@@ -26,6 +26,7 @@ import {
   parseProviderOutageParkComment,
   renderProviderOutageParkComment,
   resolveTrustedMarkerActors,
+  toSecondPrecisionIso,
 } from './protocol-helpers.mts';
 import {
   buildProviderHealthReport,
@@ -33,15 +34,6 @@ import {
   type ProviderHealthService,
   type ProviderHealthVerdict,
 } from './provider-health.mts';
-
-/**
- * Strip the fractional-second component `Date#toISOString()` always emits,
- * matching this repository's second-precision operational-marker
- * convention (`renderProviderOutageParkComment` rejects anything else).
- */
-export function toSecondPrecisionIso(date: Date): string {
-  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
 
 /**
  * Fails closed to `true` when the open-pull-request sample was truncated

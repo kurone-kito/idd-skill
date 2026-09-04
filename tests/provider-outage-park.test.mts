@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   parseProviderOutageParkComment,
   renderProviderOutageParkComment,
+  toSecondPrecisionIso,
 } from '../src/scripts/protocol-helpers.mts';
 import {
   buildParkedChangeList,
@@ -11,7 +12,6 @@ import {
   PARK_ELIGIBLE_BLOCKER_GATES,
   type RawParkMarker,
   resolveParkEligibility,
-  toSecondPrecisionIso,
 } from '../src/scripts/provider-outage-park.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
@@ -19,13 +19,11 @@ import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 // toSecondPrecisionIso -- Copilot review finding (PR #2421): the default
 // `now` in runParkPullRequest/buildParkedChangeReport must never carry
 // fractional seconds, or renderProviderOutageParkComment's strict
-// second-precision check throws on every ordinary --park --apply call.
+// second-precision check throws on every ordinary --park --apply call. The
+// pure function itself is now the shared implementation in
+// marker-helpers.mts (#2568); see tests/marker-helpers-timestamp.test.mts
+// for direct unit coverage. This test keeps the integration regression.
 // ---------------------------------------------------------------------------
-
-test('toSecondPrecisionIso: strips the fractional-second component Date#toISOString() always emits', () => {
-  const withMillis = new Date('2026-09-02T00:00:00.123Z');
-  assert.equal(toSecondPrecisionIso(withMillis), '2026-09-02T00:00:00Z');
-});
 
 test('toSecondPrecisionIso output is accepted by renderProviderOutageParkComment (regression for PR #2421 review finding)', () => {
   const now = toSecondPrecisionIso(new Date('2026-09-02T00:00:00.999Z'));

@@ -2105,3 +2105,44 @@ export function isValidIsoTimestamp(value: unknown): value is string {
   const normalize = (ts: string) => ts.replace('.000Z', 'Z');
   return normalize(new Date(time).toISOString()) === normalize(value);
 }
+
+// --- Apply-time "now" normalization (#2568) ---
+//
+// `renderUnclaimedByMarker` and the other operational-marker renderers above
+// accept only second-precision `…Z` timestamps and throw otherwise, but a
+// production `now` (`new Date().toISOString()`) always carries millisecond
+// precision. These two were independently re-implemented four times across
+// `idd-roadmap-audit-execute.mts`, `suitability-close-execute.mts`,
+// `provider-outage-park.mts`, and `provider-outage-declaration.mts` before
+// being consolidated here as the one canonical, tested implementation every
+// caller now imports instead of re-deriving.
+
+/**
+ * Strip the fractional-second component `Date#toISOString()` always emits,
+ * matching this repository's second-precision operational-marker
+ * convention.
+ */
+export function toSecondPrecisionIso(date: Date): string {
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * Validate and normalize an apply-time "now" value to UTC second-precision
+ * ISO (`YYYY-MM-DDTHH:mm:ssZ`), or `null` when unparseable. Callers that
+ * gate a mutation on this value (claim staleness, release markers) must fail
+ * closed on `null` BEFORE any mutation: an unparseable value would
+ * mis-evaluate staleness (`NaN` comparisons read as not-stale), and an
+ * offset / sub-second form (e.g. `…+09:00`) would otherwise reach
+ * `renderUnclaimedByMarker` -- which accepts only second-precision `…Z` --
+ * and throw AFTER other side effects (an evidence comment, a close) had
+ * already landed. Normalizing through `toISOString()` also converts any
+ * zone offset to UTC, so the single normalized value is safe for both the
+ * staleness checks and the release marker.
+ */
+export function normalizeApplyNow(raw: string): string | null {
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return toSecondPrecisionIso(parsed);
+}

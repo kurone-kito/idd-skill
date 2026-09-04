@@ -47,6 +47,7 @@ import {
   parseProviderOutageDeclarationComment,
   renderProviderOutageAdvancedComment,
   renderProviderOutageDeclarationComment,
+  toSecondPrecisionIso,
 } from './protocol-helpers.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
@@ -551,16 +552,6 @@ function resolveExpiryAt({
   return new Date(now.getTime() + (durationMs ?? 0))
     .toISOString()
     .replace(/\.\d{3}Z$/, 'Z');
-}
-
-/**
- * Strip the fractional-second component `Date.toISOString()` always emits,
- * so a rendered marker's timestamp fields match the repository's
- * second-precision operational-marker convention (review finding, PR
- * #2350).
- */
-function toSecondPrecisionIso(date: Date): string {
-  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function readJsonFile(path: string): unknown {
