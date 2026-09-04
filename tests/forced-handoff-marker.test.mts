@@ -484,12 +484,24 @@ test('forced handoff requires an exact old-agent match before transferring owner
   assert.deepEqual(next, activeClaim);
 });
 
-test('forced handoff rejects fractional-second timestamps', () => {
+test('forced handoff truncates a millisecond-precision timestamp instead of rejecting it (#2592)', () => {
+  const body = renderForcedHandoffComment({
+    ...payload,
+    timestamp: '2026-05-12T11:00:00.123Z',
+  });
+  const parsed = parseForcedHandoffComment(body, '2026-05-12T11:00:05Z');
+  assert.deepEqual(parsed, {
+    ...payload,
+    createdAt: '2026-05-12T11:00:05Z',
+  });
+});
+
+test('forced handoff rejects a non-UTC-offset timestamp', () => {
   assert.throws(
     () =>
       renderForcedHandoffComment({
         ...payload,
-        timestamp: '2026-05-12T11:00:00.123Z',
+        timestamp: '2026-05-12T11:00:00.123+09:00',
       }),
     /invalid forced handoff payload/,
   );

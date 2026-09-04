@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   isValidIsoTimestamp,
   normalizeApplyNow,
+  normalizeSecondPrecisionIsoTimestamp,
   toSecondPrecisionIso,
 } from '../src/scripts/marker-helpers.mts';
 
@@ -61,4 +62,49 @@ test('normalizeApplyNow normalizes a non-UTC-offset input to UTC', () => {
 test('normalizeApplyNow fails closed (null) on an unparseable value', () => {
   assert.equal(normalizeApplyNow('not-a-date'), null);
   assert.equal(normalizeApplyNow(''), null);
+});
+
+// ---------------------------------------------------------------------------
+// normalizeSecondPrecisionIsoTimestamp (#2592) -- gates 18 operational-marker
+// constructors (claimed-by, unclaimed-by, activation-nonce, advisory-wait,
+// advisory-wait-recovery, advisory-reroll, review-ack, copilot-unavailable,
+// and the outage-park marker fields), all reachable from
+// post-idd-marker.mts's --timestamp flag. It previously rejected any
+// fractional-second value outright instead of truncating it, even though
+// Date#toISOString() -- the idiomatic way to obtain "now" -- always emits
+// millisecond precision.
+// ---------------------------------------------------------------------------
+
+test('normalizeSecondPrecisionIsoTimestamp truncates a millisecond-precision toISOString() value instead of rejecting it', () => {
+  assert.equal(
+    normalizeSecondPrecisionIsoTimestamp('2026-09-04T09:25:43.219Z'),
+    '2026-09-04T09:25:43Z',
+  );
+  // A real Date#toISOString() call always carries millisecond precision.
+  const now = new Date('2026-09-04T09:25:43.219Z');
+  assert.equal(
+    normalizeSecondPrecisionIsoTimestamp(now.toISOString()),
+    '2026-09-04T09:25:43Z',
+  );
+});
+
+test('normalizeSecondPrecisionIsoTimestamp leaves an already-second-precision value unchanged', () => {
+  assert.equal(
+    normalizeSecondPrecisionIsoTimestamp('2026-09-04T09:25:43Z'),
+    '2026-09-04T09:25:43Z',
+  );
+});
+
+test('normalizeSecondPrecisionIsoTimestamp still rejects a non-UTC-offset timestamp', () => {
+  assert.equal(
+    normalizeSecondPrecisionIsoTimestamp('2026-09-04T09:25:43.219+09:00'),
+    '',
+  );
+});
+
+test('normalizeSecondPrecisionIsoTimestamp still rejects a genuinely malformed value', () => {
+  assert.equal(normalizeSecondPrecisionIsoTimestamp('not-a-timestamp'), '');
+  assert.equal(normalizeSecondPrecisionIsoTimestamp(''), '');
+  assert.equal(normalizeSecondPrecisionIsoTimestamp(undefined), '');
+  assert.equal(normalizeSecondPrecisionIsoTimestamp(123), '');
 });

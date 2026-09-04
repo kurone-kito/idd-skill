@@ -2070,12 +2070,21 @@ function normalizeIsoTimestamp(value: unknown): string {
   return trimmed;
 }
 
-function normalizeSecondPrecisionIsoTimestamp(value: unknown): string {
+export function normalizeSecondPrecisionIsoTimestamp(value: unknown): string {
   const timestamp = normalizeIsoTimestamp(value);
-  if (!timestamp || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(timestamp)) {
+  if (!timestamp) {
     return '';
   }
-  return timestamp;
+  // Truncate a well-formed fractional-second timestamp (e.g. the millisecond
+  // precision `Date#toISOString()` always emits) down to second precision
+  // instead of rejecting it outright -- reusing the same canonical
+  // truncation `toSecondPrecisionIso` already applies for apply-time "now"
+  // values (see the comment below), rather than re-deriving it here.
+  const truncated = toSecondPrecisionIso(new Date(timestamp));
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(truncated)) {
+    return '';
+  }
+  return truncated;
 }
 
 function normalizeContextScope(value: unknown): string {
