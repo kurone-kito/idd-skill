@@ -339,7 +339,9 @@ login).
    gh-then-REST fallback as the primary, no `advisory-wait:` marker, and
    no change to the AW3 route. Its review is ordinary advisory input,
    returned by the E1 snapshot if it lands before merge; skipped when
-   unconfigured.
+   unconfigured. Never poll/wait for it here, E1, or E2; only F2's
+   `secondary-quiet-window` blocker (`idd-pre-merge.instructions.md`)
+   waits.
 
 Copilot and CI advisory bot comments are advisory; unanswered ones do
 not block merge.

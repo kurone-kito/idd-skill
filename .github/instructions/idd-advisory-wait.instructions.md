@@ -23,9 +23,8 @@ swaps the single bot instead of gating every configured one).
 For non-Copilot bots, the load-bearing safety net for late-arriving
 findings is the **E1 activity-universe snapshot + `review-watermark`
 delta** (`idd-review-snapshot.instructions.md`), re-checked by the
-F2/F3 merge-readiness gate
-([`idd-pre-merge.instructions.md`](idd-pre-merge.instructions.md)),
-which forbids a bare CI-green merge without a fresh covering snapshot.
+F2/F3 merge-readiness gate (`idd-pre-merge.instructions.md`), which
+forbids a bare CI-green merge without a fresh covering snapshot.
 
 ## Fast path — common case
 
@@ -94,11 +93,9 @@ distributed defaults in `docs/policy-constants.md`: `REQUEST_CAP`,
 (default) — E14 skips to E15, F2/F3 hold; `hold` — E14, F2, and F3 all
 hold on `CAP_EXHAUSTED`.
 
-**Diagnostic note**: when every documented recovery route below fails
-identically and repeatedly, an organization-level Copilot review-quota
-outage (unrelated to this PR) is a plausible cause worth checking — for
-example via Copilot/GitHub status or an org admin surface — before
-continuing to retry the same recovery cycle.
+**Diagnostic note**: if every documented recovery route below fails
+identically and repeatedly, check for an org-level Copilot review-quota
+outage (e.g. via status page or an org admin surface) before retrying.
 
 ### Caller mapping
 
@@ -120,7 +117,9 @@ route, never satisfies the primary gate, posts no `advisory-wait`
 marker. A bot check alone never confirms review of current HEAD.
 Full trigger condition (`secondaryRequestNeeded`/`CAP_EXHAUSTED`/
 stalled `SATISFIED`) and request procedure:
-`idd-review-fix.instructions.md`'s E14 step 5.
+`idd-review-fix.instructions.md`'s E14 step 5 — never poll/wait for it
+there or at E1/E2; only F2's `secondary-quiet-window` blocker
+(`idd-pre-merge.instructions.md`) waits.
 
 ### F3-specific interpretation
 
@@ -474,7 +473,5 @@ current-HEAD recovery marker is posted. Waiting out either clock is
 therefore only a viable strategy once the diff has converged — no
 further pushes expected, independent of whether review itself has
 converged (the terminal-unavailable path exists precisely because it
-may never converge) — roadmap `#2318`'s field-evidence comment on pull
-request `#2325` recorded this repository's `PT9H` deadline override
-restarting four times across seven advisory review rounds, observed at
-229/540 minutes.
+may never converge) — see roadmap `#2318` (`#2325`: this repository's
+`PT9H` override restarted four times across seven rounds).
