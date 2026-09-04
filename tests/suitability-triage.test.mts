@@ -2605,6 +2605,73 @@ test('verifiability rejects a backtick-wrapped placeholder as a substantive bull
   }
 });
 
+test('verifiability rejects a backtick-wrapped multi-word placeholder (#2589 Copilot review, round 2)', () => {
+  // A second Copilot pass on the first fix: CODE_SPAN_STRUCTURE_PATTERN
+  // originally counted internal whitespace as a structural signal, so a
+  // multi-word placeholder phrase -- "- [ ] `TODO later`", "- [ ] `TBD
+  // soon`" -- slipped past PLACEHOLDER_TOKEN_PATTERN's single-token exact
+  // match and wrongly passed. Whitespace alone no longer counts.
+  for (const placeholder of ['TODO later', 'TBD soon']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${placeholder}\`\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for backticked "${placeholder}"`,
+    );
+  }
+});
+
+test('verifiability accepts a multi-word command with colon/slash punctuation (#2589 Copilot review, round 2)', () => {
+  // Guards the other direction: a genuine multi-word command still passes
+  // once whitespace is no longer a qualifying signal on its own, as long
+  // as it carries the punctuation a real command/path normally has.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] `pnpm run lint:minimum` passes\n',
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability rejects a placeholder token glued to trailing punctuation or words (#2589 round 3, pre-submission probe)', () => {
+  // Adversarial self-probe before this fix's third round-trip: a
+  // placeholder whose lead token is followed by a hyphen, colon, or
+  // trailing word (rather than sitting alone, as in round 2's fix) must
+  // still fail -- only the span's structural punctuation should ever
+  // change, never the placeholder classification of its lead token.
+  for (const placeholder of ['TODO-later', 'TODO: fix', 'N/A yet']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${placeholder}\`\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for backticked "${placeholder}"`,
+    );
+  }
+});
+
+test('verifiability still accepts a bare dotted identifier with no leading placeholder word (#2589 round 3)', () => {
+  // True-positive guard for the same lead-token check: an ordinary dotted
+  // identifier/filename with no placeholder lead word must keep passing.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] `foo.bar` is updated\n',
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('verifiability keyword fallback still fails with no Acceptance Criteria section (#2589)', () => {
   // Unrelated to the AC-heading path above: a body with no AC section at all
   // still relies solely on hasVerificationChannel / the other keyword
@@ -2619,8 +2686,8 @@ test('verifiability keyword fallback still fails with no Acceptance Criteria sec
 });
 
 test('verifiability accepts a bare dotted filename with no backticks or keyword (#2589 review)', () => {
-  // Exercises SUBSTANTIVE_BULLET_PATTERN's second alternative in isolation
-  // (every other new test hits the pattern only via a backtick-wrapped
+  // Exercises hasSubstantiveBullet()'s BARE_DOTTED_FILENAME_PATTERN branch
+  // in isolation (every other new test hits it only via a backtick-wrapped
   // path): a plain, unquoted filename token is substantive on its own.
   const result = checkVerifiability({
     issue: {
@@ -2634,7 +2701,7 @@ test('verifiability accepts a bare dotted filename with no backticks or keyword 
 });
 
 test('verifiability rejects an ordinary conjunction as a substantive bullet (#2589 review)', () => {
-  // SUBSTANTIVE_BULLET_PATTERN must not treat a bare slash as a path on its
+  // hasSubstantiveBullet() must not treat a bare slash as a path on its
   // own -- "and/or" has a slash but names no file, command, or artifact.
   const result = checkVerifiability({
     issue: {

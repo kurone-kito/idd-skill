@@ -674,16 +674,26 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // a real file path in this repo's AC bullets is either backticked or ends
 // in a dotted extension, both already covered below.
 //
-// Copilot review (PR #2602) flagged that treating ANY inline-code span as
-// substantive lets a backticked placeholder ("- [ ] `TODO`", "- [ ] `N/A`")
-// wrongly pass. A code span now also needs a structural signal of being a
-// real path/command/identifier (a slash, dot, underscore, hyphen, or
-// internal whitespace) and must not be an exact match against a short,
-// closed placeholder-token list.
+// Copilot review (PR #2602) flagged, across two passes, that treating ANY
+// inline-code span as substantive lets a backticked placeholder --
+// "- [ ] `TODO`", "- [ ] `N/A`", "- [ ] `TODO later`" -- wrongly pass. A
+// code span now needs a structural signal of being a real
+// path/command/identifier (a slash, dot, underscore, colon, or hyphen)
+// AND its leading token (split on whitespace, colon, or hyphen -- not
+// slash, so a slash-joined token like "N/A" itself stays intact) must not
+// exactly match a short, closed placeholder-token list. Checking only the
+// lead token (not the whole span) catches a trailing-punctuation or
+// trailing-word variant ("TODO-later", "TODO: fix", "N/A yet") without
+// having to enumerate every such phrase.
 const PLACEHOLDER_TOKEN_PATTERN =
   /^(?:TODO|TBD|N\/A|NA|XXX|FIXME|WIP|PENDING|PLACEHOLDER|NONE|ASAP)$/i;
-const CODE_SPAN_STRUCTURE_PATTERN = /[/._-]|\s/;
+const CODE_SPAN_STRUCTURE_PATTERN = /[/._:-]/;
 const BARE_DOTTED_FILENAME_PATTERN = /\b[\w-]{2,}\.[a-zA-Z]{1,5}\b/;
+
+function looksLikePlaceholder(content: string): boolean {
+  const leadToken = content.split(/[\s:-]+/)[0] ?? '';
+  return PLACEHOLDER_TOKEN_PATTERN.test(leadToken);
+}
 
 function hasSubstantiveBullet(text: string): boolean {
   for (const match of text.matchAll(/`([^`]+)`/g)) {
@@ -691,7 +701,7 @@ function hasSubstantiveBullet(text: string): boolean {
     if (
       content.length > 0 &&
       CODE_SPAN_STRUCTURE_PATTERN.test(content) &&
-      !PLACEHOLDER_TOKEN_PATTERN.test(content)
+      !looksLikePlaceholder(content)
     ) {
       return true;
     }
