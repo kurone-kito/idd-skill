@@ -43,6 +43,13 @@
 // platform's own `.bin` shim (`.CMD` on Windows, the POSIX shebang script
 // elsewhere) ultimately runs the exact same resolved script through node,
 // so this reproduces their behavior identically instead of bypassing it.
+//
+// resolveBinScript() below must stay called from inside build(), never at
+// module top-level: tests/build-ts.test.mts imports this module for the
+// dependency-free rewriteGitattributesBlock() below, and lint.yml's
+// toolless bare-node CI lane runs that test with NO package-manager
+// install at all (no node_modules), so merely importing this file must
+// not require `typescript`/`@biomejs/biome` to be resolvable.
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -53,7 +60,7 @@ const require = createRequire(import.meta.url);
  * Resolve an installed package's own `bin` entry to an absolute script
  * path, bypassing the node_modules/.bin platform shim entirely. See the
  * file header for why this replaces a plain `execFileSync('tsc' | 'biome', ...)`
- * call.
+ * call, and why every call to this function must stay inside build().
  */
 function resolveBinScript(packageName, binName) {
   const packageJsonPath = require.resolve(`${packageName}/package.json`);
@@ -66,8 +73,6 @@ function resolveBinScript(packageName, binName) {
   }
   return join(dirname(packageJsonPath), relativePath);
 }
-const TSC_BIN = resolveBinScript('typescript', 'tsc');
-const BIOME_BIN = resolveBinScript('@biomejs/biome', 'biome');
 const EMITTED_PREFIX = 'TSFILE: ';
 // The provenance header every emitted artifact carries; a helper with no
 // `.mts` source of its own would not. Kept identical to the
@@ -150,7 +155,12 @@ function syncGitattributes() {
 function build() {
   const tscOutput = execFileSync(
     process.execPath,
-    [TSC_BIN, '-p', 'tsconfig.build.json', '--listEmittedFiles'],
+    [
+      resolveBinScript('typescript', 'tsc'),
+      '-p',
+      'tsconfig.build.json',
+      '--listEmittedFiles',
+    ],
     { encoding: 'utf8' },
   );
   const emittedFiles = tscOutput
@@ -161,7 +171,12 @@ function build() {
   if (emittedFiles.length > 0) {
     execFileSync(
       process.execPath,
-      [BIOME_BIN, 'check', '--write', ...emittedFiles],
+      [
+        resolveBinScript('@biomejs/biome', 'biome'),
+        'check',
+        '--write',
+        ...emittedFiles,
+      ],
       { stdio: 'inherit' },
     );
   }
