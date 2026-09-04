@@ -102,9 +102,10 @@ Read the **issue-scope** value from the Project commands table in
   roadmap path yields **no viable, startable, unclaimed candidate** —
   **trigger (a)** (zero candidates reach A3.5: A2 found none, or A3
   filtered them all), **trigger (b)** (candidates reach A3.5 but A4
-  Step 1 or Step 1.5 discards every one), or **trigger (c)** (A1 finds
-  no roadmap issues). A0-O runs **at most once** per Discover pass as
-  this fallback; once spent, a later A4 exhaustion reports and stops
+  Step 1, Step 1.5, or Step 2's floor skip discards every one), or
+  **trigger (c)** (A1 finds no roadmap issues). A0-O runs **at most
+  once** per Discover pass as this fallback; once spent, a later A4
+  exhaustion reports and stops
   (not an abort) without re-entering A0-O. A non-empty A3.5
   approval-needed bucket is not a true zero and never triggers this
   fallback. See
