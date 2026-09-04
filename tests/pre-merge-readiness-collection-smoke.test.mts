@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -20,6 +14,7 @@ import {
   normalizeThread,
 } from '../src/scripts/pre-merge-readiness.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -317,8 +312,7 @@ function buildStubGhScript(
   // this stub's own "unexpected invocation" exit; harmless here since none
   // of this suite's assertions depend on viewerLogin/viewerAppSlug, but an
   // arg-shape drift on those two specific calls alone would not turn red.
-  return `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  return `const args = process.argv.slice(2);
 const a = (i) => args[i];
 function out(text) { process.stdout.write(text); process.exit(0); }
 function notFound() { process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }
@@ -354,21 +348,17 @@ function runPreMergeReadinessSmoke(
   threadResolved: boolean,
   options: { configJson?: string } = {},
 ): Record<string, unknown> {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-readiness-cli-'));
   const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-readiness-cwd-'));
+  // #2373: `configJson` is served from the stub's own
+  // `contents/.github/idd/config.json` GET response, not a local
+  // `cwdRoot` file -- `collectPreMergeReadiness` now resolves every
+  // policy-driven gate from a trusted-ref Contents API read, never the
+  // PR worktree's own copy.
+  const restore = stubExecutable(
+    'gh',
+    buildStubGhScript(threadResolved, { configJson: options.configJson }),
+  );
   try {
-    const ghPath = join(tempRoot, 'gh');
-    // #2373: `configJson` is served from the stub's own
-    // `contents/.github/idd/config.json` GET response, not a local
-    // `cwdRoot` file -- `collectPreMergeReadiness` now resolves every
-    // policy-driven gate from a trusted-ref Contents API read, never the
-    // PR worktree's own copy.
-    writeFileSync(
-      ghPath,
-      buildStubGhScript(threadResolved, { configJson: options.configJson }),
-    );
-    chmodSync(ghPath, 0o755);
-
     const output = execFileSync(
       process.execPath,
       [
@@ -387,7 +377,7 @@ function runPreMergeReadinessSmoke(
       {
         cwd: cwdRoot,
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+        env: { ...process.env },
         timeout: 60_000,
       },
     );
@@ -399,7 +389,7 @@ function runPreMergeReadinessSmoke(
     );
     return JSON.parse(output) as Record<string, unknown>;
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
+    restore();
     rmSync(cwdRoot, { recursive: true, force: true });
   }
 }
@@ -512,15 +502,12 @@ test('pre-merge-readiness.mjs CLI: a configured providerHealth policy changes no
 });
 
 test('pre-merge-readiness.mjs CLI: --claimless on an empty-references PR skips claim fetch (#2017)', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-claimless-cli-'));
   const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-claimless-cwd-'));
+  const restore = stubExecutable(
+    'gh',
+    buildStubGhScript(true, { failOnClaimComments: true }),
+  );
   try {
-    const ghPath = join(tempRoot, 'gh');
-    writeFileSync(
-      ghPath,
-      buildStubGhScript(true, { failOnClaimComments: true }),
-    );
-    chmodSync(ghPath, 0o755);
     const output = execFileSync(
       process.execPath,
       [
@@ -538,7 +525,7 @@ test('pre-merge-readiness.mjs CLI: --claimless on an empty-references PR skips c
       {
         cwd: cwdRoot,
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+        env: { ...process.env },
         timeout: 60_000,
       },
     );
@@ -565,26 +552,23 @@ test('pre-merge-readiness.mjs CLI: --claimless on an empty-references PR skips c
     assert.ok(report.threads);
     assert.ok(report.branchCurrency);
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
+    restore();
     rmSync(cwdRoot, { recursive: true, force: true });
   }
 });
 
 test('pre-merge-readiness.mjs CLI: --claimless fails closed when closingIssuesReferences is non-empty (#2017)', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-claimless-fail-'));
   const cwdRoot = mkdtempSync(
     join(tmpdir(), 'idd-pre-merge-claimless-fail-cwd-'),
   );
+  const restore = stubExecutable(
+    'gh',
+    buildStubGhScript(true, {
+      closingIssuesReferences: [{ number: 99 }],
+      failOnClaimComments: true,
+    }),
+  );
   try {
-    const ghPath = join(tempRoot, 'gh');
-    writeFileSync(
-      ghPath,
-      buildStubGhScript(true, {
-        closingIssuesReferences: [{ number: 99 }],
-        failOnClaimComments: true,
-      }),
-    );
-    chmodSync(ghPath, 0o755);
     assert.throws(
       () =>
         execFileSync(
@@ -604,17 +588,14 @@ test('pre-merge-readiness.mjs CLI: --claimless fails closed when closingIssuesRe
           {
             cwd: cwdRoot,
             encoding: 'utf8',
-            env: {
-              ...process.env,
-              PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
-            },
+            env: { ...process.env },
             timeout: 60_000,
           },
         ),
       /closingIssuesReferences/,
     );
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
+    restore();
     rmSync(cwdRoot, { recursive: true, force: true });
   }
 });

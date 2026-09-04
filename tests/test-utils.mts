@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
+  copyFileSync,
   cpSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { ReviewThreadNode } from '../src/scripts/resolve-review-thread.mts';
@@ -36,6 +39,192 @@ const SYNC_DOCS_DEPS = [
   'policy-helpers.mjs',
   'provider-contract.mjs',
 ];
+
+/**
+ * Stubs an executable named `name` on `PATH` for the rest of the current
+ * process and returns a cleanup callback that restores the prior `PATH`
+ * (and, on Windows, `NODE_OPTIONS`) and removes the temp directory this
+ * call created -- callers must invoke it, ideally in a `finally`, even when
+ * the test body throws. `scriptBody` is raw Node.js
+ * source run once per invocation of the stub; it sees the real CLI
+ * arguments via `process.argv.slice(2)`, the same shape on every platform.
+ *
+ * POSIX: writes a `#!/bin/sh` wrapper that `exec`s `process.execPath`
+ * (quoted, so a space in that path is safe) against `scriptBody` in its own
+ * file, rather than `#!/usr/bin/env node` (would fail to resolve `node` once
+ * `PATH` is stubbed down to just this temp dir, e.g. an originally-unset
+ * `PATH`) or naming `process.execPath` directly in the shebang line itself
+ * (a shebang's interpreter path splits on the first whitespace with no
+ * quoting support) -- then prepends that temp dir to `PATH`.
+ *
+ * Windows: a shebang-only extensionless file is never resolved by
+ * `execFileSync(name, ...)` without `shell: true` -- verified empirically,
+ * Win32's `CreateProcess` (what a non-shell spawn ultimately calls) only
+ * auto-appends `.exe` to an extension-less command name, never consulting
+ * `PATHEXT` the way `cmd.exe` does, so a `.cmd`/`.bat` launcher is
+ * unreachable from the plain `execFileSync('gh', ...)` calls under test.
+ * Instead this hard-links (falling back to a copy across a cross-device
+ * temp dir) the running `node.exe` itself to `<tempRoot>/<name>.exe`:
+ * Windows identifies an executable purely by its PE contents, so a copy of
+ * `node.exe` named `gh.exe` IS a genuine, directly launchable `gh.exe`.
+ * Its startup is redirected via `NODE_OPTIONS=--require <preload>`, a
+ * preload script that runs `scriptBody` *only* when the launched binary's
+ * own basename matches this stub's -- `NODE_OPTIONS` is inherited by every
+ * child Node process sharing this env, including a spawned CLI-under-test
+ * in the smoke tests, so that gate is what keeps the preload a no-op
+ * everywhere except the one process actually launched as `<name>.exe`.
+ * `process.argv` is normalized to the POSIX shape
+ * (`[execPath, '<stub>', ...args]`) before `scriptBody` runs, so
+ * `process.argv.slice(2)` matches on both platforms; the main-module load
+ * Node would otherwise attempt next is suppressed via a `Module._load`
+ * override rather than an explicit `process.exit()`, so `scriptBody`'s own
+ * pending async work (timers, a `process.stdin` listener) still runs to
+ * completion before the process exits naturally, exactly as it would on
+ * POSIX.
+ *
+ * All temp-file setup (`writeFileSync`/`chmodSync`/`linkSync`/
+ * `copyFileSync`) runs and is fully committed before `PATH` (or, on
+ * Windows, `NODE_OPTIONS`) is ever mutated -- a setup failure (e.g. a full
+ * or read-only temp filesystem) removes `tempRoot` and rethrows without
+ * touching either variable, so a caller whose `try { ... } finally {
+ * restore(); }` never runs (this function threw before returning `restore`)
+ * cannot leave a corrupted `PATH`/`NODE_OPTIONS` for later tests in the
+ * same process (Copilot review, PR #2575).
+ */
+export function stubExecutable(name: string, scriptBody: string): () => void {
+  const tempRoot = mkdtempSync(join(tmpdir(), `idd-stub-${name}-`));
+  const preloadPath = join(tempRoot, 'preload.cjs');
+  try {
+    if (process.platform !== 'win32') {
+      const scriptPath = join(tempRoot, name);
+      const bodyPath = join(tempRoot, `${name}.body.js`);
+      writeFileSync(bodyPath, scriptBody);
+      // A shebang line splits its interpreter path at the first whitespace
+      // with no quoting support, so naming `process.execPath` there
+      // directly (as an earlier version of this fix did) breaks the moment
+      // that path contains a space -- a real possibility (e.g. an install
+      // directory with a space in its name). `/bin/sh` is a fixed,
+      // space-free path on every POSIX system, and a normal shell command
+      // line, unlike a shebang line, supports standard "$var" quoting, so
+      // exec the real interpreter from there instead of naming it in the
+      // shebang itself. `process.argv` inside `scriptBody` still comes out
+      // as `[execPath, bodyPath, ...args]` -- the same shape `slice(2)`
+      // expects -- since `bodyPath` is what's actually passed to node as
+      // its entry script.
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh\nexec "${process.execPath}" "${bodyPath}" "$@"\n`,
+      );
+      chmodSync(scriptPath, 0o755);
+    } else {
+      const exePath = join(tempRoot, `${name}.exe`);
+      try {
+        linkSync(process.execPath, exePath);
+      } catch {
+        copyFileSync(process.execPath, exePath);
+      }
+      writeFileSync(preloadPath, buildStubPreloadSource(name, scriptBody));
+    }
+  } catch (error) {
+    rmSync(tempRoot, { recursive: true, force: true });
+    throw error;
+  }
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = originalPath
+    ? `${tempRoot}${delimiter}${originalPath}`
+    : tempRoot;
+  const restorePath = () => {
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+  };
+  if (process.platform !== 'win32') {
+    return () => {
+      restorePath();
+      rmSync(tempRoot, { recursive: true, force: true });
+    };
+  }
+  const originalNodeOptions = process.env.NODE_OPTIONS;
+  const requireFlag = `--require "${preloadPath.replaceAll('\\', '/')}"`;
+  process.env.NODE_OPTIONS = originalNodeOptions
+    ? `${originalNodeOptions} ${requireFlag}`
+    : requireFlag;
+  return () => {
+    restorePath();
+    if (originalNodeOptions === undefined) {
+      delete process.env.NODE_OPTIONS;
+    } else {
+      process.env.NODE_OPTIONS = originalNodeOptions;
+    }
+    rmSync(tempRoot, { recursive: true, force: true });
+  };
+}
+
+/** Builds the Windows preload script `stubExecutable` writes into `tempRoot`. */
+function buildStubPreloadSource(name: string, scriptBody: string): string {
+  return [
+    // Gate on the exe's own basename rather than a full-path compare: any
+    // node process launched as `<name>.exe` is this stub by construction
+    // (the real `gh.exe` is not a node binary and never honors
+    // `NODE_OPTIONS`), and matching only the basename sidesteps 8.3
+    // short-path spellings (e.g. `RUNNER~1`) a CI runner could expose for
+    // the same directory.
+    `const expectedBasename = ${JSON.stringify(`${name}.exe`.toLowerCase())};`,
+    "const nodePath = require('node:path');",
+    'if (nodePath.basename(process.execPath).toLowerCase() === expectedBasename) {',
+    // Node's own bootstrap resolves argv[1] against cwd before this
+    // preload runs (treating it as a candidate main-module path even
+    // though the process exits before ever loading one), so a plain
+    // subcommand-style first argument such as `repo` arrives here already
+    // rewritten to `<cwd>\repo`. `path.relative` inverts that exact
+    // `path.resolve(cwd, arg)` transform for the realistic domain of args
+    // this repository's `gh` invocations use (bare words and flags, never
+    // a `..`-escaping or already-absolute path), so recompute it before
+    // reassembling the POSIX-shaped argv scriptBody expects. A first arg
+    // that itself starts with `-` never reaches here at all -- Node's own
+    // C++ option parser rejects an unrecognized leading flag before any
+    // preload runs, so this stub cannot front a flag-shaped first
+    // argument on Windows (undocumented upstream of this helper; no
+    // affected call site in this repository uses one).
+    '  const cwd = process.cwd();',
+    '  const rawFirstArg = process.argv[1];',
+    '  const firstArg = rawFirstArg === undefined',
+    '    ? undefined',
+    '    : rawFirstArg.toLowerCase().startsWith((cwd + nodePath.sep).toLowerCase())',
+    '    ? nodePath.relative(cwd, rawFirstArg)',
+    '    : rawFirstArg;',
+    '  process.argv = firstArg === undefined',
+    "    ? [process.argv[0], '<stub>']",
+    "    : [process.argv[0], '<stub>', firstArg, ...process.argv.slice(2)];",
+    // Node still tries to `require()` the (unreachable) main-module path
+    // once this preload returns, regardless of any `process.argv[1]`
+    // rewrite above -- it resolves and caches that path separately,
+    // before preloads even run (empirically confirmed; reassigning
+    // `process.argv` here does not redirect it). A bare `process.exit()`
+    // after `scriptBody` would dodge that crash but also cut off any
+    // pending async work `scriptBody` started (e.g. a `process.stdin`
+    // `'data'`/`'end'` listener) before it ever fires, since the crash
+    // would otherwise pre-empt those callbacks on the very next tick.
+    // Special-casing the isMain load to a no-op instead lets the event
+    // loop -- and any `scriptBody`-registered listeners or timers --
+    // run to natural completion, then exit exactly the way a real POSIX
+    // shebang script would, honoring `process.exitCode` (or an explicit
+    // `process.exit()` `scriptBody` itself calls) either way.
+    "  const nodeModule = require('node:module');",
+    '  const originalLoad = nodeModule._load;',
+    '  nodeModule._load = function (request, parent, isMain) {',
+    '    if (isMain) return {};',
+    '    return originalLoad.apply(this, arguments);',
+    '  };',
+    '  {',
+    scriptBody,
+    '  }',
+    '}',
+  ].join('\n');
+}
 
 /**
  * Reads and JSON-parses a repo-root-relative fixture or schema file. Left

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -28,13 +28,14 @@ import {
   loadJson,
   validate,
 } from '../src/scripts/validate-schemas.mts';
+import { stubExecutable } from './test-utils.mts';
 
 // A real 40-hex SHA — the watermark/baseline/advisory renderers require it.
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 const TS = '2026-06-17T09:47:08Z';
 
 // #1833: the exact `describeUnaddressedActivity` warning text for the
-// `writeReviewActivitySnapshotGhStub` / inline "--from-pr CLI composes..."
+// `withReviewActivitySnapshotGhStub` / inline "--from-pr CLI composes..."
 // fixture's one plain, never-dispositioned comment (`body: 'hi'`).
 const NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT =
   '1 comment has no disposition evidence as of this watermark, but its ' +
@@ -743,13 +744,11 @@ test('--apply CLI POSTs via gh api --input - and prints the apply envelope', () 
   // --apply POST path is exercised without network access. The stub records its
   // argv and the JSON request body piped to stdin, then returns a comment object.
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-cli-'));
-  const ghPath = join(tempRoot, 'gh');
   const argsFile = join(tempRoot, 'gh-args.json');
   const stdinFile = join(tempRoot, 'gh-stdin.txt');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const fs = require('node:fs');
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(args));
 if (args[0] === 'api' && args.includes('--input') && args[args.indexOf('--input') + 1] === '-') {
@@ -761,70 +760,73 @@ process.stderr.write('unexpected gh invocation: ' + args.join(' '));
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'claim',
+        '--target',
+        'issue',
+        '1047',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'claude-417b737f',
+        '--claim-id',
+        'c3009f22b5f6',
+        '--supersedes',
+        'none',
+        '--timestamp',
+        TS,
+        '--branch',
+        'issue/1047-foo',
+        '--apply',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env },
+      },
+    );
 
-  const output = execFileSync(
-    process.execPath,
-    [
-      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
-      '--type',
-      'claim',
-      '--target',
-      'issue',
-      '1047',
-      '--owner',
-      'o',
-      '--repo',
-      'r',
-      '--agent-id',
-      'claude-417b737f',
-      '--claim-id',
-      'c3009f22b5f6',
-      '--supersedes',
-      'none',
-      '--timestamp',
-      TS,
-      '--branch',
-      'issue/1047-foo',
-      '--apply',
-    ],
-    {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
-    },
-  );
+    // (3) apply mode prints the envelope with the created comment id / url.
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'claim',
+      target: 'issue',
+      number: 1047,
+      commentId: 4242,
+      url: 'https://github.com/o/r/issues/1047#issuecomment-4242',
+    });
 
-  // (3) apply mode prints the envelope with the created comment id / url.
-  assert.deepEqual(JSON.parse(output), {
-    mode: 'apply',
-    type: 'claim',
-    target: 'issue',
-    number: 1047,
-    commentId: 4242,
-    url: 'https://github.com/o/r/issues/1047#issuecomment-4242',
-  });
+    // (1) the exact gh api arguments (JSON `--input -` path, not `-f body=`).
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      '--method',
+      'POST',
+      'repos/o/r/issues/1047/comments',
+      '--input',
+      '-',
+    ]);
 
-  // (1) the exact gh api arguments (JSON `--input -` path, not `-f body=`).
-  assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
-    'api',
-    '--method',
-    'POST',
-    'repos/o/r/issues/1047/comments',
-    '--input',
-    '-',
-  ]);
-
-  // (2) the JSON request body piped to stdin carries the exact marker body.
-  assert.deepEqual(JSON.parse(readFileSync(stdinFile, 'utf8')), {
-    body: buildMarkerBody('claim', {
-      'agent-id': 'claude-417b737f',
-      'claim-id': 'c3009f22b5f6',
-      supersedes: 'none',
-      timestamp: TS,
-      branch: 'issue/1047-foo',
-    }),
-  });
+    // (2) the JSON request body piped to stdin carries the exact marker body.
+    assert.deepEqual(JSON.parse(readFileSync(stdinFile, 'utf8')), {
+      body: buildMarkerBody('claim', {
+        'agent-id': 'claude-417b737f',
+        'claim-id': 'c3009f22b5f6',
+        supersedes: 'none',
+        timestamp: TS,
+        branch: 'issue/1047-foo',
+      }),
+    });
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 // --- #1134: --from-pr snapshot-derivation mode for the watermark ---
@@ -1055,152 +1057,9 @@ test('describeUnaddressedActivity fails open on negative/non-numeric counters (n
   );
 });
 
-test('--from-pr CLI composes review-activity-snapshot and prints the derived watermark (dry-run)', () => {
-  // Stub `gh` on PATH so the real subprocess composition runs offline: the
-  // post-idd-marker.mjs CLI resolves its sibling review-activity-snapshot.mjs,
-  // which makes the read calls below; the stub answers each by argv.
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-cli-'));
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-const out = (s) => { fs.writeSync(1, s); process.exit(0); };
-if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${SHA}', author: { login: 'someone' } }));
-if (args[0] === 'pr' && args[1] === 'checks') {
-  out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
-}
-if (args[0] === 'api' && args[1] === 'graphql') {
-  out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } }));
-}
-if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
-if (args[0] === 'api' && /\\/comments$/.test(args[1])) {
-  out(JSON.stringify([{ body: 'hi', created_at: '2026-06-25T10:00:00Z', updated_at: '2026-06-25T10:30:00Z', user: { login: 'someone' } }]));
-}
-fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
-process.exit(1);
-`,
-  );
-  chmodSync(ghPath, 0o755);
-
-  const output = execFileSync(
-    process.execPath,
-    [
-      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
-      '--type',
-      'watermark',
-      '--from-pr',
-      '1200',
-      '--owner',
-      'o',
-      '--repo',
-      'r',
-      '--agent-id',
-      'claude-02f8159e',
-      '--claim-id',
-      'claim-1134-02f8159e',
-    ],
-    {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
-    },
-  );
-
-  assert.deepEqual(JSON.parse(output), {
-    mode: 'dry-run',
-    type: 'watermark',
-    target: 'pr',
-    number: 1200,
-    body: buildMarkerBody('watermark', {
-      'agent-id': 'claude-02f8159e',
-      'claim-id': 'claim-1134-02f8159e',
-      'head-sha': SHA,
-      'max-activity-at': '2026-06-25T10:30:00Z',
-      'total-item-count': '1',
-      'ci-completed-at': '2026-06-25T11:00:00Z',
-    }),
-    // #1833: the stub's one plain (never-dispositioned) comment has no
-    // disposition evidence, so the diagnostic warning fires -- see the
-    // dedicated `describeUnaddressedActivity` tests below for the field's
-    // own coverage.
-    warnings: [NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT],
-  });
-});
-
-// #1833: end-to-end negative -- when the live snapshot has NO comments at
-// all, `dispositionEvidence`'s counters are both zero, so no `warnings` key
-// appears in the CLI's own success output (proving the wiring does not fire
-// on the routine/empty-PR path, not just that `describeUnaddressedActivity`
-// returns `[]` in isolation).
-test('--from-pr CLI omits warnings when the live snapshot has nothing missing a disposition', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-no-warning-'));
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-const out = (s) => { fs.writeSync(1, s); process.exit(0); };
-if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${SHA}', author: { login: 'someone' } }));
-if (args[0] === 'pr' && args[1] === 'checks') {
-  out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
-}
-if (args[0] === 'api' && args[1] === 'graphql') {
-  out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } }));
-}
-if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
-if (args[0] === 'api' && /\\/comments$/.test(args[1])) out('[]');
-fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
-process.exit(1);
-`,
-  );
-  chmodSync(ghPath, 0o755);
-
-  const output = execFileSync(
-    process.execPath,
-    [
-      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
-      '--type',
-      'watermark',
-      '--from-pr',
-      '1200',
-      '--owner',
-      'o',
-      '--repo',
-      'r',
-      '--agent-id',
-      'claude-02f8159e',
-      '--claim-id',
-      'claim-1134-02f8159e',
-    ],
-    {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
-    },
-  );
-
-  const parsed = JSON.parse(output);
-  assert.equal('warnings' in parsed, false);
-});
-
-/**
- * Build the same offline `gh` stub as the "--from-pr CLI composes..." test
- * above (PR HEAD = `headSha`, one CI pass, no threads, no reviews, one plain
- * comment), so the --expected-head-sha match/mismatch tests below can reuse
- * it without duplicating the stub script.
- */
-function writeReviewActivitySnapshotGhStub(
-  tempRoot: string,
+const REVIEW_ACTIVITY_SNAPSHOT_GH_STUB = (
   headSha: string,
-): void {
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const fs = require('node:fs');
+) => `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
 if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${headSha}', author: { login: 'someone' } }));
@@ -1216,69 +1075,185 @@ if (args[0] === 'api' && /\\/comments$/.test(args[1])) {
 }
 fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
 process.exit(1);
+`;
+
+test('--from-pr CLI composes review-activity-snapshot and prints the derived watermark (dry-run)', () => {
+  // Stub `gh` on PATH so the real subprocess composition runs offline: the
+  // post-idd-marker.mjs CLI resolves its sibling review-activity-snapshot.mjs,
+  // which makes the read calls below; the stub answers each by argv.
+  const restore = stubExecutable('gh', REVIEW_ACTIVITY_SNAPSHOT_GH_STUB(SHA));
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'watermark',
+        '--from-pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'claude-02f8159e',
+        '--claim-id',
+        'claim-1134-02f8159e',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env },
+      },
+    );
+
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'dry-run',
+      type: 'watermark',
+      target: 'pr',
+      number: 1200,
+      body: buildMarkerBody('watermark', {
+        'agent-id': 'claude-02f8159e',
+        'claim-id': 'claim-1134-02f8159e',
+        'head-sha': SHA,
+        'max-activity-at': '2026-06-25T10:30:00Z',
+        'total-item-count': '1',
+        'ci-completed-at': '2026-06-25T11:00:00Z',
+      }),
+      // #1833: the stub's one plain (never-dispositioned) comment has no
+      // disposition evidence, so the diagnostic warning fires -- see the
+      // dedicated `describeUnaddressedActivity` tests below for the field's
+      // own coverage.
+      warnings: [NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT],
+    });
+  } finally {
+    restore();
+  }
+});
+
+// #1833: end-to-end negative -- when the live snapshot has NO comments at
+// all, `dispositionEvidence`'s counters are both zero, so no `warnings` key
+// appears in the CLI's own success output (proving the wiring does not fire
+// on the routine/empty-PR path, not just that `describeUnaddressedActivity`
+// returns `[]` in isolation).
+test('--from-pr CLI omits warnings when the live snapshot has nothing missing a disposition', () => {
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const out = (s) => { fs.writeSync(1, s); process.exit(0); };
+if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${SHA}', author: { login: 'someone' } }));
+if (args[0] === 'pr' && args[1] === 'checks') {
+  out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
+}
+if (args[0] === 'api' && args[1] === 'graphql') {
+  out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } }));
+}
+if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
+if (args[0] === 'api' && /\\/comments$/.test(args[1])) out('[]');
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'watermark',
+        '--from-pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'claude-02f8159e',
+        '--claim-id',
+        'claim-1134-02f8159e',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env },
+      },
+    );
+
+    const parsed = JSON.parse(output);
+    assert.equal('warnings' in parsed, false);
+  } finally {
+    restore();
+  }
+});
+
+/**
+ * Stub the same offline `gh` behavior as the "--from-pr CLI composes..." test
+ * above (PR HEAD = `headSha`, one CI pass, no threads, no reviews, one plain
+ * comment), so the --expected-head-sha match/mismatch tests below can reuse
+ * it without duplicating the stub script. Returns the cleanup callback.
+ */
+function withReviewActivitySnapshotGhStub(headSha: string): () => void {
+  return stubExecutable('gh', REVIEW_ACTIVITY_SNAPSHOT_GH_STUB(headSha));
 }
 
 test('--expected-head-sha lets a matching (even differently-cased) --from-pr snapshot proceed', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-pinned-'));
-  writeReviewActivitySnapshotGhStub(tempRoot, SHA);
-
-  const runDryRun = (expectedHeadSha: string) =>
-    JSON.parse(
-      execFileSync(
-        process.execPath,
-        [
-          join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
-          '--type',
-          'watermark',
-          '--from-pr',
-          '1200',
-          '--expected-head-sha',
-          expectedHeadSha,
-          '--owner',
-          'o',
-          '--repo',
-          'r',
-          '--agent-id',
-          'claude-02f8159e',
-          '--claim-id',
-          'claim-1134-02f8159e',
-        ],
-        {
-          cwd: REPO_ROOT,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+  const restore = withReviewActivitySnapshotGhStub(SHA);
+  try {
+    const runDryRun = (expectedHeadSha: string) =>
+      JSON.parse(
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+            '--type',
+            'watermark',
+            '--from-pr',
+            '1200',
+            '--expected-head-sha',
+            expectedHeadSha,
+            '--owner',
+            'o',
+            '--repo',
+            'r',
+            '--agent-id',
+            'claude-02f8159e',
+            '--claim-id',
+            'claim-1134-02f8159e',
+          ],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+            env: { ...process.env },
           },
-        },
-      ),
-    );
+        ),
+      );
 
-  const expected = {
-    mode: 'dry-run',
-    type: 'watermark',
-    target: 'pr',
-    number: 1200,
-    body: buildMarkerBody('watermark', {
-      'agent-id': 'claude-02f8159e',
-      'claim-id': 'claim-1134-02f8159e',
-      'head-sha': SHA,
-      'max-activity-at': '2026-06-25T10:30:00Z',
-      'total-item-count': '1',
-      'ci-completed-at': '2026-06-25T11:00:00Z',
-    }),
-    // #1833: same one-plain-comment fixture as the "--from-pr CLI
-    // composes..." test above (shared stub function).
-    warnings: [NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT],
-  };
+    const expected = {
+      mode: 'dry-run',
+      type: 'watermark',
+      target: 'pr',
+      number: 1200,
+      body: buildMarkerBody('watermark', {
+        'agent-id': 'claude-02f8159e',
+        'claim-id': 'claim-1134-02f8159e',
+        'head-sha': SHA,
+        'max-activity-at': '2026-06-25T10:30:00Z',
+        'total-item-count': '1',
+        'ci-completed-at': '2026-06-25T11:00:00Z',
+      }),
+      // #1833: same one-plain-comment fixture as the "--from-pr CLI
+      // composes..." test above (shared stub function).
+      warnings: [NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT],
+    };
 
-  assert.deepEqual(runDryRun(SHA), expected);
-  // Case-insensitive: the Step 1 stored value and the live snapshot value
-  // must match regardless of hex-digit casing.
-  assert.deepEqual(runDryRun(SHA.toUpperCase()), expected);
+    assert.deepEqual(runDryRun(SHA), expected);
+    // Case-insensitive: the Step 1 stored value and the live snapshot value
+    // must match regardless of hex-digit casing.
+    assert.deepEqual(runDryRun(SHA.toUpperCase()), expected);
+  } finally {
+    restore();
+  }
 });
 
 test('--expected-head-sha fails closed (no post) when the live snapshot HEAD has moved', () => {
@@ -1288,46 +1263,49 @@ test('--expected-head-sha fails closed (no post) when the live snapshot HEAD has
   // a HEAD newer than Step 1 actually snapshotted. If the guard regressed,
   // this would fall through to the stub's POST-call fallback branch, whose
   // "unexpected gh invocation" stderr would fail the message assertion below.
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-drift-'));
-  writeReviewActivitySnapshotGhStub(tempRoot, SHA);
+  const restore = withReviewActivitySnapshotGhStub(SHA);
   const staleSha = 'fedcba9876543210fedcba9876543210fedcba98';
 
   try {
-    execFileSync(
-      process.execPath,
-      [
-        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
-        '--type',
-        'watermark',
-        '--from-pr',
-        '1200',
-        '--expected-head-sha',
-        staleSha,
-        '--owner',
-        'o',
-        '--repo',
-        'r',
-        '--agent-id',
-        'a',
-        '--claim-id',
-        'c',
-        '--apply',
-      ],
-      {
-        cwd: REPO_ROOT,
-        encoding: 'utf8',
-        env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
-      },
-    );
-  } catch (error) {
-    const failure = error as { status?: number; stderr?: string };
-    assert.equal(failure.status, 1);
-    assert.match(failure.stderr ?? '', /refusing to post watermark/);
-    assert.match(failure.stderr ?? '', new RegExp(staleSha));
-    assert.match(failure.stderr ?? '', new RegExp(SHA));
-    return;
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+          '--type',
+          'watermark',
+          '--from-pr',
+          '1200',
+          '--expected-head-sha',
+          staleSha,
+          '--owner',
+          'o',
+          '--repo',
+          'r',
+          '--agent-id',
+          'a',
+          '--claim-id',
+          'c',
+          '--apply',
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: { ...process.env },
+        },
+      );
+    } catch (error) {
+      const failure = error as { status?: number; stderr?: string };
+      assert.equal(failure.status, 1);
+      assert.match(failure.stderr ?? '', /refusing to post watermark/);
+      assert.match(failure.stderr ?? '', new RegExp(staleSha));
+      assert.match(failure.stderr ?? '', new RegExp(SHA));
+      return;
+    }
+    throw new Error('expected the CLI to exit non-zero');
+  } finally {
+    restore();
   }
-  throw new Error('expected the CLI to exit non-zero');
 });
 
 // Run the CLI expecting a non-zero exit; return its stderr. These guards fire
@@ -1429,14 +1407,12 @@ test('--from-pr fails closed on an explicit non-pr --target', () => {
  * .headRefOid` call resolves offline to `headSha`, without needing the full
  * review-activity-snapshot stub the watermark tests use above. Any other
  * invocation is treated as unexpected (proving the advisory --from-pr path
- * never spawns the heavier snapshot child).
+ * never spawns the heavier snapshot child). Returns the cleanup callback.
  */
-function writeHeadShaOnlyGhStub(tempRoot: string, headSha: string): void {
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const fs = require('node:fs');
+function withHeadShaOnlyGhStub(headSha: string): () => void {
+  return stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
 // Tightened to the exact lightweight call shape headShaFromPr() issues
@@ -1455,17 +1431,16 @@ fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
 }
 
-function runFromPrCliDryRun(tempRoot: string, argv: string[]): unknown {
+function runFromPrCliDryRun(argv: string[]): unknown {
   const output = execFileSync(
     process.execPath,
     [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), ...argv],
     {
       cwd: REPO_ROOT,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+      env: { ...process.env },
     },
   );
   return JSON.parse(output);
@@ -1476,9 +1451,7 @@ test('--from-pr fails closed with a targeted error when gh pr view returns a non
   // non-empty -- a non-SHA value (e.g. the literal text "null") should fail
   // closed here with a specific message, not fall through to
   // buildMarkerBody's generic "invalid advisory-wait marker payload".
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-bad-sha-'));
-  writeHeadShaOnlyGhStub(tempRoot, 'null');
-
+  const restore = withHeadShaOnlyGhStub('null');
   try {
     execFileSync(
       process.execPath,
@@ -1500,10 +1473,7 @@ test('--from-pr fails closed with a targeted error when gh pr view returns a non
       {
         cwd: REPO_ROOT,
         encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
-        },
+        env: { ...process.env },
       },
     );
   } catch (error) {
@@ -1514,176 +1484,188 @@ test('--from-pr fails closed with a targeted error when gh pr view returns a non
       /failed to derive head-sha from PR 1200: PR 1200 has no usable headRefOid \(expected a 40-hex-character SHA, got: null\)/,
     );
     return;
+  } finally {
+    restore();
   }
   throw new Error('expected the CLI to exit non-zero');
 });
 
 test('--from-pr CLI derives only --head-sha for --type advisory (dry-run)', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-advisory-'));
-  writeHeadShaOnlyGhStub(tempRoot, SHA);
+  const restore = withHeadShaOnlyGhStub(SHA);
+  try {
+    const result = runFromPrCliDryRun([
+      '--type',
+      'advisory',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--timestamp',
+      TS,
+    ]);
 
-  const result = runFromPrCliDryRun(tempRoot, [
-    '--type',
-    'advisory',
-    '--from-pr',
-    '1200',
-    '--owner',
-    'o',
-    '--repo',
-    'r',
-    '--agent-id',
-    'claude-02f8159e',
-    '--timestamp',
-    TS,
-  ]);
-
-  assert.deepEqual(result, {
-    mode: 'dry-run',
-    type: 'advisory',
-    target: 'pr',
-    number: 1200,
-    body: buildMarkerBody('advisory', {
-      'agent-id': 'claude-02f8159e',
-      'head-sha': SHA,
-      timestamp: TS,
-    }),
-  });
+    assert.deepEqual(result, {
+      mode: 'dry-run',
+      type: 'advisory',
+      target: 'pr',
+      number: 1200,
+      body: buildMarkerBody('advisory', {
+        'agent-id': 'claude-02f8159e',
+        'head-sha': SHA,
+        timestamp: TS,
+      }),
+    });
+  } finally {
+    restore();
+  }
 });
 
 test('--from-pr CLI derives only --head-sha for --type advisory-reroll (dry-run)', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-reroll-'));
-  writeHeadShaOnlyGhStub(tempRoot, SHA);
+  const restore = withHeadShaOnlyGhStub(SHA);
+  try {
+    const result = runFromPrCliDryRun([
+      '--type',
+      'advisory-reroll',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--timestamp',
+      TS,
+    ]);
 
-  const result = runFromPrCliDryRun(tempRoot, [
-    '--type',
-    'advisory-reroll',
-    '--from-pr',
-    '1200',
-    '--owner',
-    'o',
-    '--repo',
-    'r',
-    '--agent-id',
-    'claude-02f8159e',
-    '--timestamp',
-    TS,
-  ]);
-
-  assert.deepEqual(result, {
-    mode: 'dry-run',
-    type: 'advisory-reroll',
-    target: 'pr',
-    number: 1200,
-    body: buildMarkerBody('advisory-reroll', {
-      'agent-id': 'claude-02f8159e',
-      'head-sha': SHA,
-      timestamp: TS,
-    }),
-  });
+    assert.deepEqual(result, {
+      mode: 'dry-run',
+      type: 'advisory-reroll',
+      target: 'pr',
+      number: 1200,
+      body: buildMarkerBody('advisory-reroll', {
+        'agent-id': 'claude-02f8159e',
+        'head-sha': SHA,
+        timestamp: TS,
+      }),
+    });
+  } finally {
+    restore();
+  }
 });
 
 test('--from-pr CLI derives only --head-sha for --type review-ack (dry-run, #2050)', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-review-ack-'));
-  writeHeadShaOnlyGhStub(tempRoot, SHA);
+  const restore = withHeadShaOnlyGhStub(SHA);
+  try {
+    const result = runFromPrCliDryRun([
+      '--type',
+      'review-ack',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--timestamp',
+      TS,
+    ]);
 
-  const result = runFromPrCliDryRun(tempRoot, [
-    '--type',
-    'review-ack',
-    '--from-pr',
-    '1200',
-    '--owner',
-    'o',
-    '--repo',
-    'r',
-    '--agent-id',
-    'claude-02f8159e',
-    '--timestamp',
-    TS,
-  ]);
-
-  assert.deepEqual(result, {
-    mode: 'dry-run',
-    type: 'review-ack',
-    target: 'pr',
-    number: 1200,
-    body: buildMarkerBody('review-ack', {
-      'agent-id': 'claude-02f8159e',
-      'head-sha': SHA,
-      timestamp: TS,
-    }),
-  });
+    assert.deepEqual(result, {
+      mode: 'dry-run',
+      type: 'review-ack',
+      target: 'pr',
+      number: 1200,
+      body: buildMarkerBody('review-ack', {
+        'agent-id': 'claude-02f8159e',
+        'head-sha': SHA,
+        timestamp: TS,
+      }),
+    });
+  } finally {
+    restore();
+  }
 });
 
 test('--from-pr CLI derives only --head-sha for --type advisory-recovery, legacy 3-field form (dry-run)', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-recovery-legacy-'));
-  writeHeadShaOnlyGhStub(tempRoot, SHA);
+  const restore = withHeadShaOnlyGhStub(SHA);
+  try {
+    const result = runFromPrCliDryRun([
+      '--type',
+      'advisory-recovery',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--timestamp',
+      TS,
+    ]);
 
-  const result = runFromPrCliDryRun(tempRoot, [
-    '--type',
-    'advisory-recovery',
-    '--from-pr',
-    '1200',
-    '--owner',
-    'o',
-    '--repo',
-    'r',
-    '--agent-id',
-    'claude-02f8159e',
-    '--timestamp',
-    TS,
-  ]);
-
-  assert.deepEqual(result, {
-    mode: 'dry-run',
-    type: 'advisory-recovery',
-    target: 'pr',
-    number: 1200,
-    body: buildMarkerBody('advisory-recovery', {
-      'agent-id': 'claude-02f8159e',
-      'head-sha': SHA,
-      timestamp: TS,
-    }),
-  });
+    assert.deepEqual(result, {
+      mode: 'dry-run',
+      type: 'advisory-recovery',
+      target: 'pr',
+      number: 1200,
+      body: buildMarkerBody('advisory-recovery', {
+        'agent-id': 'claude-02f8159e',
+        'head-sha': SHA,
+        timestamp: TS,
+      }),
+    });
+  } finally {
+    restore();
+  }
 });
 
 test('--from-pr CLI + --claim-id/--attempt still renders the claim-bound advisory-recovery form (dry-run)', () => {
   // #1572's optional claim-bound pairing must keep working unchanged
   // alongside #1889's --from-pr derivation.
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-recovery-bound-'));
-  writeHeadShaOnlyGhStub(tempRoot, SHA);
+  const restore = withHeadShaOnlyGhStub(SHA);
+  try {
+    const result = runFromPrCliDryRun([
+      '--type',
+      'advisory-recovery',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--timestamp',
+      TS,
+      '--claim-id',
+      'claude-8cb5b32f1100',
+      '--attempt',
+      '2',
+    ]);
 
-  const result = runFromPrCliDryRun(tempRoot, [
-    '--type',
-    'advisory-recovery',
-    '--from-pr',
-    '1200',
-    '--owner',
-    'o',
-    '--repo',
-    'r',
-    '--agent-id',
-    'claude-02f8159e',
-    '--timestamp',
-    TS,
-    '--claim-id',
-    'claude-8cb5b32f1100',
-    '--attempt',
-    '2',
-  ]);
-
-  assert.deepEqual(result, {
-    mode: 'dry-run',
-    type: 'advisory-recovery',
-    target: 'pr',
-    number: 1200,
-    body: buildMarkerBody('advisory-recovery', {
-      'agent-id': 'claude-02f8159e',
-      'head-sha': SHA,
-      timestamp: TS,
-      'claim-id': 'claude-8cb5b32f1100',
-      attempt: '2',
-    }),
-  });
+    assert.deepEqual(result, {
+      mode: 'dry-run',
+      type: 'advisory-recovery',
+      target: 'pr',
+      number: 1200,
+      body: buildMarkerBody('advisory-recovery', {
+        'agent-id': 'claude-02f8159e',
+        'head-sha': SHA,
+        timestamp: TS,
+        'claim-id': 'claude-8cb5b32f1100',
+        attempt: '2',
+      }),
+    });
+  } finally {
+    restore();
+  }
 });
 
 test('--from-pr rejects manual --head-sha as ambiguous for an advisory type (before any gh call)', () => {

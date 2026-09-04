@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { evaluateClaimApprovalGate } from '../src/scripts/claim-approval-gate.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -577,13 +578,10 @@ test('CLI path fails when an explicit --policy file is invalid', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-claim-approval-gate-policy-'),
   );
-  const ghPath = join(tempRoot, 'gh');
   const policyPath = join(tempRoot, 'bad-policy.json');
-
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
   const jq = args[args.indexOf("--jq") + 1];
   process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
@@ -611,31 +609,32 @@ process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
 process.exit(1);
 `,
   );
-  writeFileSync(policyPath, '{not-json');
-  chmodSync(ghPath, 0o755);
+  try {
+    writeFileSync(policyPath, '{not-json');
 
-  assert.throws(
-    () =>
-      execFileSync(
-        process.execPath,
-        [
-          join(REPO_ROOT, 'scripts/claim-approval-gate.mjs'),
-          '--issue',
-          '1',
-          '--policy',
-          policyPath,
-        ],
-        {
-          cwd: REPO_ROOT,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/claim-approval-gate.mjs'),
+            '--issue',
+            '1',
+            '--policy',
+            policyPath,
+          ],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+            env: { ...process.env },
           },
-        },
-      ),
-    /failed to load policy from .*bad-policy\.json/,
-  );
+        ),
+      /failed to load policy from .*bad-policy\.json/,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 // #2195: --token substituted GH_TOKEN/GITHUB_TOKEN for gh auth, ambiguous
@@ -649,20 +648,23 @@ function ghTokenPropagationFixture() {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-claim-approval-gate-token-'),
   );
-  const ghPath = join(tempRoot, 'gh');
   const dumpPath = join(tempRoot, 'env-dump.json');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-require('fs').writeFileSync(process.env.ENV_DUMP_PATH, JSON.stringify({
+  const restore = stubExecutable(
+    'gh',
+    `require('fs').writeFileSync(process.env.ENV_DUMP_PATH, JSON.stringify({
   ghToken: process.env.GH_TOKEN ?? null,
   githubToken: process.env.GITHUB_TOKEN ?? null,
 }));
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
-  return { tempRoot, ghPath, dumpPath };
+  return {
+    dumpPath,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
+  };
 }
 
 function runClaimApprovalGateCli(
@@ -681,11 +683,7 @@ function runClaimApprovalGateCli(
       {
         cwd: REPO_ROOT,
         encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fixture.tempRoot}:${process.env.PATH ?? ''}`,
-          ENV_DUMP_PATH: fixture.dumpPath,
-        },
+        env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
       },
     ),
   );
@@ -697,46 +695,50 @@ function runClaimApprovalGateCli(
 
 test('--gh-token sets GH_TOKEN/GITHUB_TOKEN for gh auth', () => {
   const fixture = ghTokenPropagationFixture();
-  const dump = runClaimApprovalGateCli(
-    ['--gh-token', 'canonical-test-token'],
-    fixture,
-  );
-  assert.equal(dump.ghToken, 'canonical-test-token');
-  assert.equal(dump.githubToken, 'canonical-test-token');
+  try {
+    const dump = runClaimApprovalGateCli(
+      ['--gh-token', 'canonical-test-token'],
+      fixture,
+    );
+    assert.equal(dump.ghToken, 'canonical-test-token');
+    assert.equal(dump.githubToken, 'canonical-test-token');
+  } finally {
+    fixture.restore();
+  }
 });
 
 test('--token still sets GH_TOKEN/GITHUB_TOKEN and warns as a deprecated alias', () => {
   const fixture = ghTokenPropagationFixture();
-  let stderr = '';
   try {
-    execFileSync(
-      process.execPath,
-      [
-        join(REPO_ROOT, 'scripts/claim-approval-gate.mjs'),
-        '--issue',
-        '1',
-        '--token',
-        'deprecated-test-token',
-      ],
-      {
-        cwd: REPO_ROOT,
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fixture.tempRoot}:${process.env.PATH ?? ''}`,
-          ENV_DUMP_PATH: fixture.dumpPath,
+    let stderr = '';
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/claim-approval-gate.mjs'),
+          '--issue',
+          '1',
+          '--token',
+          'deprecated-test-token',
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
         },
-      },
-    );
-    assert.fail('expected the CLI to exit non-zero');
-  } catch (error) {
-    stderr = String((error as { stderr?: unknown }).stderr ?? '');
+      );
+      assert.fail('expected the CLI to exit non-zero');
+    } catch (error) {
+      stderr = String((error as { stderr?: unknown }).stderr ?? '');
+    }
+    const dump = JSON.parse(readFileSync(fixture.dumpPath, 'utf8')) as {
+      ghToken: string | null;
+      githubToken: string | null;
+    };
+    assert.equal(dump.ghToken, 'deprecated-test-token');
+    assert.equal(dump.githubToken, 'deprecated-test-token');
+    assert.match(stderr, /--token is deprecated; use --gh-token instead\./);
+  } finally {
+    fixture.restore();
   }
-  const dump = JSON.parse(readFileSync(fixture.dumpPath, 'utf8')) as {
-    ghToken: string | null;
-    githubToken: string | null;
-  };
-  assert.equal(dump.ghToken, 'deprecated-test-token');
-  assert.equal(dump.githubToken, 'deprecated-test-token');
-  assert.match(stderr, /--token is deprecated; use --gh-token instead\./);
 });

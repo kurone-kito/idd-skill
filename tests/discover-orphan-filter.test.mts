@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -13,6 +13,7 @@ import {
   getOrphanFirstPolicy,
 } from '../src/scripts/discover-orphan-filter.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -21,13 +22,13 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
  * before it ever reaches `loadPolicy` -- these tests only exercise the
  * policy-load failure path (#1721), which throws before any further `gh`
  * call (the open-issues sweep), so nothing beyond `repo view` needs a
- * response.
+ * response. Returns a cleanup callback that restores PATH; callers must
+ * invoke it (ideally in a `finally`) even when the assertion throws.
  */
-function stubGhRepoView(tempRoot: string): void {
-  writeFileSync(
-    join(tempRoot, 'gh'),
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+function stubGhRepoView(): () => void {
+  return stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
   const jq = args[args.indexOf("--jq") + 1];
   process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
@@ -37,7 +38,6 @@ process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
 process.exit(1);
 `,
   );
-  chmodSync(join(tempRoot, 'gh'), 0o755);
 }
 
 test('extractBlockedByReferences parses visible blocker lines', () => {
@@ -1256,55 +1256,59 @@ test('CLI path fails when an explicit --policy file is invalid', () => {
     join(tmpdir(), 'idd-discover-orphan-filter-policy-'),
   );
   const policyPath = join(tempRoot, 'bad-policy.json');
-  stubGhRepoView(tempRoot);
-  writeFileSync(policyPath, '{not-json');
+  const restore = stubGhRepoView();
+  try {
+    writeFileSync(policyPath, '{not-json');
 
-  assert.throws(
-    () =>
-      execFileSync(
-        process.execPath,
-        [
-          join(REPO_ROOT, 'scripts/discover-orphan-filter.mjs'),
-          '--policy',
-          policyPath,
-        ],
-        {
-          cwd: REPO_ROOT,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/discover-orphan-filter.mjs'),
+            '--policy',
+            policyPath,
+          ],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+            env: { ...process.env },
           },
-        },
-      ),
-    /failed to load policy from .*bad-policy\.json/,
-  );
+        ),
+      /failed to load policy from .*bad-policy\.json/,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test('CLI path fails when the default-path config exists but is malformed (not silently treated as absent)', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-discover-orphan-filter-default-policy-'),
   );
-  stubGhRepoView(tempRoot);
-  mkdirSync(join(tempRoot, '.github', 'idd'), { recursive: true });
-  writeFileSync(join(tempRoot, '.github', 'idd', 'config.json'), '{not-json');
+  const restore = stubGhRepoView();
+  try {
+    mkdirSync(join(tempRoot, '.github', 'idd'), { recursive: true });
+    writeFileSync(join(tempRoot, '.github', 'idd', 'config.json'), '{not-json');
 
-  assert.throws(
-    () =>
-      execFileSync(
-        process.execPath,
-        [join(REPO_ROOT, 'scripts/discover-orphan-filter.mjs')],
-        {
-          cwd: tempRoot,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [join(REPO_ROOT, 'scripts/discover-orphan-filter.mjs')],
+          {
+            cwd: tempRoot,
+            encoding: 'utf8',
+            env: { ...process.env },
           },
-        },
-      ),
-    /failed to load policy from .*config\.json/,
-  );
+        ),
+      /failed to load policy from .*config\.json/,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------

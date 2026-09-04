@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -32,7 +32,7 @@ import {
   type VendorSession,
   vendorSessionKey,
 } from '../src/scripts/token-cost-harvest.mts';
-import { readJson } from './test-utils.mts';
+import { readJson, stubExecutable } from './test-utils.mts';
 
 const ms = (iso: string) => Date.parse(iso);
 
@@ -65,16 +65,7 @@ function usageSum(...values: TokenCostUsage[]): number {
 // pattern) so the GitHub-join layer runs the real execFileSync + child-process
 // contract without network access.
 function stubGh(scriptBody: string): () => void {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-test-'));
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(ghPath, `#!/usr/bin/env node\n${scriptBody}`);
-  chmodSync(ghPath, 0o755);
-  const originalPath = process.env.PATH;
-  process.env.PATH = `${tempRoot}:${originalPath ?? ''}`;
-  return () => {
-    process.env.PATH = originalPath;
-    rmSync(tempRoot, { recursive: true, force: true });
-  };
+  return stubExecutable('gh', scriptBody);
 }
 
 function stubGhReturningJson(fixture: unknown): () => void {

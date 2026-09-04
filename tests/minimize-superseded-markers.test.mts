@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
 import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -17,6 +11,7 @@ import {
   isTrustedAuthor,
   resolveTrustedActors,
 } from '../src/scripts/minimize-superseded-markers.mts';
+import { stubExecutable } from './test-utils.mts';
 
 // computeExitCode only reads counts.failed; the partial reports are
 // widened structurally instead of fabricating unused report fields.
@@ -125,35 +120,31 @@ test('config-only resolution passes the author gate end to end', () => {
     // Stub gh so the run is deterministic and offline: probe failures
     // surface as per-item failures (exit 1), never the author-gate
     // configuration error (exit 2).
-    const binDir = join(sandbox, 'bin');
-    mkdirSync(binDir);
-    writeFileSync(join(binDir, 'gh'), '#!/bin/sh\nexit 1\n');
-    chmodSync(join(binDir, 'gh'), 0o755);
-
-    const script = join(
-      dirname(fileURLToPath(import.meta.url)),
-      '..',
-      'scripts',
-      'minimize-superseded-markers.mjs',
-    );
-    const result = spawnSync(
-      process.execPath,
-      [script, '--subject-ids', 'IC_test', '--format', 'json'],
-      {
-        cwd: sandbox,
-        env: {
-          ...process.env,
-          PATH: binDir,
-          IDD_TRUSTED_MARKER_ACTORS: '',
+    const restore = stubExecutable('gh', 'process.exit(1);\n');
+    try {
+      const script = join(
+        dirname(fileURLToPath(import.meta.url)),
+        '..',
+        'scripts',
+        'minimize-superseded-markers.mjs',
+      );
+      const result = spawnSync(
+        process.execPath,
+        [script, '--subject-ids', 'IC_test', '--format', 'json'],
+        {
+          cwd: sandbox,
+          env: { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' },
+          encoding: 'utf8',
         },
-        encoding: 'utf8',
-      },
-    );
+      );
 
-    assert.equal(result.status, 1, result.stderr);
-    const report = JSON.parse(result.stdout);
-    assert.equal(report.trustedMarkerActorsSource, 'config');
-    assert.deepEqual(report.trustedMarkerActors, ['kurone-kito']);
+      assert.equal(result.status, 1, result.stderr);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.trustedMarkerActorsSource, 'config');
+      assert.deepEqual(report.trustedMarkerActors, ['kurone-kito']);
+    } finally {
+      restore();
+    }
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
@@ -218,44 +209,40 @@ test('an explicit empty --trusted-marker-logins value is accepted, unlike --subj
     // (exit 1) proves the empty string reached resolveTrustedActors()
     // instead of being rejected at parse time (which would be exit 2 with
     // the "requires a value" message, before any gh call happens at all).
-    const binDir = join(sandbox, 'bin');
-    mkdirSync(binDir);
-    writeFileSync(join(binDir, 'gh'), '#!/bin/sh\nexit 1\n');
-    chmodSync(join(binDir, 'gh'), 0o755);
-
-    const script = join(
-      dirname(fileURLToPath(import.meta.url)),
-      '..',
-      'scripts',
-      'minimize-superseded-markers.mjs',
-    );
-    const result = spawnSync(
-      process.execPath,
-      [
-        script,
-        '--subject-ids',
-        'IC_test',
-        '--trusted-marker-logins',
-        '',
-        '--allow-untrusted',
-        '--format',
-        'json',
-      ],
-      {
-        cwd: sandbox,
-        env: {
-          ...process.env,
-          PATH: binDir,
-          IDD_TRUSTED_MARKER_ACTORS: '',
+    const restore = stubExecutable('gh', 'process.exit(1);\n');
+    try {
+      const script = join(
+        dirname(fileURLToPath(import.meta.url)),
+        '..',
+        'scripts',
+        'minimize-superseded-markers.mjs',
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          script,
+          '--subject-ids',
+          'IC_test',
+          '--trusted-marker-logins',
+          '',
+          '--allow-untrusted',
+          '--format',
+          'json',
+        ],
+        {
+          cwd: sandbox,
+          env: { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' },
+          encoding: 'utf8',
         },
-        encoding: 'utf8',
-      },
-    );
+      );
 
-    assert.equal(result.status, 1, result.stderr);
-    const report = JSON.parse(result.stdout);
-    assert.equal(report.trustedMarkerActorsSource, 'none');
-    assert.deepEqual(report.trustedMarkerActors, []);
+      assert.equal(result.status, 1, result.stderr);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.trustedMarkerActorsSource, 'none');
+      assert.deepEqual(report.trustedMarkerActors, []);
+    } finally {
+      restore();
+    }
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
@@ -273,21 +260,16 @@ function runMinimizeAgainstUnresolvableId(
   subjectIds: string,
 ): SpawnSyncReturns<string> {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-minimize-'));
-  try {
-    const binDir = join(sandbox, 'bin');
-    mkdirSync(binDir);
-    writeFileSync(
-      join(binDir, 'gh'),
-      `#!/usr/bin/env node
-const value = (process.argv.find((a) => a.startsWith('id=')) ?? '').slice(3);
+  const restore = stubExecutable(
+    'gh',
+    `const value = (process.argv.find((a) => a.startsWith('id=')) ?? '').slice(3);
 const message = \`Could not resolve to a node with the global id of '\${value}'\`;
 process.stdout.write(JSON.stringify({ data: { node: null }, errors: [{ type: 'NOT_FOUND', message }] }));
 process.stderr.write(\`gh: \${message}\\n\`);
 process.exit(1);
 `,
-    );
-    chmodSync(join(binDir, 'gh'), 0o755);
-
+  );
+  try {
     const script = join(
       dirname(fileURLToPath(import.meta.url)),
       '..',
@@ -306,22 +288,12 @@ process.exit(1);
       ],
       {
         cwd: sandbox,
-        env: {
-          ...process.env,
-          // Prepend the stub dir so the bare `gh` lookup resolves to the
-          // stub, not a real gh binary, while keeping the rest of PATH
-          // (matching the other CLI-stub tests in this repo) so the gh
-          // stub's #!/usr/bin/env node shebang can still find `node`.
-          // Conditional concatenation avoids a trailing `:` (and the
-          // implicit current-directory PATH entry it creates on POSIX)
-          // when PATH is unset.
-          PATH: process.env.PATH ? `${binDir}:${process.env.PATH}` : binDir,
-          IDD_TRUSTED_MARKER_ACTORS: '',
-        },
+        env: { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' },
         encoding: 'utf8',
       },
     );
   } finally {
+    restore();
     rmSync(sandbox, { recursive: true, force: true });
   }
 }

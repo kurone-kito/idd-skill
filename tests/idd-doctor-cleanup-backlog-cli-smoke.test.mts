@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import type { DoctorReport } from '../src/scripts/idd-doctor.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const IDD_DOCTOR_SCRIPT = join(REPO_ROOT, 'scripts/idd-doctor.mjs');
@@ -83,8 +84,7 @@ function buildCleanupBacklogStubGh(config: {
   );
   const evidenceTable = JSON.stringify([...config.evidenceByPr.entries()]);
   const failingNumbers = JSON.stringify([...(config.failEvidenceFor ?? [])]);
-  return `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  return `const args = process.argv.slice(2);
 if (args[0] === 'repo' && args[1] === 'view') {
   process.stdout.write(JSON.stringify({ owner: { login: ${owner} }, name: ${repo} }));
   process.exit(0);
@@ -115,11 +115,8 @@ function runIddDoctorReport(
   stubGhSource: string,
   extraArgs: string[] = [],
 ): DoctorReport {
-  const stubRoot = mkdtempSync(join(tmpdir(), 'idd-doctor-cleanup-gh-'));
+  const restore = stubExecutable('gh', stubGhSource);
   try {
-    const ghPath = join(stubRoot, 'gh');
-    writeFileSync(ghPath, stubGhSource);
-    chmodSync(ghPath, 0o755);
     const argv = [
       IDD_DOCTOR_SCRIPT,
       '--json',
@@ -131,7 +128,7 @@ function runIddDoctorReport(
     ];
     const options = {
       encoding: 'utf8' as const,
-      env: { ...process.env, PATH: `${stubRoot}:${process.env.PATH ?? ''}` },
+      env: { ...process.env },
       timeout: 60_000,
     };
     try {
@@ -152,7 +149,7 @@ function runIddDoctorReport(
       throw error;
     }
   } finally {
-    rmSync(stubRoot, { recursive: true, force: true });
+    restore();
   }
 }
 

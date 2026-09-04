@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -53,8 +55,7 @@ function buildStubGh(
   process.exit(0);
 }
 `;
-  return `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  return `const args = process.argv.slice(2);
 ${graphqlLine}const table = new Map(${table});
 const key = JSON.stringify(args);
 if (table.has(key)) {
@@ -72,25 +73,21 @@ function runStubbedCli(
   responses: Map<string, string>,
   graphqlResponse?: string,
 ): string {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-pagination-cli-'));
   const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-gh-pagination-cwd-'));
+  const restore = stubExecutable('gh', buildStubGh(responses, graphqlResponse));
   try {
-    const ghPath = join(tempRoot, 'gh');
-    writeFileSync(ghPath, buildStubGh(responses, graphqlResponse));
-    chmodSync(ghPath, 0o755);
-
     return execFileSync(
       process.execPath,
       [join(REPO_ROOT, scriptRelPath), ...cliArgs],
       {
         cwd: cwdRoot,
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+        env: { ...process.env },
         timeout: 60_000,
       },
     );
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
+    restore();
     rmSync(cwdRoot, { recursive: true, force: true });
   }
 }

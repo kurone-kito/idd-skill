@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -11,6 +11,7 @@ import {
   countLatestChangesRequestedByReviewer,
   selectResumeRoute,
 } from '../src/scripts/resume-route-selection.mts';
+import { stubExecutable } from './test-utils.mts';
 
 test('routes D4 when no PR and required checks are not generated', () => {
   const result = selectResumeRoute({
@@ -328,20 +329,23 @@ function ghTokenPropagationFixture() {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-resume-route-selection-token-'),
   );
-  const ghPath = join(tempRoot, 'gh');
   const dumpPath = join(tempRoot, 'env-dump.json');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-require('fs').writeFileSync(process.env.ENV_DUMP_PATH, JSON.stringify({
+  const restore = stubExecutable(
+    'gh',
+    `require('fs').writeFileSync(process.env.ENV_DUMP_PATH, JSON.stringify({
   ghToken: process.env.GH_TOKEN ?? null,
   githubToken: process.env.GITHUB_TOKEN ?? null,
 }));
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
-  return { tempRoot, ghPath, dumpPath };
+  return {
+    dumpPath,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
+  };
 }
 
 function runResumeRouteSelectionCli(
@@ -360,11 +364,7 @@ function runResumeRouteSelectionCli(
       {
         cwd: REPO_ROOT,
         encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fixture.tempRoot}:${process.env.PATH ?? ''}`,
-          ENV_DUMP_PATH: fixture.dumpPath,
-        },
+        env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
       },
     ),
   );
@@ -376,46 +376,50 @@ function runResumeRouteSelectionCli(
 
 test('--gh-token sets GH_TOKEN/GITHUB_TOKEN for gh auth', () => {
   const fixture = ghTokenPropagationFixture();
-  const dump = runResumeRouteSelectionCli(
-    ['--gh-token', 'canonical-test-token'],
-    fixture,
-  );
-  assert.equal(dump.ghToken, 'canonical-test-token');
-  assert.equal(dump.githubToken, 'canonical-test-token');
+  try {
+    const dump = runResumeRouteSelectionCli(
+      ['--gh-token', 'canonical-test-token'],
+      fixture,
+    );
+    assert.equal(dump.ghToken, 'canonical-test-token');
+    assert.equal(dump.githubToken, 'canonical-test-token');
+  } finally {
+    fixture.restore();
+  }
 });
 
 test('--token still sets GH_TOKEN/GITHUB_TOKEN and warns as a deprecated alias', () => {
   const fixture = ghTokenPropagationFixture();
-  let stderr = '';
   try {
-    execFileSync(
-      process.execPath,
-      [
-        join(REPO_ROOT, 'scripts/resume-route-selection.mjs'),
-        '--issue',
-        '1',
-        '--token',
-        'deprecated-test-token',
-      ],
-      {
-        cwd: REPO_ROOT,
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fixture.tempRoot}:${process.env.PATH ?? ''}`,
-          ENV_DUMP_PATH: fixture.dumpPath,
+    let stderr = '';
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/resume-route-selection.mjs'),
+          '--issue',
+          '1',
+          '--token',
+          'deprecated-test-token',
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
         },
-      },
-    );
-    assert.fail('expected the CLI to exit non-zero');
-  } catch (error) {
-    stderr = String((error as { stderr?: unknown }).stderr ?? '');
+      );
+      assert.fail('expected the CLI to exit non-zero');
+    } catch (error) {
+      stderr = String((error as { stderr?: unknown }).stderr ?? '');
+    }
+    const dump = JSON.parse(readFileSync(fixture.dumpPath, 'utf8')) as {
+      ghToken: string | null;
+      githubToken: string | null;
+    };
+    assert.equal(dump.ghToken, 'deprecated-test-token');
+    assert.equal(dump.githubToken, 'deprecated-test-token');
+    assert.match(stderr, /--token is deprecated; use --gh-token instead\./);
+  } finally {
+    fixture.restore();
   }
-  const dump = JSON.parse(readFileSync(fixture.dumpPath, 'utf8')) as {
-    ghToken: string | null;
-    githubToken: string | null;
-  };
-  assert.equal(dump.ghToken, 'deprecated-test-token');
-  assert.equal(dump.githubToken, 'deprecated-test-token');
-  assert.match(stderr, /--token is deprecated; use --gh-token instead\./);
 });
