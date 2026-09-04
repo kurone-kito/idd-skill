@@ -4160,7 +4160,7 @@ test('isBranchProtectionUnreadable is true only when both reads are unreadable',
 // reports no problem. A 404 on the classic read can also be
 // permission-masked rather than proof the repository is Rulesets-only;
 // see formatRulesetsOnlyTrustGapWarning's own doc comment for that nuance.
-test('isRulesetsOnlyTrustGap is true for a rulesets-only repository with trust unset', () => {
+test('isRulesetsOnlyTrustGap is true when the Rulesets read has an enforcing rule, the classic read is unreadable, and trust is unset', () => {
   assert.equal(
     isRulesetsOnlyTrustGap(
       { value: [{ type: 'required_status_checks' }], unreadable: false },
@@ -4170,7 +4170,7 @@ test('isRulesetsOnlyTrustGap is true for a rulesets-only repository with trust u
   );
 });
 
-test('isRulesetsOnlyTrustGap is false for a rulesets-only repository once trust is set (classic 404 trusted as empty)', () => {
+test('isRulesetsOnlyTrustGap is false once trust is set, even with an enforcing Rulesets rule present (classic 404 trusted as empty)', () => {
   // ciGate.trustEmptyProtectionReads: true makes fetchGovernanceJson trust
   // the classic endpoint's 404 as genuinely empty, so branchProtectionRead
   // arrives with unreadable: false -- simulated directly here rather than
