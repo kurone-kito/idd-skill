@@ -3817,19 +3817,35 @@ export function isRulesetsOnlyTrustGap(
  * `ciGate.trustEmptyProtectionReads` and the F2/F3 fail-closed consequence,
  * per idd-skill#2587's acceptance criteria -- is directly unit-testable
  * without re-deriving it from a full `checkGithubReadiness` run.
+ *
+ * The endpoint path fragments URL-encode `branch` (matching
+ * `checkGithubReadiness`'s own `encodeURIComponent(branch)` call, since a
+ * branch name can contain `/`) so the printed path reflects the actual API
+ * call; the human-readable `owner/repo:branch` identifier prefix stays
+ * unencoded, matching {@link isBranchProtectionUnreadable}'s own message
+ * convention (Copilot review, idd-skill#2587 PR #2600).
+ *
+ * Names the token-permission cause as the safer remedy when it applies,
+ * rather than implying `ciGate.trustEmptyProtectionReads` is the only fix
+ * regardless of cause -- blindly setting that flag over a genuine
+ * permission gap would trust a read that should actually be fixed at the
+ * token-scope level (same tradeoff `fetchGovernanceJson`'s own doc comment
+ * describes).
  */
 export function formatRulesetsOnlyTrustGapWarning(
   owner: string,
   repo: string,
   branch: string,
 ): string {
+  const encodedBranch = encodeURIComponent(branch);
   return (
-    `branch protection on ${owner}/${repo}:${branch}: the classic branches/${branch}/protection ` +
+    `branch protection on ${owner}/${repo}:${branch}: the classic branches/${encodedBranch}/protection ` +
     `read returned 404 (this endpoint also 404s when the token lacks permission to read it, not ` +
-    `only when nothing is configured there) while the Rulesets read (rules/branches/${branch}) ` +
-    `already confirms at least one enforcing rule; either way, the F2/F3 merge gate will still ` +
-    `fail closed on the first merge attempt unless ciGate.trustEmptyProtectionReads: true is set ` +
-    `in .github/idd/config.json`
+    `only when nothing is configured there -- if that's the cause here, fixing the token's ` +
+    `permissions is the safer remedy) while the Rulesets read (rules/branches/${encodedBranch}) ` +
+    `already confirms at least one enforcing rule; either way, until the cause is resolved the ` +
+    `F2/F3 merge gate will still fail closed on the first merge attempt unless ` +
+    `ciGate.trustEmptyProtectionReads: true is set in .github/idd/config.json`
   );
 }
 

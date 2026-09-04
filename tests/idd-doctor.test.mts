@@ -4223,6 +4223,29 @@ test('formatRulesetsOnlyTrustGapWarning names ciGate.trustEmptyProtectionReads a
   assert.match(message, /example-owner\/example-repo:master/);
 });
 
+test('formatRulesetsOnlyTrustGapWarning names the token-permission cause as the safer remedy, not just the trust flag', () => {
+  const message = formatRulesetsOnlyTrustGapWarning(
+    'example-owner',
+    'example-repo',
+    'master',
+  );
+  assert.match(message, /lacks permission/);
+  assert.match(message, /fixing the token's permissions is the safer remedy/);
+});
+
+test("formatRulesetsOnlyTrustGapWarning URL-encodes the branch name in endpoint path fragments, matching checkGithubReadiness's own encodeURIComponent(branch) call", () => {
+  const message = formatRulesetsOnlyTrustGapWarning(
+    'example-owner',
+    'example-repo',
+    'release/1.0',
+  );
+  assert.match(message, /branches\/release%2F1\.0\/protection/);
+  assert.match(message, /rules\/branches\/release%2F1\.0/);
+  // The human-readable identifier prefix stays unencoded, matching
+  // isBranchProtectionUnreadable's own message convention.
+  assert.match(message, /example-owner\/example-repo:release\/1\.0/);
+});
+
 test('readTrustEmptyProtectionReads is false when .github/idd/config.json is absent, lacks ciGate, or is malformed (idd-skill#2010)', () => {
   const dir = mkdtempSync(
     join(tmpdir(), 'idd-doctor-trust-empty-protection-reads-'),
