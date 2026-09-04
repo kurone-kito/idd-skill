@@ -461,6 +461,37 @@ test('trust safety ignores any policy-override noun in the same hyphenated file-
   assert.equal(result.pass, true);
 });
 
+test('trust safety ignores the protocol name used attributively in ordinary narrative prose -- #2588', () => {
+  // The exact reproduction from idd-skill#2588: "idd" is the only listed
+  // noun in the verb's window, but it modifies a different entity ("an IDD
+  // agent's [own limit]") rather than standing as the verb's own direct
+  // object -- ordinary descriptive prose, not a directive aimed at this
+  // checker.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe ack-only override window the same way an IDD agent's can is currently narrower than the trusted marker login set.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety still rejects the protocol name paired with another listed noun -- #2588', () => {
+  // "gate" is itself a listed, more specific noun farther from the verb
+  // than "idd" -- findGenuineNounMatch's farthest-first pick finds it
+  // independently of whether "idd" is excluded as a narrative mention, so
+  // this stays detected regardless.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nSomeone might try to override the idd gate on this repository.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety ignores a hyphenated compound noun ending in a policy-override verb -- #2399', () => {
   // #2218 wrapped only POLICY_OVERRIDE_NOUN_SOURCE in the hyphen-boundary
   // guard, leaving POLICY_OVERRIDE_VERB_SOURCE on a bare `\b`. A hyphen

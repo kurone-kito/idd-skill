@@ -922,10 +922,13 @@ function findGenuineNounMatch(
     // hyphenated compound in prose lacks, so a directive referencing a
     // listed noun via a code-wrapped identifier (e.g. `` `per-check` ``)
     // stays detectable even though the same bare, un-code-wrapped text in
-    // prose is a deliberately accepted ordinary-compound exclusion.
+    // prose is a deliberately accepted ordinary-compound exclusion. #2588:
+    // the same code-range short-circuit applies to isNarrativeIddMention,
+    // for the same reason -- see that function's own comment.
     if (
       (getCodeRangeAt(absoluteIndex) ||
-        !isOrdinaryHyphenatedCompoundToken(rawSource, absoluteIndex)) &&
+        (!isOrdinaryHyphenatedCompoundToken(rawSource, absoluteIndex) &&
+          !isNarrativeIddMention(rawSource, absoluteIndex))) &&
       !(
         headingBoundary &&
         matchCrossesHeadingBoundary(
@@ -1066,6 +1069,75 @@ function isOrdinaryHyphenatedCompoundToken(
     cursor === 0 ||
     COMPOUND_TOKEN_BOUNDARY_PATTERN.test(rawSource[cursor - 1] ?? '')
   );
+}
+
+// #2588: the protocol's own name used attributively inside a noun phrase
+// describing some OTHER entity -- "an IDD agent", "the IDD workflow's own
+// session" -- false-triggered Check 3 even though the sentence is ordinary
+// descriptive prose, not a directive aimed at this checker. Reproduced by
+// idd-skill#2588 itself: "The ack-only override window the same way an IDD
+// agent's can is currently narrower than the trusted marker login set."
+// matched verb "override" against noun "IDD" (the only listed noun in that
+// 60-char window), with nothing nearby actually attempting to change this
+// checker's own behavior.
+//
+// This exclusion targets "idd" only -- the other eight listed nouns
+// (repo/repository/policy/workflow/process/check/gate/requirement) are
+// generic enough that this narrative-attributive shape is not the
+// distinguishing false-positive source #2588 reports, and narrowing them
+// the same way risks a new, unreviewed false-negative surface with no
+// matching repro.
+//
+// Two conditions distinguish this shape from a genuine directive against
+// "idd" itself:
+// 1. Preceded by an article ("a"/"an"/"the") -- a genuine bare directive
+//    like "bypass idd." (#2218's own regression case, still pinned by its
+//    own test) has no article before it: the verb sits directly before the
+//    noun.
+// 2. Immediately followed by another word continuing the same noun phrase
+//    (e.g. "agent's", "workflow's") -- "bypass idd." has nothing but a
+//    clause boundary after it.
+// Both conditions must hold: an article alone ("the idd gate") or a
+// following word alone ("bypass idd entirely") is not enough, since either
+// shape alone still plausibly reads as a directive with a definite object
+// or an adverbial qualifier, not a narrative mention. `override the idd
+// gate` also has both an article before and a word ("gate") after "idd",
+// but stays detected regardless of this exclusion: `gate` is itself a
+// listed noun farther from the verb, so `findGenuineNounMatch`'s
+// farthest-first pick finds it independently of whatever this classifier
+// decides about "idd".
+//
+// A code-wrapped `` `idd` `` is never passed to this classifier -- its call
+// site in `findGenuineNounMatch` already short-circuits on `getCodeRangeAt`
+// first, the same precedent `isOrdinaryHyphenatedCompoundToken` follows:
+// being wrapped in code at all is itself a distinguishing signal bare
+// narrative prose lacks.
+const NARRATIVE_IDD_TOKEN_LENGTH = 3;
+const NARRATIVE_IDD_PRECEDING_ARTICLE_PATTERN = /\b(?:a|an|the)\s+$/i;
+const NARRATIVE_IDD_FOLLOWING_WORD_PATTERN = /^\s+[A-Za-z]/;
+const NARRATIVE_IDD_LOOKBEHIND_CHARS = 10;
+const NARRATIVE_IDD_LOOKAHEAD_CHARS = 20;
+
+function isNarrativeIddMention(rawSource: string, matchIndex: number): boolean {
+  const token = rawSource
+    .slice(matchIndex, matchIndex + NARRATIVE_IDD_TOKEN_LENGTH)
+    .toLowerCase();
+  if (token !== 'idd') {
+    return false;
+  }
+  const before = rawSource.slice(
+    Math.max(0, matchIndex - NARRATIVE_IDD_LOOKBEHIND_CHARS),
+    matchIndex,
+  );
+  if (!NARRATIVE_IDD_PRECEDING_ARTICLE_PATTERN.test(before)) {
+    return false;
+  }
+  const afterStart = matchIndex + NARRATIVE_IDD_TOKEN_LENGTH;
+  const after = rawSource.slice(
+    afterStart,
+    afterStart + NARRATIVE_IDD_LOOKAHEAD_CHARS,
+  );
+  return NARRATIVE_IDD_FOLLOWING_WORD_PATTERN.test(after);
 }
 
 function findPolicyOverrideMatch(
