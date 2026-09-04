@@ -76,9 +76,38 @@ const SYNC_DOCS_DEPS = [
  * pending async work (timers, a `process.stdin` listener) still runs to
  * completion before the process exits naturally, exactly as it would on
  * POSIX.
+ *
+ * All temp-file setup (`writeFileSync`/`chmodSync`/`linkSync`/
+ * `copyFileSync`) runs and is fully committed before `PATH` (or, on
+ * Windows, `NODE_OPTIONS`) is ever mutated -- a setup failure (e.g. a full
+ * or read-only temp filesystem) removes `tempRoot` and rethrows without
+ * touching either variable, so a caller whose `try { ... } finally {
+ * restore(); }` never runs (this function threw before returning `restore`)
+ * cannot leave a corrupted `PATH`/`NODE_OPTIONS` for later tests in the
+ * same process (Copilot review, PR #2575).
  */
 export function stubExecutable(name: string, scriptBody: string): () => void {
   const tempRoot = mkdtempSync(join(tmpdir(), `idd-stub-${name}-`));
+  const preloadPath = join(tempRoot, 'preload.cjs');
+  try {
+    if (process.platform !== 'win32') {
+      const scriptPath = join(tempRoot, name);
+      writeFileSync(scriptPath, `#!/usr/bin/env node\n${scriptBody}`);
+      chmodSync(scriptPath, 0o755);
+    } else {
+      const exePath = join(tempRoot, `${name}.exe`);
+      try {
+        linkSync(process.execPath, exePath);
+      } catch {
+        copyFileSync(process.execPath, exePath);
+      }
+      writeFileSync(preloadPath, buildStubPreloadSource(name, scriptBody));
+    }
+  } catch (error) {
+    rmSync(tempRoot, { recursive: true, force: true });
+    throw error;
+  }
+
   const originalPath = process.env.PATH;
   process.env.PATH = originalPath
     ? `${tempRoot}${delimiter}${originalPath}`
@@ -91,84 +120,12 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
     }
   };
   if (process.platform !== 'win32') {
-    const scriptPath = join(tempRoot, name);
-    writeFileSync(scriptPath, `#!/usr/bin/env node\n${scriptBody}`);
-    chmodSync(scriptPath, 0o755);
     return () => {
       restorePath();
       rmSync(tempRoot, { recursive: true, force: true });
     };
   }
   const originalNodeOptions = process.env.NODE_OPTIONS;
-  const exePath = join(tempRoot, `${name}.exe`);
-  try {
-    linkSync(process.execPath, exePath);
-  } catch {
-    copyFileSync(process.execPath, exePath);
-  }
-  const preloadPath = join(tempRoot, 'preload.cjs');
-  writeFileSync(
-    preloadPath,
-    [
-      // Gate on the exe's own basename rather than a full-path compare: any
-      // node process launched as `<name>.exe` is this stub by construction
-      // (the real `gh.exe` is not a node binary and never honors
-      // `NODE_OPTIONS`), and matching only the basename sidesteps 8.3
-      // short-path spellings (e.g. `RUNNER~1`) a CI runner could expose for
-      // the same directory.
-      `const expectedBasename = ${JSON.stringify(`${name}.exe`.toLowerCase())};`,
-      "const nodePath = require('node:path');",
-      'if (nodePath.basename(process.execPath).toLowerCase() === expectedBasename) {',
-      // Node's own bootstrap resolves argv[1] against cwd before this
-      // preload runs (treating it as a candidate main-module path even
-      // though the process exits before ever loading one), so a plain
-      // subcommand-style first argument such as `repo` arrives here already
-      // rewritten to `<cwd>\repo`. `path.relative` inverts that exact
-      // `path.resolve(cwd, arg)` transform for the realistic domain of args
-      // this repository's `gh` invocations use (bare words and flags, never
-      // a `..`-escaping or already-absolute path), so recompute it before
-      // reassembling the POSIX-shaped argv scriptBody expects. A first arg
-      // that itself starts with `-` never reaches here at all -- Node's own
-      // C++ option parser rejects an unrecognized leading flag before any
-      // preload runs, so this stub cannot front a flag-shaped first
-      // argument on Windows (undocumented upstream of this helper; no
-      // affected call site in this repository uses one).
-      '  const cwd = process.cwd();',
-      '  const rawFirstArg = process.argv[1];',
-      '  const firstArg = rawFirstArg === undefined',
-      '    ? undefined',
-      '    : rawFirstArg.toLowerCase().startsWith((cwd + nodePath.sep).toLowerCase())',
-      '    ? nodePath.relative(cwd, rawFirstArg)',
-      '    : rawFirstArg;',
-      '  process.argv = firstArg === undefined',
-      "    ? [process.argv[0], '<stub>']",
-      "    : [process.argv[0], '<stub>', firstArg, ...process.argv.slice(2)];",
-      // Node still tries to `require()` the (unreachable) main-module path
-      // once this preload returns, regardless of any `process.argv[1]`
-      // rewrite above -- it resolves and caches that path separately,
-      // before preloads even run (empirically confirmed; reassigning
-      // `process.argv` here does not redirect it). A bare `process.exit()`
-      // after `scriptBody` would dodge that crash but also cut off any
-      // pending async work `scriptBody` started (e.g. a `process.stdin`
-      // `'data'`/`'end'` listener) before it ever fires, since the crash
-      // would otherwise pre-empt those callbacks on the very next tick.
-      // Special-casing the isMain load to a no-op instead lets the event
-      // loop -- and any `scriptBody`-registered listeners or timers --
-      // run to natural completion, then exit exactly the way a real POSIX
-      // shebang script would, honoring `process.exitCode` (or an explicit
-      // `process.exit()` `scriptBody` itself calls) either way.
-      "  const nodeModule = require('node:module');",
-      '  const originalLoad = nodeModule._load;',
-      '  nodeModule._load = function (request, parent, isMain) {',
-      '    if (isMain) return {};',
-      '    return originalLoad.apply(this, arguments);',
-      '  };',
-      '  {',
-      scriptBody,
-      '  }',
-      '}',
-    ].join('\n'),
-  );
   const requireFlag = `--require "${preloadPath.replaceAll('\\', '/')}"`;
   process.env.NODE_OPTIONS = originalNodeOptions
     ? `${originalNodeOptions} ${requireFlag}`
@@ -182,6 +139,69 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
     }
     rmSync(tempRoot, { recursive: true, force: true });
   };
+}
+
+/** Builds the Windows preload script `stubExecutable` writes into `tempRoot`. */
+function buildStubPreloadSource(name: string, scriptBody: string): string {
+  return [
+    // Gate on the exe's own basename rather than a full-path compare: any
+    // node process launched as `<name>.exe` is this stub by construction
+    // (the real `gh.exe` is not a node binary and never honors
+    // `NODE_OPTIONS`), and matching only the basename sidesteps 8.3
+    // short-path spellings (e.g. `RUNNER~1`) a CI runner could expose for
+    // the same directory.
+    `const expectedBasename = ${JSON.stringify(`${name}.exe`.toLowerCase())};`,
+    "const nodePath = require('node:path');",
+    'if (nodePath.basename(process.execPath).toLowerCase() === expectedBasename) {',
+    // Node's own bootstrap resolves argv[1] against cwd before this
+    // preload runs (treating it as a candidate main-module path even
+    // though the process exits before ever loading one), so a plain
+    // subcommand-style first argument such as `repo` arrives here already
+    // rewritten to `<cwd>\repo`. `path.relative` inverts that exact
+    // `path.resolve(cwd, arg)` transform for the realistic domain of args
+    // this repository's `gh` invocations use (bare words and flags, never
+    // a `..`-escaping or already-absolute path), so recompute it before
+    // reassembling the POSIX-shaped argv scriptBody expects. A first arg
+    // that itself starts with `-` never reaches here at all -- Node's own
+    // C++ option parser rejects an unrecognized leading flag before any
+    // preload runs, so this stub cannot front a flag-shaped first
+    // argument on Windows (undocumented upstream of this helper; no
+    // affected call site in this repository uses one).
+    '  const cwd = process.cwd();',
+    '  const rawFirstArg = process.argv[1];',
+    '  const firstArg = rawFirstArg === undefined',
+    '    ? undefined',
+    '    : rawFirstArg.toLowerCase().startsWith((cwd + nodePath.sep).toLowerCase())',
+    '    ? nodePath.relative(cwd, rawFirstArg)',
+    '    : rawFirstArg;',
+    '  process.argv = firstArg === undefined',
+    "    ? [process.argv[0], '<stub>']",
+    "    : [process.argv[0], '<stub>', firstArg, ...process.argv.slice(2)];",
+    // Node still tries to `require()` the (unreachable) main-module path
+    // once this preload returns, regardless of any `process.argv[1]`
+    // rewrite above -- it resolves and caches that path separately,
+    // before preloads even run (empirically confirmed; reassigning
+    // `process.argv` here does not redirect it). A bare `process.exit()`
+    // after `scriptBody` would dodge that crash but also cut off any
+    // pending async work `scriptBody` started (e.g. a `process.stdin`
+    // `'data'`/`'end'` listener) before it ever fires, since the crash
+    // would otherwise pre-empt those callbacks on the very next tick.
+    // Special-casing the isMain load to a no-op instead lets the event
+    // loop -- and any `scriptBody`-registered listeners or timers --
+    // run to natural completion, then exit exactly the way a real POSIX
+    // shebang script would, honoring `process.exitCode` (or an explicit
+    // `process.exit()` `scriptBody` itself calls) either way.
+    "  const nodeModule = require('node:module');",
+    '  const originalLoad = nodeModule._load;',
+    '  nodeModule._load = function (request, parent, isMain) {',
+    '    if (isMain) return {};',
+    '    return originalLoad.apply(this, arguments);',
+    '  };',
+    '  {',
+    scriptBody,
+    '  }',
+    '}',
+  ].join('\n');
 }
 
 /**
