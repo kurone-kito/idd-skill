@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -55,7 +55,10 @@ process.exit(1);
 `,
   );
   return {
-    restore,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
     readCount: () => Number(readFileSync(counterFile, 'utf8').trim()),
   };
 }

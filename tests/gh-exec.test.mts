@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -88,6 +88,7 @@ process.stdout.write('  hello world  \\n');
     ]);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -254,6 +255,7 @@ process.stdout.write('{}');
     ]);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -333,6 +335,7 @@ process.stdout.write('{}');
     ]);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -367,6 +370,7 @@ process.stdout.write('{}');
     ]);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -404,6 +408,7 @@ process.stdout.write('');
     ]);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -520,6 +525,7 @@ process.stdout.write('  hello async  \\n');
     ]);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

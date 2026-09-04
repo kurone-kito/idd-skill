@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -633,6 +633,7 @@ process.exit(1);
     );
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -657,7 +658,13 @@ function ghTokenPropagationFixture() {
 process.exit(1);
 `,
   );
-  return { dumpPath, restore };
+  return {
+    dumpPath,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
+  };
 }
 
 function runClaimApprovalGateCli(

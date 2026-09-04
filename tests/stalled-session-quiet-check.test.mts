@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -149,7 +149,13 @@ function ghTokenPropagationFixture() {
 process.exit(1);
 `,
   );
-  return { dumpPath, restore };
+  return {
+    dumpPath,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
+  };
 }
 
 function runStalledSessionQuietCheckCli(

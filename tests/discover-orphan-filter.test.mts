@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1279,6 +1279,7 @@ test('CLI path fails when an explicit --policy file is invalid', () => {
     );
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -1306,6 +1307,7 @@ test('CLI path fails when the default-path config exists but is malformed (not s
     );
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -825,6 +825,7 @@ process.exit(1);
     });
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

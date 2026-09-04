@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
@@ -154,16 +148,15 @@ test('the returned cleanup callback restores PATH and NODE_OPTIONS', () => {
 });
 
 test('the returned cleanup callback removes the temp directory it created (regression: a leaked hard-linked node.exe per Windows call site)', () => {
-  const before = new Set(readdirSync(tmpdir()));
   const restore = stubExecutable('gh', "process.stdout.write('x');\n");
-  const createdEntry = readdirSync(tmpdir()).find(
-    (entry) => entry.startsWith('idd-stub-gh-') && !before.has(entry),
-  );
-  assert.ok(
-    createdEntry,
-    'stubExecutable should create an idd-stub-gh-* temp directory',
-  );
-  const createdPath = join(tmpdir(), createdEntry as string);
+  // `node:test` runs test files in parallel, and a concurrent file's own
+  // stubExecutable('gh', ...) call can create an `idd-stub-gh-*` directory
+  // in the same os.tmpdir() window -- diffing a before/after directory
+  // listing to spot "the new one" is racy against that. stubExecutable
+  // always prepends its own temp dir as PATH's first entry, so reading it
+  // straight from PATH identifies this call's own directory deterministically.
+  const createdPath = (process.env.PATH as string).split(delimiter)[0];
+  assert.match(createdPath, /idd-stub-gh-/);
   assert.ok(existsSync(createdPath));
   restore();
   assert.equal(existsSync(createdPath), false);

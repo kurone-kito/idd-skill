@@ -530,6 +530,7 @@ process.stdout.write(JSON.stringify({ run_attempt: 1 }));
     ]);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -796,6 +797,7 @@ if (process.argv[2] === 'repo' && process.argv[3] === 'view' && process.argv[5] 
     });
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
