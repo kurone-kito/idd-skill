@@ -118,7 +118,7 @@ marker. A bot check alone never confirms review of current HEAD.
 Full trigger condition (`secondaryRequestNeeded`/`CAP_EXHAUSTED`/
 stalled `SATISFIED`) and request procedure:
 `idd-review-fix.instructions.md`'s E14 step 5 — never poll/wait for it
-there or at E1/E2; only F2's `secondary-quiet-window` blocker
+there, E1, or E2; only F2's `secondary-quiet-window` blocker
 (`idd-pre-merge.instructions.md`) waits.
 
 ### F3-specific interpretation
