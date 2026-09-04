@@ -14,6 +14,17 @@ import { fileURLToPath } from 'node:url';
 
 import type { ReviewThreadNode } from '../src/scripts/resolve-review-thread.mts';
 
+/**
+ * A git-config-file-safe null-device path. `node:os`'s `devNull` is the
+ * Win32 device-namespace form (`\\.\nul`) on win32, which Git for Windows
+ * cannot open as a `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`/
+ * `GIT_CONFIG_VALUE_0` value (`fatal: unable to access '//./nul': Invalid
+ * argument`); the bare `'NUL'` device name is the form git itself accepts
+ * there. POSIX is unaffected -- `devNull` there is already `/dev/null`.
+ * See kurone-kito/idd-skill#2570.
+ */
+const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
+
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
 // sync-docs.mjs imports the shared banner/helper module, which in turn imports
@@ -171,10 +182,11 @@ function writeScaffoldedFile(dir: string, rel: string, content: string): void {
  * of the temp fixture despite `cwd` being set correctly -- and every
  * ambient `GIT_CONFIG*` variable, replacing them with a fixed
  * `GIT_CONFIG_COUNT`/`KEY`/`VALUE` triple that pins `core.excludesFile`
- * to `os.devNull` (the platform null device, not necessarily the literal
- * path `/dev/null`) so an operator's personal global ignore file can
- * never drop fixture paths from `git ls-files --exclude-standard`. Other
- * `GIT_*` variables outside these two groups are left untouched. Shared
+ * to the platform null device (`GIT_NULL_DEVICE`, not necessarily
+ * `os.devNull` -- see its own doc comment) so an operator's personal
+ * global ignore file can never drop fixture paths from `git ls-files
+ * --exclude-standard`. Other `GIT_*` variables outside these two groups
+ * are left untouched. Shared
  * by every suite that scaffolds a git-backed fixture (originally local
  * to `audit-docs-file-sets.test.mts`; lifted out for `sync-docs.test.mts`
  * too per #1703, so the sanitization logic itself has one copy).
@@ -191,11 +203,11 @@ export function fixtureEnv(): NodeJS.ProcessEnv {
   delete env.GIT_WORK_TREE;
   delete env.GIT_COMMON_DIR;
   delete env.GIT_OBJECT_DIRECTORY;
-  env.GIT_CONFIG_GLOBAL = devNull;
-  env.GIT_CONFIG_SYSTEM = devNull;
+  env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
+  env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
   env.GIT_CONFIG_COUNT = '1';
   env.GIT_CONFIG_KEY_0 = 'core.excludesFile';
-  env.GIT_CONFIG_VALUE_0 = devNull;
+  env.GIT_CONFIG_VALUE_0 = GIT_NULL_DEVICE;
   return env;
 }
 
