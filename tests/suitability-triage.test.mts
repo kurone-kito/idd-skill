@@ -1501,6 +1501,87 @@ test('trust safety allows a negation word tightly wrapped in Markdown delimiters
   assert.equal(result.pass, true);
 });
 
+// #2609: "not a directive/instruction/request to <verb>" negates via a
+// phrase-level exception, independent of NEGATION_IMMEDIATELY_BEFORE_PATTERN's
+// {0,1}-word gap (three words -- article, noun, "to" -- intervene between the
+// negation word and the trigger verb, wider than that pattern's own narrow
+// window). Found via dogfooding A4.5 on #2608, itself a Check 3 false-positive
+// report whose own descriptive "not a directive to bypass ... policy" wording
+// was flagged.
+test('trust safety allows "not a directive to <verb>" -- #2609', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is not a directive to bypass repository policy.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety allows "not an instruction to <verb>" -- #2609', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is not an instruction to override the workflow gate.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety allows "not a request to <verb>" -- #2609', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is not a request to disable the required checks.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety allows "no directive to <verb>" (no/never/don\'t forms) -- #2609', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is no directive to bypass repository policy.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety still rejects a genuine non-negated directive shaped like "a directive to <verb>" -- #2609', () => {
+  // The phrase-level exception must not become a blanket allowance for any
+  // sentence containing "directive"/"instruction"/"request" -- only an
+  // actually-negated one.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is a directive to bypass repository policy.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /Policy-override directive detected/);
+});
+
+test('trust safety does not widen the {0,1}-word gap for an ordinary negated directive -- #2609', () => {
+  // Regression pin: the existing #2024 "does not ever skip" case (one
+  // intervening word) must keep passing through
+  // NEGATION_IMMEDIATELY_BEFORE_PATTERN unchanged -- #2609 only adds an
+  // independent, separate pattern, it never loosens this one.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe fallback does not ever skip repository checks.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety preserves policy evidence positions after masked code', () => {
   const result = checkTrustSafety({
     issue: {

@@ -806,6 +806,20 @@ const NEGATION_IMMEDIATELY_BEFORE_PATTERN = new RegExp(
   `${POST_VERB_NEGATION_PATTERN.source}[^\\s.!?;,:]*(?:\\s+[^\\s.!?;,:]+){0,1}\\s*$`,
   'i',
 );
+// #2609: "not a directive to <verb>" / "not an instruction to <verb>" /
+// "not a request to <verb>" (and the equivalent no/never/don't forms) is a
+// common, natural way to describe -- in the negative -- what a piece of text
+// is *not* asking for. An article plus a noun plus "to" sits between the
+// negation word and the trigger verb (three intervening words), wider than
+// NEGATION_IMMEDIATELY_BEFORE_PATTERN's deliberately narrow {0,1}-word gap
+// (#2041's own rationale for that narrowness -- avoiding a misread of an
+// unrelated, earlier negation sitting outside POLICY_OVERRIDE_PATTERN's
+// 60-character window -- stays valid and unchanged). This is a separate,
+// explicit phrase-level exception, matching this repository's established
+// negation-gap-closing pattern (#2024, #2040, #2041, #2408, #2468, #2588),
+// never a general widening of that pattern's own gap.
+const PHRASE_LEVEL_NEGATION_BEFORE_PATTERN =
+  /\b(?:(?:not|never|don'?t|doesn'?t|can'?t|won'?t)\s+an?|no)\s+(?:directive|instruction|request)\s+to\s*$/i;
 // A clause boundary (sentence-ending punctuation, a comma/semicolon, or a
 // colon) stops the post-verb scan outright -- see
 // findNegationWithinTwoWordsAfter's clause terminator check for why
@@ -924,7 +938,12 @@ function isNegatedPolicyOverrideMatch(
 ): boolean {
   const beforeStart = Math.max(0, matchIndex - 100);
   const contextBefore = maskedSource.slice(beforeStart, matchIndex);
-  const beforeMatch = NEGATION_IMMEDIATELY_BEFORE_PATTERN.exec(contextBefore);
+  // #2609: try the narrow {0,1}-word-gap pattern first, then the separate
+  // phrase-level "not a directive/instruction/request to" exception -- an
+  // independent check, never a widening of the first pattern's own gap.
+  const beforeMatch =
+    NEGATION_IMMEDIATELY_BEFORE_PATTERN.exec(contextBefore) ??
+    PHRASE_LEVEL_NEGATION_BEFORE_PATTERN.exec(contextBefore);
   if (beforeMatch) {
     const trailingWhitespace = /\s*$/.exec(beforeMatch[0])?.[0] ?? '';
     const gapStart = matchIndex - trailingWhitespace.length;
