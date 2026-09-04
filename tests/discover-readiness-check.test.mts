@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -20,6 +20,7 @@ import {
 } from '../src/scripts/discover-readiness-check.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -1251,13 +1252,10 @@ test('CLI path fails when an explicit --policy file is invalid', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-discover-readiness-check-policy-'),
   );
-  const ghPath = join(tempRoot, 'gh');
   const policyPath = join(tempRoot, 'bad-policy.json');
-
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
   const jq = args[args.indexOf("--jq") + 1];
   process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
@@ -1267,31 +1265,31 @@ process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
 process.exit(1);
 `,
   );
-  writeFileSync(policyPath, '{not-json');
-  chmodSync(ghPath, 0o755);
+  try {
+    writeFileSync(policyPath, '{not-json');
 
-  assert.throws(
-    () =>
-      execFileSync(
-        process.execPath,
-        [
-          join(REPO_ROOT, 'scripts/discover-readiness-check.mjs'),
-          '--issue',
-          '1',
-          '--policy',
-          policyPath,
-        ],
-        {
-          cwd: REPO_ROOT,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/discover-readiness-check.mjs'),
+            '--issue',
+            '1',
+            '--policy',
+            policyPath,
+          ],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+            env: { ...process.env },
           },
-        },
-      ),
-    /failed to load policy from .*bad-policy\.json/,
-  );
+        ),
+      /failed to load policy from .*bad-policy\.json/,
+    );
+  } finally {
+    restore();
+  }
 });
 
 // #2268 AC2: at least one migrated issue/claim flow must run entirely

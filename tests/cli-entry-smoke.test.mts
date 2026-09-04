@@ -1,16 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-  chmodSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const SRC_SCRIPTS = fileURLToPath(new URL('../src/scripts/', import.meta.url));
@@ -306,12 +301,9 @@ test('every src/scripts/*.mts helper keeps module-level bindings above its CLI e
 // ---------------------------------------------------------------------------
 
 test('discover-readiness-check.mjs CLI runs the entry path without a load-time ReferenceError', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-discover-readiness-cli-'));
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 // buildIssueLoader: gh api repos/o/r/issues/900 --jq .
 if (args[0] === 'api' && args[1] === 'repos/o/r/issues/900') {
   process.stdout.write(JSON.stringify({
@@ -337,47 +329,46 @@ process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/discover-readiness-check.mjs'),
+        '--issue',
+        '900',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env },
+        // Fail fast instead of hanging the suite if the CLI ever blocks on an
+        // unexpected read (the stub gh answers or exits non-zero for every call).
+        timeout: 60_000,
+      },
+    );
 
-  const output = execFileSync(
-    process.execPath,
-    [
-      join(REPO_ROOT, 'scripts/discover-readiness-check.mjs'),
-      '--issue',
-      '900',
-      '--owner',
-      'o',
-      '--repo',
-      'r',
-    ],
-    {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
-      // Fail fast instead of hanging the suite if the CLI ever blocks on an
-      // unexpected read (the stub gh answers or exits non-zero for every call).
-      timeout: 60_000,
-    },
-  );
-
-  assert.doesNotMatch(
-    output,
-    /ReferenceError|before initialization/,
-    'CLI output must not carry a load-time ReferenceError',
-  );
-  const parsed = JSON.parse(output);
-  assert.equal(parsed.summary.total, 1);
-  assert.equal(parsed.summary.readyCount, 1);
-  assert.equal(parsed.ready[0].number, 900);
+    assert.doesNotMatch(
+      output,
+      /ReferenceError|before initialization/,
+      'CLI output must not carry a load-time ReferenceError',
+    );
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.summary.total, 1);
+    assert.equal(parsed.summary.readyCount, 1);
+    assert.equal(parsed.ready[0].number, 900);
+  } finally {
+    restore();
+  }
 });
 
 test('discover-viability-gate.mjs CLI runs the entry path without a load-time ReferenceError', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-discover-viability-cli-'));
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 // buildIssueLoader: gh api repos/o/r/issues/901 --jq .
 if (args[0] === 'api' && args[1] === 'repos/o/r/issues/901') {
   process.stdout.write(JSON.stringify({
@@ -394,38 +385,40 @@ process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/discover-viability-gate.mjs'),
+        '--issue',
+        '901',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env },
+        // Fail fast instead of hanging the suite if the CLI ever blocks on an
+        // unexpected read (the stub gh answers or exits non-zero for every call).
+        timeout: 60_000,
+      },
+    );
 
-  const output = execFileSync(
-    process.execPath,
-    [
-      join(REPO_ROOT, 'scripts/discover-viability-gate.mjs'),
-      '--issue',
-      '901',
-      '--owner',
-      'o',
-      '--repo',
-      'r',
-    ],
-    {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
-      // Fail fast instead of hanging the suite if the CLI ever blocks on an
-      // unexpected read (the stub gh answers or exits non-zero for every call).
-      timeout: 60_000,
-    },
-  );
-
-  assert.doesNotMatch(
-    output,
-    /ReferenceError|before initialization/,
-    'CLI output must not carry a load-time ReferenceError',
-  );
-  const parsed = JSON.parse(output);
-  assert.equal(parsed.summary.total, 1);
-  assert.equal(parsed.summary.viableCount, 1);
-  assert.equal(parsed.viable[0].number, 901);
+    assert.doesNotMatch(
+      output,
+      /ReferenceError|before initialization/,
+      'CLI output must not carry a load-time ReferenceError',
+    );
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.summary.total, 1);
+    assert.equal(parsed.summary.viableCount, 1);
+    assert.equal(parsed.viable[0].number, 901);
+  } finally {
+    restore();
+  }
 });
 
 // ---------------------------------------------------------------------------

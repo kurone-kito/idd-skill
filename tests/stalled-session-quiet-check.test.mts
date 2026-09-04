@@ -2,13 +2,14 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { evaluateQuietWindow } from '../src/scripts/stalled-session-quiet-check.mts';
+import { stubExecutable } from './test-utils.mts';
 
 describe('stalled-session-quiet-check', () => {
   const now = '2026-05-13T12:00:00Z';
@@ -138,20 +139,17 @@ function ghTokenPropagationFixture() {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-stalled-session-quiet-check-token-'),
   );
-  const ghPath = join(tempRoot, 'gh');
   const dumpPath = join(tempRoot, 'env-dump.json');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-require('fs').writeFileSync(process.env.ENV_DUMP_PATH, JSON.stringify({
+  const restore = stubExecutable(
+    'gh',
+    `require('fs').writeFileSync(process.env.ENV_DUMP_PATH, JSON.stringify({
   ghToken: process.env.GH_TOKEN ?? null,
   githubToken: process.env.GITHUB_TOKEN ?? null,
 }));
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
-  return { tempRoot, ghPath, dumpPath };
+  return { dumpPath, restore };
 }
 
 function runStalledSessionQuietCheckCli(
@@ -170,11 +168,7 @@ function runStalledSessionQuietCheckCli(
       {
         cwd: REPO_ROOT,
         encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${fixture.tempRoot}:${process.env.PATH ?? ''}`,
-          ENV_DUMP_PATH: fixture.dumpPath,
-        },
+        env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
       },
     ),
   );
@@ -187,47 +181,51 @@ function runStalledSessionQuietCheckCli(
 describe('stalled-session-quiet-check CLI --gh-token / --token', () => {
   it('--gh-token sets GH_TOKEN/GITHUB_TOKEN for gh auth', () => {
     const fixture = ghTokenPropagationFixture();
-    const dump = runStalledSessionQuietCheckCli(
-      ['--gh-token', 'canonical-test-token'],
-      fixture,
-    );
-    assert.equal(dump.ghToken, 'canonical-test-token');
-    assert.equal(dump.githubToken, 'canonical-test-token');
+    try {
+      const dump = runStalledSessionQuietCheckCli(
+        ['--gh-token', 'canonical-test-token'],
+        fixture,
+      );
+      assert.equal(dump.ghToken, 'canonical-test-token');
+      assert.equal(dump.githubToken, 'canonical-test-token');
+    } finally {
+      fixture.restore();
+    }
   });
 
   it('--token still sets GH_TOKEN/GITHUB_TOKEN and warns as a deprecated alias', () => {
     const fixture = ghTokenPropagationFixture();
-    let stderr = '';
     try {
-      execFileSync(
-        process.execPath,
-        [
-          join(REPO_ROOT, 'scripts/stalled-session-quiet-check.mjs'),
-          '--pr',
-          '1',
-          '--token',
-          'deprecated-test-token',
-        ],
-        {
-          cwd: REPO_ROOT,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${fixture.tempRoot}:${process.env.PATH ?? ''}`,
-            ENV_DUMP_PATH: fixture.dumpPath,
+      let stderr = '';
+      try {
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/stalled-session-quiet-check.mjs'),
+            '--pr',
+            '1',
+            '--token',
+            'deprecated-test-token',
+          ],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+            env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
           },
-        },
-      );
-      assert.fail('expected the CLI to exit non-zero');
-    } catch (error) {
-      stderr = String((error as { stderr?: unknown }).stderr ?? '');
+        );
+        assert.fail('expected the CLI to exit non-zero');
+      } catch (error) {
+        stderr = String((error as { stderr?: unknown }).stderr ?? '');
+      }
+      const dump = JSON.parse(readFileSync(fixture.dumpPath, 'utf8')) as {
+        ghToken: string | null;
+        githubToken: string | null;
+      };
+      assert.equal(dump.ghToken, 'deprecated-test-token');
+      assert.equal(dump.githubToken, 'deprecated-test-token');
+      assert.match(stderr, /--token is deprecated; use --gh-token instead\./);
+    } finally {
+      fixture.restore();
     }
-    const dump = JSON.parse(readFileSync(fixture.dumpPath, 'utf8')) as {
-      ghToken: string | null;
-      githubToken: string | null;
-    };
-    assert.equal(dump.ghToken, 'deprecated-test-token');
-    assert.equal(dump.githubToken, 'deprecated-test-token');
-    assert.match(stderr, /--token is deprecated; use --gh-token instead\./);
   });
 });

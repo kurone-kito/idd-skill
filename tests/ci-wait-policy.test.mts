@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
-  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -23,6 +22,7 @@ import {
   readCiWaitPolicy,
   resolveCiRerunDecision,
 } from '../src/scripts/ci-wait-policy.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -32,15 +32,7 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 // that restores PATH; callers must invoke it (ideally in a `finally`)
 // even when the assertion throws.
 function stubGh(scriptBody: string): () => void {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-ci-wait-policy-gh-'));
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(ghPath, `#!/usr/bin/env node\n${scriptBody}`);
-  chmodSync(ghPath, 0o755);
-  const originalPath = process.env.PATH;
-  process.env.PATH = `${tempRoot}:${originalPath ?? ''}`;
-  return () => {
-    process.env.PATH = originalPath;
-  };
+  return stubExecutable('gh', scriptBody);
 }
 
 test('parseDurationToMs parses CI wait durations', () => {

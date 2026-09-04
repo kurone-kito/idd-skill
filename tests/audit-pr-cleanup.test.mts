@@ -1,7 +1,4 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { test } from 'node:test';
 
 import type {
@@ -13,6 +10,7 @@ import {
   fetchReviewThreads,
   parsePrNumbers,
 } from '../src/scripts/audit-pr-cleanup.mts';
+import { stubExecutable } from './test-utils.mts';
 
 // Importing the CLI module directly is only possible now that its top-level
 // statements are guarded behind `import.meta.main` (#1210, migrated from
@@ -527,14 +525,14 @@ function makeThreadComment(id: string): Record<string, unknown> {
   };
 }
 
-function writeFakeGh(
-  dir: string,
+function withFakeGh<T>(
   outerResponse: string,
   continuationResponse: string,
-): void {
-  const ghPath = join(dir, 'gh');
-  const script = `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  run: () => T,
+): T {
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 if (args[0] === 'api' && args[1] === 'graphql') {
   if (args.some((a) => a.startsWith('owner='))) {
     process.stdout.write(${JSON.stringify(outerResponse)});
@@ -547,25 +545,12 @@ if (args[0] === 'api' && args[1] === 'graphql') {
 }
 process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
-`;
-  writeFileSync(ghPath, script);
-  chmodSync(ghPath, 0o755);
-}
-
-function withFakeGh<T>(
-  outerResponse: string,
-  continuationResponse: string,
-  run: () => T,
-): T {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-audit-pr-cleanup-fake-gh-'));
-  const originalPath = process.env.PATH;
+`,
+  );
   try {
-    writeFakeGh(tempRoot, outerResponse, continuationResponse);
-    process.env.PATH = `${tempRoot}:${originalPath ?? ''}`;
     return run();
   } finally {
-    process.env.PATH = originalPath;
-    rmSync(tempRoot, { recursive: true, force: true });
+    restore();
   }
 }
 

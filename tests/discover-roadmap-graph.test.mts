@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -26,6 +26,7 @@ import {
   warnOnSearchResultCap,
 } from '../src/scripts/discover-roadmap-graph.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import { stubExecutable } from './test-utils.mts';
 
 /** Run `body` with `process.stderr.write` captured; return the joined output. */
 function captureStderr(body: () => void): string {
@@ -1370,15 +1371,9 @@ test('surfaces incomplete descendant lookups instead of silently dropping them',
 });
 
 test('CLI path can enumerate GitHub sub-issues without top-level await initialization bugs', () => {
-  const tempRoot = mkdtempSync(
-    join(tmpdir(), 'idd-discover-roadmap-graph-cli-'),
-  );
-  const ghPath = join(tempRoot, 'gh');
-
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
   const jq = args[args.indexOf("--jq") + 1];
   process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
@@ -1445,44 +1440,37 @@ process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
-
-  const output = execFileSync(
-    process.execPath,
-    [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'), '--issue', '700'],
-    {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'), '--issue', '700'],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env },
       },
-    },
-  );
-  const parsed = JSON.parse(output);
+    );
+    const parsed = JSON.parse(output);
 
-  assert.deepEqual(parsed.roadmapNodes, []);
-  assert.deepEqual(parsed.executionCandidates, [701]);
-  assert.deepEqual(parsed.edges, [
-    {
-      source: 700,
-      target: 701,
-      relationship: 'sub-issue',
-      evidence: 'GitHub sub-issue #701',
-    },
-  ]);
+    assert.deepEqual(parsed.roadmapNodes, []);
+    assert.deepEqual(parsed.executionCandidates, [701]);
+    assert.deepEqual(parsed.edges, [
+      {
+        source: 700,
+        target: 701,
+        relationship: 'sub-issue',
+        evidence: 'GitHub sub-issue #701',
+      },
+    ]);
+  } finally {
+    restore();
+  }
 });
 
 test('CLI path treats gh 404 descendants as unresolved references', () => {
-  const tempRoot = mkdtempSync(
-    join(tmpdir(), 'idd-discover-roadmap-graph-404-'),
-  );
-  const ghPath = join(tempRoot, 'gh');
-
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
   const jq = args[args.indexOf("--jq") + 1];
   process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
@@ -1524,45 +1512,41 @@ process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
-
-  const output = execFileSync(
-    process.execPath,
-    [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'), '--issue', '720'],
-    {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'), '--issue', '720'],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env },
       },
-    },
-  );
-  const parsed = JSON.parse(output);
+    );
+    const parsed = JSON.parse(output);
 
-  assert.deepEqual(parsed.executionCandidates, []);
-  assert.deepEqual(parsed.diagnostics.unresolvedReferences, [
-    {
-      source: 720,
-      target: 721,
-      relationship: 'task-list',
-      evidence: '- [ ] #721',
-      reason: 'issue_not_found',
-    },
-  ]);
+    assert.deepEqual(parsed.executionCandidates, []);
+    assert.deepEqual(parsed.diagnostics.unresolvedReferences, [
+      {
+        source: 720,
+        target: 721,
+        relationship: 'task-list',
+        evidence: '- [ ] #721',
+        reason: 'issue_not_found',
+      },
+    ]);
+  } finally {
+    restore();
+  }
 });
 
 test('CLI path fails when an explicit policy file is invalid', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-discover-roadmap-graph-policy-'),
   );
-  const ghPath = join(tempRoot, 'gh');
   const policyPath = join(tempRoot, 'bad-policy.json');
-
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
   const jq = args[args.indexOf("--jq") + 1];
   process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
@@ -1572,31 +1556,31 @@ process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
 process.exit(1);
 `,
   );
-  writeFileSync(policyPath, '{not-json');
-  chmodSync(ghPath, 0o755);
+  try {
+    writeFileSync(policyPath, '{not-json');
 
-  assert.throws(
-    () =>
-      execFileSync(
-        process.execPath,
-        [
-          join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'),
-          '--issue',
-          '700',
-          '--policy',
-          policyPath,
-        ],
-        {
-          cwd: REPO_ROOT,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'),
+            '--issue',
+            '700',
+            '--policy',
+            policyPath,
+          ],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+            env: { ...process.env },
           },
-        },
-      ),
-    /failed to load policy from .*bad-policy\.json/,
-  );
+        ),
+      /failed to load policy from .*bad-policy\.json/,
+    );
+  } finally {
+    restore();
+  }
 });
 
 test('reports when only roadmap nodes remain open', async () => {
@@ -2095,14 +2079,9 @@ test('all-roadmaps rethrows an unexpected per-root error instead of swallowing i
 });
 
 test('CLI rejects combining --issue with --all-roadmaps', () => {
-  const tempRoot = mkdtempSync(
-    join(tmpdir(), 'idd-discover-roadmap-graph-mutex-'),
-  );
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
   const jq = args[args.indexOf("--jq") + 1];
   process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
@@ -2112,40 +2091,34 @@ process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
-
-  assert.throws(
-    () =>
-      execFileSync(
-        process.execPath,
-        [
-          join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'),
-          '--issue',
-          '700',
-          '--all-roadmaps',
-        ],
-        {
-          cwd: REPO_ROOT,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+  try {
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'),
+            '--issue',
+            '700',
+            '--all-roadmaps',
+          ],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+            env: { ...process.env },
           },
-        },
-      ),
-    /--all-roadmaps cannot be combined with --issue/,
-  );
+        ),
+      /--all-roadmaps cannot be combined with --issue/,
+    );
+  } finally {
+    restore();
+  }
 });
 
 test('CLI requires --issue when --all-roadmaps is absent', () => {
-  const tempRoot = mkdtempSync(
-    join(tmpdir(), 'idd-discover-roadmap-graph-no-args-'),
-  );
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
   const jq = args[args.indexOf("--jq") + 1];
   process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
@@ -2155,24 +2128,23 @@ process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
-
-  assert.throws(
-    () =>
-      execFileSync(
-        process.execPath,
-        [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs')],
-        {
-          cwd: REPO_ROOT,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+  try {
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs')],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+            env: { ...process.env },
           },
-        },
-      ),
-    /missing required --issue/,
-  );
+        ),
+      /missing required --issue/,
+    );
+  } finally {
+    restore();
+  }
 });
 
 // ---------------------------------------------------------------------------

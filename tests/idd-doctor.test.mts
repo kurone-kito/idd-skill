@@ -77,7 +77,7 @@ import {
 } from '../src/scripts/idd-doctor.mts';
 import { fetchGovernanceJson } from '../src/scripts/pre-merge-readiness.mts';
 import { loadJson } from '../src/scripts/validate-schemas.mts';
-import { readText } from './test-utils.mts';
+import { readText, stubExecutable } from './test-utils.mts';
 
 const ap = (n: number | string) =>
   `<!-- idd-skill-autopilot-suitability: ${n} -->`;
@@ -4209,20 +4209,16 @@ test('readTrustEmptyProtectionReads also reads the legacy idd-policy.json path w
 
 test('fetchGhApiJsonAt preserves a failed `gh api` call\'s stdout so fetchGovernanceJson honors ciGate.trustEmptyProtectionReads from a JSON error body\'s "status" field (idd-skill#2044)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-fetch-gh-api-stdout-'));
-  const binDir = join(dir, 'bin');
-  const originalPath = process.env.PATH;
+  // Fake `gh` that fails a `gh api` call with a JSON error body on stdout
+  // only -- no stderr `(HTTP nnn)` suffix -- the failure shape
+  // deriveGhHttpStatus() falls back to a JSON body's "status" field for.
+  const restore = stubExecutable(
+    'gh',
+    `process.stdout.write('{"message":"Not Found","status":"404"}');
+process.exit(1);
+`,
+  );
   try {
-    mkdirSync(binDir, { recursive: true });
-    // Fake `gh` that fails a `gh api` call with a JSON error body on stdout
-    // only -- no stderr `(HTTP nnn)` suffix -- the failure shape
-    // deriveGhHttpStatus() falls back to a JSON body's "status" field for.
-    writeFileSync(
-      join(binDir, 'gh'),
-      '#!/bin/sh\necho \'{"message":"Not Found","status":"404"}\'\nexit 1\n',
-    );
-    chmodSync(join(binDir, 'gh'), 0o755);
-    process.env.PATH = `${binDir}:${originalPath ?? ''}`;
-
     const fetchJson = (path: string, paginate: boolean) =>
       fetchGhApiJsonAt(dir, undefined, path, paginate);
 
@@ -4247,7 +4243,7 @@ test('fetchGhApiJsonAt preserves a failed `gh api` call\'s stdout so fetchGovern
       { value: {}, unreadable: true },
     );
   } finally {
-    process.env.PATH = originalPath;
+    restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -4300,20 +4296,16 @@ test('resolveTargetGhHostname drops an explicit but default port (Node URL.host 
 // `resolveTargetGhHostname`'s return value.
 test('fetchGhApiJsonAt routes a ported hostname through an absolute API URL and omits --hostname', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-fetch-gh-api-ported-'));
-  const binDir = join(dir, 'bin');
   const argvLog = join(dir, 'argv.log');
-  const originalPath = process.env.PATH;
+  // Fake `gh` that records its own argv (one arg per line) instead of
+  // making a real request, then returns an empty successful response.
+  const restore = stubExecutable(
+    'gh',
+    `require('node:fs').writeFileSync(${JSON.stringify(argvLog)}, process.argv.slice(2).join('\\n') + '\\n');
+process.stdout.write('{}');
+`,
+  );
   try {
-    mkdirSync(binDir, { recursive: true });
-    // Fake `gh` that records its own argv (one arg per line) instead of
-    // making a real request, then returns an empty successful response.
-    writeFileSync(
-      join(binDir, 'gh'),
-      `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(argvLog)}\necho '{}'\n`,
-    );
-    chmodSync(join(binDir, 'gh'), 0o755);
-    process.env.PATH = `${binDir}:${originalPath ?? ''}`;
-
     fetchGhApiJsonAt(
       dir,
       'ghe.example.com:8443',
@@ -4327,25 +4319,21 @@ test('fetchGhApiJsonAt routes a ported hostname through an absolute API URL and 
       'https://ghe.example.com:8443/api/v3/repos/owner/repo/branches/main/protection',
     ]);
   } finally {
-    process.env.PATH = originalPath;
+    restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test('fetchGhApiJsonAt keeps the prior --hostname argv shape for a non-ported hostname', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-fetch-gh-api-unported-'));
-  const binDir = join(dir, 'bin');
   const argvLog = join(dir, 'argv.log');
-  const originalPath = process.env.PATH;
+  const restore = stubExecutable(
+    'gh',
+    `require('node:fs').writeFileSync(${JSON.stringify(argvLog)}, process.argv.slice(2).join('\\n') + '\\n');
+process.stdout.write('{}');
+`,
+  );
   try {
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(
-      join(binDir, 'gh'),
-      `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(argvLog)}\necho '{}'\n`,
-    );
-    chmodSync(join(binDir, 'gh'), 0o755);
-    process.env.PATH = `${binDir}:${originalPath ?? ''}`;
-
     fetchGhApiJsonAt(
       dir,
       'ghe.example.com',
@@ -4361,7 +4349,7 @@ test('fetchGhApiJsonAt keeps the prior --hostname argv shape for a non-ported ho
       'ghe.example.com',
     ]);
   } finally {
-    process.env.PATH = originalPath;
+    restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });

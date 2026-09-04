@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -20,6 +20,7 @@ import {
   viewerLoginFailureIsGraphqlEligible,
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
+import { stubExecutable } from './test-utils.mts';
 
 /**
  * Save/restore `GH_HOST` and `GITHUB_SERVER_URL` around a test body (the
@@ -65,15 +66,7 @@ function withGhHostEnv(
 // contract without network access. Returns a cleanup callback that restores PATH;
 // callers must invoke it (ideally in a `finally`) even when the assertion throws.
 function stubGh(scriptBody: string): () => void {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
-  const ghPath = join(tempRoot, 'gh');
-  writeFileSync(ghPath, `#!/usr/bin/env node\n${scriptBody}`);
-  chmodSync(ghPath, 0o755);
-  const originalPath = process.env.PATH;
-  process.env.PATH = `${tempRoot}:${originalPath ?? ''}`;
-  return () => {
-    process.env.PATH = originalPath;
-  };
+  return stubExecutable('gh', scriptBody);
 }
 
 test('ghText trims stdout and forwards argv to gh', () => {

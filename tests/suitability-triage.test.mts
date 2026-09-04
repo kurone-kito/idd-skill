@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -25,6 +25,7 @@ import {
   resolveInputMode,
   splitLocalDraftTitleAndBody,
 } from '../src/scripts/suitability-triage.mts';
+import { stubExecutable } from './test-utils.mts';
 
 // Stub `gh` on PATH with an invocation counter (the discover-roadmap-graph.
 // test.mts / gh-exec.test.mts pattern) so fetchMergedPrFileOverlapEvidence's
@@ -36,12 +37,10 @@ function stubGhWithCounter(scriptBody: string): {
   readCount: () => number;
 } {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-suitability-triage-test-'));
-  const ghPath = join(tempRoot, 'gh');
   const counterFile = join(tempRoot, 'count');
-  writeFileSync(
-    ghPath,
-    `#!/usr/bin/env node
-const fs = require('node:fs');
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
 const counterFile = ${JSON.stringify(counterFile)};
 let count = 0;
 try {
@@ -55,13 +54,8 @@ process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
 `,
   );
-  chmodSync(ghPath, 0o755);
-  const originalPath = process.env.PATH;
-  process.env.PATH = `${tempRoot}:${originalPath ?? ''}`;
   return {
-    restore: () => {
-      process.env.PATH = originalPath;
-    },
+    restore,
     readCount: () => Number(readFileSync(counterFile, 'utf8').trim()),
   };
 }
