@@ -1860,6 +1860,33 @@ test('evaluateLocalCoordinationState resolves a RELATIVE --git-path output again
   assert.deepEqual(verdict.brokenReasons, ['rebase in progress']);
 });
 
+test('evaluateLocalCoordinationState resolves a RELATIVE --git-path output against a Windows drive-absolute worktree path without corrupting the drive letter or separators (#2576)', () => {
+  // A real worktree path always carries a drive letter on native Windows
+  // (unlike the plain `/repo/wt` fixture above), so this specifically
+  // exercises `isGitPathAbsolute`'s drive-letter branch and demonstrates
+  // that `joinGitPath` never re-guesses a drive letter the way
+  // `path.resolve('C:/repo/wt', '.git/rebase-merge')` would if the input
+  // lacked one -- it also never reformats the forward-slash join to
+  // backslash, matching git's own porcelain convention.
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          toZ(
+            'worktree C:/repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          ),
+        ),
+      statusPorcelain: () => OK(''),
+      resolveGitPath: (_worktreePath, name) =>
+        name === 'rebase-merge' ? OK('.git/rebase-merge\n') : FAIL('none'),
+      pathExists: (path) => path === 'C:/repo/wt/.git/rebase-merge',
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.deepEqual(verdict.brokenReasons, ['rebase in progress']);
+});
+
 test('evaluateLocalCoordinationState reports locked directly from porcelain without probing status or rebase', () => {
   const calls = { status: 0, gitPath: 0 };
   const verdict = evaluateLocalCoordinationState(
