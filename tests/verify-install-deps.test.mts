@@ -48,23 +48,32 @@ const CLI_ENTRY = join(
 const KEY_BINARY = 'node_modules/.bin/tsc';
 
 /**
- * A shell one-liner (run via `sh -c`, same as the tool's own runInstallCommand)
- * that counts its own invocations via CALL_LOG and, once `calls` reaches
- * `hitOnAttempt`, creates KEY_BINARY. `exitNonZeroBefore` optionally makes
- * every call before that attempt exit 1, to simulate a hard install failure.
+ * A `node -e` one-liner (run via the platform shell, same as the tool's own
+ * runInstallCommand) that counts its own invocations via CALL_LOG and, once
+ * `calls` reaches `hitOnAttempt`, creates KEY_BINARY. `exitNonZeroBefore`
+ * optionally makes every call before that attempt exit 1, to simulate a hard
+ * install failure. Using `node -e` instead of POSIX shell syntax (`[ -f ... ]`,
+ * `wc -l`, `mkdir -p`) means the same generated string works whether
+ * `execFileSync(installCommand, [], { shell: true })` invokes `/bin/sh`
+ * (POSIX) or `cmd.exe` (Windows) -- the script body uses only single-quoted
+ * JS string literals and no `$`/`%...%` shell-expansion syntax, so the whole
+ * `-e` argument can be safely double-quoted for either shell.
  */
 function fakeInstallCommand(
   hitOnAttempt: number,
   exitNonZeroBefore = false,
 ): string {
-  return [
-    'calls=0',
-    '[ -f "$CALL_LOG" ] && calls=$(wc -l < "$CALL_LOG" | tr -d \' \')',
-    'echo x >> "$CALL_LOG"',
-    'calls=$((calls + 1))',
-    `if [ "$calls" -ge ${hitOnAttempt} ]; then mkdir -p node_modules/.bin && touch ${KEY_BINARY}; exit 0; fi`,
-    exitNonZeroBefore ? 'exit 1' : 'exit 0',
+  const script = [
+    "const fs = require('fs')",
+    'const p = process.env.CALL_LOG',
+    'let calls = 0',
+    "try { calls = fs.readFileSync(p, 'utf8').split('\\n').filter(Boolean).length } catch {}",
+    'calls += 1',
+    "fs.appendFileSync(p, 'x\\n')",
+    `if (calls >= ${hitOnAttempt}) { fs.mkdirSync('node_modules/.bin', { recursive: true }); fs.writeFileSync('${KEY_BINARY}', ''); process.exit(0) }`,
+    exitNonZeroBefore ? 'process.exit(1)' : 'process.exit(0)',
   ].join('; ');
+  return `node -e "${script}"`;
 }
 
 interface CliRun {
