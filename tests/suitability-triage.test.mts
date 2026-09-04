@@ -2550,6 +2550,87 @@ test('verifiability still fails a bullet list with no outcome-signal word at all
   assert.equal(result.pass, false);
 });
 
+test('verifiability accepts a structured AC checklist with no outcome-signal keyword (#2589)', () => {
+  // Check 7's "substantive AC" path used to require an OUTCOME_SIGNAL_PATTERN
+  // keyword even when a genuine, structured checklist was already present --
+  // disagreeing with Check 5, which already accepts the same list as
+  // actionable. A bullet naming a concrete file path (in backticks) now
+  // satisfies the check on its own, with no outcome-signal word anywhere.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] \`docs/example.md\`'s pointer section reflects the confirmed owner
+      and storage kind, with the open TODO callout removed.
+- [ ] No confidential grant content appears anywhere in the updated
+      page.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails an Acceptance Criteria section with only a placeholder bullet (#2589)', () => {
+  // A checklist under the heading naming no path, command, or artifact --
+  // and no outcome-signal keyword -- must still fail; the widened
+  // substantive-bullet path is not a blanket "any list passes" gate.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability keyword fallback still fails with no Acceptance Criteria section (#2589)', () => {
+  // Unrelated to the AC-heading path above: a body with no AC section at all
+  // still relies solely on hasVerificationChannel / the other keyword
+  // fallbacks, unchanged by the substantive-bullet addition.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Update the onboarding doc with the new steps for new contributors.',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability rejects an ordinary conjunction as a substantive bullet (#2589 review)', () => {
+  // SUBSTANTIVE_BULLET_PATTERN must not treat a bare slash as a path on its
+  // own -- "and/or" has a slash but names no file, command, or artifact.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] Update and/or remove the callout
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let a trailing "## Candidate files" list leak substance into a placeholder AC (#2589 review)', () => {
+  // This repo's own issue template puts "## Candidate files" (a bullet list
+  // of paths) directly after "## Acceptance Criteria". Without bounding the
+  // AC section at the next heading, that trailing list's paths would leak
+  // substance into a genuinely placeholder AC bullet above it.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] TODO
+
+## Candidate files
+- src/scripts/foo.mts
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('coherence allows TODO mentions when the issue is otherwise concrete', () => {
   const result = checkCoherence({
     issue: {

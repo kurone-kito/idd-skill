@@ -521,6 +521,18 @@ function isEnumeratedParentheticalEntry(body, matchIndex, matchLength) {
   return otherEntries.length > 0 && otherEntries.every(looksLikeLabelEntry);
 }
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
+// #2589: a bullet under "## Acceptance Criteria" that names something
+// concrete -- an inline-code span (covers a quoted file path, command, or
+// identifier) or a bare dotted filename -- is substantive on its own,
+// independent of OUTCOME_SIGNAL_PATTERN's closed English vocabulary. Check 5
+// (actionability) already accepts the same checklist as actionable; this
+// keeps Check 7 from re-gating it behind a keyword spot-check the
+// checklist's own content already satisfies. Deliberately has no bare
+// slash-path alternative: `\bfoo\/bar\b` alone also matches an ordinary
+// conjunction like "and/or" or "read/write" with no real path underneath --
+// a real file path in this repo's AC bullets is either backticked or ends
+// in a dotted extension, both already covered below.
+const SUBSTANTIVE_BULLET_PATTERN = /`[^`]+`|\b[\w-]{2,}\.[a-zA-Z]{1,5}\b/;
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
 // negative lookahead rejects only a still-open *phrase* that directly negates
@@ -1704,12 +1716,23 @@ export function checkVerifiability(context) {
       (acceptanceCriteriaMatch.index ?? 0) +
       (acceptanceCriteriaMatch[0]?.length ?? 0);
     const contentAfter = body.slice(indexAfter, indexAfter + 500).trim();
-    // Require either a list (starting with - or *) or numbered content with outcome signals
-    if (/^[-*]\s+/.test(contentAfter) || /^\d+\.\s+/.test(contentAfter)) {
-      const hasOutcomeSignals = OUTCOME_SIGNAL_PATTERN.test(contentAfter);
-      if (hasOutcomeSignals) {
-        hasObjectiveCriteria = true;
-      }
+    // Bound the AC section at the next heading so a trailing sibling
+    // section (e.g. this repo's own "## Candidate files" convention, which
+    // is itself a bullet list of paths) never leaks substance or an
+    // outcome-signal keyword into a genuinely placeholder AC list (#2589).
+    const nextHeadingIndex = contentAfter.search(/\n#{1,6}\s/);
+    const listSection =
+      nextHeadingIndex === -1
+        ? contentAfter
+        : contentAfter.slice(0, nextHeadingIndex);
+    // Require either a list (starting with - or *) or numbered content. A
+    // substantive bullet (SUBSTANTIVE_BULLET_PATTERN) satisfies this on its
+    // own; an outcome-signal keyword remains a fallback for a list that
+    // names no concrete file, command, or artifact (#2589).
+    if (/^[-*]\s+/.test(listSection) || /^\d+\.\s+/.test(listSection)) {
+      hasObjectiveCriteria =
+        SUBSTANTIVE_BULLET_PATTERN.test(listSection) ||
+        OUTCOME_SIGNAL_PATTERN.test(listSection);
     }
   }
   // Alternative: check for numbered steps with outcome signals or checklists
