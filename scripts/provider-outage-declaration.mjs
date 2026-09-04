@@ -424,15 +424,13 @@ function resolveExpiryAt({ expiresAt, expiresIn, now }) {
     if (!Number.isFinite(parsed.getTime())) {
       throw new Error(`invalid --expires value: ${expiresAt}`);
     }
-    return parsed.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    return toSecondPrecisionIso(parsed);
   }
   const durationMs = parseIsoDurationToMs(expiresIn);
   if (!Number.isFinite(durationMs) || (durationMs ?? 0) <= 0) {
     throw new Error(`invalid --expires-in value: ${expiresIn}`);
   }
-  return new Date(now.getTime() + (durationMs ?? 0))
-    .toISOString()
-    .replace(/\.\d{3}Z$/, 'Z');
+  return toSecondPrecisionIso(new Date(now.getTime() + (durationMs ?? 0)));
 }
 function readJsonFile(path) {
   try {
