@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 
 import { stubExecutable } from './test-utils.mts';
@@ -167,4 +167,35 @@ test('the returned cleanup callback removes the temp directory it created (regre
   assert.ok(existsSync(createdPath));
   restore();
   assert.equal(existsSync(createdPath), false);
+});
+
+test('an originally-unset PATH is stubbed without a trailing delimiter and restored by deletion, not the literal string "undefined" (regression, Copilot review on PR #2575)', () => {
+  const realPath = process.env.PATH;
+  delete process.env.PATH;
+  try {
+    const restore = stubExecutable('gh', "process.stdout.write('x');\n");
+    try {
+      assert.ok(
+        process.env.PATH,
+        'PATH should be set to just the stub temp dir',
+      );
+      assert.ok(
+        !(process.env.PATH as string).endsWith(delimiter),
+        'PATH should not carry a trailing delimiter (an empty, cwd-implying PATH entry) when it was originally unset',
+      );
+    } finally {
+      restore();
+    }
+    assert.equal(
+      process.env.PATH,
+      undefined,
+      'restore() should delete PATH, not set it to the literal string "undefined"',
+    );
+  } finally {
+    if (realPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = realPath;
+    }
+  }
 });

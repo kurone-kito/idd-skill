@@ -69,13 +69,22 @@ const SYNC_DOCS_DEPS = [
 export function stubExecutable(name: string, scriptBody: string): () => void {
   const tempRoot = mkdtempSync(join(tmpdir(), `idd-stub-${name}-`));
   const originalPath = process.env.PATH;
-  process.env.PATH = `${tempRoot}${delimiter}${originalPath ?? ''}`;
+  process.env.PATH = originalPath
+    ? `${tempRoot}${delimiter}${originalPath}`
+    : tempRoot;
+  const restorePath = () => {
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+  };
   if (process.platform !== 'win32') {
     const scriptPath = join(tempRoot, name);
     writeFileSync(scriptPath, `#!/usr/bin/env node\n${scriptBody}`);
     chmodSync(scriptPath, 0o755);
     return () => {
-      process.env.PATH = originalPath;
+      restorePath();
       rmSync(tempRoot, { recursive: true, force: true });
     };
   }
@@ -154,7 +163,7 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
     ? `${originalNodeOptions} ${requireFlag}`
     : requireFlag;
   return () => {
-    process.env.PATH = originalPath;
+    restorePath();
     if (originalNodeOptions === undefined) {
       delete process.env.NODE_OPTIONS;
     } else {
