@@ -2598,6 +2598,21 @@ test('verifiability keyword fallback still fails with no Acceptance Criteria sec
   assert.equal(result.pass, false);
 });
 
+test('verifiability accepts a bare dotted filename with no backticks or keyword (#2589 review)', () => {
+  // Exercises SUBSTANTIVE_BULLET_PATTERN's second alternative in isolation
+  // (every other new test hits the pattern only via a backtick-wrapped
+  // path): a plain, unquoted filename token is substantive on its own.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] update the version pin in config.json
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('verifiability rejects an ordinary conjunction as a substantive bullet (#2589 review)', () => {
   // SUBSTANTIVE_BULLET_PATTERN must not treat a bare slash as a path on its
   // own -- "and/or" has a slash but names no file, command, or artifact.
