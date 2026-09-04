@@ -697,10 +697,37 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 const PLACEHOLDER_LEAD_PATTERN =
   /^(?:TODO|TBD|N\/A|NA|XXX|FIXME|WIP|PENDING|PLACEHOLDER|NONE|ASAP)(?:[^a-zA-Z0-9]|$)/i;
 const CODE_SPAN_STRUCTURE_PATTERN = /[/._:-]/;
+// CodeRabbit review (PR #2602): a code span needs actual alphanumeric
+// content, not just a structural delimiter -- "- [ ] `-`" or "- [ ] `.`"
+// otherwise names nothing while still satisfying
+// CODE_SPAN_STRUCTURE_PATTERN.
+const CODE_SPAN_ALNUM_PATTERN = /[a-zA-Z0-9]/;
 const BARE_DOTTED_FILENAME_PATTERN = /\b[\w-]{2,}\.[a-zA-Z]{1,5}\b/;
+// CodeRabbit review (PR #2602): an ATX heading may carry up to three
+// leading spaces per CommonMark, so the AC-section boundary below must
+// tolerate that indentation or an indented sibling heading (e.g. this
+// repo's own "   ## Candidate files", however it happens to be indented)
+// would not stop the section.
+const NEXT_HEADING_PATTERN = /\n {0,3}#{1,6}\s/;
+// CodeRabbit review (PR #2602): scanning the whole AC section's raw text
+// -- rather than just its list-item lines -- let a placeholder bullet
+// ("- [ ] TODO") followed by unrelated, non-list prose containing a
+// substantive-looking code span or outcome-signal keyword wrongly pass.
+// Only lines that are themselves list-item markers (a wrapped/lazy
+// continuation line is intentionally excluded too, since it cannot be
+// told apart from unrelated trailing prose without full Markdown
+// paragraph parsing) are considered for either check.
+const LIST_ITEM_LINE_PATTERN = /^\s*(?:[-*]|\d+\.)\s+/;
 
 function looksLikePlaceholder(content: string): boolean {
   return PLACEHOLDER_LEAD_PATTERN.test(content);
+}
+
+function extractListItemLines(section: string): string {
+  return section
+    .split('\n')
+    .filter((line) => LIST_ITEM_LINE_PATTERN.test(line))
+    .join('\n');
 }
 
 function hasSubstantiveBullet(text: string): boolean {
@@ -709,6 +736,7 @@ function hasSubstantiveBullet(text: string): boolean {
     if (
       content.length > 0 &&
       CODE_SPAN_STRUCTURE_PATTERN.test(content) &&
+      CODE_SPAN_ALNUM_PATTERN.test(content) &&
       !looksLikePlaceholder(content)
     ) {
       return true;
@@ -1974,7 +2002,7 @@ export function checkVerifiability(context: Context): CheckOutcome {
     // section (e.g. this repo's own "## Candidate files" convention, which
     // is itself a bullet list of paths) never leaks substance or an
     // outcome-signal keyword into a genuinely placeholder AC list (#2589).
-    const nextHeadingIndex = contentAfter.search(/\n#{1,6}\s/);
+    const nextHeadingIndex = contentAfter.search(NEXT_HEADING_PATTERN);
     const listSection =
       nextHeadingIndex === -1
         ? contentAfter
@@ -1982,11 +2010,15 @@ export function checkVerifiability(context: Context): CheckOutcome {
     // Require either a list (starting with - or *) or numbered content. A
     // substantive bullet (hasSubstantiveBullet) satisfies this on its own;
     // an outcome-signal keyword remains a fallback for a list that names
-    // no concrete file, command, or artifact (#2589).
+    // no concrete file, command, or artifact (#2589). Both checks scan
+    // only the section's own list-item lines, not its full raw text, so a
+    // placeholder bullet followed by unrelated non-list prose can't
+    // borrow that prose's substance or keywords (#2589 CodeRabbit review).
     if (/^[-*]\s+/.test(listSection) || /^\d+\.\s+/.test(listSection)) {
+      const listItemsOnly = extractListItemLines(listSection);
       hasObjectiveCriteria =
-        hasSubstantiveBullet(listSection) ||
-        OUTCOME_SIGNAL_PATTERN.test(listSection);
+        hasSubstantiveBullet(listItemsOnly) ||
+        OUTCOME_SIGNAL_PATTERN.test(listItemsOnly);
     }
   }
 

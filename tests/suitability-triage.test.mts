@@ -2731,6 +2731,56 @@ test('verifiability does not mistake a real identifier that merely starts with a
   }
 });
 
+test('verifiability rejects a punctuation-only code span as substantive (#2589 round 5, CodeRabbit review)', () => {
+  // CodeRabbit review on PR #2602: CODE_SPAN_STRUCTURE_PATTERN only checks
+  // for the *presence* of a structural delimiter, so a code span
+  // containing nothing but that delimiter -- "- [ ] `-`", "- [ ] `.`" --
+  // wrongly passed even though it names no path, command, or artifact.
+  for (const span of ['-', '.', '/', ':', '_']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${span}\`\n`,
+      },
+    } as Context);
+    assert.equal(result.pass, false, `expected fail for backticked "${span}"`);
+  }
+});
+
+test('verifiability bounds the Acceptance Criteria section at an indented heading (#2589 round 5, CodeRabbit review)', () => {
+  // CodeRabbit review on PR #2602: CommonMark permits up to three leading
+  // spaces before an ATX heading, so an indented "   ## Candidate files"
+  // sibling section wasn't recognized as a boundary and its paths leaked
+  // substance into a placeholder-only Acceptance Criteria bullet above it.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] TODO
+
+   ## Candidate files
+- src/example.mts
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability restricts substance/keyword matching to list-item lines only (#2589 round 5, CodeRabbit review)', () => {
+  // CodeRabbit review on PR #2602: hasSubstantiveBullet (and the
+  // outcome-signal keyword fallback) scanned the whole Acceptance
+  // Criteria section's raw text, not just its list-item lines, so a
+  // placeholder bullet followed by unrelated, non-list prose could
+  // borrow that prose's substantive code span or outcome-signal keyword.
+  const substanceLeak = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] TODO\nSee `src/example.mts` for context.\n',
+    },
+  } as Context);
+  assert.equal(substanceLeak.pass, false);
+});
+
 test('verifiability keyword fallback still fails with no Acceptance Criteria section (#2589)', () => {
   // Unrelated to the AC-heading path above: a body with no AC section at all
   // still relies solely on hasVerificationChannel / the other keyword
