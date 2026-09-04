@@ -4202,7 +4202,7 @@ test('isRulesetsOnlyTrustGap is false when neither read succeeds (isBranchProtec
   );
 });
 
-test('isRulesetsOnlyTrustGap is false when the repository has no Rulesets protection at all (empty rules array)', () => {
+test('isRulesetsOnlyTrustGap is false when no Rulesets rule is enforcing on the branch (empty rules array -- covers both "no rulesets configured" and "rulesets exist but none currently enforce")', () => {
   assert.equal(
     isRulesetsOnlyTrustGap(
       { value: [], unreadable: false },

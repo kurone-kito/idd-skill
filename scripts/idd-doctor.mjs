@@ -3326,10 +3326,12 @@ export function isRulesetsOnlyTrustGap(branchRulesRead, branchProtectionRead) {
  */
 export function formatRulesetsOnlyTrustGapWarning(owner, repo, branch) {
   return (
-    `branch protection on ${owner}/${repo}:${branch} is enforced only via GitHub Rulesets ` +
-    `(the classic branches/${branch}/protection read 404s); the F2/F3 merge gate will still ` +
-    `fail closed on the first merge attempt unless ciGate.trustEmptyProtectionReads: true is ` +
-    `set in .github/idd/config.json`
+    `branch protection on ${owner}/${repo}:${branch}: the classic branches/${branch}/protection ` +
+    `read returned 404 (this endpoint also 404s when the token lacks permission to read it, not ` +
+    `only when nothing is configured there) while the Rulesets read (rules/branches/${branch}) ` +
+    `already confirms at least one enforcing rule; either way, the F2/F3 merge gate will still ` +
+    `fail closed on the first merge attempt unless ciGate.trustEmptyProtectionReads: true is set ` +
+    `in .github/idd/config.json`
   );
 }
 /**
