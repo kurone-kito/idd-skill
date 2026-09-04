@@ -89,12 +89,11 @@ workflow to E1 instead of merging over it.
 (directly, or via the documented merge-gate helper reference), pass
 `--nonce {nonce}` — this session's own locally-recorded activation-nonce
 from claim time (`idd-claim.instructions.md`'s activation-nonce format) —
-alongside `--claim-id`. This extends `idd-claim.instructions.md`'s
-Claim-verification-step-5 nonce collision check to the merge-time
-write-gate too (Resume-phase cold recovery is a distinct, not-yet-wired
-case — see the "Scope for #1522" note under
-[rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred)
-and kurone-kito/idd-skill#1529). Omitting `--nonce` silently skips the
+alongside `--claim-id`, extending Claim-verification-step-5's nonce
+collision check to this merge-time write-gate (Resume-phase cold
+recovery stays a distinct, not-yet-wired case — see
+[rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred),
+kurone-kito/idd-skill#1529). Omitting `--nonce` silently skips the
 merge-time comparison rather than failing closed, so pass it whenever a
 nonce was recorded for the active claim.
 
@@ -117,12 +116,10 @@ nonce was recorded for the active claim.
   When helper runtime is enabled, prefer the documented merge-gate
   helper reference in
   [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
-  to collect this evidence, consuming `reviewCurrency` (including
-  `comparisonRoute`), `threads`, `unrepliedComments`, `reviewerStates`,
-  `advisoryWait`, `ci`, `claim`, and optional `dispositionEvidence`.
-  Helpers remain read-only evidence collectors: if execution fails,
-  output is invalid JSON, required sections are missing, or live GitHub
-  state disagrees with it, discard helper output and fetch the activity
+  to collect this evidence (the fields listed at that anchor). Helpers
+  remain read-only evidence collectors: if execution fails, output is
+  invalid JSON, required sections are missing, or live GitHub state
+  disagrees with it, discard helper output and fetch the activity
   universe snapshot (same scope as E1 Step 1) plus current CI state for
   the HEAD SHA directly — the instruction rules remain canonical. Return
   to E1 if **any** of the following is true:
@@ -165,6 +162,13 @@ nonce was recorded for the active claim.
   procedural or status comments of that kind, or both, refresh the
   watermark directly instead; every other F2 trigger and gate is
   unaffected.
+
+  Third-party advisory bot skip-review carve-out: the same applies to
+  a third-party advisory bot's own skip-review or no-action notice
+  posted after the watermark — when helper evidence shows it carries
+  no reviewer finding or actionable content, a return-to-E1 triggered
+  solely by that notice refreshes the watermark directly instead; a
+  mixed-cause trigger still returns to E1 normally.
 - **Advisory bot wait** (restart-safe enforcement): schedule a wake, or
   background only if the topology-safety condition holds (confirmed to
   route completion back to this turn) — otherwise wait synchronously:
@@ -233,9 +237,9 @@ nonce was recorded for the active claim.
     on a vacuous green.
 
   **External-check waivers**: When `pre-merge-readiness` reports a check
-  as `coveredByWaiver: true`, a trusted maintainer authorized skipping
-  it under the current head SHA and active claim. Treat it as passing
-  for F2/F3 routing **only when**:
+  `coveredByWaiver: true`, a trusted maintainer authorized skipping it
+  for the current head SHA and claim. Treat it as passing for F2/F3
+  routing **only when**:
   - `waiverEvidence.valid` is non-empty for that check's selector
   - The waiver actor is a trusted marker login
   - The waiver `headSha` matches the current PR HEAD
@@ -246,40 +250,38 @@ nonce was recorded for the active claim.
   threads, unreplied comments, required reviews, disposition evidence,
   or claim ownership. Non-empty `waiverEvidence.wrongHead`, `wrongClaim`,
   `unauthorized`, `expired`, or `malformed` are suspicious context, never
-  valid permissions. A waiver posted before its own effectiveness
-  precondition is met is valid but inert until then — see
+  valid permissions. A waiver posted before its effectiveness
+  precondition is met stays valid but inert until then — see
   `idd-pr-submit.instructions.md`'s D4 for the mechanical check.
 
   **Local validation evidence** (#2323): `pre-merge-readiness`'s
   `localValidationEvidence` field reports whether HEAD-pinned local
   evidence exists for an active `ciGate` outage
-  ([`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#local-validation-evidence-helper)).
-  It is informational only — never treat it as a passing check or a
-  waiver: an unavailable required check stays a CI-gate blocker exactly
-  as above regardless of this field. With required checks unavailable,
-  merges queue; restoring the platform check rollup is an out-of-band
-  privileged operation outside this loop.
+  ([`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#local-validation-evidence-helper))
+  — informational only, never a passing check or waiver: an
+  unavailable required check stays a CI-gate blocker regardless. With
+  required checks unavailable, merges queue until the platform check
+  rollup is restored (an out-of-band privileged operation).
 - **Required reviews**: required approvals count is satisfied and all
-  CODEOWNER approvals are obtained. If helper evidence includes
-  `reviewerStates.codeownerSelfApproval`, include that diagnostic
-  whenever its `status` is `deadlock` or `possible_deadlock` (see the
-  [field contract](../../docs/idd-helper-scripts.md#merge-gate-evidence))
-  — evidence only, never permission to bypass this gate. If approvals
-  are absent but no open actionable review items exist
-  (`ReviewItems_snapshot` empty), do **not** route to E1 — request
-  CODEOWNER/required reviewers directly (if not already requested),
-  post a hold comment, and stop. Return to E1 only when actual review
-  threads or comments exist (→ `idd-review-snapshot.instructions.md`).
+  CODEOWNER approvals are obtained. When helper evidence's
+  `reviewerStates.codeownerSelfApproval` `status` is `deadlock` or
+  `possible_deadlock`, include it as diagnostic evidence only ([field contract](../../docs/idd-helper-scripts.md#merge-gate-evidence)),
+  never permission to bypass this gate. If approvals are absent but no
+  open actionable review items exist (`ReviewItems_snapshot` empty), do
+  **not** route to E1 — request CODEOWNER/required reviewers directly
+  (if not already requested), post a hold comment, and stop. Return to
+  E1 only when actual review threads or comments exist (→
+  `idd-review-snapshot.instructions.md`).
 - **No `CHANGES_REQUESTED`** (human/required/CODEOWNER reviewers only):
   no such reviewer's latest state is `CHANGES_REQUESTED` (→ if not yet
   addressed, return to review triage; if addressed and re-review
-  requested, wait up to 30 min, then post a hold comment and stop if
-  still no response). Advisory bot reviewers (Copilot, CI bots) are
-  exempt — their `CHANGES_REQUESTED` does not block merge once the
-  advisory wait window completes.
-- **Unresolved threads = 0** (backlog gate, orthogonal to the currency
-  check above): no unresolved review threads remain, excluding
-  **awaiting-reviewer threads**. Classify each unresolved thread:
+  requested, wait up to 30 min, then post a hold comment and stop if no
+  response). Advisory bot reviewers (Copilot, CI bots) are exempt —
+  their `CHANGES_REQUESTED` does not block merge once the advisory wait
+  window completes.
+- **Unresolved threads = 0** (backlog gate): no unresolved review
+  threads remain, excluding **awaiting-reviewer threads**. Classify
+  each unresolved thread:
 
   | Condition                                                                                                       | Classification              |
   | --------------------------------------------------------------------------------------------------------------- | --------------------------- |
@@ -307,8 +309,7 @@ nonce was recorded for the active claim.
 - **Unreplied comments = 0**: no regular comment from a non-IDD-agent
   lacks a subsequent IDD-agent comment — "subsequent" meaning any
   IDD-agent regular comment posted at a strictly later timestamp (→
-  return to review triage). Mirrors E1's regular-comment filter for
-  non-advisory discussion. Copilot and CI advisory bot comments are
+  return to review triage). Copilot and CI advisory bot comments are
   handled earlier in the PATH B triage flow (E4-E7) and excluded here.
 - **Advisory convergence** (exit-code obligation for Copilot-authored
   review threads, not a judgment call): run `node
