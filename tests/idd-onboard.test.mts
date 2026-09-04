@@ -3329,18 +3329,85 @@ test('the ONBOARDING.md CLI-assisted onboarding section anchors its --import fil
 // binaries it needs are not installed, instead of failing that lane.
 // ---------------------------------------------------------------------------
 
-const MARKDOWNLINT_BIN = join(
-  REPO_ROOT,
-  'node_modules',
-  '.bin',
+// Resolve markdownlint-cli2/cspell by their own package.json `bin` entry and
+// run them directly through `process.execPath`, rather than by
+// `spawnSync('.../node_modules/.bin/markdownlint-cli2' | '.../cspell', ...)`.
+// `MARKDOWNLINT_BIN`/`CSPELL_BIN` were always absolute paths, not bare
+// commands relying on a PATH search -- but on native Windows,
+// `node_modules/.bin/markdownlint-cli2` and `node_modules/.bin/cspell` are
+// POSIX shell shims with no recognized Windows-executable extension, so
+// Windows still can't launch that exact file. `shell: true` alone fixes
+// it (verified: it makes `cmd.exe` apply its own `PATHEXT`-based extension
+// dispatch to that same absolute path, finding `<name>.CMD`), but
+// `spawnSync`/`execFileSync` without `shell: true` never invoke a shell at
+// all, so no extension dispatch of any kind happens -- the same root cause
+// #2569 fixed for tsc/biome in `src/scripts/build-ts.mts`'s
+// `resolveBinScript`. Resolving the package's real JS entry point and
+// running it through `process.execPath` sidesteps the shell (and its
+// PATHEXT dispatch) entirely, so it behaves identically on every platform.
+//
+// Unlike `typescript`/`@biomejs/biome`, both `markdownlint-cli2` and
+// `cspell` declare a package.json `exports` map with no `./package.json`
+// subpath, so resolving that subpath through Node's own package resolver
+// (`require.resolve`) throws `ERR_PACKAGE_PATH_NOT_EXPORTED` for either --
+// this reads `node_modules/<packageName>/package.json` directly instead.
+//
+// Throws when `package.json` is present but has no matching `bin` entry,
+// or when the `bin` entry points at a script that doesn't actually exist
+// (a partial/corrupted install) -- either is an unexpected packaging/
+// fixture problem, not a "not installed" state, so it should fail loudly
+// here rather than let the caller silently treat it as a skip.
+function resolveBinScript(packageName: string, binName: string): string {
+  const packageJsonPath = join(
+    REPO_ROOT,
+    'node_modules',
+    packageName,
+    'package.json',
+  );
+  const { bin } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+    bin?: string | Record<string, string>;
+  };
+  const relativePath = typeof bin === 'string' ? bin : bin?.[binName];
+  if (relativePath === undefined) {
+    throw new Error(
+      `${packageName}: package.json has no "${binName}" bin entry`,
+    );
+  }
+  const scriptPath = join(dirname(packageJsonPath), relativePath);
+  if (!existsSync(scriptPath)) {
+    throw new Error(
+      `${packageName}: bin entry "${binName}" points at a missing file: ${scriptPath}`,
+    );
+  }
+  return scriptPath;
+}
+
+// `resolveBinScript`, but returns `undefined` instead of throwing when
+// `package.json` itself is absent -- the expected bare-node lane case (see
+// the block comment above) where the package genuinely isn't installed.
+function tryResolveBinScript(
+  packageName: string,
+  binName: string,
+): string | undefined {
+  const packageJsonPath = join(
+    REPO_ROOT,
+    'node_modules',
+    packageName,
+    'package.json',
+  );
+  return existsSync(packageJsonPath)
+    ? resolveBinScript(packageName, binName)
+    : undefined;
+}
+
+const MARKDOWNLINT_BIN = tryResolveBinScript(
+  'markdownlint-cli2',
   'markdownlint-cli2',
 );
-const CSPELL_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'cspell');
-const LINT_BINARIES_INSTALLED =
-  existsSync(MARKDOWNLINT_BIN) && existsSync(CSPELL_BIN);
+const CSPELL_BIN = tryResolveBinScript('cspell', 'cspell');
 
 test('a real import + substitute produces a doc tree that passes the documented markdownlint/cspell commands with full file coverage (idd-skill#1860)', (t) => {
-  if (!LINT_BINARIES_INSTALLED) {
+  if (!MARKDOWNLINT_BIN || !CSPELL_BIN) {
     // Expected on the bare-node lane (lint.yml), which runs this suite with
     // no package-manager install by design -- see the block comment above.
     t.skip('markdownlint-cli2/cspell are not installed in this environment');
@@ -3381,20 +3448,28 @@ test('a real import + substitute produces a doc tree that passes the documented 
   assert.equal(substituted.verdict.written, true);
   assert.deepEqual(substituted.verdict.residue, []);
 
-  const markdownlintResult = spawnSync(MARKDOWNLINT_BIN, ['**/*.md'], {
-    cwd: targetRoot,
-    encoding: 'utf8',
-  });
+  const markdownlintResult = spawnSync(
+    process.execPath,
+    [MARKDOWNLINT_BIN, '**/*.md'],
+    {
+      cwd: targetRoot,
+      encoding: 'utf8',
+    },
+  );
   assert.equal(
     markdownlintResult.status,
     0,
     `markdownlint-cli2 findings against the imported docs:\n${markdownlintResult.stdout}${markdownlintResult.stderr}`,
   );
 
-  const cspellResult = spawnSync(CSPELL_BIN, ['lint', '**', '--no-progress'], {
-    cwd: targetRoot,
-    encoding: 'utf8',
-  });
+  const cspellResult = spawnSync(
+    process.execPath,
+    [CSPELL_BIN, 'lint', '**', '--no-progress'],
+    {
+      cwd: targetRoot,
+      encoding: 'utf8',
+    },
+  );
   assert.equal(
     cspellResult.status,
     0,
