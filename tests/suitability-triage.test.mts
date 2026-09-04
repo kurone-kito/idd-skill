@@ -2672,6 +2672,65 @@ test('verifiability still accepts a bare dotted identifier with no leading place
   assert.equal(result.pass, true);
 });
 
+test('verifiability rejects a placeholder glued directly to punctuation with no separator (#2589 round 4, E2 critique)', () => {
+  // An E2 critique subagent caught that round 3's split-on-whitespace/
+  // colon/hyphen lead-token check never split on a period, underscore, or
+  // slash, so a placeholder glued directly to one of those -- with no
+  // separating character at all -- still supplied its own structural
+  // signal while evading the exact-match stoplist: "- [ ] `TODO.`",
+  // "- [ ] `TODO_`", and the previously-documented "TODO/FIXME" gap (shown
+  // here to be broader than described: any slash-glued suffix, not just a
+  // second placeholder word). PLACEHOLDER_LEAD_PATTERN's anchored,
+  // non-alphanumeric-or-end lookahead closes all of these in one rule.
+  for (const placeholder of [
+    'TODO.',
+    'TODO..',
+    'TODO_',
+    'N/A.',
+    'NA.',
+    'TBD.',
+    'FIXME.',
+    'TODO/FIXME',
+    'TODO/details forthcoming',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${placeholder}\`\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for backticked "${placeholder}"`,
+    );
+  }
+});
+
+test('verifiability does not mistake a real identifier that merely starts with a placeholder word (#2589 round 4)', () => {
+  // True-positive guard for the anchored pattern: a real path/identifier
+  // whose letters happen to start with a placeholder word, but continue
+  // with more alphanumeric characters rather than ending or hitting
+  // punctuation, must not be misclassified as a placeholder.
+  for (const identifier of [
+    'NASA-report.txt',
+    'nonexistent-file.txt',
+    'WIPExample.md',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${identifier}\` is updated\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      true,
+      `expected pass for backticked "${identifier}"`,
+    );
+  }
+});
+
 test('verifiability keyword fallback still fails with no Acceptance Criteria section (#2589)', () => {
   // Unrelated to the AC-heading path above: a body with no AC section at all
   // still relies solely on hasVerificationChannel / the other keyword

@@ -674,25 +674,33 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // a real file path in this repo's AC bullets is either backticked or ends
 // in a dotted extension, both already covered below.
 //
-// Copilot review (PR #2602) flagged, across two passes, that treating ANY
-// inline-code span as substantive lets a backticked placeholder --
+// Copilot review (PR #2602) flagged, across multiple passes, that treating
+// ANY inline-code span as substantive lets a backticked placeholder --
 // "- [ ] `TODO`", "- [ ] `N/A`", "- [ ] `TODO later`" -- wrongly pass. A
 // code span now needs a structural signal of being a real
 // path/command/identifier (a slash, dot, underscore, colon, or hyphen)
-// AND its leading token (split on whitespace, colon, or hyphen -- not
-// slash, so a slash-joined token like "N/A" itself stays intact) must not
-// exactly match a short, closed placeholder-token list. Checking only the
-// lead token (not the whole span) catches a trailing-punctuation or
-// trailing-word variant ("TODO-later", "TODO: fix", "N/A yet") without
-// having to enumerate every such phrase.
-const PLACEHOLDER_TOKEN_PATTERN =
-  /^(?:TODO|TBD|N\/A|NA|XXX|FIXME|WIP|PENDING|PLACEHOLDER|NONE|ASAP)$/i;
+// AND must not merely *lead with* a short, closed placeholder token.
+// PLACEHOLDER_LEAD_PATTERN is anchored at the start and requires the
+// placeholder word to be immediately followed by a non-alphanumeric
+// character or the end of the string, so it matches the bare token
+// ("TODO"), a trailing punctuation glue of any kind ("TODO.", "TODO_",
+// "TODO-later", "TODO: fix", "TODO/FIXME") and a trailing word ("N/A
+// yet"), without matching a real identifier that merely starts with the
+// same letters ("NASA", "nonexistent-file.txt"). An earlier revision
+// tried to reconstruct this via a whitespace/colon/hyphen split of the
+// span's lead token, which covered the punctuation marks it split on but
+// missed a placeholder glued directly to a period, underscore, or slash
+// -- an E2 critique subagent caught "TODO.", "TODO_", and the
+// previously-documented "TODO/FIXME" gap being broader than described.
+// Testing the anchored pattern against the raw content directly, rather
+// than a hand-split lead token, closes the whole class at once.
+const PLACEHOLDER_LEAD_PATTERN =
+  /^(?:TODO|TBD|N\/A|NA|XXX|FIXME|WIP|PENDING|PLACEHOLDER|NONE|ASAP)(?:[^a-zA-Z0-9]|$)/i;
 const CODE_SPAN_STRUCTURE_PATTERN = /[/._:-]/;
 const BARE_DOTTED_FILENAME_PATTERN = /\b[\w-]{2,}\.[a-zA-Z]{1,5}\b/;
 
 function looksLikePlaceholder(content: string): boolean {
-  const leadToken = content.split(/[\s:-]+/)[0] ?? '';
-  return PLACEHOLDER_TOKEN_PATTERN.test(leadToken);
+  return PLACEHOLDER_LEAD_PATTERN.test(content);
 }
 
 function hasSubstantiveBullet(text: string): boolean {
