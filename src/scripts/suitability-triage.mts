@@ -1028,11 +1028,13 @@ function findGenuineNounMatch(
     // stays detectable even though the same bare, un-code-wrapped text in
     // prose is a deliberately accepted ordinary-compound exclusion. #2588:
     // the same code-range short-circuit applies to isNarrativeIddMention,
-    // for the same reason -- see that function's own comment.
+    // for the same reason -- see that function's own comment. #2608: same
+    // for isCodeIdentifierProcessMention.
     if (
       (getCodeRangeAt(absoluteIndex) ||
         (!isOrdinaryHyphenatedCompoundToken(rawSource, absoluteIndex) &&
-          !isNarrativeIddMention(rawSource, absoluteIndex))) &&
+          !isNarrativeIddMention(rawSource, absoluteIndex) &&
+          !isCodeIdentifierProcessMention(rawSource, absoluteIndex))) &&
       !(
         headingBoundary &&
         matchCrossesHeadingBoundary(
@@ -1242,6 +1244,58 @@ function isNarrativeIddMention(rawSource: string, matchIndex: number): boolean {
     afterStart + NARRATIVE_IDD_LOOKAHEAD_CHARS,
   );
   return NARRATIVE_IDD_FOLLOWING_WORD_PATTERN.test(after);
+}
+
+// #2608: the bare `process` alternative matched a Node.js code identifier's
+// leading segment -- `process.platform`, `process.env`, `process.argv`,
+// `process.exit(` -- as ordinary prose about "the process" (a procedural
+// workflow), even when un-code-wrapped inside a sentence about
+// platform-detection or CLI-argument-handling code. Reproduced by
+// idd-skill#2608 itself: "Skip it on process.platform === 'win32' since NTFS
+// has no POSIX execute bit..." matched verb "Skip" against noun "process"
+// (the only listed noun in that window), with nothing nearby actually
+// attempting to change this checker's own behavior.
+//
+// This exclusion targets `process` only -- the other eight listed nouns
+// have no analogous Node.js-global shape, so this property-access exclusion
+// is not the distinguishing false-positive source #2608 reports for any of
+// them, and narrowing them the same way risks a new, unreviewed
+// false-negative surface with no matching repro.
+//
+// Unlike `isNarrativeIddMention`, this needs no article/following-word
+// heuristic: a genuine narrative directive ("bypass the process", "skip
+// this repository's process") never continues with a literal `.` followed
+// by an identifier-start character -- that exact shape is unambiguously a
+// JS property-access expression, never English prose, regardless of
+// surrounding context. So the true-positive case #2608 itself requires
+// stays detected unconditionally: "skip the review process for this PR"
+// has `process` followed by a space, not `.`, so this classifier never
+// excludes it.
+//
+// A code-wrapped `` `process.platform` `` is never passed to this
+// classifier -- its call site in `findGenuineNounMatch` already
+// short-circuits on `getCodeRangeAt` first, the same precedent
+// `isOrdinaryHyphenatedCompoundToken`/`isNarrativeIddMention` follow: being
+// wrapped in code at all is itself a distinguishing signal bare prose
+// lacks (and it is also unreachable there regardless, since the masked
+// pass has already blanked a code-wrapped occurrence to spaces before this
+// classifier ever runs against it).
+const CODE_IDENTIFIER_PROCESS_TOKEN_LENGTH = 'process'.length;
+const CODE_IDENTIFIER_PROCESS_PROPERTY_ACCESS_PATTERN = /^\.[A-Za-z_$]/;
+
+function isCodeIdentifierProcessMention(
+  rawSource: string,
+  matchIndex: number,
+): boolean {
+  const token = rawSource
+    .slice(matchIndex, matchIndex + CODE_IDENTIFIER_PROCESS_TOKEN_LENGTH)
+    .toLowerCase();
+  if (token !== 'process') {
+    return false;
+  }
+  const afterStart = matchIndex + CODE_IDENTIFIER_PROCESS_TOKEN_LENGTH;
+  const after = rawSource.slice(afterStart, afterStart + 2);
+  return CODE_IDENTIFIER_PROCESS_PROPERTY_ACCESS_PATTERN.test(after);
 }
 
 function findPolicyOverrideMatch(
