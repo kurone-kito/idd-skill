@@ -2091,6 +2091,17 @@ function fixtureGitOut(cwd: string, args: string[]): string {
  */
 const realLocalInputs = createLocalCoordinationInputs;
 
+// `git worktree list --porcelain` always reports forward-slash paths, even
+// on native Windows (#2576), while `mkdtempSync`/`path.join` below compute
+// this test's own "expected" path with the platform's native separator
+// (backslash on win32). Both name the identical filesystem location, so
+// normalize the native-separator side before comparing against a value that
+// came from -- or through -- parsed porcelain output. A no-op on POSIX,
+// where the native separator already matches porcelain's.
+function toGitPorcelainPath(nativePath: string): string {
+  return nativePath.replaceAll('\\', '/');
+}
+
 function setupPrimaryRepo(): string {
   const primary = mkdtempSync(join(tmpdir(), 'idd-roadmap-local-'));
   fixtureGit(primary, ['init', '-b', 'main']);
@@ -2161,7 +2172,10 @@ test('AC3 real fixture: a detached worktree is correctly detected via porcelain 
       '-z',
     ]);
     const entries = parseWorktreeListPorcelain(porcelain);
-    const detachedEntry = entries.find((entry) => entry.path === detached);
+    const detachedPorcelainPath = toGitPorcelainPath(detached);
+    const detachedEntry = entries.find(
+      (entry) => entry.path === detachedPorcelainPath,
+    );
     assert.equal(detachedEntry?.detached, true);
     assert.equal(detachedEntry?.branchRef, null);
 
@@ -2171,7 +2185,7 @@ test('AC3 real fixture: a detached worktree is correctly detected via porcelain 
       'roadmap-audit/995-slug',
       realLocalInputs(primary),
     );
-    assert.deepEqual(verdict.detachedWorktreePaths, [detached]);
+    assert.deepEqual(verdict.detachedWorktreePaths, [detachedPorcelainPath]);
   } finally {
     try {
       fixtureGit(primary, ['worktree', 'remove', '--force', detached]);
@@ -2351,7 +2365,17 @@ test('real fixture: a dirty submodule reports present-broken even under diff.ign
   }
 });
 
-test('real fixture: a worktree path with trailing whitespace is matched correctly, not silently trimmed away (review finding, #2225)', () => {
+test('real fixture: a worktree path with trailing whitespace is matched correctly, not silently trimmed away (review finding, #2225)', {
+  // Windows itself refuses to create a directory whose name ends in a
+  // space (`git worktree add` there fails with "could not create leading
+  // directories ... Invalid argument") -- an OS-level constraint, not a
+  // bug in this repository's code, so this regression cannot be exercised
+  // as a real git fixture on native Windows (#2576). POSIX has no such
+  // restriction and keeps running the real-fixture coverage unchanged.
+  skip:
+    process.platform === 'win32' &&
+    'Windows cannot create a directory with a trailing space in its name',
+}, () => {
   const primary = setupPrimaryRepo();
   // A trailing space in the directory name: `-z`'s exact field boundary
   // preserves it, and the parser must not strip it back off.
@@ -2372,7 +2396,7 @@ test('real fixture: a worktree path with trailing whitespace is matched correctl
       realLocalInputs(primary),
     );
     assert.equal(verdict.presence, 'present-broken');
-    assert.equal(verdict.path, worktree);
+    assert.equal(verdict.path, toGitPorcelainPath(worktree));
     assert.deepEqual(verdict.brokenReasons, ['uncommitted content present']);
   } finally {
     try {
@@ -2454,7 +2478,7 @@ test('real fixture: local git shell-outs ignore ambient GIT_* overrides and neve
         createLocalCoordinationInputs(primary),
       );
       assert.equal(verdict.presence, 'present-clean');
-      assert.equal(verdict.path, worktree);
+      assert.equal(verdict.path, toGitPorcelainPath(worktree));
       assert.equal(verdict.unreadable, false);
     } finally {
       for (const [key, value] of saved) {
