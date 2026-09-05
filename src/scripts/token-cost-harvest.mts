@@ -1720,6 +1720,13 @@ export function scanClaudeVendorSessions(
     issueNumber: number;
     records: unknown[];
   }[] = [];
+  // #2432: each file's own unattributed records (cwd-inference failed for
+  // every segment), cached for a later contributingWindows lookup --
+  // scoped to the SAME pool eventWindowCandidates itself draws from, so a
+  // file that already independently produced its own cwd-attributed
+  // sample for some OTHER issue is never re-absorbed into a merged #ew
+  // sample here.
+  const unattributedRecordsByBasename = new Map<string, unknown[]>();
   for (const file of files) {
     let records: unknown[];
     try {
@@ -1774,41 +1781,92 @@ export function scanClaudeVendorSessions(
     // that markAmbiguousOverlaps has no reason to catch (their time
     // ranges don't overlap; they're just both attributed to the same
     // issue).
-    if (
-      !anySegmentHadCwdIssueNumber &&
-      unattributedRecords.length > 0 &&
-      completedIssueWindows.length > 0
-    ) {
-      const eventWindowGroups = segmentRecordsByEventWindow(
-        unattributedRecords,
-        completedIssueWindows,
-        extractRecordTimestampMs,
-      );
-      for (const [issueNumber, groupRecords] of eventWindowGroups) {
-        eventWindowCandidates.push({
-          fileBasename,
-          issueNumber,
-          records: groupRecords,
-        });
+    if (!anySegmentHadCwdIssueNumber && unattributedRecords.length > 0) {
+      unattributedRecordsByBasename.set(fileBasename, unattributedRecords);
+      if (completedIssueWindows.length > 0) {
+        const eventWindowGroups = segmentRecordsByEventWindow(
+          unattributedRecords,
+          completedIssueWindows,
+          extractRecordTimestampMs,
+        );
+        for (const [issueNumber, groupRecords] of eventWindowGroups) {
+          eventWindowCandidates.push({
+            fileBasename,
+            issueNumber,
+            records: groupRecords,
+          });
+        }
       }
     }
   }
 
+  const sortByTimestampAscending = (records: unknown[]): unknown[] =>
+    [...records].sort(
+      (a, b) =>
+        (extractRecordTimestampMs(a) ?? Number.POSITIVE_INFINITY) -
+        (extractRecordTimestampMs(b) ?? Number.POSITIVE_INFINITY),
+    );
+
+  // #2432: pull each confirmed contributing session's own file's records
+  // (restricted to that session's own qualifying window bounds) into the
+  // primary file's own records, one merged harvest() call per issue.
+  // Never a partial-issue failure: a contribution whose own file can't be
+  // uniquely resolved is skipped (stderr diagnostic), keeping the
+  // primary-only, narrower-but-safe harvest instead of dropping the whole
+  // issue's sample.
   const harvestEventWindowCandidate = (
     issueNumber: number,
     fileBasename: string,
     records: unknown[],
   ): void => {
+    const vendorSessionIdOverride = resolveCandidateSessionId({
+      fileBasename,
+      records,
+    });
+    const contributingWindows =
+      completedIssueWindowByIssue.get(issueNumber)?.contributingWindows ?? [];
+    const mergedRecords = [...records];
+    for (const contributing of contributingWindows) {
+      const matches = [...unattributedRecordsByBasename].filter(
+        ([candidateBasename, candidateRecords]) =>
+          resolveCandidateSessionId({
+            fileBasename: candidateBasename,
+            records: candidateRecords,
+          }) === contributing.vendorSessionId,
+      );
+      if (matches.length !== 1) {
+        process.stderr.write(
+          `token-cost-harvest: skipping contributing session ${contributing.vendorSessionId} for issue #${issueNumber}: ${
+            matches.length === 0
+              ? 'no matching file found'
+              : `matched more than one file (${matches.map(([b]) => b).join(', ')})`
+          }\n`,
+        );
+        continue;
+      }
+      const [, candidateRecords] = matches[0];
+      for (const record of candidateRecords) {
+        const atMs = extractRecordTimestampMs(record);
+        if (
+          atMs !== undefined &&
+          atMs >= contributing.startMs &&
+          atMs < contributing.endMs
+        ) {
+          mergedRecords.push(record);
+        }
+      }
+    }
     try {
       const eventWindowResult = claudeAdapter.harvest({
-        records,
+        records: sortByTimestampAscending(mergedRecords),
         fileBasename,
         issueNumberOverride: issueNumber,
+        vendorSessionIdOverride,
       } satisfies ClaudeHarvestInput);
       out.push({
         vendor: 'claude',
         adapterResult: eventWindowResult,
-        timeline: extractClaudeUsageTimeline(records),
+        timeline: extractClaudeUsageTimeline(mergedRecords),
       });
     } catch (error) {
       process.stderr.write(
@@ -1833,10 +1891,10 @@ export function scanClaudeVendorSessions(
     });
     candidatesByIssue.set(candidate.issueNumber, list);
   }
-  const vendorSessionIdByIssue = new Map<number, string | undefined>();
+  const completedIssueWindowByIssue = new Map<number, CompletedIssueWindow>();
   for (const window of completedIssueWindows) {
-    if (!vendorSessionIdByIssue.has(window.issueNumber)) {
-      vendorSessionIdByIssue.set(window.issueNumber, window.vendorSessionId);
+    if (!completedIssueWindowByIssue.has(window.issueNumber)) {
+      completedIssueWindowByIssue.set(window.issueNumber, window);
     }
   }
   // #2424/Copilot review (PR #2430): a candidate's own session id must
@@ -1861,7 +1919,8 @@ export function scanClaudeVendorSessions(
     // whose own session file got excluded upstream (a cwd-inferred
     // segment already claimed it), leaving only an unrelated concurrent
     // session's file as candidate.
-    const windowVendorSessionId = vendorSessionIdByIssue.get(issueNumber);
+    const windowVendorSessionId =
+      completedIssueWindowByIssue.get(issueNumber)?.vendorSessionId;
     if (windowVendorSessionId !== undefined) {
       const matching = fileCandidates.filter(
         (candidate) =>

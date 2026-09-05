@@ -227,6 +227,7 @@ function tokenCostEvent(
   issueNumber: number,
   vendorSessionId?: string,
   vendor = 'claude',
+  claimId?: string,
 ): string {
   return JSON.stringify({
     schemaVersion: 1,
@@ -236,6 +237,7 @@ function tokenCostEvent(
     vendor,
     issueNumber,
     ...(vendorSessionId !== undefined ? { vendorSessionId } : {}),
+    ...(claimId !== undefined ? { claimId } : {}),
   });
 }
 
@@ -1371,6 +1373,255 @@ test('scanClaudeVendorSessions: a SOLE candidate file is still harvested uncondi
   assert.equal(ewSamples.length, 1);
 });
 
+test('scanClaudeVendorSessions: a genuine handoff (matching claimId, differing vendorSessionId) merges both files into one #ew sample, identity anchored to the primary/cleanup file, with correct startedAt/endedAt despite the contributing session being chronologically EARLIER (#2432)', () => {
+  // The realistic handoff shape: the contributing (earlier) session's own
+  // records are chronologically BEFORE the primary/cleanup session's.
+  // This is the regression test for the ordering bug caught in review --
+  // `extractTimestamps` takes the first/last record in ARRAY order, not a
+  // true min/max, so a naive "concatenate contributing after primary"
+  // merge would produce startedAt > endedAt and throw. The merge must
+  // sort by timestamp before harvesting.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-contrib.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:01:00.000Z","sessionId":"sess-contrib-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":3}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-primary.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'sess-contrib-0001',
+        'claim-shared',
+      ),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-primary-0001',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+  const sample = ewSamples[0].adapterResult.sample;
+  assert.equal(sample.vendorSessionId, 'sess-primary-0001#ew501');
+  assert.equal(sample.usage.output, 10);
+  assert.equal(sample.startedAt, '2026-01-01T00:01:00.000Z');
+  assert.equal(sample.endedAt, '2026-01-01T00:24:00.000Z');
+  // Each file's own plain per-file sample plus the one merged #ew sample.
+  assert.equal(sessions.length, 3);
+});
+
+test('scanClaudeVendorSessions: a same-issue match from an unrelated concurrent session (different vendorSessionId, no shared claimId) never merges its usage in (#2432 regression guard on #2423/#2424/#2425)', () => {
+  // fileA is the primary/cleanup file; fileB has a DIFFERENT
+  // vendorSessionId AND no claimId relationship to fileA's cleanup event
+  // at all (a genuinely unrelated concurrent session, not a handoff).
+  // Unlike the #2424 "cross-file match resolved via identity" test above
+  // (same vendorSessionId on both ends), this exercises the NEW claimId
+  // branch's negative case through the full merge pipeline: fileB's
+  // own file is present and structurally eligible (unattributed,
+  // timestamp inside the widened window), but must never be pulled in.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-idA.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idA-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-idB.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:21:00.000Z","sessionId":"sess-ew-idB-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:19:00Z',
+        'sess-ew-idB-0001',
+        'claim-unrelated',
+      ),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-ew-idA-0001',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+  const sample = ewSamples[0].adapterResult.sample;
+  assert.equal(sample.vendorSessionId, 'sess-ew-idA-0001#ew501');
+  // Only fileA's own usage (1) -- fileB's usage (5) is never folded in.
+  assert.equal(sample.usage.output, 1);
+  assert.equal(sessions.length, 3);
+});
+
+test('scanClaudeVendorSessions: a contributing session whose file cannot be uniquely resolved degrades to the primary-only sample instead of failing the whole issue (#2432)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  // No file in this sandbox has sessionId 'sess-contrib-missing' -- the
+  // contributing window's own file was never scanned (e.g. rotated out,
+  // or on a different machine).
+  writeFileSync(
+    join(sandbox, 'session-ew-primary.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0002","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '502:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'sess-contrib-missing',
+        'claim-shared',
+      ),
+    ],
+    [
+      '502:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-primary-0002',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+  assert.equal(
+    ewSamples[0].adapterResult.sample.vendorSessionId,
+    'sess-primary-0002#ew502',
+  );
+  assert.equal(ewSamples[0].adapterResult.sample.usage.output, 7);
+});
+
+test('scanClaudeVendorSessions: a contributing candidate whose file already independently produced a cwd-attributed sample is never re-absorbed (#2432)', () => {
+  // fileA's own cwd resolves to a DIFFERENT issue (4242) via a real
+  // issue-worktree path -- it already produced its own independent
+  // cwd-attributed sample and must never also be pulled in as a
+  // contributing session for issue 503's merged #ew sample, even though
+  // its own sessionId matches the contributing window's vendorSessionId.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-cwd-attributed.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:01:00.000Z","sessionId":"sess-contrib-0003","cwd":"/home/user/repo.issue-4242-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":3}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-primary.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0003","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '503:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'sess-contrib-0003',
+        'claim-shared',
+      ),
+    ],
+    [
+      '503:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-primary-0003',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+  // Only the primary file's own usage (7) -- the cwd-attributed file's
+  // usage (3) is never folded in.
+  assert.equal(ewSamples[0].adapterResult.sample.usage.output, 7);
+});
+
+test('scanClaudeVendorSessions: one vendorSessionId contributing two stages merges both stages worth of that session file, not just the last one (#2432)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-contrib.jsonl'),
+    [
+      '{"type":"assistant","timestamp":"2026-01-01T00:00:30.000Z","sessionId":"sess-contrib-0004","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}',
+      '{"type":"assistant","timestamp":"2026-01-01T00:03:00.000Z","sessionId":"sess-contrib-0004","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":4}}}',
+    ].join('\n') + '\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-primary.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0004","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '504:claude:claim',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:01:00Z',
+        'sess-contrib-0004',
+        'claim-shared',
+      ),
+    ],
+    [
+      '504:claude:work',
+      stageWindow(
+        '2026-01-01T00:01:00Z',
+        '2026-01-01T00:05:00Z',
+        'sess-contrib-0004',
+        'claim-shared',
+      ),
+    ],
+    [
+      '504:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-primary-0004',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+  // 2 (claim stage) + 4 (work stage) + 7 (primary) -- both of the
+  // contributing session's own records are pulled in, not just one.
+  assert.equal(ewSamples[0].adapterResult.sample.usage.output, 13);
+});
+
 test('scanClaudeVendorSessions: an event window is ignored when the segment already has a cwd-inferred issueNumber', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
@@ -2121,6 +2372,66 @@ test('readEventWindows: tags a window with vendorSessionId when both enter and e
   try {
     const windows = readEventWindows(path);
     assert.equal(windows.get('7:claude:work')?.vendorSessionId, 'sess-A');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: tags a window with claimId when both enter and exit share one (#2432)', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:10:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    assert.equal(windows.get('7:claude:work')?.claimId, 'claim-shared');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: leaves a window claimId-untagged when the enter and exit claimId disagree (#2432, defensive)', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:10:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-one',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-two',
+    ),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const window = windows.get('7:claude:work');
+    assert.ok(window);
+    assert.equal('claimId' in (window ?? {}), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
