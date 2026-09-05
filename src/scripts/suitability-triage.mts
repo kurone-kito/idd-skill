@@ -868,11 +868,19 @@ const RESOLVED_DECISION_PATTERN =
 // let an empty marker ("Maintainer decision (...):" immediately followed by
 // a blank line and the next section) cross into that next section and match
 // its first non-whitespace character as if it were resolution content
-// (Codex round 2, PR #2662). This is the same soft co-occurrence heuristic
-// as the heading form: it does not verify the resolution text actually
-// settles the exact approval wording elsewhere in the body.
+// (Codex round 2, PR #2662). The lookahead right after the opening "("
+// requires the parenthetical to actually contain one of the three
+// provenance signals this shape is documented to carry -- an issue/PR
+// reference, "Groom hearing", or an ISO-style date -- rather than accepting
+// any (or empty) parenthetical content as if provenance were merely
+// decorative (Copilot review round 2, PR #2662): without this, "Maintainer
+// decision (): ..." or "Maintainer decision (just kidding): ..." could
+// bypass the subjective-approval gate with no real grooming-pass record
+// behind it. This is the same soft co-occurrence heuristic as the heading
+// form: it does not verify the resolution text actually settles the exact
+// approval wording elsewhere in the body.
 const INLINE_MAINTAINER_DECISION_PATTERN =
-  /(?<![\w-])Maintainer decision(?![\w-])\s*\([^)]{0,200}\)\s*:[ \t]*(?:\r?\n[ \t]*)?(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+decision(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|pending|undecided|deferred|still\s+open)(?![a-zA-Z]))\S/i;
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:[ \t]*(?:\r?\n[ \t]*)?(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+decision(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|pending|undecided|deferred|still\s+open)(?![a-zA-Z]))\S/i;
 
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the

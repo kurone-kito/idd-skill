@@ -2823,6 +2823,35 @@ test('verifiability still fails on noun-first "no decision yet" phrasing (PR #26
   assert.equal(result.pass, false);
 });
 
+test('verifiability still fails when the parenthetical carries no real provenance (PR #2662 Copilot round 2)', () => {
+  // Any (or empty) parenthetical content must not count as provenance: the
+  // parenthetical must actually contain an issue/PR reference, "Groom
+  // hearing", or an ISO-style date -- otherwise the gate is bypassable with
+  // an unsubstantiated "Maintainer decision (...): ..." claim.
+  for (const parenthetical of [
+    '()',
+    '(just kidding)',
+    '(no real basis here)',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision ${parenthetical}: pursue option 1, per the maintainer's own judgment and approval.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for parenthetical: ${parenthetical}`,
+    );
+  }
+});
+
 test('verifiability still fails when an inline decision uses still-pending vocabulary (#2661 C1 review)', () => {
   // The negative-lookahead denylist must also reject common still-pending
   // words with no negated-"resolved"/"decided" phrasing of their own (TBD,
