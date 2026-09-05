@@ -17,6 +17,7 @@ import { combineOwnerRepoFlags, ghText } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   classifyRegularBotComment,
+  classifyThreadAckOnlyPostDisposition,
   hasFreshDisposition,
   indexLatestGatingReviewsByAuthor,
   indexThreadsByReview,
@@ -24,6 +25,7 @@ import {
   isKnownReviewBot,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  resolveAdvisoryBotLogins,
   summarizeClaimValidation,
   unionTrustedMarkerActorSources,
   unsafeTextReason,
@@ -52,6 +54,7 @@ const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerActorSources = null;
 let cachedCurrentViewerLogin = null;
+let cachedConfiguredAdvisoryBotLogins = null;
 /** Default bound on whole-pass apply retries (#2011). */
 const DEFAULT_APPLY_RETRY_MAX_ATTEMPTS = 3;
 /** Base backoff (ms) before each rescan; linear-ish with jitter, matching
@@ -469,6 +472,9 @@ async function buildReport(owner, repo, prNumber, options = {}) {
   ]);
   const threadIndex = indexThreadsByReview(threads, {
     isDispositionAuthor: makeIddDispositionAuthorPredicate(iddAgentLogins),
+    iddAgentLogins,
+    advisoryBotLogins: configuredAdvisoryBotLogins(),
+    prAuthorLogin: pr.author?.login,
   });
   const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
   const report = {
@@ -702,7 +708,8 @@ function evaluateReviewComments(thread, pr, latestGatingReviews, report) {
     evaluateReviewComment(comment, thread, pr, latestGatingReviews, report);
   }
 }
-function evaluateReviewComment(
+/** Exported for direct unit testing (#2618); not part of the CLI surface. */
+export function evaluateReviewComment(
   comment,
   thread,
   pr,
@@ -765,7 +772,12 @@ function evaluateReviewComment(
       isDispositionAuthor: makeIddDispositionAuthorPredicate(
         report.trustedMarkerActors,
       ),
-    })
+    }) &&
+    !classifyThreadAckOnlyPostDisposition(thread, {
+      iddAgentLogins: report.trustedMarkerActors,
+      advisoryBotLogins: configuredAdvisoryBotLogins(),
+      prAuthorLogin: pr.author?.login,
+    }).ackOnlyPostDisposition
   ) {
     addSkipped(
       report,
@@ -805,6 +817,7 @@ function fetchPullRequest(owner, repo, number, options = {}) {
         number
         url
         merged
+        author { login }
       }
     }
   }`;
@@ -1292,6 +1305,25 @@ function configuredTrustedMarkerActorSources() {
 }
 function configuredTrustedMarkerAuthors() {
   return configuredTrustedMarkerActorSources().actors;
+}
+// #2618: this repository's configured advisory-bot logins, feeding the
+// ack-only-post-disposition carve-out (`classifyThreadAckOnlyPostDisposition`)
+// so F4 recognizes the same courtesy-ack shape F2/F3 already does.
+function configuredAdvisoryBotLogins() {
+  if (cachedConfiguredAdvisoryBotLogins) {
+    return cachedConfiguredAdvisoryBotLogins;
+  }
+  let config = null;
+  try {
+    config = JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+  } catch {
+    config = null;
+  }
+  cachedConfiguredAdvisoryBotLogins = resolveAdvisoryBotLogins({
+    envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
+    config,
+  }).logins;
+  return cachedConfiguredAdvisoryBotLogins;
 }
 function trustCollaboratorMarkers() {
   try {

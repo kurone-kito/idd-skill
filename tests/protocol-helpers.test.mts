@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   buildActivitySnapshotSummary,
+  classifyThreadAckOnlyPostDisposition,
   EDITED_AFTER_DISPOSITION_HINT,
   MALFORMED_DISPOSITION_PREFIX_HINT,
   summarizeDispositionEvidenceForGate,
@@ -186,6 +187,167 @@ test('reviewCurrency and dispositionEvidence agree a rejection-confirmed-by-main
     activitySummary.effective.maxActivityUpdatedAt,
     '2026-05-12T00:30:00Z',
   );
+});
+
+// #2618: `classifyThreadAckOnlyPostDisposition` extracted out of
+// `summarizeDispositionEvidenceForGate` into a standalone export so F4's
+// `audit-pr-cleanup.mts` (no review-snapshot watermark) can share it with
+// F2/F3's gate (`snapshotBoundaryAt` supplied). These tests exercise the
+// function directly rather than through the gate, in the F4 shape: no
+// `snapshotBoundaryAt`.
+
+test('classifyThreadAckOnlyPostDisposition recognizes a courtesy ack with no snapshot boundary (#2618)', () => {
+  const thread = {
+    id: 'thread-f4-ack-only',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'F4-1',
+          author: { login: 'reviewer-a' },
+          body: 'please fix this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'F4-2',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'F4-3',
+          author: { login: 'coderabbitai[bot]' },
+          body: 'Thanks for confirming!',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a non-advisory trailing reply (#2618)', () => {
+  const thread = {
+    id: 'thread-f4-human-reply',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'F4H-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'F4H-2',
+          author: { login: 'reviewer-a' },
+          body: 'actually, one more thing',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition fails closed on a genuinely missing disposition (#2618)', () => {
+  const thread = {
+    id: 'thread-f4-no-disposition',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'F4N-1',
+          author: { login: 'reviewer-a' },
+          body: 'please fix this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'F4N-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: 'Thanks for confirming!',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition still honors an explicit snapshot boundary (regression guard, #2618)', () => {
+  // Same shape `summarizeDispositionEvidenceForGate`'s own #2014 test above
+  // exercises through the gate; this confirms the extracted function keeps
+  // the F2/F3 boundary behavior when a caller supplies one.
+  const thread = {
+    id: 'thread-f2-boundary',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'F2B-1',
+          author: { login: 'idd-bot' },
+          body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'F2B-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: 'Thanks for confirming.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  // The bot's reply predates the boundary, so it never re-blocks the gate.
+  const beforeBoundary = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+    snapshotBoundaryAt: '2026-05-12T03:00:00Z',
+  });
+  assert.equal(beforeBoundary.ackOnlyPostDisposition, false);
+
+  const afterBoundary = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+    snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+  });
+  assert.equal(afterBoundary.ackOnlyPostDisposition, true);
 });
 
 // Codex review findings on this PR (#2014), both verified against source
