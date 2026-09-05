@@ -983,6 +983,24 @@ interface AttemptCandidate {
  * forever, since the resulting window's own stable `#ew<issueNumber>` id
  * makes a later harvest treat it as already-present (Codex review
  * finding, PR #2430).
+ *
+ * #2432/Codex review (PR #2627): absent an exact-session match, a
+ * candidate sharing `cleanup`'s own `claimId` is preferred over the plain
+ * recency-based `bestIdentified`/legacy comparison above -- claimId, once
+ * matched, is this repository's own ground-truth ownership token for
+ * "same claim lineage, possibly handed off across sessions," so it must
+ * outrank a merely-more-recent but unrelated attempt at the same bareKey.
+ * Without this tier, a single stray same-stage event from ANY differently-
+ * or un-identified attempt (an unrelated concurrent session, an aborted
+ * retry) could win purely on `endMs` and get returned instead of the
+ * genuine claim-linked candidate -- which `buildCompletedIssueWindows`'s
+ * `idCompatible` would then exclude outright, silently defeating claim-id
+ * recovery before it ever runs. This tier does not close every residual:
+ * if the earlier handoff session and the winning `cleanup` session both
+ * post the identical stage id (a redundant re-post, not the common
+ * disjoint-stage handoff shape), only one window survives per bareKey --
+ * a documented limitation, not a regression, since neither pre-#2424 nor
+ * pre-#2432 behavior could recover it either.
  */
 export function readEventWindows(path: string): Map<string, StageEventWindow> {
   const result = new Map<string, StageEventWindow>();
@@ -1116,6 +1134,7 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
   const resolveWindow = (
     key: string,
     preferredVendorSessionId: string | undefined,
+    preferredClaimId: string | undefined,
   ): StageEventWindow | undefined => {
     const candidates = attemptCandidates(key);
     if (preferredVendorSessionId !== undefined) {
@@ -1136,6 +1155,31 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
     const valid = candidates.filter(
       (candidate) => candidate.startMs < candidate.endMs,
     );
+    // #2432/Codex review (PR #2627): no exact-session match above means
+    // this stage was posted by some OTHER process than cleanup's own --
+    // among those, a candidate sharing cleanup's own claimId is the SAME
+    // claim lineage (a genuine handoff contributor) and must not be
+    // shadowed by an unrelated, differently- or un-identified attempt
+    // that merely happens to have a later `endMs`. Without this, a single
+    // stray same-stage event from any unrelated attempt would silently
+    // defeat claim-id recovery entirely, before `idCompatible` ever gets
+    // a chance to run.
+    const claimMatched =
+      preferredClaimId !== undefined
+        ? valid.filter((candidate) => candidate.claimId === preferredClaimId)
+        : [];
+    const claimPreferred =
+      claimMatched.length > 0
+        ? claimMatched.reduce((a, b) => (b.endMs > a.endMs ? b : a))
+        : undefined;
+    if (claimPreferred) {
+      return {
+        startMs: claimPreferred.startMs,
+        endMs: claimPreferred.endMs,
+        vendorSessionId: claimPreferred.vendorSessionId,
+        claimId: claimPreferred.claimId as string,
+      };
+    }
     const bestIdentified =
       valid.length > 0
         ? valid.reduce((a, b) => (b.endMs > a.endMs ? b : a))
@@ -1217,7 +1261,7 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
 
   for (const prefix of issueVendorPrefixes) {
     const cleanupKey = `${prefix}:cleanup`;
-    const cleanupWindow = resolveWindow(cleanupKey, undefined);
+    const cleanupWindow = resolveWindow(cleanupKey, undefined, undefined);
     if (cleanupWindow) {
       result.set(cleanupKey, cleanupWindow);
     }
@@ -1226,7 +1270,11 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
         continue;
       }
       const key = `${prefix}:${stageId}`;
-      const window = resolveWindow(key, cleanupWindow?.vendorSessionId);
+      const window = resolveWindow(
+        key,
+        cleanupWindow?.vendorSessionId,
+        cleanupWindow?.claimId,
+      );
       if (window) {
         result.set(key, window);
       }
@@ -1264,14 +1312,28 @@ export interface CompletedIssueWindow {
   /** The winning `cleanup` window's own claimId (#2432), when known. */
   claimId?: string;
   /**
-   * Other sessions (by vendorSessionId, one entry each, ranges unioned
-   * across every one of that session's own qualifying stage windows)
-   * whose usage a genuine claim-id-matched handoff should also pull in
-   * from their OWN file -- see `scanClaudeVendorSessions`. Present only
-   * when at least one non-cleanup window was admitted via the claimId
-   * branch of `idCompatible` (a different vendorSessionId than
-   * `cleanup`'s own). Absent for a single-session completed window,
-   * exactly as before #2432.
+   * The primary (cleanup-owning) session's own qualifying stage windows
+   * -- cleanup itself plus every boundary-consistent, same-vendorSessionId
+   * -or-unidentified stage -- kept as INDIVIDUAL windows, never unioned
+   * into one enclosing span. `scanClaudeVendorSessions` filters the
+   * primary file's own records against this set (a record must fall
+   * inside at least one of these windows to count), and the cross-session
+   * overlap guard below compares these same individual windows against
+   * each contributor's -- an enclosing span would falsely "overlap" a
+   * contributor sandwiched inside an idle gap between two of the
+   * primary's own stages (Copilot review finding round on PR #2627, #2432).
+   */
+  primaryWindows: { startMs: number; endMs: number }[];
+  /**
+   * Other sessions' own qualifying stage windows, one entry PER admitted
+   * stage (never unioned or deduplicated by vendorSessionId -- the same
+   * reasoning as `primaryWindows` above: a consumer groups entries by
+   * `vendorSessionId` when resolving which file to pull from, but must
+   * keep each stage's own individual bounds for both record filtering and
+   * the overlap guard). Present only when at least one non-cleanup window
+   * was admitted via the claimId branch of `idCompatible` (a different
+   * vendorSessionId than `cleanup`'s own). Absent for a single-session
+   * completed window, exactly as before #2432.
    */
   contributingWindows?: {
     vendorSessionId: string;
@@ -1454,54 +1516,68 @@ export function buildCompletedIssueWindows(
     if (hasContaminatedStage) {
       continue;
     }
+    // Named once, reused by the `startMs`/`primaryWindows` widening loop
+    // below and by the `contributingWindows` loop after it, so a future
+    // change to either predicate can't silently desync the two (Copilot
+    // review, PR #2627).
+    const isBoundaryConsistent = (window: StageEventWindow): boolean =>
+      window.startMs <= cleanup.endMs && window.endMs <= cleanup.endMs;
+    const isSameSessionOrUnidentified = (window: StageEventWindow): boolean =>
+      window.vendorSessionId === undefined ||
+      window.vendorSessionId === cleanup.vendorSessionId;
     let startMs = cleanup.startMs;
-    // The primary/cleanup-owning session's own full span (union of every
-    // same-vendorSessionId-or-unidentified window, i.e. what `startMs`
-    // would be WITHOUT any claimId-matched contributor) -- kept separate
-    // from `startMs` itself so the cross-session overlap guard below can
-    // compare a contributor against the primary session's REAL activity
-    // range, not just cleanup's own narrow slice.
-    let primaryStartMs = cleanup.startMs;
+    // The primary/cleanup-owning session's own INDIVIDUAL stage windows
+    // (every same-vendorSessionId-or-unidentified window, boundary
+    // consistent) -- kept as separate intervals rather than one enclosing
+    // span, so the cross-session overlap guard below can tell a real
+    // overlap apart from a contributor's window merely falling inside a
+    // GAP between two of the primary session's own disjoint stages (e.g.
+    // an A -> B -> A handoff, where A owns an early stage plus the later
+    // `cleanup` and B owns an intervening stage that never actually
+    // touches either of A's own windows).
+    const primaryWindows: { startMs: number; endMs: number }[] = [];
     for (const [, window] of candidateStages) {
-      if (window.startMs <= cleanup.endMs && window.endMs <= cleanup.endMs) {
+      if (isBoundaryConsistent(window)) {
         startMs = Math.min(startMs, window.startMs);
-        if (
-          window.vendorSessionId === undefined ||
-          window.vendorSessionId === cleanup.vendorSessionId
-        ) {
-          primaryStartMs = Math.min(primaryStartMs, window.startMs);
+        if (isSameSessionOrUnidentified(window)) {
+          primaryWindows.push({
+            startMs: window.startMs,
+            endMs: window.endMs,
+          });
         }
       }
     }
     // #2432: a boundary-consistent, claimId-matched window whose own
     // vendorSessionId differs from cleanup's own is a genuine
-    // contributing session -- union its range with any sibling windows
-    // sharing the same vendorSessionId (one earlier session can post more
-    // than one qualifying stage) into a single contribution.
-    const contributingRanges = new Map<
-      string,
-      { startMs: number; endMs: number }
-    >();
+    // contributing session. Kept as INDIVIDUAL per-stage windows -- never
+    // unioned into one enclosing range per vendorSessionId -- for the same
+    // reason `primaryWindows` above is: a contributing session's own two
+    // stages can themselves be non-adjacent (e.g. an early `work` and a
+    // much later `review`), and a union would falsely "overlap" the
+    // primary session's own unrelated activity that merely falls inside
+    // that GAP, or pull that gap's unrelated records into the merge.
+    const contributingWindows: {
+      vendorSessionId: string;
+      startMs: number;
+      endMs: number;
+    }[] = [];
     for (const [stageId, window] of candidateStages) {
       if (
         stageId === 'cleanup' ||
-        window.vendorSessionId === undefined ||
-        window.vendorSessionId === cleanup.vendorSessionId ||
-        !(window.startMs <= cleanup.endMs && window.endMs <= cleanup.endMs)
+        isSameSessionOrUnidentified(window) ||
+        !isBoundaryConsistent(window)
       ) {
         continue;
       }
-      const existing = contributingRanges.get(window.vendorSessionId);
-      contributingRanges.set(window.vendorSessionId, {
-        startMs: existing
-          ? Math.min(existing.startMs, window.startMs)
-          : window.startMs,
-        endMs: existing ? Math.max(existing.endMs, window.endMs) : window.endMs,
+      contributingWindows.push({
+        // Guaranteed non-undefined here: `isSameSessionOrUnidentified`
+        // already returned false, so `window.vendorSessionId` must be a
+        // defined string that differs from `cleanup.vendorSessionId`.
+        vendorSessionId: window.vendorSessionId as string,
+        startMs: window.startMs,
+        endMs: window.endMs,
       });
     }
-    const contributingWindows = [...contributingRanges].map(
-      ([vendorSessionId, range]) => ({ vendorSessionId, ...range }),
-    );
     // Cross-session overlap guard: a genuine sequential handoff never
     // produces overlapping activity between two different sessions. Two
     // claim-id-matched windows from DIFFERENT vendorSessionIds that DO
@@ -1510,22 +1586,33 @@ export function buildCompletedIssueWindows(
     // share one active claim-id without one being a clean continuation of
     // the other -- treat the whole issue as contaminated, same as a
     // reversed window above (no sample beats a wrong one). Compares each
-    // contributor against the primary session's OWN full span
-    // (`primaryStartMs`..`cleanup.endMs`, every same-session window
-    // unioned), not merely cleanup's own narrow slice -- a contributor
-    // overlapping an earlier same-session stage (e.g. `work`) is just as
-    // much evidence of the race as one overlapping `cleanup` itself.
+    // contributor against the primary session's own INDIVIDUAL stage
+    // windows (`primaryWindows`), not one enclosing span from its
+    // earliest stage to `cleanup.endMs` -- an enclosing span would falsely
+    // flag a legitimate A -> B -> A handoff, where B's own window merely
+    // falls inside the GAP between two of A's own disjoint stages
+    // (Codex review finding, PR #2627).
+    // Deliberately its own local closure, not a reuse of `rangesOverlap`
+    // below: that one compares closed `[min, max]` RecordTimeRanges (real
+    // observed record timestamps), while this compares half-open
+    // `[startMs, endMs)` stage windows (the same convention
+    // `segmentRecordsByEventWindow` uses) -- the boundary is strict `<`
+    // here, not `rangesOverlap`'s inclusive `<=`, because two windows
+    // merely touching at a shared instant is not a genuine overlap under
+    // that convention.
     const overlaps = (
       a: { startMs: number; endMs: number },
       b: { startMs: number; endMs: number },
     ): boolean => a.startMs < b.endMs && b.startMs < a.endMs;
-    const overlapCandidates = [
-      { startMs: primaryStartMs, endMs: cleanup.endMs },
-      ...contributingWindows,
-    ];
-    const hasCrossSessionOverlap = overlapCandidates.some((a, i) =>
-      overlapCandidates.some((b, j) => i < j && overlaps(a, b)),
-    );
+    const hasCrossSessionOverlap =
+      contributingWindows.some((contributing) =>
+        primaryWindows.some((primaryWindow) =>
+          overlaps(primaryWindow, contributing),
+        ),
+      ) ||
+      contributingWindows.some((a, i) =>
+        contributingWindows.some((b, j) => i < j && overlaps(a, b)),
+      );
     if (hasCrossSessionOverlap) {
       continue;
     }
@@ -1533,6 +1620,7 @@ export function buildCompletedIssueWindows(
       issueNumber,
       startMs,
       endMs: cleanup.endMs,
+      primaryWindows,
       ...(cleanup.vendorSessionId !== undefined
         ? { vendorSessionId: cleanup.vendorSessionId }
         : {}),
@@ -1735,13 +1823,58 @@ export function scanClaudeVendorSessions(
     issueNumber: number;
     records: unknown[];
   }[] = [];
-  // #2432: each file's own unattributed records (cwd-inference failed for
-  // every segment), cached for a later contributingWindows lookup --
-  // scoped to the SAME pool eventWindowCandidates itself draws from, so a
-  // file that already independently produced its own cwd-attributed
-  // sample for some OTHER issue is never re-absorbed into a merged #ew
-  // sample here.
-  const unattributedRecordsByBasename = new Map<string, unknown[]>();
+  // #2432: every file's own FULL record set (regardless of whether any
+  // segment resolved a cwd issue number), cached for a later
+  // contributingWindows lookup -- a genuine handoff session is very often
+  // launched right inside the issue worktree it is resuming, so its own
+  // records typically already carry a cwd-attributed segment for the
+  // exact issue being merged. Restricting this pool to unattributed-only
+  // records (the pre-#2432 #2418 scoping) would make such a session
+  // permanently unresolvable as a contributor (Codex review finding, PR
+  // #2627); which of its records actually belong to the merge is instead
+  // decided by the contributing window's own timestamp bounds below, not
+  // by which segment they happened to land in.
+  const allRecordsByBasename = new Map<string, unknown[]>();
+  // Every issue number any segment of a file resolved via cwd inference
+  // (almost always zero or one entry; #2404 segmentation can add more for
+  // a session that moved across several worktrees in one file). A file
+  // that cwd-resolved to some OTHER issue is never eligible as a
+  // contributor for a DIFFERENT target issue -- matching its own sessionId
+  // is not enough on its own, or a session that briefly touched an
+  // unrelated issue's worktree could have that unrelated activity folded
+  // into this merge (Codex review finding, PR #2627 -- distinct from the
+  // same-issue suppression case above, which this does not affect).
+  const cwdIssueNumbersByBasename = new Map<string, Set<number>>();
+  // Per-file `resolveCandidateSessionId` result, computed once per file
+  // instead of once per (contributor x file) comparison (Copilot review,
+  // PR #2627) -- `extractSessionId` can scan the whole records array.
+  const sessionIdByBasename = new Map<string, string | undefined>();
+  const resolveCandidateSessionId = (
+    fileBasename: string,
+  ): string | undefined => {
+    if (sessionIdByBasename.has(fileBasename)) {
+      return sessionIdByBasename.get(fileBasename);
+    }
+    const resolved =
+      extractSessionId(allRecordsByBasename.get(fileBasename) ?? []) ??
+      deriveFallbackSessionId(fileBasename);
+    sessionIdByBasename.set(fileBasename, resolved);
+    return resolved;
+  };
+  // #2432: a file's own cwd-derived issue-loop sample(s) whose issue
+  // number turns out to match a confirmed merge target are suppressed
+  // (not pushed to `out`) once that file is resolved as a contributor for
+  // that SAME issue number, so its usage is counted exactly once -- via
+  // the merged `#ew<issueNumber>` sample -- instead of also standing on
+  // its own. A cwd-derived sample for any OTHER issue number is never
+  // touched. Pushing is therefore deferred until every contributor
+  // resolution below has run.
+  const pendingCwdSessions: {
+    fileBasename: string;
+    issueNumber: number;
+    session: VendorSession;
+  }[] = [];
+  const consumedCwdIssueNumbersByBasename = new Map<string, Set<number>>();
   for (const file of files) {
     let records: unknown[];
     try {
@@ -1753,6 +1886,7 @@ export function scanClaudeVendorSessions(
       continue;
     }
     const fileBasename = basename(file);
+    allRecordsByBasename.set(fileBasename, records);
     const segments = segmentRecordsByCwd(records);
     const unattributedRecords: unknown[] = [];
     let anySegmentHadCwdIssueNumber = false;
@@ -1774,30 +1908,47 @@ export function scanClaudeVendorSessions(
         );
         return;
       }
-      out.push({
+      const session: VendorSession = {
         vendor: 'claude',
         adapterResult,
         timeline: extractClaudeUsageTimeline(segment.records),
-      });
-      if (adapterResult.joinHints?.issueNumber === undefined) {
+      };
+      const cwdIssueNumber = adapterResult.joinHints?.issueNumber;
+      if (cwdIssueNumber === undefined) {
+        out.push(session);
         unattributedRecords.push(...segment.records);
       } else {
         anySegmentHadCwdIssueNumber = true;
+        const cwdIssues =
+          cwdIssueNumbersByBasename.get(fileBasename) ?? new Set<number>();
+        cwdIssues.add(cwdIssueNumber);
+        cwdIssueNumbersByBasename.set(fileBasename, cwdIssues);
+        // #2432: deferred, not pushed yet -- see `pendingCwdSessions`
+        // above. Suppressed later only if this exact (file, issue number)
+        // pair is confirmed as a merge contributor.
+        pendingCwdSessions.push({
+          fileBasename,
+          issueNumber: cwdIssueNumber,
+          session,
+        });
       }
     });
 
-    // Only fall back to event-window attribution when NO segment in this
-    // file resolved a cwd-inferred issue number. Otherwise a segment
-    // whose cwd merely isn't issue-shaped (an ordinary subdirectory, not
-    // a worktree move) but whose records still happen to fall inside a
-    // DIFFERENT segment's already cwd-attributed issue window would
-    // produce a second, independent issue-loop sample for that same
-    // issue -- splitting one completed loop's usage across two samples
-    // that markAmbiguousOverlaps has no reason to catch (their time
-    // ranges don't overlap; they're just both attributed to the same
-    // issue).
+    // Only fall back to event-window attribution (for PRIMARY/cleanup-file
+    // selection) when NO segment in this file resolved a cwd-inferred
+    // issue number. Otherwise a segment whose cwd merely isn't
+    // issue-shaped (an ordinary subdirectory, not a worktree move) but
+    // whose records still happen to fall inside a DIFFERENT segment's
+    // already cwd-attributed issue window would produce a second,
+    // independent issue-loop sample for that same issue -- splitting one
+    // completed loop's usage across two samples that markAmbiguousOverlaps
+    // has no reason to catch (their time ranges don't overlap; they're
+    // just both attributed to the same issue). This restriction applies
+    // only to PRIMARY selection: a file excluded here can still be found
+    // as a claim-id-matched CONTRIBUTOR via `allRecordsByBasename` above,
+    // which is never restricted this way (Codex review finding, PR
+    // #2627).
     if (!anySegmentHadCwdIssueNumber && unattributedRecords.length > 0) {
-      unattributedRecordsByBasename.set(fileBasename, unattributedRecords);
       if (completedIssueWindows.length > 0) {
         const eventWindowGroups = segmentRecordsByEventWindow(
           unattributedRecords,
@@ -1828,42 +1979,78 @@ export function scanClaudeVendorSessions(
 
   // #2432: pull each confirmed contributing session's own file's records
   // (restricted to that session's own qualifying window bounds) into the
-  // primary file's own records, one merged harvest() call per issue.
-  // Never a partial-issue failure: a contribution whose own file can't be
-  // uniquely resolved is skipped (stderr diagnostic), keeping the
-  // primary-only, narrower-but-safe harvest instead of dropping the whole
-  // issue's sample.
+  // primary file's own records, one merged harvest() call per issue. A
+  // contribution whose own file can't be uniquely resolved skips the
+  // WHOLE issue rather than emitting a primary-only sample under the
+  // stable `#ew<issueNumber>` id: the CLI's append-side `vendorSessionKey`
+  // dedup treats that key as already-present on every later run, which
+  // would otherwise permanently freeze exactly the undercount this
+  // feature exists to fix, once the missing contributor becomes available
+  // (Codex review finding, PR #2627).
   const harvestEventWindowCandidate = (
     issueNumber: number,
     fileBasename: string,
     records: unknown[],
   ): void => {
-    const vendorSessionIdOverride = resolveCandidateSessionId({
-      fileBasename,
-      records,
-    });
+    const vendorSessionIdOverride = resolveCandidateSessionId(fileBasename);
     const contributingWindows =
       completedIssueWindowByIssue.get(issueNumber)?.contributingWindows ?? [];
-    const mergedRecords = [...records];
-    for (const contributing of contributingWindows) {
-      const matches = [...unattributedRecordsByBasename].filter(
-        ([candidateBasename, candidateRecords]) =>
-          resolveCandidateSessionId({
-            fileBasename: candidateBasename,
-            records: candidateRecords,
-          }) === contributing.vendorSessionId,
+    // #2432/Codex review (PR #2627): the primary candidate's own `records`
+    // were selected against the OVERALL (already-widened) issue window,
+    // so they can include this same file's unrelated activity that
+    // happens to fall inside a time range a confirmed contributor already
+    // owns. Drop those before merging in the contributors' own records,
+    // so that time is charged exactly once.
+    const isOwnedByAContributor = (atMs: number | undefined): boolean =>
+      atMs !== undefined &&
+      contributingWindows.some(
+        (contributing) =>
+          atMs >= contributing.startMs && atMs < contributing.endMs,
       );
-      if (matches.length !== 1) {
+    const mergedRecords = records.filter(
+      (record) => !isOwnedByAContributor(extractRecordTimestampMs(record)),
+    );
+    // A candidate file cwd-attributed to some OTHER issue number is never
+    // eligible to lend its records to THIS merge -- a file cwd-attributed
+    // only to THIS same issue (the #2432 same-worktree-handoff case) or to
+    // no issue at all (the pre-#2432 unattributed case) is eligible on a
+    // sessionId match; one cwd-attributed to a different issue is not,
+    // even on a sessionId match (Codex review finding, PR #2627). Unlike a
+    // truly unresolvable contributor below, this is a PERMANENT, structural
+    // disqualification, not a transient gap a later harvest could fix --
+    // so it drops just this one contributor and proceeds, rather than
+    // skipping the whole issue.
+    const isEligibleContributorFile = (candidateBasename: string): boolean => {
+      const cwdIssues = cwdIssueNumbersByBasename.get(candidateBasename);
+      return (
+        cwdIssues === undefined ||
+        [...cwdIssues].every((cwdIssue) => cwdIssue === issueNumber)
+      );
+    };
+    for (const contributing of contributingWindows) {
+      const sessionIdMatches = [...allRecordsByBasename].filter(
+        ([candidateBasename]) =>
+          resolveCandidateSessionId(candidateBasename) ===
+          contributing.vendorSessionId,
+      );
+      if (sessionIdMatches.length !== 1) {
         process.stderr.write(
-          `token-cost-harvest: skipping contributing session ${contributing.vendorSessionId} for issue #${issueNumber}: ${
-            matches.length === 0
-              ? 'no matching file found'
-              : `matched more than one file (${matches.map(([b]) => b).join(', ')})`
-          }\n`,
+          `token-cost-harvest: skipping issue #${issueNumber} entirely: contributing session ${contributing.vendorSessionId} ${
+            sessionIdMatches.length === 0
+              ? 'has no matching file'
+              : `matched more than one file (${sessionIdMatches.map(([b]) => b).join(', ')})`
+          } -- emitting a primary-only sample would freeze an undercount under a stable id\n`,
+        );
+        return;
+      }
+      const [contributingBasename, candidateRecords] = sessionIdMatches[0];
+      if (!isEligibleContributorFile(contributingBasename)) {
+        process.stderr.write(
+          `token-cost-harvest: dropping contributing session ${contributing.vendorSessionId} for issue #${issueNumber}: its file (${contributingBasename}) is cwd-attributed to a different issue -- proceeding without this contributor\n`,
         );
         continue;
       }
-      const [, candidateRecords] = matches[0];
+      let contributorHadRecords = false;
       for (const record of candidateRecords) {
         const atMs = extractRecordTimestampMs(record);
         if (
@@ -1872,7 +2059,15 @@ export function scanClaudeVendorSessions(
           atMs < contributing.endMs
         ) {
           mergedRecords.push(record);
+          contributorHadRecords = true;
         }
+      }
+      if (contributorHadRecords) {
+        const consumed =
+          consumedCwdIssueNumbersByBasename.get(contributingBasename) ??
+          new Set<number>();
+        consumed.add(issueNumber);
+        consumedCwdIssueNumbersByBasename.set(contributingBasename, consumed);
       }
     }
     try {
@@ -1916,19 +2111,6 @@ export function scanClaudeVendorSessions(
       completedIssueWindowByIssue.set(window.issueNumber, window);
     }
   }
-  // #2424/Copilot review (PR #2430): a candidate's own session id must
-  // fall back to its file basename exactly like `claudeAdapter.harvest()`
-  // itself does -- `extractSessionId()` alone returns `undefined` for a
-  // record shape lacking a top-level `sessionId` field (already
-  // fixture-covered for the adapter's own vendorSessionId derivation),
-  // which would otherwise never match a defined `windowVendorSessionId`
-  // even when the file is genuinely the right one.
-  const resolveCandidateSessionId = (candidate: {
-    fileBasename: string;
-    records: unknown[];
-  }): string | undefined =>
-    extractSessionId(candidate.records) ??
-    deriveFallbackSessionId(candidate.fileBasename);
   for (const [issueNumber, fileCandidates] of candidatesByIssue) {
     // #2424: resolve by attempt identity before falling back to
     // classify-and-skip (or, for a single candidate, unconditional
@@ -1943,7 +2125,8 @@ export function scanClaudeVendorSessions(
     if (windowVendorSessionId !== undefined) {
       const matching = fileCandidates.filter(
         (candidate) =>
-          resolveCandidateSessionId(candidate) === windowVendorSessionId,
+          resolveCandidateSessionId(candidate.fileBasename) ===
+          windowVendorSessionId,
       );
       if (matching.length === 1) {
         harvestEventWindowCandidate(
@@ -1988,6 +2171,21 @@ export function scanClaudeVendorSessions(
     process.stderr.write(
       `token-cost-harvest: skipping event-window issue #${issueNumber}: matched by more than one project log file (${classification}: ${fileNames.join(', ')})\n`,
     );
+  }
+  // #2432: emit each file's own cwd-derived issue-loop sample now that
+  // every contributor resolution above is final, suppressing only the
+  // exact (file, issue number) pairs confirmed as merged into a
+  // contributor above -- any other cwd-derived sample from the same file
+  // (a different issue number it also touched) is unaffected.
+  for (const pending of pendingCwdSessions) {
+    if (
+      consumedCwdIssueNumbersByBasename
+        .get(pending.fileBasename)
+        ?.has(pending.issueNumber)
+    ) {
+      continue;
+    }
+    out.push(pending.session);
   }
   return out;
 }

@@ -274,6 +274,16 @@ test('buildCompletedIssueWindows: builds an overall window only for an issue wit
       issueNumber: 501,
       startMs: ms('2026-01-01T00:00:00Z'),
       endMs: ms('2026-01-01T01:00:00Z'),
+      primaryWindows: [
+        {
+          startMs: ms('2026-01-01T00:00:00Z'),
+          endMs: ms('2026-01-01T00:30:00Z'),
+        },
+        {
+          startMs: ms('2026-01-01T00:55:00Z'),
+          endMs: ms('2026-01-01T01:00:00Z'),
+        },
+      ],
     },
   ]);
 });
@@ -303,11 +313,13 @@ test('segmentRecordsByEventWindow: groups records by the single window each time
       issueNumber: 501,
       startMs: ms('2026-01-01T00:00:00Z'),
       endMs: ms('2026-01-01T01:00:00Z'),
+      primaryWindows: [],
     },
     {
       issueNumber: 502,
       startMs: ms('2026-01-02T00:00:00Z'),
       endMs: ms('2026-01-02T01:00:00Z'),
+      primaryWindows: [],
     },
   ];
   const records = [
@@ -334,6 +346,7 @@ test('segmentRecordsByEventWindow: drops a record with no timestamp, and one mat
       issueNumber: 501,
       startMs: ms('2026-01-01T00:00:00Z'),
       endMs: ms('2026-01-01T01:00:00Z'),
+      primaryWindows: [],
     },
   ];
   const records = [
@@ -356,11 +369,13 @@ test('segmentRecordsByEventWindow: drops a record matching MORE than one window 
       issueNumber: 501,
       startMs: ms('2026-01-01T00:00:00Z'),
       endMs: ms('2026-01-01T02:00:00Z'),
+      primaryWindows: [],
     },
     {
       issueNumber: 502,
       startMs: ms('2026-01-01T01:00:00Z'),
       endMs: ms('2026-01-01T03:00:00Z'),
+      primaryWindows: [],
     },
   ];
   const records = [{ id: 'ambiguous', timestamp: '2026-01-01T01:30:00Z' }];
@@ -376,11 +391,13 @@ test('segmentRecordsByEventWindow: a record at the exact instant one window ends
       issueNumber: 501,
       startMs: ms('2026-01-01T00:00:00Z'),
       endMs: ms('2026-01-01T01:00:00Z'),
+      primaryWindows: [],
     },
     {
       issueNumber: 502,
       startMs: ms('2026-01-01T01:00:00Z'),
       endMs: ms('2026-01-01T02:00:00Z'),
+      primaryWindows: [],
     },
   ];
   const records = [{ id: 'boundary', timestamp: '2026-01-01T01:00:00Z' }];
@@ -907,7 +924,7 @@ test('buildCompletedIssueWindows: a claimId-matched but reversed window still tr
   assert.equal(windows.length, 0);
 });
 
-test('buildCompletedIssueWindows: one vendorSessionId contributing two stages unions into a single contributingWindows entry (#2432)', () => {
+test('buildCompletedIssueWindows: one vendorSessionId contributing two stages keeps two separate contributingWindows entries (#2432, Codex review PR #2627)', () => {
   const all = new Map<string, StageEventWindow>([
     [
       '604:claude:claim',
@@ -939,10 +956,18 @@ test('buildCompletedIssueWindows: one vendorSessionId contributing two stages un
   ]);
   const windows = buildCompletedIssueWindows(all, 'claude');
   assert.equal(windows.length, 1);
+  // Two separate entries, never unioned into one enclosing span -- a union
+  // would falsely "overlap" any primary-session activity that merely falls
+  // inside the GAP between attempt-A's own claim and work stages.
   assert.deepEqual(windows[0].contributingWindows, [
     {
       vendorSessionId: 'attempt-A',
       startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T00:01:00Z'),
+    },
+    {
+      vendorSessionId: 'attempt-A',
+      startMs: ms('2026-01-01T00:01:00Z'),
       endMs: ms('2026-01-01T00:05:00Z'),
     },
   ]);
@@ -1513,7 +1538,7 @@ test('scanClaudeVendorSessions: a same-issue match from an unrelated concurrent 
   assert.equal(sessions.length, 3);
 });
 
-test('scanClaudeVendorSessions: a contributing session whose file cannot be uniquely resolved degrades to the primary-only sample instead of failing the whole issue (#2432)', () => {
+test('scanClaudeVendorSessions: a contributing session whose file cannot be uniquely resolved skips the whole issue rather than freezing an undercount (#2432, Codex review PR #2627)', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   // No file in this sandbox has sessionId 'sess-contrib-missing' -- the
   // contributing window's own file was never scanned (e.g. rotated out,
@@ -1548,12 +1573,11 @@ test('scanClaudeVendorSessions: a contributing session whose file cannot be uniq
     s.adapterResult.sample.vendorSessionId.includes('#ew'),
   );
 
-  assert.equal(ewSamples.length, 1);
-  assert.equal(
-    ewSamples[0].adapterResult.sample.vendorSessionId,
-    'sess-primary-0002#ew502',
-  );
-  assert.equal(ewSamples[0].adapterResult.sample.usage.output, 7);
+  // No sample at all for issue 502 -- a primary-only sample would freeze
+  // this undercount permanently under the stable `#ew502` id, since the
+  // CLI's append-side dedup would then skip a later, fuller harvest once
+  // the missing contributor file becomes available.
+  assert.equal(ewSamples.length, 0);
 });
 
 test('scanClaudeVendorSessions: a contributing candidate whose file already independently produced a cwd-attributed sample is never re-absorbed (#2432)', () => {
@@ -2571,6 +2595,67 @@ test("readEventWindows: prefers the winning cleanup attempt's own stage candidat
     assert.equal(work?.vendorSessionId, 'sess-A');
     assert.equal(work?.startMs, ms('2026-01-01T00:00:00Z'));
     assert.equal(work?.endMs, ms('2026-01-01T00:01:00Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: a claimId match beats an unrelated, differently-identified attempt with a later endMs (Codex review finding, PR #2627, #2432)', () => {
+  // Attempt A (claim-shared) completes 'work'. Attempt Z is a wholly
+  // unrelated, later attempt at the same stage with NO matching claimId,
+  // but a LATER endMs. Attempt B (claim-shared) later completes cleanup
+  // without ever re-posting 'work' itself. Pure latest-endMs-wins would
+  // expose Z's window here (and #2432's idCompatible would then reject it
+  // outright, silently discarding A's genuinely claim-linked contribution
+  // before it ever gets a chance) -- claimId, once matched, must outrank
+  // mere recency.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:00:00Z',
+      504,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:05:00Z',
+      504,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+    tokenCostEvent('enter', 'work', '2026-01-01T00:06:00Z', 504, 'sess-Z'),
+    tokenCostEvent('exit', 'work', '2026-01-01T00:08:00Z', 504, 'sess-Z'),
+    tokenCostEvent(
+      'enter',
+      'cleanup',
+      '2026-01-01T00:20:00Z',
+      504,
+      'sess-B',
+      'claude',
+      'claim-shared',
+    ),
+    tokenCostEvent(
+      'exit',
+      'cleanup',
+      '2026-01-01T00:25:00Z',
+      504,
+      'sess-B',
+      'claude',
+      'claim-shared',
+    ),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const work = windows.get('504:claude:work');
+    assert.equal(work?.vendorSessionId, 'sess-A');
+    assert.equal(work?.claimId, 'claim-shared');
+    assert.equal(work?.startMs, ms('2026-01-01T00:00:00Z'));
+    assert.equal(work?.endMs, ms('2026-01-01T00:05:00Z'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
