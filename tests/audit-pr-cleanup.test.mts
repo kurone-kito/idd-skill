@@ -4,12 +4,15 @@ import { test } from 'node:test';
 import type {
   CleanupArgs,
   CleanupAuditReport,
+  ReviewThreadNode,
 } from '../src/scripts/audit-pr-cleanup.mts';
 import {
   assertBatchApplyClaimScope,
+  evaluateReviewComment,
   fetchReviewThreads,
   parsePrNumbers,
 } from '../src/scripts/audit-pr-cleanup.mts';
+import { indexLatestGatingReviewsByAuthor } from '../src/scripts/protocol-helpers.mts';
 import { stubExecutable } from './test-utils.mts';
 
 // Importing the CLI module directly is only possible now that its top-level
@@ -663,5 +666,86 @@ test('fetchReviewThreads fails loudly on hasNextPage:true with a missing endCurs
         fetchReviewThreads('o', 'r', 1, { throwOnError: true }),
       ),
     /hasNextPage without endCursor/,
+  );
+});
+
+// #2618: `evaluateReviewComment`'s ack-only-post-disposition carve-out,
+// mirroring F2/F3's `classifyThreadAckOnlyPostDisposition`. This repository's
+// own `.github/idd/config.json` configures `coderabbitai[bot]` as an
+// advisory bot, which these tests rely on (no mocking needed).
+const mergedPr = { number: 1, url: 'https://pr', merged: true };
+const noGatingReviews = indexLatestGatingReviewsByAuthor([]);
+
+test('evaluateReviewComment reports a candidate for an ack-only-after-disposition thread (#2618)', () => {
+  const disposition = {
+    id: 'EC-1',
+    url: 'https://pr#EC-1',
+    author: { login: 'idd-bot' },
+    body: '**Accepted** — done.',
+    createdAt: '2026-05-12T00:00:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+  const comment = {
+    id: 'EC-2',
+    url: 'https://pr#EC-2',
+    author: { login: 'coderabbitai[bot]' },
+    body: 'Thanks for confirming!',
+    createdAt: '2026-05-12T00:01:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+  const thread: ReviewThreadNode = {
+    id: 'THREAD-EVAL-ACK',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [disposition, comment],
+    },
+  };
+  const report = createAuditReport({ trustedMarkerActors: ['idd-bot'] });
+
+  evaluateReviewComment(comment, thread, mergedPr, noGatingReviews, report);
+
+  assert.equal(report.skipped.length, 0);
+  assert.equal(report.candidates.length, 1);
+  assert.equal(report.candidates[0]?.subjectId, 'EC-2');
+});
+
+test('evaluateReviewComment still skips a genuinely missing disposition (#2618)', () => {
+  const humanFeedback = {
+    id: 'EM-1',
+    url: 'https://pr#EM-1',
+    author: { login: 'reviewer-a' },
+    body: 'please fix this',
+    createdAt: '2026-05-12T00:00:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+  const comment = {
+    id: 'EM-2',
+    url: 'https://pr#EM-2',
+    author: { login: 'coderabbitai[bot]' },
+    body: 'Thanks for confirming!',
+    createdAt: '2026-05-12T00:01:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+  const thread: ReviewThreadNode = {
+    id: 'THREAD-EVAL-MISSING',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [humanFeedback, comment],
+    },
+  };
+  const report = createAuditReport({ trustedMarkerActors: ['idd-bot'] });
+
+  evaluateReviewComment(comment, thread, mergedPr, noGatingReviews, report);
+
+  assert.equal(report.candidates.length, 0);
+  assert.equal(
+    report.skipped[0]?.skipReason,
+    'review thread is missing an IDD accept/reject disposition',
   );
 });

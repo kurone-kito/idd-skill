@@ -1385,7 +1385,16 @@ export function indexLatestGatingReviewsByAuthor(reviews: ReviewLike[]) {
 
 export function indexThreadsByReview(
   threads: ThreadLike[],
-  options: { isDispositionAuthor?: (login: string) => boolean } = {},
+  options: {
+    isDispositionAuthor?: (login: string) => boolean;
+    // #2618: F4's ack-only-post-disposition carve-out, matching F2/F3's
+    // `summarizeDispositionEvidenceForGate` (`classifyThreadAckOnlyPostDisposition`).
+    // Both are optional: omitting either keeps the pre-#2618 behavior
+    // exactly (a thread without a fresh disposition always counts as
+    // missing).
+    iddAgentLogins?: unknown[] | null;
+    advisoryBotLogins?: unknown[] | null;
+  } = {},
 ) {
   const index = new Map<
     string,
@@ -1420,7 +1429,11 @@ export function indexThreadsByReview(
       if (
         !hasFreshDisposition(thread, {
           isDispositionAuthor: options.isDispositionAuthor,
-        })
+        }) &&
+        !classifyThreadAckOnlyPostDisposition(thread, {
+          iddAgentLogins: options.iddAgentLogins,
+          advisoryBotLogins: options.advisoryBotLogins,
+        }).ackOnlyPostDisposition
       ) {
         current.missingDisposition += 1;
       }
@@ -3578,8 +3591,8 @@ export function buildActivitySnapshotSummary(
   // `**Rejected**` re-post once a maintainer agrees an
   // `**Awaiting maintainer decision**` item needs no action -- a disposition
   // is a disposition regardless of which of the two terminal shapes it took.
-  // `summarizeDispositionEvidenceForGate`'s `classifyThreadAckOnlyPostDisposition`
-  // already recognizes both, but ONLY as a reply on a resolved review thread
+  // `classifyThreadAckOnlyPostDisposition` already recognizes both, but ONLY
+  // as a reply on a resolved review thread
   // (the marker's own contract, `isRejectionConfirmedDisposition`'s doc
   // comment above). `filteredComments` below are plain top-level PR
   // comments with no thread/resolved concept at all, so they must keep
@@ -4183,6 +4196,145 @@ function isIddOriginatedThreadReply(
   );
 }
 
+// #978 advisory-only diagnostic, extracted from `summarizeDispositionEvidenceForGate`
+// (#2618) so both the F2/F3 merge gate and F4's `audit-pr-cleanup` disposition
+// checks share one implementation. A blocking resolved thread is
+// "ack-only-post-disposition" when a thread-local IDD disposition exists and
+// EVERY external comment newer than the disposition (and, when
+// `snapshotBoundaryAt` is supplied, also newer than that boundary) is an
+// advisory-bot, non-disposition courtesy ack. `snapshotBoundaryAt` is
+// optional: F2/F3 passes the review-snapshot watermark so only feedback that
+// re-blocks the gate counts; F4 has no such watermark and omits it, so every
+// post-disposition external comment counts. Fails closed (false) without a
+// thread-local disposition or for an unresolved thread, and never changes
+// any caller's route by itself.
+//
+// #1313: also computes the narrower `inPlaceEditOnly` sibling signal in the
+// same pass (it needs the identical `threadDispositionAt` /
+// `postDispositionBlockingFeedback` groundwork, so folding it into one
+// function avoids recomputing that twice). `inPlaceEditOnly` additionally
+// requires every qualifying comment to be an in-place edit of content that
+// already existed at-or-before the disposition (its own `createdAt` is not
+// newer than the disposition, and its `updatedAt` is strictly newer than its
+// own `createdAt`) rather than a brand-new post-disposition comment.
+// Deliberately advisory-only, like its sibling: GitHub's API exposes no
+// revision diff for an edited comment, so this helper cannot tell a
+// cosmetic append from a substantive change to the finding.
+export function classifyThreadAckOnlyPostDisposition(
+  thread: ThreadLike,
+  options: {
+    iddAgentLogins?: unknown[] | null;
+    advisoryBotLogins?: unknown[] | null;
+    prAuthorLogin?: string | null;
+    snapshotBoundaryAt?: string | null;
+  } = {},
+): { ackOnlyPostDisposition: boolean; inPlaceEditOnly: boolean } {
+  const none = { ackOnlyPostDisposition: false, inPlaceEditOnly: false };
+  if (!thread.isResolved) {
+    return none;
+  }
+  const snapshotBoundaryAt = isValidIsoTimestamp(options.snapshotBoundaryAt)
+    ? String(options.snapshotBoundaryAt)
+    : null;
+  const iddAgentLogins = new Set(
+    normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []),
+  );
+  const advisoryBotLogins = new Set(
+    normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []),
+  );
+  const prAuthorLogin = String(options.prAuthorLogin ?? '')
+    .trim()
+    .toLowerCase();
+  // #2014: an advisory bot can never anchor "a disposition exists" -- see
+  // `summarizeDispositionEvidenceForGate`'s identical subtraction (this
+  // file, "An advisory bot can never anchor..."). Scoped to only this
+  // anchor set; callers' own `iddAgentLogins` stay unsubtracted everywhere
+  // else, since each reacts differently (fail-open vs. fail-closed) to a
+  // global change.
+  const ackAnchorAuthorLogins = new Set(
+    [...iddAgentLogins].filter(
+      (login) => !isConfiguredAdvisoryBotLogin(login, advisoryBotLogins),
+    ),
+  );
+  const nodes = thread.comments?.nodes ?? [];
+  // Recognize the same dispositions `hasFreshDisposition` accepts on a
+  // resolved thread (the gate that already decided this thread blocks): a
+  // `**Accepted**`/`**Rejected**` marker OR the terminal
+  // `**Rejection confirmed by maintainer**` marker, anchored by effective
+  // activity (`updatedAt`-preferring) so an edited disposition is dated
+  // consistently. The thread is already known resolved here.
+  const threadDispositionAt = maxIsoTimestamp(
+    nodes
+      .filter(
+        (comment) =>
+          ackAnchorAuthorLogins.has(
+            String(comment.author?.login ?? '')
+              .trim()
+              .toLowerCase(),
+          ) &&
+          (isDispositionComment({ body: String(comment.body ?? '') }) ||
+            isRejectionConfirmedDisposition({
+              body: String(comment.body ?? ''),
+            })),
+      )
+      .map((comment) => effectiveThreadCommentActivityAt(comment))
+      .filter(isValidIsoTimestamp),
+  );
+  if (!threadDispositionAt) {
+    return none;
+  }
+  // The blocking activity is external feedback newer than the thread
+  // disposition (so already-dispositioned feedback predating the ack does
+  // not disqualify the signal) and, when a snapshot boundary is supplied,
+  // also newer than it (so it actually re-blocks that gate). Without a
+  // boundary, every post-disposition external comment counts.
+  const postDispositionBlockingFeedback = nodes.filter((comment) => {
+    const authorLogin = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (
+      !authorLogin ||
+      iddAgentLogins.has(authorLogin) ||
+      authorLogin === prAuthorLogin
+    ) {
+      return false;
+    }
+    const activityAt = effectiveThreadCommentActivityAt(comment);
+    return (
+      isValidIsoTimestamp(activityAt) &&
+      (!snapshotBoundaryAt ||
+        compareIsoTimestamps(activityAt, snapshotBoundaryAt) > 0) &&
+      compareIsoTimestamps(activityAt, threadDispositionAt) > 0
+    );
+  });
+  if (postDispositionBlockingFeedback.length === 0) {
+    return none;
+  }
+  // Each remaining item must be a pure advisory-bot courtesy ack: an
+  // advisory-bot author whose body is neither a `**Accepted**`/`**Rejected**`
+  // marker nor the terminal `**Rejection confirmed by maintainer**` marker.
+  const ackOnlyPostDisposition = postDispositionBlockingFeedback.every(
+    (comment) =>
+      isConfiguredAdvisoryBotLogin(comment.author?.login, advisoryBotLogins) &&
+      !isDispositionComment({ body: String(comment.body ?? '') }) &&
+      !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }),
+  );
+  if (!ackOnlyPostDisposition) {
+    return none;
+  }
+  const inPlaceEditOnly = postDispositionBlockingFeedback.every((comment) => {
+    const createdAt = String(comment.createdAt ?? '');
+    const updatedAt = String(comment.updatedAt ?? '');
+    return (
+      isValidIsoTimestamp(createdAt) &&
+      compareIsoTimestamps(createdAt, threadDispositionAt) <= 0 &&
+      isValidIsoTimestamp(updatedAt) &&
+      compareIsoTimestamps(updatedAt, createdAt) > 0
+    );
+  });
+  return { ackOnlyPostDisposition, inPlaceEditOnly };
+}
+
 export function summarizeDispositionEvidenceForGate(
   {
     comments = [],
@@ -4222,29 +4374,6 @@ export function summarizeDispositionEvidenceForGate(
   ).trim();
   const markerPrefix =
     explicitMarkerPrefix || configuredMarkerPrefix || undefined;
-  // #2014: An advisory bot can never anchor "dispositions exist", mirroring
-  // `buildActivitySnapshotSummary`'s identical `dispositionAuthorLogins`
-  // subtraction above (this file, "An advisory bot can never anchor..."
-  // comment) -- its own `**Accepted**`/`**Rejected**`-shaped reply must not
-  // open the post-disposition window that classifies a later advisory-bot
-  // reply as ack-only. Scoped to ONLY `classifyThreadAckOnlyPostDisposition`'s
-  // own anchor below -- the raw `iddAgentLogins` set is used unchanged
-  // everywhere else in this function (`hasFreshDisposition`,
-  // `outstandingComments`, the generic `dispositionComments` 1:1 pool), per
-  // the "Pre-merge gate invariants" comment above `summarizeDispositionEvidenceForGate`:
-  // each of those reacts differently (fail-open vs. fail-closed) to a global
-  // change, so this subtraction must stay local to the ack-only diagnostic.
-  // Excludes via `isConfiguredAdvisoryBotLogin`, not a plain `Set.has`, so a
-  // `[bot]`-suffix mismatch between the two configured login sets (e.g.
-  // `iddAgentLogins` storing GitHub's `dual-bot[bot]` author-login form
-  // while `advisoryBotLogins` stores the supported suffixless `dual-bot`
-  // form) still excludes the shared login -- the same normalized identity
-  // every other advisory-bot recognition in this file already uses.
-  const ackAnchorAuthorLogins = new Set(
-    [...iddAgentLogins].filter(
-      (login) => !isConfiguredAdvisoryBotLogin(login, advisoryBotLogins),
-    ),
-  );
 
   const normalizedComments = comments
     .map((comment, inputIndex) => ({
@@ -4624,119 +4753,6 @@ export function summarizeDispositionEvidenceForGate(
     };
   });
 
-  // #978 advisory-only diagnostic: a blocking resolved thread is
-  // "ack-only-post-disposition" when a thread-local IDD disposition exists and
-  // EVERY external comment newer than BOTH the snapshot boundary (so it re-blocks
-  // the gate) AND the disposition is an advisory-bot, non-disposition courtesy
-  // ack. Reuses the review-currency carve-out's recognition shape (advisory-bot
-  // predicate driven by `advisoryBotLogins`, no hard-coded logins;
-  // post-disposition ack). Fails closed (false) without a snapshot boundary,
-  // without a thread-local disposition, or for unresolved threads, and never
-  // changes the gate route.
-  //
-  // #1313: also computes the narrower `inPlaceEditOnly` sibling signal in the
-  // same pass (it needs the identical `threadDispositionAt` /
-  // `postDispositionBlockingFeedback` groundwork, so folding it into one
-  // function avoids recomputing that twice). `inPlaceEditOnly` additionally
-  // requires every qualifying comment to be an in-place edit of content that
-  // already existed at-or-before the disposition (its own `createdAt` is not
-  // newer than the disposition, and its `updatedAt` is strictly newer than
-  // its own `createdAt`) rather than a brand-new post-disposition comment --
-  // the #1313 report's exact scenario (a bot editing its own
-  // already-dispositioned finding in place, e.g. to append a cosmetic
-  // "addressed" badge). Deliberately advisory-only, like its sibling:
-  // GitHub's API exposes no revision diff for an edited comment, so this
-  // helper cannot tell a cosmetic append from a substantive change to the
-  // finding -- an agent that wants to act on this signal must still read the
-  // comment's current body before treating the block as safe to override.
-  const classifyThreadAckOnlyPostDisposition = (
-    thread: ThreadLike,
-  ): { ackOnlyPostDisposition: boolean; inPlaceEditOnly: boolean } => {
-    const none = { ackOnlyPostDisposition: false, inPlaceEditOnly: false };
-    if (!thread.isResolved || !snapshotBoundaryAt) {
-      return none;
-    }
-    const nodes = thread.comments?.nodes ?? [];
-    // Recognize the same dispositions `hasFreshDisposition` accepts on a
-    // resolved thread (the gate that already decided this thread blocks): a
-    // `**Accepted**`/`**Rejected**` marker OR the terminal
-    // `**Rejection confirmed by maintainer**` marker, anchored by effective
-    // activity (`updatedAt`-preferring) so an edited disposition is dated
-    // consistently. The thread is already known resolved here.
-    const threadDispositionAt = maxIsoTimestamp(
-      nodes
-        .filter(
-          (comment) =>
-            ackAnchorAuthorLogins.has(
-              String(comment.author?.login ?? '')
-                .trim()
-                .toLowerCase(),
-            ) &&
-            (isDispositionComment({ body: String(comment.body ?? '') }) ||
-              isRejectionConfirmedDisposition({
-                body: String(comment.body ?? ''),
-              })),
-        )
-        .map((comment) => effectiveThreadCommentActivityAt(comment))
-        .filter(isValidIsoTimestamp),
-    );
-    if (!threadDispositionAt) {
-      return none;
-    }
-    // The blocking activity is external feedback newer than BOTH the snapshot
-    // boundary (so it actually re-blocks the gate) AND the thread disposition
-    // (so already-dispositioned feedback predating the ack does not disqualify
-    // the signal). When the disposition lands after the boundary, the
-    // post-disposition bound is what isolates the genuine ack.
-    const postDispositionBlockingFeedback = nodes.filter((comment) => {
-      const authorLogin = String(comment.author?.login ?? '')
-        .trim()
-        .toLowerCase();
-      if (
-        !authorLogin ||
-        iddAgentLogins.has(authorLogin) ||
-        authorLogin === prAuthorLogin
-      ) {
-        return false;
-      }
-      const activityAt = effectiveThreadCommentActivityAt(comment);
-      return (
-        isValidIsoTimestamp(activityAt) &&
-        compareIsoTimestamps(activityAt, snapshotBoundaryAt) > 0 &&
-        compareIsoTimestamps(activityAt, threadDispositionAt) > 0
-      );
-    });
-    if (postDispositionBlockingFeedback.length === 0) {
-      return none;
-    }
-    // Each remaining item must be a pure advisory-bot courtesy ack: an
-    // advisory-bot author whose body is neither a `**Accepted**`/`**Rejected**`
-    // marker nor the terminal `**Rejection confirmed by maintainer**` marker.
-    const ackOnlyPostDisposition = postDispositionBlockingFeedback.every(
-      (comment) =>
-        isConfiguredAdvisoryBotLogin(
-          comment.author?.login,
-          advisoryBotLogins,
-        ) &&
-        !isDispositionComment({ body: String(comment.body ?? '') }) &&
-        !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }),
-    );
-    if (!ackOnlyPostDisposition) {
-      return none;
-    }
-    const inPlaceEditOnly = postDispositionBlockingFeedback.every((comment) => {
-      const createdAt = String(comment.createdAt ?? '');
-      const updatedAt = String(comment.updatedAt ?? '');
-      return (
-        isValidIsoTimestamp(createdAt) &&
-        compareIsoTimestamps(createdAt, threadDispositionAt) <= 0 &&
-        isValidIsoTimestamp(updatedAt) &&
-        compareIsoTimestamps(updatedAt, createdAt) > 0
-      );
-    });
-    return { ackOnlyPostDisposition, inPlaceEditOnly };
-  };
-
   const missingThreads = (threads ?? [])
     .map((thread, index) => {
       const commentsInThread = thread.comments?.nodes ?? [];
@@ -4831,7 +4847,12 @@ export function summarizeDispositionEvidenceForGate(
           return null;
         }
       }
-      const classification = classifyThreadAckOnlyPostDisposition(thread);
+      const classification = classifyThreadAckOnlyPostDisposition(thread, {
+        iddAgentLogins: options.iddAgentLogins,
+        advisoryBotLogins: options.advisoryBotLogins,
+        prAuthorLogin: options.prAuthorLogin,
+        snapshotBoundaryAt: options.snapshotBoundaryAt,
+      });
       return {
         id: String(thread.id ?? '') || `thread-${index + 1}`,
         isResolved: Boolean(thread.isResolved),

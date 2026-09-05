@@ -99,6 +99,86 @@ test('indexThreadsByReview honors an IDD-scoped disposition-author predicate', (
   assert.equal(scoped.get('REVIEW-9')?.missingDisposition, 1);
 });
 
+test('indexThreadsByReview excludes an ack-only-post-disposition thread from missingDisposition (#2618)', () => {
+  const threads: ThreadLike[] = [
+    {
+      id: 'T-ACK',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'idd-bot' },
+            body: '**Accepted** — done.',
+            createdAt: '2026-05-12T00:00:00Z',
+            pullRequestReview: { id: 'REVIEW-ACK' },
+          },
+          {
+            author: { login: 'coderabbitai[bot]' },
+            body: 'Thanks for confirming!',
+            createdAt: '2026-05-12T00:01:00Z',
+            pullRequestReview: { id: 'REVIEW-ACK' },
+          },
+        ],
+      },
+    },
+  ];
+
+  // Without the new options, today's behavior is unchanged: the trailing
+  // bot reply postdates the disposition, so it still counts as missing.
+  assert.equal(
+    indexThreadsByReview(threads, {
+      isDispositionAuthor: (login) => login === 'idd-bot',
+    }).get('REVIEW-ACK')?.missingDisposition,
+    1,
+  );
+
+  // With the ack-only carve-out opted in, the same thread no longer counts.
+  assert.equal(
+    indexThreadsByReview(threads, {
+      isDispositionAuthor: (login) => login === 'idd-bot',
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }).get('REVIEW-ACK')?.missingDisposition,
+    0,
+  );
+});
+
+test('indexThreadsByReview still counts a genuinely missing disposition with the ack-only carve-out opted in (#2618)', () => {
+  const threads: ThreadLike[] = [
+    {
+      id: 'T-MISSING',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'reviewer-a' },
+            body: 'please fix this',
+            createdAt: '2026-05-12T00:00:00Z',
+            pullRequestReview: { id: 'REVIEW-MISSING' },
+          },
+          {
+            author: { login: 'coderabbitai[bot]' },
+            body: 'Thanks for confirming!',
+            createdAt: '2026-05-12T00:01:00Z',
+            pullRequestReview: { id: 'REVIEW-MISSING' },
+          },
+        ],
+      },
+    },
+  ];
+
+  assert.equal(
+    indexThreadsByReview(threads, {
+      isDispositionAuthor: (login) => login === 'idd-bot',
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }).get('REVIEW-MISSING')?.missingDisposition,
+    1,
+  );
+});
+
 test('classifyRegularBotComment honors an IDD-scoped disposition-author predicate', () => {
   const summary: CommentLike = {
     author: { login: 'coderabbitai[bot]' },
