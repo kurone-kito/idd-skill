@@ -1958,15 +1958,23 @@ test('markerPrefix defaults to idd-skill when not provided', () => {
 
 // --- authoring-owner-marker-trail (#2621) ---
 
+const TEST_BODY_SHA256 = 'a'.repeat(64);
+
 function ownerMarkerComment({
   target = 'kurone-kito/idd-skill#9001',
   mode = 'acquire',
+  set = 'set-xyz789',
+  session = 'sess-1',
+  bodySha256 = TEST_BODY_SHA256,
 }: {
   target?: string;
   mode?: string;
+  set?: string;
+  session?: string;
+  bodySha256?: string;
 } = {}): { body: string } {
   return {
-    body: `<!-- idd-skill-authoring-owner: target=${target}; anchor=kurone-kito/idd-skill#9001; mode=${mode}; owner=owner-tok1; set=set-xyz789; session=sess-1; body-sha256=none; snapshot-sha256=none; supersedes=none -->`,
+    body: `<!-- idd-skill-authoring-owner: target=${target}; anchor=kurone-kito/idd-skill#9001; mode=${mode}; owner=owner-tok1; set=${set}; session=${session}; body-sha256=${bodySha256}; snapshot-sha256=none; supersedes=none -->`,
   };
 }
 
@@ -2199,9 +2207,7 @@ test('authoring-owner-marker-trail rejects an owner marker from a different gene
     issueNumber: 9001,
     newIssue: true,
     comments: [
-      {
-        body: '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9001; anchor=kurone-kito/idd-skill#9001; mode=acquire; owner=owner-tok1; set=STALE-set; session=STALE-session; body-sha256=none; snapshot-sha256=none; supersedes=none -->',
-      },
+      ownerMarkerComment({ set: 'STALE-set', session: 'STALE-session' }),
     ],
     journalComments: [publicationIntentComment()],
   });
@@ -2254,4 +2260,42 @@ test('authoring-owner-marker-trail requires the publication marker as the litera
     (entry) => entry.id === 'authoring-owner-marker-trail',
   );
   assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail rejects body-sha256=none for a qualifying acquire-mode marker', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    comments: [ownerMarkerComment({ bodySha256: 'none' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail validates the new-issue publication line even when no comment data is supplied', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /missing.*publication marker/);
+});
+
+test('authoring-owner-marker-trail reports not-applicable (not fail) for a compliant new-issue body when comments are not supplied', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.match(finding?.detail ?? '', /not applicable/);
 });

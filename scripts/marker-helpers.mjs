@@ -932,8 +932,16 @@ const AUTHORING_OWNER_DIGEST_PATTERN = /^(?:none|[0-9a-f]{64})$/;
  * differs.
  */
 function parseSemicolonFieldMarker(body, markerPrefix, suffix) {
+  // Anchored at `^` (position 0, not "anywhere in body") and restricted to
+  // same-line whitespace between `<!--` and the prefix-suffix token: the
+  // contract requires each of these three markers to be an "HTML-first"
+  // comment/body line, not merely present somewhere in a longer comment or
+  // pasted example -- an unanchored search would also accept a marker
+  // quoted after prose, inside a fenced example, or opened across a
+  // newline (`<!--\nidd-skill-authoring-owner: ...`), none of which are the
+  // real marker the protocol posts (#2628 review, Codex).
   const pattern = new RegExp(
-    `<!--\\s*${escapeRegex(markerPrefix)}-${suffix}:\\s*([\\s\\S]*?)\\s*-->`,
+    `^<!--[ \\t]*${escapeRegex(markerPrefix)}-${suffix}:\\s*([\\s\\S]*?)\\s*-->`,
     'i',
   );
   const match = body.match(pattern);

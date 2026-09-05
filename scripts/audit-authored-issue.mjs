@@ -657,38 +657,23 @@ function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
       'not applicable: issue does not carry the authoring label',
     );
   }
-  if (options.comments === undefined) {
-    return pass(
-      id,
-      name,
-      'not applicable: no comment data supplied to this check',
-    );
-  }
   const currentRepo = normalizeCurrentRepo(options.currentRepo);
   const currentIssueRef =
     currentRepo && options.issueNumber !== undefined
       ? `${currentRepo}#${options.issueNumber}`
       : undefined;
-  // For a new issue, resolve the publication marker BEFORE searching for a
-  // qualifying owner marker: its `set`/`session` bind the "generation" a
-  // qualifying owner marker must itself belong to (#2628 review, Codex) --
-  // otherwise a stale owner marker from an earlier acquire/bootstrap cycle
-  // could combine with a fresh publication token to produce a false pass.
+  // Validate the new-issue publication line FIRST, independent of whether
+  // comment data was supplied: this half only needs the body text and the
+  // `newIssue` flag, so it must not be silently skipped just because the
+  // caller omitted `comments` -- a genuinely broken new-issue body (no
+  // publication line at all) must not get a free pass from a missing
+  // --comments-file alone (#2628 review, Codex). parseAuthoringPublicationComment
+  // itself requires the marker's literal first bytes (marker-helpers.mts),
+  // so no separate first-line regex is needed here.
   let publicationMarker = null;
   if (options.newIssue === true) {
     publicationMarker = parseAuthoringPublicationComment(text, markerPrefix);
-    // "HTML-first body line" (docs/issue-authoring-skill.md) means the
-    // marker's own literal first bytes, not merely "somewhere before other
-    // content" -- no leading blank line or whitespace tolerance (#2628
-    // review, Copilot).
-    const leadingPublicationMarkerPattern = new RegExp(
-      `^<!--\\s*${escapeRegex(markerPrefix)}-authoring-publication:`,
-      'i',
-    );
-    if (
-      publicationMarker === null ||
-      !leadingPublicationMarkerPattern.test(text)
-    ) {
+    if (publicationMarker === null) {
       return fail(
         id,
         name,
@@ -696,12 +681,26 @@ function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
       );
     }
   }
+  if (options.comments === undefined) {
+    return pass(
+      id,
+      name,
+      publicationMarker === null
+        ? 'not applicable: no comment data supplied to this check'
+        : 'publication-token line present; not applicable for the owner-marker/journal checks (no comment data supplied to this check)',
+    );
+  }
   const ownerMarkers = options.comments
     .map((comment) => parseAuthoringOwnerComment(comment.body, markerPrefix))
     .filter((marker) => marker !== null);
   const hasQualifyingOwnerMarker = ownerMarkers.some(
     (marker) =>
       AUTHORING_OWNER_QUALIFYING_MODES.has(marker.mode) &&
+      // A qualifying acquire/bootstrap/resume marker targets a real issue,
+      // so its body-sha256 must hash an actual body read, never `none`
+      // (`none` is only ever legitimate on an anchor-only release-guard
+      // marker per docs/issue-authoring-skill.md -- #2628 review, Codex).
+      marker.bodySha256 !== 'none' &&
       (currentIssueRef === undefined || marker.target === currentIssueRef) &&
       (publicationMarker === null ||
         (marker.set === publicationMarker.set &&
@@ -1366,6 +1365,14 @@ function main() {
   if (args.journalCommentsFile && !args.newIssue) {
     fail_('--journal-comments-file requires --new-issue');
   }
+  // Supplying journal data with no --comments-file would silently produce
+  // a misleading pass: the owner-marker check (a prerequisite for even
+  // reaching the journal cross-check) reports "not applicable" without
+  // --comments-file, so the journal data would never actually be consulted
+  // (#2628 review, Copilot).
+  if (args.journalCommentsFile && !args.commentsFile) {
+    fail_('--journal-comments-file requires --comments-file');
+  }
   // Explicit --current-repo wins; otherwise fall back to the
   // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
   // usage narrows cross-repo URL false positives with no extra flag.
@@ -1549,14 +1556,16 @@ Options:
                                     cross-repo (default: $GITHUB_REPOSITORY), and
                                     for authoring-owner-marker-trail's target match
   --issue <number>                 this issue's number, for authoring-owner-marker-trail's
-                                    target match (requires --current-repo)
+                                    target match (requires --current-repo or
+                                    $GITHUB_REPOSITORY to be resolvable)
   --comments-file <path>           JSON array of this issue's pre-fetched comments
                                     ({body, author?, createdAt?}); enables
                                     authoring-owner-marker-trail (network-free: this
                                     module never fetches comments itself)
   --journal-comments-file <path>   JSON array of the journal issue's pre-fetched
                                     comments, for the new-issue publication-intent
-                                    cross-check (requires --new-issue)
+                                    cross-check (requires --new-issue and
+                                    --comments-file)
   --new-issue                      this issue was just created in this invocation
                                     (not an edit); requires the leading
                                     authoring-publication body line

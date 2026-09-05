@@ -109,3 +109,21 @@ test('parseAuthoringPublicationIntentComment returns null when a required field 
     '<!-- idd-skill-authoring-publication-intent: target=target-abc; anchor=kurone-kito/idd-skill#2606; set=set-xyz; session=sess-1; token=pub-tok; journal=kurone-kito/idd-skill#2606; state=member -->';
   assert.equal(parseAuthoringPublicationIntentComment(body, 'idd-skill'), null);
 });
+
+test('parseAuthoringOwnerComment returns null when the marker follows other prose (not first bytes)', () => {
+  const body =
+    'Some preamble.\n<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9001; anchor=kurone-kito/idd-skill#9001; mode=acquire; owner=owner-tok1; set=set-xyz789; session=sess-1; body-sha256=none; snapshot-sha256=none; supersedes=none -->';
+  assert.equal(parseAuthoringOwnerComment(body, 'idd-skill'), null);
+});
+
+test('parseAuthoringPublicationComment returns null when the opener spans a newline', () => {
+  const body =
+    '<!--\nidd-skill-authoring-publication: target=target-abc; anchor=kurone-kito/idd-skill#2606; set=set-xyz; session=sess-1; token=pub-tok -->';
+  assert.equal(parseAuthoringPublicationComment(body, 'idd-skill'), null);
+});
+
+test('parseAuthoringPublicationComment returns null when preceded by a leading blank line', () => {
+  const body =
+    '\n<!-- idd-skill-authoring-publication: target=target-abc; anchor=kurone-kito/idd-skill#2606; set=set-xyz; session=sess-1; token=pub-tok -->';
+  assert.equal(parseAuthoringPublicationComment(body, 'idd-skill'), null);
+});
