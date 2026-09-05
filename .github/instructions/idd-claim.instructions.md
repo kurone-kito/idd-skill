@@ -439,6 +439,27 @@ to be safe, the displaced original pair too — using each pair's exact
 recorded `{agent-id}` / `{claim-id}`, then post a fresh `claimed-by
 supersedes: none` with a self-chosen pair).
 
+### Same-agent live-claim branch correction
+
+A different case from the sticky-successor escape above:
+**this session's own** live, non-stale claim recorded the wrong
+`branch`. Neither existing mechanism fixes it: **supersede**
+([Claim-state parsing](#claim-state-parsing) rule 4) only activates
+when the current claim is already stale, so a live claim's supersede
+post is silently invalid; **heartbeat** (rule 3.5) treats a
+different-`{branch}` re-post as anomalous and never updates the
+branch.
+
+Use **release-then-fresh** instead: post `unclaimed-by` for your own
+pair (safe — you provably hold it, [Claim verification](#claim-verification)),
+then a fresh `claimed-by supersedes: none` with a new `{claim-id}` and
+the corrected `branch`, then a fresh
+[activation-nonce](#activation-nonce-format), verified the same way.
+Propagate the new `{claim-id}` into every later call (disposition
+replies, watermarks, F2/F3, cleanup) — the old one is dead once
+released. On an open issue, re-verify no competing claim landed in the
+release-to-fresh gap before posting; not a risk on a closed one.
+
 ### Orchestrator delegation
 
 An orchestrating session that has posted and verified a claim's
