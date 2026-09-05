@@ -1408,6 +1408,80 @@ test("scanClaudeVendorSessions: a SOLE candidate file is still skipped when the 
   assert.equal(sessions.length, 1);
 });
 
+test('scanClaudeVendorSessions: two DIFFERENT issues whose completed windows overlap in wall-clock still resolve each file to its OWN issue, not dropped from both (#2652)', () => {
+  // The real-workstation shape #2652 reported: two genuinely concurrent
+  // sessions working two DIFFERENT issues, whose overall completed windows
+  // overlap. Before this fix, `segmentRecordsByEventWindow` compared each
+  // file's own unattributed records against the GLOBAL window set, so a
+  // record timestamped inside the overlap matched both windows and was
+  // dropped from both -- even though each file's own identified
+  // `vendorSessionId` unambiguously ties it to just one of the two issues.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-601.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-601-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-602.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:22:00.000Z","sessionId":"sess-ew-602-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '601:claude:work',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-ew-601-0001',
+      ),
+    ],
+    [
+      '601:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:26:00Z',
+        '2026-01-01T00:30:00Z',
+        'sess-ew-601-0001',
+      ),
+    ],
+    [
+      '602:claude:work',
+      stageWindow(
+        '2026-01-01T00:15:00Z',
+        '2026-01-01T00:28:00Z',
+        'sess-ew-602-0001',
+      ),
+    ],
+    [
+      '602:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:29:00Z',
+        '2026-01-01T00:32:00Z',
+        'sess-ew-602-0001',
+      ),
+    ],
+  ]);
+
+  // Windows overlap in [00:15, 00:30); both files' own records fall inside
+  // that overlap.
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 2);
+  assert.ok(
+    ewSamples.some(
+      (s) =>
+        s.adapterResult.sample.vendorSessionId === 'sess-ew-601-0001#ew601',
+    ),
+  );
+  assert.ok(
+    ewSamples.some(
+      (s) =>
+        s.adapterResult.sample.vendorSessionId === 'sess-ew-602-0001#ew602',
+    ),
+  );
+});
+
 test('scanClaudeVendorSessions: a SOLE candidate file is still harvested unconditionally when the window carries no identity (backward compat, #2424)', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
