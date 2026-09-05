@@ -2823,6 +2823,55 @@ test('verifiability still fails on noun-first "no decision yet" phrasing (PR #26
   assert.equal(result.pass, false);
 });
 
+test('verifiability still fails on negated-decision-noun and still-open-state synonyms (PR #2662 Codex round 3)', () => {
+  // The denylist generalizes to semantic classes (negated-decision-noun,
+  // still-open-state) rather than one literal phrase at a time, covering
+  // "no consensus yet" and siblings the literal "no decision yet" entry
+  // alone would miss.
+  for (const resolution of [
+    'no consensus yet; discussion continues',
+    'no agreement reached',
+    'awaiting a decision from the maintainer',
+    'remains unresolved pending further discussion',
+    'TBA',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05): ${resolution}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for resolution: ${resolution}`,
+    );
+  }
+});
+
+test('verifiability still passes a genuinely resolved decision containing "no" as an ordinary word (PR #2662 Codex round 3 guard)', () => {
+  // A bare `no\s+\w+` would false-positive on an ordinary resolved
+  // decision that happens to start with "no" as ordinary prose, not a
+  // pending-decision signal.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05): no changes to the public API; keep the existing signature as-is.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('verifiability still fails when the parenthetical carries no real provenance (PR #2662 Copilot round 2)', () => {
   // Any (or empty) parenthetical content must not count as provenance: the
   // parenthetical must actually contain an issue/PR reference, "Groom

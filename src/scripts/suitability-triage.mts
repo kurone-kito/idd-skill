@@ -860,9 +860,23 @@ const RESOLVED_DECISION_PATTERN =
 // `(?![a-zA-Z])` replaces a plain `\b`, which fails to end the match after
 // "TBD_" (both `D` and `_` are `\w`, so `\b` finds no boundary there) even
 // though the underscore is just a closing emphasis marker, not part of the
-// word. `no\s+decision(?:\s+yet)?` covers the noun-first phrasing "no
-// decision yet", which the earlier verb-first "not (yet) decided" denylist
-// entries do not match (Codex round 2, PR #2662). Between the colon and the
+// word. The negated-decision-noun class (`no\s+(?:decision|consensus|
+// agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?`) and the
+// still-open-state class (`(?:still|remains?)\s+(?:open|undecided|
+// unresolved|pending|unsettled)`) replace the earlier single-phrase
+// entries ("no decision yet", "still open") with their semantic families,
+// covering "no consensus yet" and similar noun-first phrasings the
+// verb-first "not (yet) decided" denylist entries don't match (Codex
+// rounds 2-3, PR #2662) without enumerating every synonym as its own
+// literal. Deliberately NOT a bare `no\s+\w+`: "no changes to the API;
+// keep as-is" is a genuinely resolved decision, not a pending one.
+// **Convergence boundary**: this denylist is already stricter than
+// precedent -- `RESOLVED_DECISION_PATTERN` above has carried no
+// resolution-text denylist at all since #1135, and its own docstring
+// accepts exactly this soft-heuristic trade-off. A denylist can never
+// enumerate every future synonym; widen a *class* here only for a
+// concrete reported case, not for a hypothetical one. Between the colon
+// and the
 // lookahead, `[ \t]*(?:\r?\n[ \t]*)?` allows at most a single hard-wrapped
 // line break, never a full blank-line paragraph gap -- a bare `\s*` there
 // let an empty marker ("Maintainer decision (...):" immediately followed by
@@ -880,7 +894,7 @@ const RESOLVED_DECISION_PATTERN =
 // form: it does not verify the resolution text actually settles the exact
 // approval wording elsewhere in the body.
 const INLINE_MAINTAINER_DECISION_PATTERN =
-  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:[ \t]*(?:\r?\n[ \t]*)?(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+decision(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|pending|undecided|deferred|still\s+open)(?![a-zA-Z]))\S/i;
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:[ \t]*(?:\r?\n[ \t]*)?(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|pending|undecided|deferred|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S/i;
 
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the

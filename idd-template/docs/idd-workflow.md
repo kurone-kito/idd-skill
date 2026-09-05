@@ -579,7 +579,7 @@ footer, remove or update the `triage:{outcome}` label, revise
 acceptance criteria to reflect the decision, and record the decision as
 inline prose in the issue body: `Maintainer decision (<provenance>,
 Groom hearing, <date>): <resolution text>` -- the shape
-`scripts/suitability-triage.mjs`'s Check 7 recognizes as a resolved
+`suitability-triage.mjs`'s Check 7 recognizes as a resolved
 decision
 ([kurone-kito/idd-skill#2661](https://github.com/kurone-kito/idd-skill/issues/2661)
 in the source repository); a comment may additionally note the
