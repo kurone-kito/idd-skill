@@ -2743,7 +2743,7 @@ test('verifiability still fails when an inline decision uses Markdown-decorated 
   // be defeated by a closing "_" (both the word char before it and "_"
   // itself are `\w`, so a plain `\b` never fires there).
   for (const resolution of [
-    '**pending** further review',
+    '**pending**, further review needed',
     '_TBD_',
     '`still open`',
     '- TBD, no consensus yet',
@@ -2870,6 +2870,79 @@ test('verifiability still passes a genuinely resolved decision containing "no" a
     },
   } as Context);
   assert.equal(result.pass, true);
+});
+
+test('verifiability still fails when a decision is only quoted via blockquote lazy continuation (PR #2662 Codex round 4)', () => {
+  // CommonMark's blockquote "lazy continuation" rule renders a line with no
+  // leading ">" as still inside the quote when it continues a paragraph
+  // that started with "> " -- checked here via the paragraph's first line,
+  // not just the matched line itself.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `> Quoted from issue #123:
+Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability passes settled decisions that begin with a denylist word (PR #2662 Codex round 4)', () => {
+  // "pending"/"undecided"/"deferred" are ordinary English adjectives that
+  // can open a genuinely settled resolution's own sentence -- only a bare,
+  // sentence-ending use of the word signals a real placeholder.
+  for (const resolution of [
+    'deferred to follow-up issue #100 so this patch remains scoped',
+    'pending requests will be rejected with HTTP 409',
+    'undecided items should be escalated to the next grooming pass',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05): ${resolution}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      true,
+      `expected pass for resolution: ${resolution}`,
+    );
+  }
+});
+
+test('verifiability still fails when pending/undecided/deferred end the resolution as a bare placeholder (PR #2662 Codex round 4 guard)', () => {
+  // The tightened boundary must still reject a genuine bare placeholder use
+  // of these words, with or without "yet"/"still"/"for now".
+  for (const resolution of ['pending', 'undecided', 'deferred for now']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05): ${resolution}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for resolution: ${resolution}`,
+    );
+  }
 });
 
 test('verifiability still fails when the parenthetical carries no real provenance (PR #2662 Copilot round 2)', () => {

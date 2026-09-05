@@ -249,13 +249,27 @@ function isPrecededByFramingVerb(normalizedBody, paragraphSpans, offset) {
 // decision (...): ...") is itself a quoting signal, independent of
 // `isPrecededByFramingVerb` -- pasting another issue's decision as a
 // blockquote carries no reporting verb of its own, so the framing-verb check
-// alone lets a quoted decision through. Checked per matched LINE (not
-// paragraph): a multi-line blockquote block is still one paragraph span, but
-// only the "> "-prefixed line the match itself sits on need be quoted for
-// the match to count as quoted.
-function isOnBlockquotedLine(normalizedBody, offset) {
-  const lineStart = normalizedBody.lastIndexOf('\n', offset - 1) + 1;
-  return /^[ \t]*>/.test(normalizedBody.slice(lineStart, offset));
+// alone lets a quoted decision through. Checks the containing PARAGRAPH's
+// first line, not just the matched line itself: CommonMark's blockquote
+// "lazy continuation" rule (this repo's own coverage:
+// tests/markdown-code.test.mts's "permits lazy continuation" case) renders
+// a line with no ">" of its own as still inside the quote when it continues
+// a paragraph that started with "> " -- "> Quoted from issue #123:" followed
+// immediately (no blank line) by an unprefixed "Maintainer decision (...)"
+// line is entirely quoted, even though that second physical line carries no
+// ">" marker of its own (Codex round 4, PR #2662).
+function isInBlockquotedParagraph(normalizedBody, paragraphSpans, offset) {
+  const span =
+    paragraphSpans.find(
+      (candidate) => offset >= candidate.start && offset <= candidate.end,
+    ) ?? paragraphSpans[paragraphSpans.length - 1];
+  const paragraphStart = span?.start ?? 0;
+  const firstLineEnd = normalizedBody.indexOf('\n', paragraphStart);
+  const firstLine = normalizedBody.slice(
+    paragraphStart,
+    firstLineEnd === -1 ? normalizedBody.length : firstLineEnd,
+  );
+  return /^[ \t]*>/.test(firstLine);
 }
 // Check 3 precision: an unsafe execution directive tells the agent to act on
 // *supplied / untrusted* content, not any command verb that merely lands near
@@ -734,11 +748,19 @@ const RESOLVED_DECISION_PATTERN =
 // decorative (Copilot review round 2, PR #2662): without this, "Maintainer
 // decision (): ..." or "Maintainer decision (just kidding): ..." could
 // bypass the subjective-approval gate with no real grooming-pass record
-// behind it. This is the same soft co-occurrence heuristic as the heading
-// form: it does not verify the resolution text actually settles the exact
-// approval wording elsewhere in the body.
+// behind it. `pending`/`undecided`/`deferred` additionally require a clause
+// boundary (through optional "yet"/"still"/"for now" and Markdown
+// decoration) immediately after the word -- these three, unlike TBD/TBA/TBC,
+// are ordinary English adjectives that can open a genuinely settled
+// resolution's own sentence ("deferred to follow-up issue #100 so this
+// patch remains scoped", "pending requests will be rejected with HTTP
+// 409"); only a bare, sentence-ending use of the word signals a real
+// placeholder (Codex round 4, PR #2662). This is the same soft
+// co-occurrence heuristic as the heading form: it does not verify the
+// resolution text actually settles the exact approval wording elsewhere in
+// the body.
 const INLINE_MAINTAINER_DECISION_PATTERN =
-  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:[ \t]*(?:\r?\n[ \t]*)?(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|pending|undecided|deferred|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S/i;
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:[ \t]*(?:\r?\n[ \t]*)?(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S/i;
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the
 // negation word and the trailing whitespace that reaches the verb. The
@@ -2190,10 +2212,11 @@ export function checkVerifiability(context) {
   // the helper reports an actionable error" -- is not wrongly excluded
   // (Codex review, PR #2662). A Markdown blockquote is a second, independent
   // quoting signal with no reporting verb of its own -- "> Maintainer
-  // decision (...): ..." -- so `isOnBlockquotedLine` also excludes a match
-  // (Codex review round 2, PR #2662). The heading form has no equivalent
-  // gap: a "## Decision (resolved …)" section is, by construction, this
-  // issue's own decision record, never a quoted example of someone else's.
+  // decision (...): ..." -- so `isInBlockquotedParagraph` also excludes a
+  // match (Codex review rounds 2 and 4, PR #2662). The heading form has no
+  // equivalent gap: a "## Decision (resolved …)" section is, by
+  // construction, this issue's own decision record, never a quoted example
+  // of someone else's.
   const hasInlineResolvedDecision = (() => {
     const inlinePattern = new RegExp(
       INLINE_MAINTAINER_DECISION_PATTERN.source,
@@ -2207,7 +2230,11 @@ export function checkVerifiability(context) {
           paragraphSpans,
           inlineMatch.index,
         ) &&
-        !isOnBlockquotedLine(normalizedBody, inlineMatch.index)
+        !isInBlockquotedParagraph(
+          normalizedBody,
+          paragraphSpans,
+          inlineMatch.index,
+        )
       ) {
         return true;
       }
