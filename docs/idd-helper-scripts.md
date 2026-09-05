@@ -1008,7 +1008,10 @@ The adopted helper boundaries are intentionally narrow:
   `node scripts/resolve-review-thread.mjs --pr <number> --comment-id <id>`
   (dry-run); add `--body "<disposition>" --apply --claim-issue <n>
   --claim-id <id>` to post the reply and resolve the thread. Optional
-  `--owner` / `--repo` / `--agent-id` / `--trusted-marker-logins`.
+  `--owner` / `--repo` / `--agent-id` / `--trusted-marker-logins`. For a
+  claimless PR (`closingIssuesReferences` empty), pass `--claimless`
+  instead of `--claim-issue`/`--claim-id` (#2616, mirrors
+  `pre-merge-readiness.mjs`'s `--claimless`, #2017).
 - Maps `--comment-id` (the review comment's REST id) to its owning review
   thread by matching it against the `databaseId` of the comments inside each
   GraphQL `reviewThreads` node (both the threads and the nested comments
@@ -1029,14 +1032,16 @@ The adopted helper boundaries are intentionally narrow:
 - **Dry-run** reports the resolved `threadId` and current `alreadyResolved`
   state without posting; a comment with no owning thread omits `threadId`
   and includes an `error` note.
-- **Fail-closed**: `--apply` requires `--body` and the
-  `--claim-issue` / `--claim-id` pair, re-validates the active claim before
-  **each** of the reply and the resolve (scoped to trusted marker authors,
-  aborting on a targeting `forced-handoff`), and binds the mutation to the
-  claimed PR by requiring the active claim's branch to equal the PR's head
-  branch. GraphQL `errors` fail fast rather than masquerading as a missing
-  thread, and a partial apply (reply posted, resolve not confirmed) still
-  reports the posted `replyId`.
+- **Fail-closed**: `--apply` requires `--body` and, unless `--claimless`,
+  the `--claim-issue` / `--claim-id` pair; absent `--claimless` it
+  re-validates the active claim before **each** of the reply and the
+  resolve (scoped to trusted marker authors, aborting on a targeting
+  `forced-handoff`), and binds the mutation to the claimed PR by requiring
+  the active claim's branch to equal the PR's head branch. `--claimless`
+  itself fails closed against a non-empty `closingIssuesReferences`.
+  GraphQL `errors` fail fast rather than masquerading as a missing thread,
+  and a partial apply (reply posted, resolve not confirmed) still reports
+  the posted `replyId`.
 - Stable contract: [`resolve-review-thread.schema.json`][resolve-review-thread-schema].
 - The written E13 reply-and-resolve rule in
   `idd-review-fix.instructions.md` stays authoritative; this helper is the

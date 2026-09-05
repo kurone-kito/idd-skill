@@ -11,9 +11,11 @@
 // (`review-activity-snapshot`, `review-disposition-verify`). It follows the
 // write-side helper family conventions: dry-run by default, `--apply` mutates
 // and requires `--claim-issue` / `--claim-id` so the active claim is
-// revalidated immediately before the reply is posted (fail-closed). Reply
-// first, resolve second — a failed reply never leaves a silently-resolved
-// thread with no disposition.
+// revalidated immediately before the reply is posted (fail-closed) --
+// unless `--claimless` (#2616) opts out for a PR with no linked issue to
+// claim against, mirroring `pre-merge-readiness.mjs`'s identical `--claimless`
+// (#2017). Reply first, resolve second — a failed reply never leaves a
+// silently-resolved thread with no disposition.
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -133,6 +135,7 @@ const RESOLVE_REVIEW_THREAD_FLAG_SPEC = {
   '--claim-id': { type: 'string', default: '' },
   '--agent-id': { type: 'string', default: '' },
   '--trusted-marker-logins': { type: 'string', default: '' },
+  '--claimless': { type: 'boolean', default: false },
   '--apply': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -174,6 +177,7 @@ export function parseArgs(argv) {
     claimId: values['claim-id'],
     agentId: values['agent-id'],
     trustedMarkerLogins: splitList(values['trusted-marker-logins']),
+    claimless: values.claimless,
     apply: values.apply,
     help,
   };
@@ -191,11 +195,14 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
                                  appends the reply-identity stamp)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
-  --claim-issue <number>         issue carrying the active claim (required with --apply)
-  --claim-id <claim-id>          active claim id to re-validate (required with --apply)
+  --claim-issue <number>         issue carrying the active claim (required with --apply, unless --claimless)
+  --claim-id <claim-id>          active claim id to re-validate (required with --apply, unless --claimless)
   --agent-id <agent-id>          current session agent id (optional, tightens the claim check)
   --trusted-marker-logins a,b    logins whose claim markers are trusted
                                  (default: your gh login)
+  --claimless                    skip claim fetch/revalidation (#2616). Only for a PR with
+                                 no closingIssuesReferences; cannot combine with
+                                 --claim-issue / --claim-id
   --apply                        post the reply and resolve the thread (default: dry-run)
   -h, --help                     show this help
 `;
@@ -290,18 +297,33 @@ if (import.meta.main) {
     process.stdout.write(USAGE);
     process.exit(args.help ? 0 : 1);
   }
-  // Fail closed: --apply mutates PR state, so the active-claim revalidation and
-  // a reply body are mandatory. Missing inputs must abort before any read or
-  // write rather than silently bypassing the gate.
+  // #2616: --claimless (mirroring pre-merge-readiness.mjs's #2017 flag)
+  // is mutually exclusive with --claim-issue / --claim-id -- both name
+  // the same "which ownership check applies" decision, so combining
+  // them is always a caller mistake, never a stricter intersection.
+  if (args.claimless && (Number.isInteger(args.claimIssue) || args.claimId)) {
+    process.stderr.write(
+      '--claimless cannot be combined with --claim-issue or --claim-id\n',
+    );
+    process.exit(1);
+  }
+  // Fail closed: --apply mutates PR state, so a reply body is always
+  // mandatory, and the active-claim revalidation is mandatory unless
+  // --claimless opts out of it. Missing inputs must abort before any
+  // read or write rather than silently bypassing the gate.
+  if (args.apply && !args.body) {
+    process.stderr.write('--apply requires --body\n');
+    process.exit(1);
+  }
   if (
     args.apply &&
+    !args.claimless &&
     (!Number.isInteger(args.claimIssue) ||
       (args.claimIssue ?? 0) <= 0 ||
-      !args.claimId ||
-      !args.body)
+      !args.claimId)
   ) {
     process.stderr.write(
-      '--apply requires --body and the --claim-issue / --claim-id pair for the mandatory claim revalidation\n',
+      '--apply requires the --claim-issue / --claim-id pair for the mandatory claim revalidation, or --claimless\n',
     );
     process.exit(1);
   }
@@ -335,6 +357,20 @@ if (import.meta.main) {
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
+  // #2616: mirror pre-merge-readiness.mjs's #2017 scoping rule --
+  // --claimless is only for a PR with no linked issue to claim against.
+  // A PR with closingIssuesReferences has one (or more): use
+  // --claim-issue instead so the claim revalidation gate still applies.
+  if (args.claimless) {
+    const closingRefs =
+      port.getChangeRequestConvergenceView(pr).closingIssuesReferences;
+    if (Array.isArray(closingRefs) && closingRefs.length > 0) {
+      process.stderr.write(
+        '--claimless requires a PR with no closingIssuesReferences; pass --claim-issue instead\n',
+      );
+      process.exit(1);
+    }
+  }
   const match = findThreadForComment(
     toReviewThreadNodes(port.listChangeRequestReviewThreadCommentIds(pr)),
     commentId,
@@ -414,6 +450,12 @@ if (import.meta.main) {
   try {
     const result = applyResolveReviewThread({
       assertClaim: () => {
+        // #2616: --claimless intentionally skips claim revalidation --
+        // the scoping check above already confirmed this PR has no
+        // linked issue to own a claim.
+        if (args.claimless) {
+          return;
+        }
         const active = activeOwnedClaim(
           port,
           args.claimIssue,
