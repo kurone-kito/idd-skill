@@ -402,8 +402,8 @@ function intersect(files: string[], highContention: Set<string>): string[] {
 
 // ---------------------------------------------------------------------------
 // CLI glue. `loadManifest` is exported and unit-tested for its
-// ENOENT-vs-parse-error boundary; the rest of this section is CLI wiring,
-// not unit-tested (the pure core above is).
+// ENOENT-vs-parse-error boundary; `parseArgs` below has its own existing
+// test coverage too. `runCli`/`printHelp` are CLI wiring, not unit-tested.
 // ---------------------------------------------------------------------------
 
 interface ParsedArgs {
@@ -460,8 +460,9 @@ function runCli(): void {
   });
 
   let activeIssues: ActiveIssueInput[] = [];
-  // With no high-contention files, every overlap intersection is empty
-  // regardless of active-issue data, so skip the API cost entirely.
+  // A missing manifest guarantees an empty high-contention set (see above),
+  // so every overlap intersection would be empty regardless of active-issue
+  // data — skip the API cost entirely in that case.
   if (args.checkOverlap && !manifestMissing) {
     activeIssues = discoverActiveIssues({
       port,

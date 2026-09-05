@@ -621,8 +621,12 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   - `manifestMissing`: `boolean` — `true` when `--manifest`'s target file does
     not exist (`ENOENT`); the CLI still exits 0, with `highContentionFiles`
     reported as an empty set rather than fabricated from the manifest path
-    itself. A manifest that exists but fails to parse (malformed JSON, wrong
-    shape) keeps the prior fail-closed behavior (the CLI throws), unchanged.
+    itself. A manifest that fails to parse (invalid JSON syntax) keeps the
+    prior fail-closed behavior (the CLI throws), unchanged. A manifest that
+    parses but has an unexpected shape (e.g. `{}`, a non-array
+    `bundleBudgets`) is not validated here — `resolveHighContentionFiles`
+    silently treats it as contributing no bundle files, a pre-existing
+    behavior this change does not alter.
   - `highContentionFiles`: `string[]` (sorted)
   - `candidates`: `[{ number: number, score: number | null,`
     `effectiveScore: number, candidateFiles: string[],`

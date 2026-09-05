@@ -348,8 +348,9 @@ function runCli() {
     };
   });
   let activeIssues = [];
-  // With no high-contention files, every overlap intersection is empty
-  // regardless of active-issue data, so skip the API cost entirely.
+  // A missing manifest guarantees an empty high-contention set (see above),
+  // so every overlap intersection would be empty regardless of active-issue
+  // data — skip the API cost entirely in that case.
   if (args.checkOverlap && !manifestMissing) {
     activeIssues = discoverActiveIssues({
       port,
