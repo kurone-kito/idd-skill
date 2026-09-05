@@ -81,9 +81,9 @@ export type AuthoringBucketMarkerValue = 'needs-decision' | 'blocked-by-human';
  * `present` is false only when no marker appears; `value` is the single
  * coherent enum value or null (fail-safe = "no bucket") when the marker is
  * absent, an unrecognized token, or repeated with disagreeing values;
- * `malformed` is true when a marker is present but either its value is not
- * one of the two recognized tokens, or it is repeated with a disagreeing
- * value.
+ * `malformed` is true when a marker is present but its value is not one of
+ * the two recognized tokens (including a value-less marker with no token
+ * at all), or it is repeated with a disagreeing value.
  */
 interface AuthoringBucketMarkerDetection {
   present: boolean;
@@ -745,20 +745,40 @@ function checkAuthoringBucketMarkerRequired(
  * {@link stripMarkdownCodeRegions}-masked (every caller in this file
  * passes the shared `text`, not `rawText`), so a marker merely quoted in
  * prose cannot be mistaken for a real one.
+ *
+ * Uses the same rawCount-vs-coherent-count gap {@link
+ * checkEffortVisibleLineAgreement} closes for the `effort` marker: the
+ * value-capturing regex below requires a non-empty token
+ * (`[^\s>]+`), so a value-less marker like
+ * `<!-- {prefix}-authoring-bucket: -->` would otherwise never match it
+ * at all and read as `present: false` — indistinguishable from no
+ * marker, which would also make {@link checkAuthoringBucketMarkerRequired}
+ * misreport a present-but-invalid marker as "none was found" (#2648
+ * review, Copilot). `countMarkerOccurrences`'s detection-only regex
+ * matches regardless of value, so comparing the two counts recovers the
+ * distinction.
  */
 function parseAuthoringBucketMarker(
   text: string,
   markerPrefix: string,
 ): AuthoringBucketMarkerDetection {
+  const rawCount = countMarkerOccurrences(
+    text,
+    markerPrefix,
+    'authoring-bucket',
+  );
+  if (rawCount === 0) {
+    return { present: false, value: null, malformed: false };
+  }
   const regex = new RegExp(
     `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
     'gi',
   );
-  let present = false;
+  let coherentCount = 0;
   let value: AuthoringBucketMarkerValue | null = null;
   let match = regex.exec(text);
   while (match) {
-    present = true;
+    coherentCount += 1;
     const raw = match[1];
     const parsed = isAuthoringBucketValue(raw) ? raw : null;
     // Fail-safe: any invalid token, or a value disagreeing with an
@@ -769,8 +789,11 @@ function parseAuthoringBucketMarker(
     value = parsed;
     match = regex.exec(text);
   }
-  if (!present) {
-    return { present: false, value: null, malformed: false };
+  if (coherentCount !== rawCount) {
+    // At least one occurrence matched the raw (any-value) scan but not
+    // the value-capturing one -- a value-less or otherwise malformed-shape
+    // marker.
+    return { present: true, value: null, malformed: true };
   }
   return { present: true, value, malformed: false };
 }

@@ -205,12 +205,14 @@ rules.
 
 A newly published `needs-decision` or `blocked-by-human` issue carries a
 hidden **authoring-bucket marker**
-(`<!-- {marker-prefix}-authoring-bucket: needs-decision|blocked-by-human -->`)
+(`<!-- {marker-prefix}-authoring-bucket: <needs-decision|blocked-by-human> -->`)
 so `audit-authored-issue.mts` can mechanically enforce the matching
 label the same way it already enforces `status:blocked-by-human` for a
 suitability score of `1`. Publishing into either bucket runs the linter
-with `--expect-bucket` (see step 6 above), requiring the marker rather
-than treating its absence as fail-safe. See the
+with `--expect-bucket` (see
+[Mechanical pre-publish gate](#mechanical-pre-publish-gate) below),
+requiring the marker rather than treating its absence as fail-safe. See
+the
 [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker)
 section of the contract for the binding rules.
 
@@ -584,15 +586,27 @@ resolve the issue during drafting instead of publishing it.
 ### Mechanical pre-publish gate
 
 Before publishing a drafted `ready` **orphan, roadmap, or sub-issue**
-body (the linter's `orphan|roadmap|child` shapes; not the non-ready
-buckets above), run the `audit-authored-issue` linter
+body (the linter's `orphan|roadmap|child` shapes), run the
+`audit-authored-issue` linter
 (`scripts/audit-authored-issue.mjs` / `bin/idd-audit-authored-issue.mjs`)
-against it when a helper runtime is available. It mechanically
+against it when a helper runtime is available. Before newly publishing
+a body into the `needs-decision` or `blocked-by-human` bucket instead,
+also run it, adding `--expect-bucket <needs-decision|blocked-by-human>`
+(choose the one matching value) — without it, the marker/label checks
+that key off `authoring-bucket` never fire, since a non-ready body is
+otherwise never run through this gate at all (the exact gap #2636/#2637
+hit). Passing `--expect-bucket` also skips the ready-shape-only checks
+(the suitability footer and required headings) that a bucket body is
+never expected to carry, since it uses its own
+Background/Required action/Ready signal shape instead. It mechanically
 re-checks a subset of the structural rules this document states in
 prose — the autopilot-suitability marker's exactly-one/coherent-value
-rule, the one-directional check that a suitability score of `1` carries
-the configured `blocked-by-human` label (it does not check the reverse:
-a non-`1` score paired with the label still passes), markerPrefix
+rule, the one-directional check that a suitability score of `1` (or an
+`authoring-bucket: blocked-by-human` marker, when present) carries the
+configured `blocked-by-human` label (it does not check the reverse:
+a non-`1` score paired with the label still passes), the equivalent
+one-directional check for `authoring-bucket: needs-decision` and the
+configured `needsDecisionLabelName` label, markerPrefix
 consistency across every authoring marker, the declared shape's
 required section headings, the roadmap-id/blocked-by dependency-marker
 rules, and visible/hidden line agreement for the suitability and effort
@@ -660,7 +674,8 @@ confirm the reference is a mere breadcrumb.
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
   --marker-prefix <resolved-target-prefix> \
-  --body-file <path-to-drafted-body> [--label <label>]...
+  --body-file <path-to-drafted-body> [--label <label>]... \
+  [--expect-bucket <needs-decision|blocked-by-human>]
 ```
 
 **Always keep `--marker-prefix`, and always replace the placeholder**

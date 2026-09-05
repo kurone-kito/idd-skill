@@ -335,8 +335,7 @@ test('authoring-bucket-marker-required fails when the marker disagrees with the 
 });
 
 test('authoring-bucket-marker-required distinguishes a missing marker from a malformed one in its detail', () => {
-  const missingBody =
-    '## Background\n\nContext.\n\n<!-- idd-skill-authoring-bucket-does-not-exist -->';
+  const missingBody = '## Background\n\nContext.\n\nNo marker at all here.';
   const missing = auditAuthoredIssue(missingBody, {
     shape: 'orphan',
     labels: [],
@@ -357,6 +356,20 @@ test('authoring-bucket-marker-required distinguishes a missing marker from a mal
     (entry) => entry.id === 'authoring-bucket-marker-required',
   );
   assert.match(malformedFinding?.detail ?? '', /malformed/);
+});
+
+test('a value-less authoring-bucket marker is treated as malformed, not missing (#2648 review, Copilot)', () => {
+  const body = `${orphanBody({ score: 4 })}\n\n<!-- idd-skill-authoring-bucket: -->`;
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: [],
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-bucket-marker-required',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /malformed/);
 });
 
 // --- bucket audits (--expect-bucket) skip the ready-shape-only checks (#2648 review, Codex) ---

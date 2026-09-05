@@ -533,17 +533,37 @@ function checkAuthoringBucketMarkerRequired(authoringBucket, expectedBucket) {
  * {@link stripMarkdownCodeRegions}-masked (every caller in this file
  * passes the shared `text`, not `rawText`), so a marker merely quoted in
  * prose cannot be mistaken for a real one.
+ *
+ * Uses the same rawCount-vs-coherent-count gap {@link
+ * checkEffortVisibleLineAgreement} closes for the `effort` marker: the
+ * value-capturing regex below requires a non-empty token
+ * (`[^\s>]+`), so a value-less marker like
+ * `<!-- {prefix}-authoring-bucket: -->` would otherwise never match it
+ * at all and read as `present: false` — indistinguishable from no
+ * marker, which would also make {@link checkAuthoringBucketMarkerRequired}
+ * misreport a present-but-invalid marker as "none was found" (#2648
+ * review, Copilot). `countMarkerOccurrences`'s detection-only regex
+ * matches regardless of value, so comparing the two counts recovers the
+ * distinction.
  */
 function parseAuthoringBucketMarker(text, markerPrefix) {
+  const rawCount = countMarkerOccurrences(
+    text,
+    markerPrefix,
+    'authoring-bucket',
+  );
+  if (rawCount === 0) {
+    return { present: false, value: null, malformed: false };
+  }
   const regex = new RegExp(
     `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
     'gi',
   );
-  let present = false;
+  let coherentCount = 0;
   let value = null;
   let match = regex.exec(text);
   while (match) {
-    present = true;
+    coherentCount += 1;
     const raw = match[1];
     const parsed = isAuthoringBucketValue(raw) ? raw : null;
     // Fail-safe: any invalid token, or a value disagreeing with an
@@ -554,8 +574,11 @@ function parseAuthoringBucketMarker(text, markerPrefix) {
     value = parsed;
     match = regex.exec(text);
   }
-  if (!present) {
-    return { present: false, value: null, malformed: false };
+  if (coherentCount !== rawCount) {
+    // At least one occurrence matched the raw (any-value) scan but not
+    // the value-capturing one -- a value-less or otherwise malformed-shape
+    // marker.
+    return { present: true, value: null, malformed: true };
   }
   return { present: true, value, malformed: false };
 }
