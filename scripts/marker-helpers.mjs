@@ -940,8 +940,13 @@ function parseSemicolonFieldMarker(body, markerPrefix, suffix) {
   // quoted after prose, inside a fenced example, or opened across a
   // newline (`<!--\nidd-skill-authoring-owner: ...`), none of which are the
   // real marker the protocol posts (#2628 review, Codex).
+  // The payload capture (and its surrounding whitespace) is restricted to
+  // same-line spaces/tabs -- these are "HTML-first body line" markers in
+  // their entirety, not just at their opener, so a multi-line comment
+  // starting at byte 0 must not parse as well-formed either (#2628 review,
+  // Copilot and Codex).
   const pattern = new RegExp(
-    `^<!--[ \\t]*${escapeRegex(markerPrefix)}-${suffix}:\\s*([\\s\\S]*?)\\s*-->`,
+    `^<!--[ \\t]*${escapeRegex(markerPrefix)}-${suffix}:[ \\t]*([^\\r\\n]*?)[ \\t]*-->`,
     'i',
   );
   const match = body.match(pattern);

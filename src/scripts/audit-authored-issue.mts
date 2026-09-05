@@ -919,7 +919,8 @@ function checkAuthoringOwnerMarkerTrail(
       (currentIssueRef === undefined ||
         marker.target.toLowerCase() === currentIssueRef) &&
       (publicationMarker === null ||
-        (marker.set === publicationMarker.set &&
+        (marker.anchor === publicationMarker.anchor &&
+          marker.set === publicationMarker.set &&
           marker.session === publicationMarker.session)),
   );
   if (!hasQualifyingOwnerMarker) {
@@ -928,7 +929,7 @@ function checkAuthoringOwnerMarkerTrail(
     const generationNote =
       publicationMarker === null
         ? ''
-        : ", set/session matching the publication marker's generation";
+        : ", anchor/set/session matching the publication marker's generation";
     return fail(
       id,
       name,
@@ -981,6 +982,15 @@ function checkAuthoringOwnerMarkerTrail(
       return false;
     }
     if (!AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER.has(intent.state)) {
+      return false;
+    }
+    // issue=none is only ever valid at state=pending (docs/issue-authoring-skill.md):
+    // "Append the returned identity while it remains pending, append
+    // member only after the owner marker is verified" -- a member-or-later
+    // record with issue=none is itself a protocol violation, regardless of
+    // whether the caller happens to know the current issue's identity
+    // (#2628 review, Copilot and Codex).
+    if (intent.issue.toLowerCase() === 'none') {
       return false;
     }
     if (
@@ -1689,6 +1699,13 @@ function main(): void {
   if (args.newIssue && args.commentsFile && !args.journalCommentsFile) {
     fail_('--new-issue with --comments-file requires --journal-comments-file');
   }
+  // Without a known current-issue identity, the journal cross-check cannot
+  // verify a publication-intent record actually names THIS issue -- an
+  // intent record naming a different (non-none) issue would otherwise pass
+  // silently whenever the caller omitted --issue (#2628 review, Codex).
+  if (args.newIssue && args.journalCommentsFile && args.issue === undefined) {
+    fail_('--new-issue with --journal-comments-file requires --issue');
+  }
 
   // Explicit --current-repo wins; otherwise fall back to the
   // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
@@ -1903,7 +1920,7 @@ Options:
                                     (not an edit); requires the leading
                                     authoring-publication body line, and (when
                                     --comments-file is also given) requires
-                                    --journal-comments-file too
+                                    --journal-comments-file and --issue too
   --format <json|table>            output format (default: json)
   --help                           show this help
 `);

@@ -127,3 +127,9 @@ test('parseAuthoringPublicationComment returns null when preceded by a leading b
     '\n<!-- idd-skill-authoring-publication: target=target-abc; anchor=kurone-kito/idd-skill#2606; set=set-xyz; session=sess-1; token=pub-tok -->';
   assert.equal(parseAuthoringPublicationComment(body, 'idd-skill'), null);
 });
+
+test('parseAuthoringOwnerComment returns null when the payload itself spans a newline', () => {
+  const body =
+    '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9001;\nanchor=kurone-kito/idd-skill#9001; mode=acquire; owner=owner-tok1; set=set-xyz789; session=sess-1; body-sha256=none; snapshot-sha256=none; supersedes=none -->';
+  assert.equal(parseAuthoringOwnerComment(body, 'idd-skill'), null);
+});

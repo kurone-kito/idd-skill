@@ -2329,3 +2329,37 @@ test('authoring-owner-marker-trail ignores a marker-shaped fenced-code example i
   );
   assert.equal(finding?.result, 'fail');
 });
+
+test('authoring-owner-marker-trail rejects issue=none at state=member even when the current issue is unknown', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+    journalComments: [publicationIntentComment({ issue: 'none' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail rejects an owner marker with a mismatched anchor from the publication generation', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [
+      {
+        body: '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9001; anchor=kurone-kito/idd-skill#DIFFERENT; mode=acquire; owner=owner-tok1; set=set-xyz789; session=sess-1; body-sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; snapshot-sha256=none; supersedes=none -->',
+      },
+    ],
+    journalComments: [publicationIntentComment()],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
