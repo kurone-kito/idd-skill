@@ -805,16 +805,32 @@ marginally-ready issue.
 ## Mechanical pre-publish gate
 
 Before publishing a drafted `ready` **orphan, roadmap, or child** body
-(the shapes the linter supports — not the non-ready buckets below,
-which are not audited by this gate), run the
-`audit-authored-issue` linter against it when a helper runtime is
-available. It mechanically re-checks a subset of the structural rules
-this contract states in prose — the autopilot-suitability marker's
+(the shapes the linter supports), run the `audit-authored-issue`
+linter against it when a helper runtime is available. Before newly
+publishing a body into the **`needs-decision`** or **`blocked-by-human`**
+bucket instead, also run it, passing
+`--expect-bucket <needs-decision|blocked-by-human>` (choose the one
+matching value): without this, the two mechanical
+checks below that key off the `authoring-bucket` marker
+(see [Authoring-bucket marker](#authoring-bucket-marker)) never
+actually fire in practice, since a non-`ready` body is otherwise never
+run through this gate at all — exactly the gap that let #2636/#2637
+publish without their required label (#2639 follow-up). `--expect-bucket`
+requires the matching marker to be present, failing when it is absent
+or disagrees; omit it for a `ready` publish or an edit to an
+already-published legacy body, where the marker stays optional and
+fail-safe on absence as documented in that section. `deferred` and
+`out-of-scope` bodies are not audited by this gate either way. It
+mechanically re-checks a subset of the structural rules this contract
+states in prose — the autopilot-suitability marker's
 exactly-one/coherent-value rule, the one-directional check that a
-suitability score of `1` carries the configured `blocked-by-human`
-label (it does not check the reverse: a non-`1` score paired with the
-label still passes), markerPrefix consistency across every authoring
-marker, the declared shape's required section headings, the
+suitability score of `1` (or an `authoring-bucket: blocked-by-human`
+marker, when present) carries the configured `blocked-by-human` label
+(it does not check the reverse: a non-`1` score paired with the label
+still passes), the equivalent one-directional check for
+`authoring-bucket: needs-decision` and the configured
+`needsDecisionLabelName` label, markerPrefix consistency across every
+authoring marker, the declared shape's required section headings, the
 roadmap-id/blocked-by dependency-marker rules, and visible/hidden line
 agreement for the suitability and effort footers — so a weak model does
 not have to hold every rule in its head at once while drafting.
@@ -905,7 +921,8 @@ confirm the reference is a mere breadcrumb.
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
   --marker-prefix <resolved-target-prefix> \
-  --body-file <path-to-drafted-body> [--label <label>]...
+  --body-file <path-to-drafted-body> [--label <label>]... \
+  [--expect-bucket <needs-decision|blocked-by-human>]
 ```
 
 Or, for npx/package-manager profiles, the equivalent
@@ -1067,6 +1084,50 @@ Binding rules:
   marker means "no effort hint": selection behaves exactly as it does
   today (a missing hint sorts as the neutral middle, as-if `M`).
   Pre-existing issues with no effort footer keep flowing.
+
+Backfill is opportunistic and follows the same claim-state precondition
+as the suitability footer.
+
+## Authoring-bucket marker
+
+A newly authored issue in the `needs-decision` or `blocked-by-human`
+readiness bucket (see [Readiness buckets](#readiness-buckets)) carries a
+hidden, machine-readable **authoring-bucket marker** recording which of
+those two axes applies, so `audit-authored-issue.mts` can mechanically
+enforce the matching label the same way it already enforces
+`status:blocked-by-human` for a suitability score of `1`
+(`checkSuitabilityBlockedByHuman`) — see
+[Mechanical pre-publish gate](#mechanical-pre-publish-gate)'s
+`--expect-bucket` flag for the enforcement path. `ready` and other
+buckets omit the marker entirely; so does a legacy body already
+published before this marker existed.
+
+```text
+<!-- {marker-prefix}-authoring-bucket: needs-decision|blocked-by-human -->
+```
+
+Binding rules:
+
+- **Two axes only.** Scoped to the two buckets with a real behavioral
+  consequence today (a required label) — `deferred` and `out-of-scope`
+  have none, so they carry no marker.
+- **Folds the existing suitability-1 check.** When present, this marker
+  decides `suitability-blocked-by-human`'s applicability instead of the
+  suitability score: `blocked-by-human` requires
+  `status:blocked-by-human` regardless of score; `needs-decision` means
+  that check does not apply, even at a suitability score of `1`. Absent
+  or malformed, `checkSuitabilityBlockedByHuman` falls back to the
+  pre-existing suitability-1-only rule — no backfill onto issues
+  published before this marker existed.
+- **Authoring marker, not operational marker.** Like
+  `autopilot-suitability`, it is body content and must never be added to
+  `OPERATIONAL_MARKERS` or subjected to F4 minimization.
+- **Fail-safe on absence, except when explicitly expected.** A missing
+  or malformed marker means "no bucket": both mechanical checks above
+  fall back to their pre-existing behavior. The gate's `--expect-bucket`
+  flag is the deliberate exception — passed only for a body newly
+  published into that bucket, it turns "no bucket" into a hard failure
+  instead (`authoring-bucket-marker-required`).
 
 Backfill is opportunistic and follows the same claim-state precondition
 as the suitability footer.

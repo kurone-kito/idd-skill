@@ -75,7 +75,14 @@ needs-decision, blocked-by-human, and out-of-scope.
    [Mechanical pre-publish gate](references/contract.md#mechanical-pre-publish-gate)
    in the bundled contract, including the manual fallback for
    `instructions-only` installs with no helper runtime. Resolve every
-   reported failure before treating the issue as ready.
+   reported failure before treating the issue as ready. Before newly
+   publishing a body into the `needs-decision` or `blocked-by-human`
+   bucket instead, also run the linter, passing
+   `--expect-bucket <needs-decision|blocked-by-human>` (choose the one
+   matching value) — the same gate section's `--expect-bucket` flag
+   requires the matching `authoring-bucket` marker for that publish,
+   closing the gap where a non-ready body would otherwise never be
+   audited at all.
 7. Publish each `ready` drafted body directly under the authoring hold
    once it passes the mechanical gate (step 6) and the critique pass
    (the Intake and Clarification phase above) — no separate publish
@@ -273,8 +280,10 @@ needs-decision, blocked-by-human, and out-of-scope.
 - Avoid widening drafting output beyond the user request without saying
   so.
 - Run the `audit-authored-issue` linter (or its manual fallback in
-  `instructions-only` installs) against every drafted ready body and
-  resolve every reported failure before publishing.
+  `instructions-only` installs) against every drafted ready body, and
+  against every body newly published into `needs-decision` or
+  `blocked-by-human` with `--expect-bucket`; resolve every reported
+  failure before publishing.
 - Name a concrete surface to edit and an objective verification for
   every `ready` candidate; route anything else to `needs-decision` or
   ask instead of guessing (the under-clarification stop rule).
