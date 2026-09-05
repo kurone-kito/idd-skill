@@ -916,6 +916,11 @@ const AUTHORING_PUBLICATION_INTENT_STATES = new Set([
   'cleanup',
   'abandoned',
 ]);
+// docs/issue-authoring-skill.md documents body-sha256/snapshot-sha256 as
+// `<64-lowercase-hex|none>` specifically -- presence alone (accepting a
+// garbage value like `body-sha256=garbage`) is not shape-valid per that
+// grammar (#2628 review, Codex and Copilot both flagged this).
+const AUTHORING_OWNER_DIGEST_PATTERN = /^(?:none|[0-9a-f]{64})$/;
 /**
  * Parse the `field=value; field2=value2; ...` payload of a
  * `<!-- {markerPrefix}-{suffix}: ... -->` marker into a raw field map. Each
@@ -966,8 +971,8 @@ export function parseAuthoringOwnerComment(body, markerPrefix) {
     !fields.owner ||
     !fields.set ||
     !fields.session ||
-    !fields['body-sha256'] ||
-    !fields['snapshot-sha256'] ||
+    !AUTHORING_OWNER_DIGEST_PATTERN.test(fields['body-sha256'] ?? '') ||
+    !AUTHORING_OWNER_DIGEST_PATTERN.test(fields['snapshot-sha256'] ?? '') ||
     !fields.supersedes
   ) {
     return null;

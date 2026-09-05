@@ -669,19 +669,55 @@ function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
     currentRepo && options.issueNumber !== undefined
       ? `${currentRepo}#${options.issueNumber}`
       : undefined;
+  // For a new issue, resolve the publication marker BEFORE searching for a
+  // qualifying owner marker: its `set`/`session` bind the "generation" a
+  // qualifying owner marker must itself belong to (#2628 review, Codex) --
+  // otherwise a stale owner marker from an earlier acquire/bootstrap cycle
+  // could combine with a fresh publication token to produce a false pass.
+  let publicationMarker = null;
+  if (options.newIssue === true) {
+    publicationMarker = parseAuthoringPublicationComment(text, markerPrefix);
+    // "HTML-first body line" (docs/issue-authoring-skill.md) means the
+    // marker's own literal first bytes, not merely "somewhere before other
+    // content" -- no leading blank line or whitespace tolerance (#2628
+    // review, Copilot).
+    const leadingPublicationMarkerPattern = new RegExp(
+      `^<!--\\s*${escapeRegex(markerPrefix)}-authoring-publication:`,
+      'i',
+    );
+    if (
+      publicationMarker === null ||
+      !leadingPublicationMarkerPattern.test(text)
+    ) {
+      return fail(
+        id,
+        name,
+        'new issue is missing a well-formed authoring-publication marker as the first line of the body',
+      );
+    }
+  }
   const ownerMarkers = options.comments
     .map((comment) => parseAuthoringOwnerComment(comment.body, markerPrefix))
     .filter((marker) => marker !== null);
   const hasQualifyingOwnerMarker = ownerMarkers.some(
     (marker) =>
       AUTHORING_OWNER_QUALIFYING_MODES.has(marker.mode) &&
-      (currentIssueRef === undefined || marker.target === currentIssueRef),
+      (currentIssueRef === undefined || marker.target === currentIssueRef) &&
+      (publicationMarker === null ||
+        (marker.set === publicationMarker.set &&
+          marker.session === publicationMarker.session)),
   );
   if (!hasQualifyingOwnerMarker) {
+    const targetNote =
+      currentIssueRef === undefined ? '' : ', target matching this issue';
+    const generationNote =
+      publicationMarker === null
+        ? ''
+        : ", set/session matching the publication marker's generation";
     return fail(
       id,
       name,
-      'no valid authoring-owner comment (mode acquire/bootstrap/resume, target matching this issue) was found',
+      `no valid authoring-owner comment (mode acquire/bootstrap/resume${targetNote}${generationNote}) was found`,
     );
   }
   if (options.newIssue !== true) {
@@ -691,23 +727,9 @@ function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
       'owner-marker present; not applicable for the publication-token line (not a new issue)',
     );
   }
-  const publicationMarker = parseAuthoringPublicationComment(
-    text,
-    markerPrefix,
-  );
-  const leadingPublicationMarkerPattern = new RegExp(
-    `^\\s*<!--\\s*${escapeRegex(markerPrefix)}-authoring-publication:`,
-    'i',
-  );
-  const publicationMarkerIsFirstLine =
-    leadingPublicationMarkerPattern.test(text);
-  if (publicationMarker === null || !publicationMarkerIsFirstLine) {
-    return fail(
-      id,
-      name,
-      'new issue is missing a well-formed authoring-publication marker as the first line of the body',
-    );
-  }
+  // publicationMarker is non-null here: newIssue === true already returned
+  // above on a missing/malformed marker.
+  const resolvedPublicationMarker = publicationMarker;
   if (options.journalComments === undefined) {
     return pass(
       id,
@@ -715,22 +737,33 @@ function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
       'owner-marker and publication-token line present; not applicable for the journal cross-check (no journal comment data supplied)',
     );
   }
+  // Match the FULL token tuple (target/anchor/set/session/token), not just
+  // target -- an unrelated or out-of-generation journal record sharing only
+  // `target` must not be accepted as evidence (#2628 review, Codex). When
+  // the current issue's identity is known, also require the record's own
+  // `issue` field to name it exactly: per the protocol, `issue` is resolved
+  // to the real identity no later than the `member` transition, so `none`
+  // at state=member-or-later is itself a protocol violation, not a
+  // tolerable gap.
   const hasMatchingIntentRecord = options.journalComments.some((comment) => {
     const intent = parseAuthoringPublicationIntentComment(
       comment.body,
       markerPrefix,
     );
-    if (intent === null || intent.target !== publicationMarker.target) {
+    if (
+      intent === null ||
+      intent.target !== resolvedPublicationMarker.target ||
+      intent.anchor !== resolvedPublicationMarker.anchor ||
+      intent.set !== resolvedPublicationMarker.set ||
+      intent.session !== resolvedPublicationMarker.session ||
+      intent.token !== resolvedPublicationMarker.token
+    ) {
       return false;
     }
     if (!AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER.has(intent.state)) {
       return false;
     }
-    if (
-      currentIssueRef !== undefined &&
-      intent.issue !== 'none' &&
-      intent.issue !== currentIssueRef
-    ) {
+    if (currentIssueRef !== undefined && intent.issue !== currentIssueRef) {
       return false;
     }
     return true;
@@ -1330,6 +1363,21 @@ function main() {
   if (args.issue !== undefined && !/^[1-9]\d*$/.test(args.issue)) {
     fail_('--issue must be a positive integer');
   }
+  if (args.journalCommentsFile && !args.newIssue) {
+    fail_('--journal-comments-file requires --new-issue');
+  }
+  // Explicit --current-repo wins; otherwise fall back to the
+  // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
+  // usage narrows cross-repo URL false positives with no extra flag.
+  // undefined (neither present) keeps the pre-#1399-fix default of
+  // flagging every full-URL reference for the prose-dependency check --
+  // but --issue's target match needs a resolvable repo to mean anything,
+  // so require one explicitly rather than silently widening the match
+  // (#2628 review, Codex and Copilot both flagged the silent-widening gap).
+  const currentRepo = args.currentRepo ?? process.env.GITHUB_REPOSITORY;
+  if (args.issue !== undefined && !currentRepo) {
+    fail_('--issue requires --current-repo (or $GITHUB_REPOSITORY) to be set');
+  }
   const policy = loadPolicy(args.configPath);
   const markerPrefix = args.markerPrefix ?? policy.markerPrefix;
   const report = auditAuthoredIssue(bodyText, {
@@ -1338,12 +1386,7 @@ function main() {
     labels: args.labels,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     authoringLabelName: policy.authoringLabelName,
-    // Explicit --current-repo wins; otherwise fall back to the
-    // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
-    // usage narrows cross-repo URL false positives with no extra flag.
-    // undefined (neither present) keeps the pre-#1399-fix default of
-    // flagging every full-URL reference.
-    currentRepo: args.currentRepo ?? process.env.GITHUB_REPOSITORY,
+    currentRepo,
     issueNumber:
       args.issue !== undefined ? Number.parseInt(args.issue, 10) : undefined,
     comments: args.commentsFile
