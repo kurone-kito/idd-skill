@@ -119,13 +119,12 @@ attribution once available.
   [`README.ja.md`](../README.ja.md) blurb.
 - `--check` verifies the committed snapshot still matches the rendered
   regions in those three files — it never re-harvests or reads raw
-  samples, only the committed snapshot. Wiring `--check` into this
-  repository's own `pre-push-validate` / `post-fix-validate` chain is
-  deferred: doing so would push the `bundle-work` documentation
-  context-ceiling budget over its configured threshold (see issue
-  `#2294`'s implementation notes), and the fix belongs to a separate,
-  deliberate byte-budget decision rather than this reporter's own
-  scope.
+  samples, only the committed snapshot. It is wired into this
+  repository's own `pre-push-validate` chain (`.github/idd/config.json`'s
+  `commands.pre-push-validate` and `audit/sync-manifest.json`'s
+  `idd-overview-core-instructions` syncPair replacement) so a push
+  cannot drift the committed snapshot out of sync with the rendered
+  README/methodology regions.
 - `--apply` is also cwd-sensitive, the same way `token-cost-harvest.mjs`
   is above: it refuses to run while the current branch is the
   repository's default branch, since a stray `--apply` left dirty on

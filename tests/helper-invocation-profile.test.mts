@@ -15,7 +15,7 @@
 // separate, broader guard (docs/** and idd-template/ mirrors too, plus
 // three more invocation forms, plus the bin/idd-* distributed-file ban)
 // rather than an extension of that narrower, already-reviewed guard --
-// the two allowlists overlap on four names (kept in sync manually; a
+// the two allowlists overlap on five names (kept in sync manually; a
 // name added to one is exceedingly unlikely to need the other without a
 // human noticing, since both represent the same "maintainer/CI-only,
 // never adopter-run" fact).

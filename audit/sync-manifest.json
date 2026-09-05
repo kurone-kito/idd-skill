@@ -388,7 +388,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 122000
+      "limitBytes": 132000
     }
   ],
   "contextCeiling": {
@@ -569,7 +569,7 @@
         },
         {
           "from": "| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |",
-          "to": "| **pre-push-validate** | `npx biome check && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && node --test tests/*.test.mts && pnpm run build:check && node scripts/idd-doctor.mjs` |"
+          "to": "| **pre-push-validate** | `npx biome check && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && node --test tests/*.test.mts && pnpm run build:check && node scripts/idd-doctor.mjs && node scripts/token-cost-report.mjs --check` |"
         },
         {
           "from": "| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |",
