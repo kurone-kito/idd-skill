@@ -1315,13 +1315,17 @@ export interface CompletedIssueWindow {
    * The primary (cleanup-owning) session's own qualifying stage windows
    * -- cleanup itself plus every boundary-consistent, same-vendorSessionId
    * -or-unidentified stage -- kept as INDIVIDUAL windows, never unioned
-   * into one enclosing span. `scanClaudeVendorSessions` filters the
-   * primary file's own records against this set (a record must fall
-   * inside at least one of these windows to count), and the cross-session
-   * overlap guard below compares these same individual windows against
-   * each contributor's -- an enclosing span would falsely "overlap" a
-   * contributor sandwiched inside an idle gap between two of the
-   * primary's own stages (Copilot review finding round on PR #2627, #2432).
+   * into one enclosing span. Used **only** by the cross-session overlap
+   * guard in `buildCompletedIssueWindows` itself, which compares these
+   * individual windows against each contributor's own: an enclosing span
+   * would falsely "overlap" a contributor sandwiched inside an idle gap
+   * between two of the primary's own stages (Copilot review finding, PR
+   * #2627, #2432). `scanClaudeVendorSessions` does NOT filter the primary
+   * file's records against this set -- it instead EXCLUDES, from the
+   * primary's own already-selected records, any timestamp a confirmed
+   * `contributingWindows` entry already owns, so that overlapping
+   * attribution is never double-charged (see `harvestEventWindowCandidate`
+   * in `scanClaudeVendorSessions`).
    */
   primaryWindows: { startMs: number; endMs: number }[];
   /**
