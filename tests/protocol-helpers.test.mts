@@ -137,7 +137,7 @@ test('reviewCurrency and dispositionEvidence agree a rejection-confirmed-by-main
         {
           id: 'RC-3',
           author: { login: 'coderabbitai[bot]' },
-          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -221,7 +221,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes a courtesy ack with no sna
         {
           id: 'F4-3',
           author: { login: 'coderabbitai[bot]' },
-          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -326,7 +326,7 @@ test('classifyThreadAckOnlyPostDisposition still honors an explicit snapshot bou
         {
           id: 'F2B-2',
           author: { login: 'coderabbitai[bot]' },
-          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -373,7 +373,7 @@ test('classifyThreadAckOnlyPostDisposition still recognizes a known-template cou
         {
           id: 'KT-2',
           author: { login: 'coderabbitai[bot]' },
-          body: '`@kurone-kito`, confirmed. The fix addresses the finding.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          body: '`@kurone-kito`, confirmed. The fix addresses the finding.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -470,11 +470,12 @@ test('classifyThreadAckOnlyPostDisposition fails closed for a reply with no know
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
-test('classifyThreadAckOnlyPostDisposition rejects a confirmation-shaped reply that also raises a new unresolved concern (Codex P1, PR #2649)', () => {
-  // A reply can open with a confirmation word and still carry a CodeRabbit
-  // closing signature while raising a genuinely new, unresolved concern in
-  // between -- the opening/signature conjunction alone cannot tell this
-  // apart from a pure courtesy ack.
+test('classifyThreadAckOnlyPostDisposition rejects a confirmation-shaped reply that raises a new unresolved concern and carries no closure signal (Codex P1 round 1, PR #2649)', () => {
+  // A reply can open with a confirmation word and still carry
+  // CodeRabbit-flavored text (the auto-generated-reply marker) while
+  // raising a genuinely new, unresolved concern -- but CodeRabbit does not
+  // report resolving the thread on a reply like this, so it carries no
+  // closure signal either.
   const thread = {
     id: 'thread-ack-with-new-concern',
     isResolved: true,
@@ -495,6 +496,49 @@ test('classifyThreadAckOnlyPostDisposition rejects a confirmation-shaped reply t
           body:
             '`@kurone-kito`, thanks. The first case is fixed, but the ' +
             'retry path still dereferences null; please address it.\n\n' +
+            '<!-- This is an auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a confirmation-shaped reply that raises a new concern but still carries the reply marker (Codex P1 round 2, PR #2649)', () => {
+  // A round-2 adversarial example (#2649): an enumerated "disqualifying"
+  // keyword blocklist tried between rounds missed this phrasing entirely
+  // ("one more issue" contains none of the blocklisted words). The
+  // closure-signal design catches it directly instead: CodeRabbit's
+  // auto-generated-reply marker alone is not a closure signal, and this
+  // reply reports no thread-resolve attempt.
+  const thread = {
+    id: 'thread-ack-with-new-concern-round-2',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'NC2-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'NC2-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed. One more issue: the retry path ' +
+            'dereferences null.\n\n' +
             '<!-- This is an auto-generated reply by CodeRabbit -->',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
@@ -535,7 +579,8 @@ test('classifyThreadAckOnlyPostDisposition recognizes a courtesy ack with the ma
           author: { login: 'coderabbitai[bot]' },
           body:
             '<!-- This is an auto-generated reply by CodeRabbit -->\n\n' +
-            '`@kurone-kito`, confirmed. Looks good.',
+            '`@kurone-kito`, confirmed. Looks good.\n\n' +
+            '✅ Review thread resolved.',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -551,10 +596,10 @@ test('classifyThreadAckOnlyPostDisposition recognizes a courtesy ack with the ma
   assert.equal(classification.ackOnlyPostDisposition, true);
 });
 
-test('classifyThreadAckOnlyPostDisposition rejects a reply carrying only the 🐇 emoji with no text signature (Copilot, PR #2649)', () => {
-  // The bare emoji alone is not a CodeRabbit-specific fingerprint -- any
+test('classifyThreadAckOnlyPostDisposition rejects a reply carrying only the 🐇 emoji with no closure signal (Copilot, PR #2649)', () => {
+  // The bare emoji alone is not CodeRabbit's resolution decision -- any
   // configured advisory bot could in principle include it, so it must not
-  // by itself satisfy the closing-signature requirement.
+  // by itself satisfy the closure requirement.
   const thread = {
     id: 'thread-emoji-only',
     isResolved: true,
@@ -909,7 +954,7 @@ test('reviewCurrency still anchors an edited ordinary Accepted marker by created
         {
           id: 'AC-3',
           author: { login: 'coderabbitai[bot]' },
-          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
           createdAt: '2026-05-12T01:00:00Z',
           updatedAt: '2026-05-12T01:00:00Z',
         },

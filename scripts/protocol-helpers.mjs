@@ -1227,13 +1227,9 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS = [
 // history: 18/18 sampled CodeRabbit replies that followed an existing
 // disposition on a resolved thread were confirmation-only (agreeing with
 // or withdrawing the finding, never a new substantive concern), and all 18
-// shared two structural signals plus the absence of a third (below). The
-// opening and signature alone are each individually loose --
-// `CODERABBIT_ACK_OPENING_RE` alone also appears on some of CodeRabbit's
-// *initial* (non-ack) findings in the same sample -- so all three
-// conditions apply together, matching the under-match-by-default posture
-// the notice patterns above already document (a false positive here could
-// carry a stale disposition onto a real review -- a false merge).
+// shared both structural signals below (a false positive here could carry
+// a stale disposition onto a real review -- a false merge, so this
+// deliberately under-matches like the notice patterns above).
 //
 // Opening: an `` `@{login}` `` mention immediately followed by a
 // confirmation/dismissal verb -- the consistent lead-in across every
@@ -1250,63 +1246,49 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
     '`@[\\w.-]+`[,:]?\\s+(?:thanks?(?:\\s+you)?|confirmed|agreed)\\b',
   'i',
 );
-// The `coderabbit-skip-review-comment-follow-up` marker CodeRabbit appends
-// to some follow-up replies (distinct from `CODERABBIT_SKIP_REVIEW_MARKER`,
-// "skip review by coderabbit.ai", which marks a summary walkthrough with no
-// review content rather than a follow-up reply).
-const CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER =
-  '<!-- coderabbit-skip-review-comment-follow-up -->';
-// Closing: one of CodeRabbit's own auto-generated TEXT signatures --
-// `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` (single-sourced with
-// `classifyRegularBotComment`'s stale review-trigger check above), the
-// fixed trailer it appends when its own thread-resolve API call fails
-// ("Thanks for confirming the fix. I couldn't resolve this review thread
-// on the repository platform..."), or
-// `CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER`. The bare 🐇 emoji is
-// deliberately EXCLUDED (Copilot review, #2649): unlike the two HTML
-// markers and the fixed trailer sentence, a lone emoji is not a
-// CodeRabbit-specific fingerprint another configured advisory bot could
-// not organically reproduce, and #2641's own verification found all 18
-// sampled trailing acks already carry at least one of the three text
-// signatures below -- dropping the emoji costs no real coverage.
-const CODERABBIT_ACK_SIGNATURE_RE = new RegExp(
-  [
-    escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER),
-    "I couldn't resolve this review thread on the repository platform",
-    escapeRegExp(CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER),
-  ].join('|'),
-  'i',
-);
-// Disqualifier (Codex P1 review, #2649): the opening + signature
-// conjunction alone does not verify that the ENTIRE reply is confirmation
-// -- a reply can open with a confirmation word and still carry the
-// signature while raising a genuinely new, unresolved concern in between
-// (e.g. "`@alice`, thanks. The first case is fixed, but the retry path
-// still dereferences null; please address it."). Any of these
-// contrastive/directive continuation signals disqualifies the whole body
-// from matching, regardless of the opening/signature. Deliberately
-// narrower than a bare `\bplease\b` or `\bstill\b` -- CodeRabbit's own
-// fixed trailer text ("so it remains open. Please retry or resolve it
-// manually.") would otherwise self-disqualify every genuine ack that
-// carries it (#2641 verification data caught this the first time).
-const CODERABBIT_ACK_DISQUALIFYING_RE =
-  /\b(but|however|still\s+(?:dereferences?|fails?|breaks?|needs?|has|contains?|does)|please\s+(?:address|fix|handle|update|change|reconsider)|needs?\s+to\s+be\s+(?:fixed|addressed|resolved)|unresolved|not\s+(?:yet\s+)?(?:fixed|resolved|addressed))\b/i;
+// Closure (Codex review, PR #2649, round 3): matching the opening plus ANY
+// CodeRabbit-generated text -- an auto-generated-reply marker, a skip
+// marker, even the bare 🐇 emoji -- is not enough. All of those mark "this
+// reply came from CodeRabbit," not "CodeRabbit is done with this finding":
+// the bare auto-generated-reply marker alone also appears on 19/48 of
+// CodeRabbit's *initial* (non-ack) findings in the same sample. An
+// enumerated blocklist of "new concern" phrasing (tried and reverted here)
+// is a losing battle -- natural language has unbounded ways to raise a
+// concern, as two rounds of adversarial review examples demonstrated.
+//
+// What IS a reliable signal: CodeRabbit only attempts (or reports failing)
+// to mark the review thread itself resolved when it considers the finding
+// closed. It never does this on a reply that raises a new concern. This is
+// CodeRabbit's own resolution DECISION, not a fingerprint of its output
+// format -- exactly the "complete known acknowledgment template" the
+// original issue asked for, not a fragment of one. Matches either of the
+// two closure forms observed across all 18 sampled trailing acks: "✅
+// Review thread resolved." (the thread-resolve API call succeeded) or its
+// "I couldn't resolve this review thread on the repository platform..."
+// fallback trailer (the same API call failed, so CodeRabbit reports the
+// attempt instead).
+const CODERABBIT_ACK_CLOSURE_RE =
+  /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
 // No comment author check here: the caller (`classifyThreadAckOnlyPostDisposition`)
-// already restricts to `isConfiguredAdvisoryBotLogin`, and the closing
-// signature above is itself CodeRabbit's own generated fingerprint (both
-// markers and the fixed trailer sentence are CodeRabbit-specific
-// artifacts), so an unrelated bot's genuine comment cannot organically
-// match both signals. #2641's own research found `chatgpt-codex-connector`
+// already restricts to `isConfiguredAdvisoryBotLogin`, and the closure
+// signal above is CodeRabbit's own resolution decision, not merely
+// CodeRabbit-flavored text, so an unrelated bot's genuine comment cannot
+// organically match it. #2641's own research found `chatgpt-codex-connector`
 // posted zero post-disposition trailing replies across this repository's
 // sampled merged-PR history -- with no observed template to derive, it has
 // no pattern here and so fails closed by construction rather than a guess.
+//
+// Residual risk, stated rather than papered over: CodeRabbit itself
+// emitting a closure signal on a reply that is NOT actually a pure
+// acknowledgment (a CodeRabbit-side defect) would still misclassify here.
+// This helper matches CodeRabbit's own stated decision; it cannot second-
+// guess a wrong decision CodeRabbit reports about itself.
 function isKnownAdvisoryAckTemplate(comment) {
   const body = String(comment.body ?? '');
   return (
     !!body &&
     CODERABBIT_ACK_OPENING_RE.test(body) &&
-    CODERABBIT_ACK_SIGNATURE_RE.test(body) &&
-    !CODERABBIT_ACK_DISQUALIFYING_RE.test(body)
+    CODERABBIT_ACK_CLOSURE_RE.test(body)
   );
 }
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all

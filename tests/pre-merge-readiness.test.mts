@@ -3107,7 +3107,7 @@ test('disposition evidence flags an ack-only-post-disposition resolved thread wi
               {
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T02:00:00Z',
-                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
               },
             ],
           },
@@ -3159,7 +3159,7 @@ test('disposition evidence recognizes a post-disposition ack across the advisory
                 {
                   author: { login: ackAuthorLogin },
                   createdAt: '2026-05-12T02:00:00Z',
-                  body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+                  body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
                 },
               ],
             },
@@ -3303,7 +3303,7 @@ test('disposition evidence still blocks but flags in-place-edit-only when a bot 
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T00:00:00Z',
                 updatedAt: '2026-05-12T02:00:00Z',
-                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
               },
               {
                 author: { login: 'idd-bot' },
@@ -3363,7 +3363,7 @@ test('disposition evidence does not flag in-place-edit-only for a genuinely new 
                 // content.
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T02:00:00Z',
-                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
               },
             ],
           },
@@ -3460,7 +3460,7 @@ test('disposition evidence reports sole-cause false when a regular comment also 
               {
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T02:00:00Z',
-                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
               },
             ],
           },
@@ -3514,7 +3514,7 @@ test('disposition evidence flags an ack-only thread dispositioned via a rejectio
               {
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T02:00:00Z',
-                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
               },
             ],
           },
@@ -3561,7 +3561,7 @@ test('disposition evidence flags ack-only when the disposition lands after the s
               {
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T03:00:00Z',
-                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
               },
             ],
           },
