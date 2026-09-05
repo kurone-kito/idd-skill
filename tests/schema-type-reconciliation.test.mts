@@ -495,6 +495,7 @@ export const tokenCostEventKeys = [
   'at',
   'vendor',
   'vendorSessionId',
+  'claimId',
   'issueNumber',
   'usage',
 ] as const satisfies readonly (keyof TokenCostEvent)[];

@@ -102,6 +102,8 @@ export interface TokenCostEvent {
   at: string;
   vendor: TokenCostVendor;
   vendorSessionId?: string | null;
+  /** The active IDD {claim-id} when this event is claim-scoped (#2432). Positive evidence that two differently-vendorSessionId'd stage windows for the same issue belong to one continuous claim lineage. */
+  claimId?: string | null;
   issueNumber?: number | null;
   usage?: TokenCostUsage | null;
 }

@@ -155,7 +155,11 @@ Include `--issue <n>` on every call from `claim` onward, once an issue
 is claimed — omit it only for `discover`, which precedes any claim. A
 call with no `--issue` is unusable for per-issue attribution (#2418):
 the harvester can only join it back to an issue when the number is
-recorded on the event itself. OpenCode has no matching `vendor` value
+recorded on the event itself. Also include `--claim-id <claim-id>` —
+the active IDD `{claim-id}` — on every call from `claim` onward: it is
+the positive-evidence signal a later harvest uses to merge a genuine
+cross-session handoff/resume of the same claim lineage instead of
+undercounting it (#2432). OpenCode has no matching `vendor` value
 in `schemas/token-cost-event.schema.json` yet — skip this call rather
 than pass a mismatched vendor. Stage ids: `discover`, `claim`, `work`,
 `submit-pr`, `review`, `merge`, `cleanup`. Ignore any failure from this

@@ -423,7 +423,7 @@ test('CLI --help exits 0 and prints usage without touching --out', () => {
   assert.match(result.stdout, /--stage <id>/);
 });
 
-test('CLI --claim-id is accepted but not persisted in the written event', () => {
+test('CLI --claim-id is persisted as claimId in the written event (#2432)', () => {
   const dir = tempDir();
   try {
     const outPath = join(dir, 'events.jsonl');
@@ -443,8 +443,33 @@ test('CLI --claim-id is accepted but not persisted in the written event', () => 
     ]);
     assert.equal(result.status, 0, result.stderr);
     const written = JSON.parse(readFileSync(outPath, 'utf8').trim());
-    assert.equal('claimId' in written, false);
+    assert.equal(written.claimId, 'abc123');
     assert.equal('claim-id' in written, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI --claim-id rejects an empty value', () => {
+  const dir = tempDir();
+  try {
+    const outPath = join(dir, 'events.jsonl');
+    const result = runCli([
+      '--stage',
+      'work',
+      '--exit',
+      '--vendor',
+      'grok',
+      '--claim-id',
+      '',
+      '--out',
+      outPath,
+      '--now',
+      NOW.toISOString(),
+      '--strict',
+    ]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--claim-id must be a single, non-empty value/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
