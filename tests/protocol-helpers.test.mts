@@ -634,6 +634,48 @@ test('classifyThreadAckOnlyPostDisposition rejects a reply carrying only the �
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects a non-CodeRabbit bot reply that happens to match the opening and closure phrases (Copilot round 4, PR #2649)', () => {
+  // The closure phrase is CodeRabbit's own resolution decision in
+  // practice, but it is still literal text; a differently-configured
+  // advisory bot emitting the identical text must not be misclassified as
+  // ack-only just because the content happens to match. The author must
+  // specifically be CodeRabbit (`isCodeRabbitLogin`), on top of the
+  // content-based signals, not instead of them.
+  const thread = {
+    id: 'thread-non-coderabbit-author',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'NR-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'NR-2',
+          author: { login: 'chatgpt-codex-connector' },
+          body:
+            '`@kurone-kito`, confirmed. Thanks for the fix.\n\n' +
+            '✅ Review thread resolved.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]', 'chatgpt-codex-connector'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 

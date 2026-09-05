@@ -3131,10 +3131,11 @@ test('disposition evidence flags an ack-only-post-disposition resolved thread wi
 });
 
 test('disposition evidence recognizes a post-disposition ack across the advisory-bot [bot] suffix (#1118)', () => {
-  // A custom advisory bot configured suffixless whose courtesy ack arrives
-  // suffixed (or vice-versa) must still be recognized as ack-only — the
-  // pre-#1118 raw Set.has() lookup missed it and forced a needless
-  // return-to-e1.
+  // CodeRabbit configured suffixless whose courtesy ack arrives suffixed
+  // (or vice-versa) must still be recognized as ack-only — the pre-#1118
+  // raw Set.has() lookup missed it and forced a needless return-to-e1.
+  // Uses CodeRabbit's own login (not a fictional generic bot) since #2641
+  // (round 4) additionally requires the author to be CodeRabbit specifically.
   const make = (configLogin: string, ackAuthorLogin: string) =>
     summarizeDispositionEvidenceForGate(
       {
@@ -3174,8 +3175,8 @@ test('disposition evidence recognizes a post-disposition ack across the advisory
     );
 
   for (const [configLogin, ackAuthorLogin] of [
-    ['advisory-bot', 'advisory-bot[bot]'],
-    ['advisory-bot[bot]', 'advisory-bot'],
+    ['coderabbitai', 'coderabbitai[bot]'],
+    ['coderabbitai[bot]', 'coderabbitai'],
   ] as const) {
     const summary = make(configLogin, ackAuthorLogin);
     assert.equal(

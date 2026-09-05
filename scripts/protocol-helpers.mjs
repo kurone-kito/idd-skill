@@ -1269,14 +1269,19 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 // attempt instead).
 const CODERABBIT_ACK_CLOSURE_RE =
   /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
-// No comment author check here: the caller (`classifyThreadAckOnlyPostDisposition`)
-// already restricts to `isConfiguredAdvisoryBotLogin`, and the closure
-// signal above is CodeRabbit's own resolution decision, not merely
-// CodeRabbit-flavored text, so an unrelated bot's genuine comment cannot
-// organically match it. #2641's own research found `chatgpt-codex-connector`
-// posted zero post-disposition trailing replies across this repository's
-// sampled merged-PR history -- with no observed template to derive, it has
-// no pattern here and so fails closed by construction rather than a guess.
+// Explicit `isCodeRabbitLogin` author check (Copilot review, #2649,
+// round 4): the closure phrase is CodeRabbit's own resolution decision in
+// practice, but it is still literal text a differently-configured
+// advisory bot could in principle also emit. The caller
+// (`classifyThreadAckOnlyPostDisposition`) already restricts to
+// `isConfiguredAdvisoryBotLogin` (any configured advisory bot, not just
+// CodeRabbit), so this check is the cheap, defense-in-depth narrowing
+// down to CodeRabbit specifically, on top of (not instead of) the
+// content-based signals below. #2641's own research found
+// `chatgpt-codex-connector` posted zero post-disposition trailing replies
+// across this repository's sampled merged-PR history -- with no observed
+// template to derive, it now fails closed both by construction (no
+// observed shape) and by this explicit author gate.
 //
 // Residual risk, stated rather than papered over: CodeRabbit itself
 // emitting a closure signal on a reply that is NOT actually a pure
@@ -1284,8 +1289,11 @@ const CODERABBIT_ACK_CLOSURE_RE =
 // This helper matches CodeRabbit's own stated decision; it cannot second-
 // guess a wrong decision CodeRabbit reports about itself.
 function isKnownAdvisoryAckTemplate(comment) {
+  const authorLogin = String(comment.author?.login ?? '');
   const body = String(comment.body ?? '');
   return (
+    !!authorLogin &&
+    isCodeRabbitLogin(authorLogin) &&
     !!body &&
     CODERABBIT_ACK_OPENING_RE.test(body) &&
     CODERABBIT_ACK_CLOSURE_RE.test(body)
