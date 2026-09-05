@@ -208,6 +208,25 @@ function getParagraphSpans(body) {
   spans.push({ start: cursor, end: body.length });
   return spans;
 }
+// #2661 C1 review: shared between `hasSubjectiveApproval` (#2512's original
+// use) and `hasResolvedDecision`'s inline-form scan. A match landing in a
+// paragraph that reports on another decision/approval as an example --
+// "issue #2641 states \"Maintainer decision (...)\" as an example of the
+// convention" -- uses the vocabulary as the OBJECT of that report, not as
+// this issue's own settled call, in either direction: it must not count as
+// evidence of an unresolved subjective gate (#2512's original case), and it
+// must equally not count as evidence THIS issue's own decision is resolved
+// (#2661's C1 finding -- a body that merely quotes another issue's already-
+// resolved decision as an example must not borrow that resolution).
+function isFramedAsDescriptive(normalizedBody, paragraphSpans, offset) {
+  const span =
+    paragraphSpans.find(
+      (candidate) => offset >= candidate.start && offset <= candidate.end,
+    ) ?? paragraphSpans[paragraphSpans.length - 1];
+  return FRAMING_VERB_PATTERN.test(
+    normalizedBody.slice(span?.start ?? 0, span?.end ?? normalizedBody.length),
+  );
+}
 // Check 3 precision: an unsafe execution directive tells the agent to act on
 // *supplied / untrusted* content, not any command verb that merely lands near
 // the ordinary determiner "this". Match the strong untrusted-origin signals, or
@@ -632,6 +651,27 @@ function hasSubstantiveBullet(text) {
 // across JavaScript regex engines.
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
+// #2661: the grooming-pass workflow (docs/idd-workflow.md, from #2494)
+// records a resolved decision as inline prose -- "Maintainer decision
+// (<provenance>, <date>): <resolution text>" -- not a "## Decision" heading,
+// so RESOLVED_DECISION_PATTERN above never matches it. The parenthetical's own
+// provenance (an issue reference and/or "Groom hearing" and/or a date) is
+// this shape's resolved signal, so -- unlike the heading form -- the literal
+// word "resolved" is not required. `[^)]` (not `[^)\n]`) lets the parenthetical
+// span a hard-wrapped line break -- GitHub issue bodies wrap at ~80 chars, so
+// "(kurone-kito/idd-skill#2637, Groom hearing,\n2026-09-05):" routinely splits
+// the provenance across two physical lines (the same line-wrap-is-not-a-
+// boundary shape as the proximity check above, #2512). A "still open" guard
+// applies immediately after the colon, so a placeholder resolution is not
+// mistaken for a real one -- both the heading form's own negated-"resolved"
+// phrasing ("not yet decided") and this inline form's own still-pending
+// vocabulary (TBD, pending, undecided, deferred, "still open"), since the
+// inline form has no positive `\bresolved\b` requirement to fall back on
+// (#2661 C1 review). This is the same soft co-occurrence heuristic as the
+// heading form: it does not verify the resolution text actually settles the
+// exact approval wording elsewhere in the body.
+const INLINE_MAINTAINER_DECISION_PATTERN =
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\([^)]{0,200}\)\s*:\s*(?!(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|pending|undecided|deferred|still\s+open)\b)\S/i;
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the
 // negation word and the trailing whitespace that reaches the verb. The
@@ -2023,32 +2063,20 @@ export function checkVerifiability(context) {
         'Issue does not provide objective verification signals or substantive acceptance criteria.',
     };
   }
+  // Normalized once so every offset computed below (line-split cursor,
+  // paragraph spans, proximity/inline-decision match index) shares the same
+  // 1-char line separator -- a raw `\r\n` body otherwise drifts the running
+  // `lineOffset` cursor by 1 byte per CRLF line, eventually pointing
+  // `isFramedAsDescriptive` at the wrong paragraph (#2531 review).
+  const normalizedBody = body.replace(/\r\n/g, '\n');
+  const paragraphSpans = getParagraphSpans(normalizedBody);
   const hasSubjectiveApproval = (() => {
-    // Normalized once so every offset computed below (line-split cursor,
-    // paragraph spans, proximity match index) shares the same 1-char line
-    // separator -- a raw `\r\n` body otherwise drifts the running
-    // `lineOffset` cursor by 1 byte per CRLF line, eventually pointing
-    // `isFramedAsDescriptive` at the wrong paragraph (#2531 review).
-    const normalizedBody = body.replace(/\r\n/g, '\n');
-    const paragraphSpans = getParagraphSpans(normalizedBody);
-    const isFramedAsDescriptive = (offset) => {
-      const span =
-        paragraphSpans.find(
-          (candidate) => offset >= candidate.start && offset <= candidate.end,
-        ) ?? paragraphSpans[paragraphSpans.length - 1];
-      return FRAMING_VERB_PATTERN.test(
-        normalizedBody.slice(
-          span?.start ?? 0,
-          span?.end ?? normalizedBody.length,
-        ),
-      );
-    };
     let lineOffset = 0;
     for (const line of normalizedBody.split('\n')) {
       if (
         SUBJECTIVE_SUBJECT_PATTERN.test(line) &&
         SUBJECTIVE_GATE_PATTERN.test(line) &&
-        !isFramedAsDescriptive(lineOffset)
+        !isFramedAsDescriptive(normalizedBody, paragraphSpans, lineOffset)
       ) {
         return true;
       }
@@ -2060,7 +2088,13 @@ export function checkVerifiability(context) {
     );
     let proximityMatch = proximityPattern.exec(normalizedBody);
     while (proximityMatch) {
-      if (!isFramedAsDescriptive(proximityMatch.index)) {
+      if (
+        !isFramedAsDescriptive(
+          normalizedBody,
+          paragraphSpans,
+          proximityMatch.index,
+        )
+      ) {
         return true;
       }
       proximityMatch = proximityPattern.exec(normalizedBody);
@@ -2068,15 +2102,46 @@ export function checkVerifiability(context) {
     return false;
   })();
   // A body that carries BOTH a resolved-decision marker (a
-  // "## Decision (resolved …)" section) AND a concrete, objectively-verifiable
-  // acceptance-criteria section is treated as having had its subjective call
-  // already settled by a human, so its prose merely *describes* that prior
-  // approval/decision. This is a soft heuristic for a soft advisory gate: it
-  // co-occurrence-matches the two signals rather than proving the decision
-  // resolves the exact approval wording, which is an accepted trade-off for
-  // maintainer-authored issues. An approval-gated body with no resolved
-  // decision still routes to needs-decision.
-  const hasResolvedDecision = RESOLVED_DECISION_PATTERN.test(body);
+  // "## Decision (resolved …)" heading, or the grooming-pass workflow's
+  // inline "Maintainer decision (…): …" prose, #2661) AND a concrete,
+  // objectively-verifiable acceptance-criteria section is treated as having
+  // had its subjective call already settled by a human, so its prose merely
+  // *describes* that prior approval/decision. This is a soft heuristic for a
+  // soft advisory gate: it co-occurrence-matches the two signals rather than
+  // proving the decision resolves the exact approval wording, which is an
+  // accepted trade-off for maintainer-authored issues. An approval-gated
+  // body with no resolved decision still routes to needs-decision.
+  //
+  // The inline form additionally requires its own paragraph not be framed as
+  // descriptive (#2661 C1 review): a body that merely *quotes* another
+  // issue's already-resolved decision as an example -- "issue #2641 states
+  // \"Maintainer decision (...)\" as an example of the convention" -- must
+  // not borrow that resolution for THIS issue's own subjective gate. The
+  // heading form has no equivalent gap: a "## Decision (resolved …)" section
+  // is, by construction, this issue's own decision record, never a quoted
+  // example of someone else's.
+  const hasInlineResolvedDecision = (() => {
+    const inlinePattern = new RegExp(
+      INLINE_MAINTAINER_DECISION_PATTERN.source,
+      'gi',
+    );
+    let inlineMatch = inlinePattern.exec(normalizedBody);
+    while (inlineMatch) {
+      if (
+        !isFramedAsDescriptive(
+          normalizedBody,
+          paragraphSpans,
+          inlineMatch.index,
+        )
+      ) {
+        return true;
+      }
+      inlineMatch = inlinePattern.exec(normalizedBody);
+    }
+    return false;
+  })();
+  const hasResolvedDecision =
+    RESOLVED_DECISION_PATTERN.test(body) || hasInlineResolvedDecision;
   if (hasSubjectiveApproval && !(hasResolvedDecision && hasObjectiveCriteria)) {
     return {
       pass: false,
