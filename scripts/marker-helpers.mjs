@@ -901,6 +901,148 @@ export function parseLocalValidationEvidenceComment(body, createdAt) {
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }
+const AUTHORING_OWNER_MODES = new Set([
+  'acquire',
+  'resume',
+  'bootstrap',
+  'heartbeat',
+  'release',
+  'release-guard',
+  'release-complete',
+]);
+const AUTHORING_PUBLICATION_INTENT_STATES = new Set([
+  'pending',
+  'member',
+  'cleanup',
+  'abandoned',
+]);
+/**
+ * Parse the `field=value; field2=value2; ...` payload of a
+ * `<!-- {markerPrefix}-{suffix}: ... -->` marker into a raw field map. Each
+ * value is split on the first `=` only and trimmed on both sides; a field
+ * with no `=` is dropped rather than treated as a key with an empty value,
+ * since none of the three markers above have a valueless field. Returns
+ * `null` when the marker itself is absent -- callers validate the required
+ * field set and any enum values themselves, since each marker's requirement
+ * differs.
+ */
+function parseSemicolonFieldMarker(body, markerPrefix, suffix) {
+  const pattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-${suffix}:\\s*([\\s\\S]*?)\\s*-->`,
+    'i',
+  );
+  const match = body.match(pattern);
+  if (!match) {
+    return null;
+  }
+  const fields = {};
+  for (const part of match[1].split(';')) {
+    const separatorIndex = part.indexOf('=');
+    if (separatorIndex < 0) {
+      continue;
+    }
+    const key = part.slice(0, separatorIndex).trim();
+    const value = part.slice(separatorIndex + 1).trim();
+    if (key) {
+      fields[key] = value;
+    }
+  }
+  return fields;
+}
+export function parseAuthoringOwnerComment(body, markerPrefix) {
+  const fields = parseSemicolonFieldMarker(
+    body,
+    markerPrefix,
+    'authoring-owner',
+  );
+  if (!fields) {
+    return null;
+  }
+  const mode = fields.mode;
+  if (
+    !fields.target ||
+    !fields.anchor ||
+    !AUTHORING_OWNER_MODES.has(mode) ||
+    !fields.owner ||
+    !fields.set ||
+    !fields.session ||
+    !fields['body-sha256'] ||
+    !fields['snapshot-sha256'] ||
+    !fields.supersedes
+  ) {
+    return null;
+  }
+  return {
+    target: fields.target,
+    anchor: fields.anchor,
+    mode: mode,
+    owner: fields.owner,
+    set: fields.set,
+    session: fields.session,
+    bodySha256: fields['body-sha256'],
+    snapshotSha256: fields['snapshot-sha256'],
+    supersedes: fields.supersedes,
+  };
+}
+export function parseAuthoringPublicationComment(body, markerPrefix) {
+  const fields = parseSemicolonFieldMarker(
+    body,
+    markerPrefix,
+    'authoring-publication',
+  );
+  if (
+    !fields ||
+    !fields.target ||
+    !fields.anchor ||
+    !fields.set ||
+    !fields.session ||
+    !fields.token
+  ) {
+    return null;
+  }
+  return {
+    target: fields.target,
+    anchor: fields.anchor,
+    set: fields.set,
+    session: fields.session,
+    token: fields.token,
+  };
+}
+export function parseAuthoringPublicationIntentComment(body, markerPrefix) {
+  const fields = parseSemicolonFieldMarker(
+    body,
+    markerPrefix,
+    'authoring-publication-intent',
+  );
+  if (!fields) {
+    return null;
+  }
+  const state = fields.state;
+  if (
+    !fields.target ||
+    !fields.anchor ||
+    !fields.set ||
+    !fields.session ||
+    !fields.token ||
+    !fields.journal ||
+    !fields.issue ||
+    !fields.actor ||
+    !AUTHORING_PUBLICATION_INTENT_STATES.has(state)
+  ) {
+    return null;
+  }
+  return {
+    target: fields.target,
+    anchor: fields.anchor,
+    set: fields.set,
+    session: fields.session,
+    token: fields.token,
+    journal: fields.journal,
+    issue: fields.issue,
+    actor: fields.actor,
+    state: state,
+  };
+}
 // --- Per-cycle marker body renderers (#900) ---
 //
 // Pure, network-free renderers for the three operational markers an agent
