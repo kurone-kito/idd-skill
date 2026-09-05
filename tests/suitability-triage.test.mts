@@ -2807,8 +2807,10 @@ Whether to adopt this approach here requires the maintainer's sign-off before we
 });
 
 test('verifiability still fails on noun-first "no decision yet" phrasing (PR #2662 Codex round 2)', () => {
-  // The denylist's verb-first "not (yet) decided" phrasing does not match
-  // the noun-first "no decision yet" phrasing.
+  // The denylist's negated-decision-noun class (added in round 2, then
+  // generalized in round 3) covers the noun-first "no decision yet"
+  // phrasing that the earlier verb-first "not (yet) decided" entries alone
+  // do not match.
   const result = checkVerifiability({
     issue: {
       ...BASE_ISSUE,
@@ -2892,6 +2894,59 @@ Whether to adopt this approach here requires the maintainer's sign-off before we
     },
   } as Context);
   assert.equal(result.pass, false);
+});
+
+test('verifiability still fails when a quote starts partway through a paragraph (PR #2662 Codex round 5)', () => {
+  // A blockquote can start on a LATER line of the same blank-line-delimited
+  // span than an unquoted prose line before it -- CommonMark starts a new
+  // blockquote block at the "> " line regardless of what precedes it. The
+  // matched line's own ">" prefix must be checked directly, not just the
+  // paragraph's first line (an earlier revision dropped this direct check
+  // while adding the lazy-continuation check above).
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `For reference:
+> Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails when the only inline decision is inside inline or fenced code (PR #2662 Codex round 5)', () => {
+  // A body that merely demonstrates the convention's syntax in code (inline
+  // or fenced) must not have that example read as a real resolution.
+  const tick = String.fromCharCode(96);
+  for (const demonstration of [
+    `Issues can record a resolution like ${tick}Maintainer decision (Groom hearing, 2026-09-05): choose A${tick}.`,
+    `\`\`\`\nMaintainer decision (Groom hearing, 2026-09-05): choose A\n\`\`\``,
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${demonstration}
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for demonstration: ${demonstration}`,
+    );
+  }
 });
 
 test('verifiability passes settled decisions that begin with a denylist word (PR #2662 Codex round 4)', () => {

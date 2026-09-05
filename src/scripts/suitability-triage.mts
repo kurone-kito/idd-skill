@@ -383,20 +383,27 @@ function isPrecededByFramingVerb(
 // decision (...): ...") is itself a quoting signal, independent of
 // `isPrecededByFramingVerb` -- pasting another issue's decision as a
 // blockquote carries no reporting verb of its own, so the framing-verb check
-// alone lets a quoted decision through. Checks the containing PARAGRAPH's
-// first line, not just the matched line itself: CommonMark's blockquote
-// "lazy continuation" rule (this repo's own coverage:
-// tests/markdown-code.test.mts's "permits lazy continuation" case) renders
+// alone lets a quoted decision through. Checks BOTH the matched line's own
+// ">" prefix (the direct case -- also covers a quote that starts partway
+// through a paragraph, e.g. "For reference:" followed immediately by
+// "> Maintainer decision (...)": CommonMark starts a new blockquote block at
+// that "> " line regardless of the preceding unquoted line, Codex round 5,
+// PR #2662) AND the containing PARAGRAPH's first line (CommonMark's
+// blockquote "lazy continuation" rule -- this repo's own coverage:
+// tests/markdown-code.test.mts's "permits lazy continuation" case -- renders
 // a line with no ">" of its own as still inside the quote when it continues
-// a paragraph that started with "> " -- "> Quoted from issue #123:" followed
-// immediately (no blank line) by an unprefixed "Maintainer decision (...)"
-// line is entirely quoted, even though that second physical line carries no
-// ">" marker of its own (Codex round 4, PR #2662).
+// a paragraph that started with "> ", Codex round 4, PR #2662). An earlier
+// round-4 revision checked only the paragraph's first line and dropped the
+// original round-2 direct-line check, reintroducing exactly the round-5 gap.
 function isInBlockquotedParagraph(
   normalizedBody: string,
   paragraphSpans: { start: number; end: number }[],
   offset: number,
 ): boolean {
+  const lineStart = normalizedBody.lastIndexOf('\n', offset - 1) + 1;
+  if (/^[ \t]*>/.test(normalizedBody.slice(lineStart, offset))) {
+    return true;
+  }
   const span =
     paragraphSpans.find(
       (candidate) => offset >= candidate.start && offset <= candidate.end,
@@ -2401,6 +2408,18 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // `isFramedAsDescriptive` at the wrong paragraph (#2531 review).
   const normalizedBody = body.replace(/\r\n/g, '\n');
   const paragraphSpans = getParagraphSpans(normalizedBody);
+  // #2661 PR #2662 review round 5 (Codex): computed against `normalizedBody`
+  // (not the raw `body`-derived `fenceMaskedBody` above, whose offsets are
+  // not CRLF-normalized -- the #2531-class position-alignment risk noted in
+  // this PR's own body) so the inline-decision scan below ignores an
+  // inline/fenced code demonstration of the convention itself, e.g. an issue
+  // documenting the syntax with `` `Maintainer decision (Groom hearing,
+  // 2026-09-05): choose A` ``. `findMarkdownCodeRanges` covers both inline
+  // and fenced spans, unlike `findFencedCodeRanges` alone.
+  const normalizedCodeMaskedBody = maskMarkdownCodeRegionsPreservingPositions(
+    normalizedBody,
+    findMarkdownCodeRanges(normalizedBody),
+  );
   const hasSubjectiveApproval = ((): boolean => {
     let lineOffset = 0;
     for (const line of normalizedBody.split('\n')) {
@@ -2466,7 +2485,7 @@ export function checkVerifiability(context: Context): CheckOutcome {
       INLINE_MAINTAINER_DECISION_PATTERN.source,
       'gi',
     );
-    let inlineMatch = inlinePattern.exec(normalizedBody);
+    let inlineMatch = inlinePattern.exec(normalizedCodeMaskedBody);
     while (inlineMatch) {
       if (
         !isPrecededByFramingVerb(
@@ -2482,7 +2501,7 @@ export function checkVerifiability(context: Context): CheckOutcome {
       ) {
         return true;
       }
-      inlineMatch = inlinePattern.exec(normalizedBody);
+      inlineMatch = inlinePattern.exec(normalizedCodeMaskedBody);
     }
     return false;
   })();
