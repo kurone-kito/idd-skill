@@ -195,12 +195,18 @@ function waitMs(ms) {
 }
 function collectCandidateEvents(repository, pr) {
   const events = [];
+  // Prefer updated_at over created_at (falling back when absent): an
+  // edited comment's created_at still names its original post time, so
+  // using it alone would misorder an edit against the trigger's own
+  // updated_at-based TRIGGERED_AT (the workflow step passes that in).
+  // updated_at equals created_at for a never-edited comment, so this is
+  // safe for the common case too (#2650 review, Copilot).
   const issueComments = ghPaginatedJson([
     'api',
     `repos/${repository}/issues/${pr}/comments`,
     '--paginate',
     '--jq',
-    '.[] | {createdAt: .created_at, body: .body}',
+    '.[] | {createdAt: (.updated_at // .created_at), body: .body}',
   ]);
   for (const c of issueComments) {
     if (typeof c.createdAt === 'string') {
@@ -212,7 +218,7 @@ function collectCandidateEvents(repository, pr) {
     `repos/${repository}/pulls/${pr}/comments`,
     '--paginate',
     '--jq',
-    '.[] | {createdAt: .created_at, body: .body}',
+    '.[] | {createdAt: (.updated_at // .created_at), body: .body}',
   ]);
   for (const rc of reviewComments) {
     if (typeof rc.createdAt === 'string') {

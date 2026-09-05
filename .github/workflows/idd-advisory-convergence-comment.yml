@@ -112,9 +112,17 @@ jobs:
           # step below.
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           # Both pull_request_review_comment and issue_comment carry the
-          # triggering comment's own timestamp at github.event.comment
-          # (matching COMMENT_BODY above).
-          TRIGGERED_AT: ${{ github.event.comment.created_at }}
+          # triggering comment's own timestamps at github.event.comment
+          # (matching COMMENT_BODY above). Prefer updated_at:
+          # pull_request_review_comment also fires on edited/deleted
+          # (see on: above), and created_at would then still name the
+          # comment's original post time, not this edit -- making every
+          # comment posted between the original post and the edit look
+          # "newer than the trigger" and wrongly skip this run.
+          # updated_at equals created_at for a never-edited comment, so
+          # this is safe for the created-event case too (#2650 review,
+          # Copilot).
+          TRIGGERED_AT: ${{ github.event.comment.updated_at || github.event.comment.created_at }}
         run: node scripts/advisory-comment-debounce.mjs --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
       - name: Rerun required HEAD check
         if: steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'
