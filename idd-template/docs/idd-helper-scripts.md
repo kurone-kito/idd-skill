@@ -21,7 +21,10 @@ functioning flag on several other helpers -- required outright on
 required as one of a small set of mutually exclusive input flags on
 `discover-viability-gate.mjs` (or `--issues`) and
 `suitability-triage.mjs` (or `--body-file` / `--stdin`) -- which primes
-the instinct to reach for it elsewhere. But the claim-revalidation flag
+the instinct to reach for it elsewhere. `audit-authored-issue.mjs` also
+accepts a genuine, functioning `--issue`, but optionally: it only
+sharpens the `authoring-owner-marker-trail` check's target match and is
+never required. But the claim-revalidation flag
 on most mutation-capable helpers is named `--claim-issue` instead, and
 requiredness varies by helper:
 

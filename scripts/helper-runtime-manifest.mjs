@@ -143,7 +143,7 @@ const HELPER_COMMANDS = [
     entryPath: 'scripts/audit-authored-issue.mjs',
     vendoredCommand: 'node scripts/audit-authored-issue.mjs',
     description:
-      'Mechanically audit a drafted issue body against the issue-authoring contract: the autopilot-suitability marker, its blocked-by-human cross-field rule, markerPrefix consistency, required headings, dependency-marker rules, and visible/hidden footer agreement.',
+      'Mechanically audit a drafted issue body against the issue-authoring contract: the autopilot-suitability marker, its blocked-by-human cross-field rule, markerPrefix consistency, required headings, dependency-marker rules, visible/hidden footer agreement, and (given pre-fetched comments) the owner-marker/publication-token trail.',
   },
   {
     id: 'audit-pr-cleanup',

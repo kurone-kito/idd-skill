@@ -39,6 +39,11 @@ import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
 import { loadIddConfig, loadPolicyConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
+import {
+  parseAuthoringOwnerComment,
+  parseAuthoringPublicationComment,
+  parseAuthoringPublicationIntentComment,
+} from './marker-helpers.mts';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 
@@ -126,6 +131,62 @@ export interface AuditOptions {
    * option entirely — never as a known, non-matching repo.
    */
   currentRepo?: string;
+  /**
+   * The current issue's number, paired with {@link currentRepo} to form its
+   * canonical `owner/repo#number` identity for the
+   * `authoring-owner-marker-trail` check's `target` comparison. Absent when
+   * that check is not applicable (e.g. no issue number is yet known).
+   */
+  issueNumber?: number;
+  /**
+   * The configured authoring label (`issueAuthoring.authoringLabelName`).
+   * Defaults to `POLICY_DEFAULTS.issueAuthoring.authoringLabelName`
+   * (`status:authoring`). Used only by `authoring-owner-marker-trail` to
+   * decide whether the check applies at all — an issue that never carries
+   * this label is unaffected by the check, matching {@link labels}'
+   * case-insensitive comparison.
+   */
+  authoringLabelName?: string;
+  /**
+   * The current issue's own pre-fetched comments, used by
+   * `authoring-owner-marker-trail` to look for a valid `authoring-owner`
+   * marker. This module stays network-free: the caller fetches comments and
+   * supplies them here. `undefined` means the caller did not opt into
+   * comment-aware checking at all, so the check reports "not applicable"
+   * rather than a false failure (distinct from an empty array, which means
+   * comments were fetched and there genuinely are none).
+   */
+  comments?: readonly AuthoringCommentInput[];
+  /**
+   * The journal issue's pre-fetched comments (the durable
+   * `authoring-publication-intent` record location per the "Authoring
+   * label lifecycle" contract). The caller resolves which issue is the
+   * journal — this module does not derive anchor/journal identity itself.
+   * Same `undefined`-vs-empty-array distinction as {@link comments}.
+   */
+  journalComments?: readonly AuthoringCommentInput[];
+  /**
+   * True when the caller knows this issue was just created (not an edit to
+   * a pre-existing issue) in the current invocation. Only when true does
+   * `authoring-owner-marker-trail` require the leading
+   * `authoring-publication` body line. Deliberately a caller-supplied
+   * boolean rather than an inferred "age relative to first label
+   * application" heuristic (the issue's own suggested approach): the
+   * caller already knows this fact firsthand at the moment of publishing,
+   * so a boolean avoids clock-skew and timestamp-parsing fragility for no
+   * loss of precision.
+   */
+  newIssue?: boolean;
+}
+
+/** One pre-fetched comment, as supplied to {@link AuditOptions.comments} and
+ * {@link AuditOptions.journalComments}. Only `body` is inspected today;
+ * `author`/`createdAt` are accepted for forward compatibility with a future
+ * trust/recency check but currently unused. */
+export interface AuthoringCommentInput {
+  body: string;
+  author?: string;
+  createdAt?: string;
 }
 
 interface HeadingRequirement {
@@ -360,9 +421,31 @@ const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--marker-prefix': { type: 'string' },
   '--config': { type: 'string' },
   '--current-repo': { type: 'string' },
+  '--issue': { type: 'string' },
   '--label': { type: 'string', multiple: true },
+  '--comments-file': { type: 'string' },
+  '--journal-comments-file': { type: 'string' },
+  '--new-issue': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
 } as const;
+
+// Declared here (alongside the flag spec above), not next to
+// checkAuthoringOwnerMarkerTrail further down: the import.meta.main trigger
+// immediately below calls main() -> auditAuthoredIssue() ->
+// checkAuthoringOwnerMarkerTrail() synchronously at module-evaluation time,
+// and a `const` declared after that point is still in the temporal dead
+// zone when the trigger fires (same TDZ hazard as AUDIT_AUTHORED_ISSUE_FLAG_SPEC
+// itself and the LIST_ITEM_MARKER_PATTERN family further down this file).
+const AUTHORING_OWNER_QUALIFYING_MODES = new Set([
+  'acquire',
+  'bootstrap',
+  'resume',
+]);
+const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
+  'member',
+  'cleanup',
+  'abandoned',
+]);
 
 if (import.meta.main) {
   main();
@@ -421,6 +504,7 @@ export function auditAuthoredIssue(
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
     checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
+    checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options),
   ];
 
   return {
@@ -734,6 +818,137 @@ function checkEffortVisibleLineAgreement(
     id,
     name,
     `visible line agrees with marker value ${effort.value}`,
+  );
+}
+
+/**
+ * Verify that an authoring-labeled issue carries the owner-marker/
+ * publication-token trail the "Authoring label lifecycle" contract
+ * (docs/issue-authoring-skill.md) requires. Not applicable (`pass`) when the
+ * issue never carries the configured authoring label at all — this is a
+ * forward-looking gate on newly authoring-labeled issues, never a
+ * retroactive backfill requirement — or when the caller did not supply
+ * `comments` (this module stays network-free; a caller not opting into
+ * comment-aware checking must not see a false failure).
+ */
+function checkAuthoringOwnerMarkerTrail(
+  text: string,
+  markerPrefix: string,
+  labels: readonly string[],
+  options: AuditOptions,
+): AuditFinding {
+  const id = 'authoring-owner-marker-trail';
+  const name =
+    'Authoring-labeled issue carries the owner-marker/publication-token trail';
+  const authoringLabelName = (
+    options.authoringLabelName ??
+    POLICY_DEFAULTS.issueAuthoring.authoringLabelName
+  )
+    .trim()
+    .toLowerCase();
+  if (!labels.includes(authoringLabelName)) {
+    return pass(
+      id,
+      name,
+      'not applicable: issue does not carry the authoring label',
+    );
+  }
+  if (options.comments === undefined) {
+    return pass(
+      id,
+      name,
+      'not applicable: no comment data supplied to this check',
+    );
+  }
+
+  const currentRepo = normalizeCurrentRepo(options.currentRepo);
+  const currentIssueRef =
+    currentRepo && options.issueNumber !== undefined
+      ? `${currentRepo}#${options.issueNumber}`
+      : undefined;
+
+  const ownerMarkers = options.comments
+    .map((comment) => parseAuthoringOwnerComment(comment.body, markerPrefix))
+    .filter((marker): marker is NonNullable<typeof marker> => marker !== null);
+  const hasQualifyingOwnerMarker = ownerMarkers.some(
+    (marker) =>
+      AUTHORING_OWNER_QUALIFYING_MODES.has(marker.mode) &&
+      (currentIssueRef === undefined || marker.target === currentIssueRef),
+  );
+  if (!hasQualifyingOwnerMarker) {
+    return fail(
+      id,
+      name,
+      'no valid authoring-owner comment (mode acquire/bootstrap/resume, target matching this issue) was found',
+    );
+  }
+
+  if (options.newIssue !== true) {
+    return pass(
+      id,
+      name,
+      'owner-marker present; not applicable for the publication-token line (not a new issue)',
+    );
+  }
+
+  const publicationMarker = parseAuthoringPublicationComment(
+    text,
+    markerPrefix,
+  );
+  const leadingPublicationMarkerPattern = new RegExp(
+    `^\\s*<!--\\s*${escapeRegex(markerPrefix)}-authoring-publication:`,
+    'i',
+  );
+  const publicationMarkerIsFirstLine =
+    leadingPublicationMarkerPattern.test(text);
+  if (publicationMarker === null || !publicationMarkerIsFirstLine) {
+    return fail(
+      id,
+      name,
+      'new issue is missing a well-formed authoring-publication marker as the first line of the body',
+    );
+  }
+
+  if (options.journalComments === undefined) {
+    return pass(
+      id,
+      name,
+      'owner-marker and publication-token line present; not applicable for the journal cross-check (no journal comment data supplied)',
+    );
+  }
+
+  const hasMatchingIntentRecord = options.journalComments.some((comment) => {
+    const intent = parseAuthoringPublicationIntentComment(
+      comment.body,
+      markerPrefix,
+    );
+    if (intent === null || intent.target !== publicationMarker.target) {
+      return false;
+    }
+    if (!AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER.has(intent.state)) {
+      return false;
+    }
+    if (
+      currentIssueRef !== undefined &&
+      intent.issue !== 'none' &&
+      intent.issue !== currentIssueRef
+    ) {
+      return false;
+    }
+    return true;
+  });
+  if (!hasMatchingIntentRecord) {
+    return fail(
+      id,
+      name,
+      'no matching authoring-publication-intent record reaching state=member or later was found on the journal issue',
+    );
+  }
+
+  return pass(
+    id,
+    name,
+    'owner-marker, publication-token line, and journal publication-intent record are all present and well-formed',
   );
 }
 
@@ -1336,6 +1551,42 @@ interface CliArgs {
   labels: string[];
   format: string;
   currentRepo?: string;
+  issue?: string;
+  commentsFile?: string;
+  journalCommentsFile?: string;
+  newIssue: boolean;
+}
+
+/**
+ * Read and JSON-parse a comments file (an array of
+ * `{body, author?, createdAt?}` objects) the same uncaught-throw-on-
+ * malformed-input way `--body-file` already behaves: a missing file or
+ * invalid JSON propagates as an unhandled exception rather than a new
+ * soft-degrade path this file does not otherwise have.
+ */
+function readCommentsFile(path: string): AuthoringCommentInput[] {
+  const raw = readFileSync(resolve(process.cwd(), path), 'utf8');
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${path} must contain a JSON array of comments`);
+  }
+  return parsed.map((entry, index) => {
+    const record = entry as {
+      body?: unknown;
+      author?: unknown;
+      createdAt?: unknown;
+    };
+    if (typeof record?.body !== 'string') {
+      throw new Error(`${path}[${index}] is missing a string "body" field`);
+    }
+    return {
+      body: record.body,
+      ...(typeof record.author === 'string' ? { author: record.author } : {}),
+      ...(typeof record.createdAt === 'string'
+        ? { createdAt: record.createdAt }
+        : {}),
+    };
+  });
 }
 
 function main(): void {
@@ -1360,6 +1611,10 @@ function main(): void {
     ? readFileSync(0, 'utf8')
     : readFileSync(resolve(process.cwd(), args.bodyFile as string), 'utf8');
 
+  if (args.issue !== undefined && !/^[1-9]\d*$/.test(args.issue)) {
+    fail_('--issue must be a positive integer');
+  }
+
   const policy = loadPolicy(args.configPath);
   const markerPrefix = args.markerPrefix ?? policy.markerPrefix;
 
@@ -1368,12 +1623,22 @@ function main(): void {
     markerPrefix,
     labels: args.labels,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
+    authoringLabelName: policy.authoringLabelName,
     // Explicit --current-repo wins; otherwise fall back to the
     // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
     // usage narrows cross-repo URL false positives with no extra flag.
     // undefined (neither present) keeps the pre-#1399-fix default of
     // flagging every full-URL reference.
     currentRepo: args.currentRepo ?? process.env.GITHUB_REPOSITORY,
+    issueNumber:
+      args.issue !== undefined ? Number.parseInt(args.issue, 10) : undefined,
+    comments: args.commentsFile
+      ? readCommentsFile(args.commentsFile)
+      : undefined,
+    journalComments: args.journalCommentsFile
+      ? readCommentsFile(args.journalCommentsFile)
+      : undefined,
+    newIssue: args.newIssue,
   });
 
   writeReport(report, args.format);
@@ -1399,6 +1664,7 @@ function isIssueShape(value: string): value is IssueShape {
 function loadPolicy(configPath?: string): {
   markerPrefix: string;
   blockedByHumanLabelName: string;
+  authoringLabelName: string;
 } {
   // Default path: reuse the shared loadIddConfig() (idd-config.mts) rather
   // than a second "readFileSync + JSON.parse, null on error" copy of the
@@ -1436,6 +1702,7 @@ function loadPolicy(configPath?: string): {
     return {
       markerPrefix: DEFAULT_MARKER_PREFIX,
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+      authoringLabelName: POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
     };
   }
   return {
@@ -1444,6 +1711,8 @@ function loadPolicy(configPath?: string): {
     ),
     blockedByHumanLabelName:
       normalizePolicyConfig(config).labels.blockedByHumanLabelName,
+    authoringLabelName:
+      normalizePolicyConfig(config).issueAuthoring.authoringLabelName,
   };
 }
 
@@ -1496,7 +1765,11 @@ function parseArgs(argv: string[]): CliArgs {
     markerPrefix: values['marker-prefix'] as string | undefined,
     configPath: values.config as string | undefined,
     currentRepo: values['current-repo'] as string | undefined,
+    issue: values.issue as string | undefined,
     labels: (values.label as string[] | undefined) ?? [],
+    commentsFile: values['comments-file'] as string | undefined,
+    journalCommentsFile: values['journal-comments-file'] as string | undefined,
+    newIssue: values['new-issue'] as boolean,
     format,
   };
 }
@@ -1512,9 +1785,11 @@ section headings for the declared shape, the roadmap-id/blocked-by
 dependency-marker rules, visible/hidden suitability+effort line
 agreement, and an advisory (warning-severity only) check that flags an
 issue/PR reference used near coordination language with no corresponding
-dependency marker. Exits 0 when every check passes, 1 when any check
-fails, 2 on a usage error; the advisory check never affects the exit
-code.
+dependency marker, and (when --comments-file is supplied) the
+authoring-owner-marker-trail check that verifies an authoring-labeled
+issue carries the owner-marker/publication-token trail. Exits 0 when
+every check passes, 1 when any check fails, 2 on a usage error; the
+advisory check never affects the exit code.
 
 Options:
   --shape <orphan|roadmap|child>   declared issue shape (required)
@@ -1524,10 +1799,24 @@ Options:
   --config <path>                  policy config path (default: .github/idd/config.json)
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1
-                                    cross-field check)
+                                    cross-field check and the authoring-label
+                                    check for authoring-owner-marker-trail)
   --current-repo <owner/repo>      this repository, for the prose-dependency check
                                     to recognize a full-URL issue/PR reference as
-                                    cross-repo (default: $GITHUB_REPOSITORY)
+                                    cross-repo (default: $GITHUB_REPOSITORY), and
+                                    for authoring-owner-marker-trail's target match
+  --issue <number>                 this issue's number, for authoring-owner-marker-trail's
+                                    target match (requires --current-repo)
+  --comments-file <path>           JSON array of this issue's pre-fetched comments
+                                    ({body, author?, createdAt?}); enables
+                                    authoring-owner-marker-trail (network-free: this
+                                    module never fetches comments itself)
+  --journal-comments-file <path>   JSON array of the journal issue's pre-fetched
+                                    comments, for the new-issue publication-intent
+                                    cross-check (requires --new-issue)
+  --new-issue                      this issue was just created in this invocation
+                                    (not an edit); requires the leading
+                                    authoring-publication body line
   --format <json|table>            output format (default: json)
   --help                           show this help
 `);
