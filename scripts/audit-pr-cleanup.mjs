@@ -1317,6 +1317,7 @@ function configuredAdvisoryBotLogins() {
     config = null;
   }
   cachedConfiguredAdvisoryBotLogins = resolveAdvisoryBotLogins({
+    envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config,
   }).logins;
   return cachedConfiguredAdvisoryBotLogins;
