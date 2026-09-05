@@ -1455,9 +1455,22 @@ export function buildCompletedIssueWindows(
       continue;
     }
     let startMs = cleanup.startMs;
+    // The primary/cleanup-owning session's own full span (union of every
+    // same-vendorSessionId-or-unidentified window, i.e. what `startMs`
+    // would be WITHOUT any claimId-matched contributor) -- kept separate
+    // from `startMs` itself so the cross-session overlap guard below can
+    // compare a contributor against the primary session's REAL activity
+    // range, not just cleanup's own narrow slice.
+    let primaryStartMs = cleanup.startMs;
     for (const [, window] of candidateStages) {
       if (window.startMs <= cleanup.endMs && window.endMs <= cleanup.endMs) {
         startMs = Math.min(startMs, window.startMs);
+        if (
+          window.vendorSessionId === undefined ||
+          window.vendorSessionId === cleanup.vendorSessionId
+        ) {
+          primaryStartMs = Math.min(primaryStartMs, window.startMs);
+        }
       }
     }
     // #2432: a boundary-consistent, claimId-matched window whose own
@@ -1496,16 +1509,18 @@ export function buildCompletedIssueWindows(
     // `idd-claim.instructions.md` where two sessions can momentarily
     // share one active claim-id without one being a clean continuation of
     // the other -- treat the whole issue as contaminated, same as a
-    // reversed window above (no sample beats a wrong one). Scoped to
-    // cleanup's own [startMs, endMs) rather than the full widened window,
-    // since only the cleanup-owning session's identity is being compared
-    // against each contributing session's own identity here.
+    // reversed window above (no sample beats a wrong one). Compares each
+    // contributor against the primary session's OWN full span
+    // (`primaryStartMs`..`cleanup.endMs`, every same-session window
+    // unioned), not merely cleanup's own narrow slice -- a contributor
+    // overlapping an earlier same-session stage (e.g. `work`) is just as
+    // much evidence of the race as one overlapping `cleanup` itself.
     const overlaps = (
       a: { startMs: number; endMs: number },
       b: { startMs: number; endMs: number },
     ): boolean => a.startMs < b.endMs && b.startMs < a.endMs;
     const overlapCandidates = [
-      { startMs: cleanup.startMs, endMs: cleanup.endMs },
+      { startMs: primaryStartMs, endMs: cleanup.endMs },
       ...contributingWindows,
     ];
     const hasCrossSessionOverlap = overlapCandidates.some((a, i) =>

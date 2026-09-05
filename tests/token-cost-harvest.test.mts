@@ -978,6 +978,41 @@ test('buildCompletedIssueWindows: two claimId-matched windows from different ven
   assert.equal(windows.length, 0);
 });
 
+test("buildCompletedIssueWindows: a contributor overlapping the primary session's OWN earlier stage (not cleanup itself) still trips the overlap guard (#2432, C1 review finding)", () => {
+  // The primary session (attempt-B) posted an earlier 'work' stage of its
+  // own, well before its own 'cleanup'. A contributor (attempt-A) whose
+  // window overlaps that earlier 'work' stage -- without overlapping
+  // cleanup's own narrow slice -- is just as much evidence of the
+  // documented TOCTOU race as one overlapping cleanup directly; comparing
+  // only against cleanup's own [startMs, endMs) would miss this.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '607:claude:work',
+      stageWindow('2026-01-01T00:05:00Z', '2026-01-01T00:15:00Z', 'attempt-B'),
+    ],
+    [
+      '607:claude:claim',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:20:00Z',
+        'attempt-A',
+        'claim-shared',
+      ),
+    ],
+    [
+      '607:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:25:00Z',
+        '2026-01-01T00:30:00Z',
+        'attempt-B',
+        'claim-shared',
+      ),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 0);
+});
+
 test('buildCompletedIssueWindows: claimId-matched windows that are exactly back-to-back (touching, not overlapping) still merge (#2432)', () => {
   const all = new Map<string, StageEventWindow>([
     [
@@ -1572,10 +1607,10 @@ test('scanClaudeVendorSessions: one vendorSessionId contributing two stages merg
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-contrib.jsonl'),
-    [
+    `${[
       '{"type":"assistant","timestamp":"2026-01-01T00:00:30.000Z","sessionId":"sess-contrib-0004","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}',
       '{"type":"assistant","timestamp":"2026-01-01T00:03:00.000Z","sessionId":"sess-contrib-0004","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":4}}}',
-    ].join('\n') + '\n',
+    ].join('\n')}\n`,
   );
   writeFileSync(
     join(sandbox, 'session-ew-primary.jsonl'),
