@@ -474,6 +474,7 @@ async function buildReport(owner, repo, prNumber, options = {}) {
     isDispositionAuthor: makeIddDispositionAuthorPredicate(iddAgentLogins),
     iddAgentLogins,
     advisoryBotLogins: configuredAdvisoryBotLogins(),
+    prAuthorLogin: pr.author?.login,
   });
   const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
   const report = {
@@ -775,6 +776,7 @@ export function evaluateReviewComment(
     !classifyThreadAckOnlyPostDisposition(thread, {
       iddAgentLogins: report.trustedMarkerActors,
       advisoryBotLogins: configuredAdvisoryBotLogins(),
+      prAuthorLogin: pr.author?.login,
     }).ackOnlyPostDisposition
   ) {
     addSkipped(
@@ -815,6 +817,7 @@ function fetchPullRequest(owner, repo, number, options = {}) {
         number
         url
         merged
+        author { login }
       }
     }
   }`;

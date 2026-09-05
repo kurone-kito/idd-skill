@@ -759,6 +759,7 @@ export function indexThreadsByReview(threads, options = {}) {
         !classifyThreadAckOnlyPostDisposition(thread, {
           iddAgentLogins: options.iddAgentLogins,
           advisoryBotLogins: options.advisoryBotLogins,
+          prAuthorLogin: options.prAuthorLogin,
         }).ackOnlyPostDisposition
       ) {
         current.missingDisposition += 1;

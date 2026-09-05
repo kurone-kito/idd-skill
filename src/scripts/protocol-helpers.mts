@@ -1394,6 +1394,7 @@ export function indexThreadsByReview(
     // missing).
     iddAgentLogins?: unknown[] | null;
     advisoryBotLogins?: unknown[] | null;
+    prAuthorLogin?: string | null;
   } = {},
 ) {
   const index = new Map<
@@ -1433,6 +1434,7 @@ export function indexThreadsByReview(
         !classifyThreadAckOnlyPostDisposition(thread, {
           iddAgentLogins: options.iddAgentLogins,
           advisoryBotLogins: options.advisoryBotLogins,
+          prAuthorLogin: options.prAuthorLogin,
         }).ackOnlyPostDisposition
       ) {
         current.missingDisposition += 1;

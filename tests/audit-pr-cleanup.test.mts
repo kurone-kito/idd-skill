@@ -749,3 +749,53 @@ test('evaluateReviewComment still skips a genuinely missing disposition (#2618)'
     'review thread is missing an IDD accept/reject disposition',
   );
 });
+
+test('evaluateReviewComment excludes the PR author from ack-only blocking feedback (#2618, Codex P2)', () => {
+  // The PR author's own post-disposition reply must not count as blocking
+  // feedback -- mirroring F2/F3's `prAuthorLogin` exclusion -- so a
+  // trailing advisory-bot courtesy ack after it still classifies as
+  // ack-only.
+  const prWithAuthor = { ...mergedPr, author: { login: 'pr-author' } };
+  const disposition = {
+    id: 'PA-1',
+    url: 'https://pr#PA-1',
+    author: { login: 'idd-bot' },
+    body: '**Accepted** — done.',
+    createdAt: '2026-05-12T00:00:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+  const authorReply = {
+    id: 'PA-2',
+    url: 'https://pr#PA-2',
+    author: { login: 'pr-author' },
+    body: 'thanks!',
+    createdAt: '2026-05-12T00:01:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+  const comment = {
+    id: 'PA-3',
+    url: 'https://pr#PA-3',
+    author: { login: 'coderabbitai[bot]' },
+    body: 'Thanks for confirming!',
+    createdAt: '2026-05-12T00:02:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+  const thread: ReviewThreadNode = {
+    id: 'THREAD-EVAL-PR-AUTHOR',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [disposition, authorReply, comment],
+    },
+  };
+  const report = createAuditReport({ trustedMarkerActors: ['idd-bot'] });
+
+  evaluateReviewComment(comment, thread, prWithAuthor, noGatingReviews, report);
+
+  assert.equal(report.skipped.length, 0);
+  assert.equal(report.candidates.length, 1);
+  assert.equal(report.candidates[0]?.subjectId, 'PA-3');
+});

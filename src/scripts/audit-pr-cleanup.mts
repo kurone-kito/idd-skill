@@ -91,6 +91,7 @@ interface PullRequestNode {
   number?: number | null;
   url: string;
   merged: boolean;
+  author?: GqlAuthorPayload | null;
 }
 
 /** Minimized-comment node returned by the minimizeComment mutation. */
@@ -716,6 +717,7 @@ async function buildReport(
     isDispositionAuthor: makeIddDispositionAuthorPredicate(iddAgentLogins),
     iddAgentLogins,
     advisoryBotLogins: configuredAdvisoryBotLogins(),
+    prAuthorLogin: pr.author?.login,
   });
   const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
 
@@ -1082,6 +1084,7 @@ export function evaluateReviewComment(
     !classifyThreadAckOnlyPostDisposition(thread, {
       iddAgentLogins: report.trustedMarkerActors,
       advisoryBotLogins: configuredAdvisoryBotLogins(),
+      prAuthorLogin: pr.author?.login,
     }).ackOnlyPostDisposition
   ) {
     addSkipped(
@@ -1139,6 +1142,7 @@ function fetchPullRequest(
         number
         url
         merged
+        author { login }
       }
     }
   }`;
