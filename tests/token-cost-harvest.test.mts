@@ -2977,19 +2977,23 @@ test('readEventWindows: legacy fallback still admits a genuinely identity-less p
 test('readEventWindows: legacy fallback admits a one-sided claimId (absence is not a signal) (#2654)', () => {
   // One side carries a claimId, the other doesn't -- same "defensive
   // degrade to compatible" rule `attemptCandidates` already applies for
-  // the identified path. Both enter and exit share vendorSessionId
-  // 'sess-A', so the legacy pairing is otherwise valid.
+  // the identified path. Neither event carries a vendorSessionId, so
+  // this exercises the legacy bareKey fallback specifically (Copilot
+  // review finding, PR #2656): a vendorSessionId on both sides would
+  // instead populate `enterAtByAttempt`/`exitAtByAttempt` and resolve
+  // via the identified path's own claimId degradation, never reaching
+  // legacyClaimIdsCompatible at all.
   const { dir, path } = writeEventsFile([
     tokenCostEvent(
       'enter',
       'work',
       '2026-01-01T00:10:00Z',
       7,
-      'sess-A',
+      undefined,
       'claude',
       'claim-only-on-enter',
     ),
-    tokenCostEvent('exit', 'work', '2026-01-01T00:20:00Z', 7, 'sess-A'),
+    tokenCostEvent('exit', 'work', '2026-01-01T00:20:00Z', 7),
   ]);
   try {
     const windows = readEventWindows(path);

@@ -841,7 +841,8 @@ export function readEventWindows(path) {
   // attempt's CURRENT latest timestamp above (#2432). Only meaningful
   // alongside an identified (vendorSessionId-bearing) attempt -- an
   // unidentified event has no attempt bucket to disambiguate a claimId
-  // against, so claimId is never tracked on the legacy bareKey path.
+  // against. (`enterClaimIdOwner`/`exitClaimIdOwner` below track claimId
+  // on the legacy bareKey path instead, unconditionally -- #2654.)
   const enterClaimIdByAttempt = new Map();
   const exitClaimIdByAttempt = new Map();
   const text = readFileSync(path, 'utf8');
