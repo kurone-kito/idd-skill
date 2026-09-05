@@ -463,12 +463,14 @@ confirmed condition above. Delegate polling mechanics to
   invocation](idd-advisory-wait.instructions.md#1-canonical-path-helper-first)
   for this PR first and read `outcome`: only `REQUEST_NEEDED` means
   request a review now. `SATISFIED` (`lastCopilotCommit` already
-  matches this HEAD SHA — Copilot's review already covers it), `WAIT`
-  (a same-head request already exists, still inside
-  its settle window), `CAP_EXHAUSTED` (the request cap is already
-  spent), and `RECOVERY_NEEDED` (a proven same-head request exists but
-  needs its marker, not a new request) all mean request nothing. Either
-  way, wait for Copilot's review to land for the current HEAD SHA
-  (already true in the `SATISFIED` case), then rerun via
-  `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md` §Rerun
-  mechanics) and resume D4.
+  matches this HEAD SHA — Copilot's review already covers it) or `WAIT`
+  (a same-head request already exists, still inside its settle window)
+  both mean request nothing — wait for Copilot's review to land for the
+  current HEAD SHA (already true in the `SATISFIED` case), then rerun
+  via `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md`
+  §Rerun mechanics) and resume D4. `CAP_EXHAUSTED` (the request cap is
+  already spent) or `RECOVERY_NEEDED` (a proven same-head request
+  exists but needs its marker, not a new request) both need the fuller
+  AW3 handling this bullet does not reimplement — exit CI-wait and
+  proceed directly to `idd-review-snapshot.instructions.md` (E1)
+  instead, the same carve-out the pending-disposition case above takes.
