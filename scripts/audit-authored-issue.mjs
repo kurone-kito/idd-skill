@@ -45,6 +45,16 @@ import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+// Shared "skip" detail for every ready-shape-only check when
+// `--expect-bucket` is set (#2648 review, Codex): a needs-decision/
+// blocked-by-human body uses its own distinct heading/footer shape
+// (see skills/issue-authoring/references/draft-patterns.md's
+// blocked-by-human example), not the ready orphan/roadmap/child shapes
+// these checks validate, so running them against a bucket audit would
+// fail a correctly-formed bucket body instead of reading as
+// not-applicable.
+const NOT_APPLICABLE_BUCKET_AUDIT_DETAIL =
+  'not applicable: auditing a needs-decision/blocked-by-human bucket publish (--expect-bucket), not a ready-shape body';
 // The five authoring-marker suffixes defined in the contract. Operational
 // markers (claimed-by, review-watermark, ...) never take this
 // `{prefix}-{suffix}` shape, so they cannot collide with this scan.
@@ -339,8 +349,9 @@ export function auditAuthoredIssue(body, options) {
     'autopilot-suitability',
   );
   const authoringBucket = parseAuthoringBucketMarker(text, markerPrefix);
+  const isBucketAudit = options.expectedAuthoringBucket !== undefined;
   const findings = [
-    checkSuitabilityMarker(suitabilityCount, suitability),
+    checkSuitabilityMarker(suitabilityCount, suitability, isBucketAudit),
     checkSuitabilityBlockedByHuman(
       suitability,
       authoringBucket,
@@ -357,7 +368,7 @@ export function auditAuthoredIssue(body, options) {
       options.expectedAuthoringBucket,
     ),
     checkMarkerPrefixConsistency(text, markerPrefix),
-    checkRequiredHeadings(text, shape),
+    checkRequiredHeadings(text, shape, isBucketAudit),
     checkDependencyMarkerRule(text, markerPrefix, shape),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
@@ -371,9 +382,12 @@ export function auditAuthoredIssue(body, options) {
     findings,
   };
 }
-function checkSuitabilityMarker(count, suitability) {
+function checkSuitabilityMarker(count, suitability, isBucketAudit) {
   const id = 'suitability-marker';
   const name = 'Exactly one coherent autopilot-suitability marker (1-5)';
+  if (isBucketAudit) {
+    return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+  }
   if (count === 0) {
     return fail(id, name, 'missing autopilot-suitability marker');
   }
@@ -491,11 +505,18 @@ function checkAuthoringBucketMarkerRequired(authoringBucket, expectedBucket) {
       `authoring-bucket marker matches the declared ${expectedBucket} bucket`,
     );
   }
-  if (authoringBucket.value === null) {
+  if (!authoringBucket.present) {
     return fail(
       id,
       name,
       `expected an authoring-bucket: ${expectedBucket} marker for a newly published ${expectedBucket} body, but none was found`,
+    );
+  }
+  if (authoringBucket.malformed) {
+    return fail(
+      id,
+      name,
+      `expected an authoring-bucket: ${expectedBucket} marker, but the marker present is malformed (an unrecognized value, or repeated with disagreeing values)`,
     );
   }
   return fail(
@@ -576,9 +597,12 @@ function checkMarkerPrefixConsistency(text, markerPrefix) {
   }
   return pass(id, name, 'all authoring markers use the resolved markerPrefix');
 }
-function checkRequiredHeadings(text, shape) {
+function checkRequiredHeadings(text, shape, isBucketAudit) {
   const id = 'required-headings';
   const name = `Required section headings present for the ${shape} shape`;
+  if (isBucketAudit) {
+    return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+  }
   const headings = extractHeadings(text);
   const missing = SHAPE_HEADING_REQUIREMENTS[shape].filter(
     (requirement) =>

@@ -77,11 +77,12 @@ needs-decision, blocked-by-human, and out-of-scope.
    `instructions-only` installs with no helper runtime. Resolve every
    reported failure before treating the issue as ready. Before newly
    publishing a body into the `needs-decision` or `blocked-by-human`
-   bucket instead, also run the linter, passing `--expect-bucket
-   needs-decision|blocked-by-human` — the same gate section's
-   `--expect-bucket` flag requires the matching `authoring-bucket`
-   marker for that publish, closing the gap where a non-ready body
-   would otherwise never be audited at all.
+   bucket instead, also run the linter, passing
+   `--expect-bucket <needs-decision|blocked-by-human>` (choose the one
+   matching value) — the same gate section's `--expect-bucket` flag
+   requires the matching `authoring-bucket` marker for that publish,
+   closing the gap where a non-ready body would otherwise never be
+   audited at all.
 7. Publish each `ready` drafted body directly under the authoring hold
    once it passes the mechanical gate (step 6) and the critique pass
    (the Intake and Clarification phase above) — no separate publish

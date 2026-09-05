@@ -334,6 +334,60 @@ test('authoring-bucket-marker-required fails when the marker disagrees with the 
   );
 });
 
+test('authoring-bucket-marker-required distinguishes a missing marker from a malformed one in its detail', () => {
+  const missingBody =
+    '## Background\n\nContext.\n\n<!-- idd-skill-authoring-bucket-does-not-exist -->';
+  const missing = auditAuthoredIssue(missingBody, {
+    shape: 'orphan',
+    labels: [],
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  const missingFinding = missing.findings.find(
+    (entry) => entry.id === 'authoring-bucket-marker-required',
+  );
+  assert.match(missingFinding?.detail ?? '', /none was found/);
+
+  const malformedBody = withAuthoringBucket(orphanBody({ score: 4 }), 'nope');
+  const malformed = auditAuthoredIssue(malformedBody, {
+    shape: 'orphan',
+    labels: [],
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  const malformedFinding = malformed.findings.find(
+    (entry) => entry.id === 'authoring-bucket-marker-required',
+  );
+  assert.match(malformedFinding?.detail ?? '', /malformed/);
+});
+
+// --- bucket audits (--expect-bucket) skip the ready-shape-only checks (#2648 review, Codex) ---
+
+test('suitability-marker is not applicable during a bucket audit, even with no suitability footer at all', () => {
+  const body = withAuthoringBucket(
+    '## Background\n\nContext for the decision.\n\n## Required action\n\nDecide the thing.',
+    'needs-decision',
+  );
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:needs-decision'],
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  assert.equal(findingResult(report, 'suitability-marker'), 'pass');
+});
+
+test('required-headings is not applicable during a bucket audit, even with a non-ready-shape heading set', () => {
+  const body = withAuthoringBucket(
+    '## Background\n\nContext for the decision.\n\n## Required action\n\nDecide the thing.\n\n## Ready signal\n\nClose once decided.',
+    'blocked-by-human',
+  );
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:blocked-by-human'],
+    expectedAuthoringBucket: 'blocked-by-human',
+  });
+  assert.equal(report.passed, true);
+  assert.equal(findingResult(report, 'required-headings'), 'pass');
+});
+
 // --- marker-prefix-consistency ---
 
 test('marker-prefix-consistency fails when a marker uses the wrong prefix', () => {

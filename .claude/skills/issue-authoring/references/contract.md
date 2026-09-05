@@ -808,8 +808,9 @@ Before publishing a drafted `ready` **orphan, roadmap, or child** body
 (the shapes the linter supports), run the `audit-authored-issue`
 linter against it when a helper runtime is available. Before newly
 publishing a body into the **`needs-decision`** or **`blocked-by-human`**
-bucket instead, also run it, passing `--expect-bucket
-needs-decision|blocked-by-human`: without this, the two mechanical
+bucket instead, also run it, passing
+`--expect-bucket <needs-decision|blocked-by-human>` (choose the one
+matching value): without this, the two mechanical
 checks below that key off the `authoring-bucket` marker
 (see [Authoring-bucket marker](#authoring-bucket-marker)) never
 actually fire in practice, since a non-`ready` body is otherwise never
@@ -921,7 +922,7 @@ confirm the reference is a mere breadcrumb.
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
   --marker-prefix <resolved-target-prefix> \
   --body-file <path-to-drafted-body> [--label <label>]... \
-  [--expect-bucket needs-decision|blocked-by-human]
+  [--expect-bucket <needs-decision|blocked-by-human>]
 ```
 
 Or, for npx/package-manager profiles, the equivalent

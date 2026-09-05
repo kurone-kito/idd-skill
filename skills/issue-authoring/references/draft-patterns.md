@@ -100,10 +100,8 @@ Before you publish a ready issue, confirm:
 
 ## Mechanical pre-publish gate
 
-Before you publish a drafted **ready orphan, roadmap, or child** body
-(scoped to those ready shapes — non-ready buckets like
-`blocked-by-human` are not audited by this gate), run the
-`audit-authored-issue` linter against it when a helper runtime
+Before you publish a drafted **ready orphan, roadmap, or child** body,
+run the `audit-authored-issue` linter against it when a helper runtime
 is available. It mechanically catches shape and marker mistakes — a
 missing or duplicated autopilot-suitability footer, a wrong
 markerPrefix, a missing required heading for the declared shape, a
@@ -113,6 +111,23 @@ mask:
 ```sh
 node scripts/audit-authored-issue.mjs --shape orphan \
   --marker-prefix <resolved-target-prefix> --body-file draft.md
+```
+
+Before newly publishing a body into the `needs-decision` or
+`blocked-by-human` bucket instead, also run it, adding
+`--expect-bucket <needs-decision|blocked-by-human>` (choose the one
+matching value) — without it, the marker/label checks that key off
+`authoring-bucket` never fire, since a non-ready body is otherwise
+never run through this gate at all. Passing `--expect-bucket` also
+skips the ready-shape-only checks (the suitability footer and required
+headings) that a bucket body like `#431` below is never expected to
+carry:
+
+```sh
+node scripts/audit-authored-issue.mjs --shape orphan \
+  --marker-prefix <resolved-target-prefix> --body-file draft.md \
+  --expect-bucket needs-decision \
+  --label status:needs-decision
 ```
 
 **Always pass `--marker-prefix`** with the prefix resolved under
