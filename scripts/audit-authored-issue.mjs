@@ -45,7 +45,7 @@ import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
-// The four authoring-marker suffixes defined in the contract. Operational
+// The five authoring-marker suffixes defined in the contract. Operational
 // markers (claimed-by, review-watermark, ...) never take this
 // `{prefix}-{suffix}` shape, so they cannot collide with this scan.
 const AUTHORING_MARKER_SUFFIXES = [
@@ -53,6 +53,7 @@ const AUTHORING_MARKER_SUFFIXES = [
   'blocked-by',
   'autopilot-suitability',
   'effort',
+  'authoring-bucket',
 ];
 const SHAPE_HEADING_REQUIREMENTS = {
   orphan: [
@@ -322,6 +323,11 @@ export function auditAuthoredIssue(body, options) {
     options.blockedByHumanLabelName.length > 0
       ? options.blockedByHumanLabelName
       : POLICY_DEFAULTS.labels.blockedByHumanLabelName;
+  const needsDecisionLabelName =
+    typeof options.needsDecisionLabelName === 'string' &&
+    options.needsDecisionLabelName.length > 0
+      ? options.needsDecisionLabelName
+      : POLICY_DEFAULTS.labels.needsDecisionLabelName;
   const labels = (options.labels ?? []).map((label) =>
     String(label).trim().toLowerCase(),
   );
@@ -331,12 +337,19 @@ export function auditAuthoredIssue(body, options) {
     markerPrefix,
     'autopilot-suitability',
   );
+  const authoringBucket = parseAuthoringBucketMarker(text, markerPrefix);
   const findings = [
     checkSuitabilityMarker(suitabilityCount, suitability),
     checkSuitabilityBlockedByHuman(
       suitability,
+      authoringBucket,
       labels,
       blockedByHumanLabelName,
+    ),
+    checkAuthoringBucketNeedsDecision(
+      authoringBucket,
+      labels,
+      needsDecisionLabelName,
     ),
     checkMarkerPrefixConsistency(text, markerPrefix),
     checkRequiredHeadings(text, shape),
@@ -375,25 +388,110 @@ function checkSuitabilityMarker(count, suitability) {
   }
   return pass(id, name, `suitability score is ${suitability.value}`);
 }
+/**
+ * Suitability=1 implies `blockedByHumanLabelName` -- unless an
+ * `authoring-bucket` marker is present, in which case that marker's value
+ * decides applicability instead (#2639): `blocked-by-human` requires the
+ * label regardless of the suitability score; any other coherent value
+ * (currently only `needs-decision`) means this check does not apply, even
+ * at suitability 1. A malformed or absent marker (`value: null`) falls
+ * back to the pre-existing suitability-1-only rule, preserving behavior
+ * for every issue published before this marker existed.
+ */
 function checkSuitabilityBlockedByHuman(
   suitability,
+  authoringBucket,
   labels,
   blockedByHumanLabelName,
 ) {
   const id = 'suitability-blocked-by-human';
-  const name = `Suitability score of 1 carries the ${blockedByHumanLabelName} label`;
-  if (suitability.value !== 1) {
-    return pass(id, name, 'not applicable: suitability score is not 1');
+  const name = `Suitability 1 (or an authoring-bucket: blocked-by-human marker) carries the ${blockedByHumanLabelName} label`;
+  const applies =
+    authoringBucket.value === 'blocked-by-human' ||
+    (authoringBucket.value === null && suitability.value === 1);
+  if (!applies) {
+    return pass(
+      id,
+      name,
+      'not applicable: neither the authoring-bucket marker nor a suitability score of 1 apply',
+    );
   }
   const target = blockedByHumanLabelName.trim().toLowerCase();
   if (labels.includes(target)) {
     return pass(id, name, `${blockedByHumanLabelName} label is present`);
   }
+  const reason =
+    authoringBucket.value === 'blocked-by-human'
+      ? `authoring-bucket marker reads blocked-by-human but the ${blockedByHumanLabelName} label was not provided`
+      : `suitability score is 1 but the ${blockedByHumanLabelName} label was not provided`;
+  return fail(id, name, reason);
+}
+/**
+ * `authoring-bucket: needs-decision` implies `needsDecisionLabelName`
+ * (#2639), mirroring {@link checkSuitabilityBlockedByHuman}'s
+ * `blocked-by-human` handling. Not applicable when the marker is absent,
+ * malformed, or reads `blocked-by-human` instead.
+ */
+function checkAuthoringBucketNeedsDecision(
+  authoringBucket,
+  labels,
+  needsDecisionLabelName,
+) {
+  const id = 'authoring-bucket-needs-decision';
+  const name = `authoring-bucket: needs-decision carries the ${needsDecisionLabelName} label`;
+  if (authoringBucket.value !== 'needs-decision') {
+    return pass(
+      id,
+      name,
+      'not applicable: authoring-bucket marker does not read needs-decision',
+    );
+  }
+  const target = needsDecisionLabelName.trim().toLowerCase();
+  if (labels.includes(target)) {
+    return pass(id, name, `${needsDecisionLabelName} label is present`);
+  }
   return fail(
     id,
     name,
-    `suitability score is 1 but the ${blockedByHumanLabelName} label was not provided`,
+    `authoring-bucket marker reads needs-decision but the ${needsDecisionLabelName} label was not provided`,
   );
+}
+/**
+ * Canonical parser for the authored
+ * `<!-- {prefix}-authoring-bucket: needs-decision|blocked-by-human -->`
+ * marker, mirroring {@link parseAutopilotSuitabilityMarker}'s fail-safe
+ * shape and repeated/disagreeing-value handling. `text` must already be
+ * {@link stripMarkdownCodeRegions}-masked (every caller in this file
+ * passes the shared `text`, not `rawText`), so a marker merely quoted in
+ * prose cannot be mistaken for a real one.
+ */
+function parseAuthoringBucketMarker(text, markerPrefix) {
+  const regex = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
+    'gi',
+  );
+  let present = false;
+  let value = null;
+  let match = regex.exec(text);
+  while (match) {
+    present = true;
+    const raw = match[1];
+    const parsed = isAuthoringBucketValue(raw) ? raw : null;
+    // Fail-safe: any invalid token, or a value disagreeing with an
+    // earlier coherent one, yields no bucket.
+    if (parsed === null || (value !== null && parsed !== value)) {
+      return { present: true, value: null, malformed: true };
+    }
+    value = parsed;
+    match = regex.exec(text);
+  }
+  if (!present) {
+    return { present: false, value: null, malformed: false };
+  }
+  return { present: true, value, malformed: false };
+}
+function isAuthoringBucketValue(value) {
+  return value === 'needs-decision' || value === 'blocked-by-human';
 }
 function checkMarkerPrefixConsistency(text, markerPrefix) {
   const id = 'marker-prefix-consistency';
@@ -1437,6 +1535,7 @@ function main() {
     markerPrefix,
     labels: args.labels,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
+    needsDecisionLabelName: policy.needsDecisionLabelName,
     authoringLabelName: policy.authoringLabelName,
     currentRepo,
     issueNumber:
@@ -1504,6 +1603,7 @@ function loadPolicy(configPath) {
     return {
       markerPrefix: DEFAULT_MARKER_PREFIX,
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+      needsDecisionLabelName: POLICY_DEFAULTS.labels.needsDecisionLabelName,
       authoringLabelName: POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
     };
   }
@@ -1511,6 +1611,8 @@ function loadPolicy(configPath) {
     markerPrefix: normalizeMarkerPrefix(config.markerPrefix),
     blockedByHumanLabelName:
       normalizePolicyConfig(config).labels.blockedByHumanLabelName,
+    needsDecisionLabelName:
+      normalizePolicyConfig(config).labels.needsDecisionLabelName,
     authoringLabelName:
       normalizePolicyConfig(config).issueAuthoring.authoringLabelName,
   };

@@ -201,6 +201,24 @@ rules.
 - A missing or invalid hint is **fail-safe**: selection behaves exactly
   as today (a missing hint sorts as the neutral middle, as-if `M`).
 
+### Authoring-bucket marker
+
+A `needs-decision` or `blocked-by-human` issue may also carry a hidden
+**authoring-bucket marker**
+(`<!-- {marker-prefix}-authoring-bucket: needs-decision|blocked-by-human -->`)
+so `audit-authored-issue.mts` can mechanically enforce the matching
+label the same way it already enforces `status:blocked-by-human` for a
+suitability score of `1`. See the
+[Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker)
+section of the contract for the binding rules.
+
+- Scoped to the two buckets with a real behavioral consequence today;
+  `ready`, `deferred`, and `out-of-scope` carry no marker.
+- When present, it decides the suitability-1/`blocked-by-human` check's
+  applicability instead of the score; absent or malformed, that check
+  falls back to its pre-existing suitability-1-only rule (no backfill
+  onto issues published before this marker existed).
+
 ## Specificity target
 
 Issue drafting should aim for a level of specificity where a

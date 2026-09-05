@@ -184,6 +184,80 @@ test('suitability-blocked-by-human is not applicable for scores other than 1', (
   assert.equal(findingResult(report, 'suitability-blocked-by-human'), 'pass');
 });
 
+// --- authoring-bucket: needs-decision | blocked-by-human (#2639) ---
+
+function withAuthoringBucket(body: string, value: string): string {
+  return `${body}\n\n<!-- idd-skill-authoring-bucket: ${value} -->`;
+}
+
+test('authoring-bucket-needs-decision fails when the marker reads needs-decision without the label', () => {
+  const body = withAuthoringBucket(orphanBody({ score: 4 }), 'needs-decision');
+  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  assert.equal(
+    findingResult(report, 'authoring-bucket-needs-decision'),
+    'fail',
+  );
+});
+
+test('authoring-bucket-needs-decision passes when the marker reads needs-decision with the label present', () => {
+  const body = withAuthoringBucket(orphanBody({ score: 4 }), 'needs-decision');
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:needs-decision'],
+  });
+  assert.equal(
+    findingResult(report, 'authoring-bucket-needs-decision'),
+    'pass',
+  );
+});
+
+test('authoring-bucket-needs-decision is not applicable when no marker is present (no regression)', () => {
+  const report = auditAuthoredIssue(orphanBody({ score: 4 }), {
+    shape: 'orphan',
+    labels: [],
+  });
+  assert.equal(
+    findingResult(report, 'authoring-bucket-needs-decision'),
+    'pass',
+  );
+});
+
+test('suitability-blocked-by-human fails when the marker reads blocked-by-human without the label, even at a non-1 score (existing behavior extended)', () => {
+  const body = withAuthoringBucket(
+    orphanBody({ score: 4 }),
+    'blocked-by-human',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  assert.equal(findingResult(report, 'suitability-blocked-by-human'), 'fail');
+});
+
+test('suitability-blocked-by-human passes when the marker reads blocked-by-human with the label present', () => {
+  const body = withAuthoringBucket(
+    orphanBody({ score: 4 }),
+    'blocked-by-human',
+  );
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:blocked-by-human'],
+  });
+  assert.equal(findingResult(report, 'suitability-blocked-by-human'), 'pass');
+});
+
+test('suitability-blocked-by-human is not applicable when the marker reads needs-decision, even at score 1 (marker takes precedence over the fallback)', () => {
+  const body = withAuthoringBucket(
+    orphanBody({ score: 1, includeEffort: false }),
+    'needs-decision',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  assert.equal(findingResult(report, 'suitability-blocked-by-human'), 'pass');
+});
+
+test('suitability-blocked-by-human still falls back to the suitability-1 rule when no marker is present (no regression)', () => {
+  const body = orphanBody({ score: 1, includeEffort: false });
+  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  assert.equal(findingResult(report, 'suitability-blocked-by-human'), 'fail');
+});
+
 // --- marker-prefix-consistency ---
 
 test('marker-prefix-consistency fails when a marker uses the wrong prefix', () => {

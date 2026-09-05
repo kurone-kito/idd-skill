@@ -1071,6 +1071,44 @@ Binding rules:
 Backfill is opportunistic and follows the same claim-state precondition
 as the suitability footer.
 
+## Authoring-bucket marker
+
+Authored issues in the `needs-decision` or `blocked-by-human` readiness
+buckets (see [Readiness buckets](#readiness-buckets)) may also carry an
+**authoring-bucket marker** — a hidden, machine-readable record of which
+of those two axes applies, so `audit-authored-issue.mts` can mechanically
+enforce the matching label the same way it already enforces
+`status:blocked-by-human` for a suitability score of `1`
+(`checkSuitabilityBlockedByHuman`). `ready` and other buckets omit the
+marker entirely.
+
+```text
+<!-- {marker-prefix}-authoring-bucket: needs-decision|blocked-by-human -->
+```
+
+Binding rules:
+
+- **Two axes only.** Scoped to the two buckets with a real behavioral
+  consequence today (a required label) — `deferred` and `out-of-scope`
+  have none, so they carry no marker.
+- **Folds the existing suitability-1 check.** When present, this marker
+  decides `suitability-blocked-by-human`'s applicability instead of the
+  suitability score: `blocked-by-human` requires
+  `status:blocked-by-human` regardless of score; `needs-decision` means
+  that check does not apply, even at a suitability score of `1`. Absent
+  or malformed, `checkSuitabilityBlockedByHuman` falls back to the
+  pre-existing suitability-1-only rule — no backfill onto issues
+  published before this marker existed.
+- **Authoring marker, not operational marker.** Like
+  `autopilot-suitability`, it is body content and must never be added to
+  `OPERATIONAL_MARKERS` or subjected to F4 minimization.
+- **Fail-safe on absence.** A missing or malformed marker means "no
+  bucket": both mechanical checks fall back to their pre-existing
+  behavior.
+
+Backfill is opportunistic and follows the same claim-state precondition
+as the suitability footer.
+
 ## Authoring hold and release
 
 Issue authoring uses a two-stage contract: drafting and publishing
