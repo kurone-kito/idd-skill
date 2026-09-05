@@ -2700,11 +2700,15 @@ function extractBoundedRegion(
   return afterStart.slice(0, endIndex);
 }
 
-test('D4 pending:true recovery checks Copilot review completion before requesting, not just "outstanding" (idd-skill#2622)', () => {
-  // A request that was just satisfied is also no longer "outstanding" --
-  // checking that alone re-requests a review Copilot already submitted for
-  // the current HEAD (traced on PR #2598). D4 must consult a fresh
-  // `advisory-wait-state` SATISFIED verdict before requesting.
+test('D4 pending:true recovery only requests on outcome: REQUEST_NEEDED, not just "not outstanding" (idd-skill#2622)', () => {
+  // "not already outstanding" alone reads true for SATISFIED (review just
+  // landed), WAIT (same-head request already exists, inside its settle
+  // window), and CAP_EXHAUSTED (request cap already spent) -- not only for
+  // the genuinely-needs-a-request case. Naively requesting whenever nothing
+  // is "outstanding" re-requests a review Copilot already submitted
+  // (traced on PR #2598) or violates the cap/settle-window contract. D4
+  // must consult a fresh `advisory-wait-state` verdict and gate the
+  // request on `outcome: REQUEST_NEEDED` specifically.
   const path =
     'idd-template/.github/instructions/idd-pr-submit.instructions.md';
   const bullet = extractBoundedRegion(
@@ -2713,9 +2717,21 @@ test('D4 pending:true recovery checks Copilot review completion before requestin
     'and resume D4.',
     path,
   );
-  assert.match(bullet, /outcome:\s*SATISFIED/);
+  assert.match(bullet, /only `REQUEST_NEEDED`/);
   assert.match(bullet, /advisory-wait-state/);
   assert.match(bullet, /lastCopilotCommit/);
+  for (const outcome of [
+    'SATISFIED',
+    'WAIT',
+    'CAP_EXHAUSTED',
+    'RECOVERY_NEEDED',
+  ]) {
+    assert.match(
+      bullet,
+      new RegExp(`\`${outcome}\``),
+      `D4's bullet must name ${outcome} as a non-requesting outcome`,
+    );
+  }
 });
 
 test('idd-ci.instructions.md Exception 3 defers to D4\'s corrected pending:true recovery check, not a standalone "outstanding" check (idd-skill#2622)', () => {

@@ -457,14 +457,18 @@ confirmed condition above. Delegate polling mechanics to
   asynchronous review exists for this HEAD SHA at all. This is an
   expected, self-resolving timing race, not a code-caused failure and
   not the review-disposition state above — but "not already outstanding"
-  is the wrong test on its own: a request that was just satisfied is
-  also no longer outstanding (`idd-skill#2622`). Run the [canonical
-  `advisory-wait-state` invocation](idd-advisory-wait.instructions.md#1-canonical-path-helper-first)
-  for this PR first: `outcome: SATISFIED` (`lastCopilotCommit` already
-  matches the current HEAD SHA) means Copilot's review landed since the
-  check last evaluated — request nothing. Any other outcome — genuinely
-  no review yet for this HEAD — request a review if one is not already
-  outstanding. Either way, wait for Copilot's review to land for the
-  current HEAD SHA (already true in the `SATISFIED` case), then rerun
-  via `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md`
-  §Rerun mechanics) and resume D4.
+  is the wrong test on its own: `SATISFIED`, `WAIT`, and `CAP_EXHAUSTED`
+  can all read as "not outstanding" too (`idd-skill#2622`). Run the
+  [canonical `advisory-wait-state`
+  invocation](idd-advisory-wait.instructions.md#1-canonical-path-helper-first)
+  for this PR first and read `outcome`: only `REQUEST_NEEDED` means
+  request a review now. `SATISFIED` (`lastCopilotCommit` already
+  matches this HEAD SHA — Copilot's review already covers it), `WAIT`
+  (a same-head request already exists, still inside
+  its settle window), `CAP_EXHAUSTED` (the request cap is already
+  spent), and `RECOVERY_NEEDED` (a proven same-head request exists but
+  needs its marker, not a new request) all mean request nothing. Either
+  way, wait for Copilot's review to land for the current HEAD SHA
+  (already true in the `SATISFIED` case), then rerun via
+  `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md` §Rerun
+  mechanics) and resume D4.
