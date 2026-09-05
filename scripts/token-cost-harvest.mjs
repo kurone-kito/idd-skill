@@ -1402,15 +1402,15 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
  * rather than being wrongly treated as ambiguous between the two.
  * Preserves each group's original file-order relative to itself.
  *
- * Known limitation (#2652): `issueWindows` today is the GLOBAL set of
- * every Claude-vendor issue's completed window, not scoped to the file
- * currently being segmented. Two different CONCURRENT sessions working
+ * `issueWindows` is trusted as already scoped to what the CALLER'S own
+ * file could plausibly own or contribute to (#2652) -- this function
+ * itself has no file identity to scope by, only the windows it is
+ * handed. `scanClaudeVendorSessions`'s `scopeIssueWindowsForFile` is the
+ * scoping step: without it, two different CONCURRENT sessions working
  * different issues over overlapping wall-clock time (this repository's
- * normal multi-session dogfooding shape) make every record in that
- * overlap ambiguous and drop out of both groups, even though each
- * record obviously belongs to its own file's session. #2652 tracks
- * scoping the comparison to windows a file could plausibly own or
- * contribute to.
+ * normal multi-session dogfooding shape) would make every record in
+ * that overlap ambiguous here and drop out of both groups, even though
+ * each record obviously belongs to its own file's session.
  */
 export function segmentRecordsByEventWindow(
   records,
@@ -1611,6 +1611,33 @@ export function scanClaudeVendorSessions(
     sessionIdByBasename.set(fileBasename, resolved);
     return resolved;
   };
+  // #2652: a completed window's own identity narrows which OTHER completed
+  // windows this file's own unattributed records can plausibly match,
+  // resolving the same overlap ambiguity #2424/#2432 already resolve for the
+  // per-issue candidate resolution below -- but one step earlier, before
+  // `segmentRecordsByEventWindow`'s own "matches more than one window" guard
+  // ever runs. Two DIFFERENT issues' completed windows can genuinely overlap
+  // in wall-clock (concurrent dogfooding is this repository's normal
+  // shape): without this scoping, a record whose timestamp falls in both is
+  // dropped from EVERY group, even when this file's own vendorSessionId
+  // identifies it as belonging to only ONE of them. A window with no
+  // identity at all (historical data, or a vendor with no session-id
+  // source) keeps today's global, unscoped comparison -- there is no
+  // session identity to scope it by. This must still admit a genuine
+  // cross-file compaction/resume continuation (#2425/#2432): a window this
+  // file merely CONTRIBUTES to (its own sessionId listed in that window's
+  // `contributingWindows`, not just the window's own primary
+  // `vendorSessionId`) stays eligible too.
+  const scopeIssueWindowsForFile = (fileVendorSessionId, windows) =>
+    windows.filter(
+      (window) =>
+        window.vendorSessionId === undefined ||
+        window.vendorSessionId === fileVendorSessionId ||
+        (window.contributingWindows ?? []).some(
+          (contributing) =>
+            contributing.vendorSessionId === fileVendorSessionId,
+        ),
+    );
   // #2432: a file's own cwd-derived issue-loop sample(s) whose issue
   // number turns out to match a confirmed merge target are suppressed
   // (not pushed to `out`) once that file is resolved as a contributor for
@@ -1707,9 +1734,13 @@ export function scanClaudeVendorSessions(
     // #2627).
     if (!anySegmentHadCwdIssueNumber && unattributedRecords.length > 0) {
       if (completedIssueWindows.length > 0) {
+        const scopedIssueWindows = scopeIssueWindowsForFile(
+          resolveCandidateSessionId(fileBasename),
+          completedIssueWindows,
+        );
         const eventWindowGroups = segmentRecordsByEventWindow(
           unattributedRecords,
-          completedIssueWindows,
+          scopedIssueWindows,
           extractRecordTimestampMs,
         );
         for (const [issueNumber, groupRecords] of eventWindowGroups) {
