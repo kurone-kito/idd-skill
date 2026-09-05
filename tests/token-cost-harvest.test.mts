@@ -1681,6 +1681,106 @@ test('scanClaudeVendorSessions: one vendorSessionId contributing two stages merg
   assert.equal(ewSamples[0].adapterResult.sample.usage.output, 13);
 });
 
+test('scanClaudeVendorSessions: a cwd-attributed primary (cleanup session launched inside the issue worktree) still merges a contributor, and its own standalone sample is suppressed (#2432, Codex review PR #2627)', () => {
+  // The cleanup-owning session was launched directly inside the issue's
+  // own worktree, so it cwd-resolves normally and is excluded from the
+  // #2418 unattributed-record fallback pool -- the merge must still fire
+  // by resolving this cwd-attributed file as primary directly.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-primary-506.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0005","cwd":"/home/user/repo.issue-506-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-contrib-506.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:00:30.000Z","sessionId":"sess-contrib-0005","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '506:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'sess-contrib-0005',
+        'claim-shared',
+      ),
+    ],
+    [
+      '506:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-primary-0005',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const issue506Samples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('506'),
+  );
+
+  // Exactly one sample for issue 506 -- not the merged #ew sample AND a
+  // separate standalone cwd-derived sample for the same completed loop.
+  assert.equal(issue506Samples.length, 1);
+  assert.equal(
+    issue506Samples[0].adapterResult.sample.vendorSessionId,
+    'sess-primary-0005#ew506',
+  );
+  assert.equal(issue506Samples[0].adapterResult.sample.usage.output, 9);
+});
+
+test('scanClaudeVendorSessions: a contributor eligible for one contributing window is not disqualified by an EARLIER, non-overlapping cwd segment for a different issue (#2432, Codex review PR #2627)', () => {
+  // The contributing session's own file also touched an unrelated issue
+  // (#100) much earlier, at a time that does not overlap this contributing
+  // window at all -- the file-wide eligibility check must not reject the
+  // contributor on that basis alone.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-contrib-507.jsonl'),
+    `${[
+      '{"type":"assistant","timestamp":"2025-12-31T00:00:00.000Z","sessionId":"sess-contrib-0006","cwd":"/home/user/repo.issue-100-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":99}}}',
+      '{"type":"assistant","timestamp":"2026-01-01T00:00:30.000Z","sessionId":"sess-contrib-0006","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}',
+    ].join('\n')}\n`,
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-primary-507.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0006","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '507:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'sess-contrib-0006',
+        'claim-shared',
+      ),
+    ],
+    [
+      '507:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-primary-0006',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew507'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+  // 7 (primary) + 2 (contributor's own in-window record) -- the
+  // contributor is NOT disqualified by its earlier, disjoint issue-100
+  // segment (99 tokens, correctly excluded from this sum).
+  assert.equal(ewSamples[0].adapterResult.sample.usage.output, 9);
+});
+
 test('scanClaudeVendorSessions: a multi-hop handoff across THREE different sessions (not just two) merges all of them (#2432, C1 review coverage gap)', () => {
   // A -> B -> C: three different vendorSessionIds, one shared claimId,
   // each contributing a different stage from its own file. The primary

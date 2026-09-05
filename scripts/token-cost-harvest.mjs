@@ -1521,16 +1521,26 @@ export function scanClaudeVendorSessions(
   // decided by the contributing window's own timestamp bounds below, not
   // by which segment they happened to land in.
   const allRecordsByBasename = new Map();
-  // Every issue number any segment of a file resolved via cwd inference
-  // (almost always zero or one entry; #2404 segmentation can add more for
-  // a session that moved across several worktrees in one file). A file
-  // that cwd-resolved to some OTHER issue is never eligible as a
-  // contributor for a DIFFERENT target issue -- matching its own sessionId
-  // is not enough on its own, or a session that briefly touched an
-  // unrelated issue's worktree could have that unrelated activity folded
-  // into this merge (Codex review finding, PR #2627 -- distinct from the
-  // same-issue suppression case above, which this does not affect).
-  const cwdIssueNumbersByBasename = new Map();
+  // Every cwd-attributed segment any file produced (almost always zero or
+  // one; #2404 segmentation can add more for a session that moved across
+  // several worktrees in one file), kept as its own TIME RANGE rather than
+  // just an issue number -- eligibility as a contributor is scoped to
+  // whether some OTHER-issue segment's own time range overlaps the
+  // specific contributing window in question, not whether the file ever
+  // touched a different issue at ANY point in its life. A long-lived file
+  // that visited issue #100 at 00:00-00:10 and then genuinely contributed
+  // to the target issue at 01:00-01:05 must stay eligible for that later
+  // window (Codex review finding, PR #2627).
+  const cwdSegmentsByBasename = new Map();
+  // #2432: a cwd-attributed segment is also a candidate PRIMARY (the
+  // cleanup-owning session is very often launched right inside the issue
+  // worktree it is resuming, so it cwd-resolves like any ordinary session
+  // instead of needing the #2418 unattributed-record fallback at all) --
+  // see the post-scan primary resolution below. Keyed loosely by
+  // (fileBasename, issueNumber, records), not deduplicated against
+  // `eventWindowCandidates` since the two pools are consulted in a
+  // strict, mutually exclusive order (Codex review finding, PR #2627).
+  const cwdAttributedCandidates = [];
   // Per-file `resolveCandidateSessionId` result, computed once per file
   // instead of once per (contributor x file) comparison (Copilot review,
   // PR #2627) -- `extractSessionId` can scan the whole records array.
@@ -1599,13 +1609,25 @@ export function scanClaudeVendorSessions(
         unattributedRecords.push(...segment.records);
       } else {
         anySegmentHadCwdIssueNumber = true;
-        const cwdIssues =
-          cwdIssueNumbersByBasename.get(fileBasename) ?? new Set();
-        cwdIssues.add(cwdIssueNumber);
-        cwdIssueNumbersByBasename.set(fileBasename, cwdIssues);
+        const segmentRange = computeRecordTimeRange(
+          segment.records,
+          extractRecordTimestampMs,
+        );
+        const segments = cwdSegmentsByBasename.get(fileBasename) ?? [];
+        segments.push({
+          issueNumber: cwdIssueNumber,
+          startMs: segmentRange?.minMs ?? Number.NEGATIVE_INFINITY,
+          endMs: segmentRange?.maxMs ?? Number.POSITIVE_INFINITY,
+        });
+        cwdSegmentsByBasename.set(fileBasename, segments);
+        cwdAttributedCandidates.push({
+          fileBasename,
+          issueNumber: cwdIssueNumber,
+          records: segment.records,
+        });
         // #2432: deferred, not pushed yet -- see `pendingCwdSessions`
         // above. Suppressed later only if this exact (file, issue number)
-        // pair is confirmed as a merge contributor.
+        // pair is confirmed as a merge contributor or primary.
         pendingCwdSessions.push({
           fileBasename,
           issueNumber: cwdIssueNumber,
@@ -1683,21 +1705,30 @@ export function scanClaudeVendorSessions(
     const mergedRecords = records.filter(
       (record) => !isOwnedByAContributor(extractRecordTimestampMs(record)),
     );
-    // A candidate file cwd-attributed to some OTHER issue number is never
-    // eligible to lend its records to THIS merge -- a file cwd-attributed
-    // only to THIS same issue (the #2432 same-worktree-handoff case) or to
-    // no issue at all (the pre-#2432 unattributed case) is eligible on a
-    // sessionId match; one cwd-attributed to a different issue is not,
-    // even on a sessionId match (Codex review finding, PR #2627). Unlike a
-    // truly unresolvable contributor below, this is a PERMANENT, structural
-    // disqualification, not a transient gap a later harvest could fix --
-    // so it drops just this one contributor and proceeds, rather than
+    // A candidate file is ineligible to lend its records to THIS
+    // contributing window when some OTHER-issue cwd segment's own time
+    // range overlaps that window -- scoped to the window in question, not
+    // to every issue the file ever touched in its lifetime: a long-lived
+    // file that visited issue #100 earlier and only later, genuinely,
+    // contributed to THIS issue must stay eligible for that later window
+    // (Codex review finding, PR #2627). Unlike a truly unresolvable
+    // contributor below, this is a PERMANENT, structural disqualification
+    // for that one window, not a transient gap a later harvest could fix
+    // -- so it drops just this one contributor and proceeds, rather than
     // skipping the whole issue.
-    const isEligibleContributorFile = (candidateBasename) => {
-      const cwdIssues = cwdIssueNumbersByBasename.get(candidateBasename);
+    const isEligibleContributorFile = (
+      candidateBasename,
+      contributingWindow,
+    ) => {
+      const segments = cwdSegmentsByBasename.get(candidateBasename);
       return (
-        cwdIssues === undefined ||
-        [...cwdIssues].every((cwdIssue) => cwdIssue === issueNumber)
+        segments === undefined ||
+        segments.every(
+          (segment) =>
+            segment.issueNumber === issueNumber ||
+            segment.endMs <= contributingWindow.startMs ||
+            segment.startMs >= contributingWindow.endMs,
+        )
       );
     };
     for (const contributing of contributingWindows) {
@@ -1717,9 +1748,9 @@ export function scanClaudeVendorSessions(
         return;
       }
       const [contributingBasename, candidateRecords] = sessionIdMatches[0];
-      if (!isEligibleContributorFile(contributingBasename)) {
+      if (!isEligibleContributorFile(contributingBasename, contributing)) {
         process.stderr.write(
-          `token-cost-harvest: dropping contributing session ${contributing.vendorSessionId} for issue #${issueNumber}: its file (${contributingBasename}) is cwd-attributed to a different issue -- proceeding without this contributor\n`,
+          `token-cost-harvest: dropping contributing session ${contributing.vendorSessionId} for issue #${issueNumber}: its file (${contributingBasename}) has a different issue's cwd segment overlapping this contributing window -- proceeding without this contributor\n`,
         );
         continue;
       }
@@ -1755,6 +1786,15 @@ export function scanClaudeVendorSessions(
         adapterResult: eventWindowResult,
         timeline: extractClaudeUsageTimeline(mergedRecords),
       });
+      // #2432: suppress the primary file's own plain cwd-derived sample
+      // too, not just contributors' -- a no-op for the pre-#2432,
+      // event-window-fallback primary (which never had one), but required
+      // once a cwd-attributed file can itself be selected as primary (see
+      // the post-scan resolution below).
+      const consumedPrimary =
+        consumedCwdIssueNumbersByBasename.get(fileBasename) ?? new Set();
+      consumedPrimary.add(issueNumber);
+      consumedCwdIssueNumbersByBasename.set(fileBasename, consumedPrimary);
     } catch (error) {
       process.stderr.write(
         `token-cost-harvest: skipping event-window issue #${issueNumber}: ${error.message}\n`,
@@ -1780,6 +1820,13 @@ export function scanClaudeVendorSessions(
       completedIssueWindowByIssue.set(window.issueNumber, window);
     }
   }
+  // #2432/Codex review (PR #2627): tracks which issue numbers this loop
+  // actually resolved a primary for -- distinct from `candidatesByIssue`
+  // merely HAVING an entry, since a contributor's own stray unattributed
+  // records can time-match this pool without ever resolving (its sessionId
+  // never matches cleanup's own). The post-scan cwd-attributed-primary
+  // step below must still run for such an issue.
+  const resolvedViaEventWindowFallback = new Set();
   for (const [issueNumber, fileCandidates] of candidatesByIssue) {
     // #2424: resolve by attempt identity before falling back to
     // classify-and-skip (or, for a single candidate, unconditional
@@ -1798,6 +1845,7 @@ export function scanClaudeVendorSessions(
           windowVendorSessionId,
       );
       if (matching.length === 1) {
+        resolvedViaEventWindowFallback.add(issueNumber);
         harvestEventWindowCandidate(
           issueNumber,
           matching[0].fileBasename,
@@ -1812,6 +1860,7 @@ export function scanClaudeVendorSessions(
         continue;
       }
     } else if (fileCandidates.length === 1) {
+      resolvedViaEventWindowFallback.add(issueNumber);
       harvestEventWindowCandidate(
         issueNumber,
         fileCandidates[0].fileBasename,
@@ -1839,6 +1888,54 @@ export function scanClaudeVendorSessions(
       : 'disjoint activity ranges -- resolvable once events carry session identity, #2424';
     process.stderr.write(
       `token-cost-harvest: skipping event-window issue #${issueNumber}: matched by more than one project log file (${classification}: ${fileNames.join(', ')})\n`,
+    );
+  }
+  // #2432/Codex review (PR #2627): a completed issue window whose primary
+  // (cleanup-owning) session was itself launched inside the target issue's
+  // own worktree cwd-resolves normally and so is EXCLUDED from
+  // `eventWindowCandidates` above (that pool is reserved for
+  // cwd-inference-failed files, to avoid a false PRIMARY duplicate -- see
+  // the comment where `eventWindowCandidates` is populated). Such an issue
+  // is therefore never actually RESOLVED by the loop above -- even when a
+  // contributor's own stray unattributed records happen to time-match the
+  // (widened) window and land in `candidatesByIssue` regardless, that
+  // resolution fails on the sessionId mismatch and is skipped, which is
+  // exactly why `resolvedViaEventWindowFallback` (set only on a genuine
+  // success above), not `candidatesByIssue.has(...)`, is the right guard
+  // here. Without this step a genuine claim-id-matched contributor's usage
+  // would otherwise never be merged at all, even though `contributingWindows`
+  // correctly identified it. Resolve those here: only when the issue has a
+  // genuine contributor to merge (an issue with none is already handled
+  // correctly by the file's own plain cwd-derived sample, untouched).
+  for (const window of completedIssueWindows) {
+    if (
+      resolvedViaEventWindowFallback.has(window.issueNumber) ||
+      window.vendorSessionId === undefined ||
+      !window.contributingWindows ||
+      window.contributingWindows.length === 0
+    ) {
+      continue;
+    }
+    const matches = cwdAttributedCandidates.filter(
+      (candidate) =>
+        candidate.issueNumber === window.issueNumber &&
+        resolveCandidateSessionId(candidate.fileBasename) ===
+          window.vendorSessionId,
+    );
+    if (matches.length !== 1) {
+      process.stderr.write(
+        `token-cost-harvest: skipping cwd-attributed primary resolution for issue #${window.issueNumber}: ${
+          matches.length === 0
+            ? 'no matching cwd-attributed segment found'
+            : `matched more than one segment (${matches.map((m) => m.fileBasename).join(', ')})`
+        } -- its plain cwd-derived sample (if any) is unaffected\n`,
+      );
+      continue;
+    }
+    harvestEventWindowCandidate(
+      window.issueNumber,
+      matches[0].fileBasename,
+      matches[0].records,
     );
   }
   // #2432: emit each file's own cwd-derived issue-loop sample now that
