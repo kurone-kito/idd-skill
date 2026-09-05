@@ -11,9 +11,11 @@
 // (`review-activity-snapshot`, `review-disposition-verify`). It follows the
 // write-side helper family conventions: dry-run by default, `--apply` mutates
 // and requires `--claim-issue` / `--claim-id` so the active claim is
-// revalidated immediately before the reply is posted (fail-closed). Reply
-// first, resolve second — a failed reply never leaves a silently-resolved
-// thread with no disposition.
+// revalidated immediately before the reply is posted (fail-closed) --
+// unless `--claimless` (#2616) opts out for a PR with no linked issue to
+// claim against, mirroring `pre-merge-readiness.mjs`'s identical `--claimless`
+// (#2017). Reply first, resolve second — a failed reply never leaves a
+// silently-resolved thread with no disposition.
 
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
@@ -193,6 +195,7 @@ interface CliArgs {
   claimId: string;
   agentId: string;
   trustedMarkerLogins: string[];
+  claimless: boolean;
   apply: boolean;
   help: boolean;
 }
@@ -214,6 +217,7 @@ const RESOLVE_REVIEW_THREAD_FLAG_SPEC = {
   '--claim-id': { type: 'string', default: '' },
   '--agent-id': { type: 'string', default: '' },
   '--trusted-marker-logins': { type: 'string', default: '' },
+  '--claimless': { type: 'boolean', default: false },
   '--apply': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -262,6 +266,7 @@ export function parseArgs(argv: string[]): CliArgs {
     claimId: values['claim-id'] as string,
     agentId: values['agent-id'] as string,
     trustedMarkerLogins: splitList(values['trusted-marker-logins'] as string),
+    claimless: values.claimless as boolean,
     apply: values.apply as boolean,
     help,
   };
@@ -280,14 +285,33 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
                                  appends the reply-identity stamp)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
-  --claim-issue <number>         issue carrying the active claim (required with --apply)
-  --claim-id <claim-id>          active claim id to re-validate (required with --apply)
+  --claim-issue <number>         issue carrying the active claim (required with --apply, unless --claimless)
+  --claim-id <claim-id>          active claim id to re-validate (required with --apply, unless --claimless)
   --agent-id <agent-id>          current session agent id (optional, tightens the claim check)
   --trusted-marker-logins a,b    logins whose claim markers are trusted
                                  (default: your gh login)
+  --claimless                    skip claim fetch/revalidation (#2616). Only for a PR with
+                                 no closingIssuesReferences; cannot combine with
+                                 --claim-issue / --claim-id
   --apply                        post the reply and resolve the thread (default: dry-run)
   -h, --help                     show this help
 `;
+
+/**
+ * #2616: `--claimless` scoping rule (mirrors `pre-merge-readiness.mjs`'s
+ * #2017 flag) -- true only when the PR has no `closingIssuesReferences`.
+ * Re-fetches live on every call rather than caching a single snapshot:
+ * a caller (dry-run, then again before each `--apply` mutation) must see
+ * a closing issue linked in the window between checks, matching the
+ * existing per-mutation claim-revalidation pattern (Codex review on this
+ * PR: a maintainer linking an issue between checks must not let a
+ * `--claimless` mutation still proceed).
+ */
+export function isClaimlessEligible(port: ProviderPort, pr: number): boolean {
+  const closingRefs =
+    port.getChangeRequestConvergenceView(pr).closingIssuesReferences;
+  return !(Array.isArray(closingRefs) && closingRefs.length > 0);
+}
 
 /**
  * Throw when a GraphQL response carries top-level `errors`, so a bad
@@ -392,18 +416,38 @@ if (import.meta.main) {
     process.stdout.write(USAGE);
     process.exit(args.help ? 0 : 1);
   }
-  // Fail closed: --apply mutates PR state, so the active-claim revalidation and
-  // a reply body are mandatory. Missing inputs must abort before any read or
-  // write rather than silently bypassing the gate.
+  // #2616: --claimless (mirroring pre-merge-readiness.mjs's #2017 flag)
+  // is mutually exclusive with --claim-issue / --claim-id -- both name
+  // the same "which ownership check applies" decision, so combining
+  // them is always a caller mistake, never a stricter intersection.
+  // `args.claimIssue !== null` (not `Number.isInteger`) so a malformed
+  // but still-supplied `--claim-issue nope` (parsed to NaN, not the
+  // parseArgs default of null for an omitted flag) is still caught
+  // here instead of silently falling through to the claimless path
+  // (Codex review on this PR).
+  if (args.claimless && (args.claimIssue !== null || args.claimId)) {
+    process.stderr.write(
+      '--claimless cannot be combined with --claim-issue or --claim-id\n',
+    );
+    process.exit(1);
+  }
+  // Fail closed: --apply mutates PR state, so a reply body is always
+  // mandatory, and the active-claim revalidation is mandatory unless
+  // --claimless opts out of it. Missing inputs must abort before any
+  // read or write rather than silently bypassing the gate.
+  if (args.apply && !args.body) {
+    process.stderr.write('--apply requires --body\n');
+    process.exit(1);
+  }
   if (
     args.apply &&
+    !args.claimless &&
     (!Number.isInteger(args.claimIssue) ||
       (args.claimIssue ?? 0) <= 0 ||
-      !args.claimId ||
-      !args.body)
+      !args.claimId)
   ) {
     process.stderr.write(
-      '--apply requires --body and the --claim-issue / --claim-id pair for the mandatory claim revalidation\n',
+      '--apply requires the --claim-issue / --claim-id pair for the mandatory claim revalidation, or --claimless\n',
     );
     process.exit(1);
   }
@@ -437,6 +481,16 @@ if (import.meta.main) {
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
+
+  // #2616: fast fail-closed preview for both dry-run and --apply -- the
+  // per-mutation re-check below (inside assertClaim) is the one that
+  // actually gates the apply-mode mutations.
+  if (args.claimless && !isClaimlessEligible(port, pr)) {
+    process.stderr.write(
+      '--claimless requires a PR with no closingIssuesReferences; pass --claim-issue instead\n',
+    );
+    process.exit(1);
+  }
 
   const match = findThreadForComment(
     toReviewThreadNodes(port.listChangeRequestReviewThreadCommentIds(pr)),
@@ -477,46 +531,60 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  // Bind the mutation to the claimed PR: the active claim's branch must be the
-  // PR's head branch, so a valid claim on the issue cannot be used to reply to
-  // and resolve a thread on some other PR passed as --pr.
-  const prHeadRef = port.getChangeRequestHeadRef(pr);
-
-  // --apply: default the trusted claim authors to this gh login so the
-  // revalidation recognizes the session's own claim markers.
-  const viewerLogin = port.resolveViewerLogin().toLowerCase();
-  const trustedAuthors = new Set(
-    (args.trustedMarkerLogins.length > 0
-      ? args.trustedMarkerLogins
-      : [viewerLogin]
-    ).map((login) => login.toLowerCase()),
-  );
-  const isTrustedAuthor = (login: string): boolean =>
-    trustedAuthors.has(
-      String(login ?? '')
-        .trim()
-        .toLowerCase(),
-    );
-
-  // Resolve the forced-handoff policy and build the collaborator-permission
-  // cache ONCE per CLI invocation (not on each assertClaim retry): re-reading
-  // .github/idd/config.json and re-hitting the collaborators API would be a
-  // needless I/O hot path. Mirrors force-handoff.mjs and the audit-pr-cleanup
-  // readActiveClaim comment.
-  const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
-  const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-  const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
-  const forcedHandoffOptions: ForcedHandoffGateOptions = {
-    forcedHandoffEnabled,
-    isAuthorizedForcedHandoff: (forcedBy) =>
-      isAuthorizedForcedHandoffActor(
-        owner,
-        repo,
-        forcedBy,
-        forcedHandoffAuthorityPolicy,
-        forcedHandoffPermissionCache,
-      ),
+  // #2616: this claim-only setup is unneeded (and un-skippable) network/
+  // identity work for --claimless -- a credential that can read/update
+  // PRs but cannot resolve a viewer identity (e.g. some GitHub App
+  // installation-token setups) must not abort here when neither the
+  // viewer nor the claimed branch is ever consulted in this mode (Codex
+  // review on this PR).
+  let prHeadRef = '';
+  let isTrustedAuthor: (login: string) => boolean = () => false;
+  let forcedHandoffOptions: ForcedHandoffGateOptions = {
+    forcedHandoffEnabled: false,
+    isAuthorizedForcedHandoff: () => false,
   };
+  if (!args.claimless) {
+    // Bind the mutation to the claimed PR: the active claim's branch must be
+    // the PR's head branch, so a valid claim on the issue cannot be used to
+    // reply to and resolve a thread on some other PR passed as --pr.
+    prHeadRef = port.getChangeRequestHeadRef(pr);
+
+    // --apply: default the trusted claim authors to this gh login so the
+    // revalidation recognizes the session's own claim markers.
+    const viewerLogin = port.resolveViewerLogin().toLowerCase();
+    const trustedAuthors = new Set(
+      (args.trustedMarkerLogins.length > 0
+        ? args.trustedMarkerLogins
+        : [viewerLogin]
+      ).map((login) => login.toLowerCase()),
+    );
+    isTrustedAuthor = (login: string): boolean =>
+      trustedAuthors.has(
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      );
+
+    // Resolve the forced-handoff policy and build the collaborator-permission
+    // cache ONCE per CLI invocation (not on each assertClaim retry): re-reading
+    // .github/idd/config.json and re-hitting the collaborators API would be a
+    // needless I/O hot path. Mirrors force-handoff.mjs and the audit-pr-cleanup
+    // readActiveClaim comment.
+    const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
+    const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+    const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
+    forcedHandoffOptions = {
+      forcedHandoffEnabled,
+      isAuthorizedForcedHandoff: (forcedBy) =>
+        isAuthorizedForcedHandoffActor(
+          owner,
+          repo,
+          forcedBy,
+          forcedHandoffAuthorityPolicy,
+          forcedHandoffPermissionCache,
+        ),
+    };
+  }
 
   // Retain the posted reply id across a later failure so a partial apply (reply
   // posted, resolve not confirmed) reports the reply id instead of looking like
@@ -525,6 +593,19 @@ if (import.meta.main) {
   try {
     const result = applyResolveReviewThread({
       assertClaim: () => {
+        // #2616: --claimless intentionally skips claim revalidation, but
+        // re-checks eligibility fresh on every call (not just once,
+        // up front) -- a closing issue linked in the window between
+        // this mutation and the last one must still abort, mirroring
+        // the non-claimless path's own per-mutation claim recheck.
+        if (args.claimless) {
+          if (!isClaimlessEligible(port, pr)) {
+            throw new Error(
+              '--claimless requires a PR with no closingIssuesReferences; pass --claim-issue instead',
+            );
+          }
+          return;
+        }
         const active = activeOwnedClaim(
           port,
           args.claimIssue as number,

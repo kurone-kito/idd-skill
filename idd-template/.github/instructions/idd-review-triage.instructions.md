@@ -162,8 +162,9 @@ reviewer feedback:
 - After posting your reply, **immediately resolve the thread** — except
   for `**Awaiting maintainer decision**`. When helper runtime is enabled,
   the profile-selected resolve-review-thread command (`--pr <number>
-  --comment-id <id> --apply`, with `--body`/`--claim-issue`/`--claim-id`;
-  see `docs/idd-helper-scripts.md`) posts the reply and resolves in one
+  --comment-id <id> --apply`, with `--body`/`--claim-issue`/`--claim-id`
+  or `--claimless`; see `docs/idd-helper-scripts.md`) posts the reply
+  and resolves in one
   call, replying before resolving so a failed reply never leaves a
   silently-resolved thread; the manual REST + GraphQL
   `resolveReviewThread` sequence is the fallback. Resolving means "agent

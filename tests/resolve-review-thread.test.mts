@@ -3,18 +3,19 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
+import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import {
   applyResolveReviewThread,
   assertNoGraphqlErrors,
   findThreadForComment,
   hasKnownDispositionMarkerPrefix,
+  isClaimlessEligible,
   parseArgs,
   type ResolveReviewThreadReport,
   type ReviewThreadNode,
 } from '../src/scripts/resolve-review-thread.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
-import { buildReviewThreadNode } from './test-utils.mts';
+import { buildReviewThreadNode, stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -61,6 +62,31 @@ test('parseArgs reads the apply-mode claim inputs', () => {
   assert.equal(args.claimIssue, 7);
   assert.equal(args.claimId, 'deadbeef');
   assert.deepEqual(args.trustedMarkerLogins, ['kurone-kito', 'second-user']);
+});
+
+test('parseArgs reads --claimless, defaulting to false', () => {
+  assert.equal(
+    parseArgs(['--pr', '42', '--comment-id', '1001']).claimless,
+    false,
+  );
+  assert.equal(
+    parseArgs(['--pr', '42', '--comment-id', '1001', '--claimless']).claimless,
+    true,
+  );
+});
+
+test('isClaimlessEligible reflects live closingIssuesReferences on every call, not a cached snapshot (#2616, Codex P2)', () => {
+  let refs: unknown[] = [];
+  const port = {
+    getChangeRequestConvergenceView: () => ({
+      closingIssuesReferences: refs,
+    }),
+  } as unknown as ProviderPort;
+  assert.equal(isClaimlessEligible(port, 42), true);
+  // A closing issue gets linked between two calls -- the second call must
+  // see it, not reuse the first call's answer.
+  refs = [{ number: 5 }];
+  assert.equal(isClaimlessEligible(port, 42), false);
 });
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
@@ -208,6 +234,26 @@ test('applyResolveReviewThread revalidates the claim before each mutation (reply
   });
   assert.deepEqual(calls, ['claim', 'reply', 'claim', 'resolve']);
   assert.equal(result.replyId, 555);
+});
+
+test('applyResolveReviewThread still posts the reply and resolves the thread when assertClaim is a --claimless no-op (#2616)', () => {
+  // --claimless's own `assertClaim` wiring is exactly this: a no-op that
+  // never fetches or validates a claim. This documents that the shared
+  // orchestration function still runs the full reply-then-resolve
+  // sequence around it.
+  const calls: string[] = [];
+  const result = applyResolveReviewThread({
+    assertClaim: () => {},
+    postReply: () => {
+      calls.push('reply');
+      return { id: 777 };
+    },
+    resolveThread: () => {
+      calls.push('resolve');
+    },
+  });
+  assert.deepEqual(calls, ['reply', 'resolve']);
+  assert.equal(result.replyId, 777);
 });
 
 test('applyResolveReviewThread does not resolve when the second claim check fails after the reply', () => {
@@ -375,6 +421,250 @@ test('--apply rejects a non-conforming --body before any gh call (compiled CLI)'
     return;
   }
   throw new Error('expected the CLI to exit non-zero');
+});
+
+test('--claimless rejects --claim-issue before any gh call (compiled CLI, #2616)', () => {
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'),
+        '--pr',
+        '42',
+        '--comment-id',
+        '1001',
+        '--claimless',
+        '--claim-issue',
+        '2005',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+    );
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /--claimless cannot be combined with --claim-issue or --claim-id/,
+    );
+    return;
+  }
+  throw new Error('expected the CLI to exit non-zero');
+});
+
+test('--claimless rejects --claim-id before any gh call (compiled CLI, #2616)', () => {
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'),
+        '--pr',
+        '42',
+        '--comment-id',
+        '1001',
+        '--claimless',
+        '--claim-id',
+        'deadbeef',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+    );
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /--claimless cannot be combined with --claim-issue or --claim-id/,
+    );
+    return;
+  }
+  throw new Error('expected the CLI to exit non-zero');
+});
+
+test('--claimless rejects a malformed --claim-issue value too (compiled CLI, #2616, Codex P2)', () => {
+  // `--claim-issue nope` parses to NaN, not the parseArgs default of null
+  // for an omitted flag -- the mutual-exclusion check must key off "was
+  // the flag supplied" (claimIssue !== null), not "did it parse to a
+  // valid positive integer", or this combination silently falls through
+  // to the claimless path instead of being rejected.
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'),
+        '--pr',
+        '42',
+        '--comment-id',
+        '1001',
+        '--claimless',
+        '--claim-issue',
+        'nope',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+    );
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /--claimless cannot be combined with --claim-issue or --claim-id/,
+    );
+    return;
+  }
+  throw new Error('expected the CLI to exit non-zero');
+});
+
+test('--apply --claimless does not require --claim-issue / --claim-id (compiled CLI, #2616)', () => {
+  // Empty PATH means the run still fails once it reaches a real `gh` call
+  // (the closingIssuesReferences scoping check), but it must NOT fail on
+  // the "requires --claim-issue" validation gate --claimless is meant to
+  // skip.
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'),
+        '--pr',
+        '42',
+        '--comment-id',
+        '1001',
+        '--claimless',
+        '--apply',
+        '--body',
+        '**Accepted** — operator-authorized, no linked issue',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+    );
+    throw new Error('expected the CLI to exit non-zero');
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.notEqual(failure.status, undefined);
+    assert.doesNotMatch(failure.stderr ?? '', /requires the --claim-issue/);
+  }
+});
+
+test('--claimless refuses a PR with closingIssuesReferences (compiled CLI, #2616)', () => {
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'pr' && args[1] === 'view') {
+  fs.writeSync(1, JSON.stringify({
+    headRefOid: 'deadbeef',
+    headRefName: 'issue/5-linked',
+    author: { login: 'someone' },
+    url: 'https://example.invalid/pr/42',
+    closingIssuesReferences: [{ number: 5 }],
+  }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'),
+        '--pr',
+        '42',
+        '--comment-id',
+        '1001',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--claimless',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    throw new Error('expected the CLI to exit non-zero');
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /--claimless requires a PR with no closingIssuesReferences; pass --claim-issue instead/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('--apply --claimless posts the reply and resolves the thread without ever resolving a viewer identity or claimed branch (compiled CLI, #2616, Codex P2)', () => {
+  // End-to-end success path over a stubbed `gh`. The stub answers every
+  // call a --claimless --apply run legitimately needs (the
+  // closingIssuesReferences scoping check -- called once up front and
+  // again before each mutation, per #2616's Codex P2 recheck fix -- the
+  // thread lookup, the reply POST, and the resolve mutation) and fails
+  // loudly for `gh api user` / `gh api .../pulls/<n> --jq .head.ref`,
+  // which only the non-claimless claim-binding path needs.
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const joined = args.join(' ');
+const out = (s) => { fs.writeSync(1, s); process.exit(0); };
+const fail = (msg) => { fs.writeSync(2, msg); process.exit(1); };
+if (args[0] === 'pr' && args[1] === 'view') {
+  out(JSON.stringify({
+    headRefOid: 'deadbeef',
+    headRefName: 'main',
+    author: { login: 'someone' },
+    url: 'https://example.invalid/pr/42',
+    closingIssuesReferences: [],
+  }));
+}
+if (args[0] === 'api' && args[1] === 'graphql') {
+  if (joined.includes('reviewThreads')) {
+    out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: {
+      nodes: [{ id: 'THREAD1', isResolved: false, path: 'x',
+        comments: { nodes: [{ databaseId: 1001 }], pageInfo: { hasNextPage: false, endCursor: null } } }],
+      pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
+  }
+  if (joined.includes('resolveReviewThread')) {
+    out(JSON.stringify({ data: { resolveReviewThread: { thread: { isResolved: true } } } }));
+  }
+  fail('unexpected graphql call: ' + joined);
+}
+if (args[0] === 'api' && args.includes('--method') && args.includes('POST') && joined.includes('replies')) {
+  out(JSON.stringify({ id: 4242 }));
+}
+if (args[0] === 'api' && args[1] === 'user') {
+  fail('FORBIDDEN: resolveViewerLogin was called in --claimless mode');
+}
+if (args[0] === 'api' && joined.includes('.head.ref')) {
+  fail('FORBIDDEN: getChangeRequestHeadRef was called in --claimless mode');
+}
+fail('unexpected gh invocation: ' + joined);
+`,
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'),
+        '--pr',
+        '42',
+        '--comment-id',
+        '1001',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--claimless',
+        '--apply',
+        '--body',
+        '**Accepted** — operator-authorized, no linked issue',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    const report = JSON.parse(output) as ResolveReviewThreadReport;
+    assert.equal(report.status, 'applied');
+    assert.equal(report.replyId, 4242);
+    assert.equal(report.threadId, 'THREAD1');
+  } finally {
+    restore();
+  }
 });
 
 test('hasKnownDispositionMarkerPrefix accepts "Rejection confirmed by maintainer" regardless of thread resolution state', () => {
