@@ -423,6 +423,8 @@ secret in CI so automated tests can verify the signature check.
 ## Ready signal
 
 Close this issue after confirming the secret is available in CI.
+
+<!-- {marker-prefix}-authoring-bucket: blocked-by-human -->
 ```
 
 `#432` — autonomous execution issue (Blocked by #431):

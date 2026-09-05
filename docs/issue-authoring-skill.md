@@ -205,7 +205,7 @@ rules.
 
 A newly published `needs-decision` or `blocked-by-human` issue carries a
 hidden **authoring-bucket marker**
-(`<!-- {marker-prefix}-authoring-bucket: <needs-decision|blocked-by-human> -->`)
+(`<!-- {marker-prefix}-authoring-bucket: needs-decision|blocked-by-human -->`)
 so `audit-authored-issue.mts` can mechanically enforce the matching
 label the same way it already enforces `status:blocked-by-human` for a
 suitability score of `1`. Publishing into either bucket runs the linter
