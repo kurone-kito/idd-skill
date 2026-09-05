@@ -163,6 +163,6 @@ this date rather than accumulate from the earlier history.
 
 <!-- token-cost-docs:start -->
 
-Not yet publishable, n=1.
+Not yet publishable, n=5.
 
 <!-- token-cost-docs:end -->
