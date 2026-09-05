@@ -2901,15 +2901,16 @@ test('readEventWindows: a same-attempt enter after a completed exit starts a gen
   }
 });
 
-test('readEventWindows: excludes the whole candidate (not just its claimId) when the enter and exit claimId genuinely disagree (#2432, Codex review PR #2627)', () => {
+test('readEventWindows: excludes the whole candidate (not just its claimId) when the enter and exit claimId genuinely disagree (#2432, Codex review PR #2627; #2654)', () => {
   // Both sides carry a DIFFERENT, non-empty claimId -- a stronger signal
   // than one side merely being absent: degrading this to claim-less would
   // let `idCompatible` treat the resulting window as compatible with ANY
-  // cleanup by default. The whole identified candidate is excluded, so
-  // resolution falls all the way through to the identity-agnostic legacy
-  // pairing (both enter and exit share the same vendorSessionId, so that
-  // legacy pairing is itself valid) -- vendorSessionId is absent too, not
-  // just claimId.
+  // cleanup by default. The whole identified candidate is excluded.
+  // #2654 (CodeRabbit review, PR #2653): the identity-agnostic legacy
+  // pairing must NOT admit this pair either, even though both enter and
+  // exit share one vendorSessionId -- the legacy path now requires
+  // claimId agreement the same way the identified path already does, so
+  // no window is produced for this key at all.
   const { dir, path } = writeEventsFile([
     tokenCostEvent(
       'enter',
@@ -2932,10 +2933,68 @@ test('readEventWindows: excludes the whole candidate (not just its claimId) when
   ]);
   try {
     const windows = readEventWindows(path);
+    assert.equal(windows.get('7:claude:work'), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: legacy fallback still admits a genuinely identity-less pair (no claimId on either side) (#2654)', () => {
+  // Contrast with the claim-mismatch case above: when NEITHER side
+  // carries a claimId, there is nothing to disagree about --
+  // `legacyClaimIdsCompatible` degrades to compatible (absent on either
+  // side is ordinary partial data, not a signal), matching this
+  // function's pre-#2654 behavior for genuinely unidentified events.
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+  ]);
+  try {
+    const windows = readEventWindows(path);
     const window = windows.get('7:claude:work');
     assert.ok(window);
-    assert.equal('claimId' in (window ?? {}), false);
-    assert.equal('vendorSessionId' in (window ?? {}), false);
+    assert.equal(window?.startMs, ms('2026-01-01T00:10:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: legacy fallback admits a one-sided claimId (absence is not a signal) (#2654)', () => {
+  // One side carries a claimId, the other doesn't -- same "defensive
+  // degrade to compatible" rule `attemptCandidates` already applies for
+  // the identified path. Both enter and exit share vendorSessionId
+  // 'sess-A', so the legacy pairing is otherwise valid.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:10:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-only-on-enter',
+    ),
+    tokenCostEvent('exit', 'work', '2026-01-01T00:20:00Z', 7, 'sess-A'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const window = windows.get('7:claude:work');
+    assert.ok(window);
     assert.equal(window?.startMs, ms('2026-01-01T00:10:00Z'));
     assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
   } finally {

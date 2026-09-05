@@ -1016,6 +1016,16 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
   // resolveWindow below.
   const enterAtOwner = new Map<string, string | undefined>();
   const exitAtOwner = new Map<string, string | undefined>();
+  // bareKey -> claimId of whichever event set enterAtOwner/exitAtOwner's
+  // CURRENT value for that key (#2654). Unconditional, mirroring
+  // enterAtOwner/exitAtOwner above -- so the legacy bareKey pairing below
+  // can require claimId agreement the same way `attemptCandidates`
+  // already does for the identified path (`#2432`), instead of only
+  // comparing `vendorSessionId`. A claim-mismatched pair sharing one
+  // vendorSessionId (rejected by `attemptCandidates`) would otherwise
+  // still slip through here as an "identity-less" legacyWindow.
+  const enterClaimIdOwner = new Map<string, string | undefined>();
+  const exitClaimIdOwner = new Map<string, string | undefined>();
   // bareKey -> vendorSessionId -> latest timestamp. Only populated for
   // events that carry a non-empty vendorSessionId.
   const enterAtByAttempt = new Map<string, Map<string, number>>();
@@ -1086,6 +1096,7 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
     if (event.event === 'enter') {
       enterAt.set(key, atMs);
       enterAtOwner.set(key, vendorSessionId);
+      enterClaimIdOwner.set(key, claimId);
       if (vendorSessionId !== undefined) {
         const openSet = openEnterByAttempt.get(key) ?? new Set<string>();
         const alreadyOpen = openSet.has(vendorSessionId);
@@ -1109,6 +1120,7 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
     } else {
       exitAt.set(key, atMs);
       exitAtOwner.set(key, vendorSessionId);
+      exitClaimIdOwner.set(key, claimId);
       if (vendorSessionId !== undefined) {
         openEnterByAttempt.get(key)?.delete(vendorSessionId);
         const byAttempt = exitAtByAttempt.get(key) ?? new Map<string, number>();
@@ -1244,8 +1256,23 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
     // pre-#2424 could never resolve either -- identity adds no signal
     // when neither side carries one.
     const legacyOwnersMatch = enterAtOwner.get(key) === exitAtOwner.get(key);
+    // #2654 (CodeRabbit review, PR #2653): `legacyOwnersMatch` alone lets
+    // a claim-mismatched identified attempt through whenever its enter
+    // and exit share one vendorSessionId -- `attemptCandidates` already
+    // rejects that exact case for the identified path (a stronger
+    // signal than one side merely being absent), but this bareKey path
+    // has no equivalent check. Same "absent on either side is ordinary
+    // partial data, not a signal" rule as `attemptCandidates`: only a
+    // BOTH-non-empty, DIFFERENT pair disqualifies the window.
+    const legacyEnterClaimId = enterClaimIdOwner.get(key);
+    const legacyExitClaimId = exitClaimIdOwner.get(key);
+    const legacyClaimIdsCompatible =
+      legacyEnterClaimId === undefined ||
+      legacyExitClaimId === undefined ||
+      legacyEnterClaimId === legacyExitClaimId;
     const legacyWindow =
       legacyOwnersMatch &&
+      legacyClaimIdsCompatible &&
       legacyStartMs !== undefined &&
       legacyEndMs !== undefined &&
       legacyStartMs < legacyEndMs
