@@ -1731,6 +1731,52 @@ test('scanClaudeVendorSessions: a cwd-attributed primary (cleanup session launch
   assert.equal(issue506Samples[0].adapterResult.sample.usage.output, 9);
 });
 
+test('scanClaudeVendorSessions: a cwd-attributed primary whose contributor cannot be resolved suppresses its own solo sample too (#2432, Codex review PR #2627)', () => {
+  // The primary is cwd-attributed to the target issue, but the claim-id
+  // matched contributor's own file is missing entirely -- the aborted
+  // merge must ALSO suppress the primary's own pending cwd sample, not
+  // just skip creating the merged one, or a later successful merge would
+  // append a second, differently-keyed sample for the same completed
+  // loop (permanent double-count).
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-primary-509.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0008","cwd":"/home/user/repo.issue-509-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
+  );
+  // No file in this sandbox has sessionId 'sess-contrib-missing'.
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '509:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'sess-contrib-missing',
+        'claim-shared',
+      ),
+    ],
+    [
+      '509:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-primary-0008',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const issue509Samples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('509'),
+  );
+
+  // No sample at all for issue 509 -- neither a merged #ew sample (the
+  // contributor could not be resolved) NOR the primary's own plain
+  // cwd-derived sample (which would otherwise sit under a different,
+  // unrecognizable dedup key forever).
+  assert.equal(issue509Samples.length, 0);
+});
+
 test('scanClaudeVendorSessions: a cwd-attributed primary that moved out of and back into the issue worktree (two segments, one file) still resolves (#2432, Codex review PR #2627)', () => {
   // The cleanup-owning session's own file produces TWO cwd-attributed
   // segments for the SAME issue (#2404 segmentation, moved out then back
@@ -2683,7 +2729,15 @@ test('readEventWindows: tags a window with claimId when both enter and exit shar
   }
 });
 
-test('readEventWindows: leaves a window claimId-untagged when the enter and exit claimId disagree (#2432, defensive)', () => {
+test('readEventWindows: excludes the whole candidate (not just its claimId) when the enter and exit claimId genuinely disagree (#2432, Codex review PR #2627)', () => {
+  // Both sides carry a DIFFERENT, non-empty claimId -- a stronger signal
+  // than one side merely being absent: degrading this to claim-less would
+  // let `idCompatible` treat the resulting window as compatible with ANY
+  // cleanup by default. The whole identified candidate is excluded, so
+  // resolution falls all the way through to the identity-agnostic legacy
+  // pairing (both enter and exit share the same vendorSessionId, so that
+  // legacy pairing is itself valid) -- vendorSessionId is absent too, not
+  // just claimId.
   const { dir, path } = writeEventsFile([
     tokenCostEvent(
       'enter',
@@ -2709,6 +2763,9 @@ test('readEventWindows: leaves a window claimId-untagged when the enter and exit
     const window = windows.get('7:claude:work');
     assert.ok(window);
     assert.equal('claimId' in (window ?? {}), false);
+    assert.equal('vendorSessionId' in (window ?? {}), false);
+    assert.equal(window?.startMs, ms('2026-01-01T00:10:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -892,12 +892,26 @@ export function readEventWindows(path) {
     for (const [vendorSessionId, startMs] of enters) {
       const endMs = exits.get(vendorSessionId);
       if (endMs !== undefined) {
-        // The attempt's own claimId requires its enter and exit to agree
-        // (both undefined, or the same value) -- one stage's enter/exit
-        // share one claim in practice, so disagreement is defensive: it
-        // degrades to undefined rather than guessing which side is right.
+        // The attempt's own claimId requires its enter and exit to agree.
+        // One side missing (undefined) while the other carries a value is
+        // ordinary partial data -- defensive degrade to undefined, since
+        // one stage's enter/exit share one claim in practice and there is
+        // no way to tell which side is right. Both sides present but
+        // DIFFERENT is a stronger signal: the same long-lived session
+        // revisited the issue under a NEW claim between this enter and
+        // exit (or a boundary write raced with a takeover) -- degrading
+        // that to claim-less would make `idCompatible` treat it as
+        // compatible with ANY cleanup by default, so the whole candidate
+        // is excluded instead (Codex review finding, PR #2627).
         const enterClaimId = enterClaimIds?.get(vendorSessionId);
         const exitClaimId = exitClaimIds?.get(vendorSessionId);
+        if (
+          enterClaimId !== undefined &&
+          exitClaimId !== undefined &&
+          enterClaimId !== exitClaimId
+        ) {
+          continue;
+        }
         const claimId = enterClaimId === exitClaimId ? enterClaimId : undefined;
         candidates.push({
           vendorSessionId,
@@ -1686,6 +1700,16 @@ export function scanClaudeVendorSessions(
   // would otherwise permanently freeze exactly the undercount this
   // feature exists to fix, once the missing contributor becomes available
   // (Codex review finding, PR #2627).
+  // Returns whether a merged sample was actually emitted -- the
+  // cwd-attributed-primary call site below needs to know this to also
+  // suppress the primary's own now-orphaned pending cwd sample on
+  // failure (Codex review finding, PR #2627): unlike the event-window
+  // fallback primary (which never has one), a cwd-attributed primary DOES
+  // have its own solo `pendingCwdSessions` entry, and leaving it
+  // unsuppressed on an aborted merge would let it stand under its own
+  // plain (non-`#ew`-suffixed) key -- a LATER successful merge would then
+  // append a second, differently-keyed sample for the same completed
+  // loop, permanently double-counting it.
   const harvestEventWindowCandidate = (issueNumber, fileBasename, records) => {
     const vendorSessionIdOverride = resolveCandidateSessionId(fileBasename);
     const contributingWindows =
@@ -1745,7 +1769,7 @@ export function scanClaudeVendorSessions(
               : `matched more than one file (${sessionIdMatches.map(([b]) => b).join(', ')})`
           } -- emitting a primary-only sample would freeze an undercount under a stable id\n`,
         );
-        return;
+        return false;
       }
       const [contributingBasename, candidateRecords] = sessionIdMatches[0];
       if (!isEligibleContributorFile(contributingBasename, contributing)) {
@@ -1795,10 +1819,12 @@ export function scanClaudeVendorSessions(
         consumedCwdIssueNumbersByBasename.get(fileBasename) ?? new Set();
       consumedPrimary.add(issueNumber);
       consumedCwdIssueNumbersByBasename.set(fileBasename, consumedPrimary);
+      return true;
     } catch (error) {
       process.stderr.write(
         `token-cost-harvest: skipping event-window issue #${issueNumber}: ${error.message}\n`,
       );
+      return false;
     }
   };
   // Cross-file resolution: event windows carry no session/file identity,
@@ -1945,11 +1971,22 @@ export function scanClaudeVendorSessions(
       continue;
     }
     const [[primaryBasename, primaryRecords]] = matchesByBasename;
-    harvestEventWindowCandidate(
+    const merged = harvestEventWindowCandidate(
       window.issueNumber,
       primaryBasename,
       primaryRecords,
     );
+    if (!merged) {
+      // #2432/Codex review (PR #2627): the merge aborted (an unresolvable
+      // contributor) -- suppress this primary's own pending cwd sample
+      // too, so this run emits NOTHING for the issue rather than a
+      // primary-only sample under a plain (non-`#ew`-suffixed) key that a
+      // later successful merge could never recognize as the same loop.
+      const consumedPrimary =
+        consumedCwdIssueNumbersByBasename.get(primaryBasename) ?? new Set();
+      consumedPrimary.add(window.issueNumber);
+      consumedCwdIssueNumbersByBasename.set(primaryBasename, consumedPrimary);
+    }
   }
   // #2432: emit each file's own cwd-derived issue-loop sample now that
   // every contributor resolution above is final, suppressing only the
