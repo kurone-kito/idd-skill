@@ -1515,11 +1515,15 @@ export function scanClaudeVendorSessions(
       }
     }
   }
+  // A record with no valid timestamp sorts last via MAX_SAFE_INTEGER --
+  // Number.POSITIVE_INFINITY would subtract to NaN when two such records
+  // are compared, which Array.prototype.sort tolerates (undefined order)
+  // but is needlessly fragile.
   const sortByTimestampAscending = (records) =>
     [...records].sort(
       (a, b) =>
-        (extractRecordTimestampMs(a) ?? Number.POSITIVE_INFINITY) -
-        (extractRecordTimestampMs(b) ?? Number.POSITIVE_INFINITY),
+        (extractRecordTimestampMs(a) ?? Number.MAX_SAFE_INTEGER) -
+        (extractRecordTimestampMs(b) ?? Number.MAX_SAFE_INTEGER),
     );
   // #2432: pull each confirmed contributing session's own file's records
   // (restricted to that session's own qualifying window bounds) into the

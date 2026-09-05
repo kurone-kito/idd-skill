@@ -1657,6 +1657,67 @@ test('scanClaudeVendorSessions: one vendorSessionId contributing two stages merg
   assert.equal(ewSamples[0].adapterResult.sample.usage.output, 13);
 });
 
+test('scanClaudeVendorSessions: a multi-hop handoff across THREE different sessions (not just two) merges all of them (#2432, C1 review coverage gap)', () => {
+  // A -> B -> C: three different vendorSessionIds, one shared claimId,
+  // each contributing a different stage from its own file. The primary
+  // (cleanup-owning) session is C.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-hop-a.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:00:30.000Z","sessionId":"sess-hop-A","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-hop-b.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:06:00.000Z","sessionId":"sess-hop-B","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":4}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-hop-c.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-hop-C","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":8}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '505:claude:claim',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:01:00Z',
+        'sess-hop-A',
+        'claim-shared',
+      ),
+    ],
+    [
+      '505:claude:work',
+      stageWindow(
+        '2026-01-01T00:05:00Z',
+        '2026-01-01T00:10:00Z',
+        'sess-hop-B',
+        'claim-shared',
+      ),
+    ],
+    [
+      '505:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-hop-C',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+  const sample = ewSamples[0].adapterResult.sample;
+  assert.equal(sample.vendorSessionId, 'sess-hop-C#ew505');
+  // 2 (A) + 4 (B) + 8 (C) -- all three hops' usage is pulled in.
+  assert.equal(sample.usage.output, 14);
+  assert.equal(sample.startedAt, '2026-01-01T00:00:30.000Z');
+  assert.equal(sample.endedAt, '2026-01-01T00:24:00.000Z');
+});
+
 test('scanClaudeVendorSessions: an event window is ignored when the segment already has a cwd-inferred issueNumber', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
