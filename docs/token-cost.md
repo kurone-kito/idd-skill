@@ -149,6 +149,15 @@ produces. Tracked separately (Refs #2444); until fixed, treat any
 `unclaimed` outcome on an event-window (`#ew<issueNumber>`) sample as
 unverified rather than a genuine abandoned-claim signal.
 
+**Baseline reset (2026-09-05)**: the tracked sample history was reset to
+`n=0` after a 2026-09-04 storage failure and host crash destroyed the prior
+environment's `samples.jsonl`/`events.jsonl` state; work resumed on a backup
+environment with no pre-crash history to recover (`#2623`, following
+`#2566`'s round-7 attempt on the same gap). This is a data-loss event, not a
+regression in the harvest/report tooling -- a reader comparing sample counts
+across time should expect the count to restart from this date rather than
+continue from the pre-crash round-6 baseline (`n=1`, 2026-09-02).
+
 ## Current snapshot
 
 <!-- token-cost-docs:start -->
