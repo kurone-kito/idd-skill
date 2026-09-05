@@ -458,7 +458,9 @@ the corrected `branch`, then a fresh
 Propagate the new `{claim-id}` into every later call (disposition
 replies, watermarks, F2/F3, cleanup) — the old one is dead once
 released. On an open issue, re-verify no competing claim landed in the
-release-to-fresh gap before posting; not a risk on a closed one.
+release-to-fresh gap before posting. If one exists, stop and wait;
+do not post the fresh claim or continue. This is not a risk on a
+closed issue.
 
 ### Orchestrator delegation
 
