@@ -2697,6 +2697,47 @@ allowlist), mirroring the maintainer's existing approval.
   assert.equal(result.pass, true);
 });
 
+test("verifiability still fails when the body only quotes another issue's resolved decision as an example (#2661 C1 review)", () => {
+  // A body that merely reports/quotes another issue's already-resolved
+  // decision as an illustrative example -- rather than recording its OWN
+  // resolution -- must not borrow that resolution: its own subjective
+  // sign-off requirement is still unresolved.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `For reference, issue #2641 states "Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates" as an example of the convention.
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails when an inline decision uses still-pending vocabulary (#2661 C1 review)', () => {
+  // The negative-lookahead denylist must also reject common still-pending
+  // words with no negated-"resolved"/"decided" phrasing of their own (TBD,
+  // pending, undecided, deferred, "still open") -- the inline form has no
+  // positive `\bresolved\b` requirement to fall back on, unlike the heading
+  // form.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05): still open, no consensus yet on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('verifiability still fails when an inline decision is not yet decided', () => {
   // A still-open "Maintainer decision (...): not yet decided" must not count
   // as a resolved decision, so the subjective screen still fires.
