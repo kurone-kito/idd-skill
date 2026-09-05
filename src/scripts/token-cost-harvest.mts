@@ -1040,7 +1040,15 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
   // attempt's true start time with the later, spurious re-entry,
   // silently narrowing the resolved window. A genuinely new cycle
   // (`enter` -> `exit` -> `enter` -> `exit`) still overwrites normally,
-  // since `exit` clears the attempt's open flag first.
+  // since `exit` clears the attempt's open flag first. #2654 (Codex
+  // review, PR #2656): this guard ALSO gates the legacy unconditional
+  // maps (enterAt/enterAtOwner/enterClaimIdOwner) for an identified
+  // event, not just the attempt-scoped ones -- otherwise a duplicate
+  // enter carrying a NEW claimId could overwrite the legacy owner/claim
+  // state even though the identified path deliberately keeps the first
+  // enter's claim, letting the legacy fallback "resurrect" an attempt
+  // `attemptCandidates` correctly rejected for a claimId mismatch as an
+  // untagged window.
   const openEnterByAttempt = new Map<string, Set<string>>();
   // bareKey -> vendorSessionId -> claimId of whichever event set that
   // attempt's CURRENT latest timestamp above (#2432). Only meaningful
@@ -1095,15 +1103,23 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
       : undefined;
     const claimId = isNonEmptyString(event.claimId) ? event.claimId : undefined;
     if (event.event === 'enter') {
-      enterAt.set(key, atMs);
-      enterAtOwner.set(key, vendorSessionId);
-      enterClaimIdOwner.set(key, claimId);
       if (vendorSessionId !== undefined) {
         const openSet = openEnterByAttempt.get(key) ?? new Set<string>();
         const alreadyOpen = openSet.has(vendorSessionId);
         openSet.add(vendorSessionId);
         openEnterByAttempt.set(key, openSet);
         if (!alreadyOpen) {
+          // #2654 review (Codex, PR #2656): the legacy unconditional
+          // maps must stay in lockstep with the attempt-scoped ones --
+          // a duplicate enter for an already-open IDENTIFIED attempt
+          // must not overwrite enterAt/enterAtOwner/enterClaimIdOwner
+          // either, or the legacy fallback can "resurrect" an
+          // identified attempt attemptCandidates correctly rejected
+          // (enter/exit claimId mismatch) as an untagged window keyed
+          // off the duplicate enter's own (different) claimId.
+          enterAt.set(key, atMs);
+          enterAtOwner.set(key, vendorSessionId);
+          enterClaimIdOwner.set(key, claimId);
           const byAttempt =
             enterAtByAttempt.get(key) ?? new Map<string, number>();
           byAttempt.set(vendorSessionId, atMs);
@@ -1115,8 +1131,17 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
           enterClaimIdByAttempt.set(key, claimIdByAttempt);
         }
         // else: a duplicate `enter` for an attempt that is still open --
-        // keep the earlier enter's timestamp/claimId as the attempt's
-        // true start (see openEnterByAttempt's doc comment above).
+        // keep the earlier enter's timestamp/claimId, in BOTH the
+        // legacy and attempt-scoped maps, as the attempt's true start
+        // (see openEnterByAttempt's doc comment above).
+      } else {
+        // No vendorSessionId at all: nothing to key an "already open"
+        // check against (historical data, or a vendor with no
+        // session-id source) -- unconditional overwrite, unchanged
+        // from this function's pre-#2651 behavior.
+        enterAt.set(key, atMs);
+        enterAtOwner.set(key, vendorSessionId);
+        enterClaimIdOwner.set(key, claimId);
       }
     } else {
       exitAt.set(key, atMs);

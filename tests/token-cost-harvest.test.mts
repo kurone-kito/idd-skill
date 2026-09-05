@@ -3006,6 +3006,54 @@ test('readEventWindows: legacy fallback admits a one-sided claimId (absence is n
   }
 });
 
+test('readEventWindows: a duplicate open-attempt enter with a NEW claimId must not resurrect a claim-mismatched attempt via the legacy fallback (Codex review finding, PR #2656, #2654)', () => {
+  // sess-A enters with claim-one, re-enters (still open, no exit yet)
+  // with claim-two, then exits with claim-two. attemptCandidates keeps
+  // the FIRST enter (claim-one) per #2651's alreadyOpen guard, so the
+  // identified path correctly rejects this as a claimId mismatch
+  // (claim-one vs claim-two). Before this fix, the legacy unconditional
+  // maps were not gated the same way: the duplicate enter overwrote
+  // enterAtOwner/enterClaimIdOwner to (sess-A, claim-two), which then
+  // MATCHED the exit's own (sess-A, claim-two) -- resurrecting the
+  // rejected attempt as an untagged legacyWindow keyed off the
+  // duplicate enter's own timestamp. No window must be produced at all.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:10:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-one',
+    ),
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:15:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-two',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-two',
+    ),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    assert.equal(windows.get('7:claude:work'), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('readEventWindows: leaves a window untagged when an event carries no vendorSessionId (historical-data fallback, #2424)', () => {
   const { dir, path } = writeEventsFile([
     tokenCostEvent('enter', 'work', '2026-01-01T00:10:00Z', 7),
