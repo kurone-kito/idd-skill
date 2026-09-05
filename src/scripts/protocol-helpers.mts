@@ -4248,9 +4248,9 @@ export function classifyThreadAckOnlyPostDisposition(
   // #2014: an advisory bot can never anchor "a disposition exists" -- see
   // `summarizeDispositionEvidenceForGate`'s identical subtraction (this
   // file, "An advisory bot can never anchor..."). Scoped to only this
-  // anchor set; callers' own `iddAgentLogins` stay unsubtracted everywhere
-  // else, since each reacts differently (fail-open vs. fail-closed) to a
-  // global change.
+  // anchor set; the raw `iddAgentLogins` set above stays unchanged
+  // everywhere else, since each caller reacts differently (fail-open vs.
+  // fail-closed) to a global change.
   const ackAnchorAuthorLogins = new Set(
     [...iddAgentLogins].filter(
       (login) => !isConfiguredAdvisoryBotLogin(login, advisoryBotLogins),
