@@ -401,7 +401,9 @@ function intersect(files: string[], highContention: Set<string>): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// CLI glue (not unit-tested; the pure core above is)
+// CLI glue. `loadManifest` is exported and unit-tested for its
+// ENOENT-vs-parse-error boundary; the rest of this section is CLI wiring,
+// not unit-tested (the pure core above is).
 // ---------------------------------------------------------------------------
 
 interface ParsedArgs {
@@ -434,14 +436,19 @@ function runCli(): void {
   const policy = loadPolicy(args.policy);
   const now = args.now || new Date().toISOString();
 
-  const manifest = loadManifest(args.manifest);
-  const highContentionFiles = resolveHighContentionFiles({
-    manifest,
-    bundleIds: args.bundles ?? DEFAULT_BUNDLE_IDS,
-    // Track the manifest actually in use so a custom --manifest is the file
-    // reported (and matched) as high-contention, not the hard-coded default.
-    extraFiles: [args.manifest],
-  });
+  const { manifest, missing: manifestMissing } = loadManifest(args.manifest);
+  // A missing manifest must not fall back to resolveHighContentionFiles's
+  // extraFiles default (the manifest path itself) — that would fabricate a
+  // one-entry high-contention set from a file that doesn't exist.
+  const highContentionFiles = manifestMissing
+    ? new Set<string>()
+    : resolveHighContentionFiles({
+        manifest,
+        bundleIds: args.bundles ?? DEFAULT_BUNDLE_IDS,
+        // Track the manifest actually in use so a custom --manifest is the file
+        // reported (and matched) as high-contention, not the hard-coded default.
+        extraFiles: [args.manifest],
+      });
 
   const candidates: OverlapCandidateInput[] = args.candidates.map((number) => {
     const issue = fetchIssue(port, number);
@@ -453,7 +460,9 @@ function runCli(): void {
   });
 
   let activeIssues: ActiveIssueInput[] = [];
-  if (args.checkOverlap) {
+  // With no high-contention files, every overlap intersection is empty
+  // regardless of active-issue data, so skip the API cost entirely.
+  if (args.checkOverlap && !manifestMissing) {
     activeIssues = discoverActiveIssues({
       port,
       trustedActors: policy.trustedMarkerActors,
@@ -473,6 +482,7 @@ function runCli(): void {
   const output = {
     repository: { owner, repo },
     checkedOverlap: args.checkOverlap,
+    manifestMissing,
     highContentionFiles: [...highContentionFiles].sort(),
     ...analysis,
   };
@@ -616,16 +626,38 @@ function fetchOpenPrLinkedIssues(port: ProviderPort): number[] {
   return port.listIssueNumbersClosedByOpenChangeRequests(OPEN_PR_SCAN_LIMIT);
 }
 
-function loadManifest(manifestPath: string): unknown {
+/**
+ * Load the sync manifest. A missing file (`ENOENT` — the common adopter case,
+ * since `audit/sync-manifest.json` is a source-repo audit artifact that
+ * adopter repositories do not ship) degrades quietly: `missing: true`, no
+ * throw. Any other read failure (permissions, a directory in place of the
+ * file, …) or a present-but-malformed manifest still fails closed exactly as
+ * before — an empty manifest would otherwise yield an empty high-contention
+ * set, making every candidate look non-overlapping.
+ */
+export function loadManifest(manifestPath: string): {
+  manifest: unknown;
+  missing: boolean;
+} {
   const targetPath = resolve(
     process.cwd(),
     manifestPath || DEFAULT_MANIFEST_PATH,
   );
+  let raw: string;
   try {
-    return JSON.parse(readFileSync(targetPath, 'utf8'));
+    raw = readFileSync(targetPath, 'utf8');
   } catch (error) {
-    // Fail closed: an empty manifest would yield an empty high-contention set,
-    // making every candidate look non-overlapping. Surface the load failure.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { manifest: null, missing: true };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `failed to load sync manifest at ${targetPath}: ${message}`,
+    );
+  }
+  try {
+    return { manifest: JSON.parse(raw), missing: false };
+  } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
       `failed to load sync manifest at ${targetPath}: ${message}`,

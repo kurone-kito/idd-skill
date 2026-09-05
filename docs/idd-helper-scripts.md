@@ -618,6 +618,11 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
 - **JSON output**:
   - `repository`: `{ owner: string, repo: string }`
   - `checkedOverlap`: `boolean`
+  - `manifestMissing`: `boolean` — `true` when `--manifest`'s target file does
+    not exist (`ENOENT`); the CLI still exits 0, with `highContentionFiles`
+    reported as an empty set rather than fabricated from the manifest path
+    itself. A manifest that exists but fails to parse (malformed JSON, wrong
+    shape) keeps the prior fail-closed behavior (the CLI throws), unchanged.
   - `highContentionFiles`: `string[]` (sorted)
   - `candidates`: `[{ number: number, score: number | null,`
     `effectiveScore: number, candidateFiles: string[],`
