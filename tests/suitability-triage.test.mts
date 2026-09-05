@@ -2768,6 +2768,61 @@ test('verifiability still fails when an inline decision uses Markdown-decorated 
   }
 });
 
+test('verifiability still fails when an inline marker has no resolution text before the next section (PR #2662 Codex round 2)', () => {
+  // A bare `\s*` between the colon and the resolution text let an EMPTY
+  // marker cross the blank-line paragraph boundary and consume the next
+  // heading's first character as if it were resolution content.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05):
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails when the only inline decision is Markdown-blockquoted (PR #2662 Codex round 2)', () => {
+  // A blockquoted decision ("> Maintainer decision (...): ...") is a
+  // quoting signal on its own, with no reporting verb required --
+  // `isPrecededByFramingVerb` alone would miss this.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `> Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails on noun-first "no decision yet" phrasing (PR #2662 Codex round 2)', () => {
+  // The denylist's verb-first "not (yet) decided" phrasing does not match
+  // the noun-first "no decision yet" phrasing.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05): no decision yet, still gathering input.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('verifiability still fails when an inline decision uses still-pending vocabulary (#2661 C1 review)', () => {
   // The negative-lookahead denylist must also reject common still-pending
   // words with no negated-"resolved"/"decided" phrasing of their own (TBD,

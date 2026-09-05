@@ -245,6 +245,18 @@ function isPrecededByFramingVerb(normalizedBody, paragraphSpans, offset) {
     normalizedBody.slice(span?.start ?? 0, offset),
   );
 }
+// #2661 PR #2662 review round 2 (Codex): a Markdown blockquote ("> Maintainer
+// decision (...): ...") is itself a quoting signal, independent of
+// `isPrecededByFramingVerb` -- pasting another issue's decision as a
+// blockquote carries no reporting verb of its own, so the framing-verb check
+// alone lets a quoted decision through. Checked per matched LINE (not
+// paragraph): a multi-line blockquote block is still one paragraph span, but
+// only the "> "-prefixed line the match itself sits on need be quoted for
+// the match to count as quoted.
+function isOnBlockquotedLine(normalizedBody, offset) {
+  const lineStart = normalizedBody.lastIndexOf('\n', offset - 1) + 1;
+  return /^[ \t]*>/.test(normalizedBody.slice(lineStart, offset));
+}
 // Check 3 precision: an unsafe execution directive tells the agent to act on
 // *supplied / untrusted* content, not any command verb that merely lands near
 // the ordinary determiner "this". Match the strong untrusted-origin signals, or
@@ -692,11 +704,19 @@ const RESOLVED_DECISION_PATTERN =
 // `(?![a-zA-Z])` replaces a plain `\b`, which fails to end the match after
 // "TBD_" (both `D` and `_` are `\w`, so `\b` finds no boundary there) even
 // though the underscore is just a closing emphasis marker, not part of the
-// word. This is the same soft co-occurrence heuristic as the heading form:
-// it does not verify the resolution text actually settles the exact
-// approval wording elsewhere in the body.
+// word. `no\s+decision(?:\s+yet)?` covers the noun-first phrasing "no
+// decision yet", which the earlier verb-first "not (yet) decided" denylist
+// entries do not match (Codex round 2, PR #2662). Between the colon and the
+// lookahead, `[ \t]*(?:\r?\n[ \t]*)?` allows at most a single hard-wrapped
+// line break, never a full blank-line paragraph gap -- a bare `\s*` there
+// let an empty marker ("Maintainer decision (...):" immediately followed by
+// a blank line and the next section) cross into that next section and match
+// its first non-whitespace character as if it were resolution content
+// (Codex round 2, PR #2662). This is the same soft co-occurrence heuristic
+// as the heading form: it does not verify the resolution text actually
+// settles the exact approval wording elsewhere in the body.
 const INLINE_MAINTAINER_DECISION_PATTERN =
-  /(?<![\w-])Maintainer decision(?![\w-])\s*\([^)]{0,200}\)\s*:\s*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|pending|undecided|deferred|still\s+open)(?![a-zA-Z]))\S/i;
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\([^)]{0,200}\)\s*:[ \t]*(?:\r?\n[ \t]*)?(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+decision(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|pending|undecided|deferred|still\s+open)(?![a-zA-Z]))\S/i;
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the
 // negation word and the trailing whitespace that reaches the verb. The
@@ -2146,9 +2166,12 @@ export function checkVerifiability(context) {
   // whole-paragraph `isFramedAsDescriptive`) so a genuine resolution whose
   // OWN text happens to use a reporting verb -- "Maintainer decision (...):
   // the helper reports an actionable error" -- is not wrongly excluded
-  // (Codex review, PR #2662). The heading form has no equivalent gap: a
-  // "## Decision (resolved …)" section is, by construction, this issue's own
-  // decision record, never a quoted example of someone else's.
+  // (Codex review, PR #2662). A Markdown blockquote is a second, independent
+  // quoting signal with no reporting verb of its own -- "> Maintainer
+  // decision (...): ..." -- so `isOnBlockquotedLine` also excludes a match
+  // (Codex review round 2, PR #2662). The heading form has no equivalent
+  // gap: a "## Decision (resolved …)" section is, by construction, this
+  // issue's own decision record, never a quoted example of someone else's.
   const hasInlineResolvedDecision = (() => {
     const inlinePattern = new RegExp(
       INLINE_MAINTAINER_DECISION_PATTERN.source,
@@ -2161,7 +2184,8 @@ export function checkVerifiability(context) {
           normalizedBody,
           paragraphSpans,
           inlineMatch.index,
-        )
+        ) &&
+        !isOnBlockquotedLine(normalizedBody, inlineMatch.index)
       ) {
         return true;
       }
