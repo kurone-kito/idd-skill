@@ -1227,57 +1227,86 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS = [
 // history: 18/18 sampled CodeRabbit replies that followed an existing
 // disposition on a resolved thread were confirmation-only (agreeing with
 // or withdrawing the finding, never a new substantive concern), and all 18
-// shared two structural signals. Both must match together --
+// shared two structural signals plus the absence of a third (below). The
+// opening and signature alone are each individually loose --
 // `CODERABBIT_ACK_OPENING_RE` alone also appears on some of CodeRabbit's
-// *initial* (non-ack) findings in the same sample, so it cannot stand
-// alone; requiring the closing signature too keeps this narrow, matching
-// the under-match-by-default posture the notice patterns above already
-// document (a false positive here could carry a stale disposition onto a
-// real review -- a false merge).
+// *initial* (non-ack) findings in the same sample -- so all three
+// conditions apply together, matching the under-match-by-default posture
+// the notice patterns above already document (a false positive here could
+// carry a stale disposition onto a real review -- a false merge).
 //
 // Opening: an `` `@{login}` `` mention immediately followed by a
 // confirmation/dismissal verb -- the consistent lead-in across every
 // sampled reply (e.g. "`@kurone-kito`, confirmed. ...",
 // "`@kurone-kito` Thanks for the fix. ...", "`@kurone-kito`, agreed. ...").
-const CODERABBIT_ACK_OPENING_RE =
-  /^`@[\w.-]+`[,:]?\s+(?:thanks?(?:\s+you)?|confirmed|agreed)\b/i;
+// An optional leading `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` is tolerated
+// before the mention (Copilot review, #2649): CodeRabbit's other marker-led
+// reply form (`classifyRegularBotComment`'s stale review-trigger check
+// above) places the marker first, so a courtesy ack using the same
+// ordering must not be missed just because `^` otherwise anchors on the
+// mention.
+const CODERABBIT_ACK_OPENING_RE = new RegExp(
+  `^(?:${escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)}\\s*)?` +
+    '`@[\\w.-]+`[,:]?\\s+(?:thanks?(?:\\s+you)?|confirmed|agreed)\\b',
+  'i',
+);
 // The `coderabbit-skip-review-comment-follow-up` marker CodeRabbit appends
 // to some follow-up replies (distinct from `CODERABBIT_SKIP_REVIEW_MARKER`,
 // "skip review by coderabbit.ai", which marks a summary walkthrough with no
 // review content rather than a follow-up reply).
 const CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER =
   '<!-- coderabbit-skip-review-comment-follow-up -->';
-// Closing: one of CodeRabbit's own auto-generated signatures -- the 🐇
-// emoji, `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` (single-sourced with
+// Closing: one of CodeRabbit's own auto-generated TEXT signatures --
+// `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` (single-sourced with
 // `classifyRegularBotComment`'s stale review-trigger check above), the
 // fixed trailer it appends when its own thread-resolve API call fails
 // ("Thanks for confirming the fix. I couldn't resolve this review thread
 // on the repository platform..."), or
-// `CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER`.
+// `CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER`. The bare 🐇 emoji is
+// deliberately EXCLUDED (Copilot review, #2649): unlike the two HTML
+// markers and the fixed trailer sentence, a lone emoji is not a
+// CodeRabbit-specific fingerprint another configured advisory bot could
+// not organically reproduce, and #2641's own verification found all 18
+// sampled trailing acks already carry at least one of the three text
+// signatures below -- dropping the emoji costs no real coverage.
 const CODERABBIT_ACK_SIGNATURE_RE = new RegExp(
   [
-    '🐇',
     escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER),
     "I couldn't resolve this review thread on the repository platform",
     escapeRegExp(CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER),
   ].join('|'),
   'i',
 );
+// Disqualifier (Codex P1 review, #2649): the opening + signature
+// conjunction alone does not verify that the ENTIRE reply is confirmation
+// -- a reply can open with a confirmation word and still carry the
+// signature while raising a genuinely new, unresolved concern in between
+// (e.g. "`@alice`, thanks. The first case is fixed, but the retry path
+// still dereferences null; please address it."). Any of these
+// contrastive/directive continuation signals disqualifies the whole body
+// from matching, regardless of the opening/signature. Deliberately
+// narrower than a bare `\bplease\b` or `\bstill\b` -- CodeRabbit's own
+// fixed trailer text ("so it remains open. Please retry or resolve it
+// manually.") would otherwise self-disqualify every genuine ack that
+// carries it (#2641 verification data caught this the first time).
+const CODERABBIT_ACK_DISQUALIFYING_RE =
+  /\b(but|however|still\s+(?:dereferences?|fails?|breaks?|needs?|has|contains?|does)|please\s+(?:address|fix|handle|update|change|reconsider)|needs?\s+to\s+be\s+(?:fixed|addressed|resolved)|unresolved|not\s+(?:yet\s+)?(?:fixed|resolved|addressed))\b/i;
 // No comment author check here: the caller (`classifyThreadAckOnlyPostDisposition`)
 // already restricts to `isConfiguredAdvisoryBotLogin`, and the closing
-// signature above is itself CodeRabbit's own generated fingerprint (the 🐇
-// emoji and both markers are CodeRabbit-specific artifacts), so an
-// unrelated bot's genuine comment cannot organically match both signals.
-// #2641's own research found `chatgpt-codex-connector` posted zero
-// post-disposition trailing replies across this repository's sampled
-// merged-PR history -- with no observed template to derive, it has no
-// pattern here and so fails closed by construction rather than a guess.
+// signature above is itself CodeRabbit's own generated fingerprint (both
+// markers and the fixed trailer sentence are CodeRabbit-specific
+// artifacts), so an unrelated bot's genuine comment cannot organically
+// match both signals. #2641's own research found `chatgpt-codex-connector`
+// posted zero post-disposition trailing replies across this repository's
+// sampled merged-PR history -- with no observed template to derive, it has
+// no pattern here and so fails closed by construction rather than a guess.
 function isKnownAdvisoryAckTemplate(comment) {
   const body = String(comment.body ?? '');
   return (
     !!body &&
     CODERABBIT_ACK_OPENING_RE.test(body) &&
-    CODERABBIT_ACK_SIGNATURE_RE.test(body)
+    CODERABBIT_ACK_SIGNATURE_RE.test(body) &&
+    !CODERABBIT_ACK_DISQUALIFYING_RE.test(body)
   );
 }
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
