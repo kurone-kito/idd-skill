@@ -734,6 +734,14 @@ const DOGFOOD_ONLY_CONCRETE_TOOLS = new Set([
   'scripts/verify-install-deps.mjs',
   'scripts/audit-docs.mjs',
   'scripts/audit-code-span-wrap.mjs',
+  // token-cost-report.mjs (#2619): this repository's own dogfood
+  // measurement reporter, now wired into the pre-push-validate row of
+  // `.github/instructions/idd-overview-core.instructions.md` itself
+  // (source: `audit/sync-manifest.json`'s `idd-overview-core-instructions`
+  // syncPair, never `idd-template`'s `{{PRE_PUSH_VALIDATE_COMMANDS}}`
+  // placeholder). Mirrors the identical exemption #2294 already added to
+  // `tests/helper-invocation-profile.test.mts`.
+  'scripts/token-cost-report.mjs',
 ]);
 
 // Collect every helper the instruction files tell adopters to RUN as
