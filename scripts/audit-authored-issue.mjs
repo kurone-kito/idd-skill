@@ -272,6 +272,7 @@ const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--current-repo': { type: 'string' },
   '--issue': { type: 'string' },
   '--label': { type: 'string', multiple: true },
+  '--expect-bucket': { type: 'string' },
   '--comments-file': { type: 'string' },
   '--journal-comments-file': { type: 'string' },
   '--new-issue': { type: 'boolean', default: false },
@@ -350,6 +351,10 @@ export function auditAuthoredIssue(body, options) {
       authoringBucket,
       labels,
       needsDecisionLabelName,
+    ),
+    checkAuthoringBucketMarkerRequired(
+      authoringBucket,
+      options.expectedAuthoringBucket,
     ),
     checkMarkerPrefixConsistency(text, markerPrefix),
     checkRequiredHeadings(text, shape),
@@ -454,6 +459,49 @@ function checkAuthoringBucketNeedsDecision(
     id,
     name,
     `authoring-bucket marker reads needs-decision but the ${needsDecisionLabelName} label was not provided`,
+  );
+}
+/**
+ * Requires the `authoring-bucket` marker to actually be present and match
+ * `expectedBucket`, when the caller declares one (#2639 follow-up). The two
+ * checks above only validate the marker/label pair *when a marker already
+ * exists*; without this check, a body that omits the marker entirely -- the
+ * exact gap #2636/#2637 hit -- silently reads as "not applicable" from both,
+ * since a `ready`-shape publish is the only case the Mechanical pre-publish
+ * gate otherwise audits. `expectedBucket` must be supplied by the caller
+ * when (and only when) auditing a body about to be newly published into the
+ * `needs-decision` or `blocked-by-human` bucket; a `ready` publish, or an
+ * already-published legacy body, passes `undefined` and this check no-ops.
+ */
+function checkAuthoringBucketMarkerRequired(authoringBucket, expectedBucket) {
+  const id = 'authoring-bucket-marker-required';
+  const name =
+    'A newly published needs-decision/blocked-by-human body carries the matching authoring-bucket marker';
+  if (expectedBucket === undefined) {
+    return pass(
+      id,
+      name,
+      'not applicable: no expected bucket declared for this audit (ready publish, or a legacy body)',
+    );
+  }
+  if (authoringBucket.value === expectedBucket) {
+    return pass(
+      id,
+      name,
+      `authoring-bucket marker matches the declared ${expectedBucket} bucket`,
+    );
+  }
+  if (authoringBucket.value === null) {
+    return fail(
+      id,
+      name,
+      `expected an authoring-bucket: ${expectedBucket} marker for a newly published ${expectedBucket} body, but none was found`,
+    );
+  }
+  return fail(
+    id,
+    name,
+    `expected an authoring-bucket: ${expectedBucket} marker, but found authoring-bucket: ${authoringBucket.value} instead`,
   );
 }
 /**
@@ -1488,6 +1536,12 @@ function main() {
   if (args.issue !== undefined && !/^[1-9]\d*$/.test(args.issue)) {
     fail_('--issue must be a positive integer');
   }
+  if (
+    args.expectBucket !== undefined &&
+    !isAuthoringBucketValue(args.expectBucket)
+  ) {
+    fail_('--expect-bucket must be needs-decision or blocked-by-human');
+  }
   if (args.journalCommentsFile && !args.newIssue) {
     fail_('--journal-comments-file requires --new-issue');
   }
@@ -1536,6 +1590,7 @@ function main() {
     labels: args.labels,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
+    expectedAuthoringBucket: args.expectBucket,
     authoringLabelName: policy.authoringLabelName,
     currentRepo,
     issueNumber:
@@ -1665,6 +1720,7 @@ function parseArgs(argv) {
     currentRepo: values['current-repo'],
     issue: values.issue,
     labels: values.label ?? [],
+    expectBucket: values['expect-bucket'],
     commentsFile: values['comments-file'],
     journalCommentsFile: values['journal-comments-file'],
     newIssue: values['new-issue'],
@@ -1695,9 +1751,15 @@ Options:
   --marker-prefix <prefix>         override the resolved markerPrefix
   --config <path>                  policy config path (default: .github/idd/config.json)
   --label <name>                   a label currently applied/proposed on the issue
-                                    (repeatable; used for the suitability=1
-                                    cross-field check and the authoring-label
-                                    check for authoring-owner-marker-trail)
+                                    (repeatable; used for the suitability=1 /
+                                    authoring-bucket cross-field checks and the
+                                    authoring-label check for
+                                    authoring-owner-marker-trail)
+  --expect-bucket <bucket>         needs-decision or blocked-by-human; set only when
+                                    auditing a body about to be newly published into
+                                    that bucket -- requires the matching
+                                    authoring-bucket marker to be present (omit for a
+                                    ready publish or a legacy body)
   --current-repo <owner/repo>      this repository, for the prose-dependency check
                                     to recognize a full-URL issue/PR reference as
                                     cross-repo (default: $GITHUB_REPOSITORY), and

@@ -258,6 +258,82 @@ test('suitability-blocked-by-human still falls back to the suitability-1 rule wh
   assert.equal(findingResult(report, 'suitability-blocked-by-human'), 'fail');
 });
 
+test('a malformed authoring-bucket marker (unrecognized token) is treated as no bucket, not a hard failure', () => {
+  const body = withAuthoringBucket(orphanBody({ score: 4 }), 'wrong-token');
+  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  assert.equal(
+    findingResult(report, 'authoring-bucket-needs-decision'),
+    'pass',
+  );
+  assert.equal(findingResult(report, 'suitability-blocked-by-human'), 'pass');
+});
+
+test('repeated authoring-bucket markers with disagreeing values are treated as no bucket, not a hard failure', () => {
+  const body = `${withAuthoringBucket(orphanBody({ score: 1, includeEffort: false }), 'needs-decision')}\n\n<!-- idd-skill-authoring-bucket: blocked-by-human -->`;
+  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  // Disagreeing markers fail-safe to "no bucket", so the suitability-1
+  // fallback rule re-applies (score is 1 and no label was provided).
+  assert.equal(findingResult(report, 'suitability-blocked-by-human'), 'fail');
+  assert.equal(
+    findingResult(report, 'authoring-bucket-needs-decision'),
+    'pass',
+  );
+});
+
+// --- authoring-bucket-marker-required: --expect-bucket enforcement (#2639 follow-up) ---
+
+test('authoring-bucket-marker-required is not applicable when no bucket is expected (ready publish or legacy body)', () => {
+  const report = auditAuthoredIssue(orphanBody({ score: 4 }), {
+    shape: 'orphan',
+    labels: [],
+  });
+  assert.equal(
+    findingResult(report, 'authoring-bucket-marker-required'),
+    'pass',
+  );
+});
+
+test('authoring-bucket-marker-required fails when a needs-decision bucket is expected but no marker is present', () => {
+  const report = auditAuthoredIssue(orphanBody({ score: 4 }), {
+    shape: 'orphan',
+    labels: [],
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  assert.equal(
+    findingResult(report, 'authoring-bucket-marker-required'),
+    'fail',
+  );
+});
+
+test('authoring-bucket-marker-required passes when the expected bucket marker matches', () => {
+  const body = withAuthoringBucket(orphanBody({ score: 4 }), 'needs-decision');
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:needs-decision'],
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  assert.equal(
+    findingResult(report, 'authoring-bucket-marker-required'),
+    'pass',
+  );
+});
+
+test('authoring-bucket-marker-required fails when the marker disagrees with the expected bucket', () => {
+  const body = withAuthoringBucket(
+    orphanBody({ score: 4 }),
+    'blocked-by-human',
+  );
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:blocked-by-human'],
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  assert.equal(
+    findingResult(report, 'authoring-bucket-marker-required'),
+    'fail',
+  );
+});
+
 // --- marker-prefix-consistency ---
 
 test('marker-prefix-consistency fails when a marker uses the wrong prefix', () => {

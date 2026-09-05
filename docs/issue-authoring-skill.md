@@ -203,12 +203,14 @@ rules.
 
 ### Authoring-bucket marker
 
-A `needs-decision` or `blocked-by-human` issue may also carry a hidden
-**authoring-bucket marker**
+A newly published `needs-decision` or `blocked-by-human` issue carries a
+hidden **authoring-bucket marker**
 (`<!-- {marker-prefix}-authoring-bucket: needs-decision|blocked-by-human -->`)
 so `audit-authored-issue.mts` can mechanically enforce the matching
 label the same way it already enforces `status:blocked-by-human` for a
-suitability score of `1`. See the
+suitability score of `1`. Publishing into either bucket runs the linter
+with `--expect-bucket` (see step 6 above), requiring the marker rather
+than treating its absence as fail-safe. See the
 [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker)
 section of the contract for the binding rules.
 
@@ -217,7 +219,8 @@ section of the contract for the binding rules.
 - When present, it decides the suitability-1/`blocked-by-human` check's
   applicability instead of the score; absent or malformed, that check
   falls back to its pre-existing suitability-1-only rule (no backfill
-  onto issues published before this marker existed).
+  onto issues published before this marker existed, or on an edit to
+  one).
 
 ## Specificity target
 
