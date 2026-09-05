@@ -2730,7 +2730,7 @@ test('verifiability passes an inline decision whose own resolution text uses a r
 
 ## Acceptance Criteria
 - [ ] tests pass
-- [ ] final sign-off from the maintainer confirms the UX feels right
+- [ ] the maintainer's sign-off on the UX is already recorded above
 `,
     },
   } as Context);
