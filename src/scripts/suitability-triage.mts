@@ -438,11 +438,21 @@ function isInBlockquotedParagraph(
 // -->` -- invisible in the rendered issue but still present in
 // `normalizedCodeMaskedBody` (Markdown code masking does not touch HTML
 // comments). Masked the same way as inline/fenced code, before the
-// inline-decision pattern scan.
+// inline-decision pattern scan. An unterminated `<!--` (no matching `-->`)
+// extends to end-of-body: CommonMark renders such an HTML block through
+// EOF, so the entire remaining body -- a genuine marker and Acceptance
+// Criteria included -- can be invisible in the rendered issue while still
+// matching this scan if left unmasked (round 7, PR #2662).
 function findHtmlCommentRanges(text: string): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
-  for (const match of text.matchAll(/<!--[\s\S]*?-->/g)) {
-    ranges.push({ start: match.index, end: match.index + match[0].length });
+  const openPattern = /<!--/g;
+  let openMatch = openPattern.exec(text);
+  while (openMatch) {
+    const closeIndex = text.indexOf('-->', openMatch.index + 4);
+    const end = closeIndex === -1 ? text.length : closeIndex + 3;
+    ranges.push({ start: openMatch.index, end });
+    openPattern.lastIndex = end;
+    openMatch = openPattern.exec(text);
   }
   return ranges;
 }

@@ -2969,6 +2969,29 @@ Whether to adopt this approach here requires the maintainer's sign-off before we
   assert.equal(result.pass, false);
 });
 
+test('verifiability still fails when an unterminated HTML comment swallows the rest of the body (PR #2662 Codex round 7)', () => {
+  // CommonMark renders an HTML comment opened with no matching "-->" as
+  // extending through end-of-document, so the "real" marker and Acceptance
+  // Criteria after it are also invisible in the rendered issue -- the whole
+  // remaining body must be masked, not just up to a "-->" that never comes.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- guidance for authors
+
+Maintainer decision (Groom hearing, 2026-09-05): choose option A over option B.
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('verifiability passes a genuine decision despite an unrelated reporting verb earlier in the paragraph (PR #2662 Codex round 6)', () => {
   // The framing-verb check is bound to the current sentence, not the whole
   // paragraph prefix: an already-terminated, unrelated sentence using a
