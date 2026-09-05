@@ -2797,6 +2797,110 @@ test('readEventWindows: tags a window with claimId when both enter and exit shar
   }
 });
 
+test('readEventWindows: a duplicate same-attempt enter with no intervening exit keeps the EARLIER enter as the window start (#2651)', () => {
+  // Reproduces a context-compaction-resumed session re-entering a stage
+  // it already entered, without ever logging an exit for the
+  // interrupted first entry -- issue #2643's own `review` stage on
+  // 2026-09-05. Before the fix, the second enter silently overwrote the
+  // first in `enterAtByAttempt`, narrowing the resolved window to
+  // [second-enter, exit) instead of the true [first-enter, exit).
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:10:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:40:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+    tokenCostEvent(
+      'exit',
+      'review',
+      '2026-01-01T00:50:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const window = windows.get('7:claude:review');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:10:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:50:00Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: a same-attempt enter after a completed exit starts a genuinely new window (#2651)', () => {
+  // Contrast with the duplicate-enter case above: once an attempt's
+  // enter has been closed by its own exit, a LATER enter for the same
+  // (issueNumber, vendor, stageId, vendorSessionId) is a fresh cycle
+  // (for example an E-phase return-to-E1 recovery loop within the same
+  // long-lived session) and must overwrite, not merge with, the prior
+  // completed window -- matching this map's existing recency-preferring
+  // semantics for legitimate retries.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:10:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+    tokenCostEvent(
+      'exit',
+      'review',
+      '2026-01-01T00:20:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:40:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+    tokenCostEvent(
+      'exit',
+      'review',
+      '2026-01-01T00:50:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-shared',
+    ),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const window = windows.get('7:claude:review');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:40:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:50:00Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('readEventWindows: excludes the whole candidate (not just its claimId) when the enter and exit claimId genuinely disagree (#2432, Codex review PR #2627)', () => {
   // Both sides carry a DIFFERENT, non-empty claimId -- a stronger signal
   // than one side merely being absent: degrading this to claim-less would
