@@ -235,15 +235,30 @@ function isFramedAsDescriptive(normalizedBody, paragraphSpans, offset) {
 // without that making the marker itself a quoted example of someone else's
 // decision. A genuine quoting/reporting frame always precedes the quoted
 // marker in natural prose ("issue #2641 states \"Maintainer decision
-// (...)\"..."), so only text before the match need be checked here.
+// (...)\"..."), so only text before the match need be checked here. Bounded
+// to the current SENTENCE, not the whole paragraph prefix (round 6, PR
+// #2662): an unrelated reporting verb in an earlier, already-terminated
+// sentence of the same paragraph -- "The current helper reports status.
+// Maintainer decision (...): choose A" -- must not suppress a genuine
+// decision merely for sharing a paragraph with an unrelated use of the same
+// vocabulary.
 function isPrecededByFramingVerb(normalizedBody, paragraphSpans, offset) {
   const span =
     paragraphSpans.find(
       (candidate) => offset >= candidate.start && offset <= candidate.end,
     ) ?? paragraphSpans[paragraphSpans.length - 1];
-  return FRAMING_VERB_PATTERN.test(
-    normalizedBody.slice(span?.start ?? 0, offset),
+  const scanText = normalizedBody.slice(span?.start ?? 0, offset);
+  const lastSentenceBoundary = Math.max(
+    scanText.lastIndexOf('. '),
+    scanText.lastIndexOf('! '),
+    scanText.lastIndexOf('? '),
+    scanText.lastIndexOf('.\n'),
+    scanText.lastIndexOf('!\n'),
+    scanText.lastIndexOf('?\n'),
   );
+  const sentenceStart =
+    lastSentenceBoundary === -1 ? 0 : lastSentenceBoundary + 2;
+  return FRAMING_VERB_PATTERN.test(scanText.slice(sentenceStart));
 }
 // #2661 PR #2662 review round 2 (Codex): a Markdown blockquote ("> Maintainer
 // decision (...): ...") is itself a quoting signal, independent of
@@ -277,6 +292,20 @@ function isInBlockquotedParagraph(normalizedBody, paragraphSpans, offset) {
     firstLineEnd === -1 ? normalizedBody.length : firstLineEnd,
   );
   return /^[ \t]*>/.test(firstLine);
+}
+// #2661 PR #2662 review round 6 (Codex): an issue-template author commonly
+// leaves hidden instructional scaffolding as an HTML comment -- e.g.
+// `<!-- Maintainer decision (Groom hearing, YYYY-MM-DD): <resolution text>
+// -->` -- invisible in the rendered issue but still present in
+// `normalizedCodeMaskedBody` (Markdown code masking does not touch HTML
+// comments). Masked the same way as inline/fenced code, before the
+// inline-decision pattern scan.
+function findHtmlCommentRanges(text) {
+  const ranges = [];
+  for (const match of text.matchAll(/<!--[\s\S]*?-->/g)) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  return ranges;
 }
 // Check 3 precision: an unsafe execution directive tells the agent to act on
 // *supplied / untrusted* content, not any command verb that merely lands near
@@ -740,14 +769,18 @@ const RESOLVED_DECISION_PATTERN =
 // resolution-text denylist at all since #1135, and its own docstring
 // accepts exactly this soft-heuristic trade-off. A denylist can never
 // enumerate every future synonym; widen a *class* here only for a
-// concrete reported case, not for a hypothetical one. Between the colon
-// and the
-// lookahead, `[ \t]*(?:\r?\n[ \t]*)?` allows at most a single hard-wrapped
-// line break, never a full blank-line paragraph gap -- a bare `\s*` there
-// let an empty marker ("Maintainer decision (...):" immediately followed by
-// a blank line and the next section) cross into that next section and match
-// its first non-whitespace character as if it were resolution content
-// (Codex round 2, PR #2662). The lookahead right after the opening "("
+// concrete reported case, not for a hypothetical one. Resolution text must
+// start on the SAME LINE as the colon (`[ \t]*`, no newline tolerance): an
+// earlier revision allowed a single hard-wrapped line break here, which
+// fixed the immediate "colon immediately followed by a blank line" case
+// (Codex round 2, PR #2662) but still let an empty marker consume the very
+// next line's first character even with no blank line at all -- e.g. a
+// heading's "#" right after "Maintainer decision (...):\n" (Copilot round
+// 6, PR #2662). Dropping the newline tolerance entirely closes both cases
+// at once; neither of this fix's two real-world citations (#2644, #2641)
+// ever needed it, since GitHub's hard-wrap only splits the provenance
+// parenthetical, never the colon-to-resolution boundary itself. The
+// lookahead right after the opening "("
 // requires the parenthetical to actually contain one of the three
 // provenance signals this shape is documented to carry -- an issue/PR
 // reference, "Groom hearing", or an ISO-style date -- rather than accepting
@@ -767,7 +800,7 @@ const RESOLVED_DECISION_PATTERN =
 // resolution text actually settles the exact approval wording elsewhere in
 // the body.
 const INLINE_MAINTAINER_DECISION_PATTERN =
-  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:[ \t]*(?:\r?\n[ \t]*)?(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S/i;
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S/i;
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the
 // negation word and the trailing whitespace that reaches the verb. The
@@ -2166,17 +2199,23 @@ export function checkVerifiability(context) {
   // `isFramedAsDescriptive` at the wrong paragraph (#2531 review).
   const normalizedBody = body.replace(/\r\n/g, '\n');
   const paragraphSpans = getParagraphSpans(normalizedBody);
-  // #2661 PR #2662 review round 5 (Codex): computed against `normalizedBody`
-  // (not the raw `body`-derived `fenceMaskedBody` above, whose offsets are
-  // not CRLF-normalized -- the #2531-class position-alignment risk noted in
-  // this PR's own body) so the inline-decision scan below ignores an
-  // inline/fenced code demonstration of the convention itself, e.g. an issue
-  // documenting the syntax with `` `Maintainer decision (Groom hearing,
-  // 2026-09-05): choose A` ``. `findMarkdownCodeRanges` covers both inline
-  // and fenced spans, unlike `findFencedCodeRanges` alone.
+  // #2661 PR #2662 review rounds 5-6 (Codex): computed against
+  // `normalizedBody` (not the raw `body`-derived `fenceMaskedBody` above,
+  // whose offsets are not CRLF-normalized -- the #2531-class
+  // position-alignment risk noted in this PR's own body) so the
+  // inline-decision scan below ignores both an inline/fenced code
+  // demonstration of the convention itself (e.g. an issue documenting the
+  // syntax with `` `Maintainer decision (Groom hearing, 2026-09-05): choose
+  // A` ``) and hidden HTML-comment template scaffolding (round 6:
+  // `<!-- Maintainer decision (...): <resolution text> -->`).
+  // `findMarkdownCodeRanges` covers both inline and fenced spans, unlike
+  // `findFencedCodeRanges` alone.
   const normalizedCodeMaskedBody = maskMarkdownCodeRegionsPreservingPositions(
     normalizedBody,
-    findMarkdownCodeRanges(normalizedBody),
+    [
+      ...findMarkdownCodeRanges(normalizedBody),
+      ...findHtmlCommentRanges(normalizedBody),
+    ],
   );
   const hasSubjectiveApproval = (() => {
     let lineOffset = 0;

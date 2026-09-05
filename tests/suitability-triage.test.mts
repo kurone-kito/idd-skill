@@ -2949,6 +2949,63 @@ Whether to adopt this approach here requires the maintainer's sign-off before we
   }
 });
 
+test('verifiability still fails when the only inline decision is hidden in an HTML comment (PR #2662 Codex round 6)', () => {
+  // Issue-template scaffolding commonly leaves hidden guidance as an HTML
+  // comment; invisible in the rendered issue, it must not count as a real
+  // resolution.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- Maintainer decision (Groom hearing, YYYY-MM-DD): <resolution text> -->
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability passes a genuine decision despite an unrelated reporting verb earlier in the paragraph (PR #2662 Codex round 6)', () => {
+  // The framing-verb check is bound to the current sentence, not the whole
+  // paragraph prefix: an already-terminated, unrelated sentence using a
+  // reporting verb must not suppress a genuine decision that follows in the
+  // same paragraph.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `The current helper reports status. Maintainer decision (Groom hearing, 2026-09-05): choose option A over option B.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails when an empty inline marker is immediately followed by a heading with no blank line (PR #2662 Copilot round 6)', () => {
+  // Resolution text must start on the same line as the colon: a single
+  // hard-wrap tolerance previously let an empty marker's colon consume the
+  // next line's first character (e.g. a heading's "#") as if it were
+  // resolution content, even with no blank-line paragraph gap at all.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05):
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('verifiability passes settled decisions that begin with a denylist word (PR #2662 Codex round 4)', () => {
   // "pending"/"undecided"/"deferred" are ordinary English adjectives that
   // can open a genuinely settled resolution's own sentence -- only a bare,
