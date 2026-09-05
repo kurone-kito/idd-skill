@@ -458,7 +458,8 @@ function asClaudeHarvestInput(input: unknown): ClaudeHarvestInput {
       ? input.issueNumberOverride
       : undefined;
   const vendorSessionIdOverride =
-    typeof input.vendorSessionIdOverride === 'string'
+    typeof input.vendorSessionIdOverride === 'string' &&
+    input.vendorSessionIdOverride.length > 0
       ? input.vendorSessionIdOverride
       : undefined;
   return {
