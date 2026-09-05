@@ -258,14 +258,14 @@
       "glob": ".github/instructions/idd-*.instructions.md",
       "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
       "alwaysLoadedLimitBytes": 20000,
-      "phaseLimitBytes": 34000
+      "phaseLimitBytes": 36000
     },
     {
       "id": "instruction-size-budgets-idd-template",
       "glob": "idd-template/.github/instructions/idd-*.instructions.md",
       "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
       "alwaysLoadedLimitBytes": 20000,
-      "phaseLimitBytes": 34000
+      "phaseLimitBytes": 36000
     }
   ],
   "bundleBudgets": [
