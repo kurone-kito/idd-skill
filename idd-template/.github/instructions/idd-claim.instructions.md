@@ -468,7 +468,10 @@ recognizing the brief reassigns it to a single-issue worker role. The
 delegation brief must state explicitly that the delegate is the sole
 worker for the named issue, that no peer workers exist for it to
 coordinate with or wait on, and that it must perform the implementation
-work itself rather than re-delegate or wait for a reply (#2179).
+work itself rather than re-delegate or wait for a reply (#2179). Prefer
+a non-context-inheriting mechanism instead, when the tool offers one —
+see [docs/idd-workflow.md's Orchestrator fan-out
+variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
 
 **Restate the CI/advisory-wait topology-safety condition; use the
 snapshot-then-stop pattern.** Carry — verbatim or by reference — the

@@ -699,12 +699,12 @@ Running this variant safely requires:
   context-inheriting worker (e.g. Claude Code's `fork` subagent) can let
   the orchestrator's own recent framing compete with, and sometimes
   override, the delegation brief's own role statement — the same
-  mechanism [Critique pass invocation](#critique-pass-invocation)
-  already avoids for Claude Code's narrower critique-pass role, by
-  preferring a fresh `general-purpose` agent over a context-sharing
-  fork. Extend that same preference to this full worker role, whenever
-  the tool exposes the choice, and fall back to the explicit
-  role-statement wording in
+  problem [Critique pass invocation](#critique-pass-invocation) already
+  avoids for Claude Code's narrower critique-pass role, since that row
+  also picks a fresh `general-purpose` agent rather than a
+  context-inheriting one. Extend that same preference to this full
+  worker role, whenever the tool exposes the choice, and fall back to
+  the explicit role-statement wording in
   [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation)
   as defense-in-depth when only a context-inheriting mechanism is
   available (kurone-kito/idd-skill#2221, kurone-kito/idd-skill#2624).
