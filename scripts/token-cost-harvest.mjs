@@ -797,6 +797,13 @@ export function readEventWindows(path) {
   // events that carry a non-empty vendorSessionId.
   const enterAtByAttempt = new Map();
   const exitAtByAttempt = new Map();
+  // bareKey -> vendorSessionId -> claimId of whichever event set that
+  // attempt's CURRENT latest timestamp above (#2432). Only meaningful
+  // alongside an identified (vendorSessionId-bearing) attempt -- an
+  // unidentified event has no attempt bucket to disambiguate a claimId
+  // against, so claimId is never tracked on the legacy bareKey path.
+  const enterClaimIdByAttempt = new Map();
+  const exitClaimIdByAttempt = new Map();
   const text = readFileSync(path, 'utf8');
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
@@ -830,6 +837,7 @@ export function readEventWindows(path) {
     const vendorSessionId = isNonEmptyString(event.vendorSessionId)
       ? event.vendorSessionId
       : undefined;
+    const claimId = isNonEmptyString(event.claimId) ? event.claimId : undefined;
     if (event.event === 'enter') {
       enterAt.set(key, atMs);
       enterAtOwner.set(key, vendorSessionId);
@@ -837,6 +845,9 @@ export function readEventWindows(path) {
         const byAttempt = enterAtByAttempt.get(key) ?? new Map();
         byAttempt.set(vendorSessionId, atMs);
         enterAtByAttempt.set(key, byAttempt);
+        const claimIdByAttempt = enterClaimIdByAttempt.get(key) ?? new Map();
+        claimIdByAttempt.set(vendorSessionId, claimId);
+        enterClaimIdByAttempt.set(key, claimIdByAttempt);
       }
     } else {
       exitAt.set(key, atMs);
@@ -845,6 +856,9 @@ export function readEventWindows(path) {
         const byAttempt = exitAtByAttempt.get(key) ?? new Map();
         byAttempt.set(vendorSessionId, atMs);
         exitAtByAttempt.set(key, byAttempt);
+        const claimIdByAttempt = exitClaimIdByAttempt.get(key) ?? new Map();
+        claimIdByAttempt.set(vendorSessionId, claimId);
+        exitClaimIdByAttempt.set(key, claimIdByAttempt);
       }
     }
   }
@@ -854,11 +868,25 @@ export function readEventWindows(path) {
     if (!enters || !exits) {
       return [];
     }
+    const enterClaimIds = enterClaimIdByAttempt.get(key);
+    const exitClaimIds = exitClaimIdByAttempt.get(key);
     const candidates = [];
     for (const [vendorSessionId, startMs] of enters) {
       const endMs = exits.get(vendorSessionId);
       if (endMs !== undefined) {
-        candidates.push({ vendorSessionId, startMs, endMs });
+        // The attempt's own claimId requires its enter and exit to agree
+        // (both undefined, or the same value) -- one stage's enter/exit
+        // share one claim in practice, so disagreement is defensive: it
+        // degrades to undefined rather than guessing which side is right.
+        const enterClaimId = enterClaimIds?.get(vendorSessionId);
+        const exitClaimId = exitClaimIds?.get(vendorSessionId);
+        const claimId = enterClaimId === exitClaimId ? enterClaimId : undefined;
+        candidates.push({
+          vendorSessionId,
+          startMs,
+          endMs,
+          ...(claimId !== undefined ? { claimId } : {}),
+        });
       }
     }
     return candidates;
@@ -874,6 +902,9 @@ export function readEventWindows(path) {
           startMs: preferred.startMs,
           endMs: preferred.endMs,
           vendorSessionId: preferred.vendorSessionId,
+          ...(preferred.claimId !== undefined
+            ? { claimId: preferred.claimId }
+            : {}),
         };
       }
     }
@@ -932,6 +963,9 @@ export function readEventWindows(path) {
             startMs: bestIdentified.startMs,
             endMs: bestIdentified.endMs,
             vendorSessionId: bestIdentified.vendorSessionId,
+            ...(bestIdentified.claimId !== undefined
+              ? { claimId: bestIdentified.claimId }
+              : {}),
           }
         : legacyWindow;
     }
@@ -940,6 +974,9 @@ export function readEventWindows(path) {
         startMs: bestIdentified.startMs,
         endMs: bestIdentified.endMs,
         vendorSessionId: bestIdentified.vendorSessionId,
+        ...(bestIdentified.claimId !== undefined
+          ? { claimId: bestIdentified.claimId }
+          : {}),
       };
     }
     return legacyWindow;
@@ -1108,29 +1145,37 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
     //   unidentified ones -- byte-identical to the pre-#2424 residual;
     //   identity cannot see it either way.
     //
-    // A third, accepted tradeoff (Codex review finding round 5, PR #2430,
-    // #2424): a `vendorSessionId` mismatch proves a different PROCESS, not
-    // a different ATTEMPT -- docs/token-cost.md's own Scope explicitly
+    // A third case (Codex review finding round 5, PR #2430, #2424; shipped
+    // in #2432): a `vendorSessionId` mismatch proves a different PROCESS,
+    // not a different ATTEMPT -- docs/token-cost.md's own Scope explicitly
     // allows one issue loop to span multiple Claude sessions via a
-    // handoff or resume. This check has no way to tell that legitimate
-    // case apart from a genuinely unrelated, abandoned earlier attempt,
-    // so it excludes both alike. Widening the window to include the
-    // earlier session's own stage would not by itself recover its usage
-    // either: `scanClaudeVendorSessions` harvests one session log file
-    // per completed window, so an earlier handoff session's records live
-    // in a file this resolution never selects -- a widened-but-single-
-    // file harvest would misrepresent its own coverage (bounds spanning
-    // both sessions, records covering only one), which is worse than
-    // today's narrower-but-honest one. Merging records across a
-    // confirmed handoff's files needs a positive-evidence rule this
-    // event stream alone can't supply; tracked separately (#2432) rather
-    // than attempted here. Until then this is a documented undercount,
-    // not a bug: recoverable once #2432 ships, unlike the permanent
-    // contamination a wrong inclusion would freeze under a stable
-    // `#ew<issueNumber>` sample id.
+    // handoff or resume, and this check alone can't tell that legitimate
+    // case apart from a genuinely unrelated, abandoned earlier attempt.
+    // `idCompatible` below adds a second, independent admission path for
+    // exactly this case: a non-cleanup window whose own `claimId` (#2432,
+    // threaded from the IDD `{claim-id}` a caller optionally passes to
+    // `token-cost-event.mjs --claim-id`) MATCHES cleanup's own is treated
+    // as compatible even when its `vendorSessionId` differs -- `claimId`
+    // is this repository's own ground-truth ownership token for "same
+    // claim lineage, possibly handed off across sessions," independent of
+    // which process posted the event. A window admitted only via this
+    // claimId branch (not also same-`vendorSessionId`-or-unidentified) is
+    // additionally recorded as a `contributingWindows` entry so
+    // `scanClaudeVendorSessions` can pull that session's own file's
+    // records in too, instead of merely widening the bounds without the
+    // usage to back them. `claimId` absent on either side (historical
+    // data, or a caller that doesn't pass `--claim-id`) falls back to
+    // today's narrower, single-session-only behavior unchanged. Two
+    // claim-id-matched windows from DIFFERENT vendorSessionIds that
+    // OVERLAP each other in time (a narrow, documented TOCTOU race in
+    // `idd-claim.instructions.md` where two sessions can momentarily
+    // share one active `{claim-id}`) are treated as contamination and
+    // skip the whole issue, same as a reversed window below -- a genuine
+    // sequential handoff never produces overlapping activity.
     const idCompatible = (window) =>
       window.vendorSessionId === undefined ||
-      window.vendorSessionId === cleanup.vendorSessionId;
+      window.vendorSessionId === cleanup.vendorSessionId ||
+      (window.claimId !== undefined && window.claimId === cleanup.claimId);
     const candidateStages = [...stages].filter(
       ([stageId, window]) => stageId === 'cleanup' || idCompatible(window),
     );
@@ -1149,6 +1194,54 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
         startMs = Math.min(startMs, window.startMs);
       }
     }
+    // #2432: a boundary-consistent, claimId-matched window whose own
+    // vendorSessionId differs from cleanup's own is a genuine
+    // contributing session -- union its range with any sibling windows
+    // sharing the same vendorSessionId (one earlier session can post more
+    // than one qualifying stage) into a single contribution.
+    const contributingRanges = new Map();
+    for (const [stageId, window] of candidateStages) {
+      if (
+        stageId === 'cleanup' ||
+        window.vendorSessionId === undefined ||
+        window.vendorSessionId === cleanup.vendorSessionId ||
+        !(window.startMs <= cleanup.endMs && window.endMs <= cleanup.endMs)
+      ) {
+        continue;
+      }
+      const existing = contributingRanges.get(window.vendorSessionId);
+      contributingRanges.set(window.vendorSessionId, {
+        startMs: existing
+          ? Math.min(existing.startMs, window.startMs)
+          : window.startMs,
+        endMs: existing ? Math.max(existing.endMs, window.endMs) : window.endMs,
+      });
+    }
+    const contributingWindows = [...contributingRanges].map(
+      ([vendorSessionId, range]) => ({ vendorSessionId, ...range }),
+    );
+    // Cross-session overlap guard: a genuine sequential handoff never
+    // produces overlapping activity between two different sessions. Two
+    // claim-id-matched windows from DIFFERENT vendorSessionIds that DO
+    // overlap is evidence of the narrow, documented TOCTOU race in
+    // `idd-claim.instructions.md` where two sessions can momentarily
+    // share one active claim-id without one being a clean continuation of
+    // the other -- treat the whole issue as contaminated, same as a
+    // reversed window above (no sample beats a wrong one). Scoped to
+    // cleanup's own [startMs, endMs) rather than the full widened window,
+    // since only the cleanup-owning session's identity is being compared
+    // against each contributing session's own identity here.
+    const overlaps = (a, b) => a.startMs < b.endMs && b.startMs < a.endMs;
+    const overlapCandidates = [
+      { startMs: cleanup.startMs, endMs: cleanup.endMs },
+      ...contributingWindows,
+    ];
+    const hasCrossSessionOverlap = overlapCandidates.some((a, i) =>
+      overlapCandidates.some((b, j) => i < j && overlaps(a, b)),
+    );
+    if (hasCrossSessionOverlap) {
+      continue;
+    }
     out.push({
       issueNumber,
       startMs,
@@ -1156,6 +1249,8 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
       ...(cleanup.vendorSessionId !== undefined
         ? { vendorSessionId: cleanup.vendorSessionId }
         : {}),
+      ...(cleanup.claimId !== undefined ? { claimId: cleanup.claimId } : {}),
+      ...(contributingWindows.length > 0 ? { contributingWindows } : {}),
     });
   }
   return out;

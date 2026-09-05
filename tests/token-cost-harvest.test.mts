@@ -208,11 +208,13 @@ function stageWindow(
   startIso: string,
   endIso: string,
   vendorSessionId?: string,
+  claimId?: string,
 ): StageEventWindow {
   return {
     startMs: ms(startIso),
     endMs: ms(endIso),
     ...(vendorSessionId !== undefined ? { vendorSessionId } : {}),
+    ...(claimId !== undefined ? { claimId } : {}),
   };
 }
 
@@ -808,6 +810,196 @@ test('buildCompletedIssueWindows: an IDENTIFIED non-cleanup window from a stale 
   assert.equal(windows[0].startMs, ms('2026-01-01T00:10:00Z'));
   assert.equal(windows[0].endMs, ms('2026-01-01T00:10:05Z'));
   assert.equal('vendorSessionId' in windows[0], false);
+});
+
+test('buildCompletedIssueWindows: a claimId match widens the window across a different vendorSessionId and records a contributingWindows entry (#2432)', () => {
+  // Attempt A (earlier handoff session) posted 'work' under the SAME
+  // claim-id as attempt B (the session that reached cleanup), but a
+  // DIFFERENT vendorSessionId. #2424 alone would exclude 'work' as a
+  // vendorSessionId mismatch; the claimId match is the positive evidence
+  // that this is a genuine handoff, not an unrelated attempt.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '601:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'attempt-A',
+        'claim-shared',
+      ),
+    ],
+    [
+      '601:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'attempt-B',
+        'claim-shared',
+      ),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:00:00Z'));
+  assert.equal(windows[0].endMs, ms('2026-01-01T00:25:00Z'));
+  assert.equal(windows[0].vendorSessionId, 'attempt-B');
+  assert.equal(windows[0].claimId, 'claim-shared');
+  assert.deepEqual(windows[0].contributingWindows, [
+    {
+      vendorSessionId: 'attempt-A',
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T00:05:00Z'),
+    },
+  ]);
+});
+
+test('buildCompletedIssueWindows: a DIFFERENT vendorSessionId AND a different (or absent) claimId is still excluded (#2432 regression guard on #2424 behavior)', () => {
+  const all = new Map<string, StageEventWindow>([
+    [
+      '602:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'attempt-A',
+        'claim-unrelated',
+      ),
+    ],
+    [
+      '602:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'attempt-B',
+        'claim-shared',
+      ),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:20:00Z'));
+  assert.equal('contributingWindows' in windows[0], false);
+});
+
+test('buildCompletedIssueWindows: a claimId-matched but reversed window still trips contamination (safety checks apply uniformly, #2432)', () => {
+  const all = new Map<string, StageEventWindow>([
+    [
+      '603:claude:work',
+      stageWindow(
+        '2026-01-01T00:04:00Z',
+        '2026-01-01T00:02:00Z',
+        'attempt-A',
+        'claim-shared',
+      ),
+    ],
+    [
+      '603:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:05:00Z',
+        '2026-01-01T00:06:00Z',
+        'attempt-B',
+        'claim-shared',
+      ),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 0);
+});
+
+test('buildCompletedIssueWindows: one vendorSessionId contributing two stages unions into a single contributingWindows entry (#2432)', () => {
+  const all = new Map<string, StageEventWindow>([
+    [
+      '604:claude:claim',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:01:00Z',
+        'attempt-A',
+        'claim-shared',
+      ),
+    ],
+    [
+      '604:claude:work',
+      stageWindow(
+        '2026-01-01T00:01:00Z',
+        '2026-01-01T00:05:00Z',
+        'attempt-A',
+        'claim-shared',
+      ),
+    ],
+    [
+      '604:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'attempt-B',
+        'claim-shared',
+      ),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.deepEqual(windows[0].contributingWindows, [
+    {
+      vendorSessionId: 'attempt-A',
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T00:05:00Z'),
+    },
+  ]);
+});
+
+test('buildCompletedIssueWindows: two claimId-matched windows from different vendorSessionIds that OVERLAP each other skip the whole issue (#2432 cross-session overlap guard)', () => {
+  // A documented, narrow TOCTOU race (idd-claim.instructions.md) can leave
+  // two sessions momentarily sharing one active claim-id without one
+  // being a clean sequential continuation -- overlapping activity under a
+  // shared claim-id is evidence of exactly that race, not a genuine
+  // handoff, so this must NOT merge.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '605:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:22:00Z',
+        'attempt-A',
+        'claim-shared',
+      ),
+    ],
+    [
+      '605:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'attempt-B',
+        'claim-shared',
+      ),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 0);
+});
+
+test('buildCompletedIssueWindows: claimId-matched windows that are exactly back-to-back (touching, not overlapping) still merge (#2432)', () => {
+  const all = new Map<string, StageEventWindow>([
+    [
+      '606:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:20:00Z',
+        'attempt-A',
+        'claim-shared',
+      ),
+    ],
+    [
+      '606:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'attempt-B',
+        'claim-shared',
+      ),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:00:00Z'));
 });
 
 test("scanClaudeVendorSessions: a completed cleanup window does not absorb a later retry's activity", () => {
