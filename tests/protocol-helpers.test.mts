@@ -430,13 +430,14 @@ test('classifyThreadAckOnlyPostDisposition rejects a novel substantive reply tha
 
 test('classifyThreadAckOnlyPostDisposition fails closed for a reply with no known template, even from a configured advisory bot (#2641)', () => {
   // `chatgpt-codex-connector` has no observed courtesy-ack template in this
-  // repository's history (#2641's own research): its replies never carry
-  // CodeRabbit's own generated closing signature (the 🐇 emoji or either
-  // marker), so even a superficially ack-shaped opening does not match
-  // `isKnownAdvisoryAckTemplate` -- fail closed rather than guess at an
-  // unobserved shape. No author check is needed here: any configured
-  // advisory bot is eligible, but only a reply that actually carries
-  // CodeRabbit's own fingerprint can satisfy the closing-signature half.
+  // repository's history (#2641's own research): its replies never report
+  // CodeRabbit's own thread-resolve closure (e.g. "✅ Review thread
+  // resolved." / "I couldn't resolve..."), so even a superficially
+  // ack-shaped opening does not match `isKnownAdvisoryAckTemplate` -- fail
+  // closed rather than guess at an unobserved shape. No author check is
+  // needed here: any configured advisory bot is eligible, but only a reply
+  // that actually reports CodeRabbit's own resolution decision can satisfy
+  // the closure half.
   const thread = {
     id: 'thread-unrecognized-bot-ack',
     isResolved: true,

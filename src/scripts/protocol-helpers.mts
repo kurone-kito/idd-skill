@@ -1123,7 +1123,7 @@ const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
 // existing review thread (distinct from `CODERABBIT_SUMMARY_MARKER`,
 // which opens a fresh review-summary walkthrough). Single-sourced here
 // (#2641 review) so `classifyRegularBotComment`'s stale review-trigger
-// check and `CODERABBIT_ACK_SIGNATURE_RE`'s courtesy-ack signature
+// check and `CODERABBIT_ACK_OPENING_RE`'s marker-first tolerance
 // recognize byte-for-byte the same marker and cannot drift.
 export const CODERABBIT_AUTO_GENERATED_REPLY_MARKER =
   '<!-- This is an auto-generated reply by CodeRabbit -->';
