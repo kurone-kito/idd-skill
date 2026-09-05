@@ -351,20 +351,33 @@ function asClaudeHarvestInput(input) {
     typeof input.issueNumberOverride === 'number'
       ? input.issueNumberOverride
       : undefined;
+  const vendorSessionIdOverride =
+    typeof input.vendorSessionIdOverride === 'string' &&
+    input.vendorSessionIdOverride.length > 0
+      ? input.vendorSessionIdOverride
+      : undefined;
   return {
     records: input.records,
     fileBasename,
     segmentIndex,
     issueNumberOverride,
+    vendorSessionIdOverride,
   };
 }
 /** Claude Code vendor adapter. `input` must satisfy {@link ClaudeHarvestInput}. */
 export const claudeAdapter = {
   harvest(input) {
-    const { records, fileBasename, segmentIndex, issueNumberOverride } =
-      asClaudeHarvestInput(input);
+    const {
+      records,
+      fileBasename,
+      segmentIndex,
+      issueNumberOverride,
+      vendorSessionIdOverride,
+    } = asClaudeHarvestInput(input);
     const vendorSessionId = deriveVendorSessionId(
-      extractSessionId(records) ?? deriveFallbackSessionId(fileBasename),
+      vendorSessionIdOverride ??
+        extractSessionId(records) ??
+        deriveFallbackSessionId(fileBasename),
       segmentIndex,
       issueNumberOverride,
     );

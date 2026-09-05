@@ -189,6 +189,89 @@ test('segmentIndex is ignored (not appended) when issueNumberOverride is also pr
   assert.equal(sample.vendorSessionId, 'sess-ew-0003#ew501');
 });
 
+test('vendorSessionIdOverride wins over extractSessionId, e.g. when records from a second file were merged in (#2432)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      {
+        type: 'assistant',
+        timestamp: '2026-01-01T00:00:00Z',
+        // A DIFFERENT session's own id -- simulates a contributing
+        // handoff session's record concatenated in ahead of the primary
+        // file's own records.
+        sessionId: 'sess-contributor-0001',
+        cwd: '/repo',
+        message: {
+          model: 'm',
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            output_tokens: 1,
+          },
+        },
+      },
+    ],
+    issueNumberOverride: 501,
+    vendorSessionIdOverride: 'sess-primary-0001',
+  });
+  assert.equal(sample.vendorSessionId, 'sess-primary-0001#ew501');
+});
+
+test('vendorSessionIdOverride wins over the fileBasename fallback too', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      {
+        type: 'assistant',
+        timestamp: '2026-01-01T00:00:00Z',
+        cwd: '/repo',
+        message: {
+          model: 'm',
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            output_tokens: 1,
+          },
+        },
+      },
+    ],
+    fileBasename: 'session-contributor.jsonl',
+    issueNumberOverride: 501,
+    vendorSessionIdOverride: 'sess-primary-0002',
+  });
+  assert.equal(sample.vendorSessionId, 'sess-primary-0002#ew501');
+});
+
+test('an empty-string vendorSessionIdOverride is ignored, falling back to extractSessionId (Copilot review finding, PR #2627)', () => {
+  // A `??`-based fallback treats '' as authoritative (unlike undefined),
+  // which would otherwise produce a malformed vendorSessionId like
+  // '#ew501' with no real base -- asClaudeHarvestInput must reject an
+  // empty override the same way extractSessionId/deriveFallbackSessionId
+  // already reject an empty sessionId/fileBasename.
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      {
+        type: 'assistant',
+        timestamp: '2026-01-01T00:00:00Z',
+        sessionId: 'sess-real-0001',
+        cwd: '/repo',
+        message: {
+          model: 'm',
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            output_tokens: 1,
+          },
+        },
+      },
+    ],
+    issueNumberOverride: 501,
+    vendorSessionIdOverride: '',
+  });
+  assert.equal(sample.vendorSessionId, 'sess-real-0001#ew501');
+});
+
 test('no issueNumberOverride and no cwd: behavior is unchanged from before #2418', () => {
   const { joinHints, sample } = claudeAdapter.harvest({
     records: [

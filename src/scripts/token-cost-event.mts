@@ -140,6 +140,13 @@ export function buildEvent(
     }
     event.issueNumber = issueNumber;
   }
+  const claimIdRaw = values['claim-id'];
+  if (claimIdRaw !== undefined) {
+    if (typeof claimIdRaw !== 'string' || claimIdRaw.length === 0) {
+      throw new Error('--claim-id must be a single, non-empty value');
+    }
+    event.claimId = claimIdRaw;
+  }
   return event;
 }
 
@@ -172,11 +179,10 @@ const TOKEN_COST_EVENT_FLAG_SPEC = {
   '--exit': { type: 'boolean', default: false },
   '--issue': { type: 'string' },
   '--vendor': { type: 'string' },
-  // Accepted for CLI-surface symmetry with the calling convention this
-  // issue's own sketch shows -- not persisted, since
-  // schemas/token-cost-event.schema.json has no field for an IDD claim id
-  // (distinct from vendorSessionId, the AI vendor's own session
-  // identifier).
+  // The active IDD {claim-id} (distinct from vendorSessionId, the AI
+  // vendor's own session identifier), when this event is claim-scoped
+  // (#2432). Positive evidence a later harvest can use to merge a
+  // legitimate cross-session handoff's usage.
   '--claim-id': { type: 'string' },
   '--out': { type: 'string' },
   '--strict': { type: 'boolean', default: false },
@@ -194,8 +200,8 @@ function printHelp(): void {
   --enter / --exit   Exactly one is required.
   --issue <n>        Issue number, when this event is issue-scoped.
   --vendor <v>       Agent vendor: grok, claude, or codex. Required.
-  --claim-id <id>    Accepted for calling-convention symmetry; not
-                      persisted (no schema field for it).
+  --claim-id <id>    The active IDD {claim-id}, when this event is
+                     claim-scoped (persisted as claimId, #2432).
   --out <path>       JSONL append target (default:
                      \${XDG_STATE_HOME:-$HOME/.local/state}/idd-skill/token-cost/events.jsonl).
   --strict           Exit non-zero on any failure instead of the default

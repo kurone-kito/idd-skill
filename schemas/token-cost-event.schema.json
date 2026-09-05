@@ -44,6 +44,10 @@
       "type": ["string", "null"],
       "description": "Opaque vendor session id when known. Never a filesystem path."
     },
+    "claimId": {
+      "type": ["string", "null"],
+      "description": "The active IDD {claim-id} when this event is claim-scoped. Positive evidence that two differently-vendorSessionId'd stage windows for the same issue belong to one continuous claim lineage (a handoff/resume), not two unrelated attempts."
+    },
     "issueNumber": {
       "type": ["integer", "null"],
       "exclusiveMinimum": 0,

@@ -88,16 +88,28 @@ themselves unidentified (all historical data, and any vendor with no
 known session-id source) -- once identified events are present, an
 identified stage is never treated as compatible with a differently- or
 un-identified completion, so a stale or unrelated attempt can't be
-silently absorbed. One accepted tradeoff from this: when a single issue
-loop legitimately spans multiple Claude sessions (a handoff or resume,
-Refs Scope above), the event-window fallback currently only harvests
-that loop's usage from the session that posted `cleanup` -- an earlier
-session's own identified stage windows are excluded rather than folded
-in, since a session-id mismatch cannot be told apart from a genuinely
-unrelated, abandoned attempt at the event level. Full multi-session
-aggregation for this path is tracked separately (Refs #2432); the
-harvested sample stays an undercount rather than risking a
-mismatched/contaminated one in the meantime.
+silently absorbed. When a single issue loop legitimately spans multiple
+Claude sessions (a handoff or resume, Refs Scope above), a second,
+independent signal resolves it: passing `--claim-id` (the active IDD
+`{claim-id}`) to `token-cost-event.mjs` persists it as `claimId` on the
+event, and a non-`cleanup` stage window whose `claimId` matches the
+winning `cleanup` window's own is treated as belonging to the same claim
+lineage even when its `vendorSessionId` differs -- the IDD `{claim-id}`
+is this repository's own ground-truth ownership token, independent of
+which process posted the event, so it can positively confirm a genuine
+handoff where a bare session-id mismatch alone cannot (Refs #2432). The
+harvester then also pulls that contributing session's own project log
+file's records into the harvested sample (restricted to its own
+qualifying window bounds), rather than merely widening the reported
+bounds without the usage to back them. Two claim-id-matched windows from
+different sessions that overlap in time -- a narrow, documented race
+where two sessions can momentarily share one active claim-id without one
+being a clean continuation of the other -- are treated as contamination
+and excluded, same as a reversed window. A loop whose events predate this
+field, or whose caller never passes `--claim-id`, falls back to today's
+narrower, single-session-only behavior unchanged -- not a regression,
+since `events.jsonl` is append-only and a later harvest picks up richer
+attribution once available.
 
 `node scripts/token-cost-report.mjs`:
 

@@ -112,6 +112,18 @@ export interface ClaudeHarvestInput {
    * fallback paths are never combined on the same harvest() call.
    */
   issueNumberOverride?: number;
+  /**
+   * #2432: pins the resulting sample's identity to a specific vendor
+   * session id, bypassing `extractSessionId(records) ??
+   * deriveFallbackSessionId(fileBasename)` outright. For a merged
+   * cross-session handoff harvest, `records` carries lines from more than
+   * one project JSONL file concatenated together -- `extractSessionId`'s
+   * "first non-empty `sessionId` in file order" scan would then pick
+   * whichever file's own id happens to sort first in the merged array,
+   * not necessarily the primary (winning `cleanup`) session's own id.
+   * Set this explicitly instead of relying on record order.
+   */
+  vendorSessionIdOverride?: string;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -445,22 +457,35 @@ function asClaudeHarvestInput(input: unknown): ClaudeHarvestInput {
     typeof input.issueNumberOverride === 'number'
       ? input.issueNumberOverride
       : undefined;
+  const vendorSessionIdOverride =
+    typeof input.vendorSessionIdOverride === 'string' &&
+    input.vendorSessionIdOverride.length > 0
+      ? input.vendorSessionIdOverride
+      : undefined;
   return {
     records: input.records,
     fileBasename,
     segmentIndex,
     issueNumberOverride,
+    vendorSessionIdOverride,
   };
 }
 
 /** Claude Code vendor adapter. `input` must satisfy {@link ClaudeHarvestInput}. */
 export const claudeAdapter: TokenCostVendorAdapter = {
   harvest(input: unknown): TokenCostAdapterResult {
-    const { records, fileBasename, segmentIndex, issueNumberOverride } =
-      asClaudeHarvestInput(input);
+    const {
+      records,
+      fileBasename,
+      segmentIndex,
+      issueNumberOverride,
+      vendorSessionIdOverride,
+    } = asClaudeHarvestInput(input);
 
     const vendorSessionId = deriveVendorSessionId(
-      extractSessionId(records) ?? deriveFallbackSessionId(fileBasename),
+      vendorSessionIdOverride ??
+        extractSessionId(records) ??
+        deriveFallbackSessionId(fileBasename),
       segmentIndex,
       issueNumberOverride,
     );
