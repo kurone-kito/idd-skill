@@ -1731,6 +1731,63 @@ test('scanClaudeVendorSessions: a cwd-attributed primary (cleanup session launch
   assert.equal(issue506Samples[0].adapterResult.sample.usage.output, 9);
 });
 
+test('scanClaudeVendorSessions: a cwd-attributed primary that moved out of and back into the issue worktree (two segments, one file) still resolves (#2432, Codex review PR #2627)', () => {
+  // The cleanup-owning session's own file produces TWO cwd-attributed
+  // segments for the SAME issue (#2404 segmentation, moved out then back
+  // in) -- this must not read as "matched more than one file" and reject
+  // the resolution; both segments' records belong to the one, uniquely
+  // resolved primary file.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-primary-508.jsonl'),
+    `${[
+      '{"type":"assistant","timestamp":"2026-01-01T00:15:00.000Z","sessionId":"sess-primary-0007","cwd":"/home/user/repo.issue-508-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":3}}}',
+      '{"type":"assistant","timestamp":"2026-01-01T00:18:00.000Z","sessionId":"sess-primary-0007","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}',
+      '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0007","cwd":"/home/user/repo.issue-508-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}',
+    ].join('\n')}\n`,
+  );
+  writeFileSync(
+    join(sandbox, 'session-contrib-508.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:00:30.000Z","sessionId":"sess-contrib-0007","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '508:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'sess-contrib-0007',
+        'claim-shared',
+      ),
+    ],
+    [
+      '508:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-primary-0007',
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const issue508Samples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('508'),
+  );
+
+  assert.equal(issue508Samples.length, 1);
+  assert.equal(
+    issue508Samples[0].adapterResult.sample.vendorSessionId,
+    'sess-primary-0007#ew508',
+  );
+  // 3 + 7 (both cwd-508-attributed segments' own records) + 2
+  // (contributor) -- the middle segment's own 5 tokens, recorded while
+  // cwd was NOT the issue-508 worktree, are correctly excluded: only the
+  // cwd-attributed segments belong to this primary.
+  assert.equal(issue508Samples[0].adapterResult.sample.usage.output, 12);
+});
+
 test('scanClaudeVendorSessions: a contributor eligible for one contributing window is not disqualified by an EARLIER, non-overlapping cwd segment for a different issue (#2432, Codex review PR #2627)', () => {
   // The contributing session's own file also touched an unrelated issue
   // (#100) much earlier, at a time that does not overlap this contributing

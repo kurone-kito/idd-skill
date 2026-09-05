@@ -1922,20 +1922,33 @@ export function scanClaudeVendorSessions(
         resolveCandidateSessionId(candidate.fileBasename) ===
           window.vendorSessionId,
     );
-    if (matches.length !== 1) {
+    // #2432/Codex review (PR #2627): a session that moves out of the
+    // target worktree and later returns produces more than one cwd
+    // segment for the SAME file and issue (#2404 segmentation) -- group by
+    // basename first, since several segments of the one uniquely-resolved
+    // file are not the ambiguity this guards against; only more than one
+    // DISTINCT file matching is.
+    const matchesByBasename = new Map();
+    for (const candidate of matches) {
+      const combined = matchesByBasename.get(candidate.fileBasename) ?? [];
+      combined.push(...candidate.records);
+      matchesByBasename.set(candidate.fileBasename, combined);
+    }
+    if (matchesByBasename.size !== 1) {
       process.stderr.write(
         `token-cost-harvest: skipping cwd-attributed primary resolution for issue #${window.issueNumber}: ${
-          matches.length === 0
+          matchesByBasename.size === 0
             ? 'no matching cwd-attributed segment found'
-            : `matched more than one segment (${matches.map((m) => m.fileBasename).join(', ')})`
+            : `matched more than one file (${[...matchesByBasename.keys()].join(', ')})`
         } -- its plain cwd-derived sample (if any) is unaffected\n`,
       );
       continue;
     }
+    const [[primaryBasename, primaryRecords]] = matchesByBasename;
     harvestEventWindowCandidate(
       window.issueNumber,
-      matches[0].fileBasename,
-      matches[0].records,
+      primaryBasename,
+      primaryRecords,
     );
   }
   // #2432: emit each file's own cwd-derived issue-loop sample now that
