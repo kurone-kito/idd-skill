@@ -579,8 +579,8 @@ footer, remove or update the `triage:{outcome}` label, revise
 acceptance criteria to reflect the decision, and record the decision as
 inline prose in the issue body: `Maintainer decision (<provenance>,
 Groom hearing, <date>): <resolution text>` -- the shape
-`suitability-triage.mjs`'s Check 7 recognizes as a resolved decision
-(`#2661`); a comment may additionally note the decision, but the body
+`scripts/suitability-triage.mjs`'s Check 7 recognizes as a resolved
+decision (`#2661`); a comment may additionally note the decision, but the body
 itself is what re-triage reads. The next ordinary Discover pass then
 picks the issue up normally -- grooming itself never claims or works
 the issue (see

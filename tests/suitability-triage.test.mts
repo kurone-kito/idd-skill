@@ -2659,7 +2659,7 @@ The maintainer approval is recorded; option 1 was chosen.
 });
 
 test('verifiability passes an inline Groom-hearing resolved-decision issue with objective criteria (#2661)', () => {
-  // Check 7 false-negative that now passes: the grooming-pass workflow
+  // Check 7 false-positive that now passes: the grooming-pass workflow
   // (#2494) records a resolved decision as inline prose, not a "## Decision"
   // heading -- reproduces the shape of kurone-kito/idd-skill#2641's body.
   const result = checkVerifiability({
@@ -2716,6 +2716,56 @@ Whether to adopt this approach here requires the maintainer's sign-off before we
     },
   } as Context);
   assert.equal(result.pass, false);
+});
+
+test('verifiability passes an inline decision whose own resolution text uses a reporting verb (PR #2662 Codex review)', () => {
+  // The framing check must only look at text BEFORE the marker, not the
+  // whole paragraph: a genuine resolution can legitimately use an ordinary
+  // verb like "reports" in its own resolution text without that making the
+  // marker a quoted example of someone else's decision.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05): the helper reports an actionable error when the input is malformed, instead of silently passing.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails when an inline decision uses Markdown-decorated or list/quote-prefixed still-pending vocabulary (PR #2662 Codex + Copilot review)', () => {
+  // The still-pending denylist must see through a leading Markdown emphasis
+  // delimiter or list/blockquote marker, and its trailing boundary must not
+  // be defeated by a closing "_" (both the word char before it and "_"
+  // itself are `\w`, so a plain `\b` never fires there).
+  for (const resolution of [
+    '**pending** further review',
+    '_TBD_',
+    '`still open`',
+    '- TBD, no consensus yet',
+    '> pending, need more info',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05): ${resolution}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for resolution: ${resolution}`,
+    );
+  }
 });
 
 test('verifiability still fails when an inline decision uses still-pending vocabulary (#2661 C1 review)', () => {

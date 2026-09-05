@@ -227,6 +227,24 @@ function isFramedAsDescriptive(normalizedBody, paragraphSpans, offset) {
     normalizedBody.slice(span?.start ?? 0, span?.end ?? normalizedBody.length),
   );
 }
+// #2661 PR #2662 review (Codex): unlike `isFramedAsDescriptive` above, this
+// scans only the paragraph text BEFORE `offset`, not the whole paragraph.
+// Used solely for the inline-decision scan, where the match's own resolution
+// text (after the colon) can legitimately contain an ordinary reporting verb
+// -- "Maintainer decision (...): the helper reports an actionable error" --
+// without that making the marker itself a quoted example of someone else's
+// decision. A genuine quoting/reporting frame always precedes the quoted
+// marker in natural prose ("issue #2641 states \"Maintainer decision
+// (...)\"..."), so only text before the match need be checked here.
+function isPrecededByFramingVerb(normalizedBody, paragraphSpans, offset) {
+  const span =
+    paragraphSpans.find(
+      (candidate) => offset >= candidate.start && offset <= candidate.end,
+    ) ?? paragraphSpans[paragraphSpans.length - 1];
+  return FRAMING_VERB_PATTERN.test(
+    normalizedBody.slice(span?.start ?? 0, offset),
+  );
+}
 // Check 3 precision: an unsafe execution directive tells the agent to act on
 // *supplied / untrusted* content, not any command verb that merely lands near
 // the ordinary determiner "this". Match the strong untrusted-origin signals, or
@@ -667,11 +685,18 @@ const RESOLVED_DECISION_PATTERN =
 // phrasing ("not yet decided") and this inline form's own still-pending
 // vocabulary (TBD, pending, undecided, deferred, "still open"), since the
 // inline form has no positive `\bresolved\b` requirement to fall back on
-// (#2661 C1 review). This is the same soft co-occurrence heuristic as the
-// heading form: it does not verify the resolution text actually settles the
-// exact approval wording elsewhere in the body.
+// (#2661 C1 review). The leading `[\s*_\`>-]*` skips past Markdown emphasis
+// (`**pending**`, `_TBD_`, `` `still open` ``) and list/blockquote markers
+// ("- TBD ...", "> pending ...") that would otherwise land between the colon
+// and the denylist word (Codex + Copilot review, PR #2662); the trailing
+// `(?![a-zA-Z])` replaces a plain `\b`, which fails to end the match after
+// "TBD_" (both `D` and `_` are `\w`, so `\b` finds no boundary there) even
+// though the underscore is just a closing emphasis marker, not part of the
+// word. This is the same soft co-occurrence heuristic as the heading form:
+// it does not verify the resolution text actually settles the exact
+// approval wording elsewhere in the body.
 const INLINE_MAINTAINER_DECISION_PATTERN =
-  /(?<![\w-])Maintainer decision(?![\w-])\s*\([^)]{0,200}\)\s*:\s*(?!(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|pending|undecided|deferred|still\s+open)\b)\S/i;
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\([^)]{0,200}\)\s*:\s*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|pending|undecided|deferred|still\s+open)(?![a-zA-Z]))\S/i;
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the
 // negation word and the trailing whitespace that reaches the verb. The
@@ -2112,14 +2137,18 @@ export function checkVerifiability(context) {
   // accepted trade-off for maintainer-authored issues. An approval-gated
   // body with no resolved decision still routes to needs-decision.
   //
-  // The inline form additionally requires its own paragraph not be framed as
-  // descriptive (#2661 C1 review): a body that merely *quotes* another
+  // The inline form additionally requires no framing verb PRECEDE it in its
+  // own paragraph (#2661 C1/PR review): a body that merely *quotes* another
   // issue's already-resolved decision as an example -- "issue #2641 states
   // \"Maintainer decision (...)\" as an example of the convention" -- must
-  // not borrow that resolution for THIS issue's own subjective gate. The
-  // heading form has no equivalent gap: a "## Decision (resolved …)" section
-  // is, by construction, this issue's own decision record, never a quoted
-  // example of someone else's.
+  // not borrow that resolution for THIS issue's own subjective gate. Scoped
+  // to text before the match (`isPrecededByFramingVerb`, not the
+  // whole-paragraph `isFramedAsDescriptive`) so a genuine resolution whose
+  // OWN text happens to use a reporting verb -- "Maintainer decision (...):
+  // the helper reports an actionable error" -- is not wrongly excluded
+  // (Codex review, PR #2662). The heading form has no equivalent gap: a
+  // "## Decision (resolved …)" section is, by construction, this issue's own
+  // decision record, never a quoted example of someone else's.
   const hasInlineResolvedDecision = (() => {
     const inlinePattern = new RegExp(
       INLINE_MAINTAINER_DECISION_PATTERN.source,
@@ -2128,7 +2157,7 @@ export function checkVerifiability(context) {
     let inlineMatch = inlinePattern.exec(normalizedBody);
     while (inlineMatch) {
       if (
-        !isFramedAsDescriptive(
+        !isPrecededByFramingVerb(
           normalizedBody,
           paragraphSpans,
           inlineMatch.index,
