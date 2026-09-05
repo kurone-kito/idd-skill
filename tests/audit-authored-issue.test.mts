@@ -2299,3 +2299,33 @@ test('authoring-owner-marker-trail reports not-applicable (not fail) for a compl
   assert.equal(finding?.result, 'pass');
   assert.match(finding?.detail ?? '', /not applicable/);
 });
+
+test('authoring-owner-marker-trail compares issue identity case-insensitively', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'Kurone-Kito/Idd-Skill',
+    issueNumber: 9001,
+    comments: [ownerMarkerComment({ target: 'kurone-kito/idd-skill#9001' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+});
+
+test('authoring-owner-marker-trail ignores a marker-shaped fenced-code example in a comment', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    comments: [
+      {
+        body: `\`\`\`html\n${ownerMarkerComment().body}\n\`\`\``,
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});

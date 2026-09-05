@@ -855,9 +855,13 @@ function checkAuthoringOwnerMarkerTrail(
   }
 
   const currentRepo = normalizeCurrentRepo(options.currentRepo);
+  // Lowercased: GitHub owner/repo names are case-insensitive, matching the
+  // normalization checkProseOnlyDependency already applies to its own
+  // owner/repo comparisons (#2628 review, CodeRabbit). Every comparison
+  // against currentIssueRef below lowercases its own operand to match.
   const currentIssueRef =
     currentRepo && options.issueNumber !== undefined
-      ? `${currentRepo}#${options.issueNumber}`
+      ? `${currentRepo}#${options.issueNumber}`.toLowerCase()
       : undefined;
 
   // Validate the new-issue publication line FIRST, independent of whether
@@ -891,8 +895,18 @@ function checkAuthoringOwnerMarkerTrail(
     );
   }
 
+  // Strip fenced/inline code regions before parsing, matching the same
+  // stripMarkdownCodeRegions(rawText) pass auditAuthoredIssue() already
+  // applies to the issue body: a pasted illustrative example wrapped in a
+  // comment's own code block must not count as a real marker (#2628
+  // review, CodeRabbit).
   const ownerMarkers = options.comments
-    .map((comment) => parseAuthoringOwnerComment(comment.body, markerPrefix))
+    .map((comment) =>
+      parseAuthoringOwnerComment(
+        stripMarkdownCodeRegions(comment.body),
+        markerPrefix,
+      ),
+    )
     .filter((marker): marker is NonNullable<typeof marker> => marker !== null);
   const hasQualifyingOwnerMarker = ownerMarkers.some(
     (marker) =>
@@ -902,7 +916,8 @@ function checkAuthoringOwnerMarkerTrail(
       // (`none` is only ever legitimate on an anchor-only release-guard
       // marker per docs/issue-authoring-skill.md -- #2628 review, Codex).
       marker.bodySha256 !== 'none' &&
-      (currentIssueRef === undefined || marker.target === currentIssueRef) &&
+      (currentIssueRef === undefined ||
+        marker.target.toLowerCase() === currentIssueRef) &&
       (publicationMarker === null ||
         (marker.set === publicationMarker.set &&
           marker.session === publicationMarker.session)),
@@ -952,7 +967,7 @@ function checkAuthoringOwnerMarkerTrail(
   // tolerable gap.
   const hasMatchingIntentRecord = options.journalComments.some((comment) => {
     const intent = parseAuthoringPublicationIntentComment(
-      comment.body,
+      stripMarkdownCodeRegions(comment.body),
       markerPrefix,
     );
     if (
@@ -968,7 +983,10 @@ function checkAuthoringOwnerMarkerTrail(
     if (!AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER.has(intent.state)) {
       return false;
     }
-    if (currentIssueRef !== undefined && intent.issue !== currentIssueRef) {
+    if (
+      currentIssueRef !== undefined &&
+      intent.issue.toLowerCase() !== currentIssueRef
+    ) {
       return false;
     }
     return true;
@@ -1661,6 +1679,16 @@ function main(): void {
   if (args.journalCommentsFile && !args.commentsFile) {
     fail_('--journal-comments-file requires --comments-file');
   }
+  // Without this, a new-issue check with real owner-marker evidence but no
+  // journal data would report "not applicable" for the journal half and
+  // still exit 0 -- a misleading success for the AC's combined
+  // publication-line + journal-record requirement (#2628 review,
+  // CodeRabbit). The pure auditAuthoredIssue() function itself keeps the
+  // graceful not-applicable degradation for a direct (non-CLI) caller that
+  // deliberately wants a partial check.
+  if (args.newIssue && args.commentsFile && !args.journalCommentsFile) {
+    fail_('--new-issue with --comments-file requires --journal-comments-file');
+  }
 
   // Explicit --current-repo wins; otherwise fall back to the
   // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
@@ -1873,7 +1901,9 @@ Options:
                                     --comments-file)
   --new-issue                      this issue was just created in this invocation
                                     (not an edit); requires the leading
-                                    authoring-publication body line
+                                    authoring-publication body line, and (when
+                                    --comments-file is also given) requires
+                                    --journal-comments-file too
   --format <json|table>            output format (default: json)
   --help                           show this help
 `);
