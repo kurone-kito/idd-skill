@@ -580,8 +580,11 @@ acceptance criteria to reflect the decision, and record the decision as
 inline prose in the issue body: `Maintainer decision (<provenance>,
 Groom hearing, <date>): <resolution text>` -- the shape
 `scripts/suitability-triage.mjs`'s Check 7 recognizes as a resolved
-decision (`#2661`); a comment may additionally note the decision, but the body
-itself is what re-triage reads. The next ordinary Discover pass then
+decision
+([kurone-kito/idd-skill#2661](https://github.com/kurone-kito/idd-skill/issues/2661)
+in the source repository); a comment may additionally note the
+decision, but the body itself is what re-triage reads. The next
+ordinary Discover pass then
 picks the issue up normally -- grooming itself never claims or works
 the issue (see
 [Mutation Policy and Coordination Rule](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)).
