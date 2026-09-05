@@ -2677,3 +2677,49 @@ test('idd-work.instructions.md confines every bare `main` mention to the B1 trus
     'a `main` mention outside the B1 trusted-checkout allowlist regressed the {development-branch} migration',
   );
 });
+
+function extractBoundedRegion(
+  content: string,
+  startMarker: string,
+  endMarker: string,
+  path: string,
+): string {
+  const startIndex = content.indexOf(startMarker);
+  assert.notEqual(
+    startIndex,
+    -1,
+    `expected to find ${JSON.stringify(startMarker)} in ${path}`,
+  );
+  const afterStart = content.slice(startIndex + startMarker.length);
+  const endIndex = afterStart.indexOf(endMarker);
+  assert.notEqual(
+    endIndex,
+    -1,
+    `expected ${JSON.stringify(endMarker)} after ${JSON.stringify(startMarker)} in ${path}`,
+  );
+  return afterStart.slice(0, endIndex);
+}
+
+test('D4 pending:true recovery checks Copilot review completion before requesting, not just "outstanding" (idd-skill#2622)', () => {
+  // A request that was just satisfied is also no longer "outstanding" --
+  // checking that alone re-requests a review Copilot already submitted for
+  // the current HEAD (traced on PR #2598). D4 must consult a fresh
+  // `advisory-wait-state` SATISFIED verdict before requesting.
+  const path =
+    'idd-template/.github/instructions/idd-pr-submit.instructions.md';
+  const bullet = extractBoundedRegion(
+    readText(path),
+    'reports `pending: true`**',
+    'and resume D4.',
+    path,
+  );
+  assert.match(bullet, /outcome:\s*SATISFIED/);
+  assert.match(bullet, /advisory-wait-state/);
+  assert.match(bullet, /lastCopilotCommit/);
+});
+
+test('idd-ci.instructions.md Exception 3 defers to D4\'s corrected pending:true recovery check, not a standalone "outstanding" check (idd-skill#2622)', () => {
+  const path = 'idd-template/.github/instructions/idd-ci.instructions.md';
+  const row = extractBoundedRegion(readText(path), 'Exception 3:', ' |', path);
+  assert.match(row, /D4's `pending: true` recovery check/);
+});
