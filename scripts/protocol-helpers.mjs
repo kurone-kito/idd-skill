@@ -503,6 +503,14 @@ const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
   escapeRegExp(CODERABBIT_SKIP_REVIEW_MARKER),
   'i',
 );
+// The exact marker CodeRabbit appends to a reply it generates on an
+// existing review thread (distinct from `CODERABBIT_SUMMARY_MARKER`,
+// which opens a fresh review-summary walkthrough). Single-sourced here
+// (#2641 review) so `classifyRegularBotComment`'s stale review-trigger
+// check and `CODERABBIT_ACK_SIGNATURE_RE`'s courtesy-ack signature
+// recognize byte-for-byte the same marker and cannot drift.
+export const CODERABBIT_AUTO_GENERATED_REPLY_MARKER =
+  '<!-- This is an auto-generated reply by CodeRabbit -->';
 // Matches the two section headings this older CodeRabbit format nests
 // per-file findings under (kurone-kito/idd-skill#2197, kurone-kito/idd-skill#2559): a review whose finding has no
 // threaded comment of its own. A newer-format review ("Actionable comments
@@ -684,9 +692,7 @@ export function classifyRegularBotComment(
     }
     return null;
   }
-  if (
-    body.startsWith('<!-- This is an auto-generated reply by CodeRabbit -->')
-  ) {
+  if (body.startsWith(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)) {
     if (
       /\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body) &&
       hasExplicitDispositionAfter(comment, comments, {
@@ -1235,16 +1241,28 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS = [
 // "`@kurone-kito` Thanks for the fix. ...", "`@kurone-kito`, agreed. ...").
 const CODERABBIT_ACK_OPENING_RE =
   /^`@[\w.-]+`[,:]?\s+(?:thanks?(?:\s+you)?|confirmed|agreed)\b/i;
+// The `coderabbit-skip-review-comment-follow-up` marker CodeRabbit appends
+// to some follow-up replies (distinct from `CODERABBIT_SKIP_REVIEW_MARKER`,
+// "skip review by coderabbit.ai", which marks a summary walkthrough with no
+// review content rather than a follow-up reply).
+const CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER =
+  '<!-- coderabbit-skip-review-comment-follow-up -->';
 // Closing: one of CodeRabbit's own auto-generated signatures -- the 🐇
-// emoji, the exact auto-generated-reply marker, the fixed trailer it
-// appends when its own thread-resolve API call fails ("Thanks for
-// confirming the fix. I couldn't resolve this review thread on the
-// repository platform..."), or the `coderabbit-skip-review-comment-follow-up`
-// marker (distinct from `CODERABBIT_SKIP_REVIEW_MARKER`, "skip review by
-// coderabbit.ai", which marks a summary walkthrough with no review content
-// rather than a follow-up reply).
-const CODERABBIT_ACK_SIGNATURE_RE =
-  /🐇|<!--\s*This is an auto-generated reply by CodeRabbit\s*-->|I couldn't resolve this review thread on the repository platform|<!--\s*coderabbit-skip-review-comment-follow-up\s*-->/i;
+// emoji, `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` (single-sourced with
+// `classifyRegularBotComment`'s stale review-trigger check above), the
+// fixed trailer it appends when its own thread-resolve API call fails
+// ("Thanks for confirming the fix. I couldn't resolve this review thread
+// on the repository platform..."), or
+// `CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER`.
+const CODERABBIT_ACK_SIGNATURE_RE = new RegExp(
+  [
+    '🐇',
+    escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER),
+    "I couldn't resolve this review thread on the repository platform",
+    escapeRegExp(CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER),
+  ].join('|'),
+  'i',
+);
 // No comment author check here: the caller (`classifyThreadAckOnlyPostDisposition`)
 // already restricts to `isConfiguredAdvisoryBotLogin`, and the closing
 // signature above is itself CodeRabbit's own generated fingerprint (the 🐇
