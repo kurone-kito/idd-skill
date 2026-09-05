@@ -682,6 +682,15 @@ updates issues. The label name comes from
 `issueAuthoring.authoringLabelName`, with `status:authoring` as the
 distributed default.
 
+`src/scripts/audit-authored-issue.mts`'s `authoring-owner-marker-trail`
+check mechanically verifies, from pre-fetched comment data a caller
+supplies, that an authoring-labeled issue carries a valid owner marker
+and (for a newly created issue) the publication-token trail this
+section defines -- structural/shape checking only, not the live
+trust/permission re-verification the runtime protocol below still
+owns. The module stays network-free; no caller currently wires it into
+the publish flow below (Refs #2621, non-blocking).
+
 During Stage 1 (author-and-publish), the skill must ensure the label
 exists in the target repository before first use. For the bundled
 GitHub CLI publication flow, create a missing label with

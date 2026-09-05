@@ -1955,3 +1955,411 @@ test('markerPrefix defaults to idd-skill when not provided', () => {
   const report = auditAuthoredIssue(orphanBody(), { shape: 'orphan' });
   assert.equal(report.markerPrefix, 'idd-skill');
 });
+
+// --- authoring-owner-marker-trail (#2621) ---
+
+const TEST_BODY_SHA256 = 'a'.repeat(64);
+
+function ownerMarkerComment({
+  target = 'kurone-kito/idd-skill#9001',
+  mode = 'acquire',
+  set = 'set-xyz789',
+  session = 'sess-1',
+  bodySha256 = TEST_BODY_SHA256,
+}: {
+  target?: string;
+  mode?: string;
+  set?: string;
+  session?: string;
+  bodySha256?: string;
+} = {}): { body: string } {
+  return {
+    body: `<!-- idd-skill-authoring-owner: target=${target}; anchor=kurone-kito/idd-skill#9001; mode=${mode}; owner=owner-tok1; set=${set}; session=${session}; body-sha256=${bodySha256}; snapshot-sha256=none; supersedes=none -->`,
+  };
+}
+
+function publicationIntentComment({
+  target = 'target-abc123',
+  issue = 'kurone-kito/idd-skill#9001',
+  state = 'member',
+}: {
+  target?: string;
+  issue?: string;
+  state?: string;
+} = {}): {
+  body: string;
+} {
+  return {
+    body: `<!-- idd-skill-authoring-publication-intent: target=${target}; anchor=kurone-kito/idd-skill#9001; set=set-xyz789; session=sess-1; token=pub-token1; journal=kurone-kito/idd-skill#9001; issue=${issue}; actor=kurone-kito; state=${state} -->`,
+  };
+}
+
+function bodyWithPublicationLine(): string {
+  return `<!-- idd-skill-authoring-publication: target=target-abc123; anchor=kurone-kito/idd-skill#9001; set=set-xyz789; session=sess-1; token=pub-token1 -->\n\n${orphanBody()}`;
+}
+
+test('authoring-owner-marker-trail is not applicable when the issue does not carry the authoring label', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: [],
+    comments: [],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.match(finding?.detail ?? '', /not applicable.*authoring label/);
+});
+
+test('authoring-owner-marker-trail is not applicable when no comment data is supplied', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.match(finding?.detail ?? '', /not applicable.*comment data/);
+});
+
+test('authoring-owner-marker-trail fails when no valid owner-marker comment exists', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    comments: [],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /no valid authoring-owner comment/);
+});
+
+test('authoring-owner-marker-trail fails when the only owner-marker mode is heartbeat', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    comments: [ownerMarkerComment({ mode: 'heartbeat' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail fails when the owner-marker target does not match the current issue', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    comments: [ownerMarkerComment({ target: 'kurone-kito/idd-skill#9002' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail passes on an edit (not a new issue) with a valid owner-marker', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    comments: [ownerMarkerComment()],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.match(finding?.detail ?? '', /not a new issue/);
+});
+
+test('authoring-owner-marker-trail fails when a new issue is missing the leading publication-token line', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /missing.*publication marker/);
+});
+
+test('authoring-owner-marker-trail fails when the publication line is well-formed but not the first line', () => {
+  const report = auditAuthoredIssue(
+    `${orphanBody()}\n\n<!-- idd-skill-authoring-publication: target=target-abc123; anchor=kurone-kito/idd-skill#9001; set=set-xyz789; session=sess-1; token=pub-token1 -->`,
+    {
+      shape: 'orphan',
+      labels: ['status:authoring'],
+      newIssue: true,
+      comments: [ownerMarkerComment()],
+    },
+  );
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail passes a new issue when journal comments are not supplied (not applicable for the journal half)', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.match(finding?.detail ?? '', /not applicable.*journal/);
+});
+
+test('authoring-owner-marker-trail fails when no journal record reaches state=member or later', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+    journalComments: [publicationIntentComment({ state: 'pending' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail fails when the journal record names a different issue', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+    journalComments: [
+      publicationIntentComment({ issue: 'kurone-kito/idd-skill#9999' }),
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail passes a fully compliant new-issue trail', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+    journalComments: [publicationIntentComment()],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+});
+
+test('authoring-owner-marker-trail label comparison is case-insensitive', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['Status:Authoring'],
+    comments: [],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail rejects a journal record that shares only the target (different generation)', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+    journalComments: [
+      {
+        body: '<!-- idd-skill-authoring-publication-intent: target=target-abc123; anchor=kurone-kito/idd-skill#9001; set=DIFFERENT-set; session=sess-1; token=pub-token1; journal=kurone-kito/idd-skill#9001; issue=kurone-kito/idd-skill#9001; actor=kurone-kito; state=member -->',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail rejects an owner marker from a different generation than the publication marker', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [
+      ownerMarkerComment({ set: 'STALE-set', session: 'STALE-session' }),
+    ],
+    journalComments: [publicationIntentComment()],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail rejects a malformed digest field on the owner marker', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    comments: [
+      {
+        body: '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9001; anchor=kurone-kito/idd-skill#9001; mode=acquire; owner=owner-tok1; set=set-xyz789; session=sess-1; body-sha256=garbage; snapshot-sha256=none; supersedes=none -->',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail rejects issue=none on a state=member journal record', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+    journalComments: [publicationIntentComment({ issue: 'none' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail requires the publication marker as the literal first bytes (no leading blank line)', () => {
+  const report = auditAuthoredIssue(`\n${bodyWithPublicationLine()}`, {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail rejects body-sha256=none for a qualifying acquire-mode marker', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    comments: [ownerMarkerComment({ bodySha256: 'none' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail validates the new-issue publication line even when no comment data is supplied', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /missing.*publication marker/);
+});
+
+test('authoring-owner-marker-trail reports not-applicable (not fail) for a compliant new-issue body when comments are not supplied', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.match(finding?.detail ?? '', /not applicable/);
+});
+
+test('authoring-owner-marker-trail compares issue identity case-insensitively', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'Kurone-Kito/Idd-Skill',
+    issueNumber: 9001,
+    comments: [ownerMarkerComment({ target: 'kurone-kito/idd-skill#9001' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+});
+
+test('authoring-owner-marker-trail ignores a marker-shaped fenced-code example in a comment', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    comments: [
+      {
+        body: `\`\`\`html\n${ownerMarkerComment().body}\n\`\`\``,
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail rejects issue=none at state=member even when the current issue is unknown', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    newIssue: true,
+    comments: [ownerMarkerComment()],
+    journalComments: [publicationIntentComment({ issue: 'none' })],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});
+
+test('authoring-owner-marker-trail rejects an owner marker with a mismatched anchor from the publication generation', () => {
+  const report = auditAuthoredIssue(bodyWithPublicationLine(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [
+      {
+        body: '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9001; anchor=kurone-kito/idd-skill#DIFFERENT; mode=acquire; owner=owner-tok1; set=set-xyz789; session=sess-1; body-sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; snapshot-sha256=none; supersedes=none -->',
+      },
+    ],
+    journalComments: [publicationIntentComment()],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});

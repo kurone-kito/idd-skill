@@ -36,6 +36,11 @@ import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { parseEffortMarker } from './effort.mjs';
 import { loadIddConfig, loadPolicyConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+import {
+  parseAuthoringOwnerComment,
+  parseAuthoringPublicationComment,
+  parseAuthoringPublicationIntentComment,
+} from './marker-helpers.mjs';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
@@ -264,9 +269,30 @@ const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--marker-prefix': { type: 'string' },
   '--config': { type: 'string' },
   '--current-repo': { type: 'string' },
+  '--issue': { type: 'string' },
   '--label': { type: 'string', multiple: true },
+  '--comments-file': { type: 'string' },
+  '--journal-comments-file': { type: 'string' },
+  '--new-issue': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
 };
+// Declared here (alongside the flag spec above), not next to
+// checkAuthoringOwnerMarkerTrail further down: the import.meta.main trigger
+// immediately below calls main() -> auditAuthoredIssue() ->
+// checkAuthoringOwnerMarkerTrail() synchronously at module-evaluation time,
+// and a `const` declared after that point is still in the temporal dead
+// zone when the trigger fires (same TDZ hazard as AUDIT_AUTHORED_ISSUE_FLAG_SPEC
+// itself and the LIST_ITEM_MARKER_PATTERN family further down this file).
+const AUTHORING_OWNER_QUALIFYING_MODES = new Set([
+  'acquire',
+  'bootstrap',
+  'resume',
+]);
+const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
+  'member',
+  'cleanup',
+  'abandoned',
+]);
 if (import.meta.main) {
   main();
 }
@@ -318,6 +344,7 @@ export function auditAuthoredIssue(body, options) {
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
     checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
+    checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options),
   ];
   return {
     shape,
@@ -601,6 +628,184 @@ function checkEffortVisibleLineAgreement(text, markerPrefix) {
     id,
     name,
     `visible line agrees with marker value ${effort.value}`,
+  );
+}
+/**
+ * Verify that an authoring-labeled issue carries the owner-marker/
+ * publication-token trail the "Authoring label lifecycle" contract
+ * (docs/issue-authoring-skill.md) requires. Not applicable (`pass`) when the
+ * issue never carries the configured authoring label at all — this is a
+ * forward-looking gate on newly authoring-labeled issues, never a
+ * retroactive backfill requirement — or when the caller did not supply
+ * `comments` (this module stays network-free; a caller not opting into
+ * comment-aware checking must not see a false failure).
+ */
+function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
+  const id = 'authoring-owner-marker-trail';
+  const name =
+    'Authoring-labeled issue carries the owner-marker/publication-token trail';
+  const authoringLabelName = (
+    options.authoringLabelName ??
+    POLICY_DEFAULTS.issueAuthoring.authoringLabelName
+  )
+    .trim()
+    .toLowerCase();
+  if (!labels.includes(authoringLabelName)) {
+    return pass(
+      id,
+      name,
+      'not applicable: issue does not carry the authoring label',
+    );
+  }
+  const currentRepo = normalizeCurrentRepo(options.currentRepo);
+  // Lowercased: GitHub owner/repo names are case-insensitive, matching the
+  // normalization checkProseOnlyDependency already applies to its own
+  // owner/repo comparisons (#2628 review, CodeRabbit). Every comparison
+  // against currentIssueRef below lowercases its own operand to match.
+  const currentIssueRef =
+    currentRepo && options.issueNumber !== undefined
+      ? `${currentRepo}#${options.issueNumber}`.toLowerCase()
+      : undefined;
+  // Validate the new-issue publication line FIRST, independent of whether
+  // comment data was supplied: this half only needs the body text and the
+  // `newIssue` flag, so it must not be silently skipped just because the
+  // caller omitted `comments` -- a genuinely broken new-issue body (no
+  // publication line at all) must not get a free pass from a missing
+  // --comments-file alone (#2628 review, Codex). parseAuthoringPublicationComment
+  // itself requires the marker's literal first bytes (marker-helpers.mts),
+  // so no separate first-line regex is needed here.
+  let publicationMarker = null;
+  if (options.newIssue === true) {
+    publicationMarker = parseAuthoringPublicationComment(text, markerPrefix);
+    if (publicationMarker === null) {
+      return fail(
+        id,
+        name,
+        'new issue is missing a well-formed authoring-publication marker as the first line of the body',
+      );
+    }
+  }
+  if (options.comments === undefined) {
+    return pass(
+      id,
+      name,
+      publicationMarker === null
+        ? 'not applicable: no comment data supplied to this check'
+        : 'publication-token line present; not applicable for the owner-marker/journal checks (no comment data supplied to this check)',
+    );
+  }
+  // Strip fenced/inline code regions before parsing, matching the same
+  // stripMarkdownCodeRegions(rawText) pass auditAuthoredIssue() already
+  // applies to the issue body: a pasted illustrative example wrapped in a
+  // comment's own code block must not count as a real marker (#2628
+  // review, CodeRabbit).
+  const ownerMarkers = options.comments
+    .map((comment) =>
+      parseAuthoringOwnerComment(
+        stripMarkdownCodeRegions(comment.body),
+        markerPrefix,
+      ),
+    )
+    .filter((marker) => marker !== null);
+  const hasQualifyingOwnerMarker = ownerMarkers.some(
+    (marker) =>
+      AUTHORING_OWNER_QUALIFYING_MODES.has(marker.mode) &&
+      // A qualifying acquire/bootstrap/resume marker targets a real issue,
+      // so its body-sha256 must hash an actual body read, never `none`
+      // (`none` is only ever legitimate on an anchor-only release-guard
+      // marker per docs/issue-authoring-skill.md -- #2628 review, Codex).
+      marker.bodySha256 !== 'none' &&
+      (currentIssueRef === undefined ||
+        marker.target.toLowerCase() === currentIssueRef) &&
+      (publicationMarker === null ||
+        (marker.anchor === publicationMarker.anchor &&
+          marker.set === publicationMarker.set &&
+          marker.session === publicationMarker.session)),
+  );
+  if (!hasQualifyingOwnerMarker) {
+    const targetNote =
+      currentIssueRef === undefined ? '' : ', target matching this issue';
+    const generationNote =
+      publicationMarker === null
+        ? ''
+        : ", anchor/set/session matching the publication marker's generation";
+    return fail(
+      id,
+      name,
+      `no valid authoring-owner comment (mode acquire/bootstrap/resume${targetNote}${generationNote}) was found`,
+    );
+  }
+  if (options.newIssue !== true) {
+    return pass(
+      id,
+      name,
+      'owner-marker present; not applicable for the publication-token line (not a new issue)',
+    );
+  }
+  // publicationMarker is non-null here: newIssue === true already returned
+  // above on a missing/malformed marker.
+  const resolvedPublicationMarker = publicationMarker;
+  if (options.journalComments === undefined) {
+    return pass(
+      id,
+      name,
+      'owner-marker and publication-token line present; not applicable for the journal cross-check (no journal comment data supplied)',
+    );
+  }
+  // Match the FULL token tuple (target/anchor/set/session/token), not just
+  // target -- an unrelated or out-of-generation journal record sharing only
+  // `target` must not be accepted as evidence (#2628 review, Codex). When
+  // the current issue's identity is known, also require the record's own
+  // `issue` field to name it exactly: per the protocol, `issue` is resolved
+  // to the real identity no later than the `member` transition, so `none`
+  // at state=member-or-later is itself a protocol violation, not a
+  // tolerable gap.
+  const hasMatchingIntentRecord = options.journalComments.some((comment) => {
+    const intent = parseAuthoringPublicationIntentComment(
+      stripMarkdownCodeRegions(comment.body),
+      markerPrefix,
+    );
+    if (
+      intent === null ||
+      intent.target !== resolvedPublicationMarker.target ||
+      intent.anchor !== resolvedPublicationMarker.anchor ||
+      intent.set !== resolvedPublicationMarker.set ||
+      intent.session !== resolvedPublicationMarker.session ||
+      intent.token !== resolvedPublicationMarker.token
+    ) {
+      return false;
+    }
+    if (!AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER.has(intent.state)) {
+      return false;
+    }
+    // issue=none is only ever valid at state=pending (docs/issue-authoring-skill.md):
+    // "Append the returned identity while it remains pending, append
+    // member only after the owner marker is verified" -- a member-or-later
+    // record with issue=none is itself a protocol violation, regardless of
+    // whether the caller happens to know the current issue's identity
+    // (#2628 review, Copilot and Codex).
+    if (intent.issue.toLowerCase() === 'none') {
+      return false;
+    }
+    if (
+      currentIssueRef !== undefined &&
+      intent.issue.toLowerCase() !== currentIssueRef
+    ) {
+      return false;
+    }
+    return true;
+  });
+  if (!hasMatchingIntentRecord) {
+    return fail(
+      id,
+      name,
+      'no matching authoring-publication-intent record reaching state=member or later was found on the journal issue',
+    );
+  }
+  return pass(
+    id,
+    name,
+    'owner-marker, publication-token line, and journal publication-intent record are all present and well-formed',
   );
 }
 // An empty or whitespace-only currentRepo (reachable via an explicit
@@ -1137,6 +1342,33 @@ function pass(id, name, detail) {
 function fail(id, name, detail) {
   return { id, name, result: 'fail', detail };
 }
+/**
+ * Read and JSON-parse a comments file (an array of
+ * `{body, author?, createdAt?}` objects) the same uncaught-throw-on-
+ * malformed-input way `--body-file` already behaves: a missing file or
+ * invalid JSON propagates as an unhandled exception rather than a new
+ * soft-degrade path this file does not otherwise have.
+ */
+function readCommentsFile(path) {
+  const raw = readFileSync(resolve(process.cwd(), path), 'utf8');
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${path} must contain a JSON array of comments`);
+  }
+  return parsed.map((entry, index) => {
+    const record = entry;
+    if (typeof record?.body !== 'string') {
+      throw new Error(`${path}[${index}] is missing a string "body" field`);
+    }
+    return {
+      body: record.body,
+      ...(typeof record.author === 'string' ? { author: record.author } : {}),
+      ...(typeof record.createdAt === 'string'
+        ? { createdAt: record.createdAt }
+        : {}),
+    };
+  });
+}
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -1155,6 +1387,49 @@ function main() {
   const bodyText = args.stdin
     ? readFileSync(0, 'utf8')
     : readFileSync(resolve(process.cwd(), args.bodyFile), 'utf8');
+  if (args.issue !== undefined && !/^[1-9]\d*$/.test(args.issue)) {
+    fail_('--issue must be a positive integer');
+  }
+  if (args.journalCommentsFile && !args.newIssue) {
+    fail_('--journal-comments-file requires --new-issue');
+  }
+  // Supplying journal data with no --comments-file would silently produce
+  // a misleading pass: the owner-marker check (a prerequisite for even
+  // reaching the journal cross-check) reports "not applicable" without
+  // --comments-file, so the journal data would never actually be consulted
+  // (#2628 review, Copilot).
+  if (args.journalCommentsFile && !args.commentsFile) {
+    fail_('--journal-comments-file requires --comments-file');
+  }
+  // Without this, a new-issue check with real owner-marker evidence but no
+  // journal data would report "not applicable" for the journal half and
+  // still exit 0 -- a misleading success for the AC's combined
+  // publication-line + journal-record requirement (#2628 review,
+  // CodeRabbit). The pure auditAuthoredIssue() function itself keeps the
+  // graceful not-applicable degradation for a direct (non-CLI) caller that
+  // deliberately wants a partial check.
+  if (args.newIssue && args.commentsFile && !args.journalCommentsFile) {
+    fail_('--new-issue with --comments-file requires --journal-comments-file');
+  }
+  // Without a known current-issue identity, the journal cross-check cannot
+  // verify a publication-intent record actually names THIS issue -- an
+  // intent record naming a different (non-none) issue would otherwise pass
+  // silently whenever the caller omitted --issue (#2628 review, Codex).
+  if (args.newIssue && args.journalCommentsFile && args.issue === undefined) {
+    fail_('--new-issue with --journal-comments-file requires --issue');
+  }
+  // Explicit --current-repo wins; otherwise fall back to the
+  // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
+  // usage narrows cross-repo URL false positives with no extra flag.
+  // undefined (neither present) keeps the pre-#1399-fix default of
+  // flagging every full-URL reference for the prose-dependency check --
+  // but --issue's target match needs a resolvable repo to mean anything,
+  // so require one explicitly rather than silently widening the match
+  // (#2628 review, Codex and Copilot both flagged the silent-widening gap).
+  const currentRepo = args.currentRepo ?? process.env.GITHUB_REPOSITORY;
+  if (args.issue !== undefined && !currentRepo) {
+    fail_('--issue requires --current-repo (or $GITHUB_REPOSITORY) to be set');
+  }
   const policy = loadPolicy(args.configPath);
   const markerPrefix = args.markerPrefix ?? policy.markerPrefix;
   const report = auditAuthoredIssue(bodyText, {
@@ -1162,12 +1437,17 @@ function main() {
     markerPrefix,
     labels: args.labels,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
-    // Explicit --current-repo wins; otherwise fall back to the
-    // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
-    // usage narrows cross-repo URL false positives with no extra flag.
-    // undefined (neither present) keeps the pre-#1399-fix default of
-    // flagging every full-URL reference.
-    currentRepo: args.currentRepo ?? process.env.GITHUB_REPOSITORY,
+    authoringLabelName: policy.authoringLabelName,
+    currentRepo,
+    issueNumber:
+      args.issue !== undefined ? Number.parseInt(args.issue, 10) : undefined,
+    comments: args.commentsFile
+      ? readCommentsFile(args.commentsFile)
+      : undefined,
+    journalComments: args.journalCommentsFile
+      ? readCommentsFile(args.journalCommentsFile)
+      : undefined,
+    newIssue: args.newIssue,
   });
   writeReport(report, args.format);
   process.exit(report.passed ? 0 : 1);
@@ -1224,12 +1504,15 @@ function loadPolicy(configPath) {
     return {
       markerPrefix: DEFAULT_MARKER_PREFIX,
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+      authoringLabelName: POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
     };
   }
   return {
     markerPrefix: normalizeMarkerPrefix(config.markerPrefix),
     blockedByHumanLabelName:
       normalizePolicyConfig(config).labels.blockedByHumanLabelName,
+    authoringLabelName:
+      normalizePolicyConfig(config).issueAuthoring.authoringLabelName,
   };
 }
 function writeReport(report, format) {
@@ -1278,7 +1561,11 @@ function parseArgs(argv) {
     markerPrefix: values['marker-prefix'],
     configPath: values.config,
     currentRepo: values['current-repo'],
+    issue: values.issue,
     labels: values.label ?? [],
+    commentsFile: values['comments-file'],
+    journalCommentsFile: values['journal-comments-file'],
+    newIssue: values['new-issue'],
     format,
   };
 }
@@ -1293,9 +1580,11 @@ section headings for the declared shape, the roadmap-id/blocked-by
 dependency-marker rules, visible/hidden suitability+effort line
 agreement, and an advisory (warning-severity only) check that flags an
 issue/PR reference used near coordination language with no corresponding
-dependency marker. Exits 0 when every check passes, 1 when any check
-fails, 2 on a usage error; the advisory check never affects the exit
-code.
+dependency marker, and (when --comments-file is supplied) the
+authoring-owner-marker-trail check that verifies an authoring-labeled
+issue carries the owner-marker/publication-token trail. Exits 0 when
+every check passes, 1 when any check fails, 2 on a usage error; the
+advisory check never affects the exit code.
 
 Options:
   --shape <orphan|roadmap|child>   declared issue shape (required)
@@ -1305,10 +1594,28 @@ Options:
   --config <path>                  policy config path (default: .github/idd/config.json)
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1
-                                    cross-field check)
+                                    cross-field check and the authoring-label
+                                    check for authoring-owner-marker-trail)
   --current-repo <owner/repo>      this repository, for the prose-dependency check
                                     to recognize a full-URL issue/PR reference as
-                                    cross-repo (default: $GITHUB_REPOSITORY)
+                                    cross-repo (default: $GITHUB_REPOSITORY), and
+                                    for authoring-owner-marker-trail's target match
+  --issue <number>                 this issue's number, for authoring-owner-marker-trail's
+                                    target match (requires --current-repo or
+                                    $GITHUB_REPOSITORY to be resolvable)
+  --comments-file <path>           JSON array of this issue's pre-fetched comments
+                                    ({body, author?, createdAt?}); enables
+                                    authoring-owner-marker-trail (network-free: this
+                                    module never fetches comments itself)
+  --journal-comments-file <path>   JSON array of the journal issue's pre-fetched
+                                    comments, for the new-issue publication-intent
+                                    cross-check (requires --new-issue and
+                                    --comments-file)
+  --new-issue                      this issue was just created in this invocation
+                                    (not an edit); requires the leading
+                                    authoring-publication body line, and (when
+                                    --comments-file is also given) requires
+                                    --journal-comments-file and --issue too
   --format <json|table>            output format (default: json)
   --help                           show this help
 `);

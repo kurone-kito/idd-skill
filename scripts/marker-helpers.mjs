@@ -901,6 +901,166 @@ export function parseLocalValidationEvidenceComment(body, createdAt) {
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }
+const AUTHORING_OWNER_MODES = new Set([
+  'acquire',
+  'resume',
+  'bootstrap',
+  'heartbeat',
+  'release',
+  'release-guard',
+  'release-complete',
+]);
+const AUTHORING_PUBLICATION_INTENT_STATES = new Set([
+  'pending',
+  'member',
+  'cleanup',
+  'abandoned',
+]);
+// docs/issue-authoring-skill.md documents body-sha256/snapshot-sha256 as
+// `<64-lowercase-hex|none>` specifically -- presence alone (accepting a
+// garbage value like `body-sha256=garbage`) is not shape-valid per that
+// grammar (#2628 review, Codex and Copilot both flagged this).
+const AUTHORING_OWNER_DIGEST_PATTERN = /^(?:none|[0-9a-f]{64})$/;
+/**
+ * Parse the `field=value; field2=value2; ...` payload of a
+ * `<!-- {markerPrefix}-{suffix}: ... -->` marker into a raw field map. Each
+ * value is split on the first `=` only and trimmed on both sides; a field
+ * with no `=` is dropped rather than treated as a key with an empty value,
+ * since none of the three markers above have a valueless field. Returns
+ * `null` when the marker itself is absent -- callers validate the required
+ * field set and any enum values themselves, since each marker's requirement
+ * differs.
+ */
+function parseSemicolonFieldMarker(body, markerPrefix, suffix) {
+  // Anchored at `^` (position 0, not "anywhere in body") and restricted to
+  // same-line whitespace between `<!--` and the prefix-suffix token: the
+  // contract requires each of these three markers to be an "HTML-first"
+  // comment/body line, not merely present somewhere in a longer comment or
+  // pasted example -- an unanchored search would also accept a marker
+  // quoted after prose, inside a fenced example, or opened across a
+  // newline (`<!--\nidd-skill-authoring-owner: ...`), none of which are the
+  // real marker the protocol posts (#2628 review, Codex).
+  // The payload capture (and its surrounding whitespace) is restricted to
+  // same-line spaces/tabs -- these are "HTML-first body line" markers in
+  // their entirety, not just at their opener, so a multi-line comment
+  // starting at byte 0 must not parse as well-formed either (#2628 review,
+  // Copilot and Codex).
+  const pattern = new RegExp(
+    `^<!--[ \\t]*${escapeRegex(markerPrefix)}-${suffix}:[ \\t]*([^\\r\\n]*?)[ \\t]*-->`,
+    'i',
+  );
+  const match = body.match(pattern);
+  if (!match) {
+    return null;
+  }
+  const fields = {};
+  for (const part of match[1].split(';')) {
+    const separatorIndex = part.indexOf('=');
+    if (separatorIndex < 0) {
+      continue;
+    }
+    const key = part.slice(0, separatorIndex).trim();
+    const value = part.slice(separatorIndex + 1).trim();
+    if (key) {
+      fields[key] = value;
+    }
+  }
+  return fields;
+}
+export function parseAuthoringOwnerComment(body, markerPrefix) {
+  const fields = parseSemicolonFieldMarker(
+    body,
+    markerPrefix,
+    'authoring-owner',
+  );
+  if (!fields) {
+    return null;
+  }
+  const mode = fields.mode;
+  if (
+    !fields.target ||
+    !fields.anchor ||
+    !AUTHORING_OWNER_MODES.has(mode) ||
+    !fields.owner ||
+    !fields.set ||
+    !fields.session ||
+    !AUTHORING_OWNER_DIGEST_PATTERN.test(fields['body-sha256'] ?? '') ||
+    !AUTHORING_OWNER_DIGEST_PATTERN.test(fields['snapshot-sha256'] ?? '') ||
+    !fields.supersedes
+  ) {
+    return null;
+  }
+  return {
+    target: fields.target,
+    anchor: fields.anchor,
+    mode: mode,
+    owner: fields.owner,
+    set: fields.set,
+    session: fields.session,
+    bodySha256: fields['body-sha256'],
+    snapshotSha256: fields['snapshot-sha256'],
+    supersedes: fields.supersedes,
+  };
+}
+export function parseAuthoringPublicationComment(body, markerPrefix) {
+  const fields = parseSemicolonFieldMarker(
+    body,
+    markerPrefix,
+    'authoring-publication',
+  );
+  if (
+    !fields ||
+    !fields.target ||
+    !fields.anchor ||
+    !fields.set ||
+    !fields.session ||
+    !fields.token
+  ) {
+    return null;
+  }
+  return {
+    target: fields.target,
+    anchor: fields.anchor,
+    set: fields.set,
+    session: fields.session,
+    token: fields.token,
+  };
+}
+export function parseAuthoringPublicationIntentComment(body, markerPrefix) {
+  const fields = parseSemicolonFieldMarker(
+    body,
+    markerPrefix,
+    'authoring-publication-intent',
+  );
+  if (!fields) {
+    return null;
+  }
+  const state = fields.state;
+  if (
+    !fields.target ||
+    !fields.anchor ||
+    !fields.set ||
+    !fields.session ||
+    !fields.token ||
+    !fields.journal ||
+    !fields.issue ||
+    !fields.actor ||
+    !AUTHORING_PUBLICATION_INTENT_STATES.has(state)
+  ) {
+    return null;
+  }
+  return {
+    target: fields.target,
+    anchor: fields.anchor,
+    set: fields.set,
+    session: fields.session,
+    token: fields.token,
+    journal: fields.journal,
+    issue: fields.issue,
+    actor: fields.actor,
+    state: state,
+  };
+}
 // --- Per-cycle marker body renderers (#900) ---
 //
 // Pure, network-free renderers for the three operational markers an agent
