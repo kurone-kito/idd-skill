@@ -2788,6 +2788,11 @@ test('D3.6 derives the IDD impact checklist mechanically, excluding the idd-temp
     /excludes `idd-template\/\.github\/instructions\/`\s+paths/,
     'D3.6 must exclude the idd-template mirror from "Instruction files changed"',
   );
+  assert.match(
+    section,
+    /Skip this sub-step and D3\.7 below entirely when/,
+    'D3.6 must skip itself and D3.7 when no pull_request_template.md exists (idd-template/ ships none)',
+  );
 });
 
 test('D3.7 re-derives the impact checklist against final HEAD before merge, using a generic safe-edit (not round-specific PR-body-sync prose) (idd-skill#2634)', () => {

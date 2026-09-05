@@ -178,11 +178,16 @@ body. Do not add a parallel "worker-lite authoring" contract.
 
 ### D3.6 — Derive the IDD impact checklist
 
-`.github/pull_request_template.md`'s IDD impact checklist (`Instruction
-files changed` / `Template files changed` / `Helper scripts changed` /
-`Config schema changed` / `Security / credential / merge behavior
-changed`) is drafted from the branch's actual changed-file list, not
-from memory. Before drafting the body, list the branch's changes
+Skip this sub-step and D3.7 below entirely when
+`.github/pull_request_template.md` does not exist or has no `IDD
+impact` heading — mirroring D3's own "If no template file exists, use
+the structure below directly" fallback, there is no checklist to
+derive or reconcile. When it exists, `.github/pull_request_template.md`'s
+IDD impact checklist (`Instruction files changed` / `Template files
+changed` / `Helper scripts changed` / `Config schema changed` /
+`Security / credential / merge behavior changed`) is drafted from the
+branch's actual changed-file list, not from memory. Before drafting the
+body, list the branch's changes
 (`git diff --name-only origin/{development-branch}...HEAD`) and derive
 each checkbox mechanically, using a root-anchored path-prefix match
 (the path starts with the glob's literal prefix, not merely contains
