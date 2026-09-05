@@ -2093,6 +2093,16 @@ export function scanClaudeVendorSessions(
         )
       );
     };
+    // Resolution is collected in a first pass and consumption is marked
+    // only after the harvest below actually succeeds (self-audited
+    // finding): marking a contributor consumed as soon as ITS OWN window
+    // resolves -- as an earlier revision did -- leaks that contributor's
+    // cwd sample as permanently suppressed whenever a LATER contributing
+    // window in this same loop fails to resolve, or the harvest call
+    // below throws, aborting the whole merge. That earlier contributor's
+    // standalone sample would then vanish with nothing to replace it: an
+    // outright loss of usage data, not merely a double-count.
+    const resolvedContributorBasenames: string[] = [];
     for (const contributing of contributingWindows) {
       const sessionIdMatches = [...allRecordsByBasename].filter(
         ([candidateBasename]) =>
@@ -2116,7 +2126,6 @@ export function scanClaudeVendorSessions(
         );
         continue;
       }
-      let contributorHadRecords = false;
       for (const record of candidateRecords) {
         const atMs = extractRecordTimestampMs(record);
         if (
@@ -2125,16 +2134,14 @@ export function scanClaudeVendorSessions(
           atMs < contributing.endMs
         ) {
           mergedRecords.push(record);
-          contributorHadRecords = true;
         }
       }
-      if (contributorHadRecords) {
-        const consumed =
-          consumedCwdIssueNumbersByBasename.get(contributingBasename) ??
-          new Set<number>();
-        consumed.add(issueNumber);
-        consumedCwdIssueNumbersByBasename.set(contributingBasename, consumed);
-      }
+      // Consumed regardless of whether any record actually landed inside
+      // the contributing window: a resolved-but-empty contributor still
+      // correctly contributed zero usage to this loop, which is not the
+      // same as never having resolved at all, and its own plain cwd
+      // sample (if any) must be suppressed either way.
+      resolvedContributorBasenames.push(contributingBasename);
     }
     try {
       const eventWindowResult = claudeAdapter.harvest({
@@ -2152,7 +2159,16 @@ export function scanClaudeVendorSessions(
       // too, not just contributors' -- a no-op for the pre-#2432,
       // event-window-fallback primary (which never had one), but required
       // once a cwd-attributed file can itself be selected as primary (see
-      // the post-scan resolution below).
+      // the post-scan resolution below). Contributors are marked here too,
+      // together and only on confirmed success -- see the comment above
+      // the resolution loop.
+      for (const contributingBasename of resolvedContributorBasenames) {
+        const consumed =
+          consumedCwdIssueNumbersByBasename.get(contributingBasename) ??
+          new Set<number>();
+        consumed.add(issueNumber);
+        consumedCwdIssueNumbersByBasename.set(contributingBasename, consumed);
+      }
       const consumedPrimary =
         consumedCwdIssueNumbersByBasename.get(fileBasename) ??
         new Set<number>();

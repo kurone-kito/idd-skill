@@ -1834,6 +1834,74 @@ test('scanClaudeVendorSessions: a cwd-attributed primary that moved out of and b
   assert.equal(issue508Samples[0].adapterResult.sample.usage.output, 12);
 });
 
+test('scanClaudeVendorSessions: an EARLIER contributor that resolved fine is not left permanently suppressed when a LATER contributing window aborts the whole merge (#2432, self-audited)', () => {
+  // Two contributing windows share claim-512: the first (work) resolves to
+  // a real file that is itself cwd-attributed to issue 512's own worktree
+  // (so it also owns a `pendingCwdSessions` entry for issue 512); the
+  // second (review) has no matching file at all, so the overall merge for
+  // issue 512 aborts entirely. Consumption must only be recorded on
+  // confirmed overall success -- marking the first contributor consumed
+  // as soon as ITS OWN window resolved, before the second window's
+  // failure is even discovered, would permanently suppress its own solo
+  // sample with nothing to replace it: real usage silently lost, not
+  // merely double-counted.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-primary-512.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0009","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-contribA-512.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:02:00.000Z","sessionId":"sess-contribA-0009","cwd":"/home/user/repo.issue-512-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":4}}}\n',
+  );
+  // No file in this sandbox has sessionId 'sess-contribB-missing'.
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '512:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        'sess-contribA-0009',
+        'claim-512',
+      ),
+    ],
+    [
+      '512:claude:review',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:15:00Z',
+        'sess-contribB-missing',
+        'claim-512',
+      ),
+    ],
+    [
+      '512:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-primary-0009',
+        'claim-512',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const mergedSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew512'),
+  );
+  const contribASamples = sessions.filter(
+    (s) => s.adapterResult.sample.vendorSessionId === 'sess-contribA-0009',
+  );
+
+  // No merged `#ew512` sample -- the unresolvable second contributor
+  // still correctly aborts the whole issue. But the first contributor's
+  // own plain cwd-derived sample for issue 512 (no `#ew` suffix -- it was
+  // never actually merged into anything) must still stand on its own.
+  assert.equal(mergedSamples.length, 0);
+  assert.equal(contribASamples.length, 1);
+  assert.equal(contribASamples[0].adapterResult.sample.usage.output, 4);
+});
+
 test('scanClaudeVendorSessions: a contributor eligible for one contributing window is not disqualified by an EARLIER, non-overlapping cwd segment for a different issue (#2432, Codex review PR #2627)', () => {
   // The contributing session's own file also touched an unrelated issue
   // (#100) much earlier, at a time that does not overlap this contributing
