@@ -777,6 +777,25 @@ function hasSubstantiveBullet(text: string): boolean {
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
 
+// #2661: the grooming-pass workflow (docs/idd-workflow.md, from #2494)
+// records a resolved decision as inline prose -- "Maintainer decision
+// (<provenance>, <date>): <resolution text>" -- not a "## Decision" heading,
+// so RESOLVED_DECISION_PATTERN above never matches it. The parenthetical's own
+// provenance (an issue reference and/or "Groom hearing" and/or a date) is
+// this shape's resolved signal, so -- unlike the heading form -- the literal
+// word "resolved" is not required. `[^)]` (not `[^)\n]`) lets the parenthetical
+// span a hard-wrapped line break -- GitHub issue bodies wrap at ~80 chars, so
+// "(kurone-kito/idd-skill#2637, Groom hearing,\n2026-09-05):" routinely splits
+// the provenance across two physical lines (the same line-wrap-is-not-a-
+// boundary shape as the proximity check above, #2512). The same "still open"
+// guard applies immediately after the colon, so a placeholder like
+// "Maintainer decision (...): not yet decided" is not mistaken for a
+// resolution. This is the same soft co-occurrence heuristic as the heading
+// form: it does not verify the resolution text actually settles the exact
+// approval wording elsewhere in the body.
+const INLINE_MAINTAINER_DECISION_PATTERN =
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\([^)]{0,200}\)\s*:\s*(?!(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided))\b)\S/i;
+
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the
 // negation word and the trailing whitespace that reaches the verb. The
@@ -2297,15 +2316,18 @@ export function checkVerifiability(context: Context): CheckOutcome {
     return false;
   })();
   // A body that carries BOTH a resolved-decision marker (a
-  // "## Decision (resolved …)" section) AND a concrete, objectively-verifiable
-  // acceptance-criteria section is treated as having had its subjective call
-  // already settled by a human, so its prose merely *describes* that prior
-  // approval/decision. This is a soft heuristic for a soft advisory gate: it
-  // co-occurrence-matches the two signals rather than proving the decision
-  // resolves the exact approval wording, which is an accepted trade-off for
-  // maintainer-authored issues. An approval-gated body with no resolved
-  // decision still routes to needs-decision.
-  const hasResolvedDecision = RESOLVED_DECISION_PATTERN.test(body);
+  // "## Decision (resolved …)" heading, or the grooming-pass workflow's
+  // inline "Maintainer decision (…): …" prose, #2661) AND a concrete,
+  // objectively-verifiable acceptance-criteria section is treated as having
+  // had its subjective call already settled by a human, so its prose merely
+  // *describes* that prior approval/decision. This is a soft heuristic for a
+  // soft advisory gate: it co-occurrence-matches the two signals rather than
+  // proving the decision resolves the exact approval wording, which is an
+  // accepted trade-off for maintainer-authored issues. An approval-gated
+  // body with no resolved decision still routes to needs-decision.
+  const hasResolvedDecision =
+    RESOLVED_DECISION_PATTERN.test(body) ||
+    INLINE_MAINTAINER_DECISION_PATTERN.test(body);
   if (hasSubjectiveApproval && !(hasResolvedDecision && hasObjectiveCriteria)) {
     return {
       pass: false,

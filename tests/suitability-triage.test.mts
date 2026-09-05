@@ -2658,6 +2658,63 @@ The maintainer approval is recorded; option 1 was chosen.
   assert.equal(result.pass, true);
 });
 
+test('verifiability passes an inline Groom-hearing resolved-decision issue with objective criteria (#2661)', () => {
+  // Check 7 false-negative that now passes: the grooming-pass workflow
+  // (#2494) records a resolved decision as inline prose, not a "## Decision"
+  // heading -- reproduces the shape of kurone-kito/idd-skill#2641's body.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates (a narrow allowlist), mirroring the maintainer's existing approval.
+
+## Acceptance Criteria
+- [ ] the helper output contains the expected token
+- [ ] tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability passes an inline Groom-hearing decision whose parenthetical is hard-wrapped (#2661)', () => {
+  // GitHub issue bodies hard-wrap at ~80 chars, so the provenance parenthetical
+  // routinely splits across two physical lines -- the exact shape of
+  // kurone-kito/idd-skill#2641's real body. `[^)]` (not `[^)\n]`) must still
+  // match across that line break.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing,
+2026-09-05): pattern-match known bot acknowledgment templates (a narrow
+allowlist), mirroring the maintainer's existing approval.
+
+## Acceptance Criteria
+- [ ] the helper output contains the expected token
+- [ ] tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails when an inline decision is not yet decided', () => {
+  // A still-open "Maintainer decision (...): not yet decided" must not count
+  // as a resolved decision, so the subjective screen still fires.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, TBD): not yet decided, pending further review.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('actionability accepts checklist without Scope/Purpose headings', () => {
   const result = checkActionability({
     issue: {
