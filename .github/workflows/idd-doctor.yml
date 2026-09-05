@@ -75,4 +75,4 @@ jobs:
           # github.com and lets this same step authenticate on a
           # self-hosted GHES host too.
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
-        run: node scripts/idd-doctor.mjs
+        run: node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1
