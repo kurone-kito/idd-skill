@@ -815,6 +815,18 @@ export function readEventWindows(path) {
   // events that carry a non-empty vendorSessionId.
   const enterAtByAttempt = new Map();
   const exitAtByAttempt = new Map();
+  // bareKey -> set of vendorSessionIds whose most recent `enter` has not
+  // yet been closed by a same-attempt `exit` (#2651). A second `enter`
+  // for an attempt that is still open is a resumed/re-entered stage --
+  // for example a context-compaction-resumed session re-entering a
+  // stage it already entered, without ever logging an `exit` for the
+  // interrupted first entry -- not a new attempt cycle. Without this
+  // guard, `enterAtByAttempt.set` below unconditionally overwrites the
+  // attempt's true start time with the later, spurious re-entry,
+  // silently narrowing the resolved window. A genuinely new cycle
+  // (`enter` -> `exit` -> `enter` -> `exit`) still overwrites normally,
+  // since `exit` clears the attempt's open flag first.
+  const openEnterByAttempt = new Map();
   // bareKey -> vendorSessionId -> claimId of whichever event set that
   // attempt's CURRENT latest timestamp above (#2432). Only meaningful
   // alongside an identified (vendorSessionId-bearing) attempt -- an
@@ -860,17 +872,27 @@ export function readEventWindows(path) {
       enterAt.set(key, atMs);
       enterAtOwner.set(key, vendorSessionId);
       if (vendorSessionId !== undefined) {
-        const byAttempt = enterAtByAttempt.get(key) ?? new Map();
-        byAttempt.set(vendorSessionId, atMs);
-        enterAtByAttempt.set(key, byAttempt);
-        const claimIdByAttempt = enterClaimIdByAttempt.get(key) ?? new Map();
-        claimIdByAttempt.set(vendorSessionId, claimId);
-        enterClaimIdByAttempt.set(key, claimIdByAttempt);
+        const openSet = openEnterByAttempt.get(key) ?? new Set();
+        const alreadyOpen = openSet.has(vendorSessionId);
+        openSet.add(vendorSessionId);
+        openEnterByAttempt.set(key, openSet);
+        if (!alreadyOpen) {
+          const byAttempt = enterAtByAttempt.get(key) ?? new Map();
+          byAttempt.set(vendorSessionId, atMs);
+          enterAtByAttempt.set(key, byAttempt);
+          const claimIdByAttempt = enterClaimIdByAttempt.get(key) ?? new Map();
+          claimIdByAttempt.set(vendorSessionId, claimId);
+          enterClaimIdByAttempt.set(key, claimIdByAttempt);
+        }
+        // else: a duplicate `enter` for an attempt that is still open --
+        // keep the earlier enter's timestamp/claimId as the attempt's
+        // true start (see openEnterByAttempt's doc comment above).
       }
     } else {
       exitAt.set(key, atMs);
       exitAtOwner.set(key, vendorSessionId);
       if (vendorSessionId !== undefined) {
+        openEnterByAttempt.get(key)?.delete(vendorSessionId);
         const byAttempt = exitAtByAttempt.get(key) ?? new Map();
         byAttempt.set(vendorSessionId, atMs);
         exitAtByAttempt.set(key, byAttempt);
@@ -1097,10 +1119,20 @@ function eventWindowsForIssue(all, issueNumber, vendor) {
  * The window's `endMs` is ALWAYS the valid cleanup window's own `endMs`
  * -- never a max across every stage -- and a stage only widens `startMs`
  * when its OWN window (both ends) falls at or before that cleanup exit.
- * This guards against `readEventWindows`'s own pairing: it pairs the
- * LATEST `--enter` seen for a (issue, vendor, stage) key with the LATEST
+ * This guards against `readEventWindows`'s own pairing: for an
+ * IDENTIFIED attempt (`vendorSessionId` present, #2651) it pairs that
+ * attempt's EARLIEST still-open `--enter` with its EXIT, so a duplicate
+ * re-`--enter` (no intervening `--exit` -- for example a
+ * compaction-resumed session re-entering a stage) cannot narrow the
+ * window; a genuinely new cycle (`--enter` -> `--exit` -> `--enter`)
+ * still starts fresh, since `--exit` closes the open attempt first. The
+ * legacy, identity-less bareKey pairing (no `vendorSessionId` on the
+ * event at all -- historical data, or a vendor with no session-id
+ * source) is deliberately UNCHANGED: it still pairs the LATEST
+ * `--enter` seen for a (issue, vendor, stage) key with the LATEST
  * `--exit`, across the whole append-only file, with no knowledge of
- * which attempt either belongs to.
+ * which attempt either belongs to -- there is no attempt identity to
+ * scope an "earliest open enter" rule to in that path.
  *
  * - A completed run followed by a re-attempt that enters `cleanup` again
  *   but never exits pairs that new, still-open enter with the FIRST
@@ -1369,6 +1401,16 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
  * and an adjacent issue's window begins matches only the later window,
  * rather than being wrongly treated as ambiguous between the two.
  * Preserves each group's original file-order relative to itself.
+ *
+ * Known limitation (#2652): `issueWindows` today is the GLOBAL set of
+ * every Claude-vendor issue's completed window, not scoped to the file
+ * currently being segmented. Two different CONCURRENT sessions working
+ * different issues over overlapping wall-clock time (this repository's
+ * normal multi-session dogfooding shape) make every record in that
+ * overlap ambiguous and drop out of both groups, even though each
+ * record obviously belongs to its own file's session. #2652 tracks
+ * scoping the comparison to windows a file could plausibly own or
+ * contribute to.
  */
 export function segmentRecordsByEventWindow(
   records,
