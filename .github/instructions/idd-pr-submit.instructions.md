@@ -176,6 +176,35 @@ follow-up is important enough to file in-repo now, invoke the
 `issue-authoring` skill (its Stage 1 hold) instead of improvising a
 body. Do not add a parallel "worker-lite authoring" contract.
 
+### D3.6 — Derive the IDD impact checklist
+
+`.github/pull_request_template.md`'s IDD impact checklist (`Instruction
+files changed` / `Template files changed` / `Helper scripts changed` /
+`Config schema changed` / `Security / credential / merge behavior
+changed`) is drafted from the branch's actual changed-file list, not
+from memory. Before drafting the body, list the branch's changes
+(`git diff --name-only origin/{development-branch}...HEAD`) and derive
+each checkbox mechanically, using a root-anchored path-prefix match
+(the path starts with the glob's literal prefix, not merely contains
+it):
+
+- **Instruction files changed** — any path starting with
+  `.github/instructions/` (excludes `idd-template/.github/instructions/`
+  paths, which count only under Template files below).
+- **Template files changed** — any path starting with `idd-template/`.
+- **Helper scripts changed** — any path starting with `src/scripts/`,
+  `scripts/`, or `bin/`.
+- **Config schema changed** — `audit/sync-manifest.json`,
+  `.github/idd/config.json`, or another repository-designated
+  config-schema-bearing file.
+- **Security / credential / merge behavior changed** stays a judgment
+  call — leave it to ordinary self-review discretion; it is not
+  mechanically derivable from paths alone.
+
+D3.7 below re-derives this same checklist against the final HEAD before
+merge — later commits (a review-fix round, a critique-pass fix landed
+before the first push) can change the answer.
+
 ### PR body language
 
 The PR body's prose sections above (summary, background/rationale,
@@ -413,6 +442,35 @@ completion.
    (`idd-review-fix.instructions.md` E9-E12) or a `{development-branch}`
    merge — are not automatically covered; re-run this step against the final HEAD
    before F3 merges.
+
+### D3.7 — Re-verify the IDD impact checklist before merge
+
+Immediately before F3 merge (the same "re-run before merge" point as
+D3.5 step 7 above), re-derive D3.6's checklist against the final HEAD's
+full changed-file list and compare it against the PR body's current
+checked boxes. When a ratchet-rule-bearing file (for example,
+`audit/sync-manifest.json`'s own ratchet-rule comment) raises a
+documented budget or limit anywhere in the branch's commits, also
+confirm the file's required PR-description callout is actually present
+in the body now, not only in a commit message — a callout only
+promised at draft time and never landed is the same drift this step
+exists to catch.
+
+On any mismatch: re-run the claim revalidation gate immediately before
+editing (a separate mutation, not covered by an earlier gated push),
+fetch the PR's current full body, edit only the checklist section (and
+the accompanying file-list prose, when present) in the fetched copy,
+and post the complete result back — `gh pr edit {pr-number} --body-file
+<path>` replaces the whole body, so never pass a partial file, which
+would drop the closing-keyword line and every other section. After
+posting, repeat D3.5 step 6's closing-set check, since edited prose can
+introduce a stray keyword-adjacent reference.
+
+**Known gap**: no phase file currently re-invokes D3.5 or this step by
+name from F1-F3, so this re-check depends on the same implicit trigger
+D3.5 step 7 already relies on rather than an explicit F-phase call —
+out of this step's own scope to close; recommend a follow-up issue to
+wire an explicit F2/F3 trigger if this gap is not already tracked.
 
 ## D4 — Wait for CI
 

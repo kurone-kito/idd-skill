@@ -2759,3 +2759,53 @@ test('idd-ci.instructions.md Exception 3 defers to D4\'s corrected pending:true 
   const row = extractBoundedRegion(readText(path), 'Exception 3:', ' |', path);
   assert.match(row, /D4's `pending: true` recovery check/);
 });
+
+test('D3.6 derives the IDD impact checklist mechanically, excluding the idd-template mirror from Instruction files (idd-skill#2634)', () => {
+  const path =
+    'idd-template/.github/instructions/idd-pr-submit.instructions.md';
+  const section = extractBoundedRegion(
+    readText(path),
+    '### D3.6 — Derive the IDD impact checklist',
+    '### PR body language',
+    path,
+  );
+  for (const label of [
+    'Instruction files changed',
+    'Template files changed',
+    'Helper scripts changed',
+    'Config schema changed',
+    'Security / credential / merge behavior changed',
+  ]) {
+    assert.match(
+      section,
+      new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      `D3.6 must derive the "${label}" checkbox`,
+    );
+  }
+  assert.match(section, /root-anchored path-prefix match/);
+  assert.match(
+    section,
+    /excludes `idd-template\/\.github\/instructions\/`\s+paths/,
+    'D3.6 must exclude the idd-template mirror from "Instruction files changed"',
+  );
+});
+
+test('D3.7 re-derives the impact checklist against final HEAD before merge, using a generic safe-edit (not round-specific PR-body-sync prose) (idd-skill#2634)', () => {
+  const path =
+    'idd-template/.github/instructions/idd-pr-submit.instructions.md';
+  const section = extractBoundedRegion(
+    readText(path),
+    '### D3.7 — Re-verify the IDD impact checklist before merge',
+    '## D4 — Wait for CI',
+    path,
+  );
+  assert.match(section, /re-derive D3\.6's checklist/);
+  assert.match(section, /ratchet-rule/);
+  assert.match(section, /gh pr edit \{pr-number\} --body-file/);
+  assert.match(section, /never pass a partial file/);
+  assert.match(section, /D3\.5 step 6's closing-set check/);
+  // Must not lean on idd-review-fix.instructions.md's round-specific "this
+  // round's fix" framing verbatim -- the mechanics here are paraphrased
+  // generically since D3.7 can fire with zero E-phase rounds behind it.
+  assert.doesNotMatch(section, /this round's fix/);
+});
