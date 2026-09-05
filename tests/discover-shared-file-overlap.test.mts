@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
   type ActiveIssueInput,
   analyzeSharedFileOverlap,
   applyOverlapTieBreaker,
+  loadManifest,
   normalizeContentionPath,
   type OverlapCandidateInput,
   parseArgs,
@@ -217,6 +220,48 @@ test('resolveHighContentionFiles over the real manifest yields the issue-named f
   }
   // A discovery-bundle-only file must not be flagged high-contention.
   assert.equal(resolved.has('idd-suitability.instructions.md'), false);
+});
+
+// ---------------------------------------------------------------------------
+// loadManifest
+// ---------------------------------------------------------------------------
+
+test('loadManifest degrades quietly on a missing manifest (ENOENT)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'discover-shared-file-overlap-'));
+  try {
+    const result = loadManifest(join(dir, 'does-not-exist.json'));
+    assert.deepEqual(result, { manifest: null, missing: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadManifest still fails closed on a present-but-malformed manifest', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'discover-shared-file-overlap-'));
+  try {
+    const manifestPath = join(dir, 'sync-manifest.json');
+    writeFileSync(manifestPath, '{ not valid json', 'utf8');
+    assert.throws(
+      () => loadManifest(manifestPath),
+      /failed to load sync manifest/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadManifest parses a present, well-formed manifest', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'discover-shared-file-overlap-'));
+  try {
+    const manifestPath = join(dir, 'sync-manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({ bundleBudgets: [] }), 'utf8');
+    assert.deepEqual(loadManifest(manifestPath), {
+      manifest: { bundleBudgets: [] },
+      missing: false,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------

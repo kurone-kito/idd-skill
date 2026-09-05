@@ -617,8 +617,8 @@ score/desync/milestone/effort: prefer a candidate whose `## Candidate
 files` do **not** overlap an actively-claimed or open-PR issue on one of
 those; `discover-shared-file-overlap` (see
 [IDD helper scripts](../../docs/idd-helper-scripts.md)) reports
-`overlapFlag`/`recommendedOrder`. Never overrides the score or crosses a
-band. See the
+`overlapFlag`/`recommendedOrder`, or `manifestMissing: true` with an
+empty set. See the
 [convention](../../docs/policy-constants.md#high-contention-shared-files).
 
 After picking, proceed to **A4.5** (`idd-suitability.instructions.md`).
