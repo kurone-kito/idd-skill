@@ -1016,6 +1016,16 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
   // resolveWindow below.
   const enterAtOwner = new Map<string, string | undefined>();
   const exitAtOwner = new Map<string, string | undefined>();
+  // bareKey -> claimId of whichever event set enterAtOwner/exitAtOwner's
+  // CURRENT value for that key (#2654). Unconditional, mirroring
+  // enterAtOwner/exitAtOwner above -- so the legacy bareKey pairing below
+  // can require claimId agreement the same way `attemptCandidates`
+  // already does for the identified path (`#2432`), instead of only
+  // comparing `vendorSessionId`. A claim-mismatched pair sharing one
+  // vendorSessionId (rejected by `attemptCandidates`) would otherwise
+  // still slip through here as an "identity-less" legacyWindow.
+  const enterClaimIdOwner = new Map<string, string | undefined>();
+  const exitClaimIdOwner = new Map<string, string | undefined>();
   // bareKey -> vendorSessionId -> latest timestamp. Only populated for
   // events that carry a non-empty vendorSessionId.
   const enterAtByAttempt = new Map<string, Map<string, number>>();
@@ -1030,13 +1040,22 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
   // attempt's true start time with the later, spurious re-entry,
   // silently narrowing the resolved window. A genuinely new cycle
   // (`enter` -> `exit` -> `enter` -> `exit`) still overwrites normally,
-  // since `exit` clears the attempt's open flag first.
+  // since `exit` clears the attempt's open flag first. #2654 (Codex
+  // review, PR #2656): this guard ALSO gates the legacy unconditional
+  // maps (enterAt/enterAtOwner/enterClaimIdOwner) for an identified
+  // event, not just the attempt-scoped ones -- otherwise a duplicate
+  // enter carrying a NEW claimId could overwrite the legacy owner/claim
+  // state even though the identified path deliberately keeps the first
+  // enter's claim, letting the legacy fallback "resurrect" an attempt
+  // `attemptCandidates` correctly rejected for a claimId mismatch as an
+  // untagged window.
   const openEnterByAttempt = new Map<string, Set<string>>();
   // bareKey -> vendorSessionId -> claimId of whichever event set that
   // attempt's CURRENT latest timestamp above (#2432). Only meaningful
   // alongside an identified (vendorSessionId-bearing) attempt -- an
   // unidentified event has no attempt bucket to disambiguate a claimId
-  // against, so claimId is never tracked on the legacy bareKey path.
+  // against. (`enterClaimIdOwner`/`exitClaimIdOwner` below track claimId
+  // on the legacy bareKey path instead, unconditionally -- #2654.)
   const enterClaimIdByAttempt = new Map<
     string,
     Map<string, string | undefined>
@@ -1084,14 +1103,23 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
       : undefined;
     const claimId = isNonEmptyString(event.claimId) ? event.claimId : undefined;
     if (event.event === 'enter') {
-      enterAt.set(key, atMs);
-      enterAtOwner.set(key, vendorSessionId);
       if (vendorSessionId !== undefined) {
         const openSet = openEnterByAttempt.get(key) ?? new Set<string>();
         const alreadyOpen = openSet.has(vendorSessionId);
         openSet.add(vendorSessionId);
         openEnterByAttempt.set(key, openSet);
         if (!alreadyOpen) {
+          // #2654 review (Codex, PR #2656): the legacy unconditional
+          // maps must stay in lockstep with the attempt-scoped ones --
+          // a duplicate enter for an already-open IDENTIFIED attempt
+          // must not overwrite enterAt/enterAtOwner/enterClaimIdOwner
+          // either, or the legacy fallback can "resurrect" an
+          // identified attempt attemptCandidates correctly rejected
+          // (enter/exit claimId mismatch) as an untagged window keyed
+          // off the duplicate enter's own (different) claimId.
+          enterAt.set(key, atMs);
+          enterAtOwner.set(key, vendorSessionId);
+          enterClaimIdOwner.set(key, claimId);
           const byAttempt =
             enterAtByAttempt.get(key) ?? new Map<string, number>();
           byAttempt.set(vendorSessionId, atMs);
@@ -1103,12 +1131,22 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
           enterClaimIdByAttempt.set(key, claimIdByAttempt);
         }
         // else: a duplicate `enter` for an attempt that is still open --
-        // keep the earlier enter's timestamp/claimId as the attempt's
-        // true start (see openEnterByAttempt's doc comment above).
+        // keep the earlier enter's timestamp/claimId, in BOTH the
+        // legacy and attempt-scoped maps, as the attempt's true start
+        // (see openEnterByAttempt's doc comment above).
+      } else {
+        // No vendorSessionId at all: nothing to key an "already open"
+        // check against (historical data, or a vendor with no
+        // session-id source) -- unconditional overwrite, unchanged
+        // from this function's pre-#2651 behavior.
+        enterAt.set(key, atMs);
+        enterAtOwner.set(key, vendorSessionId);
+        enterClaimIdOwner.set(key, claimId);
       }
     } else {
       exitAt.set(key, atMs);
       exitAtOwner.set(key, vendorSessionId);
+      exitClaimIdOwner.set(key, claimId);
       if (vendorSessionId !== undefined) {
         openEnterByAttempt.get(key)?.delete(vendorSessionId);
         const byAttempt = exitAtByAttempt.get(key) ?? new Map<string, number>();
@@ -1244,8 +1282,23 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
     // pre-#2424 could never resolve either -- identity adds no signal
     // when neither side carries one.
     const legacyOwnersMatch = enterAtOwner.get(key) === exitAtOwner.get(key);
+    // #2654 (CodeRabbit review, PR #2653): `legacyOwnersMatch` alone lets
+    // a claim-mismatched identified attempt through whenever its enter
+    // and exit share one vendorSessionId -- `attemptCandidates` already
+    // rejects that exact case for the identified path (a stronger
+    // signal than one side merely being absent), but this bareKey path
+    // has no equivalent check. Same "absent on either side is ordinary
+    // partial data, not a signal" rule as `attemptCandidates`: only a
+    // BOTH-non-empty, DIFFERENT pair disqualifies the window.
+    const legacyEnterClaimId = enterClaimIdOwner.get(key);
+    const legacyExitClaimId = exitClaimIdOwner.get(key);
+    const legacyClaimIdsCompatible =
+      legacyEnterClaimId === undefined ||
+      legacyExitClaimId === undefined ||
+      legacyEnterClaimId === legacyExitClaimId;
     const legacyWindow =
       legacyOwnersMatch &&
+      legacyClaimIdsCompatible &&
       legacyStartMs !== undefined &&
       legacyEndMs !== undefined &&
       legacyStartMs < legacyEndMs
