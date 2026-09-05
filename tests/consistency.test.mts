@@ -2679,3 +2679,83 @@ test('idd-work.instructions.md confines every bare `main` mention to the B1 trus
     'a `main` mention outside the B1 trusted-checkout allowlist regressed the {development-branch} migration',
   );
 });
+
+function extractBoundedRegion(
+  content: string,
+  startMarker: string,
+  endMarker: string,
+  path: string,
+): string {
+  const startIndex = content.indexOf(startMarker);
+  assert.notEqual(
+    startIndex,
+    -1,
+    `expected to find ${JSON.stringify(startMarker)} in ${path}`,
+  );
+  const afterStart = content.slice(startIndex + startMarker.length);
+  const endIndex = afterStart.indexOf(endMarker);
+  assert.notEqual(
+    endIndex,
+    -1,
+    `expected ${JSON.stringify(endMarker)} after ${JSON.stringify(startMarker)} in ${path}`,
+  );
+  return afterStart.slice(0, endIndex);
+}
+
+test('D4 pending:true recovery ties each advisory-wait outcome to its actual action, not just "not outstanding" (idd-skill#2622)', () => {
+  // "not already outstanding" alone reads true for SATISFIED (review just
+  // landed), WAIT (same-head request already exists, inside its settle
+  // window), and CAP_EXHAUSTED (request cap already spent) -- not only for
+  // the genuinely-needs-a-request case. Naively requesting whenever nothing
+  // is "outstanding" re-requests a review Copilot already submitted
+  // (traced on PR #2598), violates the cap/settle-window contract, or loops
+  // forever waiting on a review that will never arrive once the cap is
+  // spent. Assert each outcome sits next to its correct disposition, not
+  // merely that the outcome name appears somewhere in the bullet (a bare
+  // name-presence check would still pass if a future edit moved an outcome
+  // into the wrong clause).
+  const path =
+    'idd-template/.github/instructions/idd-pr-submit.instructions.md';
+  const bullet = extractBoundedRegion(
+    readText(path),
+    'reports `pending: true`**',
+    'the pending-disposition case above takes.',
+    path,
+  );
+  assert.match(bullet, /advisory-wait-state/);
+  assert.match(bullet, /lastCopilotCommit/);
+
+  const requestNow = extractBoundedRegion(
+    bullet,
+    'read `outcome`:',
+    'request a review now.',
+    path,
+  );
+  assert.match(requestNow, /only `REQUEST_NEEDED`/);
+
+  const requestNothingWaitAndRerun = extractBoundedRegion(
+    bullet,
+    'request a review now.',
+    'resume D4.',
+    path,
+  );
+  assert.match(requestNothingWaitAndRerun, /`SATISFIED`/);
+  assert.match(requestNothingWaitAndRerun, /`WAIT`/);
+  assert.match(requestNothingWaitAndRerun, /request nothing/);
+
+  const exitToE1 = extractBoundedRegion(
+    readText(path),
+    'resume D4.',
+    'the pending-disposition case above takes.',
+    path,
+  );
+  assert.match(exitToE1, /`CAP_EXHAUSTED`/);
+  assert.match(exitToE1, /`RECOVERY_NEEDED`/);
+  assert.match(exitToE1, /idd-review-snapshot\.instructions\.md.*\(E1\)/);
+});
+
+test('idd-ci.instructions.md Exception 3 defers to D4\'s corrected pending:true recovery check, not a standalone "outstanding" check (idd-skill#2622)', () => {
+  const path = 'idd-template/.github/instructions/idd-ci.instructions.md';
+  const row = extractBoundedRegion(readText(path), 'Exception 3:', ' |', path);
+  assert.match(row, /D4's `pending: true` recovery check/);
+});
