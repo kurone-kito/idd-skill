@@ -463,8 +463,11 @@ the accompanying file-list prose, when present) in the fetched copy,
 and post the complete result back — `gh pr edit {pr-number} --body-file
 <path>` replaces the whole body, so never pass a partial file, which
 would drop the closing-keyword line and every other section. After
-posting, repeat D3.5 step 6's closing-set check, since edited prose can
-introduce a stray keyword-adjacent reference.
+posting, repeat D3.5 step 6's closing-set check when D3.5 applies to
+this branch (skip it on the same non-default-`{development-branch}`
+condition D3.5 itself skips under, where `closingIssuesReferences`
+never populates and the check would be meaningless) — edited prose can
+otherwise introduce a stray keyword-adjacent reference.
 
 **Known gap**: no phase file currently re-invokes D3.5 or this step by
 name from F1-F3, so this re-check depends on the same implicit trigger
