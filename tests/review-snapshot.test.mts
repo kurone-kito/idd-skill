@@ -115,7 +115,7 @@ test('indexThreadsByReview excludes an ack-only-post-disposition thread from mis
           },
           {
             author: { login: 'coderabbitai[bot]' },
-            body: 'Thanks for confirming!',
+            body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
             createdAt: '2026-05-12T00:01:00Z',
             pullRequestReview: { id: 'REVIEW-ACK' },
           },

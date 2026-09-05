@@ -1215,6 +1215,53 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS = [
   // though the outer wrapper alone cannot tell it apart from a real summary.
   CODERABBIT_SKIP_REVIEW_MARKER_RE,
 ];
+// #2641: CodeRabbit's own courtesy-acknowledgment reply shape, mirroring
+// the notice patterns above (real observed structure, not an invented
+// template). Derived from this repository's own merged-PR review-thread
+// history: 18/18 sampled CodeRabbit replies that followed an existing
+// disposition on a resolved thread were confirmation-only (agreeing with
+// or withdrawing the finding, never a new substantive concern), and all 18
+// shared two structural signals. Both must match together --
+// `CODERABBIT_ACK_OPENING_RE` alone also appears on some of CodeRabbit's
+// *initial* (non-ack) findings in the same sample, so it cannot stand
+// alone; requiring the closing signature too keeps this narrow, matching
+// the under-match-by-default posture the notice patterns above already
+// document (a false positive here could carry a stale disposition onto a
+// real review -- a false merge).
+//
+// Opening: an `` `@{login}` `` mention immediately followed by a
+// confirmation/dismissal verb -- the consistent lead-in across every
+// sampled reply (e.g. "`@kurone-kito`, confirmed. ...",
+// "`@kurone-kito` Thanks for the fix. ...", "`@kurone-kito`, agreed. ...").
+const CODERABBIT_ACK_OPENING_RE =
+  /^`@[\w.-]+`[,:]?\s+(?:thanks?(?:\s+you)?|confirmed|agreed)\b/i;
+// Closing: one of CodeRabbit's own auto-generated signatures -- the 🐇
+// emoji, the exact auto-generated-reply marker, the fixed trailer it
+// appends when its own thread-resolve API call fails ("Thanks for
+// confirming the fix. I couldn't resolve this review thread on the
+// repository platform..."), or the `coderabbit-skip-review-comment-follow-up`
+// marker (distinct from `CODERABBIT_SKIP_REVIEW_MARKER`, "skip review by
+// coderabbit.ai", which marks a summary walkthrough with no review content
+// rather than a follow-up reply).
+const CODERABBIT_ACK_SIGNATURE_RE =
+  /🐇|<!--\s*This is an auto-generated reply by CodeRabbit\s*-->|I couldn't resolve this review thread on the repository platform|<!--\s*coderabbit-skip-review-comment-follow-up\s*-->/i;
+// No comment author check here: the caller (`classifyThreadAckOnlyPostDisposition`)
+// already restricts to `isConfiguredAdvisoryBotLogin`, and the closing
+// signature above is itself CodeRabbit's own generated fingerprint (the 🐇
+// emoji and both markers are CodeRabbit-specific artifacts), so an
+// unrelated bot's genuine comment cannot organically match both signals.
+// #2641's own research found `chatgpt-codex-connector` posted zero
+// post-disposition trailing replies across this repository's sampled
+// merged-PR history -- with no observed template to derive, it has no
+// pattern here and so fails closed by construction rather than a guess.
+function isKnownAdvisoryAckTemplate(comment) {
+  const body = String(comment.body ?? '');
+  return (
+    !!body &&
+    CODERABBIT_ACK_OPENING_RE.test(body) &&
+    CODERABBIT_ACK_SIGNATURE_RE.test(body)
+  );
+}
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
 // three of "Codex usage limit(s)", a reach/exceed/hit-family verb, and "for
 // code reviews", each tolerant of interposed wording drift, in the two known
@@ -3286,12 +3333,16 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
   }
   // Each remaining item must be a pure advisory-bot courtesy ack: an
   // advisory-bot author whose body is neither a `**Accepted**`/`**Rejected**`
-  // marker nor the terminal `**Rejection confirmed by maintainer**` marker.
+  // marker nor the terminal `**Rejection confirmed by maintainer**` marker,
+  // AND (#2641) matches a known courtesy-acknowledgment template -- author +
+  // shape alone no longer suffice, since a novel substantive comment that
+  // merely doesn't use disposition phrasing must not misclassify as ack-only.
   const ackOnlyPostDisposition = postDispositionBlockingFeedback.every(
     (comment) =>
       isConfiguredAdvisoryBotLogin(comment.author?.login, advisoryBotLogins) &&
       !isDispositionComment({ body: String(comment.body ?? '') }) &&
-      !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }),
+      !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }) &&
+      isKnownAdvisoryAckTemplate(comment),
   );
   if (!ackOnlyPostDisposition) {
     return none;

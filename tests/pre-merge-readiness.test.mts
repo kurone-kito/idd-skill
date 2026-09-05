@@ -3107,7 +3107,7 @@ test('disposition evidence flags an ack-only-post-disposition resolved thread wi
               {
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T02:00:00Z',
-                body: 'Thanks for confirming.',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
               },
             ],
           },
@@ -3159,7 +3159,7 @@ test('disposition evidence recognizes a post-disposition ack across the advisory
                 {
                   author: { login: ackAuthorLogin },
                   createdAt: '2026-05-12T02:00:00Z',
-                  body: 'Thanks for confirming.',
+                  body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
                 },
               ],
             },
@@ -3281,6 +3281,14 @@ test('hasFreshDisposition still re-blocks when a bot edits its own thread findin
 });
 
 test('disposition evidence still blocks but flags in-place-edit-only when a bot thread finding is edited after disposition (#1313)', () => {
+  // #2641 narrows this signal to an edited reply that ALSO matches the
+  // known ack template -- an edited substantive finding no longer
+  // qualifies (fail-closed), so this fixture uses an ack-shaped body
+  // rather than the original pre-#2641 `**Potential issue**...` body. The
+  // pre-disposition `createdAt` (00:00, before the 00:30 disposition) is a
+  // synthetic timeline kept only so the in-place-edit *timing* path
+  // (createdAt <= disposition < updatedAt) stays exercised independently
+  // of #2641's template-matching dimension.
   const summary = summarizeDispositionEvidenceForGate(
     {
       comments: [],
@@ -3295,7 +3303,7 @@ test('disposition evidence still blocks but flags in-place-edit-only when a bot 
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T00:00:00Z',
                 updatedAt: '2026-05-12T02:00:00Z',
-                body: '**Potential issue**: this needs a null check.',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
               },
               {
                 author: { login: 'idd-bot' },
@@ -3350,11 +3358,12 @@ test('disposition evidence does not flag in-place-edit-only for a genuinely new 
               {
                 // A genuinely new reply (its own fresh createdAt, not an
                 // edit of the original finding) is still recognized as a
-                // broad #978 ack-only courtesy comment, but must NOT be
-                // classified as an in-place edit of pre-existing content.
+                // known-template #978 ack-only courtesy comment, but must
+                // NOT be classified as an in-place edit of pre-existing
+                // content.
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T02:00:00Z',
-                body: 'Actually, see also this related spot.',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
               },
             ],
           },
@@ -3451,7 +3460,7 @@ test('disposition evidence reports sole-cause false when a regular comment also 
               {
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T02:00:00Z',
-                body: 'Thanks for confirming.',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
               },
             ],
           },
@@ -3505,7 +3514,7 @@ test('disposition evidence flags an ack-only thread dispositioned via a rejectio
               {
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T02:00:00Z',
-                body: 'Thanks for confirming.',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
               },
             ],
           },
@@ -3552,7 +3561,7 @@ test('disposition evidence flags ack-only when the disposition lands after the s
               {
                 author: { login: 'coderabbitai[bot]' },
                 createdAt: '2026-05-12T03:00:00Z',
-                body: 'Thanks for confirming.',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
               },
             ],
           },

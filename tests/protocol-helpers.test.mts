@@ -137,7 +137,7 @@ test('reviewCurrency and dispositionEvidence agree a rejection-confirmed-by-main
         {
           id: 'RC-3',
           author: { login: 'coderabbitai[bot]' },
-          body: 'Thanks for confirming.',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -221,7 +221,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes a courtesy ack with no sna
         {
           id: 'F4-3',
           author: { login: 'coderabbitai[bot]' },
-          body: 'Thanks for confirming!',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -326,7 +326,7 @@ test('classifyThreadAckOnlyPostDisposition still honors an explicit snapshot bou
         {
           id: 'F2B-2',
           author: { login: 'coderabbitai[bot]' },
-          body: 'Thanks for confirming.',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -348,6 +348,126 @@ test('classifyThreadAckOnlyPostDisposition still honors an explicit snapshot bou
     snapshotBoundaryAt: '2026-05-12T01:00:00Z',
   });
   assert.equal(afterBoundary.ackOnlyPostDisposition, true);
+});
+
+// #2641: `classifyThreadAckOnlyPostDisposition` now additionally requires
+// the post-disposition reply to match a known courtesy-acknowledgment
+// template (derived from actually-observed CodeRabbit replies in this
+// repository's own merged-PR history), not just author + shape.
+
+test('classifyThreadAckOnlyPostDisposition still recognizes a known-template courtesy ack (#2641)', () => {
+  const thread = {
+    id: 'thread-known-template-ack',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'KT-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'KT-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, confirmed. The fix addresses the finding.\n\n🐇 ✅',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a novel substantive reply that merely avoids disposition phrasing (#2641)', () => {
+  // A brand-new finding that happens not to be shaped like
+  // `**Accepted**`/`**Rejected**` must not misclassify as ack-only just
+  // because the author is a configured advisory bot -- it also fails the
+  // known-template match (no `` `@login` `` confirmation lead-in, no
+  // CodeRabbit closing signature), so it stays genuine blocking activity.
+  const thread = {
+    id: 'thread-novel-non-template-reply',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'NT-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'NT-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: 'Actually, this also affects the retry path -- see line 42.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition fails closed for a reply with no known template, even from a configured advisory bot (#2641)', () => {
+  // `chatgpt-codex-connector` has no observed courtesy-ack template in this
+  // repository's history (#2641's own research): its replies never carry
+  // CodeRabbit's own generated closing signature (the 🐇 emoji or either
+  // marker), so even a superficially ack-shaped opening does not match
+  // `isKnownAdvisoryAckTemplate` -- fail closed rather than guess at an
+  // unobserved shape. No author check is needed here: any configured
+  // advisory bot is eligible, but only a reply that actually carries
+  // CodeRabbit's own fingerprint can satisfy the closing-signature half.
+  const thread = {
+    id: 'thread-unrecognized-bot-ack',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'UB-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'UB-2',
+          author: { login: 'chatgpt-codex-connector' },
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]', 'chatgpt-codex-connector'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
 // Codex review findings on this PR (#2014), both verified against source
@@ -671,7 +791,7 @@ test('reviewCurrency still anchors an edited ordinary Accepted marker by created
         {
           id: 'AC-3',
           author: { login: 'coderabbitai[bot]' },
-          body: 'Thanks for confirming.',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n🐇 ✅',
           createdAt: '2026-05-12T01:00:00Z',
           updatedAt: '2026-05-12T01:00:00Z',
         },
