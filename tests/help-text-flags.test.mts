@@ -164,6 +164,7 @@ const CROSS_REFERENCE_FLAGS: Readonly<Record<string, readonly string[]>> = {
 // with a function literally named printHelp().
 const COVERED_HELPERS = [
   'actions-usage-report',
+  'advisory-comment-debounce',
   'advisory-convergence',
   'advisory-wait-state',
   'audit-authored-issue',

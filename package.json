@@ -17,6 +17,7 @@
   "repository": "github:kurone-kito/idd-skill",
   "type": "module",
   "bin": {
+    "idd-advisory-comment-debounce": "./bin/idd-advisory-comment-debounce.mjs",
     "idd-advisory-convergence": "./bin/idd-advisory-convergence.mjs",
     "idd-advisory-wait-state": "./bin/idd-advisory-wait-state.mjs",
     "idd-audit-authored-issue": "./bin/idd-audit-authored-issue.mjs",

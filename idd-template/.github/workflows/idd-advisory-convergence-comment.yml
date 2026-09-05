@@ -35,6 +35,29 @@
 # harmless. The same skip applies when `package-manager` resolves but
 # which package manager to use is ambiguous (see "Detect package
 # manager" below).
+#
+# Debounce (#1381, #2023, #2638): a burst of IDD-originated comments (30
+# in ~15 min on PR #2628) fired `rerun-advisory-convergence.mjs --apply`
+# once per comment, exhausting every same-HEAD instance's one-time rerun
+# budget mid-burst. The "Check for newer qualifying event" step below
+# waits a short quiet window, then re-queries whether a newer
+# IDD-originated comment/review has since landed on the same PR; if so,
+# this run skips its own `--apply` call and leaves it to the
+# later-triggered run (which asks the same question in turn). This is a
+# job-body-level check -- it does not alter `cancel-in-progress: false`
+# below, which stays exactly as #2136 established it. (Note on that
+# setting's actual scope: it protects only the currently in-progress
+# run in this group from cancellation; a merely *pending*, not-yet-
+# started run is still cancelled and replaced by the newest pending run
+# when another is queued behind it, since no `queue:` key is set here
+# -- the debounce below exists for the case where a run has already
+# started and must itself decide whether a newer event supersedes it,
+# which that pending-run replacement does not cover.) If the debounce
+# step's own live-data collection fails, the step fails and GitHub
+# Actions' default sequential-failure behavior skips "Rerun required
+# HEAD check" entirely for that run -- safe, since this is a
+# non-required companion refresh, and a later qualifying event (or the
+# required check's own polling) will trigger a fresh attempt.
 name: IDD advisory-convergence comment refresh
 concurrency:
   # Do not cancel: a later human LGTM must not abort an in-flight
@@ -225,8 +248,47 @@ jobs:
               npx --yes --package "$SPEC" idd-review-comment-origin
               ;;
           esac
-      - name: Rerun required HEAD check
+      - name: Check for newer qualifying event
+        id: debounce
         if: steps.origin.outputs.idd_originated == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          # Same dual-trigger-family PR-number resolution as the rerun
+          # step below.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          # Both pull_request_review_comment and issue_comment carry the
+          # triggering comment's own timestamp at github.event.comment
+          # (matching COMMENT_BODY above).
+          TRIGGERED_AT: ${{ github.event.comment.created_at }}
+          PROFILE: ${{ steps.profile.outputs.profile }}
+          PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
+          MANAGER: ${{ steps.manager.outputs.manager }}
+        run: |
+          case "$PROFILE" in
+            vendored-node)
+              node scripts/advisory-comment-debounce.mjs --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
+              ;;
+            package-manager)
+              case "$MANAGER" in
+                pnpm)
+                  pnpm exec idd-advisory-comment-debounce --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
+                  ;;
+                yarn)
+                  yarn idd-advisory-comment-debounce --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
+                  ;;
+                *)
+                  npm exec idd-advisory-comment-debounce -- --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
+                  ;;
+              esac
+              ;;
+            ephemeral-npx)
+              SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
+              npx --yes --package "$SPEC" idd-advisory-comment-debounce --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
+              ;;
+          esac
+      - name: Rerun required HEAD check
+        if: steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
