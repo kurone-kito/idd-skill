@@ -122,3 +122,71 @@ test('comment-refresh workflow files exist next to the required copies', () => {
     assert.ok(readFileSync(`${REPO_ROOT}/${path}`, 'utf8').length > 0);
   }
 });
+
+// #2643: a burst of IDD-originated comments must not exhaust the
+// required check's rerun budget by firing --apply once per comment.
+test('comment-refresh workflows debounce the rerun call and preserve cancel-in-progress: false', () => {
+  for (const path of COMMENT_PATHS) {
+    const text = readWorkflow(path);
+    assert.match(
+      text,
+      /- name: Check for newer qualifying event/,
+      `${path} must have a "Check for newer qualifying event" debounce step`,
+    );
+    assert.match(
+      text,
+      /id:\s*debounce/,
+      `${path} debounce step must expose id: debounce`,
+    );
+    assert.match(
+      text,
+      /advisory-comment-debounce/,
+      `${path} must invoke the advisory-comment-debounce helper`,
+    );
+    // The debounce step must run (and be able to gate the rerun step)
+    // only after classification, not before or in place of it.
+    const originIndex = text.indexOf('- name: Classify review comment');
+    const debounceIndex = text.indexOf(
+      '- name: Check for newer qualifying event',
+    );
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    assert.ok(originIndex !== -1 && debounceIndex !== -1 && rerunIndex !== -1);
+    assert.ok(
+      originIndex < debounceIndex && debounceIndex < rerunIndex,
+      `${path} steps must run in order: classify, debounce, rerun`,
+    );
+    // The rerun step's own `if:` must require both a positive origin
+    // classification AND a non-skip debounce verdict -- neither alone
+    // is sufficient (#2643 review floor: a debounce step that exists
+    // but doesn't actually gate the rerun call would be a no-op fix).
+    const rerunStepText = text.slice(
+      rerunIndex,
+      text.indexOf('\n      - name:', rerunIndex + 1) === -1
+        ? undefined
+        : text.indexOf('\n      - name:', rerunIndex + 1),
+    );
+    const ifLine = rerunStepText
+      .split('\n')
+      .find((line) => line.trim().startsWith('if:'));
+    assert.ok(
+      ifLine,
+      `${path} Rerun required HEAD check step must have an if: condition`,
+    );
+    assert.match(
+      ifLine as string,
+      /steps\.origin\.outputs\.idd_originated\s*==\s*'true'/,
+      `${path} rerun step's if: must still require idd_originated`,
+    );
+    assert.match(
+      ifLine as string,
+      /steps\.debounce\.outputs\.skip\s*!=\s*'true'/,
+      `${path} rerun step's if: must require the debounce step did not skip`,
+    );
+    // #2136's invariant must survive this change unmodified.
+    assert.match(
+      text,
+      /cancel-in-progress:\s*false/,
+      `${path} must not cancel an in-flight IDD refresh`,
+    );
+  }
+});

@@ -77,7 +77,16 @@ argv. Exit 0 always on a successful classify (including "not
 originated"); a non-zero exit is a usage or parse error.
 `;
 
-function resolveMarkerPrefix(flagValue: string): string | undefined {
+/**
+ * Resolve the effective markerPrefix: an explicit non-empty `flagValue`
+ * wins; otherwise fall back to `.github/idd/config.json`'s configured
+ * value. Exported so sibling companion-workflow helpers (e.g.
+ * `advisory-comment-debounce.mts`) resolve the identical effective
+ * prefix this file's own CLI uses, rather than re-deriving the
+ * fallback and risking drift between two classification passes over
+ * the same PR.
+ */
+export function resolveMarkerPrefix(flagValue: string): string | undefined {
   const trimmed = flagValue.trim();
   if (trimmed) {
     return trimmed;
