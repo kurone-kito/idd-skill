@@ -503,6 +503,14 @@ const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
   escapeRegExp(CODERABBIT_SKIP_REVIEW_MARKER),
   'i',
 );
+// The exact marker CodeRabbit appends to a reply it generates on an
+// existing review thread (distinct from `CODERABBIT_SUMMARY_MARKER`,
+// which opens a fresh review-summary walkthrough). Single-sourced here
+// (#2641 review) so `classifyRegularBotComment`'s stale review-trigger
+// check and `CODERABBIT_ACK_OPENING_RE`'s marker-first tolerance
+// recognize byte-for-byte the same marker and cannot drift.
+export const CODERABBIT_AUTO_GENERATED_REPLY_MARKER =
+  '<!-- This is an auto-generated reply by CodeRabbit -->';
 // Matches the two section headings this older CodeRabbit format nests
 // per-file findings under (kurone-kito/idd-skill#2197, kurone-kito/idd-skill#2559): a review whose finding has no
 // threaded comment of its own. A newer-format review ("Actionable comments
@@ -684,9 +692,7 @@ export function classifyRegularBotComment(
     }
     return null;
   }
-  if (
-    body.startsWith('<!-- This is an auto-generated reply by CodeRabbit -->')
-  ) {
+  if (body.startsWith(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)) {
     if (
       /\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body) &&
       hasExplicitDispositionAfter(comment, comments, {
@@ -1215,6 +1221,84 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS = [
   // though the outer wrapper alone cannot tell it apart from a real summary.
   CODERABBIT_SKIP_REVIEW_MARKER_RE,
 ];
+// #2641: CodeRabbit's own courtesy-acknowledgment reply shape, mirroring
+// the notice patterns above (real observed structure, not an invented
+// template). Derived from this repository's own merged-PR review-thread
+// history: 18/18 sampled CodeRabbit replies that followed an existing
+// disposition on a resolved thread were confirmation-only (agreeing with
+// or withdrawing the finding, never a new substantive concern), and all 18
+// shared both structural signals below (a false positive here could carry
+// a stale disposition onto a real review -- a false merge, so this
+// deliberately under-matches like the notice patterns above).
+//
+// Opening: an `` `@{login}` `` mention immediately followed by a
+// confirmation/dismissal verb -- the consistent lead-in across every
+// sampled reply (e.g. "`@kurone-kito`, confirmed. ...",
+// "`@kurone-kito` Thanks for the fix. ...", "`@kurone-kito`, agreed. ...").
+// An optional leading `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` is tolerated
+// before the mention (Copilot review, #2649): CodeRabbit's other marker-led
+// reply form (`classifyRegularBotComment`'s stale review-trigger check
+// above) places the marker first, so a courtesy ack using the same
+// ordering must not be missed just because `^` otherwise anchors on the
+// mention.
+const CODERABBIT_ACK_OPENING_RE = new RegExp(
+  `^(?:${escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)}\\s*)?` +
+    '`@[\\w.-]+`[,:]?\\s+(?:thanks?(?:\\s+you)?|confirmed|agreed)\\b',
+  'i',
+);
+// Closure (Codex review, PR #2649, round 3): matching the opening plus ANY
+// CodeRabbit-generated text -- an auto-generated-reply marker, a skip
+// marker, even the bare 🐇 emoji -- is not enough. All of those mark "this
+// reply came from CodeRabbit," not "CodeRabbit is done with this finding":
+// the bare auto-generated-reply marker alone also appears on 19/48 of
+// CodeRabbit's *initial* (non-ack) findings in the same sample. An
+// enumerated blocklist of "new concern" phrasing (tried and reverted here)
+// is a losing battle -- natural language has unbounded ways to raise a
+// concern, as two rounds of adversarial review examples demonstrated.
+//
+// What IS a reliable signal: CodeRabbit only attempts (or reports failing)
+// to mark the review thread itself resolved when it considers the finding
+// closed. It never does this on a reply that raises a new concern. This is
+// CodeRabbit's own resolution DECISION, not a fingerprint of its output
+// format -- exactly the "complete known acknowledgment template" the
+// original issue asked for, not a fragment of one. Matches either of the
+// two closure forms observed across all 18 sampled trailing acks: "✅
+// Review thread resolved." (the thread-resolve API call succeeded) or its
+// "I couldn't resolve this review thread on the repository platform..."
+// fallback trailer (the same API call failed, so CodeRabbit reports the
+// attempt instead).
+const CODERABBIT_ACK_CLOSURE_RE =
+  /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
+// Explicit `isCodeRabbitLogin` author check (Copilot review, #2649,
+// round 4): the closure phrase is CodeRabbit's own resolution decision in
+// practice, but it is still literal text a differently-configured
+// advisory bot could in principle also emit. The caller
+// (`classifyThreadAckOnlyPostDisposition`) already restricts to
+// `isConfiguredAdvisoryBotLogin` (any configured advisory bot, not just
+// CodeRabbit), so this check is the cheap, defense-in-depth narrowing
+// down to CodeRabbit specifically, on top of (not instead of) the
+// content-based signals below. #2641's own research found
+// `chatgpt-codex-connector` posted zero post-disposition trailing replies
+// across this repository's sampled merged-PR history -- with no observed
+// template to derive, it now fails closed both by construction (no
+// observed shape) and by this explicit author gate.
+//
+// Residual risk, stated rather than papered over: CodeRabbit itself
+// emitting a closure signal on a reply that is NOT actually a pure
+// acknowledgment (a CodeRabbit-side defect) would still misclassify here.
+// This helper matches CodeRabbit's own stated decision; it cannot second-
+// guess a wrong decision CodeRabbit reports about itself.
+function isKnownAdvisoryAckTemplate(comment) {
+  const authorLogin = String(comment.author?.login ?? '');
+  const body = String(comment.body ?? '');
+  return (
+    !!authorLogin &&
+    isCodeRabbitLogin(authorLogin) &&
+    !!body &&
+    CODERABBIT_ACK_OPENING_RE.test(body) &&
+    CODERABBIT_ACK_CLOSURE_RE.test(body)
+  );
+}
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
 // three of "Codex usage limit(s)", a reach/exceed/hit-family verb, and "for
 // code reviews", each tolerant of interposed wording drift, in the two known
@@ -3286,12 +3370,16 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
   }
   // Each remaining item must be a pure advisory-bot courtesy ack: an
   // advisory-bot author whose body is neither a `**Accepted**`/`**Rejected**`
-  // marker nor the terminal `**Rejection confirmed by maintainer**` marker.
+  // marker nor the terminal `**Rejection confirmed by maintainer**` marker,
+  // AND (#2641) matches a known courtesy-acknowledgment template -- author +
+  // shape alone no longer suffice, since a novel substantive comment that
+  // merely doesn't use disposition phrasing must not misclassify as ack-only.
   const ackOnlyPostDisposition = postDispositionBlockingFeedback.every(
     (comment) =>
       isConfiguredAdvisoryBotLogin(comment.author?.login, advisoryBotLogins) &&
       !isDispositionComment({ body: String(comment.body ?? '') }) &&
-      !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }),
+      !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }) &&
+      isKnownAdvisoryAckTemplate(comment),
   );
   if (!ackOnlyPostDisposition) {
     return none;
