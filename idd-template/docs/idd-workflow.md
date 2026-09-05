@@ -576,9 +576,17 @@ several unrelated technical topics into one dense batch.
 
 **Apply the operator's answers back onto the issue**: update the score
 footer, remove or update the `triage:{outcome}` label, revise
-acceptance criteria to reflect the decision, and record the decision in
-a comment. The next ordinary Discover pass then picks the issue up
-normally -- grooming itself never claims or works the issue (see
+acceptance criteria to reflect the decision, and record the decision as
+inline prose in the issue body: `Maintainer decision (<provenance>,
+Groom hearing, <date>): <resolution text>` -- the shape
+`suitability-triage.mjs`'s Check 7 recognizes as a resolved
+decision
+([kurone-kito/idd-skill#2661](https://github.com/kurone-kito/idd-skill/issues/2661)
+in the source repository); a comment may additionally note the
+decision, but the body itself is what re-triage reads. The next
+ordinary Discover pass then
+picks the issue up normally -- grooming itself never claims or works
+the issue (see
 [Mutation Policy and Coordination Rule](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)).
 
 **Worked example.** An issue was rejected `needs-decision` at score
@@ -591,7 +599,9 @@ invalidation-on-write. After the operator picks TTL-based expiry, the
 acceptance criteria are rewritten to "cache reads for up to 60 seconds
 via TTL-based expiry; no explicit invalidation path is required", the
 score footer is raised to `4/5`, and the `triage:needs-decision` label
-is removed with a comment recording the decision and its rationale.
+is removed after the body records `Maintainer decision (Groom hearing,
+2026-06-27): TTL-based expiry, chosen over explicit
+invalidation-on-write for simplicity`.
 
 ## Roadmap completion audits
 

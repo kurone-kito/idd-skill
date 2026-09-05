@@ -2658,6 +2658,495 @@ The maintainer approval is recorded; option 1 was chosen.
   assert.equal(result.pass, true);
 });
 
+test('verifiability passes an inline Groom-hearing resolved-decision issue with objective criteria (#2661)', () => {
+  // Check 7 false-positive that now passes: the grooming-pass workflow
+  // (#2494) records a resolved decision as inline prose, not a "## Decision"
+  // heading -- reproduces the shape of kurone-kito/idd-skill#2641's body.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates (a narrow allowlist), mirroring the maintainer's existing approval.
+
+## Acceptance Criteria
+- [ ] the helper output contains the expected token
+- [ ] tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability passes an inline Groom-hearing decision whose parenthetical is hard-wrapped (#2661)', () => {
+  // GitHub issue bodies hard-wrap at ~80 chars, so the provenance parenthetical
+  // routinely splits across two physical lines -- the exact shape of
+  // kurone-kito/idd-skill#2641's real body. `[^)]` (not `[^)\n]`) must still
+  // match across that line break.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing,
+2026-09-05): pattern-match known bot acknowledgment templates (a narrow
+allowlist), mirroring the maintainer's existing approval.
+
+## Acceptance Criteria
+- [ ] the helper output contains the expected token
+- [ ] tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test("verifiability still fails when the body only quotes another issue's resolved decision as an example (#2661 C1 review)", () => {
+  // A body that merely reports/quotes another issue's already-resolved
+  // decision as an illustrative example -- rather than recording its OWN
+  // resolution -- must not borrow that resolution: its own subjective
+  // sign-off requirement is still unresolved.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `For reference, issue #2641 states "Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates" as an example of the convention.
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability passes an inline decision whose own resolution text uses a reporting verb (PR #2662 Codex review)', () => {
+  // The framing check must only look at text BEFORE the marker, not the
+  // whole paragraph: a genuine resolution can legitimately use an ordinary
+  // verb like "reports" in its own resolution text without that making the
+  // marker a quoted example of someone else's decision.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05): the helper reports an actionable error when the input is malformed, instead of silently passing.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] the maintainer's sign-off on the UX is already recorded above
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails when an inline decision uses Markdown-decorated or list/quote-prefixed still-pending vocabulary (PR #2662 Codex + Copilot review)', () => {
+  // The still-pending denylist must see through a leading Markdown emphasis
+  // delimiter or list/blockquote marker, and its trailing boundary must not
+  // be defeated by a closing "_" (both the word char before it and "_"
+  // itself are `\w`, so a plain `\b` never fires there).
+  for (const resolution of [
+    '**pending**, further review needed',
+    '_TBD_',
+    '`still open`',
+    '- TBD, no consensus yet',
+    '> pending, need more info',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05): ${resolution}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for resolution: ${resolution}`,
+    );
+  }
+});
+
+test('verifiability still fails when an inline marker has no resolution text before the next section (PR #2662 Codex round 2)', () => {
+  // A bare `\s*` between the colon and the resolution text let an EMPTY
+  // marker cross the blank-line paragraph boundary and consume the next
+  // heading's first character as if it were resolution content.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05):
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails when the only inline decision is Markdown-blockquoted (PR #2662 Codex round 2)', () => {
+  // A blockquoted decision ("> Maintainer decision (...): ...") is a
+  // quoting signal on its own, with no reporting verb required --
+  // `isPrecededByFramingVerb` alone would miss this.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `> Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails on noun-first "no decision yet" phrasing (PR #2662 Codex round 2)', () => {
+  // The denylist's negated-decision-noun class (added in round 2, then
+  // generalized in round 3) covers the noun-first "no decision yet"
+  // phrasing that the earlier verb-first "not (yet) decided" entries alone
+  // do not match.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05): no decision yet, still gathering input.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails on negated-decision-noun and still-open-state synonyms (PR #2662 Codex round 3)', () => {
+  // The denylist generalizes to semantic classes (negated-decision-noun,
+  // still-open-state) rather than one literal phrase at a time, covering
+  // "no consensus yet" and siblings the literal "no decision yet" entry
+  // alone would miss.
+  for (const resolution of [
+    'no consensus yet; discussion continues',
+    'no agreement reached',
+    'awaiting a decision from the maintainer',
+    'remains unresolved pending further discussion',
+    'TBA',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05): ${resolution}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for resolution: ${resolution}`,
+    );
+  }
+});
+
+test('verifiability still passes a genuinely resolved decision containing "no" as an ordinary word (PR #2662 Codex round 3 guard)', () => {
+  // A bare `no\s+\w+` would false-positive on an ordinary resolved
+  // decision that happens to start with "no" as ordinary prose, not a
+  // pending-decision signal.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05): no changes to the public API; keep the existing signature as-is.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails when a decision is only quoted via blockquote lazy continuation (PR #2662 Codex round 4)', () => {
+  // CommonMark's blockquote "lazy continuation" rule renders a line with no
+  // leading ">" as still inside the quote when it continues a paragraph
+  // that started with "> " -- checked here via the paragraph's first line,
+  // not just the matched line itself.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `> Quoted from issue #123:
+Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails when a quote starts partway through a paragraph (PR #2662 Codex round 5)', () => {
+  // A blockquote can start on a LATER line of the same blank-line-delimited
+  // span than an unquoted prose line before it -- CommonMark starts a new
+  // blockquote block at the "> " line regardless of what precedes it. The
+  // matched line's own ">" prefix must be checked directly, not just the
+  // paragraph's first line (an earlier revision dropped this direct check
+  // while adding the lazy-continuation check above).
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `For reference:
+> Maintainer decision (kurone-kito/idd-skill#2637, Groom hearing, 2026-09-05): pattern-match known bot acknowledgment templates
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails when the only inline decision is inside inline or fenced code (PR #2662 Codex round 5)', () => {
+  // A body that merely demonstrates the convention's syntax in code (inline
+  // or fenced) must not have that example read as a real resolution.
+  const tick = String.fromCharCode(96);
+  for (const demonstration of [
+    `Issues can record a resolution like ${tick}Maintainer decision (Groom hearing, 2026-09-05): choose A${tick}.`,
+    `\`\`\`\nMaintainer decision (Groom hearing, 2026-09-05): choose A\n\`\`\``,
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${demonstration}
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for demonstration: ${demonstration}`,
+    );
+  }
+});
+
+test('verifiability still fails when the only inline decision is hidden in an HTML comment (PR #2662 Codex round 6)', () => {
+  // Issue-template scaffolding commonly leaves hidden guidance as an HTML
+  // comment; invisible in the rendered issue, it must not count as a real
+  // resolution.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- Maintainer decision (Groom hearing, YYYY-MM-DD): <resolution text> -->
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails when an unterminated HTML comment swallows the rest of the body (PR #2662 Codex round 7)', () => {
+  // CommonMark renders an HTML comment opened with no matching "-->" as
+  // extending through end-of-document, so the "real" marker and Acceptance
+  // Criteria after it are also invisible in the rendered issue -- the whole
+  // remaining body must be masked, not just up to a "-->" that never comes.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- guidance for authors
+
+Maintainer decision (Groom hearing, 2026-09-05): choose option A over option B.
+
+Whether to adopt this approach here requires the maintainer's sign-off before we proceed, since it is ultimately a judgment call about UX.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability passes a genuine decision despite an unrelated reporting verb earlier in the paragraph (PR #2662 Codex round 6)', () => {
+  // The framing-verb check is bound to the current sentence, not the whole
+  // paragraph prefix: an already-terminated, unrelated sentence using a
+  // reporting verb must not suppress a genuine decision that follows in the
+  // same paragraph.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `The current helper reports status. Maintainer decision (Groom hearing, 2026-09-05): choose option A over option B.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails when an empty inline marker is immediately followed by a heading with no blank line (PR #2662 Copilot round 6)', () => {
+  // Resolution text must start on the same line as the colon: a single
+  // hard-wrap tolerance previously let an empty marker's colon consume the
+  // next line's first character (e.g. a heading's "#") as if it were
+  // resolution content, even with no blank-line paragraph gap at all.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05):
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability passes settled decisions that begin with a denylist word (PR #2662 Codex round 4)', () => {
+  // "pending"/"undecided"/"deferred" are ordinary English adjectives that
+  // can open a genuinely settled resolution's own sentence -- only a bare,
+  // sentence-ending use of the word signals a real placeholder.
+  for (const resolution of [
+    'deferred to follow-up issue #100 so this patch remains scoped',
+    'pending requests will be rejected with HTTP 409',
+    'undecided items should be escalated to the next grooming pass',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05): ${resolution}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      true,
+      `expected pass for resolution: ${resolution}`,
+    );
+  }
+});
+
+test('verifiability still fails when pending/undecided/deferred end the resolution as a bare placeholder (PR #2662 Codex round 4 guard)', () => {
+  // The tightened boundary must still reject a genuine bare placeholder use
+  // of these words, with or without "yet"/"still"/"for now".
+  for (const resolution of ['pending', 'undecided', 'deferred for now']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05): ${resolution}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for resolution: ${resolution}`,
+    );
+  }
+});
+
+test('verifiability still fails when the parenthetical carries no real provenance (PR #2662 Copilot round 2)', () => {
+  // Any (or empty) parenthetical content must not count as provenance: the
+  // parenthetical must actually contain an issue/PR reference, "Groom
+  // hearing", or an ISO-style date -- otherwise the gate is bypassable with
+  // an unsubstantiated "Maintainer decision (...): ..." claim.
+  for (const parenthetical of [
+    '()',
+    '(just kidding)',
+    '(no real basis here)',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision ${parenthetical}: pursue option 1, per the maintainer's own judgment and approval.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for parenthetical: ${parenthetical}`,
+    );
+  }
+});
+
+test('verifiability still fails when an inline decision uses still-pending vocabulary (#2661 C1 review)', () => {
+  // The negative-lookahead denylist must also reject common still-pending
+  // words with no negated-"resolved"/"decided" phrasing of their own (TBD,
+  // pending, undecided, deferred, "still open") -- the inline form has no
+  // positive `\bresolved\b` requirement to fall back on, unlike the heading
+  // form.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, 2026-09-05): still open, no consensus yet on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails when an inline decision is not yet decided', () => {
+  // A still-open "Maintainer decision (...): not yet decided" must not count
+  // as a resolved decision, so the subjective screen still fires.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (Groom hearing, TBD): not yet decided, pending further review.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] output contains the expected token
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('actionability accepts checklist without Scope/Purpose headings', () => {
   const result = checkActionability({
     issue: {

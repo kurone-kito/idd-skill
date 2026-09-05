@@ -332,6 +332,131 @@ function getParagraphSpans(body: string): { start: number; end: number }[] {
   return spans;
 }
 
+// #2661 C1 review: shared between `hasSubjectiveApproval` (#2512's original
+// use) and `hasResolvedDecision`'s inline-form scan. A match landing in a
+// paragraph that reports on another decision/approval as an example --
+// "issue #2641 states \"Maintainer decision (...)\" as an example of the
+// convention" -- uses the vocabulary as the OBJECT of that report, not as
+// this issue's own settled call, in either direction: it must not count as
+// evidence of an unresolved subjective gate (#2512's original case), and it
+// must equally not count as evidence THIS issue's own decision is resolved
+// (#2661's C1 finding -- a body that merely quotes another issue's already-
+// resolved decision as an example must not borrow that resolution).
+function isFramedAsDescriptive(
+  normalizedBody: string,
+  paragraphSpans: { start: number; end: number }[],
+  offset: number,
+): boolean {
+  const span =
+    paragraphSpans.find(
+      (candidate) => offset >= candidate.start && offset <= candidate.end,
+    ) ?? paragraphSpans[paragraphSpans.length - 1];
+  return FRAMING_VERB_PATTERN.test(
+    normalizedBody.slice(span?.start ?? 0, span?.end ?? normalizedBody.length),
+  );
+}
+
+// #2661 PR #2662 review (Codex): unlike `isFramedAsDescriptive` above, this
+// scans only the paragraph text BEFORE `offset`, not the whole paragraph.
+// Used solely for the inline-decision scan, where the match's own resolution
+// text (after the colon) can legitimately contain an ordinary reporting verb
+// -- "Maintainer decision (...): the helper reports an actionable error" --
+// without that making the marker itself a quoted example of someone else's
+// decision. A genuine quoting/reporting frame always precedes the quoted
+// marker in natural prose ("issue #2641 states \"Maintainer decision
+// (...)\"..."), so only text before the match need be checked here. Bounded
+// to the current SENTENCE, not the whole paragraph prefix (round 6, PR
+// #2662): an unrelated reporting verb in an earlier, already-terminated
+// sentence of the same paragraph -- "The current helper reports status.
+// Maintainer decision (...): choose A" -- must not suppress a genuine
+// decision merely for sharing a paragraph with an unrelated use of the same
+// vocabulary.
+function isPrecededByFramingVerb(
+  normalizedBody: string,
+  paragraphSpans: { start: number; end: number }[],
+  offset: number,
+): boolean {
+  const span =
+    paragraphSpans.find(
+      (candidate) => offset >= candidate.start && offset <= candidate.end,
+    ) ?? paragraphSpans[paragraphSpans.length - 1];
+  const scanText = normalizedBody.slice(span?.start ?? 0, offset);
+  const lastSentenceBoundary = Math.max(
+    scanText.lastIndexOf('. '),
+    scanText.lastIndexOf('! '),
+    scanText.lastIndexOf('? '),
+    scanText.lastIndexOf('.\n'),
+    scanText.lastIndexOf('!\n'),
+    scanText.lastIndexOf('?\n'),
+  );
+  const sentenceStart =
+    lastSentenceBoundary === -1 ? 0 : lastSentenceBoundary + 2;
+  return FRAMING_VERB_PATTERN.test(scanText.slice(sentenceStart));
+}
+
+// #2661 PR #2662 review round 2 (Codex): a Markdown blockquote ("> Maintainer
+// decision (...): ...") is itself a quoting signal, independent of
+// `isPrecededByFramingVerb` -- pasting another issue's decision as a
+// blockquote carries no reporting verb of its own, so the framing-verb check
+// alone lets a quoted decision through. Checks BOTH the matched line's own
+// ">" prefix (the direct case -- also covers a quote that starts partway
+// through a paragraph, e.g. "For reference:" followed immediately by
+// "> Maintainer decision (...)": CommonMark starts a new blockquote block at
+// that "> " line regardless of the preceding unquoted line, Codex round 5,
+// PR #2662) AND the containing PARAGRAPH's first line (CommonMark's
+// blockquote "lazy continuation" rule -- this repo's own coverage:
+// tests/markdown-code.test.mts's "permits lazy continuation" case -- renders
+// a line with no ">" of its own as still inside the quote when it continues
+// a paragraph that started with "> ", Codex round 4, PR #2662). An earlier
+// round-4 revision checked only the paragraph's first line and dropped the
+// original round-2 direct-line check, reintroducing exactly the round-5 gap.
+function isInBlockquotedParagraph(
+  normalizedBody: string,
+  paragraphSpans: { start: number; end: number }[],
+  offset: number,
+): boolean {
+  const lineStart = normalizedBody.lastIndexOf('\n', offset - 1) + 1;
+  if (/^[ \t]*>/.test(normalizedBody.slice(lineStart, offset))) {
+    return true;
+  }
+  const span =
+    paragraphSpans.find(
+      (candidate) => offset >= candidate.start && offset <= candidate.end,
+    ) ?? paragraphSpans[paragraphSpans.length - 1];
+  const paragraphStart = span?.start ?? 0;
+  const firstLineEnd = normalizedBody.indexOf('\n', paragraphStart);
+  const firstLine = normalizedBody.slice(
+    paragraphStart,
+    firstLineEnd === -1 ? normalizedBody.length : firstLineEnd,
+  );
+  return /^[ \t]*>/.test(firstLine);
+}
+
+// #2661 PR #2662 review round 6 (Codex): an issue-template author commonly
+// leaves hidden instructional scaffolding as an HTML comment -- e.g.
+// `<!-- Maintainer decision (Groom hearing, YYYY-MM-DD): <resolution text>
+// -->` -- invisible in the rendered issue but still present in
+// `normalizedCodeMaskedBody` (Markdown code masking does not touch HTML
+// comments). Masked the same way as inline/fenced code, before the
+// inline-decision pattern scan. An unterminated `<!--` (no matching `-->`)
+// extends to end-of-body: CommonMark renders such an HTML block through
+// EOF, so the entire remaining body -- a genuine marker and Acceptance
+// Criteria included -- can be invisible in the rendered issue while still
+// matching this scan if left unmasked (round 7, PR #2662).
+function findHtmlCommentRanges(text: string): MarkdownCodeRange[] {
+  const ranges: MarkdownCodeRange[] = [];
+  const openPattern = /<!--/g;
+  let openMatch = openPattern.exec(text);
+  while (openMatch) {
+    const closeIndex = text.indexOf('-->', openMatch.index + 4);
+    const end = closeIndex === -1 ? text.length : closeIndex + 3;
+    ranges.push({ start: openMatch.index, end });
+    openPattern.lastIndex = end;
+    openMatch = openPattern.exec(text);
+  }
+  return ranges;
+}
+
 // Check 3 precision: an unsafe execution directive tells the agent to act on
 // *supplied / untrusted* content, not any command verb that merely lands near
 // the ordinary determiner "this". Match the strong untrusted-origin signals, or
@@ -776,6 +901,77 @@ function hasSubstantiveBullet(text: string): boolean {
 // across JavaScript regex engines.
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
+
+// #2661: the grooming-pass workflow (docs/idd-workflow.md, from #2494)
+// records a resolved decision as inline prose -- "Maintainer decision
+// (<provenance>, <date>): <resolution text>" -- not a "## Decision" heading,
+// so RESOLVED_DECISION_PATTERN above never matches it. The parenthetical's own
+// provenance (an issue reference and/or "Groom hearing" and/or a date) is
+// this shape's resolved signal, so -- unlike the heading form -- the literal
+// word "resolved" is not required. `[^)]` (not `[^)\n]`) lets the parenthetical
+// span a hard-wrapped line break -- GitHub issue bodies wrap at ~80 chars, so
+// "(kurone-kito/idd-skill#2637, Groom hearing,\n2026-09-05):" routinely splits
+// the provenance across two physical lines (the same line-wrap-is-not-a-
+// boundary shape as the proximity check above, #2512). A "still open" guard
+// applies immediately after the colon, so a placeholder resolution is not
+// mistaken for a real one -- both the heading form's own negated-"resolved"
+// phrasing ("not yet decided") and this inline form's own still-pending
+// vocabulary (TBD, pending, undecided, deferred, "still open"), since the
+// inline form has no positive `\bresolved\b` requirement to fall back on
+// (#2661 C1 review). The leading `[\s*_\`>-]*` skips past Markdown emphasis
+// (`**pending**`, `_TBD_`, `` `still open` ``) and list/blockquote markers
+// ("- TBD ...", "> pending ...") that would otherwise land between the colon
+// and the denylist word (Codex + Copilot review, PR #2662); the trailing
+// `(?![a-zA-Z])` replaces a plain `\b`, which fails to end the match after
+// "TBD_" (both `D` and `_` are `\w`, so `\b` finds no boundary there) even
+// though the underscore is just a closing emphasis marker, not part of the
+// word. The negated-decision-noun class (`no\s+(?:decision|consensus|
+// agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?`) and the
+// still-open-state class (`(?:still|remains?)\s+(?:open|undecided|
+// unresolved|pending|unsettled)`) replace the earlier single-phrase
+// entries ("no decision yet", "still open") with their semantic families,
+// covering "no consensus yet" and similar noun-first phrasings the
+// verb-first "not (yet) decided" denylist entries don't match (Codex
+// rounds 2-3, PR #2662) without enumerating every synonym as its own
+// literal. Deliberately NOT a bare `no\s+\w+`: "no changes to the API;
+// keep as-is" is a genuinely resolved decision, not a pending one.
+// **Convergence boundary**: this denylist is already stricter than
+// precedent -- `RESOLVED_DECISION_PATTERN` above has carried no
+// resolution-text denylist at all since #1135, and its own docstring
+// accepts exactly this soft-heuristic trade-off. A denylist can never
+// enumerate every future synonym; widen a *class* here only for a
+// concrete reported case, not for a hypothetical one. Resolution text must
+// start on the SAME LINE as the colon (`[ \t]*`, no newline tolerance): an
+// earlier revision allowed a single hard-wrapped line break here, which
+// fixed the immediate "colon immediately followed by a blank line" case
+// (Codex round 2, PR #2662) but still let an empty marker consume the very
+// next line's first character even with no blank line at all -- e.g. a
+// heading's "#" right after "Maintainer decision (...):\n" (Copilot round
+// 6, PR #2662). Dropping the newline tolerance entirely closes both cases
+// at once; neither of this fix's two real-world citations (#2644, #2641)
+// ever needed it, since GitHub's hard-wrap only splits the provenance
+// parenthetical, never the colon-to-resolution boundary itself. The
+// lookahead right after the opening "("
+// requires the parenthetical to actually contain one of the three
+// provenance signals this shape is documented to carry -- an issue/PR
+// reference, "Groom hearing", or an ISO-style date -- rather than accepting
+// any (or empty) parenthetical content as if provenance were merely
+// decorative (Copilot review round 2, PR #2662): without this, "Maintainer
+// decision (): ..." or "Maintainer decision (just kidding): ..." could
+// bypass the subjective-approval gate with no real grooming-pass record
+// behind it. `pending`/`undecided`/`deferred` additionally require a clause
+// boundary (through optional "yet"/"still"/"for now" and Markdown
+// decoration) immediately after the word -- these three, unlike TBD/TBA/TBC,
+// are ordinary English adjectives that can open a genuinely settled
+// resolution's own sentence ("deferred to follow-up issue #100 so this
+// patch remains scoped", "pending requests will be rejected with HTTP
+// 409"); only a bare, sentence-ending use of the word signals a real
+// placeholder (Codex round 4, PR #2662). This is the same soft
+// co-occurrence heuristic as the heading form: it does not verify the
+// resolution text actually settles the exact approval wording elsewhere in
+// the body.
+const INLINE_MAINTAINER_DECISION_PATTERN =
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S/i;
 
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the
@@ -2249,33 +2445,38 @@ export function checkVerifiability(context: Context): CheckOutcome {
         'Issue does not provide objective verification signals or substantive acceptance criteria.',
     };
   }
+  // Normalized once so every offset computed below (line-split cursor,
+  // paragraph spans, proximity/inline-decision match index) shares the same
+  // 1-char line separator -- a raw `\r\n` body otherwise drifts the running
+  // `lineOffset` cursor by 1 byte per CRLF line, eventually pointing
+  // `isFramedAsDescriptive` at the wrong paragraph (#2531 review).
+  const normalizedBody = body.replace(/\r\n/g, '\n');
+  const paragraphSpans = getParagraphSpans(normalizedBody);
+  // #2661 PR #2662 review rounds 5-6 (Codex): computed against
+  // `normalizedBody` (not the raw `body`-derived `fenceMaskedBody` above,
+  // whose offsets are not CRLF-normalized -- the #2531-class
+  // position-alignment risk noted in this PR's own body) so the
+  // inline-decision scan below ignores both an inline/fenced code
+  // demonstration of the convention itself (e.g. an issue documenting the
+  // syntax with `` `Maintainer decision (Groom hearing, 2026-09-05): choose
+  // A` ``) and hidden HTML-comment template scaffolding (round 6:
+  // `<!-- Maintainer decision (...): <resolution text> -->`).
+  // `findMarkdownCodeRanges` covers both inline and fenced spans, unlike
+  // `findFencedCodeRanges` alone.
+  const normalizedCodeMaskedBody = maskMarkdownCodeRegionsPreservingPositions(
+    normalizedBody,
+    [
+      ...findMarkdownCodeRanges(normalizedBody),
+      ...findHtmlCommentRanges(normalizedBody),
+    ],
+  );
   const hasSubjectiveApproval = ((): boolean => {
-    // Normalized once so every offset computed below (line-split cursor,
-    // paragraph spans, proximity match index) shares the same 1-char line
-    // separator -- a raw `\r\n` body otherwise drifts the running
-    // `lineOffset` cursor by 1 byte per CRLF line, eventually pointing
-    // `isFramedAsDescriptive` at the wrong paragraph (#2531 review).
-    const normalizedBody = body.replace(/\r\n/g, '\n');
-    const paragraphSpans = getParagraphSpans(normalizedBody);
-    const isFramedAsDescriptive = (offset: number): boolean => {
-      const span =
-        paragraphSpans.find(
-          (candidate) => offset >= candidate.start && offset <= candidate.end,
-        ) ?? paragraphSpans[paragraphSpans.length - 1];
-      return FRAMING_VERB_PATTERN.test(
-        normalizedBody.slice(
-          span?.start ?? 0,
-          span?.end ?? normalizedBody.length,
-        ),
-      );
-    };
-
     let lineOffset = 0;
     for (const line of normalizedBody.split('\n')) {
       if (
         SUBJECTIVE_SUBJECT_PATTERN.test(line) &&
         SUBJECTIVE_GATE_PATTERN.test(line) &&
-        !isFramedAsDescriptive(lineOffset)
+        !isFramedAsDescriptive(normalizedBody, paragraphSpans, lineOffset)
       ) {
         return true;
       }
@@ -2288,7 +2489,13 @@ export function checkVerifiability(context: Context): CheckOutcome {
     );
     let proximityMatch = proximityPattern.exec(normalizedBody);
     while (proximityMatch) {
-      if (!isFramedAsDescriptive(proximityMatch.index)) {
+      if (
+        !isFramedAsDescriptive(
+          normalizedBody,
+          paragraphSpans,
+          proximityMatch.index,
+        )
+      ) {
         return true;
       }
       proximityMatch = proximityPattern.exec(normalizedBody);
@@ -2297,15 +2504,59 @@ export function checkVerifiability(context: Context): CheckOutcome {
     return false;
   })();
   // A body that carries BOTH a resolved-decision marker (a
-  // "## Decision (resolved …)" section) AND a concrete, objectively-verifiable
-  // acceptance-criteria section is treated as having had its subjective call
-  // already settled by a human, so its prose merely *describes* that prior
-  // approval/decision. This is a soft heuristic for a soft advisory gate: it
-  // co-occurrence-matches the two signals rather than proving the decision
-  // resolves the exact approval wording, which is an accepted trade-off for
-  // maintainer-authored issues. An approval-gated body with no resolved
-  // decision still routes to needs-decision.
-  const hasResolvedDecision = RESOLVED_DECISION_PATTERN.test(body);
+  // "## Decision (resolved …)" heading, or the grooming-pass workflow's
+  // inline "Maintainer decision (…): …" prose, #2661) AND a concrete,
+  // objectively-verifiable acceptance-criteria section is treated as having
+  // had its subjective call already settled by a human, so its prose merely
+  // *describes* that prior approval/decision. This is a soft heuristic for a
+  // soft advisory gate: it co-occurrence-matches the two signals rather than
+  // proving the decision resolves the exact approval wording, which is an
+  // accepted trade-off for maintainer-authored issues. An approval-gated
+  // body with no resolved decision still routes to needs-decision.
+  //
+  // The inline form additionally requires no framing verb PRECEDE it in its
+  // own paragraph (#2661 C1/PR review): a body that merely *quotes* another
+  // issue's already-resolved decision as an example -- "issue #2641 states
+  // \"Maintainer decision (...)\" as an example of the convention" -- must
+  // not borrow that resolution for THIS issue's own subjective gate. Scoped
+  // to text before the match (`isPrecededByFramingVerb`, not the
+  // whole-paragraph `isFramedAsDescriptive`) so a genuine resolution whose
+  // OWN text happens to use a reporting verb -- "Maintainer decision (...):
+  // the helper reports an actionable error" -- is not wrongly excluded
+  // (Codex review, PR #2662). A Markdown blockquote is a second, independent
+  // quoting signal with no reporting verb of its own -- "> Maintainer
+  // decision (...): ..." -- so `isInBlockquotedParagraph` also excludes a
+  // match (Codex review rounds 2 and 4, PR #2662). The heading form has no
+  // equivalent gap: a "## Decision (resolved …)" section is, by
+  // construction, this issue's own decision record, never a quoted example
+  // of someone else's.
+  const hasInlineResolvedDecision = ((): boolean => {
+    const inlinePattern = new RegExp(
+      INLINE_MAINTAINER_DECISION_PATTERN.source,
+      'gi',
+    );
+    let inlineMatch = inlinePattern.exec(normalizedCodeMaskedBody);
+    while (inlineMatch) {
+      if (
+        !isPrecededByFramingVerb(
+          normalizedBody,
+          paragraphSpans,
+          inlineMatch.index,
+        ) &&
+        !isInBlockquotedParagraph(
+          normalizedBody,
+          paragraphSpans,
+          inlineMatch.index,
+        )
+      ) {
+        return true;
+      }
+      inlineMatch = inlinePattern.exec(normalizedCodeMaskedBody);
+    }
+    return false;
+  })();
+  const hasResolvedDecision =
+    RESOLVED_DECISION_PATTERN.test(body) || hasInlineResolvedDecision;
   if (hasSubjectiveApproval && !(hasResolvedDecision && hasObjectiveCriteria)) {
     return {
       pass: false,
