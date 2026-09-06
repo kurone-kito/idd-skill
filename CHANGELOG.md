@@ -14,6 +14,74 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-06
+
+Suitability-triage precision, cross-platform test hardening, and
+review/merge-pipeline reliability release.
+
+### Added
+
+- `idd-doctor` now warns (or, under `--strict`, errors) when a
+  repository's branch protection is enforced only via GitHub Rulesets
+  and the classic protection read genuinely 404s without
+  `ciGate.trustEmptyProtectionReads` set — closing a blind spot where
+  the F2/F3 merge gate could still fail on the first attempt despite a
+  clean doctor report.
+- Declaration-scoped `advisoryWait.providerOutage.terminalWindow`
+  override that shortens the terminal-unavailability window only
+  while a live provider-outage declaration is active, wired
+  consistently into the CI-gate verdict, the F2 readiness check, and
+  the active advisory-wait loop.
+- `resolve-review-thread --claimless` mode, mirroring
+  `pre-merge-readiness`'s flag, for operator-authorized reply-and-
+  resolve on a PR with no closing issue references.
+- `idd-pr-submit` mechanically derives the PR body's IDD impact
+  checklist from the actual diff at submission and re-verifies it
+  against the final HEAD immediately before merge, instead of trusting
+  a checklist drafted once from memory.
+- Issue-authoring: a `needs-decision` authoring-bucket marker
+  (mirroring the existing `blocked-by-human` one) so downstream
+  mechanical checks no longer need to re-derive the bucket from prose.
+
+### Changed
+
+- Extensive instruction and documentation precision across work,
+  claim, pre-merge, advisory-wait, review-fix, review-snapshot,
+  discover, and orchestration-delegation guidance (the B1/F4 path
+  inside a host-isolated worktree, same-agent live-claim branch
+  correction, third-party bot skip-review notices in F2
+  review-currency, non-inheriting delegation for workers, REST-id-to-
+  node-id conversion notes, and related docs-only work).
+
+### Fixed
+
+- Suitability-triage precision: Check 3 no longer flags a freestanding
+  protocol-name mention, a `process.platform`-style code mention, or a
+  "not a directive to `<verb>`" negation as a policy override; Check 7
+  now accepts a substantive acceptance-criteria checklist without a
+  trigger keyword and recognizes the grooming pass's inline
+  `Maintainer decision (…, Groom hearing, …)` resolved-decision
+  convention alongside the existing heading form.
+- Cross-platform hardening across the test suite and build tooling for
+  native Windows: `tsc`/`biome` bin resolution, null-device and
+  PATH-stubbed `gh` CLI fixtures, POSIX-executable-bit and
+  `chmodSync`-based fault-injection assumptions, `idd-roadmap-audit`
+  git-path joins, the fake install command, `markdownlint-cli2`/
+  `cspell` `node_modules/.bin` spawning, and per-platform config-path
+  roots.
+- Review and merge pipeline: review-triage now captures CodeRabbit's
+  embedded findings; marker-helpers truncates fractional-second
+  timestamps; the advisory-convergence-comment workflow debounces
+  redundant rerun `--apply` calls; `audit-pr-cleanup`'s ack-only
+  post-disposition carve-out now extends to F4; the ack-only
+  classifier now checks for CodeRabbit's own closure-decision template
+  instead of author and shape alone; and `idd-pr-submit` confirms
+  Copilot's review actually landed before re-requesting it.
+- `discover-shared-file-overlap` degrades quietly instead of erroring
+  when the shared-file manifest is missing, and `audit-authored-issue`
+  verifies the owner-marker/publication trail before treating an issue
+  as fully published.
+
 ## [0.8.0] - 2026-09-04
 
 Outage-resilience release: sustain the IDD loop while the Copilot
