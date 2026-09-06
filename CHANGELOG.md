@@ -45,9 +45,10 @@ review/merge-pipeline reliability release.
 
 ### Changed
 
-- Extensive instruction and documentation precision across claim,
-  pre-merge, advisory-wait, review-fix, review-snapshot, discover, and
-  orchestration-delegation guidance (same-agent live-claim branch
+- Extensive instruction and documentation precision across work,
+  claim, pre-merge, advisory-wait, review-fix, review-snapshot,
+  discover, and orchestration-delegation guidance (the B1/F4 path
+  inside a host-isolated worktree, same-agent live-claim branch
   correction, third-party bot skip-review notices in F2
   review-currency, non-inheriting delegation for workers, REST-id-to-
   node-id conversion notes, and related docs-only work).
