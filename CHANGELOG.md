@@ -73,8 +73,9 @@ review/merge-pipeline reliability release.
   timestamps; the advisory-convergence-comment workflow debounces
   redundant rerun `--apply` calls; `audit-pr-cleanup`'s ack-only
   post-disposition carve-out now extends to F4; the ack-only
-  classifier requires an exact template match; and `idd-pr-submit`
-  confirms Copilot's review actually landed before re-requesting it.
+  classifier now checks for CodeRabbit's own closure-decision template
+  instead of author and shape alone; and `idd-pr-submit` confirms
+  Copilot's review actually landed before re-requesting it.
 - `discover-shared-file-overlap` degrades quietly instead of erroring
   when the shared-file manifest is missing, and `audit-authored-issue`
   verifies the owner-marker/publication trail before treating an issue
