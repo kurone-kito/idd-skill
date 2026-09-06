@@ -1,6 +1,6 @@
 {
   "$schema": "https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json",
-  "iddVersion": "0.8.0",
+  "iddVersion": "0.9.0",
   "markerPrefix": "{{PROJECT_MARKER_PREFIX}}",
   "mergePolicy": "human_merge",
   "reviewPolicy": "copilot-advisory",
