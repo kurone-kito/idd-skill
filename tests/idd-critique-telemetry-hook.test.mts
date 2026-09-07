@@ -527,20 +527,25 @@ test('invokeCritiqueTelemetryHook kills a backgrounded descendant on timeout, no
   // process group (negative pid), which must still reach it.
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-telemetry-hook-group-kill-'));
   const pidFile = join(sandbox, 'pid');
-  const nodeScript =
-    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); ` +
-    'setInterval(() => {}, 1000);';
-  const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(nodeScript)} & wait`;
+  // #2685 review (CodeRabbit): record the backgrounded descendant's pid via
+  // the shell's own `$!` immediately after backgrounding it, rather than
+  // waiting on the node subprocess to reach and complete its own
+  // `writeFileSync` -- with a short 500ms `timeoutMs` below, a slow node
+  // startup under this repository's documented heavy concurrent-session
+  // load could otherwise race the group-kill and leave `pidFile` never
+  // written at all.
+  const nodeScript = 'setInterval(() => {}, 1000);';
+  const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(nodeScript)} & echo $! > ${JSON.stringify(pidFile)}; wait`;
 
   const result = await invokeCritiqueTelemetryHook(command, samplePayload(), {
     timeoutMs: 500,
   });
   assert.deepEqual(result, { attempted: true, ok: false });
 
-  const pid = Number(readFileSync(pidFile, 'utf8').trim());
+  const pid = Number(await waitForNonEmptyFile(pidFile, 5_000));
   assert.ok(
     Number.isInteger(pid) && pid > 0,
-    `expected the backgrounded descendant to have written its own pid, got ${pid}`,
+    `expected the backgrounded descendant's pid to have been recorded, got ${pid}`,
   );
   const gone = await waitUntilProcessGone(pid, 10_000);
   assert.ok(
