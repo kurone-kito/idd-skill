@@ -13,7 +13,9 @@
 // login and counted. This is a read-only reporting tool only: it never
 // edits `.github/idd/config.json` and never mutates GitHub state (no
 // label removal, no comments, no other write call of any kind). Adding
-// a login to `labels.untrustedLabelerLogins` stays a manual,
+// an accepted candidate's login as one of the recipe's
+// `<labeler-bot-login-N>` placeholders in
+// `.github/workflows/strip-untrusted-labels.yml` stays a manual,
 // adopter-owned edit after reviewing this report.
 import { parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghApiJson, ghText } from './gh-exec.mjs';
@@ -89,12 +91,13 @@ const MAX_SWEEP_PAGES = 100_000;
  * issues/PRs, can run to several MB).
  *
  * Deliberately **not** `ghApiJson(path, { paginate: true })`: that call
- * walks every page inside one `gh` subprocess via `ghText`'s synchronous
- * `execFileSync`, whose `GhTextOptions` exposes no `maxBuffer` override
- * (only the async `ghTextAsync` does) -- so even a well-projected single
- * `--paginate` call is hard-capped at Node's default 1 MiB *total*
- * accumulated stdout across every page, with no override available
- * through this repository's sync `gh`-exec primitives. This helper's
+ * walks every page inside one `gh` subprocess via its own synchronous
+ * `execFileSync`, whose `GhApiJsonOptions` exposes no `maxBuffer`
+ * override (only the async `ghTextAsync`'s `GhTextAsyncOptions` does)
+ * -- so even a well-projected single `--paginate` call is hard-capped
+ * at Node's default 1 MiB *total* accumulated stdout across every
+ * page, with no override available through this repository's sync
+ * `gh`-exec primitives. This helper's
  * sweep is repository-wide and unbounded by design (unlike every other
  * paginated caller in this repository, which is PR/issue-scoped and
  * bounded in practice to a few pages -- see `DEFAULT_GH_PAGINATED_TIMEOUT_MS`'s

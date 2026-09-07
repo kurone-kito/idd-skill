@@ -284,3 +284,46 @@ test('idd-suggest-untrusted-labelers.mjs CLI: table format renders the same aggr
     /Total: 1 distinct bot login\(s\) found across 1 scanned issue\/PR event\(s\) over 1 page\(s\)\./,
   );
 });
+
+test('idd-suggest-untrusted-labelers.mjs CLI: --owner/--repo omitted auto-detects via gh repo view, with no other gh call made', () => {
+  // Same no-mutation proof as the explicit-flags tests above, but for the
+  // default (auto-detect) invocation shape: the stub table registers only
+  // the two `gh repo view` reads plus the one events page -- any other
+  // call, mutating or not, fails the stub loudly.
+  const responses = new Map<string, string>([
+    [
+      JSON.stringify([
+        'repo',
+        'view',
+        '--json',
+        'owner',
+        '--jq',
+        '.owner.login',
+      ]),
+      OWNER,
+    ],
+    [JSON.stringify(['repo', 'view', '--json', 'name', '--jq', '.name']), REPO],
+    [
+      JSON.stringify(eventsPageArgv(1)),
+      JSON.stringify([
+        {
+          event: 'labeled',
+          actor: { login: 'auto-detected-bot', type: 'Bot' },
+        },
+      ]),
+    ],
+  ]);
+
+  const output = runStubbedCli(['--format', 'json'], responses);
+
+  assert.doesNotMatch(output, /ReferenceError|before initialization/);
+  const report = JSON.parse(output) as UntrustedLabelerSweepResult & {
+    owner: string;
+    repo: string;
+  };
+  assert.equal(report.owner, OWNER);
+  assert.equal(report.repo, REPO);
+  assert.deepEqual(report.candidates, [
+    { login: 'auto-detected-bot', labeledEventCount: 1 },
+  ]);
+});
