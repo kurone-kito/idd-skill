@@ -189,6 +189,7 @@ const COVERED_HELPERS = [
   'idd-critique-delegate',
   'idd-doctor',
   'idd-roadmap-audit-execute',
+  'idd-suggest-untrusted-labelers',
   'live-status-digest',
   'local-validation-evidence',
   'merged-pr-feedback-sweep',

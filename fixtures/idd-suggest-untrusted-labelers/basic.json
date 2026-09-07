@@ -1,0 +1,17 @@
+{
+  "input": {
+    "events": [
+      { "event": "labeled", "actor": { "login": "noisy-bot", "type": "Bot" } },
+      { "event": "labeled", "actor": { "login": "noisy-bot", "type": "Bot" } },
+      { "event": "labeled", "actor": { "login": "noisy-bot", "type": "Bot" } },
+      { "event": "labeled", "actor": { "login": "quiet-bot", "type": "Bot" } },
+      { "event": "labeled", "actor": { "login": "kurone-kito", "type": "User" } },
+      { "event": "unlabeled", "actor": { "login": "noisy-bot", "type": "Bot" } },
+      { "event": "closed", "actor": { "login": "kurone-kito", "type": "User" } }
+    ]
+  },
+  "expected": [
+    { "login": "noisy-bot", "labeledEventCount": 3 },
+    { "login": "quiet-bot", "labeledEventCount": 1 }
+  ]
+}

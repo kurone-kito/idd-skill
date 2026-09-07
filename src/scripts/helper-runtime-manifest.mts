@@ -606,6 +606,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
     contractPaths: ['schemas/stalled-session-quiet-check.schema.json'],
   },
   {
+    id: 'suggest-untrusted-labelers',
+    scriptName: 'idd:suggest-untrusted-labelers',
+    binName: 'idd-suggest-untrusted-labelers',
+    entryPath: 'scripts/idd-suggest-untrusted-labelers.mjs',
+    vendoredCommand: 'node scripts/idd-suggest-untrusted-labelers.mjs',
+    description:
+      'Sweep GET /repos/{owner}/{repo}/issues/events to completion and report distinct bot logins that produced a labeled event, with a count each (read-only).',
+  },
+  {
     id: 'suitability-close-execute',
     scriptName: 'idd:suitability-close-execute',
     binName: 'idd-suitability-close-execute',

@@ -1,0 +1,18 @@
+{
+  "input": {
+    "events": [
+      { "event": "labeled", "actor": null },
+      { "event": "labeled", "actor": {} },
+      { "event": "labeled", "actor": { "login": null, "type": "Bot" } },
+      { "event": "labeled", "actor": { "login": "   ", "type": "Bot" } },
+      { "event": "labeled", "actor": { "login": "same-count-a", "type": "Bot" } },
+      { "event": "labeled", "actor": { "login": "same-count-b", "type": "Bot" } },
+      { "event": null, "actor": { "login": "ignored-bot", "type": "Bot" } },
+      { "actor": { "login": "another-ignored-bot", "type": "Bot" } }
+    ]
+  },
+  "expected": [
+    { "login": "same-count-a", "labeledEventCount": 1 },
+    { "login": "same-count-b", "labeledEventCount": 1 }
+  ]
+}
