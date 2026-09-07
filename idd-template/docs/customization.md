@@ -928,7 +928,7 @@ hand-copying a placeholder recipe:
    package-manager or `npx` form for it. Without a local clone
    available, use the manual recipe below instead.
 
-   It reads this repository's own configured (or defaulted)
+   It reads the target repository's own configured (or defaulted)
    `labels.roadmapLabelName` / `labels.blockedByHumanLabelName` /
    `labels.needsDecisionLabelName` and the declared logins, then writes
    `.github/workflows/strip-untrusted-labels.yml` with the same trust
