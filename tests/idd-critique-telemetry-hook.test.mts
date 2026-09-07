@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -547,6 +547,52 @@ test('invokeCritiqueTelemetryHook kills a backgrounded descendant on timeout, no
     gone,
     `expected the backgrounded descendant (pid ${pid}) to be killed by the process-group signal, but it is still running`,
   );
+});
+
+test('invokeCritiqueTelemetryHook disarms the watchdog once the hook exits well before timeoutMs (#2685 review, Codex)', async () => {
+  // Regression fixture for the PID-reuse race: a hook that settles quickly
+  // used to leave its watchdog asleep for the rest of timeoutMs, so a
+  // process/group id it recycled inside that window could be killed by
+  // mistake. `timeoutMs` here is deliberately large (well beyond this
+  // test's own assertion deadline) -- if disarming did NOT happen, the
+  // watchdog would still be alive (mid-`sleep`) when this test checks it,
+  // proving the assertion actually exercises cancellation rather than the
+  // watchdog's own natural, on-time expiry.
+  let watchdogChild: ReturnType<typeof spawn> | undefined;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args);
+    if (args[0] === 'sh') {
+      watchdogChild = child;
+    }
+    return child;
+  }) as typeof spawn;
+
+  const restore = stubExecutable(
+    'idd-telemetry-hook-quick-exit',
+    'process.exit(0);\n',
+  );
+  try {
+    const result = await invokeCritiqueTelemetryHook(
+      'idd-telemetry-hook-quick-exit',
+      samplePayload(),
+      { timeoutMs: 30_000, spawnFn },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+
+    assert.ok(watchdogChild, 'expected the watchdog to have been spawned');
+    const watchdogPid = watchdogChild?.pid;
+    assert.ok(
+      typeof watchdogPid === 'number' && watchdogPid > 0,
+      `expected the watchdog to report a pid, got ${watchdogPid}`,
+    );
+    const gone = await waitUntilProcessGone(watchdogPid as number, 10_000);
+    assert.ok(
+      gone,
+      `expected the watchdog (pid ${watchdogPid}) to be killed once the hook exited, well before its own 30s timeoutMs sleep, but it is still running`,
+    );
+  } finally {
+    restore();
+  }
 });
 
 // --- CLI --invoke: fire-and-forget at the process boundary (#2679) -------

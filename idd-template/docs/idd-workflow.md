@@ -1214,6 +1214,10 @@ of C4, once the round's Accept/Reject decision is final (before C5,
 exit, so a clean round that skips C3/C4 entirely still emits a record
 (with zero findings/accepted/rejected counts).
 
+The lite work profile (`lite/idd-work-lite.instructions.md`) does not
+invoke this hook -- per-round telemetry is a full-profile-only feature
+for now.
+
 The JSON payload written to the hook command's stdin:
 
 ```json

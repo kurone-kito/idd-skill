@@ -222,9 +222,10 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
     // spawns (e.g. a backgrounded job) -- `detached: true` above makes
     // `child.pid` both the process-group id and session id, so killing
     // the *negative* pid reaches the whole tree.
-    if (typeof child.pid === 'number' && child.pid > 0) {
-      spawnWatchdog(spawnFn, child.pid, timeoutMs);
-    }
+    const watchdog =
+      typeof child.pid === 'number' && child.pid > 0
+        ? spawnWatchdog(spawnFn, child.pid, timeoutMs)
+        : null;
     const timer = setTimeout(() => {
       killProcessGroup(child);
       settle(false);
@@ -233,12 +234,24 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
     // settles the promise; unref lets the caller's own process exit
     // normally if this hook is the only pending handle.
     timer.unref?.();
+    // #2685 review, Codex (discussion_r3952717...): a hook that exits well
+    // before `timeoutMs` used to leave the watchdog armed for the rest of
+    // its sleep, so a PID (or process-group id, since `detached: true`
+    // makes them the same number) reused by an unrelated process within
+    // that remaining window could be killed by mistake. Disarming the
+    // watchdog here as soon as `child` genuinely settles closes that race
+    // for the normal (non-timeout) exit path -- the only path left open is
+    // a *new* process becoming group leader of that exact recycled id
+    // inside the brief disarm-in-flight window, which `killProcessGroup`'s
+    // own ESRCH-tolerant fallback below cannot avoid either.
     child.on('error', () => {
       clearTimeout(timer);
+      cancelWatchdog(watchdog);
       settle(false);
     });
     child.on('exit', (code) => {
       clearTimeout(timer);
+      cancelWatchdog(watchdog);
       settle(code === 0);
     });
     child.stdin?.on('error', () => {
@@ -259,6 +272,11 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
  * single-PID kill only when the group-targeted signal itself fails (e.g.
  * `child.pid` is somehow already gone, or a platform without POSIX
  * process-group semantics). Never throws.
+ *
+ * Also used by {@link cancelWatchdog} to disarm the watchdog's own process
+ * group (itself `detached: true` -- see {@link spawnWatchdog}) once it is no
+ * longer needed; `child` in that call is the watchdog's `sh -c` wrapper, not
+ * the hook command.
  */
 function killProcessGroup(child) {
   const pid = child.pid;
@@ -281,42 +299,68 @@ function killProcessGroup(child) {
   }
 }
 /**
+ * Disarm a still-sleeping {@link spawnWatchdog} once the hook it was
+ * guarding has already settled on its own (#2685 review, Codex): without
+ * this, a hook that exits well inside `timeoutMs` still leaves the watchdog
+ * asleep for the remainder of the window, so a PID/process-group id reused
+ * by an unrelated process before the watchdog's `sleep` elapses could be
+ * killed by mistake. `watchdog` is `null` when {@link spawnWatchdog} itself
+ * never ran (no usable `child.pid`) or failed to spawn -- a no-op then, not
+ * an error. Reuses {@link killProcessGroup} since the watchdog is itself
+ * `detached: true` (its own `sh -c 'sleep ...; kill ...'` wrapper is its own
+ * session/group leader); killing it before its `sleep` returns prevents the
+ * trailing `kill -9 -<pid>` from ever running.
+ */
+function cancelWatchdog(watchdog) {
+  if (watchdog) {
+    killProcessGroup(watchdog);
+  }
+}
+/**
  * Best-effort, self-contained deadline enforcement that survives this
  * process exiting before `timeoutMs` elapses (`--invoke`'s whole point).
- * Spawns a detached, unref'd `sh -c 'sleep <n>; kill -9 -<pid> || kill -9
- * <pid> || true'` -- `sleep`/`kill` rather than the `timeout(1)` coreutil,
- * which isn't guaranteed present everywhere. Never throws: spawn failure
- * here (no POSIX shell on `PATH`, e.g. a bare Windows environment)
- * silently forfeits this backup and leaves the JS-level timer above as
- * the only enforcement for a caller that stays alive to see it -- an
- * accepted gap on that platform, not a new one this function introduces.
+ * Spawns a detached, unref'd `sh -c 'sleep <n>; kill -9 -<pid> || true'` --
+ * `sleep`/`kill` rather than the `timeout(1)` coreutil, which isn't
+ * guaranteed present everywhere. Returns the spawned watchdog so the caller
+ * can {@link cancelWatchdog} it once the hook it guards settles on its own,
+ * or `null` if the spawn itself failed. Never throws: spawn failure here
+ * (no POSIX shell on `PATH`, e.g. a bare Windows environment) silently
+ * forfeits this backup and leaves the JS-level timer above as the only
+ * enforcement for a caller that stays alive to see it -- an accepted gap on
+ * that platform, not a new one this function introduces.
  *
  * **No `--` before `-<pid>`** (deliberately, empirically verified): `sh`
  * on Debian/Ubuntu (and derivatives) is `dash`, whose `kill` builtin
  * rejects `kill -9 -- -<pid>` outright ("Illegal number: -") -- unlike
  * bash/GNU `kill`, dash's builtin does not recognize `--` as end-of-options
  * at all, so the *group*-targeted attempt silently failed on every run
- * under dash, invisibly falling through to the single-pid fallback, which
- * by then usually no longer names a live process either (the original
- * spawned pid can itself be a short-lived shell that already exited,
- * leaving only its group-mate descendants alive). `kill -9 -<pid>`
- * (leading `-` attached directly to the digits, no separate `--` token)
- * is the portable form both dash and bash accept.
+ * under dash. `kill -9 -<pid>` (leading `-` attached directly to the
+ * digits, no separate `--` token) is the portable form both dash and bash
+ * accept.
+ *
+ * **No single-PID fallback** (#2685 review, Codex, discussion about the
+ * PID-reuse race): a prior revision retried a bare `kill -9 <pid>` when the
+ * group-targeted kill failed. On POSIX, `kill -9 -<pid>` only fails with
+ * ESRCH once *every* member of that process group has already exited --
+ * meaning the fallback could only ever name something else that happens to
+ * reuse that exact number, never the original hook. It made a rare race
+ * strictly worse (an extra, unconditional attempt to kill an unrelated
+ * process) without ever helping the intended case, so it is dropped: once
+ * the group-targeted `kill` reports no such group, this watchdog gives up.
  */
 function spawnWatchdog(spawnFn, pid, timeoutMs) {
   try {
     const seconds = Math.max(timeoutMs, 0) / 1000;
     const watchdog = spawnFn(
       'sh',
-      [
-        '-c',
-        `sleep ${seconds}; kill -9 -${pid} 2>/dev/null || kill -9 ${pid} 2>/dev/null || true`,
-      ],
+      ['-c', `sleep ${seconds}; kill -9 -${pid} 2>/dev/null || true`],
       { detached: true, stdio: 'ignore' },
     );
     watchdog.unref();
+    return watchdog;
   } catch {
     // See doc comment: best-effort only.
+    return null;
   }
 }
 /**
