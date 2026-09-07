@@ -302,11 +302,11 @@ based on content? If yes, and the repository keeps the distributed IDD
 label names (or any other label such an auto-labeler could plausibly
 infer), adopt the guard recipe in
 [Customizing IDD — Reserved-label guard recipe](../customization.md#reserved-label-guard-recipe)
-before relying on unattended discovery or hold semantics. When a helper
-runtime is available, prefer declaring `labels.untrustedLabelerLogins`
-and running the `idd-onboard` CLI's `--substitute` stage over the
-manual recipe — both paths, and the trade-offs between them, are
-documented at that same recipe link. The `idd-suggest-untrusted-labelers`
+before relying on unattended discovery or hold semantics. When a local
+`kurone-kito/idd-skill` clone is available, prefer declaring
+`labels.untrustedLabelerLogins` and running the `idd-onboard` CLI's
+`--substitute` stage over the manual recipe — both paths, and the
+trade-offs between them, are documented at that same recipe link. The `idd-suggest-untrusted-labelers`
 sweep helper only proposes candidate logins for a human to review; it
 is read-only and never writes `.github/idd/config.json` itself, so
 still add each accepted candidate to `labels.untrustedLabelerLogins`
