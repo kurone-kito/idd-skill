@@ -36,7 +36,7 @@ behavior change too.
 | Issue scope                         | Roadmap-first discovery (roadmap path first, orphan fallback)                                                                                                                                                                                                                                                                                                                                                                                                                             | Default is `roadmap-first`. Set `issue-scope` to `roadmap` for strict roadmap-only discovery (no orphan fallback), or to `orphan-first` when unblocked orphan issues should be considered before roadmap traversal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Orphan-first approval               | No extra gate beyond orphan readiness checks                                                                                                                                                                                                                                                                                                                                                                                                                                              | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Issue-author approval               | Secure-by-default target contract; unattended work needs a self-authorizing issue author or explicit approval unless the repository opts out                                                                                                                                                                                                                                                                                                                                              | Record the gate decision, approval actors, freshness rule, approval signals, and opt-out semantics in repository-local policy docs and onboarding. Keep this contract aligned with the discovery/claim behavior that already ships, and update both surfaces together if local policy changes later.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| IDD label names                     | `roadmap`, `status:blocked-by-human`, and `status:needs-decision` drive roadmap identification, human-gate holds, and decision holds. A semantic issue auto-labeler (for example CodeRabbit's issue enrichment) can auto-apply any of these three label names to an ordinary issue with no error — silently dropping it from execution candidates or parking it behind a hold — and omitting a label from the labeler's own instruction list does not restrict which labels it may apply. | Configure `labels.roadmapLabelName`, `labels.blockedByHumanLabelName`, and `labels.needsDecisionLabelName` in `.github/idd/config.json` when the repository already uses a different label taxonomy for these three roles. Migration note: when renaming an existing label, first create the new label and apply it alongside the old one on the affected open issues, then update the config value, then delete the old label — discovery and triage then never pass through a window where hold labels stop matching; keep all three configured labels present in the repository afterward. If the repository runs a semantic issue auto-labeler, adopt the [reserved-label guard recipe](#reserved-label-guard-recipe) below to stop it from applying these labels.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| IDD label names                     | `roadmap`, `status:blocked-by-human`, and `status:needs-decision` drive roadmap identification, human-gate holds, and decision holds. A semantic issue auto-labeler (for example CodeRabbit's issue enrichment) can auto-apply any of these three label names to an ordinary issue with no error — silently dropping it from execution candidates or parking it behind a hold — and omitting a label from the labeler's own instruction list does not restrict which labels it may apply. | Configure `labels.roadmapLabelName`, `labels.blockedByHumanLabelName`, and `labels.needsDecisionLabelName` in `.github/idd/config.json` when the repository already uses a different label taxonomy for these three roles. Migration note: when renaming an existing label, first create the new label and apply it alongside the old one on the affected open issues, then update the config value, then delete the old label — discovery and triage then never pass through a window where hold labels stop matching; keep all three configured labels present in the repository afterward. If the repository runs a semantic issue auto-labeler, adopt the [reserved-label guard recipe](#reserved-label-guard-recipe) below — generated from a declared `labels.untrustedLabelerLogins` list when a helper runtime is available, or copied and hand-substituted otherwise — to stop it from applying these labels.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Issue authoring guard               | The configured authoring label is both the draft marker for a held issue and the claim-suppression lock Discover enforces; Discover skips issues carrying it and warns when that label appears stale                                                                                                                                                                                                                                                                                      | Configure `issueAuthoring.authoringLabelName` and `issueAuthoring.authoringStaleAge` in `.github/idd/config.json` when local label naming or timing differs from the distributed defaults. Keep the label available in the target repository and keep `authoringStaleAge` less than `claimTiming.staleAge`; see [IDD policy constants](policy-constants.md#issue-authoring-defaults).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Workshop example repo               | `idd-doctor` checks that the example repository's README back-links to this repo's `docs/workshop/`                                                                                                                                                                                                                                                                                                                                                                                       | Set `workshop.exampleRepository` in `.github/idd/config.json` to `"<owner>/<repo>"` when this repository publishes a workshop and an external example repository should back-link to it. Leave the field empty / unset to skip the check (default for adopter repos that have not published a workshop).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Worktree guard                      | Advisory only by default — `idd-doctor` warns on a primary-worktree implementation-branch HEAD but nothing blocks the commit, push, or merge                                                                                                                                                                                                                                                                                                                                              | Opt in by setting `worktreeGuard.enabled: true` in `.github/idd/config.json`; `idd-doctor` then enforces the same as its `--strict` flag would, so a primary-worktree `issue/*` / `roadmap-audit/*` HEAD fails outright instead of only warning. Pair it with the local git hook activation steps in [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--enable-the-local-worktree-guard) for pre-commit/pre-push enforcement — including its [hook-manager coexistence guidance](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/optional-host-setup.md#coexisting-with-an-existing-hook-manager) for a repository where an existing hook manager already owns `core.hooksPath`. Override `worktreeGuard.branchPatterns` to change which branch globs count as implementation branches (default `issue/*`, `roadmap-audit/*`). Absent or `false` keeps the historical advisory-only behavior.                                                                                                                                                                                                                                                                                                                                                                              |
@@ -893,7 +893,51 @@ your own repository below) guards against this with
 `.github/workflows/strip-untrusted-labels.yml`: a same-event
 `issues: labeled` / `pull_request_target: labeled` handler that removes
 a reserved label the instant a configured untrusted actor applies it.
-The recipe below adapts that workflow for adopters. Save it as
+Two paths produce this file for your own repository, below.
+
+### Preferred: generated guard (helper runtime available)
+
+When a helper runtime is available (see the "Helper runtime" row in the
+table above, and
+[IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order)),
+generate the guard from your own declared configuration instead of
+hand-copying a placeholder recipe:
+
+1. Populate `labels.untrustedLabelerLogins` in `.github/idd/config.json`
+   with the login(s) of whichever semantic issue auto-labeler(s) this
+   repository actually runs. The
+   [Untrusted-labeler login sweep](idd-helper-scripts.md#untrusted-labeler-login-sweep)
+   helper automates the full-history detection technique the manual
+   recipe below documents in prose — run it and filter its output down
+   to the actor(s) recognized as untrusted, excluding any bot already
+   trusted to apply these labels on purpose (for example this
+   repository's own IDD or CI automation).
+2. Run the `idd-onboard` CLI's `--substitute` stage (already part of
+   normal onboarding/re-onboarding; see
+   [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#cli-assisted-onboarding)):
+   `node scripts/idd-onboard.mjs --substitute --target <target-dir>`.
+   It reads this repository's own configured (or defaulted)
+   `labels.roadmapLabelName` / `labels.blockedByHumanLabelName` /
+   `labels.needsDecisionLabelName` and the declared logins, then writes
+   `.github/workflows/strip-untrusted-labels.yml` with the same trust
+   model documented below (least-privilege `permissions:`, no
+   checkout, `pull_request_target` for the PR branch,
+   `runs-on: ubuntu-latest`). An absent or empty
+   `labels.untrustedLabelerLogins` writes nothing and does not fail
+   (opt-in, not opt-out).
+
+**Scope limit.** The generator covers only the three base labels above.
+A repository that also wants `issueAuthoring.authoringLabelName`
+covered, or the broader shared-prefix form described in the Fallback
+subsection below, has no generated equivalent yet — use the manual
+recipe for that extension instead. Re-running `--substitute` also regenerates
+the file from the current configuration every time, overwriting any
+hand-edit previously made to a generated copy.
+
+### Fallback: manual recipe (`instructions-only` profile, or extended coverage)
+
+Without a helper runtime — or when the scope limit above applies — copy
+the recipe by hand. Save it as
 `.github/workflows/strip-untrusted-labels.yml` and substitute every
 `<...>` placeholder before use:
 
@@ -1056,8 +1100,41 @@ actually runs. A shipped file carrying this source repository's own
 values would silently protect the wrong labels or actors for any
 adopter who configured `labels.*` or runs a different labeler — worse
 than no file, since its presence could be mistaken for coverage it does
-not actually provide. Copy the recipe above and substitute the
-placeholders instead.
+not actually provide. This is why the file is never a static template
+asset either way: the generated path above resolves these same
+per-adopter values from `.github/idd/config.json` at onboarding time
+instead of shipping them pre-filled, and the manual path asks you to
+substitute them by hand.
+
+### Advisory: `.coderabbit.yaml` snippet
+
+Adopters who use CodeRabbit specifically can additionally scope its
+issue auto-labeling away from the reserved label names, mirroring the
+snippet this source repository's own `.coderabbit.yaml` carries:
+
+```yaml
+issue_enrichment:
+  labeling:
+    # Scope issue auto-labeling to content labels only. `<roadmap-label-name>`
+    # (and any other configured reserved IDD label name) is intentionally
+    # left out of the list below — this is hygiene, not a restriction: it
+    # does not stop CodeRabbit's own auto-labeling heuristic from applying
+    # that label anyway. Keep the CI guard above in place regardless.
+    auto_apply_labels: true
+    labeling_instructions:
+      # ... your own content-label entries; omit every reserved IDD label
+      # name from this list.
+```
+
+**This is hygiene alongside the CI guard above, never a substitute for
+it.** Per the risk prose earlier in this section and
+[IDD label names](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#idd-label-names)'s
+"omitting a label from the labeler's instructions is not a restriction"
+point: leaving a label out of `labeling_instructions` only tells
+CodeRabbit which labels its content-labeling feature is configured to
+consider — it does not stop CodeRabbit's own auto-labeling heuristic
+from applying that label anyway. Keep the generated or manual CI guard
+above in place regardless of whether this snippet is adopted.
 
 ## Issue Scope
 

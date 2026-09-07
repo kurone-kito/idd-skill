@@ -302,7 +302,12 @@ based on content? If yes, and the repository keeps the distributed IDD
 label names (or any other label such an auto-labeler could plausibly
 infer), adopt the guard recipe in
 [Customizing IDD — Reserved-label guard recipe](../customization.md#reserved-label-guard-recipe)
-before relying on unattended discovery or hold semantics.
+before relying on unattended discovery or hold semantics. When a helper
+runtime is available, prefer declaring `labels.untrustedLabelerLogins`
+and running the `idd-onboard` CLI's `--substitute` stage (or the
+`idd-suggest-untrusted-labelers` sweep helper to populate the login
+list) over the manual recipe — both paths, and the trade-offs between
+them, are documented at that same recipe link.
 
 ### Bootstrap execution mode
 
