@@ -139,6 +139,18 @@ export function buildCritiqueTelemetryHookPayload(input) {
  * silently absorbed into `{ ok: false }` rather than propagated, unlike
  * `critiqueLoop.delegate`'s fail-closed hold semantics.
  *
+ * `detached: true` (#2685 review, Codex): the child runs in its own
+ * session, so it survives a signal delivered to this process's group (e.g.
+ * the invoking shell's own job-control teardown) instead of dying
+ * alongside it. This function's own promise still always resolves once
+ * the child truly settles (exit, error, or timeout) for any caller that
+ * awaits it (every test below does); the CLI's `--invoke` mode (below)
+ * simply never awaits it, and exits via `process.exit()` -- which
+ * terminates unconditionally regardless of any pending handle -- instead
+ * of waiting for the child to exit or hit `timeoutMs`, which would
+ * otherwise delay every C-phase round invoking this hook by up to that
+ * bound.
+ *
  * Failure modes this deliberately guards against (a naive
  * `spawn().stdin.write()` call crashes the parent process on each of these):
  * - A spawn failure (bad shell, ENOENT, EACCES) emits `'error'` on the
@@ -146,8 +158,9 @@ export function buildCritiqueTelemetryHookPayload(input) {
  * - A child that exits before reading stdin EPIPEs the write asynchronously
  *   -- the write's own try/catch only covers the *synchronous* failure
  *   path, so `stdin`'s own `'error'` listener is required too.
- * - A hanging command would block the caller indefinitely without a bounded
- *   `timeoutMs` + `SIGKILL`.
+ * - A hanging command would block a caller that does choose to await this
+ *   promise (e.g. a test, or a future non-CLI embedder) indefinitely
+ *   without a bounded `timeoutMs` + `SIGKILL`.
  * - Inheriting stdout/stderr would let a chatty hook pollute the caller's
  *   own output, so both are set to `'ignore'`.
  */
@@ -171,6 +184,22 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
       child = spawnFn(command, {
         shell: true,
         stdio: ['pipe', 'ignore', 'ignore'],
+        // `detached: true` (not `child.unref()`) only: this puts the child
+        // in its own session so it survives a signal sent to this
+        // process's group (e.g. the invoking shell's own job-control
+        // teardown), without unref'ing it. Deliberately NOT calling
+        // `child.unref()` here -- that would remove the *only* thing
+        // keeping the event loop alive long enough for the (also unref'd)
+        // timeout timer below to ever fire for a caller that legitimately
+        // awaits this promise (every test in this file does; a future
+        // non-CLI embedder might too) -- with both unref'd, nothing forces
+        // the loop to keep running, so the promise could stay pending
+        // forever once nothing else in the process needs the loop. The
+        // CLI's own `--invoke` mode (below) doesn't need this ref/unref
+        // distinction at all: it never awaits this promise, and
+        // `process.exit()` terminates unconditionally regardless of any
+        // pending handle's ref status.
+        detached: true,
       });
     } catch {
       settle(false);
@@ -244,19 +273,50 @@ function runCli() {
     printHelp();
     process.exit(0);
   }
+  if (args.invoke) {
+    runInvoke(args);
+    return;
+  }
   const report = buildCritiqueTelemetryHookReport(
     args.policy ? { localPolicyPath: args.policy } : undefined,
     args.noUserGlobal,
   );
-  if (!args.invoke) {
-    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+}
+/**
+ * `--invoke`: the fire-and-forget entry point. Reads the caller-built JSON
+ * payload from stdin, invokes the resolved hook if usable, and always
+ * exits `0` with no output -- a caller can shell out to
+ * `... | node scripts/idd-critique-telemetry-hook.mjs --invoke` and never
+ * have to check this process's result or wait on it.
+ *
+ * Two failure modes this must absorb that the default (non-`--invoke`)
+ * mode deliberately does *not* (#2685 review, Codex):
+ * - **Resolution itself can throw** (e.g. an explicit `--policy` path that
+ *   is missing or malformed JSON -- `loadPolicyConfig` throws for an
+ *   explicit path by design). In the default mode that throw is the
+ *   caller-visible signal; under `--invoke` it must not be, so resolution
+ *   runs inside its own try/catch here, never at module-level `runCli`
+ *   scope.
+ * - **This process must not itself wait for the hook to settle.** Once
+ *   `invokeCritiqueTelemetryHook` has synchronously spawned the (detached,
+ *   `unref`'d) child and issued the stdin write, this function exits
+ *   without awaiting that promise's resolution -- otherwise this CLI
+ *   process (and thus whatever shelled out to it) blocks for up to the
+ *   hook's own `timeoutMs`, contradicting the documented "never delays"
+ *   contract.
+ */
+function runInvoke(args) {
+  let report;
+  try {
+    report = buildCritiqueTelemetryHookReport(
+      args.policy ? { localPolicyPath: args.policy } : undefined,
+      args.noUserGlobal,
+    );
+  } catch {
+    process.exit(0);
     return;
   }
-  // --invoke is the fire-and-forget entry point: read the caller-built JSON
-  // payload from stdin, invoke the resolved hook if usable, and always exit
-  // 0 with no output -- the whole point is that a caller can shell out to
-  // `... | node scripts/idd-critique-telemetry-hook.mjs --invoke` and never
-  // have to check this process's result.
   readStdinBounded()
     .then((raw) => {
       let payload;
@@ -271,9 +331,14 @@ function runCli() {
         payload !== null &&
         typeof payload === 'object'
       ) {
-        return invokeCritiqueTelemetryHook(report.command, payload);
+        // Deliberately not returned/awaited -- see this function's doc
+        // comment. The `.catch` below is defensive only:
+        // invokeCritiqueTelemetryHook's own contract already never
+        // rejects.
+        invokeCritiqueTelemetryHook(report.command, payload).catch(
+          () => undefined,
+        );
       }
-      return undefined;
     })
     .catch(() => undefined)
     .finally(() => process.exit(0));

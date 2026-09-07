@@ -466,7 +466,9 @@ floor (C1) has passed, else continue to C5. One or more issues:
 continue to C3 regardless of the floor — C4 applies the floor check
 after Accept/Reject scoring.
 
-**Telemetry hook**: on this skip, invoke `critiqueLoop.telemetryHook`
+**Telemetry hook**: on a zero-issue round (either branch above — a
+round that continues to C5 for the floor only is still a zero-finding
+round and must not lose its record), invoke `critiqueLoop.telemetryHook`
 (C1) with zero findings/accepted/rejected counts — fire-and-forget.
 
 ### C3 — Score issues

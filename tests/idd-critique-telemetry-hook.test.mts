@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -529,6 +529,85 @@ test('CLI --invoke exits 0 promptly when the resolved hook command fails', () =>
   } finally {
     restore();
   }
+});
+
+test('CLI --invoke does not wait for a hanging resolved hook up to its default 5s timeout (#2685 review, Copilot + Codex)', () => {
+  // The regression fixture for the core review finding: --invoke must not
+  // itself block its caller for up to the hook's own timeoutMs (default
+  // 5000ms) -- the CLI process must exit as soon as it has handed the
+  // payload off, regardless of how long (or whether) the resolved command
+  // ever finishes. Before the fix, this test would take >= 5000ms; the
+  // bound below is comfortably under that while still generous for this
+  // repository's documented heavy concurrent-session load.
+  const restore = stubExecutable(
+    'idd-telemetry-hook-cli-hang',
+    // Keep the event loop alive without ever exiting on its own -- the
+    // CLI must still return promptly despite this.
+    'setInterval(() => {}, 1000);\n',
+  );
+  try {
+    const sandbox = mkdtempSync(
+      join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-hang-'),
+    );
+    const policyPath = join(sandbox, 'config.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        critiqueLoop: {
+          telemetryHook: { command: 'idd-telemetry-hook-cli-hang' },
+        },
+      }),
+    );
+    const startedAt = Date.now();
+    const { stdout } = runCli(
+      ['--policy', policyPath, '--invoke'],
+      undefined,
+      JSON.stringify(samplePayload()),
+    );
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(stdout, '');
+    assert.ok(
+      elapsedMs < 3_000,
+      `expected --invoke to return well under the hook's 5s default timeout even though it hangs, took ${elapsedMs}ms`,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('CLI --invoke absorbs a resolution failure (malformed --policy file) instead of exiting non-zero (#2685 review, Codex)', () => {
+  // loadPolicyConfig throws for an explicit --policy path that is missing
+  // or malformed JSON -- deliberately, for the default (non-invoke) mode,
+  // where that throw is the caller-visible signal. Under --invoke it must
+  // not be: this is a pure observability hook, and the documented contract
+  // is "always exits 0, never surfaces an error" regardless of why the
+  // hook turned out to be unusable.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-malformed-'),
+  );
+  const policyPath = join(sandbox, 'config.json');
+  writeFileSync(policyPath, '{ not valid json');
+  const isolatedHome = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-invoke-malformed-home-'),
+  );
+  const result = spawnSync(
+    process.execPath,
+    [CLI_PATH, '--policy', policyPath, '--invoke'],
+    {
+      encoding: 'utf8',
+      timeout: 30_000,
+      input: JSON.stringify(samplePayload()),
+      env: {
+        ...process.env,
+        GITHUB_ACTIONS: '',
+        HOME: isolatedHome,
+        XDG_CONFIG_HOME: '',
+      },
+    },
+  );
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
 });
 
 test('CLI --invoke exits 0 when a resolved hook succeeds', () => {
