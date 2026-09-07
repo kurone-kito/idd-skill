@@ -727,6 +727,26 @@ test('planUntrustedLabelerGuardWorkflow is idempotent against an unchanged confi
   assert.equal(secondContent, firstContent);
 });
 
+test('applyUntrustedLabelerGuardPlan reports written: false on an unchanged rerun, not a spurious write (#2684 review)', () => {
+  // Automation consuming this return value (or the CLI verdict's
+  // top-level `written` field) to decide whether to commit would
+  // otherwise attempt an empty commit on every idempotent rerun.
+  const root = makeFixtureDir();
+  writeLabelsConfig(root, { untrustedLabelerLogins: ['repeat-bot[bot]'] });
+  const plan = planUntrustedLabelerGuardWorkflow(root);
+  assert.equal(applyUntrustedLabelerGuardPlan(root, plan), true);
+  const mtimeAfterFirstWrite = statSync(
+    join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH),
+  ).mtimeMs;
+  const secondPlan = planUntrustedLabelerGuardWorkflow(root);
+  assert.equal(applyUntrustedLabelerGuardPlan(root, secondPlan), false);
+  assert.equal(
+    statSync(join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH)).mtimeMs,
+    mtimeAfterFirstWrite,
+    'the file must not be rewritten when content is already identical',
+  );
+});
+
 test('applyUntrustedLabelerGuardPlan refuses to write through a symlinked ancestor directory (#2684 review)', () => {
   const outsideRoot = trackedMkdtemp('idd-onboard-outside-');
   const root = makeFixtureDir();

@@ -1366,9 +1366,14 @@ export function planUntrustedLabelerGuardWorkflow(
 /**
  * Write a non-`null` `plan.content` to `plan.path` under `targetDir`,
  * creating parent directories as needed. Returns whether a write
- * happened — `false` for the `content: null` no-op plan, never an error.
- * Idempotent: re-running with an unchanged plan reproduces the same
- * file content. Re-validates the write destination via
+ * happened — `false` for the `content: null` no-op plan or when the
+ * existing file already holds byte-identical content (a genuine
+ * idempotent no-op, not an error), never an error otherwise. Idempotent:
+ * re-running with an unchanged plan reproduces the same file content
+ * without reporting a spurious write — automation consuming this return
+ * value (or the CLI verdict's `written` field) to decide whether to
+ * commit would otherwise attempt an empty commit on every unchanged
+ * rerun (#2684 review). Re-validates the write destination via
  * `assertSafeGuardWorkflowDestination` immediately before writing —
  * `planUntrustedLabelerGuardWorkflow` above already validates it once at
  * plan time, but this call stays the authoritative, load-bearing check
@@ -1383,6 +1388,9 @@ export function applyUntrustedLabelerGuardPlan(
   }
   assertSafeGuardWorkflowDestination(targetDir, plan.path);
   const absolute = resolve(targetDir, plan.path);
+  if (readTextIfPresent(targetDir, plan.path) === plan.content) {
+    return false;
+  }
   mkdirSync(dirname(absolute), { recursive: true });
   writeFileSync(absolute, plan.content);
   return true;
