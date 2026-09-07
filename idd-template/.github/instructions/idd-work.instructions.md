@@ -493,10 +493,11 @@ unfixed, per the guard.
 
 Otherwise continue to C5.
 
-**Telemetry hook**: once final (before C5, PR submission, or a hold),
-invoke `critiqueLoop.telemetryHook` (C1) with this round's findings,
-severity, accepted/rejected counts, and delegate usage —
-fire-and-forget.
+**Telemetry hook**: once final (before C5, PR submission, or C4's own
+hold) invoke `critiqueLoop.telemetryHook` (C1) with this round's
+findings, severity, accepted/rejected counts, and delegate usage —
+fire-and-forget. A delegate's own fail-closed hold (`docs/idd-workflow.md`)
+stops before C2 and has no telemetry record.
 
 ### C5 — Fix accepted issues
 
