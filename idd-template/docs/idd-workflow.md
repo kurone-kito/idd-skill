@@ -1290,6 +1290,15 @@ never changes which mechanism supplies critique findings, the C-phase
 objective diff validation floor, the E-phase Copilot
 advisory-convergence policy, required checks, or merge gates.
 
+### E10 has no delegate or telemetry hook support
+
+`idd-review-fix.instructions.md`'s own critique pass (E10) does not
+consult `critiqueLoop.delegate` or `critiqueLoop.telemetryHook` at
+all — both surfaces are scoped to the C1 critique pass only, and E10
+always runs the per-agent mechanism above unmodified, regardless of
+how either surface is configured. Extending either surface to E10 is a
+separate, not-yet-scoped change.
+
 ### Mutation / write-side helper lens
 
 When the diff under critique implements a helper that **mutates GitHub
