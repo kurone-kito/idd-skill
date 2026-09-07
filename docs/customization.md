@@ -926,6 +926,18 @@ hand-copying a placeholder recipe:
    `labels.untrustedLabelerLogins` writes nothing and does not fail
    (opt-in, not opt-out).
 
+**Ordering matters.** `labels.untrustedLabelerLogins` is neither one of
+the seven `--hear`-derived onboarding placeholders nor a field
+`--record-policy` writes, so a fresh CLI-assisted run's Step 4
+`--substitute` sees it only if step 1 above already wrote it into
+`.github/idd/config.json` by hand first — confirming the item during
+Step 1B's hearing alone does not populate it, and no CLI stage
+populates it for you. Add the list to `.github/idd/config.json`
+yourself before running `--substitute`, or rerun `--substitute` after
+adding it to an already-onboarded repository's config; either way,
+`--substitute` is always safe to rerun (see the Scope limit note
+above).
+
 **Scope limit.** The generator covers only the three base labels above.
 A repository that also wants `issueAuthoring.authoringLabelName`
 covered, or the broader shared-prefix form described in the Fallback

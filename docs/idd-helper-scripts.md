@@ -3139,11 +3139,15 @@ same as `AW4`/`AW5`.
 - **Read-only, unconditionally**: performs no write operation of any
   kind — no `.github/idd/config.json` edit, no GitHub mutation (no
   label change, no comment, no other write call). It only proposes
-  candidates for a human to review; adding an accepted candidate's
-  login as one of the [Reserved-label guard recipe](customization.md#reserved-label-guard-recipe)'s
-  `<labeler-bot-login-N>` placeholders in
-  `strip-untrusted-labels.yml` stays a manual, adopter-owned edit
-  after judging each candidate's event count. Not a phase step in any
+  candidates for a human to review; recording an accepted candidate's
+  login stays a manual, adopter-owned edit after judging each
+  candidate's event count. Add it to `labels.untrustedLabelerLogins` in
+  `.github/idd/config.json` and (re-)run `idd-onboard --substitute` to
+  generate `strip-untrusted-labels.yml`, or add it as one of the
+  [Reserved-label guard recipe](customization.md#reserved-label-guard-recipe)'s
+  `<labeler-bot-login-N>` placeholders when following that recipe's
+  manual fallback instead — see that recipe for when each path applies.
+  Not a phase step in any
   `idd-*.instructions.md` file — like the Merged-PR feedback sweep
   above, this is a manually-invoked, operator-run spot-check, run once
   when first building the reserved-label guard's bot-login list and
