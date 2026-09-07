@@ -1012,6 +1012,16 @@ export function normalizePolicyConfig(config: unknown) {
         c?.labels?.needsDecisionLabelName,
         POLICY_DEFAULTS.labels.needsDecisionLabelName,
       ),
+      // #2669 PR review (Codex): this resolves to [] (trust everyone) on
+      // any malformed entry, including a mix of valid + invalid logins --
+      // fail-open for this denylist field, unlike an allowlist field's
+      // fail-to-[] (fail-closed). Kept matching the sibling label-name
+      // fields' resolution pattern per #2669's own acceptance criteria;
+      // no consumer reads this list yet (see the schema description), so
+      // there is no live enforcement gap today. Reconsider the fail
+      // direction -- and whether schema validation alone is a sufficient
+      // guarantee for the consumer -- when #2671 designs the actual
+      // enforcement this list feeds.
       untrustedLabelerLogins: parseNonEmptyStringArray(
         c?.labels?.untrustedLabelerLogins,
         POLICY_DEFAULTS.labels.untrustedLabelerLogins,
@@ -1281,6 +1291,20 @@ function parseNonEmptyString(value: unknown, fallback: string): string {
  * non-empty string falls back to `fallback` as a whole rather than dropping
  * just the bad entries, so a typo'd login cannot silently vanish from the
  * set.
+ *
+ * Caution for a denylist-semantics caller (#2669 PR review, Codex): "fail
+ * closed to `fallback`" is directionally safe only when `fallback` is the
+ * maximally *restrictive* value for that field -- true for an allowlist
+ * (`fallback: []` denies everyone) but the opposite for a denylist
+ * (`fallback: []` trusts everyone). `labels.untrustedLabelerLogins` is a
+ * denylist, so one malformed entry alongside otherwise-valid logins
+ * silently drops every previously-declared untrusted login, not just the
+ * bad one. Schema validation (`minItems: 1`, non-empty `items`) is the
+ * actual enforcement boundary before this ever runs; this fallback is
+ * defense-in-depth for callers that bypass it. Partial-preserve filtering
+ * would not fully close this either -- a misspelled-but-non-empty login
+ * still passes this parser and simply matches nothing downstream. See the
+ * call site below for why this is deliberately left unchanged for now.
  */
 function parseNonEmptyStringArray(
   value: unknown,
