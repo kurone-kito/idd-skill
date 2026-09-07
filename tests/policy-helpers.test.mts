@@ -78,18 +78,81 @@ test('advisoryWait.exemptBotAuthoredPrs defaults to false and only a literal tru
   );
 });
 
-test('POLICY_DEFAULTS.labels exposes the three reserved label name defaults', () => {
+test('POLICY_DEFAULTS.labels exposes the three reserved label name defaults plus untrustedLabelerLogins', () => {
   // Additive only (#1272): POLICY_DEFAULTS carries the literal defaults,
   // and normalizePolicyConfig normalizes this namespace too (for shape
   // parity — see its labels branch), but no consuming helper outside
   // policy-helpers.mts reads it yet. Wiring the discover/claim/
   // roadmap-audit label lookups to it is deferred to the follow-up
-  // (#1273).
+  // (#1273). `untrustedLabelerLogins` (#2669) is not itself a label name —
+  // it is the login list a future generation track will scope a CI guard
+  // to — but it lives in this same namespace.
   assert.deepEqual(POLICY_DEFAULTS.labels, {
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    untrustedLabelerLogins: [],
   });
+});
+
+test('labels.untrustedLabelerLogins defaults to [] and accepts a configured override (#2669)', () => {
+  assert.deepEqual(normalizePolicyConfig({}).labels.untrustedLabelerLogins, []);
+  assert.deepEqual(
+    normalizePolicyConfig({
+      labels: { untrustedLabelerLogins: ['triage-bot', 'auto-labeler[bot]'] },
+    }).labels.untrustedLabelerLogins,
+    ['triage-bot', 'auto-labeler[bot]'],
+  );
+});
+
+test('labels.untrustedLabelerLogins fails safe to [] on invalid input (#2669)', () => {
+  // Mirrors discover.legacyRoots's dedicated fail-safe test above:
+  // parseNonEmptyStringArray shares parsePositiveIntegerArray's shape, so a
+  // non-array, an empty array, and either an empty-string or a wrong-typed
+  // entry all fall back to the default `[]` as a whole -- a typo'd login
+  // cannot silently vanish from the set by dropping just the bad entry.
+  assert.deepEqual(
+    normalizePolicyConfig({ labels: { untrustedLabelerLogins: 'triage-bot' } })
+      .labels.untrustedLabelerLogins,
+    [],
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({ labels: { untrustedLabelerLogins: [] } }).labels
+      .untrustedLabelerLogins,
+    [],
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      labels: { untrustedLabelerLogins: ['triage-bot', ''] },
+    }).labels.untrustedLabelerLogins,
+    [],
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      labels: { untrustedLabelerLogins: ['triage-bot', 42] },
+    }).labels.untrustedLabelerLogins,
+    [],
+  );
+  // A whitespace-only entry can never match a real GitHub login; treated
+  // the same as an empty-string entry (#2669 PR review, Codex).
+  assert.deepEqual(
+    normalizePolicyConfig({
+      labels: { untrustedLabelerLogins: ['triage-bot', '   '] },
+    }).labels.untrustedLabelerLogins,
+    [],
+  );
+});
+
+test('labels.untrustedLabelerLogins trims surviving entries (#2669 PR review, Codex)', () => {
+  // Mirrors readWorktreeGuardBranchPatterns's rationale (idd-doctor.mts):
+  // an entry with incidental surrounding whitespace otherwise passes but
+  // never matches a real login.
+  assert.deepEqual(
+    normalizePolicyConfig({
+      labels: { untrustedLabelerLogins: [' triage-bot ', 'auto-labeler[bot]'] },
+    }).labels.untrustedLabelerLogins,
+    ['triage-bot', 'auto-labeler[bot]'],
+  );
 });
 
 test('claimTiming.staleAge defaults to PT24H and accepts a configured override', () => {

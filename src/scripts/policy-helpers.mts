@@ -372,6 +372,7 @@ interface RawConfig {
     roadmapLabelName?: unknown;
     blockedByHumanLabelName?: unknown;
     needsDecisionLabelName?: unknown;
+    untrustedLabelerLogins?: unknown;
   };
   mergeGate?: { soloCodeownerAdminFallback?: unknown };
   providerOutage?: {
@@ -562,6 +563,11 @@ export const POLICY_DEFAULTS = Object.freeze({
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    // Added in #2669: string array default, resolved like the three
+    // sibling label-name fields above but via parseNonEmptyStringArray
+    // (fail-closed to [] on a non-array, an empty array, or any entry
+    // that isn't a non-empty string) instead of parseNonEmptyString.
+    untrustedLabelerLogins: Object.freeze([]),
   }),
   // Added in #1521 (solo-CODEOWNER autonomous `--admin` merge fallback).
   mergeGate: Object.freeze({
@@ -1006,6 +1012,20 @@ export function normalizePolicyConfig(config: unknown) {
         c?.labels?.needsDecisionLabelName,
         POLICY_DEFAULTS.labels.needsDecisionLabelName,
       ),
+      // #2669 PR review (Codex): this resolves to [] (trust everyone) on
+      // any malformed entry, including a mix of valid + invalid logins --
+      // fail-open for this denylist field, unlike an allowlist field's
+      // fail-to-[] (fail-closed). Kept matching the sibling label-name
+      // fields' resolution pattern per #2669's own acceptance criteria;
+      // no consumer reads this list yet (see the schema description), so
+      // there is no live enforcement gap today. Reconsider the fail
+      // direction -- and whether schema validation alone is a sufficient
+      // guarantee for the consumer -- when #2671 designs the actual
+      // enforcement this list feeds.
+      untrustedLabelerLogins: parseNonEmptyStringArray(
+        c?.labels?.untrustedLabelerLogins,
+        POLICY_DEFAULTS.labels.untrustedLabelerLogins,
+      ),
     },
     mergeGate: {
       soloCodeownerAdminFallback: parseEnum(
@@ -1136,11 +1156,12 @@ export function selectDesyncedIndex(token: unknown, bandSize: unknown): number {
  * normalization. This list is deliberately not treated as exhaustive —
  * what matters for this swap is not enumerating every divergence axis,
  * but that `POLICY_DEFAULTS` (below) never contains a value on *any* of
- * them. All 8 call sites in this file were enumerated before making this
- * swap: `normalizePolicyConfig`'s `clone(POLICY_DEFAULTS)`, plus 7 calls
- * across `parsePositiveIntegerArray` and `parseCheckSelectors`, which
- * only ever clone `POLICY_DEFAULTS` itself or one of its own frozen
- * sub-arrays (`discover.legacyRoots`, `ciGate.externalChecks.advisory`,
+ * them. All 10 call sites in this file were enumerated before making this
+ * swap: `normalizePolicyConfig`'s `clone(POLICY_DEFAULTS)`, plus 9 calls
+ * across `parsePositiveIntegerArray`, `parseNonEmptyStringArray`, and
+ * `parseCheckSelectors`, which only ever clone `POLICY_DEFAULTS` itself or
+ * one of its own frozen sub-arrays (`discover.legacyRoots`,
+ * `labels.untrustedLabelerLogins`, `ciGate.externalChecks.advisory`,
  * `.waivable` — all `[]`). `POLICY_DEFAULTS` is a plain, deeply-frozen
  * literal of strings, finite numbers, booleans, and empty arrays only —
  * no function, `Date`, `Map`, `BigInt`, `RegExp`, typed array, exotic
@@ -1261,6 +1282,54 @@ function parsePositiveIntegerArray(
 
 function parseNonEmptyString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+/**
+ * Parse a config array of non-blank strings (e.g. GitHub logins), such as
+ * `labels.untrustedLabelerLogins`. Mirrors `parsePositiveIntegerArray`'s
+ * fail-closed shape: a non-array, empty array, or any entry that is empty
+ * or whitespace-only after trimming falls back to `fallback` as a whole
+ * rather than dropping just the bad entries, so a typo'd login cannot
+ * silently vanish from the set. A surviving entry is itself trimmed
+ * (matches `readWorktreeGuardBranchPatterns` in `idd-doctor.mts`): an
+ * entry with incidental surrounding whitespace otherwise passes but never
+ * matches a real login.
+ *
+ * Caution for a denylist-semantics caller (#2669 PR review, Codex): "fail
+ * closed to `fallback`" is directionally safe only when `fallback` is the
+ * maximally *restrictive* value for that field -- true for an allowlist
+ * (`fallback: []` denies everyone) but the opposite for a denylist
+ * (`fallback: []` trusts everyone). `labels.untrustedLabelerLogins` is a
+ * denylist, so one malformed entry alongside otherwise-valid logins
+ * silently drops every previously-declared untrusted login, not just the
+ * bad one. Schema validation (`minItems: 1`, non-empty `items`) is the
+ * actual enforcement boundary before this ever runs; this fallback is
+ * defense-in-depth for callers that bypass it. Partial-preserve filtering
+ * would not fully close this either -- a misspelled-but-non-empty login
+ * still passes this parser and simply matches nothing downstream. See the
+ * call site below for why this is deliberately left unchanged for now.
+ */
+function parseNonEmptyStringArray(
+  value: unknown,
+  fallback: readonly string[],
+): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return clone(fallback) as string[];
+  }
+
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      return clone(fallback) as string[];
+    }
+    // Trim surviving entries: matches readWorktreeGuardBranchPatterns's
+    // same rationale (idd-doctor.mts) -- a configured entry with
+    // incidental surrounding whitespace (e.g. "triage-bot ") otherwise
+    // passes validation but never matches a real login, silently
+    // covering nothing.
+    normalized.push(entry.trim());
+  }
+  return normalized;
 }
 
 function parseCheckSelectors(

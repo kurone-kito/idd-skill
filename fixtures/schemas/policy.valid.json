@@ -97,7 +97,8 @@
   "labels": {
     "roadmapLabelName": "roadmap",
     "blockedByHumanLabelName": "status:blocked-by-human",
-    "needsDecisionLabelName": "status:needs-decision"
+    "needsDecisionLabelName": "status:needs-decision",
+    "untrustedLabelerLogins": ["triage-bot"]
   },
   "mergeGate": {
     "soloCodeownerAdminFallback": "auto-admin-retry"

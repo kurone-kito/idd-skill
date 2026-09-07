@@ -771,9 +771,20 @@
           "type": "string",
           "minLength": 1,
           "description": "GitHub label name marking an issue as needing a maintainer decision, excluding it from Discover's ready-to-start set. Optional; defaults to `status:needs-decision`."
+        },
+        "untrustedLabelerLogins": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "Each entry must contain a non-whitespace character. A GitHub login can never be whitespace-only; rejecting one at validation time instead of silently accepting it prevents a validated configuration from covering no actual actor once a consuming guard reads this list. The runtime also trims each entry, so a value like \"triage-bot \" is accepted and resolves to \"triage-bot\"."
+          },
+          "description": "Logins of semantic issue auto-labelers that this repository does not trust to apply IDD's reserved labels. Optional; omit this key for the empty-list case -- `minItems: 1` rejects an explicit `[]`. Schema-supported metadata; no distributed enforcement (CI guard generation) reads this list yet."
         }
       },
-      "description": "Container for the three IDD-role label names: roadmap, blocked-by-human, and needs-decision. Optional; omitting any nested key keeps that key's own distributed default."
+      "description": "Container for the three IDD-role label names (roadmap, blocked-by-human, and needs-decision) plus the untrusted-labeler login list. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "mergeGate": {
       "type": "object",

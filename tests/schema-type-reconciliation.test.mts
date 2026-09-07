@@ -262,6 +262,7 @@ interface PolicyConfigFile {
     roadmapLabelName?: string;
     blockedByHumanLabelName?: string;
     needsDecisionLabelName?: string;
+    untrustedLabelerLogins?: readonly string[];
   };
   mergeGate?: {
     soloCodeownerAdminFallback?: 'auto-admin-retry' | 'hold-and-report';
@@ -1230,6 +1231,7 @@ const policyConfigFixture = {
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    untrustedLabelerLogins: ['triage-bot'],
   },
   mergeGate: { soloCodeownerAdminFallback: 'auto-admin-retry' },
   providerOutage: {
