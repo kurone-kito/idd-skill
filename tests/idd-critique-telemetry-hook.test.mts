@@ -600,6 +600,60 @@ test('invokeCritiqueTelemetryHook disarms the watchdog once the hook exits well 
   }
 });
 
+test("invokeCritiqueTelemetryHook attaches an 'error' listener to the watchdog, guarding against an asynchronous spawn failure (#2685 review, Codex)", async () => {
+  // Regression fixture: `spawn('sh', ...)` for a shell that cannot be
+  // started at all (e.g. no POSIX shell on `PATH`, notably a bare Windows
+  // install) does not throw synchronously -- it still returns a
+  // `ChildProcess` and emits `'error'` on it *asynchronously*, which
+  // `spawnWatchdog`'s own `try`/`catch` around the `spawnFn(...)` call
+  // cannot see. An `EventEmitter` with no `'error'` listener rethrows an
+  // emitted `'error'` as an uncaught exception -- which would crash
+  // whatever process called this hook, directly violating its "never
+  // throws" contract.
+  //
+  // Asserting on the listener being attached (rather than actually
+  // triggering and observing an uncaught exception end-to-end) is
+  // deliberate: `node --test` tracks which async resources belong to which
+  // test, and an exception thrown from a listener-less `EventEmitter`
+  // fired via `queueMicrotask` from inside this test's body was observed,
+  // empirically, to be attributed to a *different* ("after this test
+  // ended") pseudo-test instead of failing this one -- see this commit's
+  // message for the concrete repro. A direct check that the watchdog
+  // carries an `'error'` listener is deterministic and avoids that
+  // reporting quirk entirely, while still failing this test (with the
+  // real fix reverted, `watchdogChild.listenerCount('error')` is `0`) --
+  // manually verified against a version of the file without the fix,
+  // instead of the fragile emit-and-observe alternative.
+  let watchdogChild: ReturnType<typeof spawn> | undefined;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args);
+    if (args[0] === 'sh') {
+      watchdogChild = child;
+    }
+    return child;
+  }) as typeof spawn;
+
+  const restore = stubExecutable(
+    'idd-telemetry-hook-quick-exit-2',
+    'process.exit(0);\n',
+  );
+  try {
+    const result = await invokeCritiqueTelemetryHook(
+      'idd-telemetry-hook-quick-exit-2',
+      samplePayload(),
+      { timeoutMs: 30_000, spawnFn },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    assert.ok(watchdogChild, 'expected the watchdog to have been spawned');
+    assert.ok(
+      (watchdogChild?.listenerCount('error') ?? 0) > 0,
+      "expected the watchdog to have an 'error' listener attached, guarding against an asynchronous spawn failure",
+    );
+  } finally {
+    restore();
+  }
+});
+
 // --- CLI --invoke: fire-and-forget at the process boundary (#2679) -------
 //
 // The fixture acceptance criterion 3 asks for at the process-boundary

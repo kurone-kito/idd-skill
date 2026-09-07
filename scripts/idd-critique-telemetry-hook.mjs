@@ -413,6 +413,19 @@ function spawnWatchdog(spawnFn, pid, timeoutMs) {
       ['-c', `sleep ${seconds}; kill -9 -${pid} 2>/dev/null || true`],
       { detached: true, stdio: 'ignore' },
     );
+    // #2685 review, Codex: a spawn failure that isn't synchronous (e.g. no
+    // `sh` on `PATH` at all, notably a bare Windows install) does not throw
+    // into the `try` above -- `spawn()` still returns a `ChildProcess` and
+    // emits `'error'` on it asynchronously instead. An `EventEmitter` with
+    // no `'error'` listener throws that error back out as an uncaught
+    // exception when it fires, which would crash whatever process called
+    // this hook -- directly violating this file's "never throws" contract.
+    // A no-op listener is all this needs: the caller already treats a
+    // missing watchdog as an accepted, silent gap (see this function's own
+    // doc comment).
+    watchdog.on('error', () => {
+      // Best-effort only -- see doc comment above and on this function.
+    });
     watchdog.unref();
     return watchdog;
   } catch {
