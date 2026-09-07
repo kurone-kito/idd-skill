@@ -241,6 +241,7 @@ interface PolicyConfigFile {
       command: string;
       mode?: 'fallback' | 'combined' | 'on-success' | 'never';
     } | null;
+    telemetryHook?: { command: string } | null;
   };
   reviewEscalation?: {
     changesRequestedFirstEscalation?: string;
