@@ -21,6 +21,7 @@
 
 import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghApiJson, ghText } from './gh-exec.mts';
+import { deriveGhHttpStatus } from './gh-http-status.mts';
 
 // ---------------------------------------------------------------------------
 // Aggregation (pure -- offline fixture-testable, no network)
@@ -208,16 +209,36 @@ function fetchLabeledBotEventsPage(
   repo: string,
   page: number,
 ): RawIssueEvent[] {
-  const raw = ghApiJson(
-    `repos/${owner}/${repo}/issues/events?per_page=${EVENTS_PER_PAGE}&page=${page}`,
-    {
-      extraArgs: [
-        '--jq',
-        '[.[] | {event: .event, actor: {login: (.actor.login // null), type: (.actor.type // null)}}]',
-      ],
-    },
-  );
-  return raw as RawIssueEvent[];
+  try {
+    const raw = ghApiJson(
+      `repos/${owner}/${repo}/issues/events?per_page=${EVENTS_PER_PAGE}&page=${page}`,
+      {
+        extraArgs: [
+          '--jq',
+          '[.[] | {event: .event, actor: {login: (.actor.login // null), type: (.actor.type // null)}}]',
+        ],
+      },
+    );
+    return raw as RawIssueEvent[];
+  } catch (error) {
+    // #2670 review: turn a rate-limit-caused failure into an actionable
+    // message instead of a raw `gh api` stack trace. This does not add
+    // retry/backoff or a resumable cursor -- a genuinely exhausted
+    // primary rate limit (5,000 requests/hour) needs a real wait, which
+    // a bounded in-process retry can't shorten, and no progress is saved
+    // between runs, so a re-run after the reset simply restarts the
+    // sweep. Full rate-limit-aware resumable pagination is a reasonable
+    // follow-up for a repository whose full history is large enough to
+    // approach that ceiling; out of scope for this reporting tool today.
+    const status = deriveGhHttpStatus(error);
+    if (status === 403 || status === 429) {
+      throw new Error(
+        `idd-suggest-untrusted-labelers: GitHub API request failed with HTTP ${status} while fetching page ${page} of GET /repos/${owner}/${repo}/issues/events -- likely a rate limit (GitHub's authenticated primary limit is 5,000 requests/hour; a sweep issues one request per ${EVENTS_PER_PAGE} events, so a repository with several hundred thousand events can exhaust it mid-sweep). No progress from this run is saved -- wait for the rate limit to reset (check \`gh api rate_limit\`) and re-run.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 }
 
 /**

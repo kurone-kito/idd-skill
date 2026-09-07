@@ -204,11 +204,12 @@ process.exit(1);
 function runStubbedCli(
   cliArgs: string[],
   responses: Map<string, string>,
+  stubScript: (responses: Map<string, string>) => string = buildStubGh,
 ): string {
   const cwdRoot = mkdtempSync(
     join(tmpdir(), 'idd-suggest-untrusted-labelers-cwd-'),
   );
-  const restore = stubExecutable('gh', buildStubGh(responses));
+  const restore = stubExecutable('gh', stubScript(responses));
   try {
     return execFileSync(
       process.execPath,
@@ -227,6 +228,30 @@ function runStubbedCli(
     restore();
     rmSync(cwdRoot, { recursive: true, force: true });
   }
+}
+
+/** Like {@link buildStubGh}, but the page-1 events call fails with an
+ * `(HTTP 403)`-shaped stderr (gh's real rate-limit failure shape --
+ * `deriveGhHttpStatus` in `gh-http-status.mts` parses exactly this) instead
+ * of returning a page from `responses`. Used only by the rate-limit test
+ * below. */
+function buildStubGhWithPage1RateLimit(responses: Map<string, string>): string {
+  const table = JSON.stringify([...responses.entries()]);
+  const rateLimitKey = JSON.stringify(eventsPageArgv(1));
+  return `const args = process.argv.slice(2);
+const table = new Map(${table});
+const key = JSON.stringify(args);
+if (key === ${JSON.stringify(rateLimitKey)}) {
+  process.stderr.write('gh: API rate limit exceeded (HTTP 403)\\n');
+  process.exit(1);
+}
+if (table.has(key)) {
+  process.stdout.write(table.get(key));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`;
 }
 
 test('idd-suggest-untrusted-labelers.mjs CLI: pages to completion across a full page and a short final page, with no other gh call made', () => {
@@ -326,4 +351,23 @@ test('idd-suggest-untrusted-labelers.mjs CLI: --owner/--repo omitted auto-detect
   assert.deepEqual(report.candidates, [
     { login: 'auto-detected-bot', labeledEventCount: 1 },
   ]);
+});
+
+test('idd-suggest-untrusted-labelers.mjs CLI: a rate-limit-shaped (HTTP 403) page failure surfaces an actionable message, not a raw gh stack trace', () => {
+  assert.throws(
+    () =>
+      runStubbedCli(
+        ['--owner', OWNER, '--repo', REPO],
+        new Map(),
+        buildStubGhWithPage1RateLimit,
+      ),
+    (error: unknown) => {
+      const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+      assert.match(stderr, /idd-suggest-untrusted-labelers:/);
+      assert.match(stderr, /HTTP 403/);
+      assert.match(stderr, /rate limit/i);
+      assert.match(stderr, /page 1/);
+      return true;
+    },
+  );
 });
