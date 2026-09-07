@@ -1285,12 +1285,15 @@ function parseNonEmptyString(value: unknown, fallback: string): string {
 }
 
 /**
- * Parse a config array of non-empty strings (e.g. GitHub logins), such as
+ * Parse a config array of non-blank strings (e.g. GitHub logins), such as
  * `labels.untrustedLabelerLogins`. Mirrors `parsePositiveIntegerArray`'s
- * fail-closed shape: a non-array, empty array, or any entry that is not a
- * non-empty string falls back to `fallback` as a whole rather than dropping
- * just the bad entries, so a typo'd login cannot silently vanish from the
- * set.
+ * fail-closed shape: a non-array, empty array, or any entry that is empty
+ * or whitespace-only after trimming falls back to `fallback` as a whole
+ * rather than dropping just the bad entries, so a typo'd login cannot
+ * silently vanish from the set. A surviving entry is itself trimmed
+ * (matches `readWorktreeGuardBranchPatterns` in `idd-doctor.mts`): an
+ * entry with incidental surrounding whitespace otherwise passes but never
+ * matches a real login.
  *
  * Caution for a denylist-semantics caller (#2669 PR review, Codex): "fail
  * closed to `fallback`" is directionally safe only when `fallback` is the
@@ -1316,10 +1319,15 @@ function parseNonEmptyStringArray(
 
   const normalized: string[] = [];
   for (const entry of value) {
-    if (typeof entry !== 'string' || entry.length === 0) {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
       return clone(fallback) as string[];
     }
-    normalized.push(entry);
+    // Trim surviving entries: matches readWorktreeGuardBranchPatterns's
+    // same rationale (idd-doctor.mts) -- a configured entry with
+    // incidental surrounding whitespace (e.g. "triage-bot ") otherwise
+    // passes validation but never matches a real login, silently
+    // covering nothing.
+    normalized.push(entry.trim());
   }
   return normalized;
 }

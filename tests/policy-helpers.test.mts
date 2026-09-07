@@ -133,6 +133,26 @@ test('labels.untrustedLabelerLogins fails safe to [] on invalid input (#2669)', 
     }).labels.untrustedLabelerLogins,
     [],
   );
+  // A whitespace-only entry can never match a real GitHub login; treated
+  // the same as an empty-string entry (#2669 PR review, Codex).
+  assert.deepEqual(
+    normalizePolicyConfig({
+      labels: { untrustedLabelerLogins: ['triage-bot', '   '] },
+    }).labels.untrustedLabelerLogins,
+    [],
+  );
+});
+
+test('labels.untrustedLabelerLogins trims surviving entries (#2669 PR review, Codex)', () => {
+  // Mirrors readWorktreeGuardBranchPatterns's rationale (idd-doctor.mts):
+  // an entry with incidental surrounding whitespace otherwise passes but
+  // never matches a real login.
+  assert.deepEqual(
+    normalizePolicyConfig({
+      labels: { untrustedLabelerLogins: [' triage-bot ', 'auto-labeler[bot]'] },
+    }).labels.untrustedLabelerLogins,
+    ['triage-bot', 'auto-labeler[bot]'],
+  );
 });
 
 test('claimTiming.staleAge defaults to PT24H and accepts a configured override', () => {

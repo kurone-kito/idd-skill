@@ -2389,6 +2389,23 @@ test('policy schema rejects a labels.untrustedLabelerLogins entry that is not a 
   );
 });
 
+test('policy schema rejects a whitespace-only labels.untrustedLabelerLogins entry', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  // A whitespace-only login can never match a real GitHub actor; the `\S`
+  // pattern rejects it at validation time instead of letting a validated
+  // configuration silently cover no actor (mirrors the same rationale as
+  // worktreeGuard.branchPatterns above).
+  instance.labels = { untrustedLabelerLogins: [' '] };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('$.labels.untrustedLabelerLogins[0]')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema accepts forcedHandoff.mode human-gated', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(
