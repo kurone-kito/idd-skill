@@ -565,8 +565,8 @@ export const POLICY_DEFAULTS = Object.freeze({
     needsDecisionLabelName: 'status:needs-decision',
     // Added in #2669: string array default, resolved like the three
     // sibling label-name fields above but via parseNonEmptyStringArray
-    // (fail-closed to [] on a non-array or wrong-typed entry) instead of
-    // parseNonEmptyString.
+    // (fail-closed to [] on a non-array, an empty array, or any entry
+    // that isn't a non-empty string) instead of parseNonEmptyString.
     untrustedLabelerLogins: Object.freeze([]),
   }),
   // Added in #1521 (solo-CODEOWNER autonomous `--admin` merge fallback).
