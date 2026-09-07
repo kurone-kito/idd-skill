@@ -220,6 +220,13 @@ in this preamble, since the fallback differs per helper.
   `mode`, and a machine-readable `reason` when unusable, delegating
   entirely to the existing exported resolvers (referenced in
   [kurone-kito/idd-skill#2329](https://github.com/kurone-kito/idd-skill/issues/2329))
+- `scripts/idd-critique-telemetry-hook.mjs` for the C-phase effective
+  `critiqueLoop.telemetryHook` verdict (`usable`, `source`, `command`,
+  and a machine-readable `reason` when unusable), plus fire-and-forget
+  invocation via `--invoke`: pipe the per-round JSON payload on stdin
+  and it invokes the resolved hook, always exiting `0` regardless of
+  the hook's own success or failure (referenced in
+  [kurone-kito/idd-skill#2679](https://github.com/kurone-kito/idd-skill/issues/2679))
 
 **Review & Merge Phase Helpers:**
 
@@ -2955,6 +2962,65 @@ same as `AW4`/`AW5`.
   `parseCritiqueLoopDelegate` in `policy-helpers.mts`) with no
   reimplemented validation rule (referenced in
   [kurone-kito/idd-skill#2329](https://github.com/kurone-kito/idd-skill/issues/2329))
+
+### Effective C-phase critique telemetry hook
+
+- Preferred command when helper runtime is enabled:
+  `idd-critique-telemetry-hook [--policy <path>] [--no-user-global]`
+- Source repository equivalent:
+  `node scripts/idd-critique-telemetry-hook.mjs [--policy <path>] [--no-user-global]`
+- Output schema (stable fields):
+
+  ```json
+  {
+    "usable": true,
+    "source": "repository-local",
+    "command": "notify-critique-telemetry --json",
+    "reason": null
+  }
+  ```
+
+- `source` values: `repository-local`, `user-global`, `none`
+- `reason` values (only when `usable` is `false`):
+  `repository-local-explicit-disable` (repo-local
+  `critiqueLoop.telemetryHook` is the JSON `null` sentinel),
+  `invalid-repository-local-telemetry-hook` (a malformed repo-local
+  value, which fails closed and never inherits a user-global hook),
+  `not-configured` (absent at every layer)
+- `usable: true` always carries a non-null `command` and a null
+  `reason`; `usable: false` always carries a null `command` and a
+  non-null `reason`
+- Resolution order matches
+  [User-global critique telemetry hook default](idd-workflow.md#user-global-critique-telemetry-hook-default)
+  exactly: a configured, disabled (`null`), or malformed repository-local
+  `critiqueLoop.telemetryHook` always wins outright and never inherits
+  the user-global layer; only when repository-local is entirely absent
+  does an optional `$XDG_CONFIG_HOME/idd-skill/config.json` (or
+  `$HOME/.config/idd-skill/config.json`) fragment apply
+- Under `GITHUB_ACTIONS=true` the user-global layer is always skipped
+  (repository-local resolution is unaffected), matching the documented
+  invariant that a GitHub-hosted or other remote agent surface never
+  consults it; `--no-user-global` skips it explicitly on any other
+  remote surface the caller recognizes but this helper cannot
+  auto-detect from a single provider variable
+- `--invoke` reads a JSON payload from stdin (see
+  [Repository-configurable critique telemetry hook](idd-workflow.md#repository-configurable-critique-telemetry-hook)
+  for the payload shape) and, only if a hook resolved as usable,
+  invokes its command with that payload on the child's stdin.
+  Fire-and-forget: a missing command, non-zero exit, timeout, or any
+  other failure is silently ignored; this mode always exits `0` and
+  never writes to stdout/stderr, unlike the plain resolution mode above
+  -- the whole point is that a caller never has to inspect this
+  process's own result
+- Deterministic and network-free for resolution; `--invoke` is the one
+  exception (it spawns the resolved command) and is bounded by a
+  default 5-second timeout plus a forced kill, so it can never block or
+  delay its caller; delegates resolution entirely to the existing
+  exported resolvers (`resolveEffectiveCritiqueLoopTelemetryHookFromEnv`
+  in `idd-config.mts`, `resolveEffectiveCritiqueLoopTelemetryHook` /
+  `inspectCritiqueLoopTelemetryHookLayer` in `policy-helpers.mts`) with
+  no reimplemented validation rule (referenced in
+  [kurone-kito/idd-skill#2679](https://github.com/kurone-kito/idd-skill/issues/2679))
 
 ### S2 quiet-window evidence
 

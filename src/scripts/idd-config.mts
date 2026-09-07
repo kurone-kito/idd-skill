@@ -38,8 +38,11 @@ import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import {
   type EffectiveCritiqueLoopDelegate,
+  type EffectiveCritiqueLoopTelemetryHook,
   inspectCritiqueLoopDelegateLayer,
+  inspectCritiqueLoopTelemetryHookLayer,
   resolveEffectiveCritiqueLoopDelegate,
+  resolveEffectiveCritiqueLoopTelemetryHook,
 } from './policy-helpers.mts';
 
 /**
@@ -414,6 +417,53 @@ export function resolveEffectiveCritiqueLoopDelegateFromEnv(
   });
 
   return resolveEffectiveCritiqueLoopDelegate({
+    localConfig,
+    globalConfig: global.status === 'present' ? global.config : undefined,
+  });
+}
+
+/** Options for {@link resolveEffectiveCritiqueLoopTelemetryHookFromEnv}. */
+export interface ResolveEffectiveCritiqueLoopTelemetryHookFromEnvOptions {
+  /** Raw repository-local policy object. When omitted, load from disk. */
+  localConfig?: unknown;
+  /** Path forwarded to {@link loadPolicyConfig} when `localConfig` is omitted. */
+  localPolicyPath?: string;
+  env?: NodeJS.ProcessEnv;
+  /** Injected user-global file path; skips XDG/`HOME` resolution. */
+  globalConfigPath?: string;
+  homedir?: string;
+}
+
+/**
+ * Opt-in C-phase entry: resolve the effective `critiqueLoop.telemetryHook`
+ * from the repository-local document plus an optional user-global file
+ * (#2679). Structurally identical control flow to
+ * {@link resolveEffectiveCritiqueLoopDelegateFromEnv}: repository-local
+ * always wins outright when present (configured, disabled, or malformed);
+ * only when repository-local is entirely absent does the user-global
+ * fragment apply. Does not run as a side effect of {@link loadIddConfig} or
+ * {@link loadPolicyConfig}.
+ */
+export function resolveEffectiveCritiqueLoopTelemetryHookFromEnv(
+  options?: ResolveEffectiveCritiqueLoopTelemetryHookFromEnvOptions,
+): EffectiveCritiqueLoopTelemetryHook {
+  const localConfig =
+    options && Object.hasOwn(options, 'localConfig')
+      ? options.localConfig
+      : loadPolicyConfig(options?.localPolicyPath).config;
+
+  const local = inspectCritiqueLoopTelemetryHookLayer(localConfig);
+  if (local.status !== 'absent') {
+    return resolveEffectiveCritiqueLoopTelemetryHook({ localConfig });
+  }
+
+  const global = loadUserGlobalPolicyDocument({
+    env: options?.env,
+    path: options?.globalConfigPath,
+    homedir: options?.homedir,
+  });
+
+  return resolveEffectiveCritiqueLoopTelemetryHook({
     localConfig,
     globalConfig: global.status === 'present' ? global.config : undefined,
   });

@@ -12,6 +12,7 @@ import {
   loadTrustedIddConfig,
   loadUserGlobalPolicyDocument,
   resolveEffectiveCritiqueLoopDelegateFromEnv,
+  resolveEffectiveCritiqueLoopTelemetryHookFromEnv,
   resolveUserGlobalConfigPath,
 } from '../src/scripts/idd-config.mts';
 
@@ -531,6 +532,158 @@ test('resolveEffectiveCritiqueLoopDelegateFromEnv fails closed on a malformed re
     status: 'local-malformed',
     source: 'repository-local',
     reason: 'invalid-repository-local-delegate',
+  });
+});
+
+// #2679: resolveEffectiveCritiqueLoopTelemetryHookFromEnv, mirroring every
+// resolveEffectiveCritiqueLoopDelegateFromEnv case above (#2257/#2258) for
+// the simpler `{ command }`-only critiqueLoop.telemetryHook shape.
+
+test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv ignores global keys other than critiqueLoop.telemetryHook (#2679)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-user-global-telemetry-hook-extra-'),
+  );
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      mergePolicy: 'must-not-apply',
+      critiqueLoop: { telemetryHook: { command: 'global-hook' } },
+    }),
+  );
+  const result = loadUserGlobalPolicyDocument({ path });
+  assert.equal(result.status, 'present');
+  const resolved = resolveEffectiveCritiqueLoopTelemetryHookFromEnv({
+    localConfig: {},
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'global',
+    source: 'user-global',
+    hook: { command: 'global-hook' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv skips the global file when local policy already decides (#2679)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-user-global-telemetry-hook-skipped-'),
+  );
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      critiqueLoop: { telemetryHook: { command: 'must-not-load' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopTelemetryHookFromEnv({
+    localConfig: {
+      critiqueLoop: { telemetryHook: { command: 'local-hook' } },
+    },
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'local',
+    source: 'repository-local',
+    hook: { command: 'local-hook' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv does not read HOME when path is injected (#2679)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-user-global-telemetry-hook-injected-'),
+  );
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      critiqueLoop: { telemetryHook: { command: 'injected-hook' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopTelemetryHookFromEnv({
+    localConfig: {},
+    globalConfigPath: path,
+    env: { HOME: '/this-must-not-be-read', XDG_CONFIG_HOME: '/neither' },
+  });
+  assert.deepEqual(resolved, {
+    status: 'global',
+    source: 'user-global',
+    hook: { command: 'injected-hook' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv: commands, mergePolicy, reviewPolicy, and CI-related global keys do not leak into the resolved hook (#2679)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-user-global-telemetry-hook-leak-'),
+  );
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      commands: { 'pre-push-validate': 'echo must-not-apply' },
+      mergePolicy: 'fully_autonomous_merge',
+      reviewPolicy: 'copilot-advisory',
+      ciWait: { runningTimeout: 'PT99H' },
+      critiqueLoop: { telemetryHook: { command: 'global-hook' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopTelemetryHookFromEnv({
+    localConfig: {},
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'global',
+    source: 'user-global',
+    hook: { command: 'global-hook' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv honors a repository-local null disable even when a global hook file exists (#2679)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-user-global-telemetry-hook-disabled-'),
+  );
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      critiqueLoop: { telemetryHook: { command: 'must-not-apply' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopTelemetryHookFromEnv({
+    localConfig: { critiqueLoop: { telemetryHook: null } },
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'disabled',
+    source: 'repository-local',
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv fails closed on a malformed repository-local hook without inheriting the global object (#2679)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-user-global-telemetry-hook-malformed-'),
+  );
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      critiqueLoop: { telemetryHook: { command: 'must-not-apply' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopTelemetryHookFromEnv({
+    localConfig: {
+      critiqueLoop: { telemetryHook: { command: 'local-hook', bogus: 1 } },
+    },
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'local-malformed',
+    source: 'repository-local',
+    reason: 'invalid-repository-local-telemetry-hook',
   });
 });
 

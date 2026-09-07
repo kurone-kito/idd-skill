@@ -1195,6 +1195,101 @@ or under `mode: never`, the per-agent pass does not run at all, so an
 operator relying solely on a delegate should expect the lenses below
 are not applied to that PR's diff.
 
+### Repository-configurable critique telemetry hook
+
+A repository may also configure a per-round C-phase telemetry
+notification by setting `critiqueLoop.telemetryHook` in
+`.github/idd/config.json` (see
+[Customization Surfaces](customization.md#customization-surfaces) and
+[Configuration Authority Hierarchy](policy-constants.md#configuration-authority-hierarchy)):
+a `command` string is a shell command invoked once per C-phase round,
+with a JSON payload written to its stdin. Unlike `critiqueLoop.delegate`
+above, this hook never supplies critique findings and never gates
+C-phase control flow — it is a pure observability side channel.
+
+The hook is invoked at two points in the C-phase loop, documented in
+`.github/instructions/idd-work.instructions.md`'s C2 and C4: at the end
+of C4, once the round's Accept/Reject decision is final (before C5,
+`idd-pr-submit.instructions.md`, or a hold); and at C2's zero-issue
+exit, so a clean round that skips C3/C4 entirely still emits a record
+(with zero findings/accepted/rejected counts).
+
+The lite work profile (`lite/idd-work-lite.instructions.md`) does not
+invoke this hook -- per-round telemetry is a full-profile-only feature
+for now.
+
+The JSON payload written to the hook command's stdin:
+
+```json
+{
+  "phase": "C",
+  "round": 2,
+  "repo": "owner/repo",
+  "issue": 123,
+  "pr": null,
+  "findingsCount": 3,
+  "severityBreakdown": { "high": 1, "medium": 1, "low": 1 },
+  "acceptedCount": 2,
+  "rejectedCount": 1,
+  "delegateUsed": true,
+  "delegateCommand": "coderabbit-critique",
+  "timestamp": "2026-09-08T12:00:00Z"
+}
+```
+
+`pr` is `null` before a PR exists for this issue; `delegateCommand` is
+present only when `delegateUsed` is `true`.
+
+**Fire-and-forget.** A missing command, non-zero exit, timeout, or any
+other failure invoking the hook is silently ignored and never blocks,
+holds, delays, or otherwise changes C-phase control flow — unlike
+`critiqueLoop.delegate`'s fail-closed hold semantics described above,
+this is a pure side channel. The C-phase objective diff validation
+floor and every other C-phase gate apply identically whether the hook
+is configured, missing, or failing.
+
+### User-global critique telemetry hook default
+
+A local runtime (one that reads the operator's own `$HOME`) may also
+inherit a `critiqueLoop.telemetryHook` from a user-global file when the
+repository leaves the repo-local field genuinely absent — a
+GitHub-hosted or other remote agent surface has no such operator home
+directory and never consults this layer. Resolution order: repo-local
+`critiqueLoop.telemetryHook` (a configured object, an explicit JSON
+`null` disable, or a malformed value) always wins outright and never
+inherits the global layer — an explicit repo-local `null` disables the
+hook entirely even when a global hook exists, and a malformed
+repo-local value fails closed to "no hook" the same way; only when
+repo-local is entirely absent does the global file apply; absent both,
+no hook runs. A malformed or explicit-`null` **global** fragment is
+treated the same as a missing one — silently falls back to "no hook" —
+which is distinct from repo-local `null`'s stronger role of actively
+disabling any inherited hook.
+
+The global file lives at the same path, and under the same
+qualified-root rules, as the critique delegate's own user-global file
+above (`$XDG_CONFIG_HOME/idd-skill/config.json`, falling back to
+`$HOME/.config/idd-skill/config.json`). Only the
+`critiqueLoop.telemetryHook` fragment is read from it; every other key
+— including `critiqueLoop.delegate` — is ignored, and repository-local
+`.github/idd/config.json` stays the sole authority for every other
+policy surface.
+
+Example (a generic local notifier, not a specific product):
+
+```json
+{ "critiqueLoop": { "telemetryHook": { "command": "my-critique-notifier" } } }
+```
+
+Any configured hook command — repo-local or user-global — is executable
+configuration: it may transmit source code or other data available to
+its process to an external service, so enabling one is a deliberate
+operator/repository choice, and neither config file should hold
+secrets. This surface only emits a per-round observability record; it
+never changes which mechanism supplies critique findings, the C-phase
+objective diff validation floor, the E-phase Copilot
+advisory-convergence policy, required checks, or merge gates.
+
 ### Mutation / write-side helper lens
 
 When the diff under critique implements a helper that **mutates GitHub

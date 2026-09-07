@@ -100,6 +100,54 @@ export interface EffectiveCritiqueLoopDelegate {
 }
 
 /**
+ * `critiqueLoop.telemetryHook` (#2679): a per-round C-phase telemetry
+ * notification, structurally simpler than {@link CritiqueLoopDelegate} --
+ * `command` only, no `mode` -- because the hook is fire-and-forget and never
+ * gates C-phase control flow the way the delegate can.
+ */
+export interface CritiqueLoopTelemetryHook {
+  command: string;
+}
+
+/** How one policy document presents `critiqueLoop.telemetryHook`. */
+export type CritiqueLoopTelemetryHookLayerStatus =
+  | 'absent'
+  | 'disabled'
+  | 'configured'
+  | 'malformed';
+
+export interface CritiqueLoopTelemetryHookLayer {
+  status: CritiqueLoopTelemetryHookLayerStatus;
+  hook?: CritiqueLoopTelemetryHook;
+  reason?: string;
+}
+
+/**
+ * Outcome of layered telemetry-hook resolution. Mirrors
+ * {@link EffectiveCritiqueLoopDelegateStatus} exactly: `local-malformed` is
+ * fail-closed -- a bad repository-local `telemetryHook` must not inherit a
+ * user-global object.
+ */
+export type EffectiveCritiqueLoopTelemetryHookStatus =
+  | 'local'
+  | 'disabled'
+  | 'global'
+  | 'none'
+  | 'local-malformed';
+
+export type CritiqueLoopTelemetryHookSource =
+  | 'repository-local'
+  | 'user-global'
+  | 'none';
+
+export interface EffectiveCritiqueLoopTelemetryHook {
+  status: EffectiveCritiqueLoopTelemetryHookStatus;
+  source: CritiqueLoopTelemetryHookSource;
+  hook?: CritiqueLoopTelemetryHook;
+  reason?: string;
+}
+
+/**
  * How one policy document presents `developmentBranch` (#2271). `absent`
  * means "no explicit value" -- callers fall back to the repository's live
  * GitHub default branch. `invalid` is fail-closed: a present-but-malformed
@@ -357,6 +405,7 @@ interface RawConfig {
     cPhaseLowSeveritySkipAfter?: unknown;
     e10NoProgressHoldAfter?: unknown;
     delegate?: { command?: unknown; mode?: unknown };
+    telemetryHook?: { command?: unknown };
   };
   reviewEscalation?: {
     changesRequestedFirstEscalation?: unknown;
@@ -1526,6 +1575,140 @@ export function resolveEffectiveCritiqueLoopDelegate(input: {
       status: 'global',
       source: 'user-global',
       delegate: global.delegate,
+    };
+  }
+
+  return { status: 'none', source: 'none' };
+}
+
+/**
+ * Parse `critiqueLoop.telemetryHook`. Mirrors {@link parseCritiqueLoopDelegate}
+ * but for the simpler `{ command }`-only shape (#2679): a non-object, an
+ * unknown nested key (anything beyond `command`), or a missing/whitespace-only
+ * `command` all normalize to `undefined` (no hook configured), matching the
+ * schema's `additionalProperties: false` / `command`-only shape.
+ */
+function parseCritiqueLoopTelemetryHook(
+  value: unknown,
+): CritiqueLoopTelemetryHook | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const candidate = value as { command?: unknown };
+  const candidateKeys = Object.keys(candidate);
+  if (candidateKeys.some((key) => key !== 'command')) {
+    return undefined;
+  }
+  // Object.keys() above already excludes inherited keys, but a plain
+  // property read (candidate.command) still walks the prototype chain --
+  // require command to be an own property, mirroring
+  // parseCritiqueLoopDelegate's own-property guard (#2207 review).
+  if (!Object.hasOwn(candidate, 'command')) {
+    return undefined;
+  }
+
+  const command = parseNonEmptyString(candidate.command, '');
+  if (!command || command.trim() === '') {
+    return undefined;
+  }
+
+  return { command };
+}
+
+const INVALID_LOCAL_TELEMETRY_HOOK_REASON =
+  'invalid-repository-local-telemetry-hook';
+
+/**
+ * Inspect `critiqueLoop.telemetryHook` on a raw policy document without
+ * applying `normalizePolicyConfig`'s fail-safe collapse. Mirrors
+ * {@link inspectCritiqueLoopDelegateLayer}'s absent / disabled / configured /
+ * malformed shape.
+ */
+export function inspectCritiqueLoopTelemetryHookLayer(
+  config: unknown,
+): CritiqueLoopTelemetryHookLayer {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'absent' };
+  }
+
+  if (!Object.hasOwn(config, 'critiqueLoop')) {
+    return { status: 'absent' };
+  }
+
+  const critiqueLoop = (config as RawConfig).critiqueLoop;
+  if (
+    typeof critiqueLoop !== 'object' ||
+    critiqueLoop === null ||
+    Array.isArray(critiqueLoop)
+  ) {
+    // A present non-object `critiqueLoop` is a local configuration error:
+    // fail closed rather than treating it as "no hook" and inheriting a
+    // user-global object.
+    return { status: 'malformed', reason: INVALID_LOCAL_TELEMETRY_HOOK_REASON };
+  }
+
+  if (!Object.hasOwn(critiqueLoop, 'telemetryHook')) {
+    return { status: 'absent' };
+  }
+
+  const value = (critiqueLoop as { telemetryHook: unknown }).telemetryHook;
+  if (value === null) {
+    return { status: 'disabled' };
+  }
+
+  const parsed = parseCritiqueLoopTelemetryHook(value);
+  if (parsed) {
+    return { status: 'configured', hook: parsed };
+  }
+
+  return { status: 'malformed', reason: INVALID_LOCAL_TELEMETRY_HOOK_REASON };
+}
+
+/**
+ * Resolve the effective C-phase telemetry hook from a repository-local
+ * document and an optional user-global document. Pure: callers supply
+ * already-loaded JSON (or `undefined` for an absent global file). Never
+ * reads the filesystem.
+ *
+ * Order: local object, local `null` disable, global object, then none --
+ * identical to {@link resolveEffectiveCritiqueLoopDelegate}'s resolution
+ * order. A malformed local hook is fail-closed and does not inherit global.
+ * A malformed or disabled global fragment is treated as absent.
+ */
+export function resolveEffectiveCritiqueLoopTelemetryHook(input: {
+  localConfig: unknown;
+  globalConfig?: unknown;
+}): EffectiveCritiqueLoopTelemetryHook {
+  const local = inspectCritiqueLoopTelemetryHookLayer(input.localConfig);
+  if (local.status === 'configured' && local.hook) {
+    return {
+      status: 'local',
+      source: 'repository-local',
+      hook: local.hook,
+    };
+  }
+  if (local.status === 'disabled') {
+    return { status: 'disabled', source: 'repository-local' };
+  }
+  if (local.status === 'malformed') {
+    return {
+      status: 'local-malformed',
+      source: 'repository-local',
+      reason: local.reason ?? INVALID_LOCAL_TELEMETRY_HOOK_REASON,
+    };
+  }
+
+  if (input.globalConfig === undefined || input.globalConfig === null) {
+    return { status: 'none', source: 'none' };
+  }
+
+  const global = inspectCritiqueLoopTelemetryHookLayer(input.globalConfig);
+  if (global.status === 'configured' && global.hook) {
+    return {
+      status: 'global',
+      source: 'user-global',
+      hook: global.hook,
     };
   }
 

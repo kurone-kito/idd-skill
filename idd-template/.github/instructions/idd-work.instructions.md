@@ -429,8 +429,12 @@ problems exist. See `idd-overview-appendix.instructions.md` for per-agent
 implementation. The distributed defaults for the C-phase skip and loop
 guards are listed in `docs/policy-constants.md`. A repository may
 configure `critiqueLoop.delegate` to point this step at a different
-reviewer instead of the per-agent mechanism; see `docs/idd-workflow.md`'s
-"Critique pass invocation" section.
+reviewer instead of the per-agent mechanism, or `critiqueLoop.telemetryHook`
+for a separate fire-and-forget per-round JSON record (round, repo,
+issue, PR, findings/severity/accepted/rejected counts, delegate usage,
+timestamp) that C2/C4 below invoke but that never gates control flow;
+see `docs/idd-workflow.md`'s "Critique pass invocation" section for
+both.
 
 **Objective diff validation floor**: neither C2 nor C4 below may skip to
 `idd-pr-submit.instructions.md` unless **fix-validate** — the same
@@ -456,6 +460,11 @@ Zero issues reported: skip to `idd-pr-submit.instructions.md` when the
 floor (C1) has passed, else continue to C5. One or more issues:
 continue to C3 regardless of the floor — C4 applies the floor check
 after Accept/Reject scoring.
+
+**Telemetry hook**: on a zero-issue round (either branch above — a
+round that continues to C5 for the floor only is still a zero-finding
+round and must not lose its record), invoke `critiqueLoop.telemetryHook`
+(C1) with zero findings/accepted/rejected counts — fire-and-forget.
 
 ### C3 — Score issues
 
@@ -483,6 +492,12 @@ satisfy the floor only; the second bullet's remaining Low Accepts stay
 unfixed, per the guard.
 
 Otherwise continue to C5.
+
+**Telemetry hook**: once final (before C5, PR submission, or C4's own
+hold) invoke `critiqueLoop.telemetryHook` (C1) with this round's
+findings, severity, accepted/rejected counts, and delegate usage —
+fire-and-forget. A delegate's own fail-closed hold (`docs/idd-workflow.md`)
+stops before C2 and has no telemetry record.
 
 ### C5 — Fix accepted issues
 

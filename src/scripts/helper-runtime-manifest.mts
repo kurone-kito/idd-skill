@@ -312,6 +312,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Resolve the effective C1 critiqueLoop.delegate (repository-local, then user-global).',
   },
   {
+    id: 'critique-telemetry-hook',
+    scriptName: 'idd:critique-telemetry-hook',
+    binName: 'idd-critique-telemetry-hook',
+    entryPath: 'scripts/idd-critique-telemetry-hook.mjs',
+    vendoredCommand: 'node scripts/idd-critique-telemetry-hook.mjs',
+    description:
+      'Resolve the effective C-phase critiqueLoop.telemetryHook and, with --invoke, fire-and-forget invoke it.',
+  },
+  {
     id: 'discover-orphan-filter',
     scriptName: 'idd:discover-orphan-filter',
     binName: 'idd-discover-orphan-filter',

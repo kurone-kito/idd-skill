@@ -654,7 +654,7 @@
               "description": "Shell command for a per-round C-phase critique telemetry notification. Required within this object; must contain a non-whitespace character (the `\\S` pattern rejects a whitespace-only value, matching `delegate.command`'s own validation)."
             }
           },
-          "description": "Schema-supported, repository-configurable per-round C-phase critique telemetry hook declaration. Optional; not currently invoked by any discover, claim, work, or review runtime consumer — see the roadmap's Track B for the planned resolution and invocation logic. An explicit JSON `null` is the local disable sentinel: it prevents inheriting a user-global hook without installing a local one. `required` and `properties` apply only when the value is an object."
+          "description": "Repository-configurable per-round C-phase critique telemetry hook declaration. Optional; resolved and invoked fire-and-forget from the C-phase loop (C2's zero-issue exit and C4's Accept/Reject decision) — see `docs/idd-workflow.md`'s \"Repository-configurable critique telemetry hook\" section for the resolution order and JSON payload shape. Unlike `delegate` above, it never supplies critique findings or gates C-phase control flow. An explicit JSON `null` is the local disable sentinel: it prevents inheriting a user-global hook without installing a local one. `required` and `properties` apply only when the value is an object."
         }
       },
       "description": "Container for the C-phase and E10 critique-loop convergence guardrails. Optional; omitting any nested key keeps that key's own distributed default."
