@@ -103,12 +103,33 @@ test('labels.untrustedLabelerLogins defaults to [] and accepts a configured over
     }).labels.untrustedLabelerLogins,
     ['triage-bot', 'auto-labeler[bot]'],
   );
-  // Fail-closed (parseNonEmptyStringArray mirrors
-  // parsePositiveIntegerArray's shape): a wrong-typed entry falls back to
-  // [] as a whole rather than dropping just the bad entry.
+});
+
+test('labels.untrustedLabelerLogins fails safe to [] on invalid input (#2669)', () => {
+  // Mirrors discover.legacyRoots's dedicated fail-safe test above:
+  // parseNonEmptyStringArray shares parsePositiveIntegerArray's shape, so a
+  // non-array, an empty array, and either an empty-string or a wrong-typed
+  // entry all fall back to the default `[]` as a whole -- a typo'd login
+  // cannot silently vanish from the set by dropping just the bad entry.
+  assert.deepEqual(
+    normalizePolicyConfig({ labels: { untrustedLabelerLogins: 'triage-bot' } })
+      .labels.untrustedLabelerLogins,
+    [],
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({ labels: { untrustedLabelerLogins: [] } }).labels
+      .untrustedLabelerLogins,
+    [],
+  );
   assert.deepEqual(
     normalizePolicyConfig({
       labels: { untrustedLabelerLogins: ['triage-bot', ''] },
+    }).labels.untrustedLabelerLogins,
+    [],
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      labels: { untrustedLabelerLogins: ['triage-bot', 42] },
     }).labels.untrustedLabelerLogins,
     [],
   );

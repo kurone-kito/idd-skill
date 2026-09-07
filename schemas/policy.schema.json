@@ -765,7 +765,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Logins of semantic issue auto-labelers that this repository does not trust to apply IDD's reserved labels. Optional; defaults to an empty array when omitted."
+          "description": "Logins of semantic issue auto-labelers that this repository does not trust to apply IDD's reserved labels. Optional; defaults to an empty array when omitted. Schema-supported metadata; no distributed enforcement (CI guard generation) reads this list yet."
         }
       },
       "description": "Container for the three IDD-role label names (roadmap, blocked-by-human, and needs-decision) plus the untrusted-labeler login list. Optional; omitting any nested key keeps that key's own distributed default."
