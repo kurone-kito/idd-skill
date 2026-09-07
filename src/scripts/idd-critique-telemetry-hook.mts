@@ -292,12 +292,29 @@ export function invokeCritiqueTelemetryHook(
       return;
     }
 
+    // Belt-and-braces deadline enforcement (#2685 review, Codex, both
+    // findings): once `--invoke` stops awaiting this promise (this file's
+    // CLI does, deliberately -- see runInvoke below), the JS-level timer a
+    // few lines down can never fire, because the *process it would run in*
+    // has already exited via `process.exit()`. A hung hook would then be
+    // orphaned forever with no deadline at all. A detached shell watchdog
+    // enforces the same deadline independently of whether this process is
+    // still alive to see it through -- `sleep` + `kill` are effectively
+    // universal on POSIX, unlike relying on the `timeout(1)` coreutil,
+    // which is not guaranteed present everywhere this hook might run.
+    // Also addresses the process-group half of the same finding: `shell:
+    // true` makes `child` the `/bin/sh -c` wrapper, and a plain
+    // single-PID kill (from either this watchdog or the JS timer below)
+    // does not reliably reach a further descendant that wrapper's shell
+    // spawns (e.g. a backgrounded job) -- `detached: true` above makes
+    // `child.pid` both the process-group id and session id, so killing
+    // the *negative* pid reaches the whole tree.
+    if (typeof child.pid === 'number' && child.pid > 0) {
+      spawnWatchdog(spawnFn, child.pid, timeoutMs);
+    }
+
     const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // Already exited between the timeout firing and this call; ignore.
-      }
+      killProcessGroup(child);
       settle(false);
     }, timeoutMs);
     // Never block process exit on this timer alone -- resolve() already
@@ -326,6 +343,77 @@ export function invokeCritiqueTelemetryHook(
       // settle this promise.
     }
   });
+}
+
+/**
+ * SIGKILL the whole detached process group `child` leads, falling back to a
+ * single-PID kill only when the group-targeted signal itself fails (e.g.
+ * `child.pid` is somehow already gone, or a platform without POSIX
+ * process-group semantics). Never throws.
+ */
+function killProcessGroup(child: ChildProcess): void {
+  const pid = child.pid;
+  if (typeof pid === 'number' && pid > 0) {
+    try {
+      // A negative pid targets the process *group* with that id -- with
+      // `detached: true` above, `child.pid` is both, since the child is
+      // its own session/group leader.
+      process.kill(-pid, 'SIGKILL');
+      return;
+    } catch {
+      // Fall through -- e.g. ESRCH (group leader already exited) or no
+      // POSIX process-group semantics on this platform (Windows).
+    }
+  }
+  try {
+    child.kill('SIGKILL');
+  } catch {
+    // Already exited; ignore.
+  }
+}
+
+/**
+ * Best-effort, self-contained deadline enforcement that survives this
+ * process exiting before `timeoutMs` elapses (`--invoke`'s whole point).
+ * Spawns a detached, unref'd `sh -c 'sleep <n>; kill -9 -<pid> || kill -9
+ * <pid> || true'` -- `sleep`/`kill` rather than the `timeout(1)` coreutil,
+ * which isn't guaranteed present everywhere. Never throws: spawn failure
+ * here (no POSIX shell on `PATH`, e.g. a bare Windows environment)
+ * silently forfeits this backup and leaves the JS-level timer above as
+ * the only enforcement for a caller that stays alive to see it -- an
+ * accepted gap on that platform, not a new one this function introduces.
+ *
+ * **No `--` before `-<pid>`** (deliberately, empirically verified): `sh`
+ * on Debian/Ubuntu (and derivatives) is `dash`, whose `kill` builtin
+ * rejects `kill -9 -- -<pid>` outright ("Illegal number: -") -- unlike
+ * bash/GNU `kill`, dash's builtin does not recognize `--` as end-of-options
+ * at all, so the *group*-targeted attempt silently failed on every run
+ * under dash, invisibly falling through to the single-pid fallback, which
+ * by then usually no longer names a live process either (the original
+ * spawned pid can itself be a short-lived shell that already exited,
+ * leaving only its group-mate descendants alive). `kill -9 -<pid>`
+ * (leading `-` attached directly to the digits, no separate `--` token)
+ * is the portable form both dash and bash accept.
+ */
+function spawnWatchdog(
+  spawnFn: typeof spawn,
+  pid: number,
+  timeoutMs: number,
+): void {
+  try {
+    const seconds = Math.max(timeoutMs, 0) / 1000;
+    const watchdog = spawnFn(
+      'sh',
+      [
+        '-c',
+        `sleep ${seconds}; kill -9 -${pid} 2>/dev/null || kill -9 ${pid} 2>/dev/null || true`,
+      ],
+      { detached: true, stdio: 'ignore' },
+    );
+    watchdog.unref();
+  } catch {
+    // See doc comment: best-effort only.
+  }
 }
 
 /**

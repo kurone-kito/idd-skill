@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -378,6 +379,48 @@ function samplePayload(): CritiqueTelemetryHookPayload {
   });
 }
 
+/** Polls (rather than a single delayed check) until `pid` no longer exists
+ * or `timeoutMs` elapses -- robust against this repository's documented
+ * heavy concurrent-session scheduling load, which can otherwise delay
+ * exactly when an already-issued kill signal actually reaps the process. */
+async function waitUntilProcessGone(
+  pid: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await delay(100);
+  }
+  return false;
+}
+
+/** Polls for `path` to exist and be non-empty, since the CLI's own exit
+ * (fire-and-forget) races the spawned hook's node-startup time -- reading
+ * immediately after the CLI returns is not reliably far enough along. */
+async function waitForNonEmptyFile(
+  path: string,
+  timeoutMs: number,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const content = readFileSync(path, 'utf8').trim();
+      if (content !== '') {
+        return content;
+      }
+    } catch {
+      // Not written yet; keep polling.
+    }
+    await delay(50);
+  }
+  return readFileSync(path, 'utf8').trim();
+}
+
 test('invokeCritiqueTelemetryHook is a no-op for an empty/whitespace command', async () => {
   assert.deepEqual(await invokeCritiqueTelemetryHook('', samplePayload()), {
     attempted: false,
@@ -475,6 +518,37 @@ test('invokeCritiqueTelemetryHook resolves ok:false promptly (bounded by timeout
   }
 });
 
+test('invokeCritiqueTelemetryHook kills a backgrounded descendant on timeout, not just the shell wrapper (#2685 review, Codex)', async () => {
+  // Regression fixture: `shell: true` makes the spawned `child` the
+  // `/bin/sh -c` wrapper. A command that backgrounds a job of its own
+  // (`cmd & wait`) creates a descendant with a *different* pid than that
+  // wrapper -- a plain single-pid kill would leave it running as an
+  // orphan even though `child` itself died. The fix targets the whole
+  // process group (negative pid), which must still reach it.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-telemetry-hook-group-kill-'));
+  const pidFile = join(sandbox, 'pid');
+  const nodeScript =
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); ` +
+    'setInterval(() => {}, 1000);';
+  const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(nodeScript)} & wait`;
+
+  const result = await invokeCritiqueTelemetryHook(command, samplePayload(), {
+    timeoutMs: 500,
+  });
+  assert.deepEqual(result, { attempted: true, ok: false });
+
+  const pid = Number(readFileSync(pidFile, 'utf8').trim());
+  assert.ok(
+    Number.isInteger(pid) && pid > 0,
+    `expected the backgrounded descendant to have written its own pid, got ${pid}`,
+  );
+  const gone = await waitUntilProcessGone(pid, 10_000);
+  assert.ok(
+    gone,
+    `expected the backgrounded descendant (pid ${pid}) to be killed by the process-group signal, but it is still running`,
+  );
+});
+
 // --- CLI --invoke: fire-and-forget at the process boundary (#2679) -------
 //
 // The fixture acceptance criterion 3 asks for at the process-boundary
@@ -531,7 +605,7 @@ test('CLI --invoke exits 0 promptly when the resolved hook command fails', () =>
   }
 });
 
-test('CLI --invoke does not wait for a hanging resolved hook up to its default 5s timeout (#2685 review, Copilot + Codex)', () => {
+test('CLI --invoke does not wait for a hanging resolved hook up to its default 5s timeout, and the hook is still killed after the CLI exits (#2685 review, Copilot + Codex)', async () => {
   // The regression fixture for the core review finding: --invoke must not
   // itself block its caller for up to the hook's own timeoutMs (default
   // 5000ms) -- the CLI process must exit as soon as it has handed the
@@ -539,16 +613,23 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
   // ever finishes. Before the fix, this test would take >= 5000ms; the
   // bound below is comfortably under that while still generous for this
   // repository's documented heavy concurrent-session load.
+  //
+  // The second half proves the *other* half of the same review round: once
+  // the CLI process (and with it, the JS-level timeout timer) is gone, the
+  // hung hook must still not run forever -- only the detached watchdog can
+  // enforce that deadline at this point, since nothing else survives to.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-hang-'),
+  );
+  const pidFile = join(sandbox, 'pid');
   const restore = stubExecutable(
     'idd-telemetry-hook-cli-hang',
-    // Keep the event loop alive without ever exiting on its own -- the
-    // CLI must still return promptly despite this.
-    'setInterval(() => {}, 1000);\n',
+    // Record this stub's own pid, then hang -- lets the assertions below
+    // confirm it was actually killed, not merely that the CLI returned.
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+      'setInterval(() => {}, 1000);\n',
   );
   try {
-    const sandbox = mkdtempSync(
-      join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-hang-'),
-    );
     const policyPath = join(sandbox, 'config.json');
     writeFileSync(
       policyPath,
@@ -569,6 +650,23 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
     assert.ok(
       elapsedMs < 3_000,
       `expected --invoke to return well under the hook's 5s default timeout even though it hangs, took ${elapsedMs}ms`,
+    );
+
+    // The CLI's own exit (fire-and-forget) races the spawned hook's
+    // node-startup time -- the pid file may not exist yet at this exact
+    // instant even though the CLI itself has already returned.
+    const pid = Number(await waitForNonEmptyFile(pidFile, 5_000));
+    assert.ok(
+      Number.isInteger(pid) && pid > 0,
+      `expected the hung hook to have written its own pid, got ${pid}`,
+    );
+    // This one waits out the CLI's *default* 5s timeout (no --invoke flag
+    // overrides it), so the poll budget below is more generous than the
+    // configured-short-timeout tests above.
+    const gone = await waitUntilProcessGone(pid, 20_000);
+    assert.ok(
+      gone,
+      `expected the hung hook (pid ${pid}) to be killed by the watchdog after the CLI process itself exited, but it is still running`,
     );
   } finally {
     restore();
