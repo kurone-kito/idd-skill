@@ -727,6 +727,46 @@ test('planUntrustedLabelerGuardWorkflow is idempotent against an unchanged confi
   assert.equal(secondContent, firstContent);
 });
 
+test('applyUntrustedLabelerGuardPlan refuses to write through a symlinked ancestor directory (#2684 review)', () => {
+  const outsideRoot = trackedMkdtemp('idd-onboard-outside-');
+  const root = makeFixtureDir();
+  mkdirSync(join(root, '.github'), { recursive: true });
+  // .github/workflows itself is a symlink to an external directory --
+  // mirrors the readTargetPolicyConfig .github/idd symlink test above.
+  symlinkSync(outsideRoot, join(root, '.github', 'workflows'));
+  const plan = {
+    path: UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH,
+    untrustedLabelerLogins: ['bot[bot]'],
+    content: 'name: placeholder\n',
+  };
+  assert.throws(
+    () => applyUntrustedLabelerGuardPlan(root, plan),
+    /non-directory \(e\.g\. a symlink\) sits on its path/,
+  );
+  assert.equal(
+    existsSync(join(outsideRoot, 'strip-untrusted-labels.yml')),
+    false,
+  );
+});
+
+test('applyUntrustedLabelerGuardPlan refuses to overwrite an existing symlinked leaf (#2684 review)', () => {
+  const outsideFile = join(trackedMkdtemp('idd-onboard-outside-'), 'evil.yml');
+  writeFileSync(outsideFile, 'name: pre-existing\n');
+  const root = makeFixtureDir();
+  mkdirSync(join(root, '.github', 'workflows'), { recursive: true });
+  symlinkSync(outsideFile, join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH));
+  const plan = {
+    path: UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH,
+    untrustedLabelerLogins: ['bot[bot]'],
+    content: 'name: placeholder\n',
+  };
+  assert.throws(
+    () => applyUntrustedLabelerGuardPlan(root, plan),
+    /non-plain-file entry/,
+  );
+  assert.equal(readFileSync(outsideFile, 'utf8'), 'name: pre-existing\n');
+});
+
 test('buildUntrustedLabelerGuardWorkflowContent escapes an embedded single quote in a label name (#2671)', () => {
   const content = buildUntrustedLabelerGuardWorkflowContent({
     roadmapLabelName: "adopter's-roadmap",
@@ -753,6 +793,25 @@ test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing 
       }),
     /labels\.roadmapLabelName must not contain control characters/,
   );
+});
+
+test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing a C1 control character or a Unicode line/paragraph separator (#2684 review)', () => {
+  // YAML 1.1 treats NEL/C1 (\x80-\x9f) and U+2028/U+2029 as line breaks
+  // too, so the same `if: |-` block-scalar breakout applies to these,
+  // not only ASCII C0/DEL.
+  for (const injected of ['\x85', '\u2028', '\u2029']) {
+    assert.throws(
+      () =>
+        buildUntrustedLabelerGuardWorkflowContent({
+          roadmapLabelName: `roadmap${injected}permissions:`,
+          blockedByHumanLabelName: 'status:blocked-by-human',
+          needsDecisionLabelName: 'status:needs-decision',
+          untrustedLabelerLogins: ['bot[bot]'],
+        }),
+      /labels\.roadmapLabelName must not contain control characters/,
+      `expected ${JSON.stringify(injected)} to be rejected`,
+    );
+  }
 });
 
 test('buildUntrustedLabelerGuardWorkflowContent safely escapes a control character inside an untrustedLabelerLogins entry (#2671 review)', () => {

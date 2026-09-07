@@ -1127,21 +1127,25 @@ function readTargetPolicyConfig(targetDir: string): unknown {
  * YAML single-quoted scalars already use).
  *
  * Quote-doubling alone is not sufficient: a policy value containing a
- * newline can break out of the surrounding `if: |-` block scalar and
- * inject arbitrary top-level YAML keys (e.g. a second `permissions:`
- * block) into the generated workflow file — a real privilege-escalation
- * primitive, since `.github/idd/config.json` typically receives less
- * review scrutiny than `.github/workflows/*.yml` (#2671 review). Reject
- * any control character (including `\n`/`\r`) outright rather than
- * attempting to escape it, since GitHub Actions expression strings have
- * no escape sequence for one.
+ * line-break character can break out of the surrounding `if: |-` block
+ * scalar and inject arbitrary top-level YAML keys (e.g. a second
+ * `permissions:` block) into the generated workflow file — a real
+ * privilege-escalation primitive, since `.github/idd/config.json`
+ * typically receives less review scrutiny than
+ * `.github/workflows/*.yml` (#2671 review). Reject any control
+ * character outright rather than attempting to escape it, since GitHub
+ * Actions expression strings have no escape sequence for one. Beyond
+ * ASCII C0/DEL, YAML 1.1 (which several GitHub Actions YAML parsers
+ * still follow) also treats NEL/C1 (`\x80`-`\x9f`) and the Unicode line
+ * (U+2028) and paragraph (U+2029) separators as line breaks, so those
+ * are rejected too (#2684 review).
  */
 function escapeActionsExpressionStringLiteral(
   value: string,
   context: string,
 ): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately matching C0/DEL to reject them
-  if (/[\x00-\x1f\x7f]/.test(value)) {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately matching C0/C1/DEL to reject them
+  if (/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(value)) {
     throw new Error(
       `${context} must not contain control characters (including newlines): ${JSON.stringify(value)}`,
     );
@@ -1307,6 +1311,11 @@ export function planUntrustedLabelerGuardWorkflow(
  * happened — `false` for the `content: null` no-op plan, never an error.
  * Idempotent: re-running with an unchanged plan reproduces the same
  * file content.
+ *
+ * Fails closed (throws, no write) when a symlinked ancestor or a
+ * non-plain-file leaf could otherwise let the write escape `targetDir`
+ * (#2684 review) — the same class of check `readTargetPolicyConfig`
+ * above already applies on the read side.
  */
 export function applyUntrustedLabelerGuardPlan(
   targetDir: string,
@@ -1315,7 +1324,23 @@ export function applyUntrustedLabelerGuardPlan(
   if (plan.content === null) {
     return false;
   }
+  if (hasNonDirectoryAncestor(targetDir, plan.path)) {
+    throw new Error(
+      `refusing to write ${plan.path}: a non-directory (e.g. a symlink) sits on its path under ${targetDir}`,
+    );
+  }
   const absolute = resolve(targetDir, plan.path);
+  let leafStat: ReturnType<typeof lstatSync> | null;
+  try {
+    leafStat = lstatSync(absolute);
+  } catch {
+    leafStat = null;
+  }
+  if (leafStat !== null && !leafStat.isFile()) {
+    throw new Error(
+      `refusing to write ${plan.path}: an existing non-plain-file entry (e.g. a symlink) already occupies that path under ${targetDir}`,
+    );
+  }
   mkdirSync(dirname(absolute), { recursive: true });
   writeFileSync(absolute, plan.content);
   return true;
