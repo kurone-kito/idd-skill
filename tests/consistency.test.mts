@@ -956,6 +956,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       critiqueLoop: {
         cPhaseLowSeveritySkipAfter: 4,
         e10NoProgressHoldAfter: 2,
+        telemetryHook: { command: 'notify-hook' },
       },
       reviewEscalation: {
         changesRequestedFirstEscalation: 'PT18H',
@@ -1033,6 +1034,8 @@ test('policy normalization provides default-safe values and supports aliases', (
       claim: {
         verifySettleDelay: 'PT7S',
       },
+      // telemetryHook (#2678) is schema-only in this track and must not
+      // leak into the normalized output -- see the input object above.
       critiqueLoop: {
         cPhaseLowSeveritySkipAfter: 4,
         e10NoProgressHoldAfter: 2,

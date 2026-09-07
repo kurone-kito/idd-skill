@@ -773,6 +773,22 @@ test('an unrecognized mode still fails closed after the widening (#2324)', () =>
   );
 });
 
+test('critiqueLoop.telemetryHook has no normalizePolicyConfig resolution yet (schema-only, #2678)', () => {
+  // #2678 adds critiqueLoop.telemetryHook to the JSON schema only; unlike
+  // delegate, no runtime resolution/invocation logic exists yet (deferred to
+  // the roadmap's Track B). This canary pins that boundary: a future track
+  // adding real resolution must consciously update this test.
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({
+        critiqueLoop: { telemetryHook: { command: 'notify-critique' } },
+      }).critiqueLoop,
+      'telemetryHook',
+    ),
+    false,
+  );
+});
+
 test('selectDesyncedIndex returns 0 for empty, singleton, or invalid bands', () => {
   assert.equal(selectDesyncedIndex('any-token', 0), 0);
   assert.equal(selectDesyncedIndex('any-token', 1), 0);

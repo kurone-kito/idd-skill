@@ -68,7 +68,10 @@
   },
   "critiqueLoop": {
     "cPhaseLowSeveritySkipAfter": 3,
-    "e10NoProgressHoldAfter": 3
+    "e10NoProgressHoldAfter": 3,
+    "telemetryHook": {
+      "command": "notify-critique-telemetry"
+    }
   },
   "reviewEscalation": {
     "changesRequestedFirstEscalation": "PT24H",

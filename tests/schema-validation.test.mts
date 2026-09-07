@@ -853,6 +853,100 @@ test('policy schema accepts critiqueLoop.delegate JSON null as the local disable
   assert.deepEqual(errors, []);
 });
 
+// --- #2678: critiqueLoop.telemetryHook ----------------------------------
+
+test('policy schema accepts a critiqueLoop.telemetryHook with command only (#2678)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    telemetryHook: { command: 'notify-critique-telemetry --json' },
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects a critiqueLoop.telemetryHook missing command (#2678)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = { telemetryHook: {} };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.critiqueLoop.telemetryHook')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects a critiqueLoop.telemetryHook with an empty command (#2678)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = { telemetryHook: { command: '' } };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('$.critiqueLoop.telemetryHook.command'),
+    ),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects a critiqueLoop.telemetryHook with a whitespace-only command (#2678)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  // Same rationale as delegate.command above: a whitespace-only command can
+  // never run anything actionable.
+  instance.critiqueLoop = { telemetryHook: { command: '   ' } };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('$.critiqueLoop.telemetryHook.command'),
+    ),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects an unknown critiqueLoop.telemetryHook subkey (#2678)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    telemetryHook: { command: 'notify-critique-telemetry', bogus: 1 },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.critiqueLoop.telemetryHook')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema treats a missing critiqueLoop.telemetryHook as the fail-safe default (#2678)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  delete instance.critiqueLoop.telemetryHook;
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema accepts critiqueLoop.telemetryHook JSON null as the local disable sentinel (#2678)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = { ...instance.critiqueLoop, telemetryHook: null };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
 test('policy schema rejects a whitespace-only branchPatterns entry', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(
