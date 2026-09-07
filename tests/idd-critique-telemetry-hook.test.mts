@@ -654,6 +654,84 @@ test("invokeCritiqueTelemetryHook attaches an 'error' listener to the watchdog, 
   }
 });
 
+test('invokeCritiqueTelemetryHook falls back to the default timeout for a non-finite timeoutMs (#2685 review, Copilot)', async () => {
+  // `?? DEFAULT_INVOKE_TIMEOUT_MS` alone only substitutes for
+  // `null`/`undefined` -- a caller-supplied `NaN` would otherwise pass
+  // straight through to `setTimeout`, which treats a non-finite delay as
+  // firing on (near-)the next tick, killing a perfectly healthy hook
+  // almost instantly instead of respecting the intended (here, implicitly
+  // default) bound. Capture the watchdog's `sleep` argument via a spawnFn
+  // spy to prove the sanitized value reached it, rather than waiting out
+  // a real default-5s timeout in this test.
+  let watchdogArgs: string[] | undefined;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    if (args[0] === 'sh') {
+      watchdogArgs = args[1] as string[];
+    }
+    return spawn(...args);
+  }) as typeof spawn;
+
+  const restore = stubExecutable(
+    'idd-telemetry-hook-quick-exit-3',
+    'process.exit(0);\n',
+  );
+  try {
+    const result = await invokeCritiqueTelemetryHook(
+      'idd-telemetry-hook-quick-exit-3',
+      samplePayload(),
+      { timeoutMs: Number.NaN, spawnFn },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    assert.ok(watchdogArgs, 'expected the watchdog to have been spawned');
+    const script = watchdogArgs?.[1] ?? '';
+    assert.match(
+      script,
+      /^sleep 5;/,
+      `expected a NaN timeoutMs to fall back to the default 5s bound, got: ${script}`,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('spawnWatchdog rounds a fractional timeoutMs up to a whole second (#2685 review, Copilot)', async () => {
+  // Some POSIX `sleep` implementations only accept integer seconds; a
+  // fractional argument (a `timeoutMs` not a multiple of 1000, as several
+  // tests in this file configure) can make those implementations reject
+  // or skip the delay, SIGKILLing (near-)immediately. Assert the
+  // watchdog's `sleep` argument is always a whole number, rounded *up*
+  // (never down, which could fire the backup before the primary JS-level
+  // timer it exists to survive past).
+  let watchdogArgs: string[] | undefined;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    if (args[0] === 'sh') {
+      watchdogArgs = args[1] as string[];
+    }
+    return spawn(...args);
+  }) as typeof spawn;
+
+  const restore = stubExecutable(
+    'idd-telemetry-hook-quick-exit-4',
+    'process.exit(0);\n',
+  );
+  try {
+    const result = await invokeCritiqueTelemetryHook(
+      'idd-telemetry-hook-quick-exit-4',
+      samplePayload(),
+      { timeoutMs: 1_500, spawnFn },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const script = watchdogArgs?.[1] ?? '';
+    assert.match(
+      script,
+      /^sleep 2;/,
+      `expected timeoutMs: 1500 to round up to a 2s sleep, got: ${script}`,
+    );
+  } finally {
+    restore();
+  }
+});
+
 // --- CLI --invoke: fire-and-forget at the process boundary (#2679) -------
 //
 // The fixture acceptance criterion 3 asks for at the process-boundary

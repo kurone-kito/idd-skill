@@ -185,7 +185,22 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
     return Promise.resolve({ attempted: false, ok: false });
   }
   const spawnFn = options?.spawnFn ?? spawn;
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_INVOKE_TIMEOUT_MS;
+  // #2685 review, Copilot: `?? DEFAULT_INVOKE_TIMEOUT_MS` alone only
+  // substitutes for `null`/`undefined` -- a caller-supplied `NaN` (or any
+  // other non-finite or negative value) would pass straight through and
+  // reach `setTimeout` below, which treats a non-finite delay as firing on
+  // (near-)the next tick, killing the hook almost instantly instead of
+  // waiting the intended bound. Falling back to the documented default for
+  // *any* unusable value keeps this "never throws" function's behavior
+  // predictable for a caller's own coding mistake, rather than silently
+  // clamping to some other value.
+  const requestedTimeoutMs = options?.timeoutMs;
+  const timeoutMs =
+    typeof requestedTimeoutMs === 'number' &&
+    Number.isFinite(requestedTimeoutMs) &&
+    requestedTimeoutMs >= 0
+      ? requestedTimeoutMs
+      : DEFAULT_INVOKE_TIMEOUT_MS;
   let delivered = false;
   const notifyDelivered = () => {
     if (delivered) {
@@ -407,7 +422,16 @@ function cancelWatchdog(watchdog) {
  */
 function spawnWatchdog(spawnFn, pid, timeoutMs) {
   try {
-    const seconds = Math.max(timeoutMs, 0) / 1000;
+    // #2685 review, Copilot: `Math.ceil`, not a plain division -- some
+    // POSIX `sleep` implementations only accept integer seconds, and a
+    // fractional argument (e.g. a test's `timeoutMs: 500` -> `0.5`) can
+    // make those reject or otherwise skip the delay entirely, SIGKILLing
+    // the hook (near-)immediately instead of after the intended bound.
+    // Rounding up, never down or to nearest, keeps this backup watchdog
+    // from ever firing *earlier* than the primary JS-level timer it
+    // exists to survive past -- the small extra slack on a portable
+    // `sleep` is harmless for a best-effort backup.
+    const seconds = Math.ceil(Math.max(timeoutMs, 0) / 1000);
     const watchdog = spawnFn(
       'sh',
       ['-c', `sleep ${seconds}; kill -9 -${pid} 2>/dev/null || true`],
