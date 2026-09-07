@@ -871,6 +871,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       roadmapLabelName: 'roadmap',
       blockedByHumanLabelName: 'status:blocked-by-human',
       needsDecisionLabelName: 'status:needs-decision',
+      untrustedLabelerLogins: [],
     },
     mergeGate: {
       soloCodeownerAdminFallback: 'auto-admin-retry',
@@ -974,6 +975,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         roadmapLabelName: 'epic',
         blockedByHumanLabelName: 'blocked:human',
         needsDecisionLabelName: 'needs:decision',
+        untrustedLabelerLogins: ['triage-bot'],
       },
       mergeGate: {
         soloCodeownerAdminFallback: 'hold-and-report',
@@ -1054,6 +1056,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         roadmapLabelName: 'epic',
         blockedByHumanLabelName: 'blocked:human',
         needsDecisionLabelName: 'needs:decision',
+        untrustedLabelerLogins: ['triage-bot'],
       },
       mergeGate: {
         soloCodeownerAdminFallback: 'hold-and-report',

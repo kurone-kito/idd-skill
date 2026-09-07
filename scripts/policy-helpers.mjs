@@ -311,6 +311,11 @@ export const POLICY_DEFAULTS = Object.freeze({
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    // Added in #2669: string array default, resolved like the three
+    // sibling label-name fields above but via parseNonEmptyStringArray
+    // (fail-closed to [] on a non-array or wrong-typed entry) instead of
+    // parseNonEmptyString.
+    untrustedLabelerLogins: Object.freeze([]),
   }),
   // Added in #1521 (solo-CODEOWNER autonomous `--admin` merge fallback).
   mergeGate: Object.freeze({
@@ -734,6 +739,10 @@ export function normalizePolicyConfig(config) {
         c?.labels?.needsDecisionLabelName,
         POLICY_DEFAULTS.labels.needsDecisionLabelName,
       ),
+      untrustedLabelerLogins: parseNonEmptyStringArray(
+        c?.labels?.untrustedLabelerLogins,
+        POLICY_DEFAULTS.labels.untrustedLabelerLogins,
+      ),
     },
     mergeGate: {
       soloCodeownerAdminFallback: parseEnum(
@@ -852,11 +861,12 @@ export function selectDesyncedIndex(token, bandSize) {
  * normalization. This list is deliberately not treated as exhaustive —
  * what matters for this swap is not enumerating every divergence axis,
  * but that `POLICY_DEFAULTS` (below) never contains a value on *any* of
- * them. All 8 call sites in this file were enumerated before making this
- * swap: `normalizePolicyConfig`'s `clone(POLICY_DEFAULTS)`, plus 7 calls
- * across `parsePositiveIntegerArray` and `parseCheckSelectors`, which
- * only ever clone `POLICY_DEFAULTS` itself or one of its own frozen
- * sub-arrays (`discover.legacyRoots`, `ciGate.externalChecks.advisory`,
+ * them. All 10 call sites in this file were enumerated before making this
+ * swap: `normalizePolicyConfig`'s `clone(POLICY_DEFAULTS)`, plus 9 calls
+ * across `parsePositiveIntegerArray`, `parseNonEmptyStringArray`, and
+ * `parseCheckSelectors`, which only ever clone `POLICY_DEFAULTS` itself or
+ * one of its own frozen sub-arrays (`discover.legacyRoots`,
+ * `labels.untrustedLabelerLogins`, `ciGate.externalChecks.advisory`,
  * `.waivable` — all `[]`). `POLICY_DEFAULTS` is a plain, deeply-frozen
  * literal of strings, finite numbers, booleans, and empty arrays only —
  * no function, `Date`, `Map`, `BigInt`, `RegExp`, typed array, exotic
@@ -955,6 +965,27 @@ function parsePositiveIntegerArray(value, fallback) {
 }
 function parseNonEmptyString(value, fallback) {
   return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+/**
+ * Parse a config array of non-empty strings (e.g. GitHub logins), such as
+ * `labels.untrustedLabelerLogins`. Mirrors `parsePositiveIntegerArray`'s
+ * fail-closed shape: a non-array, empty array, or any entry that is not a
+ * non-empty string falls back to `fallback` as a whole rather than dropping
+ * just the bad entries, so a typo'd login cannot silently vanish from the
+ * set.
+ */
+function parseNonEmptyStringArray(value, fallback) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return clone(fallback);
+  }
+  const normalized = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.length === 0) {
+      return clone(fallback);
+    }
+    normalized.push(entry);
+  }
+  return normalized;
 }
 function parseCheckSelectors(value, fallback) {
   if (!Array.isArray(value) || value.length === 0) {
