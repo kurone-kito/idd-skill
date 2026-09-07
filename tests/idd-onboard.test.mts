@@ -767,6 +767,27 @@ test('applyUntrustedLabelerGuardPlan refuses to overwrite an existing symlinked 
   assert.equal(readFileSync(outsideFile, 'utf8'), 'name: pre-existing\n');
 });
 
+test('applyUntrustedLabelerGuardPlan rejects an unsafe plan.path (absolute or traversing), independent of any symlink (#2684 review)', () => {
+  // Every current caller only ever passes the
+  // UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH constant, but this function is
+  // exported and plan.path is not otherwise type-constrained -- a future
+  // misuse (or direct call) with an absolute or `..`-traversing path
+  // must fail closed even with no symlink involved at all.
+  const root = makeFixtureDir();
+  for (const unsafePath of ['/etc/evil.yml', '../evil.yml', '..\\evil.yml']) {
+    assert.throws(
+      () =>
+        applyUntrustedLabelerGuardPlan(root, {
+          path: unsafePath,
+          untrustedLabelerLogins: ['bot[bot]'],
+          content: 'name: placeholder\n',
+        }),
+      /refusing to write an unsafe path/,
+      `expected ${JSON.stringify(unsafePath)} to be rejected`,
+    );
+  }
+});
+
 test('buildUntrustedLabelerGuardWorkflowContent escapes an embedded single quote in a label name (#2671)', () => {
   const content = buildUntrustedLabelerGuardWorkflowContent({
     roadmapLabelName: "adopter's-roadmap",

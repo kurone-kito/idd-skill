@@ -1086,11 +1086,20 @@ export function planUntrustedLabelerGuardWorkflow(targetDir) {
  * Fails closed (throws, no write) when a symlinked ancestor or a
  * non-plain-file leaf could otherwise let the write escape `targetDir`
  * (#2684 review) — the same class of check `readTargetPolicyConfig`
- * above already applies on the read side.
+ * above already applies on the read side. Also rejects an unsafe
+ * `plan.path` (absolute, `..`-traversing, or Windows-drive-qualified)
+ * via the same `isSafeRelativePath` guard the import manifest paths
+ * already use, even though every current caller only ever passes the
+ * `UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH` constant — this function is
+ * exported and its `plan.path` parameter is not otherwise
+ * type-constrained (#2684 review).
  */
 export function applyUntrustedLabelerGuardPlan(targetDir, plan) {
   if (plan.content === null) {
     return false;
+  }
+  if (!isSafeRelativePath(plan.path)) {
+    throw new Error(`refusing to write an unsafe path: ${plan.path}`);
   }
   if (hasNonDirectoryAncestor(targetDir, plan.path)) {
     throw new Error(
