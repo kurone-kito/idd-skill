@@ -3142,11 +3142,13 @@ same as `AW4`/`AW5`.
   candidates for a human to review; recording an accepted candidate's
   login stays a manual, adopter-owned edit after judging each
   candidate's event count. Add it to `labels.untrustedLabelerLogins` in
-  `.github/idd/config.json` and (re-)run `idd-onboard --substitute` to
-  generate `strip-untrusted-labels.yml`, or add it as one of the
+  `.github/idd/config.json` and (re-)run the `idd-onboard` CLI's
+  `--substitute` stage to generate `strip-untrusted-labels.yml` (see the
   [Reserved-label guard recipe](customization.md#reserved-label-guard-recipe)'s
-  `<labeler-bot-login-N>` placeholders when following that recipe's
-  manual fallback instead — see that recipe for when each path applies.
+  "Preferred: generated guard" path for the exact invocation), or add it
+  as one of that recipe's `<labeler-bot-login-N>` placeholders when
+  following that recipe's manual fallback instead — see that recipe for
+  when each path applies.
   Not a phase step in any
   `idd-*.instructions.md` file — like the Merged-PR feedback sweep
   above, this is a manually-invoked, operator-run spot-check, run once

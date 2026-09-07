@@ -920,14 +920,13 @@ hand-copying a placeholder recipe:
    node scripts/idd-onboard.mjs --substitute --target <target-dir>
    ```
 
-   **This path requires a local `kurone-kito/idd-skill` clone**
-   (`scripts/idd-onboard.mjs` runs from that clone, not from an
-   installed helper package) — `idd-onboard` is not part of the
-   `package-manager` / `ephemeral-npx` helper command catalog
-   documented in
+   **The supported invocation runs from a local
+   `kurone-kito/idd-skill` clone** — `idd-onboard` is not a cataloged
+   `package-manager` / `ephemeral-npx` helper command in
    [IDD helper script evaluation](idd-helper-scripts.md), unlike the
-   sweep helper in step 1. Without a local clone available, use the
-   manual recipe below instead.
+   sweep helper in step 1, so this document does not offer a
+   package-manager or `npx` form for it. Without a local clone
+   available, use the manual recipe below instead.
 
    It reads this repository's own configured (or defaulted)
    `labels.roadmapLabelName` / `labels.blockedByHumanLabelName` /
