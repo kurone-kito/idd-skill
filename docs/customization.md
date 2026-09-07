@@ -1109,8 +1109,9 @@ substitute them by hand.
 ### Advisory: `.coderabbit.yaml` snippet
 
 Adopters who use CodeRabbit specifically can additionally scope its
-issue auto-labeling away from the reserved label names, mirroring the
-snippet this source repository's own `.coderabbit.yaml` carries:
+issue auto-labeling away from the reserved label names, adapted from
+this source repository's own `.coderabbit.yaml` snippet with an added
+non-sufficiency caveat that file's own comment does not yet carry:
 
 ```yaml
 issue_enrichment:
