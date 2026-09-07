@@ -917,7 +917,8 @@ hand-copying a placeholder recipe:
    [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#cli-assisted-onboarding)):
 
    ```sh
-   node scripts/idd-onboard.mjs --substitute --target <target-dir>
+   node scripts/idd-onboard.mjs --substitute --target <target-dir> \
+     --allow-root <target-dir>
    ```
 
    **The supported invocation runs from a local
@@ -926,7 +927,11 @@ hand-copying a placeholder recipe:
    [IDD helper script evaluation](idd-helper-scripts.md), unlike the
    sweep helper in step 1, so this document does not offer a
    package-manager or `npx` form for it. Without a local clone
-   available, use the manual recipe below instead.
+   available, use the manual recipe below instead. `--target` is
+   confined to the current working directory (or an `--allow-root`
+   boundary); when `<target-dir>` is a separate adopter checkout
+   outside the clone, `--allow-root <target-dir>` widens the confined
+   root so the command doesn't exit before generating the guard.
 
    It reads the target repository's own configured (or defaulted)
    `labels.roadmapLabelName` / `labels.blockedByHumanLabelName` /
