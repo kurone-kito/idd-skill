@@ -2051,6 +2051,90 @@ test('bin/idd-onboard.mjs --substitute generates the guard workflow end-to-end w
     generated,
     /contains\(fromJSON\('\["triage-bot\[bot\]"\]'\), github\.event\.sender\.login\)/,
   );
+  // ubuntu-latest for adopter portability, matching
+  // docs/customization.md's own recipe -- not this source repository's
+  // own ubuntu-slim runner (#2684 review).
+  assert.match(generated, /runs-on: ubuntu-latest/);
+});
+
+test('bin/idd-onboard.mjs --substitute reports written: true at the top level when only the guard workflow changed (#2684 review)', () => {
+  // A caller consuming only the generic top-level `written` field must
+  // not conclude "no changes" when filesChanged is 0 but the guard alone
+  // was written -- simulate that by re-running --substitute against an
+  // already-fully-substituted tree that only just gained a non-empty
+  // labels.untrustedLabelerLogins.
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  const first = runCliBin([
+    '--substitute',
+    '--target',
+    root,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(first.status, 0);
+
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  config.labels = { untrustedLabelerLogins: ['triage-bot[bot]'] };
+  writeFileSync(configPath, JSON.stringify(config));
+
+  const second = runCliBin([
+    '--substitute',
+    '--target',
+    root,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(second.status, 0);
+  assert.equal(second.verdict.filesChanged, 0);
+  assert.equal(
+    (second.verdict.untrustedLabelerGuard as { written: boolean }).written,
+    true,
+  );
+  assert.equal(second.verdict.written, true);
+});
+
+test('planUntrustedLabelerGuardWorkflow validates the write destination during planning, before any other --substitute write (#2684 review)', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  mkdirSync(join(root, '.github'), { recursive: true });
+  symlinkSync(
+    trackedMkdtemp('idd-onboard-outside-'),
+    join(root, '.github', 'workflows'),
+  );
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  config.labels = { untrustedLabelerLogins: ['bot[bot]'] };
+  writeFileSync(configPath, JSON.stringify(config));
+  const before = snapshotTree(root);
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--substitute',
+        '--target',
+        root,
+        ...CLI_OVERRIDE_FLAGS,
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /non-directory \(e\.g\. a symlink\)/);
+  }
+  // The whole run aborted before applySubstitutionPlan wrote anything,
+  // not only before the guard workflow itself.
+  assertTreeUnchanged(root, before);
 });
 
 test('bin/idd-onboard.mjs without --dry-run applies exactly the planned edits', () => {

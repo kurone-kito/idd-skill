@@ -1249,7 +1249,12 @@ jobs:
   strip-label:
     if: |-
       contains(fromJSON('${loginsJson}'), github.event.sender.login) && (${labelCondition})
-    runs-on: ubuntu-slim
+    # ubuntu-latest here for maximum portability across time and
+    # adopters, matching docs/customization.md's own reserved-label
+    # guard recipe (#2684 review) -- ubuntu-slim is a valid alternative
+    # for this single-\`gh\`-call job, but it is not a runner label every
+    # adopter's account can assume is available.
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Remove reserved label applied by an untrusted labeler
@@ -1279,12 +1284,64 @@ export interface UntrustedLabelerGuardPlan {
 }
 
 /**
+ * Fail closed (throw, no return value to ignore) when writing `path`
+ * under `targetDir` could do something other than create-or-replace a
+ * plain file confined to `targetDir` (#2684 review):
+ *
+ * - an unsafe `path` itself (absolute, `..`-traversing, or
+ *   Windows-drive-qualified) via the same `isSafeRelativePath` guard the
+ *   import manifest paths already use;
+ * - a symlinked (or otherwise non-directory) ancestor directory that
+ *   would let the write escape `targetDir` — the same class of check
+ *   `readTargetPolicyConfig` above already applies on the read side;
+ * - an existing non-plain-file leaf (e.g. the destination is already a
+ *   symlink).
+ *
+ * Called during planning (before any file in the --substitute run is
+ * written) so a rejection aborts the whole run with no partial write,
+ * and again immediately before the write itself as a TOCTOU-narrowing
+ * belt-and-suspenders check for any other caller of
+ * `applyUntrustedLabelerGuardPlan`.
+ */
+function assertSafeGuardWorkflowDestination(
+  targetDir: string,
+  path: string,
+): void {
+  if (!isSafeRelativePath(path)) {
+    throw new Error(`refusing to write an unsafe path: ${path}`);
+  }
+  if (hasNonDirectoryAncestor(targetDir, path)) {
+    throw new Error(
+      `refusing to write ${path}: a non-directory (e.g. a symlink) sits on its path under ${targetDir}`,
+    );
+  }
+  const absolute = resolve(targetDir, path);
+  let leafStat: ReturnType<typeof lstatSync> | null;
+  try {
+    leafStat = lstatSync(absolute);
+  } catch {
+    leafStat = null;
+  }
+  if (leafStat !== null && !leafStat.isFile()) {
+    throw new Error(
+      `refusing to write ${path}: an existing non-plain-file entry (e.g. a symlink) already occupies that path under ${targetDir}`,
+    );
+  }
+}
+
+/**
  * Plan the untrusted-labeler guard-workflow generation step (#2671) for a
  * target tree, reading its own `.github/idd/config.json` `labels.*`
  * configuration. `content` is `null` — a deliberate no-op, not an error —
  * when `labels.untrustedLabelerLogins` is absent or empty (opt-in, not
- * opt-out). Pure and side-effect-free; see `applyUntrustedLabelerGuardPlan`
- * for the write step.
+ * opt-out). Read-only; see `applyUntrustedLabelerGuardPlan` for the write
+ * step. When `content` will be non-`null`, also validates the write
+ * destination via `assertSafeGuardWorkflowDestination` here — before
+ * `runCli`'s --substitute branch writes anything else — so an unsafe
+ * destination aborts the whole run before `applySubstitutionPlan` has
+ * written any placeholder substitution, rather than surfacing only once
+ * the guard write itself runs after that other write already landed
+ * (#2684 review).
  */
 export function planUntrustedLabelerGuardWorkflow(
   targetDir: string,
@@ -1298,6 +1355,7 @@ export function planUntrustedLabelerGuardWorkflow(
       content: null,
     };
   }
+  assertSafeGuardWorkflowDestination(targetDir, path);
   return {
     path,
     untrustedLabelerLogins: labels.untrustedLabelerLogins,
@@ -1310,18 +1368,11 @@ export function planUntrustedLabelerGuardWorkflow(
  * creating parent directories as needed. Returns whether a write
  * happened — `false` for the `content: null` no-op plan, never an error.
  * Idempotent: re-running with an unchanged plan reproduces the same
- * file content.
- *
- * Fails closed (throws, no write) when a symlinked ancestor or a
- * non-plain-file leaf could otherwise let the write escape `targetDir`
- * (#2684 review) — the same class of check `readTargetPolicyConfig`
- * above already applies on the read side. Also rejects an unsafe
- * `plan.path` (absolute, `..`-traversing, or Windows-drive-qualified)
- * via the same `isSafeRelativePath` guard the import manifest paths
- * already use, even though every current caller only ever passes the
- * `UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH` constant — this function is
- * exported and its `plan.path` parameter is not otherwise
- * type-constrained (#2684 review).
+ * file content. Re-validates the write destination via
+ * `assertSafeGuardWorkflowDestination` immediately before writing —
+ * `planUntrustedLabelerGuardWorkflow` above already validates it once at
+ * plan time, but this call stays the authoritative, load-bearing check
+ * for any other caller that constructs a plan by hand.
  */
 export function applyUntrustedLabelerGuardPlan(
   targetDir: string,
@@ -1330,26 +1381,8 @@ export function applyUntrustedLabelerGuardPlan(
   if (plan.content === null) {
     return false;
   }
-  if (!isSafeRelativePath(plan.path)) {
-    throw new Error(`refusing to write an unsafe path: ${plan.path}`);
-  }
-  if (hasNonDirectoryAncestor(targetDir, plan.path)) {
-    throw new Error(
-      `refusing to write ${plan.path}: a non-directory (e.g. a symlink) sits on its path under ${targetDir}`,
-    );
-  }
+  assertSafeGuardWorkflowDestination(targetDir, plan.path);
   const absolute = resolve(targetDir, plan.path);
-  let leafStat: ReturnType<typeof lstatSync> | null;
-  try {
-    leafStat = lstatSync(absolute);
-  } catch {
-    leafStat = null;
-  }
-  if (leafStat !== null && !leafStat.isFile()) {
-    throw new Error(
-      `refusing to write ${plan.path}: an existing non-plain-file entry (e.g. a symlink) already occupies that path under ${targetDir}`,
-    );
-  }
   mkdirSync(dirname(absolute), { recursive: true });
   writeFileSync(absolute, plan.content);
   return true;
@@ -3300,7 +3333,13 @@ async function runCli(): Promise<void> {
     unknownTokens: plan.unknownTokens,
     skippedPaths: listSkippedPlaceholderPaths(targetDir),
     filesChanged,
-    written: canWrite && filesChanged > 0,
+    // Folds in untrustedLabelerGuardWritten (#2684 review): a caller
+    // consuming only this generic top-level field must not conclude "no
+    // changes" and skip committing a newly generated guard workflow when
+    // filesChanged is 0 but the guard alone was written (e.g. a
+    // previously-substituted tree that only just gained a non-empty
+    // labels.untrustedLabelerLogins).
+    written: (canWrite && filesChanged > 0) || untrustedLabelerGuardWritten,
     untrustedLabelerGuard: {
       path: untrustedLabelerGuardPlan.path,
       logins: untrustedLabelerGuardPlan.untrustedLabelerLogins,
