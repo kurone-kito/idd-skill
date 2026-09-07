@@ -3100,6 +3100,54 @@ same as `AW4`/`AW5`.
     universal adopter policy — this sweep is a detection aid only: never
     an automatic recovery path or a retroactive merge gate.
 
+### Untrusted-labeler login sweep
+
+- Source repo / vendored-node command:
+
+  ```sh
+  node scripts/idd-suggest-untrusted-labelers.mjs [--owner <owner>] [--repo <repo>] [--format table|json]
+  ```
+
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd:suggest-untrusted-labelers` command from the helper runtime
+  manifest wiring above; the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-suggest-untrusted-labelers [--owner <owner>] [--repo <repo>] [--format table|json]
+  ```
+
+- Automates the full-history sweep technique the
+  [Reserved-label guard recipe](customization.md#reserved-label-guard-recipe)
+  already documents in prose: paginates `GET
+  /repos/{owner}/{repo}/issues/events` to completion, keeping only
+  entries where `event == "labeled"` and the actor's `type == "Bot"`
+  (the REST Issue Event object's `actor` field — a nullable simple-user
+  object — not the webhook payload's `sender` field), deduplicates by
+  `actor.login`, and prints each distinct bot login with a count of
+  `labeled` events attributed to it (`--format table`, the default) or
+  the full result as JSON (`--format json`, including `scannedEventCount`
+  and `pageCount` completeness evidence). `--owner`/`--repo` default to
+  the current repository via `gh repo view` auto-detection.
+- Pages manually (`page=1,2,...` with `per_page=100`), not via `gh api
+  --paginate` in one subprocess call: the repository-level endpoint
+  embeds the full parent `issue` object in every event, and `gh`'s
+  synchronous execution path this repository's helpers share exposes no
+  `maxBuffer` override, so an unbounded repository-wide sweep pages one
+  request at a time instead of risking a single oversized buffered
+  response.
+- **Read-only, unconditionally**: performs no write operation of any
+  kind — no `.github/idd/config.json` edit, no GitHub mutation (no
+  label change, no comment, no other write call). It only proposes
+  candidates for a human to review; adding a login to
+  `labels.untrustedLabelerLogins` stays a manual, adopter-owned edit
+  after judging each candidate's event count. Not a phase step in any
+  `idd-*.instructions.md` file — like the Merged-PR feedback sweep
+  above, this is a manually-invoked, operator-run spot-check, run once
+  when first building the reserved-label guard's bot-login list and
+  again after enabling new automation or after a long gap (a bot with
+  no history yet can still start labeling later).
+
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 
 `idd-review-triage.instructions.md`'s E-phase sync path and
