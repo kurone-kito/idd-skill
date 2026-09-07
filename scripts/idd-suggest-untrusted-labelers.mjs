@@ -22,23 +22,52 @@ import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghApiJson, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 
 /**
- * Filter `events` to `event === 'labeled'` entries whose actor `type ===
- * 'Bot'`, and count occurrences per `actor.login` into `counts` (mutated
- * in place). Pure and offline: takes an already-fetched batch, never
- * calls `gh` itself. Extracted so both {@link aggregateUntrustedLabelerCandidates}
- * (a single whole-array call, what the offline fixture test covers) and
- * {@link sweepUntrustedLabelerCandidates}'s per-page loop (repeated calls
- * with one page's events at a time, so no page's events need outlive this
- * call) share one counting primitive instead of two independently
- * maintained copies (#2670 review: a whole-sweep event array would
- * otherwise grow without bound against {@link MAX_SWEEP_PAGES}).
+ * Deduplicates `events` by numeric `id` against `seenEventIds` (mutated in
+ * place -- an id already present means this row was already counted, so
+ * it is skipped entirely), then filters the remaining ones to `event ===
+ * 'labeled'` entries whose actor `type === 'Bot'` and counts occurrences
+ * per `actor.login` into `counts` (mutated in place). Returns the number
+ * of *new* (non-duplicate) events in this batch, for the caller's own
+ * completeness accounting.
+ *
+ * The id-dedup exists because `GET /repos/{owner}/{repo}/issues/events`
+ * sorts newest-first and this sweep pages by page number (#2670 review):
+ * a page fetched while new events are still being created can shift
+ * already-fetched events across a page boundary and return one again on
+ * a later page, inflating both `labeledEventCount` and the completeness
+ * evidence on an active repository -- exactly where a full-history sweep
+ * takes longest and is most exposed to this. An event with no usable
+ * `id` (missing/non-numeric -- never produced by the real fetch path,
+ * only possible from a hand-built test fixture) is never deduplicated,
+ * matching this function's original pre-dedup behavior.
+ *
+ * Pure and offline: takes an already-fetched batch, never calls `gh`
+ * itself. Extracted so both {@link aggregateUntrustedLabelerCandidates}
+ * (a single whole-array call with a fresh `seenEventIds`, what the
+ * offline fixture test covers) and {@link sweepUntrustedLabelerCandidates}'s
+ * per-page loop (repeated calls sharing one `seenEventIds` across the
+ * whole sweep, so no page's events need outlive this call) share one
+ * counting primitive instead of two independently maintained copies --
+ * a whole-sweep event array would otherwise grow without bound against
+ * {@link MAX_SWEEP_PAGES}.
  *
  * An event whose `actor` is `null`/absent (GitHub omits `actor` for some
  * system-generated events), or whose `actor.login` is empty/whitespace, is
- * skipped rather than counted under an empty-string login.
+ * skipped rather than counted under an empty-string login (this skip is
+ * independent of the id dedup above -- the event still counts toward the
+ * returned new-event total even when it doesn't end up in `counts`).
  */
-function accumulateLabeledBotEvents(events, counts) {
+function accumulateLabeledBotEvents(events, counts, seenEventIds) {
+  let newEventCount = 0;
   for (const event of events) {
+    const id = typeof event?.id === 'number' ? event.id : null;
+    if (id !== null) {
+      if (seenEventIds.has(id)) {
+        continue;
+      }
+      seenEventIds.add(id);
+    }
+    newEventCount += 1;
     if (event?.event !== 'labeled') {
       continue;
     }
@@ -51,6 +80,7 @@ function accumulateLabeledBotEvents(events, counts) {
     }
     counts.set(login, (counts.get(login) ?? 0) + 1);
   }
+  return newEventCount;
 }
 /** Sorts an `actor.login` -> count map into the final candidate list:
  * count descending, then login ascending for a stable order. */
@@ -65,15 +95,16 @@ function finalizeUntrustedLabelerCandidates(counts) {
 }
 /**
  * Filter `events` to `event === 'labeled'` entries whose actor `type ===
- * 'Bot'`, deduplicate by `actor.login`, and count occurrences per login.
- * Pure and offline: takes already-fetched events, never calls `gh` itself
- * (the paginated fetch lives in {@link sweepUntrustedLabelerCandidates}
- * below), matching `actions-usage-report.mts`'s aggregate/fetch split so
- * this function is the one covered by an offline fixture test.
+ * 'Bot'`, deduplicate by numeric `id` (when present) and by
+ * `actor.login`, and count occurrences per login. Pure and offline:
+ * takes already-fetched events, never calls `gh` itself (the paginated
+ * fetch lives in {@link sweepUntrustedLabelerCandidates} below),
+ * matching `actions-usage-report.mts`'s aggregate/fetch split so this
+ * function is the one covered by an offline fixture test.
  */
 export function aggregateUntrustedLabelerCandidates(events) {
   const counts = new Map();
-  accumulateLabeledBotEvents(events, counts);
+  accumulateLabeledBotEvents(events, counts, new Set());
   return finalizeUntrustedLabelerCandidates(counts);
 }
 // ---------------------------------------------------------------------------
@@ -145,7 +176,7 @@ function fetchLabeledBotEventsPage(owner, repo, page) {
       {
         extraArgs: [
           '--jq',
-          '[.[] | {event: .event, actor: {login: (.actor.login // null), type: (.actor.type // null)}}]',
+          '[.[] | {id: .id, event: .event, actor: {login: (.actor.login // null), type: (.actor.type // null)}}]',
         ],
       },
     );
@@ -178,23 +209,29 @@ function fetchLabeledBotEventsPage(owner, repo, page) {
  * collecting every page's events into one array first. A repository-wide
  * sweep against {@link MAX_SWEEP_PAGES}'s ceiling could otherwise retain
  * up to ~10,000,000 projected event objects simultaneously even though
- * only the per-login counts and two totals are ever needed (#2670
- * review) -- this keeps peak memory bounded by the distinct-login count,
- * not the total event count. Stops at the first page shorter than
+ * only the per-login counts, the id-dedup set, and two totals are ever
+ * needed (#2670 review) -- this keeps peak memory to roughly one integer
+ * per distinct event seen (the id-dedup set below) plus one entry per
+ * distinct login, both far smaller than retaining full event objects for
+ * the whole sweep. Stops at the first page shorter than
  * {@link EVENTS_PER_PAGE} (the last page); a page fetch itself never
  * mutates anything -- see {@link fetchLabeledBotEventsPage}.
  */
 export function sweepUntrustedLabelerCandidates(owner, repo, deps = {}) {
   const fetchPage = deps.fetchPage ?? fetchLabeledBotEventsPage;
   const counts = new Map();
+  const seenEventIds = new Set();
   let scannedEventCount = 0;
   let page = 1;
   let pageCount = 0;
   for (;;) {
     const items = fetchPage(owner, repo, page);
     pageCount += 1;
-    scannedEventCount += items.length;
-    accumulateLabeledBotEvents(items, counts);
+    scannedEventCount += accumulateLabeledBotEvents(
+      items,
+      counts,
+      seenEventIds,
+    );
     if (items.length < EVENTS_PER_PAGE) {
       break;
     }

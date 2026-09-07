@@ -161,6 +161,54 @@ test('sweepUntrustedLabelerCandidates: no events at all reports zero candidates 
   assert.deepEqual(result.candidates, []);
 });
 
+test('sweepUntrustedLabelerCandidates: an event id repeated across a shifted pagination window is counted once', () => {
+  // Reproduces the #2670 review scenario: GET .../issues/events sorts
+  // newest-first and this sweep pages by page number, so a page fetched
+  // while new events are still being created can shift an
+  // already-fetched event across a page boundary and return it again on
+  // a later page. Page 1 (100 items, full -- continues pagination) ends
+  // with event id 100 (the "oldest" item on that page); a fresh event
+  // arriving between fetches pushes id 100 back into page 2's window, so
+  // it reappears there alongside two genuinely new events.
+  const page1 = Array.from({ length: 100 }, (_unused, index) => ({
+    id: 100 - index,
+    event: 'labeled',
+    actor: { login: 'prolific-bot', type: 'Bot' },
+  }));
+  const page2 = [
+    // Re-fetched due to the shifted window -- must NOT be counted twice.
+    {
+      id: 100,
+      event: 'labeled',
+      actor: { login: 'prolific-bot', type: 'Bot' },
+    },
+    // A genuinely new event -- id well outside page 1's 1-100 range so
+    // it can't accidentally collide with one already counted there.
+    { id: 5000, event: 'labeled', actor: { login: 'second-bot', type: 'Bot' } },
+  ];
+  const result = sweepUntrustedLabelerCandidates('o', 'r', {
+    fetchPage: (_owner, _repo, page) => (page === 1 ? page1 : page2),
+  });
+  assert.equal(result.pageCount, 2);
+  // 100 distinct events from page 1, plus exactly 1 new event from page 2
+  // (id 5000) -- id 100's repeat is excluded, not 102 total.
+  assert.equal(result.scannedEventCount, 101);
+  assert.deepEqual(result.candidates, [
+    { login: 'prolific-bot', labeledEventCount: 100 },
+    { login: 'second-bot', labeledEventCount: 1 },
+  ]);
+});
+
+test('aggregateUntrustedLabelerCandidates: events with no id field are never deduplicated (pre-dedup fixture behavior preserved)', () => {
+  const events: RawIssueEvent[] = [
+    { event: 'labeled', actor: { login: 'no-id-bot', type: 'Bot' } },
+    { event: 'labeled', actor: { login: 'no-id-bot', type: 'Bot' } },
+  ];
+  assert.deepEqual(aggregateUntrustedLabelerCandidates(events), [
+    { login: 'no-id-bot', labeledEventCount: 2 },
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // CLI subprocess: stub `gh` on PATH, matched by exact argv (same technique
 // as tests/gh-pagination-parsing-smoke.test.mts). Proves, against the
@@ -176,7 +224,7 @@ test('sweepUntrustedLabelerCandidates: no events at all reports zero candidates 
 const OWNER = 'o';
 const REPO = 'r';
 const EVENTS_PROJECTION_JQ =
-  '[.[] | {event: .event, actor: {login: (.actor.login // null), type: (.actor.type // null)}}]';
+  '[.[] | {id: .id, event: .event, actor: {login: (.actor.login // null), type: (.actor.type // null)}}]';
 
 function eventsPageArgv(page: number): string[] {
   return [
