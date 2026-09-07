@@ -36,7 +36,9 @@ import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   inspectCritiqueLoopDelegateLayer,
+  inspectCritiqueLoopTelemetryHookLayer,
   resolveEffectiveCritiqueLoopDelegate,
+  resolveEffectiveCritiqueLoopTelemetryHook,
 } from './policy-helpers.mjs';
 /**
  * Read and parse `.github/idd/config.json` from the current working
@@ -317,6 +319,35 @@ export function resolveEffectiveCritiqueLoopDelegateFromEnv(options) {
     homedir: options?.homedir,
   });
   return resolveEffectiveCritiqueLoopDelegate({
+    localConfig,
+    globalConfig: global.status === 'present' ? global.config : undefined,
+  });
+}
+/**
+ * Opt-in C-phase entry: resolve the effective `critiqueLoop.telemetryHook`
+ * from the repository-local document plus an optional user-global file
+ * (#2679). Structurally identical control flow to
+ * {@link resolveEffectiveCritiqueLoopDelegateFromEnv}: repository-local
+ * always wins outright when present (configured, disabled, or malformed);
+ * only when repository-local is entirely absent does the user-global
+ * fragment apply. Does not run as a side effect of {@link loadIddConfig} or
+ * {@link loadPolicyConfig}.
+ */
+export function resolveEffectiveCritiqueLoopTelemetryHookFromEnv(options) {
+  const localConfig =
+    options && Object.hasOwn(options, 'localConfig')
+      ? options.localConfig
+      : loadPolicyConfig(options?.localPolicyPath).config;
+  const local = inspectCritiqueLoopTelemetryHookLayer(localConfig);
+  if (local.status !== 'absent') {
+    return resolveEffectiveCritiqueLoopTelemetryHook({ localConfig });
+  }
+  const global = loadUserGlobalPolicyDocument({
+    env: options?.env,
+    path: options?.globalConfigPath,
+    homedir: options?.homedir,
+  });
+  return resolveEffectiveCritiqueLoopTelemetryHook({
     localConfig,
     globalConfig: global.status === 'present' ? global.config : undefined,
   });

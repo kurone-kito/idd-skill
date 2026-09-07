@@ -1181,6 +1181,117 @@ export function resolveEffectiveCritiqueLoopDelegate(input) {
   }
   return { status: 'none', source: 'none' };
 }
+/**
+ * Parse `critiqueLoop.telemetryHook`. Mirrors {@link parseCritiqueLoopDelegate}
+ * but for the simpler `{ command }`-only shape (#2679): a non-object, an
+ * unknown nested key (anything beyond `command`), or a missing/whitespace-only
+ * `command` all normalize to `undefined` (no hook configured), matching the
+ * schema's `additionalProperties: false` / `command`-only shape.
+ */
+function parseCritiqueLoopTelemetryHook(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value;
+  const candidateKeys = Object.keys(candidate);
+  if (candidateKeys.some((key) => key !== 'command')) {
+    return undefined;
+  }
+  // Object.keys() above already excludes inherited keys, but a plain
+  // property read (candidate.command) still walks the prototype chain --
+  // require command to be an own property, mirroring
+  // parseCritiqueLoopDelegate's own-property guard (#2207 review).
+  if (!Object.hasOwn(candidate, 'command')) {
+    return undefined;
+  }
+  const command = parseNonEmptyString(candidate.command, '');
+  if (!command || command.trim() === '') {
+    return undefined;
+  }
+  return { command };
+}
+const INVALID_LOCAL_TELEMETRY_HOOK_REASON =
+  'invalid-repository-local-telemetry-hook';
+/**
+ * Inspect `critiqueLoop.telemetryHook` on a raw policy document without
+ * applying `normalizePolicyConfig`'s fail-safe collapse. Mirrors
+ * {@link inspectCritiqueLoopDelegateLayer}'s absent / disabled / configured /
+ * malformed shape.
+ */
+export function inspectCritiqueLoopTelemetryHookLayer(config) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'absent' };
+  }
+  if (!Object.hasOwn(config, 'critiqueLoop')) {
+    return { status: 'absent' };
+  }
+  const critiqueLoop = config.critiqueLoop;
+  if (
+    typeof critiqueLoop !== 'object' ||
+    critiqueLoop === null ||
+    Array.isArray(critiqueLoop)
+  ) {
+    // A present non-object `critiqueLoop` is a local configuration error:
+    // fail closed rather than treating it as "no hook" and inheriting a
+    // user-global object.
+    return { status: 'malformed', reason: INVALID_LOCAL_TELEMETRY_HOOK_REASON };
+  }
+  if (!Object.hasOwn(critiqueLoop, 'telemetryHook')) {
+    return { status: 'absent' };
+  }
+  const value = critiqueLoop.telemetryHook;
+  if (value === null) {
+    return { status: 'disabled' };
+  }
+  const parsed = parseCritiqueLoopTelemetryHook(value);
+  if (parsed) {
+    return { status: 'configured', hook: parsed };
+  }
+  return { status: 'malformed', reason: INVALID_LOCAL_TELEMETRY_HOOK_REASON };
+}
+/**
+ * Resolve the effective C-phase telemetry hook from a repository-local
+ * document and an optional user-global document. Pure: callers supply
+ * already-loaded JSON (or `undefined` for an absent global file). Never
+ * reads the filesystem.
+ *
+ * Order: local object, local `null` disable, global object, then none --
+ * identical to {@link resolveEffectiveCritiqueLoopDelegate}'s resolution
+ * order. A malformed local hook is fail-closed and does not inherit global.
+ * A malformed or disabled global fragment is treated as absent.
+ */
+export function resolveEffectiveCritiqueLoopTelemetryHook(input) {
+  const local = inspectCritiqueLoopTelemetryHookLayer(input.localConfig);
+  if (local.status === 'configured' && local.hook) {
+    return {
+      status: 'local',
+      source: 'repository-local',
+      hook: local.hook,
+    };
+  }
+  if (local.status === 'disabled') {
+    return { status: 'disabled', source: 'repository-local' };
+  }
+  if (local.status === 'malformed') {
+    return {
+      status: 'local-malformed',
+      source: 'repository-local',
+      reason: local.reason ?? INVALID_LOCAL_TELEMETRY_HOOK_REASON,
+    };
+  }
+  if (input.globalConfig === undefined || input.globalConfig === null) {
+    return { status: 'none', source: 'none' };
+  }
+  const global = inspectCritiqueLoopTelemetryHookLayer(input.globalConfig);
+  if (global.status === 'configured' && global.hook) {
+    return {
+      status: 'global',
+      source: 'user-global',
+      hook: global.hook,
+    };
+  }
+  return { status: 'none', source: 'none' };
+}
 function hasConfiguredCollaboratorMarkerTrust(config) {
   const c = config;
   return (

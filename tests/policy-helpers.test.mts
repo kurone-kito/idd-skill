@@ -6,12 +6,14 @@ import {
   DEFAULT_PROVIDER,
   getReviewEscalationChangesRequestedPolicy,
   inspectCritiqueLoopDelegateLayer,
+  inspectCritiqueLoopTelemetryHookLayer,
   inspectDevelopmentBranch,
   inspectProvider,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
   parseIsoDurationToMs,
   resolveEffectiveCritiqueLoopDelegate,
+  resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveDevelopmentBranch,
   resolveEffectiveProvider,
   selectDesyncedIndex,
@@ -836,11 +838,15 @@ test('an unrecognized mode still fails closed after the widening (#2324)', () =>
   );
 });
 
-test('critiqueLoop.telemetryHook has no normalizePolicyConfig resolution yet (schema-only, #2678)', () => {
-  // #2678 adds critiqueLoop.telemetryHook to the JSON schema only; unlike
-  // delegate, no runtime resolution/invocation logic exists yet (deferred to
-  // the roadmap's Track B). This canary pins that boundary: a future track
-  // adding real resolution must consciously update this test.
+test('critiqueLoop.telemetryHook has no normalizePolicyConfig resolution (#2679)', () => {
+  // #2679 adds a *separate* opt-in resolver for critiqueLoop.telemetryHook
+  // (inspectCritiqueLoopTelemetryHookLayer / resolveEffectiveCritiqueLoopTelemetryHook
+  // below, and resolveEffectiveCritiqueLoopTelemetryHookFromEnv in
+  // idd-config.mts) -- mirroring how critiqueLoop.delegate's own
+  // normalizePolicyConfig fail-safe (see the 'null delegate to absent' test
+  // above) stays intentionally unrelated to its own layered C1 resolver.
+  // normalizePolicyConfig itself is untouched by #2679: this canary still
+  // pins that boundary.
   assert.equal(
     Object.hasOwn(
       normalizePolicyConfig({
@@ -849,6 +855,162 @@ test('critiqueLoop.telemetryHook has no normalizePolicyConfig resolution yet (sc
       'telemetryHook',
     ),
     false,
+  );
+});
+
+// #2679: critiqueLoop.telemetryHook layer/resolver tests, mirroring every
+// critiqueLoop.delegate equivalent above (the '#2257' tests) for the
+// simpler `{ command }`-only shape (no `mode`).
+
+test('inspectCritiqueLoopTelemetryHookLayer distinguishes absent, disabled, configured, and malformed (#2679)', () => {
+  assert.deepEqual(inspectCritiqueLoopTelemetryHookLayer({}), {
+    status: 'absent',
+  });
+  assert.deepEqual(
+    inspectCritiqueLoopTelemetryHookLayer({
+      critiqueLoop: { telemetryHook: null },
+    }),
+    { status: 'disabled' },
+  );
+  assert.deepEqual(
+    inspectCritiqueLoopTelemetryHookLayer({
+      critiqueLoop: { telemetryHook: { command: 'notify-critique' } },
+    }),
+    {
+      status: 'configured',
+      hook: { command: 'notify-critique' },
+    },
+  );
+  assert.deepEqual(
+    inspectCritiqueLoopTelemetryHookLayer({
+      critiqueLoop: { telemetryHook: { command: 'notify-critique', bogus: 1 } },
+    }),
+    {
+      status: 'malformed',
+      reason: 'invalid-repository-local-telemetry-hook',
+    },
+  );
+});
+
+test('inspectCritiqueLoopTelemetryHookLayer fails safe to absent on a missing or empty command (#2679)', () => {
+  assert.deepEqual(
+    inspectCritiqueLoopTelemetryHookLayer({
+      critiqueLoop: { telemetryHook: {} },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-telemetry-hook' },
+  );
+  assert.deepEqual(
+    inspectCritiqueLoopTelemetryHookLayer({
+      critiqueLoop: { telemetryHook: { command: '' } },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-telemetry-hook' },
+  );
+  assert.deepEqual(
+    inspectCritiqueLoopTelemetryHookLayer({
+      critiqueLoop: { telemetryHook: { command: '   ' } },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-telemetry-hook' },
+  );
+});
+
+test('inspectCritiqueLoopTelemetryHookLayer fails safe to malformed on an inherited (non-own) command property (#2679)', () => {
+  const inherited = Object.create({ command: 'inherited-hook' });
+  assert.deepEqual(
+    inspectCritiqueLoopTelemetryHookLayer({
+      critiqueLoop: { telemetryHook: inherited },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-telemetry-hook' },
+  );
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHook prefers a local object over a global object (#2679)', () => {
+  const result = resolveEffectiveCritiqueLoopTelemetryHook({
+    localConfig: {
+      critiqueLoop: { telemetryHook: { command: 'local-hook' } },
+    },
+    globalConfig: {
+      critiqueLoop: { telemetryHook: { command: 'global-hook' } },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'local',
+    source: 'repository-local',
+    hook: { command: 'local-hook' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHook honors local JSON null over a valid global object (#2679)', () => {
+  const result = resolveEffectiveCritiqueLoopTelemetryHook({
+    localConfig: { critiqueLoop: { telemetryHook: null } },
+    globalConfig: {
+      critiqueLoop: { telemetryHook: { command: 'global-hook' } },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'disabled',
+    source: 'repository-local',
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHook inherits a global object when local is absent (#2679)', () => {
+  const result = resolveEffectiveCritiqueLoopTelemetryHook({
+    localConfig: {},
+    globalConfig: {
+      mergePolicy: 'must-not-leak',
+      critiqueLoop: { telemetryHook: { command: 'global-hook' } },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'global',
+    source: 'user-global',
+    hook: { command: 'global-hook' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHook fails closed on a malformed local hook (#2679)', () => {
+  const result = resolveEffectiveCritiqueLoopTelemetryHook({
+    localConfig: {
+      critiqueLoop: { telemetryHook: { command: 'local-hook', bogus: 1 } },
+    },
+    globalConfig: {
+      critiqueLoop: { telemetryHook: { command: 'global-hook' } },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'local-malformed',
+    source: 'repository-local',
+    reason: 'invalid-repository-local-telemetry-hook',
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHook fails closed on a non-object local critiqueLoop (#2679)', () => {
+  const result = resolveEffectiveCritiqueLoopTelemetryHook({
+    localConfig: { critiqueLoop: 'not-an-object' },
+    globalConfig: {
+      critiqueLoop: { telemetryHook: { command: 'global-hook' } },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'local-malformed',
+    source: 'repository-local',
+    reason: 'invalid-repository-local-telemetry-hook',
+  });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHook treats a malformed global fragment as absent (#2679)', () => {
+  const result = resolveEffectiveCritiqueLoopTelemetryHook({
+    localConfig: {},
+    globalConfig: {
+      critiqueLoop: { telemetryHook: { command: 'global-hook', bogus: 1 } },
+    },
+  });
+  assert.deepEqual(result, { status: 'none', source: 'none' });
+});
+
+test('resolveEffectiveCritiqueLoopTelemetryHook returns none when both layers are absent (#2679)', () => {
+  assert.deepEqual(
+    resolveEffectiveCritiqueLoopTelemetryHook({ localConfig: {} }),
+    { status: 'none', source: 'none' },
   );
 });
 
