@@ -29,8 +29,10 @@ import {
 import {
   applyImportPlan,
   applySubstitutionPlan,
+  applyUntrustedLabelerGuardPlan,
   buildImportPlan,
   buildSubstitutionPlan,
+  buildUntrustedLabelerGuardWorkflowContent,
   checkGitRemoteBranchExists,
   checkManifestCompleteness,
   checkPlaceholderResidue,
@@ -45,6 +47,7 @@ import {
   MARKER_PREFIX_PATTERN,
   ONBOARDING_PLACEHOLDERS,
   parseRemoteRepoRef,
+  planUntrustedLabelerGuardWorkflow,
   readExistingCommandsTable,
   resolveConfinedDirectory,
   resolveCoreTemplateFiles,
@@ -56,6 +59,7 @@ import {
   runVerify,
   SCAN_EXCLUDED_PATHS,
   scanPlaceholderTokens,
+  UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH,
 } from '../src/scripts/idd-onboard.mts';
 import { loadOnboardingHearingCatalog } from '../src/scripts/onboarding-hearing.mts';
 import type { PromptFn } from '../src/scripts/readline-prompt.mts';
@@ -611,6 +615,205 @@ test('restoreExistingCommandsTable never restores install-deps, even when the sn
   // exactly as --import wrote it, for the normal --substitute flow to
   // resolve independently via deriveInstallDepsCommand.
   assert.equal(restored.commands['install-deps'], '{{INSTALL_DEPS_COMMAND}}');
+});
+
+// --- #2671: untrusted-labeler guard-workflow generation --------------------
+
+function writeLabelsConfig(
+  root: string,
+  labels: Record<string, unknown>,
+): void {
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    JSON.stringify({ labels }),
+  );
+}
+
+test('planUntrustedLabelerGuardWorkflow is a no-op when untrustedLabelerLogins is absent (#2671)', () => {
+  const root = makeFixtureDir();
+  const plan = planUntrustedLabelerGuardWorkflow(root);
+  assert.equal(plan.path, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH);
+  assert.deepEqual(plan.untrustedLabelerLogins, []);
+  assert.equal(plan.content, null);
+  assert.equal(
+    applyUntrustedLabelerGuardPlan(root, plan),
+    false,
+    'a null-content plan must never write',
+  );
+  assert.equal(
+    existsSync(join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH)),
+    false,
+  );
+});
+
+test('planUntrustedLabelerGuardWorkflow is a no-op when untrustedLabelerLogins is empty (#2671)', () => {
+  const root = makeFixtureDir();
+  writeLabelsConfig(root, { untrustedLabelerLogins: [] });
+  const plan = planUntrustedLabelerGuardWorkflow(root);
+  assert.equal(plan.content, null);
+});
+
+test('planUntrustedLabelerGuardWorkflow generates the guard workflow for non-empty declared logins (#2671)', () => {
+  const root = makeFixtureDir();
+  writeLabelsConfig(root, {
+    untrustedLabelerLogins: ['some-labeler-bot[bot]', 'another-bot[bot]'],
+  });
+  const plan = planUntrustedLabelerGuardWorkflow(root);
+  assert.deepEqual(plan.untrustedLabelerLogins, [
+    'some-labeler-bot[bot]',
+    'another-bot[bot]',
+  ]);
+  assert.ok(plan.content !== null);
+  assert.match(
+    plan.content ?? '',
+    /contains\(fromJSON\('\["some-labeler-bot\[bot\]","another-bot\[bot\]"\]'\), github\.event\.sender\.login\)/,
+  );
+  // Default label names, since none were configured.
+  assert.match(plan.content ?? '', /github\.event\.label\.name == 'roadmap'/);
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'status:blocked-by-human'/,
+  );
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'status:needs-decision'/,
+  );
+
+  assert.equal(applyUntrustedLabelerGuardPlan(root, plan), true);
+  const written = readFileSync(
+    join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH),
+    'utf8',
+  );
+  assert.equal(written, plan.content);
+});
+
+test('planUntrustedLabelerGuardWorkflow substitutes custom (non-default) label names (#2671)', () => {
+  const root = makeFixtureDir();
+  writeLabelsConfig(root, {
+    roadmapLabelName: 'epic',
+    blockedByHumanLabelName: 'blocked:human',
+    needsDecisionLabelName: 'needs:decision',
+    untrustedLabelerLogins: ['triage-bot[bot]'],
+  });
+  const plan = planUntrustedLabelerGuardWorkflow(root);
+  assert.match(plan.content ?? '', /github\.event\.label\.name == 'epic'/);
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'blocked:human'/,
+  );
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'needs:decision'/,
+  );
+  assert.doesNotMatch(plan.content ?? '', /'roadmap'/);
+});
+
+test('planUntrustedLabelerGuardWorkflow is idempotent against an unchanged config (#2671)', () => {
+  const root = makeFixtureDir();
+  writeLabelsConfig(root, { untrustedLabelerLogins: ['repeat-bot[bot]'] });
+  const first = planUntrustedLabelerGuardWorkflow(root);
+  applyUntrustedLabelerGuardPlan(root, first);
+  const firstContent = readFileSync(
+    join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH),
+    'utf8',
+  );
+  const second = planUntrustedLabelerGuardWorkflow(root);
+  applyUntrustedLabelerGuardPlan(root, second);
+  const secondContent = readFileSync(
+    join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH),
+    'utf8',
+  );
+  assert.equal(secondContent, firstContent);
+});
+
+test('buildUntrustedLabelerGuardWorkflowContent escapes an embedded single quote in a label name (#2671)', () => {
+  const content = buildUntrustedLabelerGuardWorkflowContent({
+    roadmapLabelName: "adopter's-roadmap",
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
+    untrustedLabelerLogins: ['bot[bot]'],
+  });
+  assert.match(content, /github\.event\.label\.name == 'adopter''s-roadmap'/);
+});
+
+test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing a newline (YAML/permissions-injection guard, #2671 review)', () => {
+  // A raw newline would otherwise break out of the `if: |-` block scalar
+  // and let an attacker-controlled labels.* value inject arbitrary
+  // top-level YAML (e.g. a second `permissions:` block) into the
+  // generated workflow file. Quote-doubling alone does not stop this;
+  // control characters must be rejected outright.
+  assert.throws(
+    () =>
+      buildUntrustedLabelerGuardWorkflowContent({
+        roadmapLabelName: 'roadmap\npermissions:\n  contents: write\nfoo:',
+        blockedByHumanLabelName: 'status:blocked-by-human',
+        needsDecisionLabelName: 'status:needs-decision',
+        untrustedLabelerLogins: ['bot[bot]'],
+      }),
+    /labels\.roadmapLabelName must not contain control characters/,
+  );
+});
+
+test('buildUntrustedLabelerGuardWorkflowContent safely escapes a control character inside an untrustedLabelerLogins entry (#2671 review)', () => {
+  // JSON.stringify already renders a control character as a short escape
+  // (e.g. "\r" -> the two characters backslash + "r"), so the serialized
+  // logins blob this function embeds never contains a raw control byte --
+  // unlike the three label-name fields above, which are interpolated as
+  // raw strings and do need the explicit rejection this test's sibling
+  // above covers.
+  const content = buildUntrustedLabelerGuardWorkflowContent({
+    roadmapLabelName: 'roadmap',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
+    untrustedLabelerLogins: ['bot\r[bot]'],
+  });
+  assert.match(content, /contains\(fromJSON\('\["bot\\r\[bot\]"\]'\)/);
+  assert.doesNotMatch(content, /\r/);
+});
+
+test('bin/idd-onboard.mjs --substitute fails closed (exit 2) on a control character in a configured label name (#2671 review)', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  config.labels = {
+    roadmapLabelName: 'roadmap\npermissions:\n  contents: write\nfoo:',
+    untrustedLabelerLogins: ['bot[bot]'],
+  };
+  writeFileSync(configPath, JSON.stringify(config));
+  const before = snapshotTree(root);
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--substitute',
+        '--target',
+        root,
+        ...CLI_OVERRIDE_FLAGS,
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(
+      String(failed.stderr),
+      /labels\.roadmapLabelName must not contain control characters/,
+    );
+  }
+  assert.equal(
+    existsSync(join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH)),
+    false,
+  );
+  assertTreeUnchanged(root, before);
 });
 
 test('restoreExistingCommandsTable only rewrites a row still holding the raw placeholder token', () => {
@@ -1715,6 +1918,59 @@ test('bin/idd-onboard.mjs --substitute summary lists the skipped meta-doc paths'
       `byte mismatch: ${relativePath}`,
     );
   }
+});
+
+test('bin/idd-onboard.mjs --substitute writes no guard workflow when untrustedLabelerLogins is unset (#2671)', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  const { status, verdict } = runCliBin([
+    '--substitute',
+    '--target',
+    root,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(status, 0);
+  assert.deepEqual(verdict.untrustedLabelerGuard, {
+    path: UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH,
+    logins: [],
+    written: false,
+  });
+  assert.equal(
+    existsSync(join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH)),
+    false,
+  );
+});
+
+test('bin/idd-onboard.mjs --substitute generates the guard workflow end-to-end when untrustedLabelerLogins is declared (#2671)', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  config.labels = { untrustedLabelerLogins: ['triage-bot[bot]'] };
+  writeFileSync(configPath, JSON.stringify(config));
+  const { status, verdict } = runCliBin([
+    '--substitute',
+    '--target',
+    root,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(status, 0);
+  assert.deepEqual(verdict.untrustedLabelerGuard, {
+    path: UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH,
+    logins: ['triage-bot[bot]'],
+    written: true,
+  });
+  const generated = readFileSync(
+    join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH),
+    'utf8',
+  );
+  assert.match(
+    generated,
+    /contains\(fromJSON\('\["triage-bot\[bot\]"\]'\), github\.event\.sender\.login\)/,
+  );
 });
 
 test('bin/idd-onboard.mjs without --dry-run applies exactly the planned edits', () => {
