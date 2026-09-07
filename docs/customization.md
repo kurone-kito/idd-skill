@@ -922,9 +922,12 @@ hand-copying a placeholder recipe:
    `.github/workflows/strip-untrusted-labels.yml` with the same trust
    model documented below (least-privilege `permissions:`, no
    checkout, `pull_request_target` for the PR branch,
-   `runs-on: ubuntu-latest`). An absent or empty
-   `labels.untrustedLabelerLogins` writes nothing and does not fail
-   (opt-in, not opt-out).
+   `runs-on: ubuntu-latest`). An absent `labels.untrustedLabelerLogins`
+   writes nothing and does not fail (opt-in, not opt-out) — **omit the
+   key entirely** rather than setting it to `[]`: the policy schema
+   requires at least one entry (`minItems: 1`), so an explicit empty
+   array fails live-config schema validation (for example
+   `idd-doctor`) even though `--substitute` itself tolerates it.
 
 **Ordering matters.** `labels.untrustedLabelerLogins` is neither one of
 the seven `--hear`-derived onboarding placeholders nor a field
@@ -944,7 +947,13 @@ covered, or the broader shared-prefix form described in the Fallback
 subsection below, has no generated equivalent yet — use the manual
 recipe for that extension instead. Re-running `--substitute` also regenerates
 the file from the current configuration every time, overwriting any
-hand-edit previously made to a generated copy.
+hand-edit previously made to a generated copy — but only ever writes or
+leaves the file unchanged, never deletes it: removing
+`labels.untrustedLabelerLogins` from the configuration and rerunning
+`--substitute` does **not** delete a previously generated
+`.github/workflows/strip-untrusted-labels.yml`. Delete that file by
+hand when disabling the guard this way, or the old actor list keeps
+stripping labels despite the current configuration.
 
 ### Fallback: manual recipe (`instructions-only` profile, or extended coverage)
 
