@@ -915,7 +915,20 @@ hand-copying a placeholder recipe:
 2. Run the `idd-onboard` CLI's `--substitute` stage (already part of
    normal onboarding/re-onboarding; see
    [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#cli-assisted-onboarding)):
-   `node scripts/idd-onboard.mjs --substitute --target <target-dir>`.
+
+   ```sh
+   node scripts/idd-onboard.mjs --substitute --target <target-dir>
+   ```
+
+   **This path requires a local `kurone-kito/idd-skill` clone**
+   (`scripts/idd-onboard.mjs` runs from that clone, not from an
+   installed helper package) — `idd-onboard` is not part of the
+   `package-manager` / `ephemeral-npx` helper command catalog
+   documented in
+   [IDD helper script evaluation](idd-helper-scripts.md), unlike the
+   sweep helper in step 1. Without a local clone available, use the
+   manual recipe below instead.
+
    It reads this repository's own configured (or defaulted)
    `labels.roadmapLabelName` / `labels.blockedByHumanLabelName` /
    `labels.needsDecisionLabelName` and the declared logins, then writes

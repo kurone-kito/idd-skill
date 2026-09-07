@@ -304,10 +304,14 @@ infer), adopt the guard recipe in
 [Customizing IDD — Reserved-label guard recipe](../customization.md#reserved-label-guard-recipe)
 before relying on unattended discovery or hold semantics. When a helper
 runtime is available, prefer declaring `labels.untrustedLabelerLogins`
-and running the `idd-onboard` CLI's `--substitute` stage (or the
-`idd-suggest-untrusted-labelers` sweep helper to populate the login
-list) over the manual recipe — both paths, and the trade-offs between
-them, are documented at that same recipe link.
+and running the `idd-onboard` CLI's `--substitute` stage over the
+manual recipe — both paths, and the trade-offs between them, are
+documented at that same recipe link. The `idd-suggest-untrusted-labelers`
+sweep helper only proposes candidate logins for a human to review; it
+is read-only and never writes `.github/idd/config.json` itself, so
+still add each accepted candidate to `labels.untrustedLabelerLogins`
+by hand and (re-)run `--substitute` afterward — stopping after the
+sweep alone leaves the repository without the generated guard.
 
 ### Bootstrap execution mode
 
