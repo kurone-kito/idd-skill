@@ -54,6 +54,19 @@ const DEFAULT_INVOKE_TIMEOUT_MS = 5_000;
 /** Bound on how long `--invoke` waits for a piped stdin payload. */
 const STDIN_READ_TIMEOUT_MS = 2_000;
 
+/**
+ * Bound on how long `--invoke` waits for the hook's stdin handoff to
+ * complete before exiting anyway (#2685 review, CodeRabbit) -- a *much*
+ * smaller ask than `DEFAULT_INVOKE_TIMEOUT_MS` above, since it is only
+ * covering the stdin write reaching the child's pipe (normally near-
+ * instant for this small a JSON payload), not the hook running to
+ * completion. A caller that never gets an `onPayloadDelivered` signal at
+ * all (e.g. a `spawnFn` stub that doesn't wire up a real stdin) still
+ * exits promptly rather than hanging on `--invoke`'s "never blocks"
+ * contract.
+ */
+const PAYLOAD_DELIVERY_TIMEOUT_MS = 1_000;
+
 if (import.meta.main) {
   runCli();
 }
@@ -207,6 +220,18 @@ export interface InvokeCritiqueTelemetryHookOptions {
   timeoutMs?: number;
   /** Injectable for tests; defaults to `node:child_process`'s `spawn`. */
   spawnFn?: typeof spawn;
+  /**
+   * Called once (at most) as soon as `payload` has been fully handed off to
+   * the child's stdin -- on the stdin stream's `'close'` (fires once the
+   * underlying pipe is closed, whether that followed a clean `'finish'` or
+   * an error) or on a spawn/child `'error'` that means no delivery will
+   * ever happen. Lets a fire-and-forget caller (the CLI's `--invoke`, via
+   * `runInvoke` below) wait for the payload to actually reach the child's
+   * pipe without waiting for the hook *process* to settle (#2685 review,
+   * CodeRabbit: `process.exit(0)` racing an in-flight stdin write could
+   * otherwise truncate the JSON the hook receives).
+   */
+  onPayloadDelivered?: () => void;
 }
 
 /**
@@ -224,11 +249,15 @@ export interface InvokeCritiqueTelemetryHookOptions {
  * alongside it. This function's own promise still always resolves once
  * the child truly settles (exit, error, or timeout) for any caller that
  * awaits it (every test below does); the CLI's `--invoke` mode (below)
- * simply never awaits it, and exits via `process.exit()` -- which
- * terminates unconditionally regardless of any pending handle -- instead
- * of waiting for the child to exit or hit `timeoutMs`, which would
+ * still never awaits *this* promise, and exits via `process.exit()` --
+ * which terminates unconditionally regardless of any pending handle --
+ * instead of waiting for the child to exit or hit `timeoutMs`, which would
  * otherwise delay every C-phase round invoking this hook by up to that
- * bound.
+ * bound. It does, separately, wait a short bounded time for
+ * {@link InvokeCritiqueTelemetryHookOptions.onPayloadDelivered} (#2685
+ * review, CodeRabbit) -- "the payload reached the child's stdin" is a much
+ * smaller ask than "the hook finished", and guards against `process.exit()`
+ * truncating an in-flight write.
  *
  * Failure modes this deliberately guards against (a naive
  * `spawn().stdin.write()` call crashes the parent process on each of these):
@@ -254,6 +283,14 @@ export function invokeCritiqueTelemetryHook(
 
   const spawnFn = options?.spawnFn ?? spawn;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_INVOKE_TIMEOUT_MS;
+  let delivered = false;
+  const notifyDelivered = () => {
+    if (delivered) {
+      return;
+    }
+    delivered = true;
+    options?.onPayloadDelivered?.();
+  };
 
   return new Promise((resolve) => {
     let settled = false;
@@ -289,6 +326,7 @@ export function invokeCritiqueTelemetryHook(
       });
     } catch {
       settle(false);
+      notifyDelivered();
       return;
     }
 
@@ -323,19 +361,36 @@ export function invokeCritiqueTelemetryHook(
     // normally if this hook is the only pending handle.
     timer.unref?.();
 
-    // #2685 review, Codex (discussion_r3952717...): a hook that exits well
-    // before `timeoutMs` used to leave the watchdog armed for the rest of
-    // its sleep, so a PID (or process-group id, since `detached: true`
-    // makes them the same number) reused by an unrelated process within
-    // that remaining window could be killed by mistake. Disarming the
-    // watchdog here as soon as `child` genuinely settles closes that race
-    // for the normal (non-timeout) exit path -- the only path left open is
-    // a *new* process becoming group leader of that exact recycled id
-    // inside the brief disarm-in-flight window, which `killProcessGroup`'s
-    // own ESRCH-tolerant fallback below cannot avoid either.
+    // #2685 review, Codex + CodeRabbit (PID-reuse race on early exit): a
+    // hook that exits well before `timeoutMs` used to leave the watchdog
+    // armed for the rest of its sleep, so a PID (or process-group id, since
+    // `detached: true` makes them the same number) reused by an unrelated
+    // process within that remaining window could be killed by mistake.
+    // Disarming the watchdog here closes that race **only for a caller that
+    // awaits this promise** (every test in this file does) -- these
+    // `child.on(...)` listeners run in *this* process, so they only fire if
+    // this process is still alive to run them. `--invoke` (below)
+    // deliberately never awaits this promise and calls `process.exit(0)`
+    // almost immediately after spawning, well before `child` can plausibly
+    // emit `'exit'` -- so on that path, the primary one in practice, the
+    // watchdog stays armed for the full `timeoutMs` exactly as before, by
+    // design: closing that half of the race would require a supervisor
+    // living entirely outside this Node process (a self-contained shell
+    // script that spawns the hook, waits on it, and only then kills its own
+    // watchdog subshell), which trades a narrow, bounded residual for
+    // meaningfully more moving parts -- see the PR discussion for the
+    // rejected fuller design and why it was not taken here. The residual
+    // this leaves is narrower than "PID reuse" alone suggests: POSIX does
+    // not let a pid (or session/group id) be reallocated while *any* task
+    // -- running or zombie, unreaped -- still holds it, so the reused id
+    // must first be freed by the entire group exiting *and* being reaped,
+    // then cycle back around after a full `pid_max` wrap, all inside the
+    // remaining `timeoutMs` window, with the new holder also calling
+    // `setsid`/`setpgid` to become a group leader.
     child.on('error', () => {
       clearTimeout(timer);
       cancelWatchdog(watchdog);
+      notifyDelivered();
       settle(false);
     });
     child.on('exit', (code) => {
@@ -346,14 +401,29 @@ export function invokeCritiqueTelemetryHook(
     child.stdin?.on('error', () => {
       // Asynchronous EPIPE (child exited before reading stdin) or similar --
       // the 'exit'/'error' handlers above still settle this promise.
+      notifyDelivered();
     });
+    // 'close' fires once the stdin pipe's write end is actually closed --
+    // after a clean `end()` flush completes, or after an error tears it
+    // down -- independent of whether the child ever reads or exits. This is
+    // the signal `notifyDelivered` needs: "the payload handoff is done",
+    // not "the hook is done".
+    child.stdin?.on('close', notifyDelivered);
+    if (!child.stdin) {
+      // No stdin to wait on at all (unexpected given `stdio: ['pipe', ...]`
+      // above) -- don't leave a caller of onPayloadDelivered waiting for a
+      // signal that can never come.
+      notifyDelivered();
+    }
 
     try {
       child.stdin?.write(JSON.stringify(payload));
       child.stdin?.end();
     } catch {
       // Synchronous write failure -- 'error'/'exit' handlers above still
-      // settle this promise.
+      // settle this promise; the stdin 'error' handler above still notifies
+      // delivery-completion (as "done", since nothing further can be sent).
+      notifyDelivered();
     }
   });
 }
@@ -518,14 +588,51 @@ function runCli(): void {
 }
 
 /**
+ * Fire off {@link invokeCritiqueTelemetryHook} and resolve as soon as the
+ * payload has reached the child's stdin -- via
+ * {@link InvokeCritiqueTelemetryHookOptions.onPayloadDelivered} -- or after
+ * {@link PAYLOAD_DELIVERY_TIMEOUT_MS} elapses, whichever comes first.
+ * Deliberately does **not** wait for the hook itself to settle (exit,
+ * error, or its own much longer `timeoutMs`) -- only for the much smaller
+ * "the write happened" signal (#2685 review, CodeRabbit). The
+ * `invokeCritiqueTelemetryHook` promise itself is not returned/awaited
+ * here; it keeps running in the background exactly as before (its own
+ * timeout + watchdog still apply) after this function's own promise
+ * resolves.
+ */
+function invokeAndWaitForDelivery(
+  command: string,
+  payload: CritiqueTelemetryHookPayload,
+): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve();
+    };
+    const timer = setTimeout(settle, PAYLOAD_DELIVERY_TIMEOUT_MS);
+    timer.unref?.();
+    invokeCritiqueTelemetryHook(command, payload, {
+      onPayloadDelivered: () => {
+        clearTimeout(timer);
+        settle();
+      },
+    }).catch(() => undefined);
+  });
+}
+
+/**
  * `--invoke`: the fire-and-forget entry point. Reads the caller-built JSON
  * payload from stdin, invokes the resolved hook if usable, and always
  * exits `0` with no output -- a caller can shell out to
  * `... | node scripts/idd-critique-telemetry-hook.mjs --invoke` and never
  * have to check this process's result or wait on it.
  *
- * Two failure modes this must absorb that the default (non-`--invoke`)
- * mode deliberately does *not* (#2685 review, Codex):
+ * Failure modes this must absorb that the default (non-`--invoke`) mode
+ * deliberately does *not* (#2685 review, Codex + CodeRabbit):
  * - **Resolution itself can throw** (e.g. an explicit `--policy` path that
  *   is missing or malformed JSON -- `loadPolicyConfig` throws for an
  *   explicit path by design). In the default mode that throw is the
@@ -533,12 +640,13 @@ function runCli(): void {
  *   runs inside its own try/catch here, never at module-level `runCli`
  *   scope.
  * - **This process must not itself wait for the hook to settle.** Once
- *   `invokeCritiqueTelemetryHook` has synchronously spawned the (detached,
- *   `unref`'d) child and issued the stdin write, this function exits
- *   without awaiting that promise's resolution -- otherwise this CLI
- *   process (and thus whatever shelled out to it) blocks for up to the
- *   hook's own `timeoutMs`, contradicting the documented "never delays"
- *   contract.
+ *   `invokeCritiqueTelemetryHook` has synchronously spawned the (detached)
+ *   child and issued the stdin write, this function does not wait for that
+ *   promise's resolution -- otherwise this CLI process (and thus whatever
+ *   shelled out to it) blocks for up to the hook's own `timeoutMs`,
+ *   contradicting the documented "never delays" contract. It does wait,
+ *   briefly, for {@link invokeAndWaitForDelivery}'s much smaller
+ *   "payload reached the child" signal -- see that function's doc comment.
  */
 function runInvoke(args: ParsedArgs): void {
   let report: CritiqueTelemetryHookReport;
@@ -566,15 +674,12 @@ function runInvoke(args: ParsedArgs): void {
         payload !== null &&
         typeof payload === 'object'
       ) {
-        // Deliberately not returned/awaited -- see this function's doc
-        // comment. The `.catch` below is defensive only:
-        // invokeCritiqueTelemetryHook's own contract already never
-        // rejects.
-        invokeCritiqueTelemetryHook(
+        return invokeAndWaitForDelivery(
           report.command,
           payload as CritiqueTelemetryHookPayload,
-        ).catch(() => undefined);
+        );
       }
+      return undefined;
     })
     .catch(() => undefined)
     .finally(() => process.exit(0));

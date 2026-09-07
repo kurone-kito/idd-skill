@@ -719,6 +719,70 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
   }
 });
 
+test('CLI --invoke waits for a large payload to fully reach the hook before exiting (#2685 review, CodeRabbit)', async () => {
+  // Regression fixture: `runInvoke` used to fire `invokeCritiqueTelemetryHook`
+  // and call `process.exit(0)` right after, without waiting for the stdin
+  // write to the hook's pipe to actually finish -- fine for a small
+  // payload that completes in a single synchronous write, but a payload
+  // well over the OS pipe buffer (64KB on Linux) cannot land in one write
+  // and needs the child to keep draining it across several event-loop
+  // ticks; exiting mid-write would truncate what the hook receives.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-large-payload-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-capture-stdin',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  try {
+    const policyPath = join(sandbox, 'config.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        critiqueLoop: {
+          telemetryHook: { command: 'idd-telemetry-hook-capture-stdin' },
+        },
+      }),
+    );
+    const bigPayload = { ...samplePayload(), padding: 'x'.repeat(500_000) };
+    const expected = JSON.stringify(bigPayload);
+    const startedAt = Date.now();
+    const { stdout } = runCli(
+      ['--policy', policyPath, '--invoke'],
+      undefined,
+      expected,
+    );
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(stdout, '');
+    // Generous vs. PAYLOAD_DELIVERY_TIMEOUT_MS's 1s bound -- proves the CLI
+    // still returns promptly rather than waiting for the hook process
+    // itself (which, unlike the hanging-hook test above, actually does
+    // exit quickly here, but this test is about the write completing, not
+    // about the hook's own runtime).
+    assert.ok(
+      elapsedMs < 5_000,
+      `expected --invoke to return promptly even for a large payload, took ${elapsedMs}ms`,
+    );
+
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      expected,
+      'expected the hook to receive the full, untruncated payload',
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('CLI --invoke absorbs a resolution failure (malformed --policy file) instead of exiting non-zero (#2685 review, Codex)', () => {
   // loadPolicyConfig throws for an explicit --policy path that is missing
   // or malformed JSON -- deliberately, for the default (non-invoke) mode,
