@@ -753,21 +753,12 @@ Running this variant safely requires:
   `node scripts/clone-lock.mjs --check` (or the profile-selected
   `idd:clone-lock` command with `--check`, per that same section, for
   the literal per-profile invocation) and, if it reports the lock
-  present, follow the existing manual-recovery procedure. With a
-  parseable holder: confirm the whole lock-owning operation -- the
-  recorded wrapper and any git process it spawned -- is actually gone,
-  not merely that the recorded pid has exited (a dead wrapper can still
-  leave a live git child that still needs the lock -- observed
-  2026-09-01, kurone-kito/idd-skill#2223, kurone-kito/idd-skill#2389).
-  With `malformed: true` (a truncated or otherwise unparseable lock
-  file carries no holder to check at all -- preventive; no observed
-  incident yet): independently confirm no clone-scoped git operation is
-  still running against this repository instead. Either way, only then
-  remove the
-  lock file by hand and retry -- the same approach git's own
-  `index.lock` takes on a stale-lock collision -- before delegating a
-  fresh subagent with a resume-specific briefing rather than resuming
-  the dead worker's own
+  present, follow that same section's manual-recovery procedure in
+  full -- by design this lock never auto-recovers a stale holder
+  (observed 2026-09-01, kurone-kito/idd-skill#2223,
+  kurone-kito/idd-skill#2389) -- before delegating a fresh subagent
+  with a resume-specific briefing rather than resuming the dead
+  worker's own
   context.
 - **Independently verify a worker's reported terminal outcome before
   trusting it.** A worker's final-turn text describes what it
