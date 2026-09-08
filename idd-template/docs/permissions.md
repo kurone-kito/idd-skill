@@ -512,10 +512,9 @@ allow/deny split, softened as described below.
   that deny, consistent with also allowing `gh pr merge` under this
   repository's recorded `fully_autonomous_merge` policy. A different
   helper script under this same allowlisted surface carries its own
-  residual: `idd-onboard`'s `--allow-root <dir>` flag
-  (`src/scripts/idd-onboard.mts`) accepts any existing directory and
-  adds it to the path-confinement boundary list verbatim, with no
-  upper bound. A filesystem root removes the confinement fix #2216
+  residual: `idd-onboard`'s `--allow-root <dir>` flag accepts any
+  existing directory and adds it to the path-confinement boundary list
+  verbatim, with no upper bound. A filesystem root removes the confinement fix #2216
   shipped entirely; a narrower but still broad value (e.g. a home
   directory) substantially widens it instead -- either way defeating
   the exact unattended/agent-dispatch threat model that fix's own doc
