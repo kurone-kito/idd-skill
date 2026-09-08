@@ -123,6 +123,18 @@ export function buildIddConfigContentsArgs(owner, repo, ref) {
  * {@link ghText}) so a caller like `collectPreMergeReadiness` can pass a
  * fake in tests without spawning a `gh` process, mirroring
  * `idd-merge-execute.mts`'s `resolveRemoteSoloCodeownerAdminFallbackMode`.
+ *
+ * **Verified 2026-09-08 (#2716)**: GitHub's Contents API does NOT mask a
+ * permission denial as a 404 for this endpoint. A disposable private repo
+ * (`kurone-kito/idd-skill-issue-2716-contents-api-probe`, intentionally
+ * retained) ran a GitHub Actions workflow declaring `permissions: {
+ * contents: none }` at the job level and read an existing file at a valid
+ * ref via the workflow's own ephemeral `GITHUB_TOKEN`. Observed response:
+ * `403` with `{"message": "Resource not accessible by integration"}` --
+ * a genuine, unambiguous permission denial, distinguishable from a real
+ * 404. `deriveGhHttpStatus(error) === 404` above correctly fails closed
+ * (throws) for this case rather than misclassifying it as absence. See
+ * `docs/idd-helper-scripts.md` for the full test methodology.
  */
 export function loadTrustedIddConfig(
   owner,
