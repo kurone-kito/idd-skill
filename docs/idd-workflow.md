@@ -758,11 +758,14 @@ Running this variant safely requires:
   claim ownership and worktree state before continuing; treat any
   uncommitted work found in the worktree as unverified input to check,
   never as something to trust or silently discard. Also check for a
-  stale clone-scoped lock before redelegating: run
+  stale clone-scoped lock before redelegating -- skip this check under
+  `instructions-only` running one worker at a time, which never
+  contends for the lock; see
+  [Clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) for that
+  profile's own multi-worker-one-clone caveat: run
   `node scripts/clone-lock.mjs --check` (or the profile-selected
-  `idd:clone-lock` command with `--check` -- see
-  [Clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) for the
-  literal per-profile invocation) and, if it reports a held lock, follow
+  `idd:clone-lock` command with `--check`, per that same section, for
+  the literal per-profile invocation) and, if it reports a held lock, follow
   the existing manual-recovery procedure: confirm the whole lock-owning
   operation -- the recorded wrapper and any git process it spawned -- is
   actually gone, not merely that the recorded pid has exited (a dead
