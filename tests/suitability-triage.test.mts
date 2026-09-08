@@ -3998,6 +3998,68 @@ test('verifiability still passes an ordinary either/or offering two already-reso
   assert.equal(result.pass, true);
 });
 
+test('verifiability rejects an escape hatch that names the tradeoff without the word "why" (#2709, Codex review PR #2725)', () => {
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either implement retries, or document the tradeoff.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability rejects an escape hatch even when it merely NAMES a concrete artifact while declining to provide it (#2709, Codex review PR #2725)', () => {
+  // "document why tests are not needed" only NAMES tests while explicitly
+  // declining to provide them -- must not be credited as a real
+  // requirement just because the word "tests" appears.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add tests, or document why tests are not needed.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability catches an escape-hatch documentation branch on the LEFT side of the either/or (#2709, Copilot review PR #2725)', () => {
+  // Order must not matter: "Either document why…, or fix…" puts the
+  // documentation branch first.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either document why validation is not needed, or add input validation to \`parseConfig\`.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not flag an escape-hatch-shaped sentence outside the Acceptance Criteria section (#2709, Codex review PR #2725)', () => {
+  // Scoped to the AC section only: ordinary Background prose using the same
+  // "either... or... explain why" shape must not trip Check 7 when the
+  // actual AC bullets are fully objective.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Background
+We either retain the existing behavior or explain why it differs from the docs.
+
+## Acceptance Criteria
+- tests pass
+- lint passes
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {

@@ -666,21 +666,39 @@ const EITHER_OR_PATTERN = new RegExp(
 );
 // #2709: the documentation-branch alternative of an either/or
 // acceptance-criteria escape hatch, e.g. "either fix X, or document why
-// not" -- a verb naming disclosure/write-up followed (within a bounded
-// window, tolerating short connecting prose) by "why". Deliberately
-// matches the verb stem loosely enough to cover "documenting"/"explaining"
-// gerund forms, since a plain `\bdocument\b` word boundary would miss
-// those. Used by checkVerifiability, not checkAutonomy.
+// not" / "or document the tradeoff" -- a verb naming disclosure/write-up
+// followed (within a bounded window, tolerating short connecting prose) by
+// "why" or one of the vague-disclosure-topic nouns this pattern is meant to
+// catch even without the literal word "why" (Codex review, PR #2725).
+// Deliberately matches the verb stem loosely enough to cover
+// "documenting"/"explaining" gerund forms, since a plain `\bdocument\b`
+// word boundary would miss those. Used by checkVerifiability, not
+// checkAutonomy.
 const ESCAPE_HATCH_DOCUMENT_PATTERN =
-  /\b(?:document|explain|write[- ]up|note|record|describe)\w*\b[\s\S]{0,40}\bwhy\b/i;
+  /\b(?:document|explain|write[- ]up|note|record|describe)\w*\b[\s\S]{0,40}\b(?:why|trade-?offs?|gaps?|limitations?|rationale|reasons?)\b/i;
 // #2709: a concrete, checkable artifact reference -- reusing the same
 // keyword family checkVerifiability's own hasVerificationChannel already
 // treats as an objective verification signal, scoped here to just the
 // escape-hatch branch's own text (not the whole issue body) so a checkable
 // artifact named elsewhere cannot be borrowed to pass a branch that itself
-// names nothing checkable.
+// names nothing checkable. A match is additionally required to be
+// un-negated (via isNegatedNearby) at the call site: "or document why tests
+// are not needed" merely NAMES tests while declining to provide them, which
+// must not count as the branch specifying a real requirement (Codex review,
+// PR #2725).
 const CONCRETE_ARTIFACT_PATTERN =
-  /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b|\bartifact\b/i;
+  /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b|\bartifact\b/gi;
+// #2709: a deliberately TIGHT negation window for the artifact-negation
+// check above (narrower than the general NEGATION_WINDOW_CHARS below,
+// which several checkAutonomy phrase families share). The escape-hatch
+// phrase itself commonly contains "why not" ("document why not…") --
+// reusing the wider window would let that "not" wrongly negate an
+// unrelated concrete artifact named later in the same branch (e.g.
+// "...document why not in a new ADR file and add a lint rule..."). 20
+// chars comfortably covers a genuine short-distance collocation like
+// "tests are not needed" while excluding "why not"'s typically
+// longer-distance false trigger.
+const ARTIFACT_NEGATION_WINDOW_CHARS = 20;
 // Window checkAutonomy's negation checks scan on either side of a match --
 // shared by the coordination-language, unresolved-choice, and either/or
 // marker checks via isNegatedNearby below.
@@ -2593,30 +2611,85 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // either/or + UNRESOLVED_CHOICE_PATTERN pairing (#2219): an escape-hatch
   // branch reads as fully "resolved" prose on both sides, so it carries
   // none of that check's unresolved-choice phrases and never trips it.
-  for (const match of normalizedBody.matchAll(EITHER_OR_PATTERN)) {
-    const matchText = match[0] ?? '';
-    const matchIndex = match.index ?? 0;
-    // Scope the "names nothing checkable" test to the branch's own text --
-    // from the either/or match to the end of its line (AC bullets are
-    // typically single Markdown list lines) -- not the whole body, so a
-    // checkable artifact named in the OTHER branch or a sibling bullet
-    // cannot be borrowed to pass an escape-hatch branch that itself names
-    // nothing checkable.
-    const branchStart = matchIndex + matchText.length;
-    const lineEnd = normalizedBody.indexOf('\n', branchStart);
-    const branchText = normalizedBody.slice(
-      branchStart,
-      lineEnd === -1 ? normalizedBody.length : lineEnd,
-    );
-    if (
-      ESCAPE_HATCH_DOCUMENT_PATTERN.test(branchText) &&
-      !CONCRETE_ARTIFACT_PATTERN.test(branchText)
-    ) {
-      return {
-        pass: false,
-        evidence:
-          'Issue offers an either/or acceptance-criteria escape hatch whose documentation-branch alternative names no concrete, checkable content.',
-      };
+  //
+  // Scoped to the Acceptance Criteria section only, not the whole body
+  // (Codex review, PR #2725): ordinary explanatory prose elsewhere in the
+  // issue (e.g. a Background sentence phrased as "either... or... explain
+  // why") must not trip Check 7 when the actual AC bullets are fully
+  // objective.
+  const isEscapeHatchBranch = (
+    branchText: string,
+    branchStart: number,
+  ): boolean => {
+    if (!ESCAPE_HATCH_DOCUMENT_PATTERN.test(branchText)) {
+      return false;
+    }
+    const artifactPattern = new RegExp(CONCRETE_ARTIFACT_PATTERN.source, 'gi');
+    for (const artifactMatch of branchText.matchAll(artifactPattern)) {
+      const artifactText = artifactMatch[0] ?? '';
+      const artifactIndex = branchStart + (artifactMatch.index ?? 0);
+      // A NEGATED artifact mention ("document why tests are NOT needed")
+      // merely names the artifact while declining to provide it -- it must
+      // not count as the branch specifying a real requirement (Codex
+      // review, PR #2725).
+      if (
+        !isNegatedNearby(
+          normalizedBody,
+          artifactText,
+          artifactIndex,
+          ARTIFACT_NEGATION_WINDOW_CHARS,
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const acSectionMatch = normalizedBody.match(ACCEPTANCE_CRITERIA_PATTERN);
+  if (acSectionMatch) {
+    const acSectionStart =
+      (acSectionMatch.index ?? 0) + (acSectionMatch[0]?.length ?? 0);
+    const restOfBody = normalizedBody.slice(acSectionStart);
+    const nextHeadingIdx = restOfBody.search(NEXT_HEADING_PATTERN);
+    const acSectionEnd =
+      acSectionStart +
+      (nextHeadingIdx === -1 ? restOfBody.length : nextHeadingIdx);
+    const acSectionText = normalizedBody.slice(acSectionStart, acSectionEnd);
+
+    for (const match of acSectionText.matchAll(EITHER_OR_PATTERN)) {
+      const matchText = match[0] ?? '';
+      const matchStart = acSectionStart + (match.index ?? 0);
+
+      // Right branch: from the end of the either/or match to the end of
+      // its line -- AC bullets are typically single Markdown list lines.
+      const rightBranchStart = matchStart + matchText.length;
+      const rightLineEnd = normalizedBody.indexOf('\n', rightBranchStart);
+      const rightBranchText = normalizedBody.slice(
+        rightBranchStart,
+        rightLineEnd === -1 ? normalizedBody.length : rightLineEnd,
+      );
+
+      // Left branch: the content between "either" and "or" WITHIN the
+      // match itself -- "Either document why…, or fix…" puts the
+      // documentation branch first, and the escape hatch must be caught
+      // regardless of which side it's on (Copilot review, PR #2725).
+      const leftBranchStart = matchStart + 'either'.length;
+      const leftBranchText = matchText.slice(
+        'either'.length,
+        matchText.length - 'or'.length,
+      );
+
+      if (
+        isEscapeHatchBranch(rightBranchText, rightBranchStart) ||
+        isEscapeHatchBranch(leftBranchText, leftBranchStart)
+      ) {
+        return {
+          pass: false,
+          evidence:
+            'Issue offers an either/or acceptance-criteria escape hatch whose documentation-branch alternative names no concrete, checkable content.',
+        };
+      }
     }
   }
 
