@@ -4227,6 +4227,219 @@ test('verifiability does not pair "either" in one bullet with an unrelated "or" 
   assert.equal(result.pass, true);
 });
 
+test('verifiability does not treat a placeholder domain or an email address as a bare filename (#2711 gap 1)', () => {
+  // BARE_DOTTED_FILENAME_PATTERN's own dictionary-word-shaped match also
+  // fires on a placeholder domain mentioned in ordinary prose -- neither
+  // "example.com" (the RFC 2606 reserved placeholder domain) nor
+  // "owner@example.com" (an email address, whose domain part alone also
+  // matches the pattern) names a real file.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] Update the contact listed as example.com
+- [ ] Notify owner@example.com when done
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test("verifiability does not let an unrelated later section's checklist flip a placeholder Acceptance Criteria section (#2711 gap 2)", () => {
+  // The whole-body numbered-steps/checklist fallback previously had no
+  // section-boundary awareness: this repo's own "## Candidate files"
+  // bullet-list convention (itself a checklist, unrelated to the AC
+  // section) combined with an outcome-signal word anywhere else in the
+  // body wrongly flipped a genuinely placeholder AC section to "has
+  // objective criteria."
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+TBD
+
+## Candidate files
+- [ ] src/scripts/foo.mts
+
+This change should pass on merge.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let a hidden HTML comment leak substance into the Acceptance Criteria scan (#2711 gap 3)', () => {
+  // A concrete-looking code span and outcome-signal keyword hidden inside
+  // an HTML comment on the same line as a placeholder bullet is invisible
+  // in the rendered issue and must not count as real content.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO <!-- ${tick}scripts/real.mjs${tick} outputs the result -->
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let an unmatched fenced-example "<!--" swallow a later genuine decision (#2711 gap 4)', () => {
+  // findHtmlCommentRanges previously scanned for a literal "<!--" with no
+  // awareness of fenced code: an issue documenting the HTML-comment marker
+  // syntax inside a fenced example, with no closing "-->" anywhere in the
+  // body, masked from that position all the way to EOF, swallowing a
+  // genuine "Maintainer decision (...)" that followed the fence.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off before merging.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+Example marker syntax:
+\`\`\`
+<!-- unterminated example
+\`\`\`
+
+Maintainer decision (Groom hearing, 2026-09-05): proceed as described above.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability recognizes a parenthesized ordered-list marker as a real checklist line (#2711 gap 5)', () => {
+  // LIST_ITEM_LINE_PATTERN previously recognized only "1." numbering, not
+  // the equally valid CommonMark "1)" form -- a substantive bullet written
+  // that way was silently dropped from the AC-section list-item scan,
+  // leaving only the placeholder line and wrongly failing the check. The
+  // placeholder line deliberately avoids checkbox ("- [ ]") syntax so this
+  // fixture isolates LIST_ITEM_LINE_PATTERN's own gap from the unscoped
+  // whole-body checklist fallback (#2711 gap 2, fixed separately) that a
+  // checkbox-shaped placeholder line would otherwise also satisfy.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- TODO
+1) ${tick}scripts/real-thing.mjs${tick} passes
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability does not let a keyword-free indented-code example leak into the Acceptance Criteria scan (#2711 gap 6)', () => {
+  // No indented (4-space) code masking existed before the AC-substance
+  // scan -- a fenced-only mask left an indented Markdown example (here,
+  // one demonstrating the checklist syntax itself) fully visible, so its
+  // own concrete-looking code span was read as a real, substantive bullet.
+  // Two blank lines fully exit the preceding "- [ ] TODO" bullet's own
+  // list-content zone (one blank line alone keeps a list zone active,
+  // which raises the indented-code threshold above 4 columns and would
+  // read this same line as a nested list item instead of a code example).
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO
+
+
+    - [ ] ${tick}scripts/real.mjs${tick} passes
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability bounds the Acceptance Criteria section at a Setext-style sibling heading (#2711 gap 7)', () => {
+  // NEXT_HEADING_PATTERN previously recognized only ATX ("#") headings --
+  // a Setext-style sibling heading (a text line underlined with "---")
+  // reproduced the same section-boundary leak as an unbounded scan: a
+  // trailing "## Candidate files"-shaped section's own bullet leaked into
+  // a genuinely placeholder AC section.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO
+
+Candidate files
+---
+- [ ] ${tick}scripts/real.mjs${tick}
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability treats a struck-through inline decision as not resolved (#2711 gap 8)', () => {
+  // A GFM strikethrough span ("~~...~~") marks its content as retracted or
+  // superseded -- a struck-through "Maintainer decision (...)" must not
+  // count as this issue's own current live resolution.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+~~Maintainer decision (Groom hearing, 2026-09-05): proceed as described above.~~ Superseded, see the follow-up discussion for the current plan.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test("verifiability recognizes an inverted-attribution quotation of another issue's decision (#2711 gap 9)", () => {
+  // A reporting verb can follow the quoted marker instead of preceding it
+  // -- "'Maintainer decision (...): choose A,' reports the linked
+  // discussion" -- which the backward-only framing-verb scan never saw,
+  // wrongly treating an externally-reported quotation as this issue's own
+  // resolution.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+Issue #4321 'Maintainer decision (Groom hearing, 2026-09-05): choose option A,' reports the linked discussion.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let an earlier sentence ending in a closing quote widen the framing-verb scan (#2711 gap 10)', () => {
+  // The literal ". "/"! "/"? " sentence-boundary scan found no boundary at
+  // a sentence ending in a closing quote before the space (`out." `) and
+  // fell back to scanning from the paragraph start, wrongly pulling an
+  // earlier, unrelated sentence's own framing verb ("states") into the
+  // window and suppressing this issue's own genuine, later, unrelated
+  // resolution.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+The doc states "figure it out." Maintainer decision (Groom hearing, 2026-09-05): choose option A.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {

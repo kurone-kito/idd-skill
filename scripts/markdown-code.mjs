@@ -1066,7 +1066,16 @@ export function findFencedCodeRanges(text) {
   }
   return ranges;
 }
-function findIndentedCodeRanges(text, fencedRanges) {
+/**
+ * Blank-line-tolerant ranges of 4-space (or list-content-indent-relative)
+ * indented code blocks, excluding any line already covered by a fenced
+ * range. `fencedRanges` must be in ascending `start` order (as returned by
+ * {@link findFencedCodeRanges}). Exported (#2711) so a caller that needs
+ * fenced + indented masking WITHOUT inline code spans -- {@link
+ * findMarkdownCodeRanges} always includes inline spans too -- can compose
+ * this with {@link findFencedCodeRanges} directly.
+ */
+export function findIndentedCodeRanges(text, fencedRanges) {
   const ranges = [];
   let rangeStart = null;
   let rangeEnd = 0;
