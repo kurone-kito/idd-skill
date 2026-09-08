@@ -40,6 +40,9 @@ pnpm run lint
 pnpm run test
 ```
 
+Node.js 25+ no longer bundles corepack; if `corepack enable` fails,
+install it first with `npm install -g corepack`.
+
 The pre-commit hook runs a fast, commit-safe subset
 (`pnpm run lint:precommit`: Biome, dprint, and markdownlint); the full
 `pnpm run lint:minimum` suite runs in CI. The commit message hook

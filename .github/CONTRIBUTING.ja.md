@@ -42,6 +42,9 @@ pnpm run lint
 pnpm run test
 ```
 
+Node.js 25 以降は corepack を同梱しません。`corepack enable` が
+失敗する場合は、先に `npm install -g corepack` でインストールしてください。
+
 pre-commit hook は高速・コミット安全なサブセット
 (`pnpm run lint:precommit`: Biome・dprint・markdownlint)を実行し、
 完全な `pnpm run lint:minimum` スイートは CI で実行されます。

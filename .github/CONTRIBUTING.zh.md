@@ -32,6 +32,9 @@ pnpm run lint
 pnpm run test
 ```
 
+Node.js 25 及以上版本不再内置 corepack。如果 `corepack enable`
+失败,请先运行 `npm install -g corepack` 进行安装。
+
 pre-commit 钩子运行快速且提交安全的子集
 (`pnpm run lint:precommit`: Biome、dprint 和 markdownlint);完整的
 `pnpm run lint:minimum` 套件在 CI 中运行。commit-msg 钩子通过
