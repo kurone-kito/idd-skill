@@ -518,6 +518,36 @@ test('policy schema rejects an unknown worktreeGuard subkey', () => {
   );
 });
 
+test('policy schema accepts the upstreamEscalation opt-in object', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.upstreamEscalation = { enabled: true };
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test('policy schema treats missing upstreamEscalation as disabled by default', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  delete instance.upstreamEscalation;
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test('policy schema rejects an unknown upstreamEscalation subkey', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.upstreamEscalation = { enabled: true, bogus: 1 };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected an unknown upstreamEscalation subkey to be rejected',
+  );
+});
+
 test('policy schema accepts the mergeGate.soloCodeownerAdminFallback opt-in object (#1521)', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

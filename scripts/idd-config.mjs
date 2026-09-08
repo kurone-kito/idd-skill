@@ -55,6 +55,20 @@ export function loadIddConfig() {
     return null;
   }
 }
+/**
+ * Resolve the opt-in `upstreamEscalation.enabled` toggle from an
+ * already-loaded config object -- e.g. {@link loadIddConfig}'s return
+ * value directly, or {@link loadPolicyConfig}'s `.config` field (typed
+ * `unknown`). Accepts `unknown` rather than `IddConfig` so a caller
+ * with the latter, untyped shape never needs an unsafe cast just to
+ * read this one field. Absent, `null`, or any non-`true` value
+ * resolves to `false` -- the same absent/false-is-disabled shape
+ * `worktreeGuard.enabled` uses at its own read site
+ * (`idd-doctor.mts`'s `readWorktreeGuardEnabled`).
+ */
+export function isUpstreamEscalationEnabled(config) {
+  return config?.upstreamEscalation?.enabled === true;
+}
 /** Default `.github/idd/config.json` path, relative to the process cwd. */
 export const DEFAULT_POLICY_CONFIG_PATH = '.github/idd/config.json';
 /**

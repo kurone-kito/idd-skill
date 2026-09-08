@@ -258,6 +258,7 @@ interface PolicyConfigFile {
   };
   autopilotSuitability?: { floor?: 1 | 2 | 3 | 4 | 5; enabled?: boolean };
   worktreeGuard?: { enabled?: boolean; branchPatterns?: readonly string[] };
+  upstreamEscalation?: { enabled?: boolean };
   labels?: {
     roadmapLabelName?: string;
     blockedByHumanLabelName?: string;
@@ -566,6 +567,7 @@ export const policyConfigKeys = [
   'issueAuthoring',
   'autopilotSuitability',
   'worktreeGuard',
+  'upstreamEscalation',
   'labels',
   'mergeGate',
   'providerOutage',
@@ -1227,6 +1229,7 @@ const policyConfigFixture = {
     enabled: true,
     branchPatterns: ['issue/*', 'roadmap-audit/*'],
   },
+  upstreamEscalation: { enabled: true },
   labels: {
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
