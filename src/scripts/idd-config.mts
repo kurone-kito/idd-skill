@@ -78,11 +78,11 @@ export function loadIddConfig(): IddConfig | null {
 
 /**
  * Resolve the opt-in `upstreamEscalation.enabled` toggle from an
- * already-loaded config object (e.g. from {@link loadIddConfig} or
- * {@link loadPolicyConfig}). Absent, `null`, or any non-`true` value
- * resolves to `false` -- the same absent/false-is-disabled shape
- * `worktreeGuard.enabled` uses at its own read site
- * (`idd-doctor.mts`'s `readWorktreeGuardEnabled`).
+ * already-loaded config object -- e.g. {@link loadIddConfig}'s return
+ * value directly, or {@link loadPolicyConfig}'s `.config` field.
+ * Absent, `null`, or any non-`true` value resolves to `false` -- the
+ * same absent/false-is-disabled shape `worktreeGuard.enabled` uses at
+ * its own read site (`idd-doctor.mts`'s `readWorktreeGuardEnabled`).
  */
 export function isUpstreamEscalationEnabled(
   config: IddConfig | null | undefined,

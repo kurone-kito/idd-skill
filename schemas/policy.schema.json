@@ -759,7 +759,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Opt-in toggle for flagging a high-confidence idd-skill upstream defect discovered in an adopter repository as a local `status:upstream-candidate` issue (default false; absent means false). Absent or false reproduces today's behavior exactly: no new marker, label, or local issue is ever produced. Never applies to the `kurone-kito/idd-skill` source repository itself, where the triggering condition cannot occur."
+          "description": "Opt-in toggle for flagging a high-confidence idd-skill upstream defect discovered in an adopter repository as a local `status:upstream-candidate` issue (default false; absent means false). Schema-supported field only; no distributed phase file reads this yet, so setting it to true currently has no effect. Absent or false reproduces today's behavior exactly: no new marker, label, or local issue is ever produced. Never applies to the `kurone-kito/idd-skill` source repository itself, where the triggering condition cannot occur."
         }
       },
       "description": "Container for the opt-in upstream-defect-escalation toggle. Optional; omitting it keeps the feature disabled."
