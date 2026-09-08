@@ -2720,12 +2720,19 @@ test('D4 pending:true recovery ties each advisory-wait outcome to its actual act
   // merely that the outcome name appears somewhere in the bullet (a bare
   // name-presence check would still pass if a future edit moved an outcome
   // into the wrong clause).
+  //
+  // SATISFIED itself splits further (idd-skill#2712): a genuine
+  // `lastCopilotCommit` match reruns and resumes D4 same as WAIT, but an
+  // elapsed-window SATISFIED (AW3's timeout rows, `lastCopilotCommit` still
+  // not matching HEAD) must exit to E1 like CAP_EXHAUSTED/RECOVERY_NEEDED,
+  // or D4 would rerun a check that can never turn green from that rerun
+  // alone and loop forever.
   const path =
     'idd-template/.github/instructions/idd-pr-submit.instructions.md';
   const bullet = extractBoundedRegion(
     readText(path),
     'reports `pending: true`**',
-    'the pending-disposition case above takes.',
+    'the elapsed-window `SATISFIED` case take.',
     path,
   );
   assert.match(bullet, /advisory-wait-state/);
@@ -2739,20 +2746,32 @@ test('D4 pending:true recovery ties each advisory-wait outcome to its actual act
   );
   assert.match(requestNow, /only `REQUEST_NEEDED`/);
 
-  const requestNothingWaitAndRerun = extractBoundedRegion(
+  const waitAndRerun = extractBoundedRegion(
     bullet,
     'request a review now.',
-    'resume D4.',
+    'and resume D4.',
     path,
   );
-  assert.match(requestNothingWaitAndRerun, /`SATISFIED`/);
-  assert.match(requestNothingWaitAndRerun, /`WAIT`/);
-  assert.match(requestNothingWaitAndRerun, /request nothing/);
+  assert.match(waitAndRerun, /`WAIT`/);
+  assert.match(waitAndRerun, /request nothing/);
+
+  const satisfiedSplit = extractBoundedRegion(
+    bullet,
+    'and resume D4.',
+    'below instead.',
+    path,
+  );
+  assert.match(satisfiedSplit, /`SATISFIED`/);
+  assert.match(satisfiedSplit, /matches this HEAD SHA/);
+  assert.match(satisfiedSplit, /rerun-and-resume-D4/);
+  assert.match(satisfiedSplit, /does \*\*not\*\* match this HEAD SHA/);
+  assert.match(satisfiedSplit, /elapsed window/);
+  assert.match(satisfiedSplit, /pending: true.*for this HEAD/);
 
   const exitToE1 = extractBoundedRegion(
     readText(path),
-    'resume D4.',
-    'the pending-disposition case above takes.',
+    'below instead.',
+    'the elapsed-window `SATISFIED` case take.',
     path,
   );
   assert.match(exitToE1, /`CAP_EXHAUSTED`/);
