@@ -338,6 +338,57 @@ export function collectContextCeilingViolations(config, bundles) {
   }
   return { errors, notices };
 }
+/**
+ * Collect "near-ceiling ratchet" violations (#2697): `docs/policy-constants.md`'s
+ * near-ceiling exception says raising a `bundleBudgets` bundle's `limitBytes`
+ * while that bundle was already near its ceiling should be avoided in favor
+ * of trimming or splitting the addition instead -- this mechanically
+ * enforces the exception, which was prose-only before this check existed.
+ *
+ * Pure (no I/O): the audit pipeline supplies the current bundle stats
+ * (`checkBundleBudgets`'s own summation, reused rather than re-measured
+ * here) and the equivalent stats measured from the base ref's manifest and
+ * file contents. `noticeUtilizationPct` reuses the same near-ceiling
+ * threshold {@link collectContextCeilingViolations} already surfaces as a
+ * notice, so the two checks agree on what "near-ceiling" means.
+ *
+ * No violation (silently skipped) when: the bundle is absent from
+ * `baseBundles` (a brand-new bundle has nothing to compare against); the
+ * bundle's `limitBytes` did not increase relative to the base ref (unchanged
+ * or decreased); or the base ref's own `limitBytes` is zero or negative
+ * (nothing meaningful to ratchet a utilization percentage from). Threshold
+ * comparison is cross-multiplied in byte space
+ * (`totalBytes * 100` vs. `limitBytes * pct`), matching
+ * {@link collectContextCeilingViolations}'s own convention so a bundle
+ * sitting exactly at the threshold does not tip over from float rounding;
+ * inclusive `>=`, matching that function's own notice-threshold comparison
+ * ("reaches ... or more").
+ */
+export function collectNearCeilingRatchetViolations(
+  noticeUtilizationPct,
+  currentBundles,
+  baseBundles,
+) {
+  const baseById = new Map(baseBundles.map((bundle) => [bundle.id, bundle]));
+  const errors = [];
+  for (const current of currentBundles) {
+    const base = baseById.get(current.id);
+    if (
+      !base ||
+      current.limitBytes <= base.limitBytes ||
+      base.limitBytes <= 0
+    ) {
+      continue;
+    }
+    if (base.totalBytes * 100 >= base.limitBytes * noticeUtilizationPct) {
+      const baseUtilizationPct = (base.totalBytes / base.limitBytes) * 100;
+      errors.push(
+        `near-ceiling-ratchet: ${current.id} limitBytes raised from ${base.limitBytes} to ${current.limitBytes} while already at ${baseUtilizationPct.toFixed(2)}% utilization at the base ref (${base.totalBytes}/${base.limitBytes} bytes) -- docs/policy-constants.md's near-ceiling exception prefers trimming or splitting the addition over raising here`,
+      );
+    }
+  }
+  return errors;
+}
 // Words after which a `/` must start a regex literal, not division.
 const REGEX_PRECEDING_KEYWORDS = new Set([
   'return',

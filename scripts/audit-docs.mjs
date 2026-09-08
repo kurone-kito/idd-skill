@@ -16,6 +16,7 @@ import {
   collectEnginesRangeMirrorViolations,
   collectGeneratedFromBannerViolations,
   collectInstructionSizeBudgetViolations,
+  collectNearCeilingRatchetViolations,
   collectOkfFrontmatterViolations,
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
@@ -80,10 +81,11 @@ checkShellFileLists(
 checkSyncPairs(manifest.syncPairs ?? []);
 checkGeneratedFromBanners(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets);
-checkContextCeiling(
-  manifest.contextCeiling ?? null,
-  checkBundleBudgets(manifest.bundleBudgets ?? []),
-);
+{
+  const bundleStats = checkBundleBudgets(manifest.bundleBudgets ?? []);
+  checkContextCeiling(manifest.contextCeiling ?? null, bundleStats);
+  checkNearCeilingRatchet(manifest.contextCeiling ?? null, bundleStats);
+}
 checkDocBudgetNumbers();
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
@@ -909,6 +911,109 @@ function checkContextCeiling(config, bundleStats) {
   const result = collectContextCeilingViolations(config, bundleStats);
   errors.push(...result.errors);
   notices.push(...result.notices);
+}
+// Near-ceiling ratchet guard (#2697): reads the base ref's own
+// `audit/sync-manifest.json` and its bundle member files via `git show`, so
+// the comparison uses the base ref's OWN file list for a bundle (which may
+// differ from the current manifest's) rather than re-reading current files
+// against an old limit. Degrades to a notice, never an error, when a base
+// ref cannot be resolved or read (e.g. a shallow checkout with no `main`
+// history) -- matching `listChangedFiles`'s own graceful-skip precedent for
+// missing git context, since failing the whole audit closed on an
+// unrelated checkout-depth issue would be worse than skipping this one
+// mechanical guard for that run.
+function resolveNearCeilingBaseRef() {
+  const candidates = [];
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (eventPath) {
+    try {
+      const event = JSON.parse(readFileSync(eventPath, 'utf8'));
+      if (event.pull_request?.base?.sha) {
+        candidates.push(event.pull_request.base.sha);
+      }
+    } catch {
+      // Fall through to the next candidate.
+    }
+  }
+  if (process.env.GITHUB_BASE_REF) {
+    candidates.push(`origin/${process.env.GITHUB_BASE_REF}`);
+  }
+  candidates.push('origin/main');
+  for (const ref of candidates) {
+    try {
+      git(['rev-parse', '--verify', `${ref}^{commit}`]);
+      return ref;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+function readTextAtRef(ref, file) {
+  try {
+    return normalizeText(git(['show', `${ref}:${file}`]));
+  } catch {
+    // File did not exist at the base ref (e.g. newly added in this change);
+    // its base-ref byte contribution is 0, not an error.
+    return null;
+  }
+}
+function computeBaseBundleStats(ref, budgets) {
+  const stats = [];
+  for (const budget of budgets) {
+    const id = budget.id ?? 'bundle-budget';
+    const limitBytes = Number(budget.limitBytes);
+    if (!Number.isFinite(limitBytes) || limitBytes < 0) {
+      // Already reported against the current manifest by checkBundleBudgets.
+      continue;
+    }
+    let totalBytes = 0;
+    for (const file of budget.files ?? []) {
+      const text = readTextAtRef(ref, file);
+      if (text !== null) {
+        totalBytes += Buffer.byteLength(stripGeneratedFromBanner(text), 'utf8');
+      }
+    }
+    stats.push({ id, limitBytes, totalBytes });
+  }
+  return stats;
+}
+function checkNearCeilingRatchet(config, currentBundleStats) {
+  if (!config) {
+    return;
+  }
+  const noticeUtilizationPct = Number(config.noticeUtilizationPct);
+  if (!Number.isFinite(noticeUtilizationPct) || noticeUtilizationPct < 0) {
+    // Already reported by checkContextCeiling.
+    return;
+  }
+  const baseRef = resolveNearCeilingBaseRef();
+  if (!baseRef) {
+    notices.push('near-ceiling-ratchet: could not resolve a base ref; skipped');
+    return;
+  }
+  let baseManifest = null;
+  try {
+    baseManifest = JSON.parse(
+      git(['show', `${baseRef}:audit/sync-manifest.json`]),
+    );
+  } catch {
+    notices.push(
+      `near-ceiling-ratchet: could not read audit/sync-manifest.json at ${baseRef}; skipped`,
+    );
+    return;
+  }
+  const baseBundleStats = computeBaseBundleStats(
+    baseRef,
+    baseManifest.bundleBudgets ?? [],
+  );
+  errors.push(
+    ...collectNearCeilingRatchetViolations(
+      noticeUtilizationPct,
+      currentBundleStats,
+      baseBundleStats,
+    ),
+  );
 }
 function checkDocBudgetNumbers() {
   // Cross-check every hardcoded byte value in the guarded docs against the
