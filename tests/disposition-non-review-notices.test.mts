@@ -8,6 +8,7 @@ import {
   buildDispositionPlan,
   buildSummaryDispositionBody,
   type DispositionPlan,
+  isCodexReviewSummaryCompleteForHeadSha,
   type NoticeComment,
   noticeReason,
   parseArgs,
@@ -50,13 +51,23 @@ const CODERABBIT_SKIP_REVIEW =
 // #2695: chatgpt-codex-connector[bot]'s own recurring review-status comment,
 // edited in place on every push -- a status table against the current commit
 // that cycles through "Running" and "Completed" states, analogous to
-// CODERABBIT_SUMMARY above but for Codex.
+// CODERABBIT_SUMMARY above but for Codex. Modeled on the real comment body
+// (kurone-kito/idd-skill#2722) rather than a guessed shape.
 const CODEX_SUMMARY_RUNNING =
-  '<!-- codex-pull-request-review-summary -->\n' +
-  '## Status\n\n| Commit | Status |\n| --- | --- |\n| abc1234 | Running |\n';
+  '<!-- codex-pull-request-review-summary -->\n\n' +
+  '## Codex Review Summary\n\n' +
+  'This comment shows the latest Codex review activity on this pull request.\n\n' +
+  '| Review | Status | Commit | Review trigger |\n' +
+  '| --- | --- | --- | --- |\n' +
+  '| 📝 **Code Review** | 🔄 **Running** | `abc1234` | PR opened |\n';
 const CODEX_SUMMARY_COMPLETED =
-  '<!-- codex-pull-request-review-summary -->\n' +
-  '## Status\n\n| Commit | Status |\n| --- | --- |\n| abc1234 | Completed |\n';
+  '<!-- codex-pull-request-review-summary -->\n\n' +
+  '## Codex Review Summary\n\n' +
+  'This comment shows the latest Codex review activity on this pull request.\n\n' +
+  '| Review | Status | Commit | Review trigger |\n' +
+  '| --- | --- | --- | --- |\n' +
+  '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-05-12T00:00:00Z">' +
+  '2026-05-12T00:00:00Z</relative-time> | `abc1234` | PR opened |\n';
 // A full 40-char head SHA for the cases that validate against the schema, which
 // now constrains `headSha` to `^[0-9a-f]{40}$`.
 const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -670,8 +681,45 @@ test('#2161: a genuine walkthrough (no inner skip-review marker) is still a summ
 });
 
 test('#2695: isReviewSummaryComment recognizes a Codex review-status comment in both "Running" and "Completed" table states', () => {
+  // Marker recognition alone is state-agnostic; the Running/Completed
+  // distinction is enforced separately by isCodexReviewSummaryCompleteForHeadSha
+  // (see the tests below), not by isReviewSummaryComment itself.
   assert.equal(isReviewSummaryComment(CODEX_SUMMARY_RUNNING), true);
   assert.equal(isReviewSummaryComment(CODEX_SUMMARY_COMPLETED), true);
+});
+
+test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is true only for a Completed row matching the current HEAD', () => {
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(CODEX_SUMMARY_COMPLETED, 'abc1234'),
+    true,
+  );
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(CODEX_SUMMARY_RUNNING, 'abc1234'),
+    false,
+  );
+});
+
+test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is false for a Completed row naming a different (stale) commit', () => {
+  // A stale summary left over from a prior HEAD must not be mistaken for
+  // completion at the CURRENT HEAD merely because some row says Completed.
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(CODEX_SUMMARY_COMPLETED, 'def5678'),
+    false,
+  );
+});
+
+test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is false for a body with no parseable status table', () => {
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(
+      'just plain text, no table',
+      'abc1234',
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(CODEX_SUMMARY_COMPLETED, ''),
+    false,
+  );
 });
 
 test('#2695: buildDispositionPlan plans an **Accepted** for an undispositioned Codex review-status comment, same as CodeRabbit', () => {
@@ -693,12 +741,29 @@ test('#2695: buildDispositionPlan plans an **Accepted** for an undispositioned C
   assert.equal(plan.skipped.length, 0);
 });
 
+test('#2695 (Codex review, P1): buildDispositionPlan never auto-accepts a Codex summary while its table still shows the HEAD as Running', () => {
+  // Guards the exact TOCTOU hazard Codex's own review flagged on this fix's
+  // first commit: accepting a still-Running summary would let the gate treat
+  // the review as settled before Codex has posted its real findings.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODEX, CODEX_SUMMARY_RUNNING)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 1, botLogin: CODEX, reason: 'codex-review-running' },
+  ]);
+});
+
 test('#2695: buildDispositionPlan skips a Codex summary already accepted by a strictly-newer disposition (idempotent re-run)', () => {
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
       comments: [
-        notice(1, CODEX, CODEX_SUMMARY_RUNNING, '2026-05-12T00:00:00Z'),
+        notice(1, CODEX, CODEX_SUMMARY_COMPLETED, '2026-05-12T00:00:00Z'),
         notice(
           2,
           'kurone-kito',

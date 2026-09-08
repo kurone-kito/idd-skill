@@ -513,9 +513,14 @@ export const CODEX_SUMMARY_MARKER =
 // Every recognized advisory-bot review-summary marker, keyed by the bot's
 // suffix-insensitive identity token (see `advisoryBotIdentityToken`) so
 // `isReviewSummaryComment` recognizes each configured advisory bot's own
-// completed-review summary comment instead of only CodeRabbit's (#2695).
-// Single-sourced here so adding a future bot's summary marker means adding
-// one map entry, not touching the recognizer function itself.
+// review-summary comment instead of only CodeRabbit's (#2695). Recognizing
+// the marker does NOT by itself mean the review is complete -- Codex's
+// summary can also appear while its own status table still reads "Running"
+// for the current HEAD; `disposition-non-review-notices.mts`'s
+// `isCodexReviewSummaryCompleteForHeadSha` gates the actual auto-accept on
+// that separately. Single-sourced here so adding a future bot's summary
+// marker means adding one map entry, not touching the recognizer function
+// itself.
 const REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY = new Map([
   ['coderabbitai', CODERABBIT_SUMMARY_MARKER],
   ['chatgpt-codex-connector', CODEX_SUMMARY_MARKER],
@@ -1514,15 +1519,22 @@ export const EDITED_AFTER_DISPOSITION_HINT =
 // re-dispositions the CURRENT summary per HEAD rather than carrying an old
 // acceptance forward (a stale carry-forward could mask a finding folded into a
 // later summary body — the "a false positive is a false merge" hazard).
-// True when a regular comment is a configured advisory bot's completed-review
-// summary (CodeRabbit's summary walkthrough, Codex's review-status comment, or
+// True when a regular comment is a configured advisory bot's review-summary
+// comment (CodeRabbit's summary walkthrough, Codex's review-status comment, or
 // any future bot in `REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY`). Detection is
 // start-anchored on the exact single-sourced marker (after trimming leading
 // whitespace) so a comment that merely quotes a marker in prose is not
 // matched. The caller is expected to have already filtered by advisory-bot
 // login (as every call site in this file and in
 // `disposition-non-review-notices.mts` does) -- this function only tells
-// apart a summary body from every other body.
+// apart a summary body from every other body. It does NOT imply the review
+// is complete: Codex edits the same comment in place across its own
+// lifecycle, so this can match while its status table still reads "Running"
+// for the current HEAD -- callers that decide whether to AUTO-ACCEPT (as
+// opposed to merely classifying a comment as needing some disposition) must
+// gate on completion separately, as
+// `disposition-non-review-notices.mts`'s `isCodexReviewSummaryCompleteForHeadSha`
+// does.
 // #2161: a comment that also nests CODERABBIT_SKIP_REVIEW_MARKER carries no
 // review content despite starting with the CodeRabbit summary marker, so it
 // is excluded here too -- never a summary walkthrough, always a non-review
