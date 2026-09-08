@@ -55,9 +55,12 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // not-applicable.
 const NOT_APPLICABLE_BUCKET_AUDIT_DETAIL =
   'not applicable: auditing a needs-decision/blocked-by-human bucket publish (--expect-bucket), not a ready-shape body';
-// The five authoring-marker suffixes defined in the contract. Operational
-// markers (claimed-by, review-watermark, ...) never take this
-// `{prefix}-{suffix}` shape, so they cannot collide with this scan.
+// The authoring-marker suffixes this file checks for prefix consistency.
+// Most are defined in the contract (skills/issue-authoring/references/
+// contract.md); `upstream-candidate` is defined by roadmap #2700 and
+// documented there pending #2702. Operational markers (claimed-by,
+// review-watermark, ...) never take this `{prefix}-{suffix}` shape, so
+// they cannot collide with this scan.
 const AUTHORING_MARKER_SUFFIXES = [
   'roadmap-id',
   'blocked-by',
@@ -1852,8 +1855,9 @@ Options:
   --config <path>                  policy config path (default: .github/idd/config.json)
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1 /
-                                    authoring-bucket cross-field checks and the
-                                    authoring-label check for
+                                    authoring-bucket cross-field checks, the
+                                    upstream-candidate marker/label pairing
+                                    check, and the authoring-label check for
                                     authoring-owner-marker-trail)
   --expect-bucket <bucket>         needs-decision or blocked-by-human; set only when
                                     auditing a body about to be newly published into

@@ -2627,6 +2627,27 @@ test('upstream-candidate-marker-label runs the same way across all three shapes'
   assert.equal(findingResult(child, 'upstream-candidate-marker-label'), 'pass');
 });
 
+test('upstream-candidate-marker-label treats a malformed-value marker occurrence as present (presence-only, per docstring)', () => {
+  const body = `${orphanBody({ score: 4 })}\n\n<!-- idd-skill-upstream-candidate: false -->`;
+  const withLabel = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:upstream-candidate'],
+  });
+  assert.equal(
+    findingResult(withLabel, 'upstream-candidate-marker-label'),
+    'pass',
+  );
+
+  const withoutLabel = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: [],
+  });
+  assert.equal(
+    findingResult(withoutLabel, 'upstream-candidate-marker-label'),
+    'fail',
+  );
+});
+
 test('marker-prefix-consistency flags a wrong-prefix upstream-candidate marker', () => {
   const body = `${orphanBody({ score: 4 })}\n\n<!-- other-prefix-upstream-candidate: true -->`;
   const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
