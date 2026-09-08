@@ -533,7 +533,12 @@ confirmed condition above. Delegate polling mechanics to
   [canonical `advisory-wait-state`
   invocation](idd-advisory-wait.instructions.md#1-canonical-path-helper-first)
   for this PR first and read `outcome`: only `REQUEST_NEEDED` means
-  request a review now. `WAIT` (a same-head request already exists,
+  request a review now. Post the same-head `advisory-wait:` marker in
+  the same step (helper-first: `post-idd-marker.mjs --type advisory
+  --from-pr`), matching E14's `REQUEST_NEEDED` marker step — without
+  it, `requestMarkerCount` never advances and every resumed D4 pass
+  reads `REQUEST_NEEDED` again instead of progressing toward the cap.
+  `WAIT` (a same-head request already exists,
   still inside its settle window) means request nothing — wait for
   Copilot's review to land for the current HEAD SHA, then rerun via
   `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md` §Rerun

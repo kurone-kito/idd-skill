@@ -105,7 +105,7 @@ outage (e.g. via status page or an org admin surface) before retrying.
 | Outcome | D4 | E14 | F2 | F3 |
 | --- | --- | --- | --- | --- |
 | `SATISFIED` | `lastCopilotCommit` matches HEAD: rerun `idd-advisory-convergence`; resume D4. Elapsed-window `SATISFIED`: exit CI-wait; proceed to E1 | proceed to E15 | continue to CI check | proceed with merge |
-| `REQUEST_NEEDED` | request review now; resume D4 | request Copilot + marker + poll | return to E14 | return to E14 |
+| `REQUEST_NEEDED` | request review + marker; resume D4 | request Copilot + marker + poll | return to E14 | return to E14 |
 | `RECOVERY_NEEDED` | exit CI-wait; proceed to E1 | post recovery marker + poll | post recovery marker + poll | post recovery marker; return to F2 |
 | `CAP_EXHAUSTED` | exit CI-wait; proceed to E1 | use `CAP_EXHAUSTED_ROUTE` | post cap-exhausted hold and stop | post cap-exhausted hold and stop |
 | `WAIT` | wait for Copilot's review; rerun `idd-advisory-convergence`; resume D4 | continue polling | poll then restart F2 from top | do not merge; return to F2 |
