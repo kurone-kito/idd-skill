@@ -518,6 +518,19 @@ const EITHER_OR_PATTERN = new RegExp(
   `\\beither\\b[\\s\\S]{0,${EITHER_OR_PROXIMITY_WINDOW_CHARS}}?\\bor\\b`,
   'gi',
 );
+// #2709: checkVerifiability's own either/or matcher, deliberately WITHOUT
+// EITHER_OR_PROXIMITY_WINDOW_CHARS's cap (Codex review, PR #2725 round 4). A
+// substantive left branch can legitimately run past 120 chars before its
+// own "or" -- e.g. a compatibility-requirements bullet -- and the shared
+// EITHER_OR_PATTERN above then finds no match at all, silently passing the
+// escape hatch. The cross-bullet contamination EITHER_OR_PROXIMITY_WINDOW_CHARS
+// exists to prevent no longer applies here: checkVerifiability already scans
+// one list item (a single bounded unit) at a time, not the whole AC
+// section, so there is no unrelated later bullet left to accidentally pair
+// with. Kept as a separate pattern (not a change to the shared
+// EITHER_OR_PATTERN) so checkAutonomy's own whole-body proximity matching,
+// which still needs the cross-bullet guard, is unaffected.
+const EITHER_OR_WITHIN_ITEM_PATTERN = /\beither\b[\s\S]*?\bor\b/gi;
 // #2709: the documentation-branch alternative of an either/or
 // acceptance-criteria escape hatch, e.g. "either fix X, or document why
 // not" / "or document the tradeoff" -- a verb naming disclosure/write-up
@@ -2409,6 +2422,14 @@ export function checkVerifiability(context) {
   // constrains a specific claim -- no regex-based check can do that without
   // full NLP, and each keyword added to close one counterexample only
   // relocates the same gap to the next one.
+  //
+  // Matched against normalizedCodeMaskedBody (not normalizedBody), the same
+  // position-preserving code-masked body the resolved-decision scan above
+  // already uses (Codex review, PR #2725 round 4): an AC bullet that quotes
+  // this exact escape-hatch phrasing as a literal example inside inline or
+  // fenced code -- e.g. "Add a lint rule rejecting `Either add validation,
+  // or document why validation is not needed`" -- must not have its quoted
+  // example treated as the issue's own operative prose.
   const isEscapeHatchBranch = (branchText, branchStart) => {
     if (!ESCAPE_HATCH_DOCUMENT_PATTERN.test(branchText)) {
       return false;
@@ -2423,7 +2444,7 @@ export function checkVerifiability(context) {
       // review, PR #2725).
       if (
         !isNegatedNearby(
-          normalizedBody,
+          normalizedCodeMaskedBody,
           artifactText,
           artifactIndex,
           ARTIFACT_NEGATION_WINDOW_CHARS,
@@ -2434,24 +2455,29 @@ export function checkVerifiability(context) {
     }
     return true;
   };
-  const acSectionMatch = normalizedBody.match(ACCEPTANCE_CRITERIA_PATTERN);
+  const acSectionMatch = normalizedCodeMaskedBody.match(
+    ACCEPTANCE_CRITERIA_PATTERN,
+  );
   if (acSectionMatch) {
     const acSectionStart =
       (acSectionMatch.index ?? 0) + (acSectionMatch[0]?.length ?? 0);
-    const restOfBody = normalizedBody.slice(acSectionStart);
+    const restOfBody = normalizedCodeMaskedBody.slice(acSectionStart);
     const nextHeadingIdx = restOfBody.search(NEXT_HEADING_PATTERN);
     const acSectionEnd =
       acSectionStart +
       (nextHeadingIdx === -1 ? restOfBody.length : nextHeadingIdx);
-    const acSectionText = normalizedBody.slice(acSectionStart, acSectionEnd);
+    const acSectionText = normalizedCodeMaskedBody.slice(
+      acSectionStart,
+      acSectionEnd,
+    );
     // Split the AC section into individual list items -- a marker line
     // (LIST_ITEM_LINE_PATTERN) plus any immediately-following indented,
     // non-blank, non-marker continuation lines -- so the either/or scan
     // below stays within one bullet's own text instead of the whole
     // section's raw text (Codex review, PR #2725 round 2). Each item's
-    // `text` is a contiguous slice of normalizedBody (not a manual
-    // line-join), so absolute offsets computed from it stay valid for the
-    // isNegatedNearby calls inside isEscapeHatchBranch below.
+    // `text` is a contiguous slice of normalizedCodeMaskedBody (not a
+    // manual line-join), so absolute offsets computed from it stay valid
+    // for the isNegatedNearby calls inside isEscapeHatchBranch above.
     const acListItems = [];
     {
       let itemStart = null;
@@ -2461,7 +2487,7 @@ export function checkVerifiability(context) {
       const closeItem = () => {
         if (itemStart !== null) {
           acListItems.push({
-            text: normalizedBody.slice(itemStart, itemEnd),
+            text: normalizedCodeMaskedBody.slice(itemStart, itemEnd),
             start: itemStart,
           });
         }
@@ -2502,7 +2528,7 @@ export function checkVerifiability(context) {
       closeItem();
     }
     for (const item of acListItems) {
-      for (const match of item.text.matchAll(EITHER_OR_PATTERN)) {
+      for (const match of item.text.matchAll(EITHER_OR_WITHIN_ITEM_PATTERN)) {
         const matchText = match[0] ?? '';
         const matchIndexInItem = match.index ?? 0;
         const matchStart = item.start + matchIndexInItem;
@@ -2529,7 +2555,7 @@ export function checkVerifiability(context) {
           return {
             pass: false,
             evidence:
-              'Issue offers an either/or acceptance-criteria escape hatch whose documentation-branch alternative names no concrete, checkable content.',
+              'Issue offers an either/or acceptance-criteria escape hatch whose documentation-branch alternative names no un-negated, concrete, checkable requirement.',
           };
         }
       }

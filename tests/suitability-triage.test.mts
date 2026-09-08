@@ -4093,6 +4093,40 @@ test('verifiability still passes a continuation-line escape hatch that discloses
   assert.equal(result.pass, true);
 });
 
+test('verifiability does not flag an escape-hatch phrase quoted as a literal example in inline code (#2709, Codex review PR #2725 round 4)', () => {
+  // The AC bullet is ABOUT detecting/documenting this exact pattern, quoting
+  // it verbatim inside a code span -- the quoted example must not be
+  // scanned as the issue's own operative either/or bullet.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Add a lint rule rejecting \`Either add validation, or document why validation is not needed\`.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still catches an escape hatch whose left branch exceeds the shared proximity window (#2709, Codex review PR #2725 round 4)', () => {
+  // The substantive left branch runs well past
+  // EITHER_OR_PROXIMITY_WINDOW_CHARS (120 chars) before its own "or" --
+  // since the scan is already scoped to one list item, there is no
+  // cross-bullet contamination risk left to guard against by capping the
+  // search here too.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either preserve full backward compatibility with every existing caller of the deprecated \`loadLegacyConfig\` helper across all supported Node.js versions and configuration formats, or document why preserving aliases is not needed.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('verifiability catches an escape-hatch disclosure nested as a deeper-indented sub-bullet (#2709, Codex review PR #2725 round 3)', () => {
   // A nested marker line (indented deeper than the enclosing item's own
   // marker) is a sub-item elaborating the outer bullet, not an unrelated
