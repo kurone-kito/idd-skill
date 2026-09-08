@@ -51,9 +51,10 @@ node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> \
 `roadmap-audit/<number>-<slug>`) posted per the written claim step
 below; an ordinary execution claim on the roadmap issue does not
 authorize closure. `--apply` re-validates that claim and re-evaluates
-the graph immediately before mutating, then posts the evidence
-comment, closes the roadmap, and releases the claim, re-validating
-ownership again before each of those last two steps.
+the graph before posting the evidence comment, re-validates ownership
+once more immediately before closing the roadmap, then releases the
+claim under that same validated ownership (no separate check between
+the close and the release).
 
 A non-zero exit paired with well-formed JSON — a not-ready result
 (`"ready": false` with a `"blockers"` array), or an `--apply`
