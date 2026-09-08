@@ -30,6 +30,18 @@ test('protected branch with a failing required check: gate does not pass', () =>
   assert.equal(r.requiredChecksPassing, false);
 });
 
+// #2714's fix is deliberately scoped to resolvePresentRunConclusion (the
+// no-required-checks fallback), not classifyCiChecks itself, because a
+// REQUIRED check that is itself CANCELLED with no successor must not
+// silently read as passing. Lock that design intent directly: the
+// required-checks status must stay 'unknown', never 'success'.
+test('protected branch with a lone CANCELLED required check: status stays unknown, gate does not pass', () => {
+  const r = summarize([{ name: 'lint', state: 'CANCELLED' }], protectedRules);
+  assert.equal(r.noRequiredChecksConfigured, false);
+  assert.equal(r.status, 'unknown');
+  assert.equal(r.requiredChecksPassing, false);
+});
+
 test('unprotected + green runs: reported distinctly from a passing required gate', () => {
   const r = summarize([{ name: 'build', state: 'SUCCESS' }], []);
   assert.equal(r.noRequiredChecksConfigured, true);
@@ -54,6 +66,79 @@ test('unprotected + pending runs: presentRunConclusion is pending', () => {
   const r = summarize([{ name: 'build', state: 'IN_PROGRESS' }], []);
   assert.equal(r.noRequiredChecksConfigured, true);
   assert.equal(r.presentRunConclusion, 'pending');
+});
+
+// #2714: a lone CANCELLED instance with no same-producer successor to dedup
+// against is deliberately excluded from both classifyCiChecks's `failed`
+// and `passing` buckets, landing in its residual `unknown` bucket. Before
+// this fix, resolvePresentRunConclusion folded that `unknown` status into
+// 'some-failing' -- reproducing exactly the outcome CANCELLED's exclusion
+// from `failed` exists to avoid. A single genuinely-passing companion check
+// (`lint`) alongside it rules out a passing-run-count coincidence.
+test('unprotected + a lone CANCELLED run with no successor: presentRunConclusion is pending, not some-failing', () => {
+  const r = summarize(
+    [
+      { name: 'lint', state: 'SUCCESS' },
+      { name: 'companion', state: 'CANCELLED' },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'pending');
+});
+
+// A CANCELLED instance that DOES have a same-producer successor is an
+// ordinary, already-handled dedup case (#1471/#1745): selectLatestCheckPerName
+// selects the successor, so the CANCELLED instance never reaches the
+// `unknown` bucket at all. This must stay 'all-passing', not 'pending' --
+// confirms the #2714 fix is scoped to the lone/no-successor shape only.
+test('unprotected + a CANCELLED run superseded by a later SUCCESS for the same name: presentRunConclusion is all-passing', () => {
+  const r = summarize(
+    [
+      {
+        name: 'build',
+        state: 'CANCELLED',
+        completedAt: '2026-01-01T00:00:00Z',
+      },
+      { name: 'build', state: 'SUCCESS', completedAt: '2026-01-01T00:05:00Z' },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'all-passing');
+});
+
+// The #2714 fix is scoped to CANCELLED specifically -- an `unknown` bucket
+// caused by some other, genuinely unrecognized state string stays
+// 'some-failing', the conservative default, rather than being broadened to
+// every `unknown` cause.
+test('unprotected + an unrecognized non-CANCELLED state: presentRunConclusion stays some-failing', () => {
+  const r = summarize(
+    [
+      { name: 'lint', state: 'SUCCESS' },
+      { name: 'companion', state: 'SOME_FUTURE_GITHUB_STATE' },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'some-failing');
+});
+
+// A mix of CANCELLED and a genuinely unrecognized state in the `unknown`
+// bucket must not be laxly treated as "contains a CANCELLED, so pending" --
+// the `.every()` check exists precisely to require the WHOLE bucket be
+// CANCELLED before relaxing to 'pending'.
+test('unprotected + CANCELLED mixed with an unrecognized state: presentRunConclusion stays some-failing', () => {
+  const r = summarize(
+    [
+      { name: 'lint', state: 'SUCCESS' },
+      { name: 'companion-a', state: 'CANCELLED' },
+      { name: 'companion-b', state: 'SOME_FUTURE_GITHUB_STATE' },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'some-failing');
 });
 
 // A pinned/indeterminate required-check source (workflows rule, or an app-pinned
