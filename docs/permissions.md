@@ -514,9 +514,10 @@ allow/deny split, softened as described below.
   helper script under this same allowlisted surface carries its own
   residual: `idd-onboard`'s `--allow-root <dir>` flag accepts any
   existing directory and adds it to the path-confinement boundary list
-  verbatim, with no upper bound. A filesystem root removes the confinement fix #2216
-  shipped entirely; a narrower but still broad value (e.g. a home
-  directory) substantially widens it instead -- either way defeating
+  verbatim, with no upper bound. A filesystem root removes the
+  confinement that issue #2216 fixed entirely; a narrower but still
+  broad value (e.g. a home directory) substantially widens it instead
+  -- either way defeating
   the exact unattended/agent-dispatch threat model that fix's own doc
   comment names (preventive; no observed incident yet). Neither the
   script's own argument validation nor the allowlisted
