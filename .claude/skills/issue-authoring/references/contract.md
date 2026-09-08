@@ -515,9 +515,10 @@ Ask these checks:
 
 ## Live-observed claim citation
 
-When a drafted issue's Background section asserts a "live observed"
-runtime behavior claim (as opposed to a claim verifiable by reading
-static source), cite a concrete, checkable artifact for it — a
+When a drafted issue's Background section (or its `## Goal` / `## Why
+this matters` equivalent, per the schema in use) asserts a "live
+observed" runtime behavior claim (as opposed to a claim verifiable by
+reading static source), cite a concrete, checkable artifact for it — a
 permalink, a PR/comment/run ID, or an inline reproduction snippet —
 rather than only a prose description of the observed event. A drafting
 session that already has the artifact in hand (a PR review thread, a
@@ -529,8 +530,9 @@ in this file: "(observed 2026-08-12/13 on an adopter repository,
 This is not a mechanical `audit-authored-issue` gate check: a
 live-observed claim is prose-level and not reliably machine-detectable
 without a high false-positive risk. Apply this discipline at drafting
-time instead, before an unsupported claim ships in a Background section
-another session or reviewer cannot independently re-verify.
+time instead, before an unsupported claim ships in one of these
+sections that another session or reviewer cannot independently
+re-verify.
 
 ## Dependency minimization
 
