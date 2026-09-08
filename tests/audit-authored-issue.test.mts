@@ -2697,14 +2697,51 @@ test('upstream-candidate-marker-label treats a value-less marker occurrence as f
   assert.match(finding?.detail ?? '', /malformed/);
 });
 
-test('marker-prefix-consistency flags a wrong-prefix upstream-candidate marker', () => {
+test('marker-prefix-consistency flags a wrong-prefix upstream-candidate marker when upstreamEscalationEnabled is true', () => {
   const body = `${orphanBody({ score: 4 })}\n\n<!-- other-prefix-upstream-candidate: true -->`;
-  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: [],
+    upstreamEscalationEnabled: true,
+  });
   const finding = report.findings.find(
     (entry) => entry.id === 'marker-prefix-consistency',
   );
   assert.equal(finding?.result, 'fail');
   assert.match(finding?.detail ?? '', /other-prefix-upstream-candidate/);
+});
+
+test('marker-prefix-consistency ignores a wrong-prefix upstream-candidate marker when upstreamEscalationEnabled is unset (#2721 review, Codex)', () => {
+  const body = `${orphanBody({ score: 4 })}\n\n<!-- other-prefix-upstream-candidate: true -->`;
+  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'marker-prefix-consistency',
+  );
+  assert.equal(finding?.result, 'pass');
+});
+
+test('upstream-candidate-marker-label treats a duplicated, agreeing true marker as malformed (#2721 review, Copilot and Codex)', () => {
+  const body = `${orphanBody({ score: 4 })}\n\n<!-- idd-skill-upstream-candidate: true -->\n\n<!-- idd-skill-upstream-candidate: true -->`;
+  const withLabel = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:upstream-candidate'],
+    upstreamEscalationEnabled: true,
+  });
+  const withLabelFinding = withLabel.findings.find(
+    (entry) => entry.id === 'upstream-candidate-marker-label',
+  );
+  assert.equal(withLabelFinding?.result, 'fail');
+  assert.match(withLabelFinding?.detail ?? '', /malformed/);
+
+  const withoutLabel = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: [],
+    upstreamEscalationEnabled: true,
+  });
+  assert.equal(
+    findingResult(withoutLabel, 'upstream-candidate-marker-label'),
+    'pass',
+  );
 });
 
 test('authoring-owner-marker-trail rejects an owner marker with a mismatched anchor from the publication generation', () => {

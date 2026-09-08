@@ -384,7 +384,11 @@ export function auditAuthoredIssue(body, options) {
       authoringBucket,
       options.expectedAuthoringBucket,
     ),
-    checkMarkerPrefixConsistency(text, markerPrefix),
+    checkMarkerPrefixConsistency(
+      text,
+      markerPrefix,
+      options.upstreamEscalationEnabled === true,
+    ),
     checkRequiredHeadings(text, shape, isBucketAudit),
     checkDependencyMarkerRule(text, markerPrefix, shape),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
@@ -571,14 +575,14 @@ function checkAuthoringBucketMarkerRequired(authoringBucket, expectedBucket) {
  * upstream-candidate` label applied for an unrelated reason (#2721
  * review, Codex).
  *
- * Value-coherent, not presence-only (#2721 review, Codex): a marker
- * occurrence whose value is not exactly `true`, or that disagrees with
- * another occurrence, is `malformed` and is treated as fail-safe
- * *absent* -- mirroring {@link parseAuthoringBucketMarker}'s malformed
- * handling -- rather than as "present". A malformed marker paired with
- * the label still fails (with a distinct detail), since the label
+ * Value-coherent, not presence-only (#2721 review, Copilot and Codex): a
+ * marker occurrence whose value is not exactly `true`, or that appears
+ * more than once (even with agreeing values -- see
+ * {@link parseUpstreamCandidateMarker}), is `malformed` and is treated as
+ * fail-safe *absent* rather than as "present". A malformed marker paired
+ * with the label still fails (with a distinct detail), since the label
  * asserts upstream candidacy while the marker itself does not carry a
- * coherent confirming value.
+ * single coherent confirming value.
  */
 function checkUpstreamCandidateMarkerLabel(
   text,
@@ -631,13 +635,17 @@ function checkUpstreamCandidateMarkerLabel(
 }
 /**
  * Canonical parser for the authored
- * `<!-- {prefix}-upstream-candidate: true -->` marker (roadmap #2700),
- * mirroring {@link parseAuthoringBucketMarker}'s fail-safe shape and
- * repeated/disagreeing-value handling -- except this marker has exactly
- * one valid value (`true`), so any other token, a value-less occurrence,
- * or an occurrence whose case does not match exactly (`True`/`TRUE`) is
- * malformed the same way a second, disagreeing `authoring-bucket` value
- * would be.
+ * `<!-- {prefix}-upstream-candidate: true -->` marker (roadmap #2700).
+ * Unlike {@link parseAuthoringBucketMarker}, which tolerates repeated
+ * occurrences as long as they agree on the same valid value, this marker
+ * requires exactly one occurrence -- a second, even agreeing, `...: true`
+ * comment is itself malformed, mirroring {@link checkSuitabilityMarker}'s
+ * `count > 1` rule rather than the bucket marker's disagreement-only one
+ * (#2721 review, Copilot and Codex both independently flagged the
+ * duplicate-tolerant first draft, whose own `malformed` finding detail
+ * already promised "exactly one coherent ... occurrence"). Any other
+ * token, a value-less occurrence, or a case mismatch (`True`/`TRUE`) is
+ * malformed the same way a non-`true` value always was.
  */
 function parseUpstreamCandidateMarker(text, markerPrefix) {
   const rawCount = countMarkerOccurrences(
@@ -648,20 +656,15 @@ function parseUpstreamCandidateMarker(text, markerPrefix) {
   if (rawCount === 0) {
     return { present: false, malformed: false };
   }
-  const regex = new RegExp(
-    `<!--\\s*${escapeRegex(markerPrefix)}-upstream-candidate:\\s*([^\\s>]+)\\s*-->`,
-    'gi',
-  );
-  let coherentCount = 0;
-  for (const match of text.matchAll(regex)) {
-    if (match[1] === 'true') {
-      coherentCount += 1;
-    }
-  }
-  if (coherentCount !== rawCount) {
+  if (rawCount > 1) {
     return { present: true, malformed: true };
   }
-  return { present: true, malformed: false };
+  const regex = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-upstream-candidate:\\s*([^\\s>]+)\\s*-->`,
+    'i',
+  );
+  const match = regex.exec(text);
+  return { present: true, malformed: match?.[1] !== 'true' };
 }
 /**
  * Canonical parser for the authored
@@ -723,7 +726,11 @@ function parseAuthoringBucketMarker(text, markerPrefix) {
 function isAuthoringBucketValue(value) {
   return value === 'needs-decision' || value === 'blocked-by-human';
 }
-function checkMarkerPrefixConsistency(text, markerPrefix) {
+function checkMarkerPrefixConsistency(
+  text,
+  markerPrefix,
+  upstreamEscalationEnabled,
+) {
   const id = 'marker-prefix-consistency';
   const name = 'Every authoring marker uses the resolved target markerPrefix';
   // The captured prefix is compared by string equality below (never
@@ -738,8 +745,22 @@ function checkMarkerPrefixConsistency(text, markerPrefix) {
   // malformed, valueless, wrong-prefix marker (e.g. `<!-- other-roadmap-id
   // -->`) is still evidence of a prefix leak and must not evade this scan
   // just because it is also missing its value.
+  //
+  // `upstream-candidate` is excluded from the scan unless the caller's
+  // resolved `upstreamEscalationEnabled` is true (#2721 review, Codex):
+  // {@link checkUpstreamCandidateMarkerLabel} is itself gated the same
+  // way, so a repository that never opted in treats this marker as dead
+  // content -- scanning a dead marker's prefix would fire a new,
+  // publish-blocking finding for a repository roadmap #2700 promises
+  // "sees no behavior change at all", the same risk the pairing check's
+  // own gate exists to close.
+  const suffixes = upstreamEscalationEnabled
+    ? AUTHORING_MARKER_SUFFIXES
+    : AUTHORING_MARKER_SUFFIXES.filter(
+        (suffix) => suffix !== 'upstream-candidate',
+      );
   const pattern = new RegExp(
-    `<!--\\s*([^\\s>:]+)-(${AUTHORING_MARKER_SUFFIXES.join('|')})\\b[\\s\\S]*?-->`,
+    `<!--\\s*([^\\s>:]+)-(${suffixes.join('|')})\\b[\\s\\S]*?-->`,
     'gi',
   );
   const mismatches = [];
@@ -1939,7 +1960,9 @@ Options:
   --marker-prefix <prefix>         override the resolved markerPrefix
   --config <path>                  policy config path (default: .github/idd/config.json);
                                     also resolves upstreamEscalation.enabled, which
-                                    gates the upstream-candidate-marker-label check
+                                    gates both upstream-candidate checks (the
+                                    marker/label pairing check and the
+                                    upstream-candidate branch of the prefix scan)
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1 /
                                     authoring-bucket cross-field checks, the
