@@ -556,6 +556,11 @@ test('pre-merge-readiness.mjs CLI: --claimless on an empty-references PR skips c
   }
 });
 
+// #2707: the CLI entrypoint now catches this throw and emits a structured
+// `{ error, hint? }` JSON object on stdout with a non-zero exit code,
+// instead of an uncaught-exception stack trace on stderr -- assert against
+// the parsed stdout JSON (execFileSync still throws on the non-zero exit;
+// only where the error text lives changed).
 test('pre-merge-readiness.mjs CLI: --claimless fails closed when closingIssuesReferences is non-empty (#2017)', () => {
   const cwdRoot = mkdtempSync(
     join(tmpdir(), 'idd-pre-merge-claimless-fail-cwd-'),
@@ -591,7 +596,13 @@ test('pre-merge-readiness.mjs CLI: --claimless fails closed when closingIssuesRe
             timeout: 60_000,
           },
         ),
-      /closingIssuesReferences/,
+      (error: unknown) => {
+        const stdout = (error as { stdout?: string }).stdout ?? '';
+        const parsed = JSON.parse(stdout) as { error: string; hint?: string };
+        assert.match(parsed.error, /closingIssuesReferences/);
+        assert.equal(parsed.hint, undefined);
+        return true;
+      },
     );
   } finally {
     restore();
