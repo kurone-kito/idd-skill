@@ -518,6 +518,23 @@ const EITHER_OR_PATTERN = new RegExp(
   `\\beither\\b[\\s\\S]{0,${EITHER_OR_PROXIMITY_WINDOW_CHARS}}?\\bor\\b`,
   'gi',
 );
+// #2709: the documentation-branch alternative of an either/or
+// acceptance-criteria escape hatch, e.g. "either fix X, or document why
+// not" -- a verb naming disclosure/write-up followed (within a bounded
+// window, tolerating short connecting prose) by "why". Deliberately
+// matches the verb stem loosely enough to cover "documenting"/"explaining"
+// gerund forms, since a plain `\bdocument\b` word boundary would miss
+// those. Used by checkVerifiability, not checkAutonomy.
+const ESCAPE_HATCH_DOCUMENT_PATTERN =
+  /\b(?:document|explain|write[- ]up|note|record|describe)\w*\b[\s\S]{0,40}\bwhy\b/i;
+// #2709: a concrete, checkable artifact reference -- reusing the same
+// keyword family checkVerifiability's own hasVerificationChannel already
+// treats as an objective verification signal, scoped here to just the
+// escape-hatch branch's own text (not the whole issue body) so a checkable
+// artifact named elsewhere cannot be borrowed to pass a branch that itself
+// names nothing checkable.
+const CONCRETE_ARTIFACT_PATTERN =
+  /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b|\bartifact\b/i;
 // Window checkAutonomy's negation checks scan on either side of a match --
 // shared by the coordination-language, unresolved-choice, and either/or
 // marker checks via isNegatedNearby below.
@@ -2317,6 +2334,44 @@ export function checkVerifiability(context) {
       pass: false,
       evidence: 'Issue success depends on subjective approval or judgment.',
     };
+  }
+  // #2709 (idd-suitability.instructions.md Edge Cases, #1984): an either/or
+  // acceptance-criteria bullet where one branch is a substantive fix and
+  // the other reads "or document why not" is not an automatic PASS -- the
+  // documentation branch must be evaluated on its own merits, and should
+  // classify needs-decision when it only restates the bullet without
+  // disclosing the tradeoff. `hasObjectiveSignals` above only confirms SOME
+  // part of the body names a checkable artifact; it does not confirm the
+  // escape-hatch branch itself does, which is the actual ambiguity this
+  // check exists to catch. Deliberately independent of checkAutonomy's
+  // either/or + UNRESOLVED_CHOICE_PATTERN pairing (#2219): an escape-hatch
+  // branch reads as fully "resolved" prose on both sides, so it carries
+  // none of that check's unresolved-choice phrases and never trips it.
+  for (const match of normalizedBody.matchAll(EITHER_OR_PATTERN)) {
+    const matchText = match[0] ?? '';
+    const matchIndex = match.index ?? 0;
+    // Scope the "names nothing checkable" test to the branch's own text --
+    // from the either/or match to the end of its line (AC bullets are
+    // typically single Markdown list lines) -- not the whole body, so a
+    // checkable artifact named in the OTHER branch or a sibling bullet
+    // cannot be borrowed to pass an escape-hatch branch that itself names
+    // nothing checkable.
+    const branchStart = matchIndex + matchText.length;
+    const lineEnd = normalizedBody.indexOf('\n', branchStart);
+    const branchText = normalizedBody.slice(
+      branchStart,
+      lineEnd === -1 ? normalizedBody.length : lineEnd,
+    );
+    if (
+      ESCAPE_HATCH_DOCUMENT_PATTERN.test(branchText) &&
+      !CONCRETE_ARTIFACT_PATTERN.test(branchText)
+    ) {
+      return {
+        pass: false,
+        evidence:
+          'Issue offers an either/or acceptance-criteria escape hatch whose documentation-branch alternative names no concrete, checkable content.',
+      };
+    }
   }
   return {
     pass: true,

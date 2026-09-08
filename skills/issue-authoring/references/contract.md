@@ -783,6 +783,14 @@ authoring skill should catch these issues before publishing:
 | Autonomy (Check 6)       | `ready` or escalated | Ensure agent can complete without external coordination                         |
 | Verifiability (Check 7)  | `ready` or escalated | Ensure success is verifiable; escalate if it requires subjective approval       |
 
+**Check 7 escape-hatch pattern**: an either/or acceptance-criteria bullet
+where one branch is a substantive change and the other reads as "or
+document the gap/tradeoff" is not an automatic Check 7 PASS -- the
+documentation branch must itself name a concrete, checkable requirement,
+or evaluate it on its own merits and route to `needs-decision`. See
+`idd-suitability.instructions.md`'s Edge Cases section ("Escape-hatch
+acceptance criteria") for the full worked example.
+
 Pre-publish validation checklist:
 
 1. **Coherence**: Issue body is well-formed, title+description are

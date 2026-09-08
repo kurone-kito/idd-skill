@@ -3951,6 +3951,53 @@ test('verifiability still fails a genuine subjective gate in a CRLF body (#2531 
   assert.equal(result.pass, false);
 });
 
+test('verifiability rejects an either/or escape-hatch bullet whose documentation branch names no checkable content (#2709)', () => {
+  // Live-confirmed false-pass reproduced from #2709's own Background: a
+  // substantive fix on one side, and a no-further-requirement "document why
+  // not" branch on the other -- pre-fix this returned pass:true.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still passes when the documentation branch itself names a checkable artifact (#2709)', () => {
+  // Same either/or shape, but the documentation branch discloses its own
+  // concrete requirement -- must not be flagged.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add input validation to \`parseConfig\`, or document why not in a new ADR file and add a lint rule enforcing the decision.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still passes an ordinary either/or offering two already-resolved, equivalent options (#2709, no regression)', () => {
+  // An either/or with no documentation/disclosure verb at all is an
+  // ordinary resolved-options bullet (#2219's own baseline case), not an
+  // escape hatch -- must keep passing.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either \`config.json\` or \`config.yaml\` is accepted as the input format.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {
