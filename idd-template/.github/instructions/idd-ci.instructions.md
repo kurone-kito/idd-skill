@@ -357,6 +357,16 @@ condition below accounts for this.
   insert "is it done yet?" turns or end this turn assuming an
   unconfirmed background/async notification resumes it — that stalls
   silently under supervisor/worker topologies.
+- **Main-session turn-ending rule.** The Portability gap above assumes a
+  background wait was at least started; a main (non-delegated) session
+  can fail a different way: ending its turn on a future-tense promise
+  ("I will wait and then...", "I'll check back once...") with no wait
+  mechanism armed at all — not even an unconfirmed one. Pair every such
+  promise with one of the mechanisms in the bullet above (a scheduled
+  wakeup, a confirmed-topology background task, or a synchronous block)
+  before ending the turn. Issue #2221 recorded repeated stalls — one
+  lasting 3.6 hours — from exactly this gap; arming the wait mechanically
+  prevented recurrence once adopted.
 - **Batch post-wait actions** into one turn once the wait resolves
   (disposition, replies, marker, next gate together).
 - **Scope post-fix re-validation** to the changed surface when provably
