@@ -147,8 +147,9 @@ do not proceed to E12; a maintainer must clear the hold.
 
 Any other read (clean, behind-no-conflict, computing, dirty, unknown)
 skips the merge here — E11 never re-polls a transient read or holds on
-a dirty/unknown one; proceed to E12 and let the post-E12 branch-sync
-check handle those states properly.
+a dirty/unknown one; proceed to E12 and let
+`idd-review-triage.instructions.md`'s E-phase branch-sync check handle
+those states properly once PATH A reaches zero.
 
 ## E12 — Lint, test, push
 
