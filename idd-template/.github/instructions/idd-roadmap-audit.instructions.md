@@ -23,7 +23,9 @@ non-vendored profiles.
 
 Default (no `--apply`) dry-runs the mechanical completion preconditions
 via the same roadmap-graph traversal used below and prints a JSON
-verdict with `ready`, `blockers`, and `evidenceBody` keys. It gates
+verdict object that includes `ready`, `blockers`, and `evidenceBody`
+alongside other protocol/result fields (`protocolVersion`, `mode`,
+`result`, and more) — the listed keys are not the whole shape. It gates
 only the MECHANICAL completion preconditions (all descendants
 closed/complete; no
 open/unresolved/inaccessible/linked-PR/nested-roadmap/childless/cycle/
@@ -56,17 +58,17 @@ once more immediately before closing the roadmap, then releases the
 claim under that same validated ownership (no separate check between
 the close and the release).
 
-A non-zero exit paired with well-formed JSON — a not-ready result
-(`"ready": false` with a `"blockers"` array), or an `--apply`
-claim-rejection reason such as `claim-branch-mismatch` or
-`claim-stale` — is an authoritative verdict, not a malfunction: act on
-it directly. **Exception**: a `claim-rejection` result that also
-carries `viewerLoginUnavailable: true` is inconclusive, not
+A non-zero exit paired with well-formed JSON — a not-ready verdict
+(`"ready": false` with a non-empty `"blockers"` array), or an `--apply`
+verdict whose `"result"` string embeds a not-owned reason code such as
+`claim-branch-mismatch` or `claim-stale` — is authoritative, not a
+malfunction: act on it directly. **Exception**: a verdict that also
+carries `"viewerLoginUnavailable": true` is inconclusive, not
 authoritative — the helper's own trusted-author lookup failed, so
 apply the written fallback (retry, or a manual permission check)
-instead of treating the rejection as final. Otherwise, fall back to
-the written A1.5 procedure below only when the helper is unavailable,
-malformed, or its output disagrees with live state.
+instead of treating it as final. Otherwise, fall back to the written
+A1.5 procedure below only when the helper is unavailable, malformed,
+or its output disagrees with live state.
 
 ## A1.5 — Audit completed roadmaps
 
