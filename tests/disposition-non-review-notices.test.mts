@@ -47,6 +47,16 @@ const CODERABBIT_SKIP_REVIEW =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
   '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n' +
   '> [!WARNING]\n> ## Review skipped\nReview was skipped due to path filters.';
+// #2695: chatgpt-codex-connector[bot]'s own recurring review-status comment,
+// edited in place on every push -- a status table against the current commit
+// that cycles through "Running" and "Completed" states, analogous to
+// CODERABBIT_SUMMARY above but for Codex.
+const CODEX_SUMMARY_RUNNING =
+  '<!-- codex-pull-request-review-summary -->\n' +
+  '## Status\n\n| Commit | Status |\n| --- | --- |\n| abc1234 | Running |\n';
+const CODEX_SUMMARY_COMPLETED =
+  '<!-- codex-pull-request-review-summary -->\n' +
+  '## Status\n\n| Commit | Status |\n| --- | --- |\n| abc1234 | Completed |\n';
 // A full 40-char head SHA for the cases that validate against the schema, which
 // now constrains `headSha` to `^[0-9a-f]{40}$`.
 const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -657,6 +667,53 @@ test('#2161: isReviewSummaryComment and isAdvisoryNonReviewNotice agree on a cas
 test('#2161: a genuine walkthrough (no inner skip-review marker) is still a summary walkthrough, not a notice', () => {
   assert.equal(isReviewSummaryComment(CODERABBIT_SUMMARY), true);
   assert.equal(isAdvisoryNonReviewNotice(CODERABBIT_SUMMARY), false);
+});
+
+test('#2695: isReviewSummaryComment recognizes a Codex review-status comment in both "Running" and "Completed" table states', () => {
+  assert.equal(isReviewSummaryComment(CODEX_SUMMARY_RUNNING), true);
+  assert.equal(isReviewSummaryComment(CODEX_SUMMARY_COMPLETED), true);
+});
+
+test('#2695: buildDispositionPlan plans an **Accepted** for an undispositioned Codex review-status comment, same as CodeRabbit', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODEX, CODEX_SUMMARY_COMPLETED)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  const entry = plan.planned[0];
+  assert.equal(entry.botLogin, CODEX);
+  assert.ok(entry.body.startsWith('**Accepted**'));
+  assert.match(
+    entry.body,
+    /chatgpt-codex-connector\[bot\] summary walkthrough at HEAD abc1234/,
+  );
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('#2695: buildDispositionPlan skips a Codex summary already accepted by a strictly-newer disposition (idempotent re-run)', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODEX, CODEX_SUMMARY_RUNNING, '2026-05-12T00:00:00Z'),
+        notice(
+          2,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODEX, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.noticeId),
+    [1],
+  );
 });
 
 test('#2161: buildDispositionPlan proposes **Rejected**, never **Accepted**, for a CodeRabbit skip-review notice', () => {

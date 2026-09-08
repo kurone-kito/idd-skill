@@ -1119,6 +1119,26 @@ const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
   'i',
 );
 
+// The exact marker `chatgpt-codex-connector[bot]` prefixes its own recurring
+// PR-level review-status comment with: a single issue-level comment it edits
+// in place (not reposts) on every push, showing a "Running"/"Completed"
+// status table against the current commit. The Codex analog of
+// `CODERABBIT_SUMMARY_MARKER` (#2695).
+export const CODEX_SUMMARY_MARKER =
+  '<!-- codex-pull-request-review-summary -->';
+
+// Every recognized advisory-bot review-summary marker, keyed by the bot's
+// suffix-insensitive identity token (see `advisoryBotIdentityToken`) so
+// `isReviewSummaryComment` recognizes each configured advisory bot's own
+// completed-review summary comment instead of only CodeRabbit's (#2695).
+// Single-sourced here so adding a future bot's summary marker means adding
+// one map entry, not touching the recognizer function itself.
+const REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY: ReadonlyMap<string, string> =
+  new Map([
+    ['coderabbitai', CODERABBIT_SUMMARY_MARKER],
+    ['chatgpt-codex-connector', CODEX_SUMMARY_MARKER],
+  ]);
+
 // The exact marker CodeRabbit appends to a reply it generates on an
 // existing review thread (distinct from `CODERABBIT_SUMMARY_MARKER`,
 // which opens a fresh review-summary walkthrough). Single-sourced here
@@ -2284,30 +2304,50 @@ export const EDITED_AFTER_DISPOSITION_HINT =
 // acceptance forward (a stale carry-forward could mask a finding folded into a
 // later summary body — the "a false positive is a false merge" hazard).
 
-// True when a regular comment is a CodeRabbit summary walkthrough. Detection is
+// True when a regular comment is a configured advisory bot's completed-review
+// summary (CodeRabbit's summary walkthrough, Codex's review-status comment, or
+// any future bot in `REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY`). Detection is
 // start-anchored on the exact single-sourced marker (after trimming leading
-// whitespace) so a comment that merely quotes the marker in prose is not matched.
+// whitespace) so a comment that merely quotes a marker in prose is not
+// matched. The caller is expected to have already filtered by advisory-bot
+// login (as every call site in this file and in
+// `disposition-non-review-notices.mts` does) -- this function only tells
+// apart a summary body from every other body.
 // #2161: a comment that also nests CODERABBIT_SKIP_REVIEW_MARKER carries no
-// review content despite starting with the summary marker, so it is excluded
-// here too -- never a summary walkthrough, always a non-review notice (see
-// isAdvisoryNonReviewNotice / ADVISORY_NON_REVIEW_NOTICE_PATTERNS).
+// review content despite starting with the CodeRabbit summary marker, so it
+// is excluded here too -- never a summary walkthrough, always a non-review
+// notice (see isAdvisoryNonReviewNotice / ADVISORY_NON_REVIEW_NOTICE_PATTERNS).
+// No other configured bot currently has an analogous inner exclusion marker.
 export function isReviewSummaryComment(body: unknown): boolean {
   const text = String(body ?? '').trimStart();
-  return (
-    text.startsWith(CODERABBIT_SUMMARY_MARKER) &&
-    !CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text)
-  );
+  for (const marker of REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY.values()) {
+    if (!text.startsWith(marker)) {
+      continue;
+    }
+    if (
+      marker === CODERABBIT_SUMMARY_MARKER &&
+      CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text)
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
-// A trusted IDD disposition of a CodeRabbit summary walkthrough: the canonical
-// `**Accepted** — {bot} summary walkthrough …` reply the helper posts. Requires
-// the `**Accepted**` prefix (via `DISPOSITION_ACCEPTED_PREFIX_RE`, so the bounded
-// trailing-punctuation variants like `**Accepted.**` also count; a summary is a
-// completed review, so it is accepted, never rejected) AND the
-// `summary walkthrough` phrase, so an ordinary acceptance of reviewer feedback is
-// excluded. Tightly matched to `buildSummaryDispositionBody` so a loose
-// acceptance can never be miscredited (which would under-post and strand the
-// gate).
+// A trusted IDD disposition of any configured advisory bot's review-summary
+// comment (CodeRabbit's summary walkthrough, Codex's review-status comment,
+// or a future bot): the canonical `**Accepted** — {bot} summary walkthrough
+// …` reply the helper posts. Requires the `**Accepted**` prefix (via
+// `DISPOSITION_ACCEPTED_PREFIX_RE`, so the bounded trailing-punctuation
+// variants like `**Accepted.**` also count; a summary is a completed review,
+// so it is accepted, never rejected) AND the `summary walkthrough` phrase, so
+// an ordinary acceptance of reviewer feedback is excluded. Already
+// bot-agnostic -- the `{bot}` login is free text inside the body, not part of
+// this predicate -- so recognizing a new bot's summary here needs no change,
+// only a new `isReviewSummaryComment` marker entry (#2695). Tightly matched
+// to `buildSummaryDispositionBody` so a loose acceptance can never be
+// miscredited (which would under-post and strand the gate).
 export function isReviewSummaryDisposition(comment: {
   body?: string | null;
 }): boolean {
