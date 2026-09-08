@@ -214,7 +214,7 @@ function normalizePositiveIntegerBudget(value, defaultValue) {
   }
   return value;
 }
-function normalizeNonNegativeNumber(value) {
+export function normalizeNonNegativeNumber(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     return null;
   }
@@ -337,6 +337,134 @@ export function collectContextCeilingViolations(config, bundles) {
     }
   }
   return { errors, notices };
+}
+/**
+ * Collect "near-ceiling ratchet" violations (#2697): `docs/policy-constants.md`'s
+ * near-ceiling exception says raising a `bundleBudgets` bundle's `limitBytes`
+ * while that bundle was already near its ceiling should be avoided in favor
+ * of trimming or splitting the addition instead -- this mechanically
+ * enforces the exception, which was prose-only before this check existed.
+ *
+ * Pure (no I/O): the audit pipeline supplies the current bundle stats
+ * (`checkBundleBudgets`'s own summation, reused rather than re-measured
+ * here) and the equivalent stats measured from the base ref's manifest and
+ * file contents. `noticeUtilizationPct` reuses the same near-ceiling
+ * threshold {@link collectContextCeilingViolations} already surfaces as a
+ * notice, so the two checks agree on what "near-ceiling" means.
+ *
+ * No violation (silently skipped) when: the bundle is genuinely new -- no
+ * base-ref entry matches its id, and (see the rename fallback below) no
+ * base bundle has an identical file set either; the bundle's `limitBytes`
+ * did not increase relative to the base ref (unchanged or decreased); or
+ * the base ref's own `limitBytes` is zero or negative (nothing meaningful
+ * to ratchet a utilization percentage from). Threshold comparison is
+ * cross-multiplied in byte space (`totalBytes * 100` vs. `limitBytes *
+ * pct`), matching {@link collectContextCeilingViolations}'s own convention
+ * so a bundle sitting exactly at the threshold does not tip over from
+ * float rounding; inclusive `>=`, matching that function's own
+ * notice-threshold comparison ("reaches ... or more").
+ *
+ * **Bundle-rename fallback** (#2697 Codex review finding on PR #2736): an
+ * id lookup alone would let a PR dodge this guard by renaming an
+ * already-near-ceiling bundle while raising its limit -- the rename reads
+ * as "no base-ref entry", the brand-new-bundle exemption. When a current
+ * bundle's id has no base match, this also looks for a base bundle whose
+ * `files` set is identical (order-independent) to the current bundle's own
+ * -- an id rename with unchanged membership is still the same bundle for
+ * this check's purposes. A file-set shared by two or more base bundles is
+ * ambiguous and is never used as a fallback match. Exact-set match only:
+ * a bundle whose file membership also changed (a split, a merge, a partial
+ * overlap) is treated as genuinely new, the same as before this fallback
+ * existed -- matching membership by name is a much weaker signal than
+ * matching it exactly, and this check's own false-positive cost (blocking
+ * an unrelated, legitimate raise) is why it stops at the exact case.
+ */
+export function collectNearCeilingRatchetViolations(
+  noticeUtilizationPct,
+  currentBundles,
+  baseBundles,
+) {
+  const baseById = new Map(baseBundles.map((bundle) => [bundle.id, bundle]));
+  // `null` marks an ambiguous signature (shared by 2+ base bundles) so it is
+  // never mistaken for "no entry" (`undefined`, via a plain Map miss) --
+  // both must resolve to "no fallback match", but for different reasons.
+  const baseByFileSignature = new Map();
+  for (const bundle of baseBundles) {
+    const signature = fileSetSignature(bundle.files);
+    if (signature === null) {
+      continue;
+    }
+    baseByFileSignature.set(
+      signature,
+      baseByFileSignature.has(signature) ? null : bundle,
+    );
+  }
+  const errors = [];
+  for (const current of currentBundles) {
+    const currentSignature = fileSetSignature(current.files);
+    const base =
+      baseById.get(current.id) ??
+      (currentSignature !== null
+        ? (baseByFileSignature.get(currentSignature) ?? undefined)
+        : undefined);
+    if (
+      !base ||
+      current.limitBytes <= base.limitBytes ||
+      base.limitBytes <= 0
+    ) {
+      continue;
+    }
+    if (base.totalBytes * 100 >= base.limitBytes * noticeUtilizationPct) {
+      const baseUtilizationPct = (base.totalBytes / base.limitBytes) * 100;
+      errors.push(
+        `near-ceiling-ratchet: ${current.id} limitBytes raised from ${base.limitBytes} to ${current.limitBytes} while already at ${baseUtilizationPct.toFixed(2)}% utilization at the base ref (${base.totalBytes}/${base.limitBytes} bytes) -- docs/policy-constants.md's near-ceiling exception prefers trimming or splitting the addition over raising here`,
+      );
+    }
+  }
+  return errors;
+}
+/** Order-independent identity for a bundle's file membership, used only by
+ * {@link collectNearCeilingRatchetViolations}'s rename fallback. `null` for
+ * an empty or absent file list -- nothing to key a fallback match on. */
+function fileSetSignature(files) {
+  if (!files || files.length === 0) {
+    return null;
+  }
+  // \n as the join separator, not a space: a file path could
+  // plausibly contain a space, but never a literal newline.
+  return [...files].sort().join('\n');
+}
+/**
+ * Pick the effective `noticeUtilizationPct` for
+ * {@link collectNearCeilingRatchetViolations} (#2697 Codex review finding
+ * on PR #2736): a PR that raises both a bundle's `limitBytes` and the
+ * `noticeUtilizationPct` threshold itself in the same change (e.g. 95 to
+ * 97) could otherwise dodge the guard entirely -- a bundle sitting at 96%
+ * under the OLD (base-ref) threshold reads as compliant against the NEW,
+ * looser threshold, exactly the near-ceiling raise this check exists to
+ * catch. Using the stricter (lower) of the base and current thresholds
+ * closes that gap in both directions: raising the threshold cannot loosen
+ * the check, and a repository that instead LOWERS the threshold in the
+ * same PR gets the more conservative (lower) value applied immediately
+ * rather than waiting a cycle. Falls back to `currentPct` alone when the
+ * base ref's config is missing or not a valid non-negative number (a
+ * repository adopting `contextCeiling` for the first time in this PR has
+ * no base-ref threshold to compare against).
+ *
+ * Reuses {@link normalizeNonNegativeNumber}'s strict `typeof === 'number'`
+ * gate rather than a bare `Number(...)` coercion (CodeRabbit review finding
+ * on PR #2736): `Number(null)`, `Number('')`, and `Number(false)` all
+ * coerce to `0`, a valid-looking finite non-negative number that would
+ * silently defeat the documented "missing base value falls back to
+ * currentPct" contract and instead apply an effective 0% threshold --
+ * flagging every raised `limitBytes` regardless of actual utilization.
+ */
+export function selectStricterNoticeUtilizationPct(
+  currentPct,
+  baseNoticeUtilizationPct,
+) {
+  const basePct = normalizeNonNegativeNumber(baseNoticeUtilizationPct);
+  return basePct === null ? currentPct : Math.min(currentPct, basePct);
 }
 // Words after which a `/` must start a regex literal, not division.
 const REGEX_PRECEDING_KEYWORDS = new Set([

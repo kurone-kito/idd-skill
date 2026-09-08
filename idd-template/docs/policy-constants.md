@@ -588,6 +588,20 @@ budget for smaller-context models. Read the two as one policy: raise by
 default while headroom remains, and trim or split once headroom is nearly
 gone.
 
+**Mechanically enforced (#2697).** `node scripts/audit-docs.mjs --check`
+fails, when the base ref and its manifest are available, when a commit
+raises a `bundleBudgets` bundle's `limitBytes` while that bundle's
+base-ref utilization was already at or above the configured
+`noticeUtilizationPct` threshold (95% by default) — the exception is no
+longer prose-only. The check compares against the base ref's own
+`audit/sync-manifest.json` and file contents, so a genuinely new bundle
+(no base-ref entry by id, and no base bundle with an identical file set
+either — an id rename alone does not count as new) or a `limitBytes`
+decrease never trips it. If the base ref or its manifest cannot be read
+(for example, a shallow checkout), the check emits a notice and skips
+this comparison instead of failing
+closed.
+
 ### High-contention shared files
 
 A small set of files concentrates concurrent autopilot edits and therefore
