@@ -99,13 +99,17 @@ standard-tier session.
 Confirmed against the live manifest (`audit/sync-manifest.json`);
 re-confirmed 2026-09-01 after pull request #2342 (issue #2181) moved
 the ceiling to the 200K baseline and ratcheted `bundle-review` to
-138,000:
+138,000; raised again 2026-09-08 (issue #2644, the main-session
+turn-ending wake-up rule) to 150,000, and `bundle-review-fix-lite` to
+43,000 (parity fix in the same issue -- `idd-ci-lite.instructions.md`
+declares itself semantically equivalent to the full-size file, so the
+same rule addition landed there too):
 
 | Bundle                        | Files                                                                                                                                     | `limitBytes` |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
 | `bundle-review-snapshot-lite` | `idd-advisory-wait-lite`, `idd-review-snapshot-lite`                                                                                      | 23,000       |
-| `bundle-review-fix-lite`      | `idd-advisory-wait-lite`, `idd-ci-lite`, `idd-review-fix-lite`                                                                            | 39,500       |
-| `bundle-review` (standard)    | `idd-advisory-wait`, `idd-ci`, `idd-overview-appendix`, `idd-overview-core`, `idd-review-fix`, `idd-review-snapshot`, `idd-review-triage` | 138,000      |
+| `bundle-review-fix-lite`      | `idd-advisory-wait-lite`, `idd-ci-lite`, `idd-review-fix-lite`                                                                            | 43,000       |
+| `bundle-review` (standard)    | `idd-advisory-wait`, `idd-ci`, `idd-overview-appendix`, `idd-overview-core`, `idd-review-fix`, `idd-review-snapshot`, `idd-review-triage` | 150,000      |
 
 The lite split is a **token-budget condensation** for a weak-model
 profile that deliberately excludes E4-E8 from condensation at all — it

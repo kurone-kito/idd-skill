@@ -351,7 +351,7 @@
         ".github/instructions/lite/idd-ci-lite.instructions.md",
         ".github/instructions/lite/idd-review-fix-lite.instructions.md"
       ],
-      "limitBytes": 39500
+      "limitBytes": 43000
     },
     {
       "id": "bundle-review-snapshot-lite",
@@ -374,7 +374,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 138000
+      "limitBytes": 150000
     },
     {
       "id": "bundle-merge",
