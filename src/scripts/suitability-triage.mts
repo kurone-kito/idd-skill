@@ -1432,10 +1432,21 @@ function isOrdinaryHyphenatedCompoundToken(
     // itself, a feature-spec sentence describing a *different* check's own
     // skip condition). This needs no equivalent trace-to-origin walk: a
     // trailing hyphen immediately followed by a word character, with
-    // nothing hyphen-like leading this token, is unambiguously an ordinary
-    // compound word -- symmetric with `POLICY_OVERRIDE_NOUN_SOURCE`'s own
-    // trailing `(?![\w-])` guard, which the noun side already has baked
-    // into its regex and the verb side never did.
+    // nothing hyphen-like leading this token, is treated the same way a
+    // bare, un-code-wrapped TAIL compound already is below (see the "#2407
+    // review round 5 (Codex, known limit)" comment on the leading-side walk's
+    // own bare case) -- symmetric with `POLICY_OVERRIDE_NOUN_SOURCE`'s own
+    // trailing `(?![\w-])` guard, which the noun side already has baked into
+    // its regex and the verb side never did. This is a deliberate tradeoff,
+    // not a claim that the shape is unambiguous: a bare compound like
+    // "skip-checks" with a genuine override noun nearby ("Pass skip-checks
+    // so the repository gate is not evaluated") now also passes, same as
+    // bare "force-skip" already does -- narrowing this by inspecting the
+    // compound's own tail word would be asymmetric with the tail-position
+    // case (nothing there inspects the word before its hyphen either) and
+    // would reintroduce false positives on ordinary "skip-checks feature"
+    // prose, the exact shape #2734 exists to fix (#2734 review, Copilot;
+    // see the dedicated pinned regression test below).
     //
     // This classification only applies when the token's OWN start is a
     // genuine prose boundary (start of string, or
