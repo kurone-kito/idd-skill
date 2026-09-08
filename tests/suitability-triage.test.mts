@@ -4440,6 +4440,67 @@ The doc states "figure it out." Maintainer decision (Groom hearing, 2026-09-05):
   assert.equal(result.pass, true);
 });
 
+test('verifiability recognizes an Acceptance Criteria section written entirely with "1)" numbering (PR #2735 Copilot review)', () => {
+  // The outer "does this section look like a list at all" gate recognized
+  // only "1." ordered-list numbering, not the "1)" form LIST_ITEM_LINE_PATTERN
+  // itself already supports (#2711 gap 5) -- an AC section using ONLY that
+  // numbering style (no "-"/"*" bullet anywhere) never entered the
+  // section-scoped scan at all, regardless of the list-item-line fix.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+1) TBD
+2) ${tick}scripts/real.mjs${tick} passes
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability ignores an HTML-comment-marker opener demonstrated in inline code (PR #2735 Codex review round 2)', () => {
+  // findHtmlCommentRanges excluded an unmatched "<!--" only when it was
+  // inside a FENCED code example (#2711 gap 4); the same demonstration
+  // written as an inline code span -- `` `<!--` `` -- was still treated as
+  // a real unterminated comment and masked the rest of the section,
+  // including the following bullet's own concrete artifact, through EOF.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Document the literal ${tick}<!--${tick} marker
+- ${tick}src/parser.mts${tick} is deterministic
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still credits a genuine numbered section unrelated to a placeholder Acceptance Criteria heading (PR #2735 Codex review round 2)', () => {
+  // An earlier revision (#2711 gap 2) skipped the whole-body numbered-
+  // steps/checklist fallback entirely whenever ANY Acceptance Criteria
+  // heading existed, over-correcting for the "## Candidate files" leak: a
+  // genuinely separate, later section (here "## Expected Behavior") with
+  // real numbered verification content was wrongly suppressed too. Only
+  // the Acceptance Criteria section's own content and the recognized
+  // "## Candidate files" convention are excluded now, not every sibling
+  // section.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+TBD
+
+## Expected Behavior
+1. The result is deterministic.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {

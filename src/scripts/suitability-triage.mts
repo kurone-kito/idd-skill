@@ -556,23 +556,28 @@ function isInStrikethroughSpan(
 // unterminated `<!--` to illustrate the shape -- must not have that
 // example's opener treated as a REAL unterminated comment: doing so masks
 // through EOF and swallows a genuine later "Maintainer decision (...)"
-// that follows the fence. `fencedRanges` (optional, defaults to none so
-// existing callers with no fenced content to worry about are unaffected)
-// lets a caller exclude any `<!--` whose own opening `<` falls inside a
-// fenced code range from consideration entirely.
+// that follows the fence. The same applies to an INLINE code span
+// demonstrating the same syntax (PR #2735 Codex review round 2) -- e.g.
+// `` `<!--` `` followed by a later bullet naming the real artifact.
+// `ignoredOpenerRanges` (optional, defaults to none so existing callers
+// with no code content to worry about are unaffected) lets a caller
+// exclude any `<!--` whose own opening `<` falls inside one of these
+// ranges from consideration entirely; pass fenced + indented + inline
+// ranges (e.g. `findMarkdownCodeRanges`'s result) to cover every code
+// shape, not just fenced blocks.
 function findHtmlCommentRanges(
   text: string,
-  fencedRanges: MarkdownCodeRange[] = [],
+  ignoredOpenerRanges: MarkdownCodeRange[] = [],
 ): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
   const openPattern = /<!--/g;
   let openMatch = openPattern.exec(text);
   while (openMatch) {
     const openIndex = openMatch.index;
-    const isInsideFence = fencedRanges.some(
+    const isIgnored = ignoredOpenerRanges.some(
       (range) => openIndex >= range.start && openIndex < range.end,
     );
-    if (isInsideFence) {
+    if (isIgnored) {
       openPattern.lastIndex = openIndex + 4;
       openMatch = openPattern.exec(text);
       continue;
@@ -977,6 +982,13 @@ function isEnumeratedParentheticalEntry(
   return otherEntries.length > 0 && otherEntries.every(looksLikeLabelEntry);
 }
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
+// #2711 PR #2735 review (Codex): this repo's own "## Candidate files"
+// convention (#2589) names files to EDIT, never a verification signal --
+// matched here (mirroring ACCEPTANCE_CRITERIA_PATTERN's own shape) so the
+// "Alternative" whole-body fallback below can exclude just this specific,
+// already-recognized non-verification section instead of every sibling
+// section unconditionally.
+const CANDIDATE_FILES_SECTION_PATTERN = /^#+\s*Candidate\s+files\s*$/im;
 // #2589: a bullet under "## Acceptance Criteria" that names something
 // concrete -- an inline-code span (covers a quoted file path, command, or
 // identifier) or a bare dotted filename -- is substantive on its own,
@@ -2622,13 +2634,18 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // example written as an indented block, or hidden template scaffolding
   // inside an HTML comment, could otherwise leak a fake substantive bullet
   // or a fake outcome-signal keyword into this same scan. `findHtmlCommentRanges`
-  // is given the fenced ranges too so an unterminated `<!--` used as a
-  // fenced code EXAMPLE of the syntax doesn't mask through EOF.
+  // is given every code range (fenced, indented, AND inline -- PR #2735
+  // Codex review round 2) so an unterminated `<!--` used as a code
+  // EXAMPLE of the syntax, in any of those three shapes, doesn't mask
+  // through EOF; only fenced and indented ranges are actually masked into
+  // `fenceMaskedBody` itself, since inline spans stay unmasked for
+  // hasSubstantiveBullet's own backtick scan below.
   const fencedRangesForVerifiability = findFencedCodeRanges(body);
+  const codeRangesForVerifiability = findMarkdownCodeRanges(body);
   const fenceMaskedBody = maskMarkdownCodeRegionsPreservingPositions(body, [
     ...fencedRangesForVerifiability,
     ...findIndentedCodeRanges(body, fencedRangesForVerifiability),
-    ...findHtmlCommentRanges(body, fencedRangesForVerifiability),
+    ...findHtmlCommentRanges(body, codeRangesForVerifiability),
   ]);
   const acceptanceCriteriaMatch = fenceMaskedBody.match(
     ACCEPTANCE_CRITERIA_PATTERN,
@@ -2656,7 +2673,10 @@ export function checkVerifiability(context: Context): CheckOutcome {
     // only the section's own list-item lines, not its full raw text, so a
     // placeholder bullet followed by unrelated non-list prose can't
     // borrow that prose's substance or keywords (#2589 CodeRabbit review).
-    if (/^[-*]\s+/.test(listSection) || /^\d+\.\s+/.test(listSection)) {
+    // #2711 PR #2735 review (Copilot): also accepts the "1)" ordered-list
+    // form, matching LIST_ITEM_LINE_PATTERN's own fix -- an AC section
+    // written entirely with that numbering used to never enter this block.
+    if (/^[-*]\s+/.test(listSection) || /^\d+[.)]\s+/.test(listSection)) {
       const listItemsOnly = extractListItemLines(listSection);
       hasObjectiveCriteria =
         hasSubstantiveBullet(listItemsOnly) ||
@@ -2665,18 +2685,63 @@ export function checkVerifiability(context: Context): CheckOutcome {
   }
 
   // Alternative: check for numbered steps with outcome signals or
-  // checklists. Scoped to a body with NO "Acceptance Criteria" heading at
-  // all (#2711): when one exists, the section-scoped scan above already
-  // gave it a fair, bounded review; letting this whole-body fallback rescan
-  // past that boundary let an unrelated LATER section's own checklist
-  // (e.g. this repo's own "## Candidate files" bullet-list convention)
-  // flip a genuinely placeholder Acceptance Criteria section to "has
-  // objective criteria."
-  if (!hasObjectiveCriteria && !acceptanceCriteriaMatch) {
+  // checklists, excluding (a) the Acceptance Criteria section's own
+  // content, already given a fair, bounded review above, and (b) this
+  // repo's own "## Candidate files" convention (#2589) -- a list of files
+  // to EDIT, never a verification signal. A genuine numbered-steps or
+  // checklist section elsewhere in the body (e.g. "## Expected Behavior",
+  // "## Reproduction") still counts: an earlier revision (#2711) instead
+  // skipped this whole fallback whenever ANY Acceptance Criteria heading
+  // existed, which also suppressed that legitimate case (Codex review, PR
+  // #2735) -- only these two specific, already-recognized
+  // non-verification regions are excluded now, not every sibling section.
+  // Also accepts the "1)" ordered-list form (matching the fix above).
+  if (!hasObjectiveCriteria) {
+    const alternativeScanExclusions: MarkdownCodeRange[] = [];
+    if (acceptanceCriteriaMatch) {
+      const acHeadingStart = acceptanceCriteriaMatch.index ?? 0;
+      const acContentStart =
+        acHeadingStart + (acceptanceCriteriaMatch[0]?.length ?? 0);
+      const acRestOfBody = fenceMaskedBody.slice(acContentStart);
+      const acNextHeadingIdx = acRestOfBody.search(NEXT_HEADING_PATTERN);
+      const acContentEnd =
+        acContentStart +
+        (acNextHeadingIdx === -1 ? acRestOfBody.length : acNextHeadingIdx);
+      alternativeScanExclusions.push({
+        start: acHeadingStart,
+        end: acContentEnd,
+      });
+    }
+    const candidateFilesMatch = fenceMaskedBody.match(
+      CANDIDATE_FILES_SECTION_PATTERN,
+    );
+    if (candidateFilesMatch) {
+      const cfHeadingStart = candidateFilesMatch.index ?? 0;
+      const cfContentStart =
+        cfHeadingStart + (candidateFilesMatch[0]?.length ?? 0);
+      const cfRestOfBody = fenceMaskedBody.slice(cfContentStart);
+      const cfNextHeadingIdx = cfRestOfBody.search(NEXT_HEADING_PATTERN);
+      const cfContentEnd =
+        cfContentStart +
+        (cfNextHeadingIdx === -1 ? cfRestOfBody.length : cfNextHeadingIdx);
+      alternativeScanExclusions.push({
+        start: cfHeadingStart,
+        end: cfContentEnd,
+      });
+    }
+    const bodyForAlternativeScan =
+      alternativeScanExclusions.length > 0
+        ? maskMarkdownCodeRegionsPreservingPositions(
+            body,
+            alternativeScanExclusions,
+          )
+        : body;
     const hasNumSteps =
-      /^\s*\d+\.\s+/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
+      /^\s*\d+[.)]\s+/m.test(bodyForAlternativeScan) &&
+      OUTCOME_SIGNAL_PATTERN.test(bodyForAlternativeScan);
     const hasChecklist =
-      /^\s*[-*]\s+\[[ xX]\]/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
+      /^\s*[-*]\s+\[[ xX]\]/m.test(bodyForAlternativeScan) &&
+      OUTCOME_SIGNAL_PATTERN.test(bodyForAlternativeScan);
     hasObjectiveCriteria = hasNumSteps || hasChecklist;
   }
 
@@ -2713,17 +2778,18 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // syntax with `` `Maintainer decision (Groom hearing, 2026-09-05): choose
   // A` ``) and hidden HTML-comment template scaffolding (round 6:
   // `<!-- Maintainer decision (...): <resolution text> -->`).
-  // `findMarkdownCodeRanges` covers both inline and fenced spans, unlike
-  // `findFencedCodeRanges` alone. `findHtmlCommentRanges` is given the
-  // fenced ranges too (#2711) so an unterminated `<!--` used as a fenced
-  // code EXAMPLE of the HTML-comment-marker syntax isn't treated as a real
-  // unterminated comment masking through EOF.
-  const fencedRangesForCommentMasking = findFencedCodeRanges(normalizedBody);
+  // `findMarkdownCodeRanges` covers fenced, indented, AND inline spans,
+  // unlike `findFencedCodeRanges` alone. `findHtmlCommentRanges` is given
+  // that same superset (#2711; widened to include inline spans too per PR
+  // #2735 Codex review round 2) so an unterminated `<!--` used as a code
+  // EXAMPLE of the HTML-comment-marker syntax, fenced or inline, isn't
+  // treated as a real unterminated comment masking through EOF.
+  const codeRangesForCommentMasking = findMarkdownCodeRanges(normalizedBody);
   const normalizedCodeMaskedBody = maskMarkdownCodeRegionsPreservingPositions(
     normalizedBody,
     [
-      ...findMarkdownCodeRanges(normalizedBody),
-      ...findHtmlCommentRanges(normalizedBody, fencedRangesForCommentMasking),
+      ...codeRangesForCommentMasking,
+      ...findHtmlCommentRanges(normalizedBody, codeRangesForCommentMasking),
     ],
   );
   const hasSubjectiveApproval = ((): boolean => {
