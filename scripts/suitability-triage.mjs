@@ -2506,7 +2506,29 @@ export function checkVerifiability(context) {
       // so a genuine checklist item past that window (which the primary
       // scan never saw either) remains available to this fallback instead
       // of being doubly hidden.
-      const acContentEnd = Math.min(acSectionEnd, acContentStart + 500);
+      //
+      // #2711 PR #2735 review round 7 (Codex): a single checklist item
+      // that itself straddles the 500-character cutoff -- marker and
+      // explanatory prefix before it, objective clause after -- must not
+      // have its exclusion cut mid-line: char-precise truncation left the
+      // marker excluded while only the suffix reached the fallback, and
+      // the bare suffix text (with no "- [ ]" of its own) never matched
+      // `hasChecklist`'s marker pattern. Snap the cutoff back to the start
+      // of the straddling line so the whole item stays together, either
+      // fully excluded (primary scan's job) or fully visible to the
+      // fallback -- never split across the boundary.
+      const rawCutoff = acContentStart + 500;
+      let acContentEnd;
+      if (rawCutoff >= acSectionEnd) {
+        acContentEnd = acSectionEnd;
+      } else {
+        const straddleLineStart =
+          fenceMaskedBody.lastIndexOf('\n', rawCutoff) + 1;
+        acContentEnd =
+          straddleLineStart <= acContentStart
+            ? acContentStart
+            : straddleLineStart;
+      }
       alternativeScanExclusions.push({
         start: acHeadingStart,
         end: acContentEnd,

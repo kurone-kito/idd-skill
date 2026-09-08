@@ -4629,6 +4629,27 @@ The implementation must satisfy:
   assert.equal(result.pass, true);
 });
 
+test('verifiability keeps a checklist item together when it straddles the 500-char cutoff (PR #2735 Codex review round 7)', () => {
+  // A single checklist item whose marker/prefix sits before the 500-char
+  // cutoff and whose objective clause sits after it was previously split
+  // by char-precise exclusion: the marker was excluded (masked as part of
+  // the "already reviewed" AC section) while only the bare suffix reached
+  // the Alternative fallback -- with no "- [ ]" of its own, the suffix
+  // never matched hasChecklist's marker pattern. Now the cutoff snaps back
+  // to the start of the straddling line, so the whole item either stays
+  // fully excluded or reaches the fallback intact.
+  const filler = 'This section explains context at length. '.repeat(12);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] ${filler}The result is deterministic.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {
