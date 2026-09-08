@@ -7,6 +7,7 @@ import { test } from 'node:test';
 
 import {
   buildIddConfigContentsArgs,
+  isUpstreamEscalationEnabled,
   loadIddConfig,
   loadPolicyConfig,
   loadTrustedIddConfig,
@@ -798,5 +799,28 @@ test('loadTrustedIddConfig rethrows when the fetch returns empty content', () =>
   assert.throws(
     () => loadTrustedIddConfig('o', 'r', 'main', () => ''),
     /cannot confirm \.github\/idd\/config\.json for o\/r@main/,
+  );
+});
+
+test('isUpstreamEscalationEnabled resolves to false when the key is absent', () => {
+  assert.equal(isUpstreamEscalationEnabled({}), false);
+});
+
+test('isUpstreamEscalationEnabled resolves to false for a null/undefined config', () => {
+  assert.equal(isUpstreamEscalationEnabled(null), false);
+  assert.equal(isUpstreamEscalationEnabled(undefined), false);
+});
+
+test('isUpstreamEscalationEnabled resolves to false for explicit enabled: false', () => {
+  assert.equal(
+    isUpstreamEscalationEnabled({ upstreamEscalation: { enabled: false } }),
+    false,
+  );
+});
+
+test('isUpstreamEscalationEnabled resolves to true for explicit enabled: true', () => {
+  assert.equal(
+    isUpstreamEscalationEnabled({ upstreamEscalation: { enabled: true } }),
+    true,
   );
 });
