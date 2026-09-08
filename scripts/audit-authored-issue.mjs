@@ -34,7 +34,11 @@ import {
 } from './discover-readiness-check.mjs';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { parseEffortMarker } from './effort.mjs';
-import { loadIddConfig, loadPolicyConfig } from './idd-config.mjs';
+import {
+  isUpstreamEscalationEnabled,
+  loadIddConfig,
+  loadPolicyConfig,
+} from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import {
   parseAuthoringOwnerComment,
@@ -55,16 +59,29 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // not-applicable.
 const NOT_APPLICABLE_BUCKET_AUDIT_DETAIL =
   'not applicable: auditing a needs-decision/blocked-by-human bucket publish (--expect-bucket), not a ready-shape body';
-// The five authoring-marker suffixes defined in the contract. Operational
-// markers (claimed-by, review-watermark, ...) never take this
-// `{prefix}-{suffix}` shape, so they cannot collide with this scan.
+// The authoring-marker suffixes this file checks for prefix consistency.
+// Most are defined in the contract (skills/issue-authoring/references/
+// contract.md); `upstream-candidate` is defined by roadmap #2700 and
+// documented there pending #2702. Operational markers (claimed-by,
+// review-watermark, ...) never take this `{prefix}-{suffix}` shape, so
+// they cannot collide with this scan.
 const AUTHORING_MARKER_SUFFIXES = [
   'roadmap-id',
   'blocked-by',
   'autopilot-suitability',
   'effort',
   'authoring-bucket',
+  'upstream-candidate',
 ];
+/**
+ * The fixed GitHub label paired with the
+ * `<!-- {prefix}-upstream-candidate: true -->` marker (roadmap #2700's
+ * "Naming" section). Unlike `blockedByHumanLabelName` /
+ * `needsDecisionLabelName`, this name is fixed by the roadmap itself, not
+ * policy-configurable -- every adopter that opts in via
+ * `upstreamEscalation.enabled` uses the same literal label.
+ */
+const UPSTREAM_CANDIDATE_LABEL_NAME = 'status:upstream-candidate';
 const SHAPE_HEADING_REQUIREMENTS = {
   orphan: [
     { anyOf: ['Background', 'Goal'] },
@@ -367,13 +384,23 @@ export function auditAuthoredIssue(body, options) {
       authoringBucket,
       options.expectedAuthoringBucket,
     ),
-    checkMarkerPrefixConsistency(text, markerPrefix),
+    checkMarkerPrefixConsistency(
+      text,
+      markerPrefix,
+      options.upstreamEscalationEnabled === true,
+    ),
     checkRequiredHeadings(text, shape, isBucketAudit),
     checkDependencyMarkerRule(text, markerPrefix, shape),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
     checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
     checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options),
+    checkUpstreamCandidateMarkerLabel(
+      text,
+      markerPrefix,
+      labels,
+      options.upstreamEscalationEnabled === true,
+    ),
   ];
   return {
     shape,
@@ -526,6 +553,120 @@ function checkAuthoringBucketMarkerRequired(authoringBucket, expectedBucket) {
   );
 }
 /**
+ * Mirrors {@link checkSuitabilityBlockedByHuman}'s marker/label
+ * cross-field pattern, but bidirectionally (#2700/#2703): the
+ * `status:upstream-candidate` label and the
+ * `<!-- {prefix}-upstream-candidate: true -->` marker must always agree,
+ * in either direction -- one present without the other is a fail, both
+ * or neither is a pass. This is stricter than the one-directional
+ * suitability-1 check above, which only fails a label omission and never
+ * flags a label applied without the matching condition; this pair has no
+ * pre-existing issues predating it, so there is no backward-compatibility
+ * reason to keep it one-directional.
+ *
+ * Gated on `upstreamEscalationEnabled`: reports "not applicable" when
+ * false (the resolved default), per roadmap #2700's own success
+ * criterion that a repository which has not opted in "sees no behavior
+ * change at all" -- this file's `audit-authored-issue` gate runs
+ * unconditionally on every published body in every adopter repository
+ * (`skills/issue-authoring/references/workflow-boundary.md`), so without
+ * this gate a repository that never enabled the feature could still see
+ * a new publish-blocking failure from an incidental `status:
+ * upstream-candidate` label applied for an unrelated reason (#2721
+ * review, Codex).
+ *
+ * Value-coherent, not presence-only (#2721 review, Copilot and Codex): a
+ * marker occurrence whose value is not exactly `true`, or that appears
+ * more than once (even with agreeing values -- see
+ * {@link parseUpstreamCandidateMarker}), is `malformed` and is treated as
+ * fail-safe *absent* rather than as "present". A malformed marker paired
+ * with the label still fails (with a distinct detail), since the label
+ * asserts upstream candidacy while the marker itself does not carry a
+ * single coherent confirming value.
+ */
+function checkUpstreamCandidateMarkerLabel(
+  text,
+  markerPrefix,
+  labels,
+  upstreamEscalationEnabled,
+) {
+  const id = 'upstream-candidate-marker-label';
+  const name = `${UPSTREAM_CANDIDATE_LABEL_NAME} label and the upstream-candidate marker agree`;
+  if (!upstreamEscalationEnabled) {
+    return pass(
+      id,
+      name,
+      'not applicable: upstreamEscalation.enabled is not set for this repository',
+    );
+  }
+  const marker = parseUpstreamCandidateMarker(text, markerPrefix);
+  const hasLabel = labels.includes(UPSTREAM_CANDIDATE_LABEL_NAME.toLowerCase());
+  if (marker.malformed) {
+    if (hasLabel) {
+      return fail(
+        id,
+        name,
+        `${UPSTREAM_CANDIDATE_LABEL_NAME} label is present but the upstream-candidate marker is malformed (expected exactly one coherent "...: true" occurrence)`,
+      );
+    }
+    return pass(
+      id,
+      name,
+      'neither the label nor a coherent upstream-candidate marker is present (a malformed marker occurrence is fail-safe to absent)',
+    );
+  }
+  const hasMarker = marker.present;
+  if (hasMarker === hasLabel) {
+    return pass(
+      id,
+      name,
+      hasLabel
+        ? `both the ${UPSTREAM_CANDIDATE_LABEL_NAME} label and the upstream-candidate marker are present`
+        : `neither the ${UPSTREAM_CANDIDATE_LABEL_NAME} label nor the upstream-candidate marker is present`,
+    );
+  }
+  return fail(
+    id,
+    name,
+    hasLabel
+      ? `${UPSTREAM_CANDIDATE_LABEL_NAME} label is present but the upstream-candidate marker was not found`
+      : `upstream-candidate marker is present but the ${UPSTREAM_CANDIDATE_LABEL_NAME} label was not provided`,
+  );
+}
+/**
+ * Canonical parser for the authored
+ * `<!-- {prefix}-upstream-candidate: true -->` marker (roadmap #2700).
+ * Unlike {@link parseAuthoringBucketMarker}, which tolerates repeated
+ * occurrences as long as they agree on the same valid value, this marker
+ * requires exactly one occurrence -- a second, even agreeing, `...: true`
+ * comment is itself malformed, mirroring {@link checkSuitabilityMarker}'s
+ * `count > 1` rule rather than the bucket marker's disagreement-only one
+ * (#2721 review, Copilot and Codex both independently flagged the
+ * duplicate-tolerant first draft, whose own `malformed` finding detail
+ * already promised "exactly one coherent ... occurrence"). Any other
+ * token, a value-less occurrence, or a case mismatch (`True`/`TRUE`) is
+ * malformed the same way a non-`true` value always was.
+ */
+function parseUpstreamCandidateMarker(text, markerPrefix) {
+  const rawCount = countMarkerOccurrences(
+    text,
+    markerPrefix,
+    'upstream-candidate',
+  );
+  if (rawCount === 0) {
+    return { present: false, malformed: false };
+  }
+  if (rawCount > 1) {
+    return { present: true, malformed: true };
+  }
+  const regex = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-upstream-candidate:\\s*([^\\s>]+)\\s*-->`,
+    'i',
+  );
+  const match = regex.exec(text);
+  return { present: true, malformed: match?.[1] !== 'true' };
+}
+/**
  * Canonical parser for the authored
  * `<!-- {prefix}-authoring-bucket: needs-decision|blocked-by-human -->`
  * marker, mirroring {@link parseAutopilotSuitabilityMarker}'s fail-safe
@@ -585,7 +726,11 @@ function parseAuthoringBucketMarker(text, markerPrefix) {
 function isAuthoringBucketValue(value) {
   return value === 'needs-decision' || value === 'blocked-by-human';
 }
-function checkMarkerPrefixConsistency(text, markerPrefix) {
+function checkMarkerPrefixConsistency(
+  text,
+  markerPrefix,
+  upstreamEscalationEnabled,
+) {
   const id = 'marker-prefix-consistency';
   const name = 'Every authoring marker uses the resolved target markerPrefix';
   // The captured prefix is compared by string equality below (never
@@ -600,8 +745,22 @@ function checkMarkerPrefixConsistency(text, markerPrefix) {
   // malformed, valueless, wrong-prefix marker (e.g. `<!-- other-roadmap-id
   // -->`) is still evidence of a prefix leak and must not evade this scan
   // just because it is also missing its value.
+  //
+  // `upstream-candidate` is excluded from the scan unless the caller's
+  // resolved `upstreamEscalationEnabled` is true (#2721 review, Codex):
+  // {@link checkUpstreamCandidateMarkerLabel} is itself gated the same
+  // way, so a repository that never opted in treats this marker as dead
+  // content -- scanning a dead marker's prefix would fire a new,
+  // publish-blocking finding for a repository roadmap #2700 promises
+  // "sees no behavior change at all", the same risk the pairing check's
+  // own gate exists to close.
+  const suffixes = upstreamEscalationEnabled
+    ? AUTHORING_MARKER_SUFFIXES
+    : AUTHORING_MARKER_SUFFIXES.filter(
+        (suffix) => suffix !== 'upstream-candidate',
+      );
   const pattern = new RegExp(
-    `<!--\\s*([^\\s>:]+)-(${AUTHORING_MARKER_SUFFIXES.join('|')})\\b[\\s\\S]*?-->`,
+    `<!--\\s*([^\\s>:]+)-(${suffixes.join('|')})\\b[\\s\\S]*?-->`,
     'gi',
   );
   const mismatches = [];
@@ -1649,6 +1808,7 @@ function main() {
       ? readCommentsFile(args.journalCommentsFile)
       : undefined,
     newIssue: args.newIssue,
+    upstreamEscalationEnabled: policy.upstreamEscalationEnabled,
   });
   writeReport(report, args.format);
   process.exit(report.passed ? 0 : 1);
@@ -1707,6 +1867,7 @@ function loadPolicy(configPath) {
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
       needsDecisionLabelName: POLICY_DEFAULTS.labels.needsDecisionLabelName,
       authoringLabelName: POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
+      upstreamEscalationEnabled: false,
     };
   }
   return {
@@ -1717,6 +1878,7 @@ function loadPolicy(configPath) {
       normalizePolicyConfig(config).labels.needsDecisionLabelName,
     authoringLabelName:
       normalizePolicyConfig(config).issueAuthoring.authoringLabelName,
+    upstreamEscalationEnabled: isUpstreamEscalationEnabled(config),
   };
 }
 function writeReport(report, format) {
@@ -1796,11 +1958,16 @@ Options:
   --body-file <path>               read the drafted issue body from a file
   --stdin                          read the drafted issue body from stdin
   --marker-prefix <prefix>         override the resolved markerPrefix
-  --config <path>                  policy config path (default: .github/idd/config.json)
+  --config <path>                  policy config path (default: .github/idd/config.json);
+                                    also resolves upstreamEscalation.enabled, which
+                                    gates both upstream-candidate checks (the
+                                    marker/label pairing check and the
+                                    upstream-candidate branch of the prefix scan)
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1 /
-                                    authoring-bucket cross-field checks and the
-                                    authoring-label check for
+                                    authoring-bucket cross-field checks, the
+                                    upstream-candidate marker/label pairing
+                                    check, and the authoring-label check for
                                     authoring-owner-marker-trail)
   --expect-bucket <bucket>         needs-decision or blocked-by-human; set only when
                                     auditing a body about to be newly published into
