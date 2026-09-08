@@ -766,11 +766,12 @@ Running this variant safely requires:
   the existing manual-recovery procedure: confirm the whole lock-owning
   operation -- the recorded wrapper and any git process it spawned -- is
   actually gone, not merely that the recorded pid has exited (a dead
-  wrapper can still leave a live git child that still needs the lock),
-  then remove the lock file by hand and retry -- the same recovery
-  git's own `index.lock` expects on a stale-lock collision -- before
-  delegating a fresh subagent with a resume-specific briefing rather
-  than resuming the dead worker's own context.
+  wrapper can still leave a live git child that still needs the lock --
+  kurone-kito/idd-skill#2223), then remove the lock file by hand and
+  retry -- the same approach git's own `index.lock` takes on a
+  stale-lock collision -- before delegating a fresh subagent with a
+  resume-specific briefing rather than resuming the dead worker's own
+  context.
 - **Independently verify a worker's reported terminal outcome before
   trusting it.** A worker's final-turn text describes what it
   _attempted_, not proof of what actually landed on the forge. Before
