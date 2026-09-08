@@ -2063,8 +2063,28 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 // "I couldn't resolve this review thread on the repository platform..."
 // fallback trailer (the same API call failed, so CodeRabbit reports the
 // attempt instead).
-const CODERABBIT_ACK_CLOSURE_RE =
-  /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
+//
+// #2710: a third, distinct courtesy-ack template observed live -- after an
+// IDD agent posts its own disposition reply and resolves a thread itself,
+// CodeRabbit sometimes follows up with an opening matching
+// CODERABBIT_ACK_OPENING_RE (e.g. "`@login`, thanks for confirming...")
+// but NEITHER closure phrase above; instead it carries the "🐇 ✅" emoji
+// pair immediately followed by this HTML-comment marker.
+// CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER is CodeRabbit's own
+// stable, machine-readable marker for this reply shape -- a
+// decision-shaped signal, consistent with this file's existing design
+// principle of matching CodeRabbit's own resolution decision rather than
+// free-form "new concern" phrasing.
+export const CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER =
+  '<!-- coderabbit-skip-review-comment-follow-up -->';
+const CODERABBIT_ACK_CLOSURE_RE = new RegExp(
+  [
+    '✅\\s*Review thread resolved\\.',
+    "I couldn't resolve this review thread on the repository platform",
+    `🐇\\s*✅[\\s\\S]{0,40}?${escapeRegExp(CODERABBIT_SKIP_REVIEW_COMMENT_FOLLOW_UP_MARKER)}`,
+  ].join('|'),
+  'i',
+);
 
 // Explicit `isCodeRabbitLogin` author check (Copilot review, #2649,
 // round 4): the closure phrase is CodeRabbit's own resolution decision in

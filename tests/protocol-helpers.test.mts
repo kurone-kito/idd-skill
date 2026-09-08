@@ -437,6 +437,48 @@ test('classifyThreadAckOnlyPostDisposition still recognizes a known-template cou
   assert.equal(classification.ackOnlyPostDisposition, true);
 });
 
+// #2710: a third, distinct CodeRabbit courtesy-ack template observed live
+// after an IDD agent posts its own disposition reply and resolves a
+// thread itself -- an opening matching CODERABBIT_ACK_OPENING_RE followed
+// by the "🐇 ✅" emoji pair and the
+// `coderabbit-skip-review-comment-follow-up` HTML-comment marker, with
+// NEITHER of the two previously-recognized closure phrases anywhere in
+// the body.
+
+test('classifyThreadAckOnlyPostDisposition recognizes the post-disposition courtesy-ack template (#2710)', () => {
+  const thread = {
+    id: 'thread-skip-review-follow-up-ack',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'SF-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'SF-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, thanks for confirming.\n\n🐇 ✅ <!-- coderabbit-skip-review-comment-follow-up -->',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
 test('classifyThreadAckOnlyPostDisposition rejects a novel substantive reply that merely avoids disposition phrasing (#2641)', () => {
   // A brand-new finding that happens not to be shaped like
   // `**Accepted**`/`**Rejected**` must not misclassify as ack-only just
