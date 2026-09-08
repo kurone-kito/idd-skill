@@ -189,6 +189,54 @@ test('reviewCurrency and dispositionEvidence agree a rejection-confirmed-by-main
   );
 });
 
+// #2696: this gate-level function already read `thread.id` correctly before
+// this issue's fix -- the actual bug was upstream (the provider mapping and
+// both `normalizeThread` call sites dropped `id` before it reached here; see
+// those files' own test coverage for the real regression guards). This test
+// pins the AC's explicit requirement directly at this layer: report the real
+// thread id whenever the caller supplies one, and fall back to a positional
+// `thread-${index+1}` label only when it genuinely has none.
+test('summarizeDispositionEvidenceForGate reports the real thread id when present, and the positional fallback only when absent', () => {
+  const threadWithRealId = {
+    id: 'RT_real_123',
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'please address this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+    },
+  };
+  const threadWithNoId = {
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-b' },
+          body: 'and this one too',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const dispositionSummary = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [threadWithRealId, threadWithNoId] },
+    { iddAgentLogins: [], advisoryBotLogins: [] },
+  );
+
+  assert.equal(dispositionSummary.blockingCount, 2);
+  assert.equal(dispositionSummary.missingThreads[0].id, 'RT_real_123');
+  assert.equal(dispositionSummary.missingThreads[1].id, 'thread-2');
+});
+
 // #2618: `classifyThreadAckOnlyPostDisposition` extracted out of
 // `summarizeDispositionEvidenceForGate` into a standalone export so F4's
 // `audit-pr-cleanup.mts` (no review-snapshot watermark) can share it with

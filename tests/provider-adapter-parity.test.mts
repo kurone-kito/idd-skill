@@ -196,6 +196,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
     reviewThreadsWithComments: {
       42: [
         {
+          id: 'RT_resolved',
           isResolved: true,
           comments: [
             {
@@ -208,6 +209,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
           ],
         },
         {
+          id: 'RT_open',
           isResolved: false,
           comments: [
             {
@@ -230,6 +232,14 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
     githubResult.map((thread) => thread.isResolved),
     [true, false],
     'sanity: one resolved thread, one unresolved',
+  );
+  // #2696: the real GraphQL thread id must survive the port mapping --
+  // downstream diagnostics (dispositionEvidence.missingThreads[].id) key
+  // off this instead of falling back to a positional thread-N label.
+  assert.deepEqual(
+    githubResult.map((thread) => thread.id),
+    ['RT_resolved', 'RT_open'],
+    'the real thread id must flow through, not be dropped',
   );
   assert.deepEqual(fakeResult, githubResult);
 });

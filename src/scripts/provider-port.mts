@@ -245,8 +245,12 @@ export interface ProviderReviewThreadComment {
  * (byte-identical GraphQL query in both). Distinct from the minimal
  * {@link ProviderPort.listChangeRequestReviewThreads} (`{isResolved}[]`
  * only, #2266): this one also needs each thread's comment bodies/authors
- * for disposition-evidence matching. */
+ * for disposition-evidence matching. `id` is the thread's real GraphQL
+ * node id (#2696) -- callers thread it into diagnostic output (e.g.
+ * `dispositionEvidence.missingThreads[].id`) so a caller can identify
+ * which thread to reply to without a separate positional lookup. */
 export interface ProviderReviewThreadWithComments {
+  id: string;
   isResolved: boolean | null;
   comments: ProviderReviewThreadComment[];
 }

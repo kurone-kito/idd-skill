@@ -254,6 +254,7 @@ function normalizeReview(review: ReviewPayload) {
 
 function normalizeThread(thread: ProviderReviewThreadWithComments) {
   return {
+    id: thread.id,
     isResolved: Boolean(thread.isResolved),
     updatedAt: '',
     comments: {
