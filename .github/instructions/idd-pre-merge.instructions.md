@@ -108,14 +108,17 @@ for the full flag reference.
 
 **Polling loop failure mode**: a caller that repeats this invocation
 (directly, or via a delegated worker) until F2 is ready must branch on
-two distinct outcomes: a non-zero exit with a JSON `{ "error": ... }`
-object on stdout (a call-time argument/usage error, e.g. the missing
-`--claim-issue`/`--claimless` case above) is a **call failure** — fix the
-invocation and retry, never keep polling on it — while a zero exit with
-the full readiness report JSON (`ready: false` with `blockers`) is an
-ordinary **not-ready-yet** result to keep polling on. Treating both the
-same way (kurone-kito/idd-skill#2707) turns a fixable invocation mistake
-into a silent stall with no operator-visible error.
+two distinct outcomes: a zero exit with the full readiness report JSON
+(`ready: false` with `blockers`) is an ordinary **not-ready-yet** result
+to keep polling on; a non-zero exit with a JSON `{ "error": ... }` object
+on stdout instead is a **call failure** — this covers both a call-time
+argument/usage error (e.g. the missing `--claim-issue`/`--claimless`
+case above, which also carries a `hint`) and a live `gh`-backed lookup
+failing (no `hint`); fix the invocation before retrying an argument
+error, and use judgment before abandoning the poll on a `hint`-less one
+(a live call can fail transiently). Conflating either kind of `{error}`
+response with an ordinary not-ready-yet result (kurone-kito/idd-skill#2707)
+turns an operator-visible failure into a silent stall.
 
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
