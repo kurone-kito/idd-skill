@@ -110,6 +110,10 @@ export interface DispositionReport {
   status?: 'applied' | 'failed';
   applied?: AppliedDisposition[];
   failed?: FailedDisposition[];
+  /** `--apply` only: Codex summary items skipped by an immediately-pre-post
+   * revalidation (#2695 P1 follow-up) -- see
+   * `ApplyDispositionPlanResult.staleSkipped`. */
+  staleSkipped?: SkippedNotice[];
   skipped: SkippedNotice[];
 }
 
@@ -781,11 +785,35 @@ export interface ApplyDispositionPlanDeps {
    * the same loop never re-matches an id this loop already attributed.
    */
   knownViewerCommentIds: ReadonlySet<number>;
+  /**
+   * #2695 (Codex review, P1 follow-up): immediately before posting a planned
+   * Codex summary-walkthrough acceptance, re-verify the SOURCE comment
+   * (`item.noticeId`) still reads Completed for the CURRENT head. This
+   * closes the gap between `planNow()` (a snapshot taken once before the
+   * loop) and this specific post -- claim revalidation and earlier items'
+   * posts both take real network time, during which Codex could re-trigger
+   * and flip its own in-place-edited comment back to Running. Only called
+   * for a planned item whose `reason` is `'summary walkthrough'` and whose
+   * `botLogin` resolves to the `chatgpt-codex-connector` identity; every
+   * other item (notices, CodeRabbit summaries) posts unconditionally, as
+   * before. Omit in a test double with no live source to re-check --
+   * omitting it skips this revalidation entirely (never fails closed) so
+   * existing non-Codex-focused tests need no change.
+   */
+  revalidateCodexSummaryStillComplete?: (item: PlannedDisposition) => boolean;
 }
 
 export interface ApplyDispositionPlanResult {
   applied: AppliedDisposition[];
   failed: FailedDisposition[];
+  /**
+   * Codex summary items skipped because `revalidateCodexSummaryStillComplete`
+   * reported the source comment no longer Completed for the current HEAD
+   * immediately before posting (#2695 P1 follow-up). Not an error: left for
+   * a later pass once Codex actually finishes, the same way `plan.skipped`'s
+   * `codex-review-running` items are.
+   */
+  staleSkipped: SkippedNotice[];
   /** `true` when the claim was lost mid-loop, stopping further posts. */
   claimLost: boolean;
   /** Every viewer-authored comment id known by the end of the run: the
@@ -818,6 +846,7 @@ export function applyDispositionPlan(
   const knownViewerCommentIds = new Set(deps.knownViewerCommentIds);
   const applied: AppliedDisposition[] = [];
   const failed: FailedDisposition[] = [];
+  const staleSkipped: SkippedNotice[] = [];
   let claimLost = false;
   for (let index = 0; index < plan.planned.length; index += 1) {
     const item = plan.planned[index];
@@ -834,6 +863,21 @@ export function applyDispositionPlan(
         });
       }
       break;
+    }
+    const isCodexSummaryWalkthrough =
+      item.reason === 'summary walkthrough' &&
+      advisoryBotIdentityToken(item.botLogin) === 'chatgpt-codex-connector';
+    if (
+      isCodexSummaryWalkthrough &&
+      deps.revalidateCodexSummaryStillComplete &&
+      !deps.revalidateCodexSummaryStillComplete(item)
+    ) {
+      staleSkipped.push({
+        noticeId: item.noticeId,
+        botLogin: item.botLogin,
+        reason: 'codex-review-running-at-post-time',
+      });
+      continue;
     }
     let posted: { id: number } | null = null;
     let lastError: string | null = null;
@@ -866,7 +910,7 @@ export function applyDispositionPlan(
       });
     }
   }
-  return { applied, failed, claimLost, knownViewerCommentIds };
+  return { applied, failed, staleSkipped, claimLost, knownViewerCommentIds };
 }
 
 if (import.meta.main) {
@@ -1022,17 +1066,43 @@ if (import.meta.main) {
   // own post instead of some other pre-existing comment that happens to
   // carry the identical (now per-notice-unique, #1482) body text.
   const knownViewerCommentIds = viewerCommentIds(owner, repo, pr, viewerLogin);
-  const { applied, failed, claimLost } = applyDispositionPlan(plan, {
-    revalidateClaim,
-    postDisposition: (body) => postDisposition(owner, repo, pr, body),
-    recoverPostedDisposition: (body, knownIds) =>
-      recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
-    knownViewerCommentIds,
-  });
+  // #2695 (Codex review, P1 follow-up): re-fetch the live PR head and the
+  // SOURCE comment's current body immediately before posting a planned Codex
+  // summary acceptance, closing the window since planNow()'s snapshot where
+  // Codex could have re-triggered and flipped its own comment back to
+  // Running.
+  const revalidateCodexSummaryStillComplete = (
+    item: PlannedDisposition,
+  ): boolean => {
+    const freshHeadSha = ghText([
+      'api',
+      `repos/${owner}/${repo}/pulls/${pr}`,
+      '--jq',
+      '.head.sha',
+    ]);
+    const freshBody = ghText([
+      'api',
+      `repos/${owner}/${repo}/issues/comments/${item.noticeId}`,
+      '--jq',
+      '.body',
+    ]);
+    return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
+  };
+  const { applied, failed, staleSkipped, claimLost } = applyDispositionPlan(
+    plan,
+    {
+      revalidateClaim,
+      postDisposition: (body) => postDisposition(owner, repo, pr, body),
+      recoverPostedDisposition: (body, knownIds) =>
+        recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
+      knownViewerCommentIds,
+      revalidateCodexSummaryStillComplete,
+    },
+  );
 
   const status = failed.length > 0 ? 'failed' : 'applied';
   process.stdout.write(
-    `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, skipped: plan.skipped }, null, 2)}\n`,
+    `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, staleSkipped, skipped: plan.skipped }, null, 2)}\n`,
   );
   process.exit(claimLost || failed.length > 0 ? 1 : 0);
 }

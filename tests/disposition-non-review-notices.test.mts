@@ -1226,6 +1226,7 @@ test('applyDispositionPlan: an empty plan is a no-op that touches no dep', () =>
   assert.deepEqual(result, {
     applied: [],
     failed: [],
+    staleSkipped: [],
     claimLost: false,
     knownViewerCommentIds: new Set([7]),
   });
@@ -1371,4 +1372,102 @@ test('applyDispositionPlan: preserves a non-Error thrown value instead of collap
   assert.deepEqual(result.failed, [
     { noticeId: 701, error: 'rate limited: retry after 30s' },
   ]);
+});
+
+// --- #2695 (Codex review, P1 follow-up): revalidateCodexSummaryStillComplete
+
+function fakeCodexSummaryPlan(noticeId: number): DispositionPlan {
+  return {
+    headSha: 'abc1234',
+    planned: [
+      {
+        noticeId,
+        botLogin: CODEX,
+        reason: 'summary walkthrough',
+        body: buildSummaryDispositionBody(CODEX, 'abc1234'),
+      },
+    ],
+    skipped: [],
+  };
+}
+
+test('applyDispositionPlan: skips (not fails) a planned Codex summary that revalidateCodexSummaryStillComplete reports as no longer complete', () => {
+  const calls: string[] = [];
+  const plan = fakeCodexSummaryPlan(801);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => {
+      calls.push('claim');
+      return true;
+    },
+    postDisposition: () => {
+      calls.push('post');
+      return { id: 1 };
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: (item) => {
+      calls.push(`revalidate:${item.noticeId}`);
+      return false;
+    },
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.staleSkipped, [
+    {
+      noticeId: 801,
+      botLogin: CODEX,
+      reason: 'codex-review-running-at-post-time',
+    },
+  ]);
+  // Claim revalidation and the staleness check both run, but post() never does.
+  assert.deepEqual(calls, ['claim', 'revalidate:801']);
+});
+
+test('applyDispositionPlan: posts a planned Codex summary that revalidateCodexSummaryStillComplete confirms is still complete', () => {
+  const plan = fakeCodexSummaryPlan(802);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => ({ id: 9802 }),
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: () => true,
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, [{ noticeId: 802, commentId: 9802 }]);
+  assert.deepEqual(result.staleSkipped, []);
+});
+
+test('applyDispositionPlan: omitting revalidateCodexSummaryStillComplete posts a Codex summary unconditionally (backward compatible)', () => {
+  const plan = fakeCodexSummaryPlan(803);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => ({ id: 9803 }),
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, [{ noticeId: 803, commentId: 9803 }]);
+  assert.deepEqual(result.staleSkipped, []);
+});
+
+test('applyDispositionPlan: revalidateCodexSummaryStillComplete is never consulted for a non-Codex-summary item', () => {
+  // A CodeRabbit notice item (fakePlan's default shape) must never trigger the
+  // Codex-only staleness hook, even when one is supplied.
+  const plan = fakePlan([901]);
+  let revalidateCalled = false;
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => ({ id: 9901 }),
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: () => {
+      revalidateCalled = true;
+      return false;
+    },
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.equal(revalidateCalled, false);
+  assert.deepEqual(result.applied, [{ noticeId: 901, commentId: 9901 }]);
+  assert.deepEqual(result.staleSkipped, []);
 });

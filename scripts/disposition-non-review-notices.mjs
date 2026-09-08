@@ -653,6 +653,7 @@ export function applyDispositionPlan(plan, deps) {
   const knownViewerCommentIds = new Set(deps.knownViewerCommentIds);
   const applied = [];
   const failed = [];
+  const staleSkipped = [];
   let claimLost = false;
   for (let index = 0; index < plan.planned.length; index += 1) {
     const item = plan.planned[index];
@@ -669,6 +670,21 @@ export function applyDispositionPlan(plan, deps) {
         });
       }
       break;
+    }
+    const isCodexSummaryWalkthrough =
+      item.reason === 'summary walkthrough' &&
+      advisoryBotIdentityToken(item.botLogin) === 'chatgpt-codex-connector';
+    if (
+      isCodexSummaryWalkthrough &&
+      deps.revalidateCodexSummaryStillComplete &&
+      !deps.revalidateCodexSummaryStillComplete(item)
+    ) {
+      staleSkipped.push({
+        noticeId: item.noticeId,
+        botLogin: item.botLogin,
+        reason: 'codex-review-running-at-post-time',
+      });
+      continue;
     }
     let posted = null;
     let lastError = null;
@@ -701,7 +717,7 @@ export function applyDispositionPlan(plan, deps) {
       });
     }
   }
-  return { applied, failed, claimLost, knownViewerCommentIds };
+  return { applied, failed, staleSkipped, claimLost, knownViewerCommentIds };
 }
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
@@ -844,16 +860,40 @@ if (import.meta.main) {
   // own post instead of some other pre-existing comment that happens to
   // carry the identical (now per-notice-unique, #1482) body text.
   const knownViewerCommentIds = viewerCommentIds(owner, repo, pr, viewerLogin);
-  const { applied, failed, claimLost } = applyDispositionPlan(plan, {
-    revalidateClaim,
-    postDisposition: (body) => postDisposition(owner, repo, pr, body),
-    recoverPostedDisposition: (body, knownIds) =>
-      recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
-    knownViewerCommentIds,
-  });
+  // #2695 (Codex review, P1 follow-up): re-fetch the live PR head and the
+  // SOURCE comment's current body immediately before posting a planned Codex
+  // summary acceptance, closing the window since planNow()'s snapshot where
+  // Codex could have re-triggered and flipped its own comment back to
+  // Running.
+  const revalidateCodexSummaryStillComplete = (item) => {
+    const freshHeadSha = ghText([
+      'api',
+      `repos/${owner}/${repo}/pulls/${pr}`,
+      '--jq',
+      '.head.sha',
+    ]);
+    const freshBody = ghText([
+      'api',
+      `repos/${owner}/${repo}/issues/comments/${item.noticeId}`,
+      '--jq',
+      '.body',
+    ]);
+    return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
+  };
+  const { applied, failed, staleSkipped, claimLost } = applyDispositionPlan(
+    plan,
+    {
+      revalidateClaim,
+      postDisposition: (body) => postDisposition(owner, repo, pr, body),
+      recoverPostedDisposition: (body, knownIds) =>
+        recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
+      knownViewerCommentIds,
+      revalidateCodexSummaryStillComplete,
+    },
+  );
   const status = failed.length > 0 ? 'failed' : 'applied';
   process.stdout.write(
-    `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, skipped: plan.skipped }, null, 2)}\n`,
+    `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, staleSkipped, skipped: plan.skipped }, null, 2)}\n`,
   );
   process.exit(claimLost || failed.length > 0 ? 1 : 0);
 }

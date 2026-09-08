@@ -79,8 +79,12 @@ one field: `audit-pr-cleanup.mjs` exposes both `mode`
 (`dry-run`/`apply`) and `status` (a seven-value vocabulary: `clean`,
 `needs-apply`, `permission-blocked`, `rescan-failed`, `failed`,
 `incomplete`, `applied`); `disposition-non-review-notices.mjs` prints
-no `status` key at all in its default dry-run mode, and only
-`applied`/`failed` under `--apply`; `resolve-review-thread.mjs`
+no `status` key at all in its default dry-run mode, and its `status`
+value (`applied`/`failed`) under `--apply` is still driven only by
+`applied`/`failed` -- `--apply` output also carries a separate
+`staleSkipped` array (#2695: Codex summary items whose live state
+was re-checked and found no longer Completed immediately before
+posting), which does not affect `status`; `resolve-review-thread.mjs`
 returns `mode` (`dry-run`/`apply`) alongside its own separate
 `status?` (`applied`/`failed`).
 
