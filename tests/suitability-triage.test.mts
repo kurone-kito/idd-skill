@@ -4570,6 +4570,45 @@ This will produce the expected result.
   assert.equal(result.pass, false);
 });
 
+test('verifiability ignores a backslash-escaped HTML comment opener (PR #2735 Codex review round 5)', () => {
+  // A backslash-escaped "\<!--" renders as a literal string in CommonMark,
+  // not a real HTML comment start. findHtmlCommentRanges previously masked
+  // everything after it through EOF (no matching "-->" ever follows),
+  // hiding a genuine later Acceptance Criteria checklist item.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Document the literal \\<!-- marker in the README.
+
+## Acceptance Criteria
+- [ ] Ship the fix in src/foo.ts
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability ignores backslash-escaped strikethrough delimiters (PR #2735 Codex review round 5)', () => {
+  // A backslash-escaped "\~~" renders as a literal string in CommonMark,
+  // not a real strikethrough delimiter. isInStrikethroughSpan previously
+  // paired two such literal, escaped tokens as a real delimiter pair,
+  // wrongly treating the genuine decision marker between them as struck
+  // through / retracted.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+\\~~ Maintainer decision (Groom hearing, 2026-09-05): proceed as described. \\~~
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {

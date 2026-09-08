@@ -372,6 +372,14 @@ function isInBlockquotedParagraph(normalizedBody, paragraphSpans, offset) {
 // relative to `normalizedBody` (as `maskMarkdownCodeRegionsPreservingPositions`
 // guarantees) so `paragraphSpans` and `offset`, both computed against
 // `normalizedBody`, stay valid against it.
+//
+// #2711 PR #2735 review round 5 (Codex): a backslash-escaped delimiter
+// (`\~~`) renders as a literal string in CommonMark, not a real
+// strikethrough boundary -- two literal `\~~` examples surrounding a
+// genuine, unstruck "Maintainer decision (...)" must not be paired as if
+// they were real delimiters. A single preceding backslash is enough to
+// treat a `~~` as escaped (soft heuristic, matching this file's existing
+// style; does not attempt full backslash-run parity for `\\~~`).
 function isInStrikethroughSpan(codeMaskedBody, paragraphSpans, offset) {
   const span =
     paragraphSpans.find(
@@ -385,7 +393,9 @@ function isInStrikethroughSpan(codeMaskedBody, paragraphSpans, offset) {
   const delimiterStarts = [];
   let delimiterMatch = delimiterPattern.exec(paragraphText);
   while (delimiterMatch !== null) {
-    delimiterStarts.push(delimiterMatch.index);
+    if (paragraphText[delimiterMatch.index - 1] !== '\\') {
+      delimiterStarts.push(delimiterMatch.index);
+    }
     delimiterPattern.lastIndex = delimiterMatch.index + 2;
     delimiterMatch = delimiterPattern.exec(paragraphText);
   }
@@ -424,15 +434,26 @@ function isInStrikethroughSpan(codeMaskedBody, paragraphSpans, offset) {
 // ranges from consideration entirely; pass fenced + indented + inline
 // ranges (e.g. `findMarkdownCodeRanges`'s result) to cover every code
 // shape, not just fenced blocks.
+//
+// #2711 PR #2735 review round 5 (Codex): a backslash-escaped opener
+// (`\<!--`) renders as a literal string in CommonMark, not a real HTML
+// comment start -- an issue documenting the literal marker syntax (e.g.
+// `Document the literal \<!-- marker`) must not have everything after it
+// masked through EOF. A single preceding backslash is enough to treat it
+// as escaped (soft heuristic, matching this file's existing style; does
+// not attempt full backslash-run parity for a doubly-escaped `\\<!--`).
 function findHtmlCommentRanges(text, ignoredOpenerRanges = []) {
   const ranges = [];
   const openPattern = /<!--/g;
   let openMatch = openPattern.exec(text);
   while (openMatch) {
     const openIndex = openMatch.index;
-    const isIgnored = ignoredOpenerRanges.some(
-      (range) => openIndex >= range.start && openIndex < range.end,
-    );
+    const isEscaped = text[openIndex - 1] === '\\';
+    const isIgnored =
+      isEscaped ||
+      ignoredOpenerRanges.some(
+        (range) => openIndex >= range.start && openIndex < range.end,
+      );
     if (isIgnored) {
       openPattern.lastIndex = openIndex + 4;
       openMatch = openPattern.exec(text);
