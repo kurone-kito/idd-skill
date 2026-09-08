@@ -300,6 +300,13 @@ and treat as a PASS so work is not blocked by agent capability limits.
 classify as `invalid` and stop rather than treating it as a PASS.
 Failing open on a safety check is a concrete security risk.
 
+**Semantic skip/fail description of a different check** (#2697, #2734):
+mechanical hyphen/heading guards can't tell "skip the check" prose about a
+_different_ check's own pass/fail/skip logic from a genuine directive.
+Known, accepted limit — the written check stays authoritative; wrap a
+quoted trigger phrase in code spans when authoring an issue about this
+shape.
+
 **Escape-hatch acceptance criteria**: an either/or acceptance-criteria
 bullet where one branch is a substantive change and the other reads as
 "or document the gap/tradeoff" is not a Check 7 (Verifiability) PASS by

@@ -1137,7 +1137,11 @@ function findGenuineNounMatch(
     // for isCodeIdentifierProcessMention.
     if (
       (getCodeRangeAt(absoluteIndex) ||
-        (!isOrdinaryHyphenatedCompoundToken(rawSource, absoluteIndex) &&
+        (!isOrdinaryHyphenatedCompoundToken(
+          rawSource,
+          absoluteIndex,
+          nounMatch[0].length,
+        ) &&
           !isNarrativeIddMention(rawSource, absoluteIndex) &&
           !isCodeIdentifierProcessMention(rawSource, absoluteIndex))) &&
       !(
@@ -1240,9 +1244,45 @@ const COMPOUND_TOKEN_BOUNDARY_PATTERN = /[\s\x60'"(]/;
 // origin" mechanism, not anything specific to the verb word list, so the
 // noun side needed no logic changes here, only a second call site in
 // `findPolicyOverrideMatch` at the noun's own match position.
-function isOrdinaryHyphenatedCompoundToken(rawSource, matchIndex) {
+function isOrdinaryHyphenatedCompoundToken(rawSource, matchIndex, matchLength) {
   if (rawSource[matchIndex - 1] !== '-') {
-    return false;
+    // #2734: no leading hyphen at all, so this token is not the tail of a
+    // compound and not a flag reference either -- every flag shape this
+    // file already handles ("--skip", "/force-skip") is hyphen/slash/plus
+    // PREFIXED, never hyphen-SUFFIXED with nothing leading it. The same
+    // "ordinary compound" false-positive shape the leading-side walk below
+    // exists for can still occur with this token as the compound's HEAD
+    // instead of its tail (e.g. "skip-condition", reported on issue #2734
+    // itself, a feature-spec sentence describing a *different* check's own
+    // skip condition). This needs no equivalent trace-to-origin walk: a
+    // trailing hyphen immediately followed by a word character, with
+    // nothing hyphen-like leading this token, is unambiguously an ordinary
+    // compound word -- symmetric with `POLICY_OVERRIDE_NOUN_SOURCE`'s own
+    // trailing `(?![\w-])` guard, which the noun side already has baked
+    // into its regex and the verb side never did.
+    //
+    // This classification only applies when the token's OWN start is a
+    // genuine prose boundary (start of string, or
+    // `COMPOUND_TOKEN_BOUNDARY_PATTERN`) -- mirroring the leading-side
+    // walk's own terminal test below. A non-hyphen flag prefix that still
+    // abuts the token with no boundary (`/skip-checks`, `+skip-checks`)
+    // must stay detectable as a directive, exactly like the existing
+    // `--skip-checks` / `/force-skip` shapes the leading-side walk already
+    // handles; only the leading character actually being `-` routes into
+    // that walk, so a `/`- or `+`-prefixed flag would otherwise slip
+    // through this trailing-hyphen branch unclassified as an "ordinary
+    // compound" false negative.
+    if (
+      matchIndex !== 0 &&
+      !COMPOUND_TOKEN_BOUNDARY_PATTERN.test(rawSource[matchIndex - 1] ?? '')
+    ) {
+      return false;
+    }
+    const afterMatch = rawSource[matchIndex + matchLength];
+    return (
+      afterMatch === '-' &&
+      /\w/.test(rawSource[matchIndex + matchLength + 1] ?? '')
+    );
   }
   let cursor = matchIndex - 1;
   while (cursor > 0 && /[\w-]/.test(rawSource[cursor - 1] ?? '')) {
@@ -1432,7 +1472,7 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
     const verb = maskedMatch[1] ?? '';
     if (
       (!getCodeRangeAt(index) &&
-        isOrdinaryHyphenatedCompoundToken(text, index)) ||
+        isOrdinaryHyphenatedCompoundToken(text, index, verb.length)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
@@ -1491,7 +1531,7 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
     const verb = match[1] ?? '';
     if (
       (!getCodeRangeAt(index) &&
-        isOrdinaryHyphenatedCompoundToken(text, index)) ||
+        isOrdinaryHyphenatedCompoundToken(text, index, verb.length)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
