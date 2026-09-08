@@ -131,7 +131,7 @@ unpushed E9 fixes.
   instead.
 - Otherwise (clean, behind-no-conflict, computing, dirty,
   force-push-exception, unknown): skip the merge, proceed to E12 —
-  the E-phase branch-sync check and F1 hold on those later.
+  the E-phase branch-sync check and F1 handle those downstream.
 
 ## E12 — Lint, test, push
 

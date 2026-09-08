@@ -144,8 +144,8 @@ other GitHub side effect, confirm all of the following:
    contract above) — no non-helper fallback here.
 2. Not a confirmed conflict (clean, behind-no-conflict, computing,
    dirty, force-push-exception, unknown)? Skip the merge, continue to
-   E12 — F1 (`idd-pre-merge-lite.instructions.md`) holds on those
-   later.
+   E12 — F1 (`idd-pre-merge-lite.instructions.md`) handles those
+   downstream.
 3. Conflict (`mergeable` `CONFLICTING`)? Unresolved review threads,
    unreplied comments, or reviewer state `CHANGES_REQUESTED`: get
    explicit operator confirmation first — the merge commit will appear
