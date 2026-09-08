@@ -7,10 +7,12 @@ import {
   renderReviewReplyStamp,
 } from '../src/scripts/marker-helpers.mts';
 import {
+  collectPreMergeReadiness,
   fetchBranchRulesets,
   fetchGovernanceJson,
   normalizeStatusCheckRollupEntry,
   parseArgs,
+  renderCliUsageError,
   resolveDeclarationActiveSince,
   resolveEligibleCodeownerUserLogins,
   resolveToleratedGhFailure,
@@ -7096,6 +7098,43 @@ test('parseArgs: a non-positive / non-integer number throws a clear message', ()
     () => parseArgs(['--claim-issue', '0']),
     /invalid --claim-issue value/,
   );
+});
+
+// #2707: neither --claimless nor --claim-issue supplied is still a thrown
+// Error from collectPreMergeReadiness itself (unchanged contract for a
+// direct function caller) -- the CLI entrypoint's own try/catch, tested via
+// renderCliUsageError below, is what turns this into a structured,
+// non-crashing stdout error for a subprocess caller.
+test('collectPreMergeReadiness: neither --claimless nor --claim-issue throws (#2707)', () => {
+  assert.throws(
+    () => collectPreMergeReadiness(['--pr', '1']),
+    /missing required --claim-issue <number> argument/,
+  );
+});
+
+test('renderCliUsageError: names --claimless as the fix for the missing-claim-issue error (#2707)', () => {
+  const result = renderCliUsageError(
+    new Error('missing required --claim-issue <number> argument'),
+  );
+  assert.equal(
+    result.error,
+    'missing required --claim-issue <number> argument',
+  );
+  assert.match(result.hint ?? '', /--claimless/);
+});
+
+test('renderCliUsageError: an unrelated error carries no --claimless hint (#2707)', () => {
+  const result = renderCliUsageError(
+    new Error('missing required --pr <number> argument'),
+  );
+  assert.equal(result.error, 'missing required --pr <number> argument');
+  assert.equal(result.hint, undefined);
+});
+
+test('renderCliUsageError: a non-Error thrown value still renders a string error (#2707)', () => {
+  const result = renderCliUsageError('some non-Error throw');
+  assert.equal(result.error, 'some non-Error throw');
+  assert.equal(result.hint, undefined);
 });
 
 test('buildPreMergeReadinessSummary: claimless emits not-applicable ownership (#2017)', () => {

@@ -664,11 +664,39 @@ export function collectPreMergeReadiness(
     trustedMarkerActorsSource,
   };
 }
+// #2707: a caller that repeats this invocation until F2 is ready (directly,
+// or via a delegated worker's polling loop) must be able to distinguish a
+// call-time argument/usage error from an ordinary "not ready yet" readiness
+// report -- both used to be indistinguishable-by-default (an uncaught
+// exception left an unhandled stack trace on stderr and a non-JSON stdout,
+// easy to conflate with a transient not-ready state if the caller only
+// checks the exit code). `hint` is populated only for the specific error
+// this arose from (the missing --claim-issue/--claimless case); other
+// thrown errors surface with `error` alone.
+export function renderCliUsageError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('missing required --claim-issue')) {
+    return {
+      error: message,
+      hint:
+        'pass --claim-issue <issue-number> (with --claim-id), or --claimless ' +
+        'for a PR with no closingIssuesReferences',
+    };
+  }
+  return { error: message };
+}
 // CLI: emit the readiness report as JSON when invoked directly.
 if (import.meta.main) {
-  process.stdout.write(
-    `${JSON.stringify(collectPreMergeReadiness(process.argv.slice(2)), null, 2)}\n`,
-  );
+  try {
+    process.stdout.write(
+      `${JSON.stringify(collectPreMergeReadiness(process.argv.slice(2)), null, 2)}\n`,
+    );
+  } catch (error) {
+    process.stdout.write(
+      `${JSON.stringify(renderCliUsageError(error), null, 2)}\n`,
+    );
+    process.exitCode = 1;
+  }
 }
 function warnDeprecatedFlag(deprecated, canonical) {
   process.stderr.write(
