@@ -21,23 +21,19 @@ Resolve `<profile-selected-roadmap-audit-execute-command>` from
 `docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
 non-vendored profiles.
 
-Default (no `--apply`) dry-runs the mechanical completion preconditions
-via the same roadmap-graph traversal used below and prints a JSON
-verdict object that includes `ready`, `blockers`, and `evidenceBody`
-alongside other protocol/result fields (`protocolVersion`, `mode`,
-`result`, and more) — the listed keys are not the whole shape. It gates
-only the MECHANICAL completion preconditions (all descendants
-closed/complete; no
+Default (no `--apply`) dry-runs the roadmap-graph traversal and prints
+a JSON verdict — see the helper's own `--help` for the exact field
+contract, exit codes, and not-owned reason codes; treat that as
+authoritative over any paraphrase here. It gates only the MECHANICAL
+completion preconditions (all descendants closed/complete; no
 open/unresolved/inaccessible/linked-PR/nested-roadmap/childless/cycle/
 human-gate blocker) — it does **not** verify the roadmap's free-form
-success criteria or autonomy-gap items, which the caller must still
-confirm separately before `--apply`, exactly as every other
-helper-first section in this repository already states for its own
-helper. It also does **not** gate on a `diagnostics.duplicateReferences`
-hit — only a cycle blocks `ready` — even though the written procedure
-below always treats a duplicate reference as unresolved; manually check
-the evidence body's duplicate-reference count before trusting a
-`ready: true` verdict:
+success criteria or autonomy-gap items, and does **not** gate on a
+duplicate graph reference (only a cycle blocks `ready`, even though
+the written procedure below always treats a duplicate reference as
+unresolved). The caller must still confirm all of these separately
+before `--apply`, exactly as every other helper-first section in this
+repository already states for its own helper:
 
 ```sh
 # source repo / vendored-node
@@ -52,23 +48,11 @@ node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> \
 `<claim-id>` must be the roadmap-audit-scoped claim (branch
 `roadmap-audit/<number>-<slug>`) posted per the written claim step
 below; an ordinary execution claim on the roadmap issue does not
-authorize closure. `--apply` re-validates that claim and re-evaluates
-the graph before posting the evidence comment, re-validates ownership
-once more immediately before closing the roadmap, then releases the
-claim under that same validated ownership (no separate check between
-the close and the release).
+authorize closure.
 
-A non-zero exit paired with well-formed JSON — a not-ready verdict
-(`"ready": false` with a non-empty `"blockers"` array), or an `--apply`
-verdict whose `"result"` string embeds a not-owned reason code such as
-`claim-branch-mismatch` or `claim-stale` — is authoritative, not a
-malfunction: act on it directly. **Exception**: a verdict that also
-carries `"viewerLoginUnavailable": true` is inconclusive, not
-authoritative — the helper's own trusted-author lookup failed, so
-apply the written fallback (retry, or a manual permission check)
-instead of treating it as final. Otherwise, fall back to the written
-A1.5 procedure below only when the helper is unavailable, malformed,
-or its output disagrees with live state.
+If the helper is unavailable, its output cannot be parsed, or its
+verdict disagrees with live state, fall back to the written A1.5
+procedure below.
 
 ## A1.5 — Audit completed roadmaps
 
