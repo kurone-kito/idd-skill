@@ -364,32 +364,6 @@ export function collectContextCeilingViolations(config, bundles) {
  * inclusive `>=`, matching that function's own notice-threshold comparison
  * ("reaches ... or more").
  */
-/**
- * Pick the effective `noticeUtilizationPct` for
- * {@link collectNearCeilingRatchetViolations} (#2697 Codex review finding
- * on PR #2736): a PR that raises both a bundle's `limitBytes` and the
- * `noticeUtilizationPct` threshold itself in the same change (e.g. 95 to
- * 97) could otherwise dodge the guard entirely -- a bundle sitting at 96%
- * under the OLD (base-ref) threshold reads as compliant against the NEW,
- * looser threshold, exactly the near-ceiling raise this check exists to
- * catch. Using the stricter (lower) of the base and current thresholds
- * closes that gap in both directions: raising the threshold cannot loosen
- * the check, and a repository that instead LOWERS the threshold in the
- * same PR gets the more conservative (lower) value applied immediately
- * rather than waiting a cycle. Falls back to `currentPct` alone when the
- * base ref's config is missing or not a valid non-negative number (a
- * repository adopting `contextCeiling` for the first time in this PR has
- * no base-ref threshold to compare against).
- */
-export function selectStricterNoticeUtilizationPct(
-  currentPct,
-  baseNoticeUtilizationPct,
-) {
-  const basePct = Number(baseNoticeUtilizationPct);
-  return Number.isFinite(basePct) && basePct >= 0
-    ? Math.min(currentPct, basePct)
-    : currentPct;
-}
 export function collectNearCeilingRatchetViolations(
   noticeUtilizationPct,
   currentBundles,
@@ -414,6 +388,38 @@ export function collectNearCeilingRatchetViolations(
     }
   }
   return errors;
+}
+/**
+ * Pick the effective `noticeUtilizationPct` for
+ * {@link collectNearCeilingRatchetViolations} (#2697 Codex review finding
+ * on PR #2736): a PR that raises both a bundle's `limitBytes` and the
+ * `noticeUtilizationPct` threshold itself in the same change (e.g. 95 to
+ * 97) could otherwise dodge the guard entirely -- a bundle sitting at 96%
+ * under the OLD (base-ref) threshold reads as compliant against the NEW,
+ * looser threshold, exactly the near-ceiling raise this check exists to
+ * catch. Using the stricter (lower) of the base and current thresholds
+ * closes that gap in both directions: raising the threshold cannot loosen
+ * the check, and a repository that instead LOWERS the threshold in the
+ * same PR gets the more conservative (lower) value applied immediately
+ * rather than waiting a cycle. Falls back to `currentPct` alone when the
+ * base ref's config is missing or not a valid non-negative number (a
+ * repository adopting `contextCeiling` for the first time in this PR has
+ * no base-ref threshold to compare against).
+ *
+ * Reuses {@link normalizeNonNegativeNumber}'s strict `typeof === 'number'`
+ * gate rather than a bare `Number(...)` coercion (CodeRabbit review finding
+ * on PR #2736): `Number(null)`, `Number('')`, and `Number(false)` all
+ * coerce to `0`, a valid-looking finite non-negative number that would
+ * silently defeat the documented "missing base value falls back to
+ * currentPct" contract and instead apply an effective 0% threshold --
+ * flagging every raised `limitBytes` regardless of actual utilization.
+ */
+export function selectStricterNoticeUtilizationPct(
+  currentPct,
+  baseNoticeUtilizationPct,
+) {
+  const basePct = normalizeNonNegativeNumber(baseNoticeUtilizationPct);
+  return basePct === null ? currentPct : Math.min(currentPct, basePct);
 }
 // Words after which a `/` must start a regex literal, not division.
 const REGEX_PRECEDING_KEYWORDS = new Set([

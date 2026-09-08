@@ -954,8 +954,13 @@ function readTextAtRef(ref, file) {
   try {
     return normalizeText(git(['show', `${ref}:${file}`]));
   } catch {
-    // File did not exist at the base ref (e.g. newly added in this change);
-    // its base-ref byte contribution is 0, not an error.
+    // Most commonly the file did not exist at the base ref (e.g. newly
+    // added in this change), but any `git show` failure -- a corrupt
+    // object, a path that is a directory at that ref, etc. -- is treated
+    // the same way: there is no usable byte count to add, and
+    // resolveNearCeilingBaseRef already verified the ref itself resolves,
+    // so failing this whole check closed over one file's read error would
+    // be a worse outcome than counting it as a 0-byte contribution.
     return null;
   }
 }

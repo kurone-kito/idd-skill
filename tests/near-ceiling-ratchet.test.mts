@@ -30,6 +30,21 @@ test('selectStricterNoticeUtilizationPct picks the shared value when base and cu
   assert.equal(selectStricterNoticeUtilizationPct(95, 95), 95);
 });
 
+// CodeRabbit review finding on PR #2736: a bare `Number(...)` coercion turns
+// each of these into a valid-looking `0`, which would wrongly apply an
+// effective 0% threshold instead of falling back to currentPct.
+test('selectStricterNoticeUtilizationPct falls back to currentPct for null', () => {
+  assert.equal(selectStricterNoticeUtilizationPct(95, null), 95);
+});
+
+test('selectStricterNoticeUtilizationPct falls back to currentPct for an empty string', () => {
+  assert.equal(selectStricterNoticeUtilizationPct(95, ''), 95);
+});
+
+test('selectStricterNoticeUtilizationPct falls back to currentPct for false', () => {
+  assert.equal(selectStricterNoticeUtilizationPct(95, false), 95);
+});
+
 test('a brand-new bundle with no base-ref entry does not error', () => {
   const current = [{ id: 'bundle-new', limitBytes: 10000, totalBytes: 9000 }];
   const result = collectNearCeilingRatchetViolations(NOTICE_PCT, current, []);
