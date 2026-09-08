@@ -110,3 +110,81 @@ test('multiple bundles are evaluated independently', () => {
   assert.equal(result.length, 1);
   assert.match(result[0], /bundle-a/);
 });
+
+// Codex review finding on PR #2736: an id rename alone must not exempt an
+// already-near-ceiling bundle from this guard as though it were brand-new.
+test('a bundle renamed with an identical file set is matched by the rename fallback and errors', () => {
+  const files = ['a.md', 'b.md'];
+  const current = [
+    { id: 'bundle-a-v2', limitBytes: 2000, totalBytes: 1000, files },
+  ];
+  const base = [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950, files }];
+  const result = collectNearCeilingRatchetViolations(NOTICE_PCT, current, base);
+  assert.equal(result.length, 1);
+  assert.match(result[0], /bundle-a-v2 limitBytes raised from 1000 to 2000/);
+});
+
+test('a bundle renamed with an identical file set and an unchanged limitBytes does not error', () => {
+  const files = ['a.md', 'b.md'];
+  const current = [
+    { id: 'bundle-a-v2', limitBytes: 1000, totalBytes: 950, files },
+  ];
+  const base = [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950, files }];
+  const result = collectNearCeilingRatchetViolations(NOTICE_PCT, current, base);
+  assert.deepEqual(result, []);
+});
+
+test('a bundle renamed with a different file set is treated as genuinely new, not a rename', () => {
+  const current = [
+    {
+      id: 'bundle-a-v2',
+      limitBytes: 2000,
+      totalBytes: 1000,
+      files: ['a.md', 'c.md'],
+    },
+  ];
+  const base = [
+    {
+      id: 'bundle-a',
+      limitBytes: 1000,
+      totalBytes: 950,
+      files: ['a.md', 'b.md'],
+    },
+  ];
+  const result = collectNearCeilingRatchetViolations(NOTICE_PCT, current, base);
+  assert.deepEqual(result, []);
+});
+
+test('two base bundles sharing an identical file set are ambiguous and never used as a rename match', () => {
+  const files = ['a.md', 'b.md'];
+  const current = [
+    { id: 'bundle-a-v2', limitBytes: 2000, totalBytes: 1000, files },
+  ];
+  const base = [
+    { id: 'bundle-a', limitBytes: 1000, totalBytes: 950, files },
+    { id: 'bundle-a-dup', limitBytes: 1000, totalBytes: 950, files },
+  ];
+  const result = collectNearCeilingRatchetViolations(NOTICE_PCT, current, base);
+  assert.deepEqual(result, []);
+});
+
+test('file order does not affect the rename fallback match', () => {
+  const current = [
+    {
+      id: 'bundle-a-v2',
+      limitBytes: 2000,
+      totalBytes: 1000,
+      files: ['b.md', 'a.md'],
+    },
+  ];
+  const base = [
+    {
+      id: 'bundle-a',
+      limitBytes: 1000,
+      totalBytes: 950,
+      files: ['a.md', 'b.md'],
+    },
+  ];
+  const result = collectNearCeilingRatchetViolations(NOTICE_PCT, current, base);
+  assert.equal(result.length, 1);
+});

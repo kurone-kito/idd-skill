@@ -214,7 +214,7 @@ function normalizePositiveIntegerBudget(value, defaultValue) {
   }
   return value;
 }
-function normalizeNonNegativeNumber(value) {
+export function normalizeNonNegativeNumber(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     return null;
   }
@@ -352,17 +352,32 @@ export function collectContextCeilingViolations(config, bundles) {
  * threshold {@link collectContextCeilingViolations} already surfaces as a
  * notice, so the two checks agree on what "near-ceiling" means.
  *
- * No violation (silently skipped) when: the bundle is absent from
- * `baseBundles` (a brand-new bundle has nothing to compare against); the
- * bundle's `limitBytes` did not increase relative to the base ref (unchanged
- * or decreased); or the base ref's own `limitBytes` is zero or negative
- * (nothing meaningful to ratchet a utilization percentage from). Threshold
- * comparison is cross-multiplied in byte space
- * (`totalBytes * 100` vs. `limitBytes * pct`), matching
- * {@link collectContextCeilingViolations}'s own convention so a bundle
- * sitting exactly at the threshold does not tip over from float rounding;
- * inclusive `>=`, matching that function's own notice-threshold comparison
- * ("reaches ... or more").
+ * No violation (silently skipped) when: the bundle is genuinely new -- no
+ * base-ref entry matches its id, and (see the rename fallback below) no
+ * base bundle has an identical file set either; the bundle's `limitBytes`
+ * did not increase relative to the base ref (unchanged or decreased); or
+ * the base ref's own `limitBytes` is zero or negative (nothing meaningful
+ * to ratchet a utilization percentage from). Threshold comparison is
+ * cross-multiplied in byte space (`totalBytes * 100` vs. `limitBytes *
+ * pct`), matching {@link collectContextCeilingViolations}'s own convention
+ * so a bundle sitting exactly at the threshold does not tip over from
+ * float rounding; inclusive `>=`, matching that function's own
+ * notice-threshold comparison ("reaches ... or more").
+ *
+ * **Bundle-rename fallback** (#2697 Codex review finding on PR #2736): an
+ * id lookup alone would let a PR dodge this guard by renaming an
+ * already-near-ceiling bundle while raising its limit -- the rename reads
+ * as "no base-ref entry", the brand-new-bundle exemption. When a current
+ * bundle's id has no base match, this also looks for a base bundle whose
+ * `files` set is identical (order-independent) to the current bundle's own
+ * -- an id rename with unchanged membership is still the same bundle for
+ * this check's purposes. A file-set shared by two or more base bundles is
+ * ambiguous and is never used as a fallback match. Exact-set match only:
+ * a bundle whose file membership also changed (a split, a merge, a partial
+ * overlap) is treated as genuinely new, the same as before this fallback
+ * existed -- matching membership by name is a much weaker signal than
+ * matching it exactly, and this check's own false-positive cost (blocking
+ * an unrelated, legitimate raise) is why it stops at the exact case.
  */
 export function collectNearCeilingRatchetViolations(
   noticeUtilizationPct,
@@ -370,9 +385,28 @@ export function collectNearCeilingRatchetViolations(
   baseBundles,
 ) {
   const baseById = new Map(baseBundles.map((bundle) => [bundle.id, bundle]));
+  // `null` marks an ambiguous signature (shared by 2+ base bundles) so it is
+  // never mistaken for "no entry" (`undefined`, via a plain Map miss) --
+  // both must resolve to "no fallback match", but for different reasons.
+  const baseByFileSignature = new Map();
+  for (const bundle of baseBundles) {
+    const signature = fileSetSignature(bundle.files);
+    if (signature === null) {
+      continue;
+    }
+    baseByFileSignature.set(
+      signature,
+      baseByFileSignature.has(signature) ? null : bundle,
+    );
+  }
   const errors = [];
   for (const current of currentBundles) {
-    const base = baseById.get(current.id);
+    const currentSignature = fileSetSignature(current.files);
+    const base =
+      baseById.get(current.id) ??
+      (currentSignature !== null
+        ? (baseByFileSignature.get(currentSignature) ?? undefined)
+        : undefined);
     if (
       !base ||
       current.limitBytes <= base.limitBytes ||
@@ -388,6 +422,17 @@ export function collectNearCeilingRatchetViolations(
     }
   }
   return errors;
+}
+/** Order-independent identity for a bundle's file membership, used only by
+ * {@link collectNearCeilingRatchetViolations}'s rename fallback. `null` for
+ * an empty or absent file list -- nothing to key a fallback match on. */
+function fileSetSignature(files) {
+  if (!files || files.length === 0) {
+    return null;
+  }
+  // \n as the join separator, not a space: a file path could
+  // plausibly contain a space, but never a literal newline.
+  return [...files].sort().join('\n');
 }
 /**
  * Pick the effective `noticeUtilizationPct` for

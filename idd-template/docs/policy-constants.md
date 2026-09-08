@@ -594,10 +594,12 @@ raises a `bundleBudgets` bundle's `limitBytes` while that bundle's
 base-ref utilization was already at or above the configured
 `noticeUtilizationPct` threshold (95% by default) — the exception is no
 longer prose-only. The check compares against the base ref's own
-`audit/sync-manifest.json` and file contents, so a brand-new bundle (no
-base-ref entry) or a `limitBytes` decrease never trips it. If the base
-ref or its manifest cannot be read (for example, a shallow checkout),
-the check emits a notice and skips this comparison instead of failing
+`audit/sync-manifest.json` and file contents, so a genuinely new bundle
+(no base-ref entry by id, and no base bundle with an identical file set
+either — an id rename alone does not count as new) or a `limitBytes`
+decrease never trips it. If the base ref or its manifest cannot be read
+(for example, a shallow checkout), the check emits a notice and skips
+this comparison instead of failing
 closed.
 
 ### High-contention shared files

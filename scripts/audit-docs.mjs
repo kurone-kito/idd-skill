@@ -23,6 +23,7 @@ import {
   collectTypeSuppressionViolations,
   globFiles,
   isBannerScopedInstructionTarget,
+  normalizeNonNegativeNumber,
   parseGeneratedFromBannerSource,
   renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
@@ -904,7 +905,7 @@ function checkBundleBudgets(budgets) {
         `${id}: bundle total is ${totalBytes} bytes (limit ${limitBytes}); files: ${files.join(', ')}`,
       );
     }
-    stats.push({ id, limitBytes, totalBytes });
+    stats.push({ id, limitBytes, totalBytes, files });
   }
   return stats;
 }
@@ -968,19 +969,20 @@ function computeBaseBundleStats(ref, budgets) {
   const stats = [];
   for (const budget of budgets) {
     const id = budget.id ?? 'bundle-budget';
+    const files = budget.files ?? [];
     const limitBytes = Number(budget.limitBytes);
     if (!Number.isFinite(limitBytes) || limitBytes < 0) {
       // Already reported against the current manifest by checkBundleBudgets.
       continue;
     }
     let totalBytes = 0;
-    for (const file of budget.files ?? []) {
+    for (const file of files) {
       const text = readTextAtRef(ref, file);
       if (text !== null) {
         totalBytes += Buffer.byteLength(stripGeneratedFromBanner(text), 'utf8');
       }
     }
-    stats.push({ id, limitBytes, totalBytes });
+    stats.push({ id, limitBytes, totalBytes, files });
   }
   return stats;
 }
@@ -988,8 +990,15 @@ function checkNearCeilingRatchet(config, currentBundleStats) {
   if (!config) {
     return;
   }
-  const noticeUtilizationPct = Number(config.noticeUtilizationPct);
-  if (!Number.isFinite(noticeUtilizationPct) || noticeUtilizationPct < 0) {
+  // Strict typeof-number gate (Copilot review finding, PR #2736): a bare
+  // Number(...) coercion turns null/''/false into a valid-looking 0, which
+  // would let this function run with an effective 0% threshold instead of
+  // deferring entirely to checkContextCeiling's own error for the same
+  // misconfiguration.
+  const noticeUtilizationPct = normalizeNonNegativeNumber(
+    config.noticeUtilizationPct,
+  );
+  if (noticeUtilizationPct === null) {
     // Already reported by checkContextCeiling.
     return;
   }
