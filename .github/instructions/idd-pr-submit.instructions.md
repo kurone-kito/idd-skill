@@ -533,15 +533,24 @@ confirmed condition above. Delegate polling mechanics to
   [canonical `advisory-wait-state`
   invocation](idd-advisory-wait.instructions.md#1-canonical-path-helper-first)
   for this PR first and read `outcome`: only `REQUEST_NEEDED` means
-  request a review now. `SATISFIED` (`lastCopilotCommit` already
-  matches this HEAD SHA — Copilot's review already covers it) or `WAIT`
-  (a same-head request already exists, still inside its settle window)
-  both mean request nothing — wait for Copilot's review to land for the
-  current HEAD SHA (already true in the `SATISFIED` case), then rerun
-  via `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md`
-  §Rerun mechanics) and resume D4. `CAP_EXHAUSTED` (the request cap is
+  request a review now. `WAIT` (a same-head request already exists,
+  still inside its settle window) means request nothing — wait for
+  Copilot's review to land for the current HEAD SHA, then rerun via
+  `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md` §Rerun
+  mechanics) and resume D4. `SATISFIED` splits on `lastCopilotCommit`:
+  when it already matches this HEAD SHA, Copilot's review already
+  covers it — request nothing and take the same rerun-and-resume-D4
+  action as `WAIT` above. When it does **not** match this HEAD SHA,
+  `SATISFIED` instead means a same-head request's elapsed window ran
+  out with no review ever landing for this HEAD (see
+  `idd-advisory-wait.instructions.md`'s AW3 elapsed-window rows);
+  `idd-advisory-convergence` stays `pending: true` for this HEAD
+  regardless, so rerunning and resuming D4 would only reproduce the
+  same wait indefinitely — treat it like `CAP_EXHAUSTED`/
+  `RECOVERY_NEEDED` below instead. `CAP_EXHAUSTED` (the request cap is
   already spent) or `RECOVERY_NEEDED` (a proven same-head request
   exists but needs its marker, not a new request) both need the fuller
   AW3 handling this bullet does not reimplement — exit CI-wait and
   proceed directly to `idd-review-snapshot.instructions.md` (E1)
-  instead, the same carve-out the pending-disposition case above takes.
+  instead, the same carve-out the pending-disposition case above and
+  the elapsed-window `SATISFIED` case take.
