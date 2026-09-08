@@ -4093,6 +4093,24 @@ test('verifiability still passes a continuation-line escape hatch that discloses
   assert.equal(result.pass, true);
 });
 
+test('verifiability catches an escape-hatch disclosure nested as a deeper-indented sub-bullet (#2709, Codex review PR #2725 round 3)', () => {
+  // A nested marker line (indented deeper than the enclosing item's own
+  // marker) is a sub-item elaborating the outer bullet, not an unrelated
+  // sibling -- it must fold into the enclosing item's text instead of
+  // starting a new item whose own right branch is empty.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation, or:
+  - document why validation is not needed
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('verifiability does not pair "either" in one bullet with an unrelated "or" in a later bullet (#2709, Codex review PR #2725 round 2)', () => {
   // Neither bullet on its own forms an either/or escape hatch -- "Either
   // add validation to `parseConfig`" has no "or" of its own, and "Skip

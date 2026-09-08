@@ -2632,11 +2632,16 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // or\n  document why validation is not needed" -- be seen at all; the
   // previous single-line bound cut the branch off right after "or",
   // guaranteeing an empty (and therefore always-passing) right-branch text.
-  // A continuation line must be indented and not itself a new list marker;
-  // an unindented "lazy continuation" line is deliberately excluded here for
-  // the same reason extractListItemLines excludes it above -- it cannot be
-  // told apart from unrelated trailing prose without full Markdown paragraph
-  // parsing.
+  // A continuation line must be indented; an unindented "lazy continuation"
+  // line is deliberately excluded here for the same reason
+  // extractListItemLines excludes it above -- it cannot be told apart from
+  // unrelated trailing prose without full Markdown paragraph parsing. A
+  // continuation line MAY itself be a list marker as long as it is indented
+  // deeper than the enclosing item's own marker -- "- Either add
+  // validation, or:\n  - document why validation is not needed" is a
+  // nested sub-item elaborating on the outer bullet, not an unrelated
+  // sibling (Codex review, PR #2725 round 3); a marker at the same or
+  // shallower indentation still starts a new item.
   //
   // Accepted limitation (Codex review, PR #2725 round 2): the artifact check
   // below confirms the branch NAMES a checkable keyword co-occurring in the
@@ -2702,6 +2707,7 @@ export function checkVerifiability(context: Context): CheckOutcome {
     {
       let itemStart: number | null = null;
       let itemEnd = 0;
+      let itemMarkerIndent = 0;
       let cursor = 0;
       const closeItem = (): void => {
         if (itemStart !== null) {
@@ -2716,12 +2722,26 @@ export function checkVerifiability(context: Context): CheckOutcome {
         const lineEnd = lineStart + line.length;
         const isBlank = line.trim().length === 0;
         const isMarker = LIST_ITEM_LINE_PATTERN.test(line);
+        const indent = line.length - line.trimStart().length;
+        // A more-deeply-indented marker line is a NESTED sub-item of the
+        // current item, not a new sibling -- "- Either add validation,
+        // or:\n  - document why validation is not needed" keeps the
+        // documentation alternative as this item's own continuation
+        // instead of starting an unrelated second item whose own right
+        // branch is empty (Codex review, PR #2725 round 3). A marker at
+        // the same or shallower indentation is an ordinary sibling bullet
+        // and still starts a new item.
+        const isNestedMarker =
+          isMarker && itemStart !== null && indent > itemMarkerIndent;
         const isIndentedContinuation =
-          itemStart !== null && !isBlank && !isMarker && /^\s/.test(line);
-        if (isMarker) {
+          itemStart !== null &&
+          !isBlank &&
+          (isNestedMarker || (!isMarker && /^\s/.test(line)));
+        if (isMarker && !isNestedMarker) {
           closeItem();
           itemStart = lineStart;
           itemEnd = lineEnd;
+          itemMarkerIndent = indent;
         } else if (isIndentedContinuation) {
           itemEnd = lineEnd;
         } else {
