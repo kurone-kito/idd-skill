@@ -556,6 +556,11 @@ test('pre-merge-readiness.mjs CLI: --claimless on an empty-references PR skips c
   }
 });
 
+// #2707: the CLI entrypoint now catches this throw and emits a structured
+// `{ error, hint? }` JSON object on stdout with a non-zero exit code,
+// instead of an uncaught-exception stack trace on stderr -- assert against
+// the parsed stdout JSON (execFileSync still throws on the non-zero exit;
+// only where the error text lives changed).
 test('pre-merge-readiness.mjs CLI: --claimless fails closed when closingIssuesReferences is non-empty (#2017)', () => {
   const cwdRoot = mkdtempSync(
     join(tmpdir(), 'idd-pre-merge-claimless-fail-cwd-'),
@@ -591,10 +596,60 @@ test('pre-merge-readiness.mjs CLI: --claimless fails closed when closingIssuesRe
             timeout: 60_000,
           },
         ),
-      /closingIssuesReferences/,
+      (error: unknown) => {
+        const stdout = (error as { stdout?: string }).stdout ?? '';
+        const parsed = JSON.parse(stdout) as { error: string; hint?: string };
+        assert.match(parsed.error, /closingIssuesReferences/);
+        assert.equal(parsed.hint, undefined);
+        return true;
+      },
     );
   } finally {
     restore();
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
+});
+
+// #2707 (CodeRabbit review on PR #2731): the sibling `renderCliUsageError`
+// unit test in pre-merge-readiness.test.mts covers the hinted shape as a
+// pure function, but not the actual subprocess boundary -- this exercises
+// the real CLI entrypoint end-to-end for the missing-claim-issue case (no
+// gh stub needed: collectPreMergeReadiness throws this before any gh call).
+test('pre-merge-readiness.mjs CLI: neither --claim-issue nor --claimless names --claimless as the fix (#2707)', () => {
+  const cwdRoot = mkdtempSync(
+    join(tmpdir(), 'idd-pre-merge-missing-claim-cwd-'),
+  );
+  try {
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/pre-merge-readiness.mjs'),
+            '--pr',
+            '1',
+            '--owner',
+            OWNER,
+            '--repo',
+            REPO,
+          ],
+          {
+            cwd: cwdRoot,
+            encoding: 'utf8',
+            env: { ...process.env },
+            timeout: 60_000,
+          },
+        ),
+      (error: unknown) => {
+        const stdout = (error as { stdout?: string }).stdout ?? '';
+        const parsed = JSON.parse(stdout) as { error: string; hint?: string };
+        assert.match(parsed.error, /missing required --claim-issue/);
+        assert.match(parsed.hint ?? '', /--claimless/);
+        assert.notEqual((error as { status?: number }).status, 0);
+        return true;
+      },
+    );
+  } finally {
     rmSync(cwdRoot, { recursive: true, force: true });
   }
 });
