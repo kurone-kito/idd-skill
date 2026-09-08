@@ -2320,12 +2320,12 @@ export const EDITED_AFTER_DISPOSITION_HINT =
 // No other configured bot currently has an analogous inner exclusion marker.
 export function isReviewSummaryComment(body: unknown): boolean {
   const text = String(body ?? '').trimStart();
-  for (const marker of REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY.values()) {
+  for (const [identity, marker] of REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY) {
     if (!text.startsWith(marker)) {
       continue;
     }
     if (
-      marker === CODERABBIT_SUMMARY_MARKER &&
+      identity === 'coderabbitai' &&
       CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text)
     ) {
       return false;
