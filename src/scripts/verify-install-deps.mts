@@ -39,6 +39,27 @@ export function classifyInstallDepsOutcome(
     : { status: 'missing-after-retry' };
 }
 
+/**
+ * Node.js 25+ no longer bundles corepack (nodejs/corepack), so a
+ * pnpm-based install command can fail with no pnpm binary to run on a
+ * bare Node >=25 install. When the key binary is still missing after
+ * the retry, this hint is a possibility to check, not a diagnosis --
+ * corepack being absent isn't necessarily the actual cause.
+ */
+export function describeCorepackGuidance(
+  corepackAvailable: boolean,
+): string | null {
+  if (corepackAvailable) {
+    return null;
+  }
+  return (
+    'verify-install-deps: corepack was not found. Node.js 25+ no longer ' +
+    'bundles corepack, which may be why the install above is failing -- ' +
+    'install it separately (for example `npm install -g corepack`) and ' +
+    'retry.\n'
+  );
+}
+
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `key-binary:`): tests/flag-name-matrix.test.mts scans this file's
 // *compiled* .mjs source text for quoted flag literals such as the
@@ -90,6 +111,10 @@ function runCli(): void {
     existsAfterRetry,
   );
   if (outcome.status === 'missing-after-retry') {
+    const corepackHint = describeCorepackGuidance(isCorepackAvailable());
+    if (corepackHint !== null) {
+      process.stderr.write(corepackHint);
+    }
     process.stderr.write(
       `verify-install-deps: ${args.keyBinary} still missing after retrying ` +
         `"${args.installCommand}". The dependency install did not complete ` +
@@ -134,6 +159,23 @@ function runInstallCommand(installCommand: string): void {
     execFileSync(installCommand, [], { shell: true, stdio: 'inherit' });
   } catch {
     // Swallowed intentionally -- see comment above.
+  }
+}
+
+/**
+ * `shell: true` is required, not incidental, for the same reason
+ * `runInstallCommand` above needs it: a globally installed `corepack`
+ * can be a `.CMD`/`.ps1` shim on Windows that isn't directly
+ * executable without a shell (see also `build-ts.mts`'s header on the
+ * `tsc`/`biome` shim case) -- omitting it risks a false "missing" read
+ * on Windows even when corepack is present.
+ */
+function isCorepackAvailable(): boolean {
+  try {
+    execFileSync('corepack', ['--version'], { shell: true, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
   }
 }
 

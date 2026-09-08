@@ -6,7 +6,10 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { classifyInstallDepsOutcome } from '../src/scripts/verify-install-deps.mts';
+import {
+  classifyInstallDepsOutcome,
+  describeCorepackGuidance,
+} from '../src/scripts/verify-install-deps.mts';
 
 test('present-after-install when the key binary exists before any retry', () => {
   assert.deepEqual(classifyInstallDepsOutcome(true, false), {
@@ -30,6 +33,16 @@ test('missing-after-retry when the binary is still absent after the retry', () =
   assert.deepEqual(classifyInstallDepsOutcome(false, false), {
     status: 'missing-after-retry',
   });
+});
+
+test('describeCorepackGuidance returns null when corepack is available', () => {
+  assert.equal(describeCorepackGuidance(true), null);
+});
+
+test('describeCorepackGuidance hints at installing corepack when absent', () => {
+  const hint = describeCorepackGuidance(false);
+  assert.match(hint ?? '', /corepack was not found/);
+  assert.match(hint ?? '', /npm install -g corepack/);
 });
 
 // ---------------------------------------------------------------------------
@@ -142,6 +155,10 @@ test('CLI: exits 1 with an actionable message when the binary never appears', ()
   assert.equal(attempts, 2);
   assert.match(stderr, /still missing after retrying/);
   assert.match(stderr, /retry manually/);
+  // This sandbox's dev environment has corepack available, so the
+  // corepack hint must not fire here -- see describeCorepackGuidance's
+  // own unit tests above for the absent-corepack case.
+  assert.doesNotMatch(stderr, /corepack was not found/);
 });
 
 test('CLI: --help prints usage and exits 0 without running any install', () => {
