@@ -867,21 +867,33 @@ export function applyDispositionPlan(
     const isCodexSummaryWalkthrough =
       item.reason === 'summary walkthrough' &&
       advisoryBotIdentityToken(item.botLogin) === 'chatgpt-codex-connector';
-    if (
-      isCodexSummaryWalkthrough &&
-      deps.revalidateCodexSummaryStillComplete &&
-      !deps.revalidateCodexSummaryStillComplete(item)
-    ) {
-      staleSkipped.push({
-        noticeId: item.noticeId,
-        botLogin: item.botLogin,
-        reason: 'codex-review-running-at-post-time',
-      });
-      continue;
-    }
     let posted: { id: number } | null = null;
     let lastError: string | null = null;
+    let becameStale = false;
     for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
+      // #2695 (Codex review, P1 follow-up): re-checked immediately before
+      // EACH actual POST attempt, not once before the retry loop -- a failed
+      // first attempt plus recovery lookup both take real network time, long
+      // enough for Codex to re-trigger and flip its own comment back to
+      // Running before the retry. A revalidation failure (Copilot review: a
+      // thrown error from the fetch itself, e.g. a transient network error)
+      // is treated the same as "not confirmed complete" -- never let it
+      // crash the whole apply loop, and never post on an unconfirmed state.
+      if (
+        isCodexSummaryWalkthrough &&
+        deps.revalidateCodexSummaryStillComplete
+      ) {
+        let stillComplete: boolean;
+        try {
+          stillComplete = deps.revalidateCodexSummaryStillComplete(item);
+        } catch {
+          stillComplete = false;
+        }
+        if (!stillComplete) {
+          becameStale = true;
+          break;
+        }
+      }
       try {
         posted = deps.postDisposition(item.body);
       } catch (error) {
@@ -900,7 +912,13 @@ export function applyDispositionPlan(
         );
       }
     }
-    if (posted) {
+    if (becameStale) {
+      staleSkipped.push({
+        noticeId: item.noticeId,
+        botLogin: item.botLogin,
+        reason: 'codex-review-running-at-post-time',
+      });
+    } else if (posted) {
       knownViewerCommentIds.add(posted.id);
       applied.push({ noticeId: item.noticeId, commentId: posted.id });
     } else {
@@ -1074,17 +1092,24 @@ if (import.meta.main) {
   const revalidateCodexSummaryStillComplete = (
     item: PlannedDisposition,
   ): boolean => {
-    const freshHeadSha = ghText([
-      'api',
-      `repos/${owner}/${repo}/pulls/${pr}`,
-      '--jq',
-      '.head.sha',
-    ]);
+    // #2695 (CodeRabbit review): fetch the SOURCE comment body first, THEN
+    // the PR head. A push between the two fetches must never let a stale,
+    // already-superseded headSha validate against a body snapshot taken
+    // after that push -- reading the body first guarantees freshHeadSha is
+    // never OLDER than what freshBody reflects, so a mid-fetch push can only
+    // make freshHeadSha newer than any row the (older) body actually has,
+    // correctly failing the match instead of falsely confirming completion.
     const freshBody = ghText([
       'api',
       `repos/${owner}/${repo}/issues/comments/${item.noticeId}`,
       '--jq',
       '.body',
+    ]);
+    const freshHeadSha = ghText([
+      'api',
+      `repos/${owner}/${repo}/pulls/${pr}`,
+      '--jq',
+      '.head.sha',
     ]);
     return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
   };

@@ -1471,3 +1471,72 @@ test('applyDispositionPlan: revalidateCodexSummaryStillComplete is never consult
   assert.deepEqual(result.applied, [{ noticeId: 901, commentId: 9901 }]);
   assert.deepEqual(result.staleSkipped, []);
 });
+
+test('applyDispositionPlan: re-revalidates before the retry POST and stale-skips instead of retrying when Codex flips to Running mid-retry', () => {
+  // Codex review (P1 follow-up on the first staleness-gate commit): the
+  // first postDisposition throws, recovery finds nothing, and by the time
+  // the retry would run Codex has flipped its own comment back to Running.
+  // The retry must never fire -- the item is stale-skipped, not failed.
+  const calls: string[] = [];
+  const plan = fakeCodexSummaryPlan(804);
+  let revalidateCallCount = 0;
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      calls.push('post');
+      throw new Error('transient create failure');
+    },
+    recoverPostedDisposition: () => {
+      calls.push('recover');
+      return null;
+    },
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: () => {
+      revalidateCallCount += 1;
+      calls.push(`revalidate:${revalidateCallCount}`);
+      // Complete on the first check (before attempt 0), Running by the time
+      // the retry would check again.
+      return revalidateCallCount === 1;
+    },
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.staleSkipped, [
+    {
+      noticeId: 804,
+      botLogin: CODEX,
+      reason: 'codex-review-running-at-post-time',
+    },
+  ]);
+  // Attempt 0's revalidation passes, its post throws, recovery finds
+  // nothing, the retry's revalidation fails -- and the retry POST never runs.
+  assert.deepEqual(calls, ['revalidate:1', 'post', 'recover', 'revalidate:2']);
+});
+
+test('applyDispositionPlan: a throwing revalidateCodexSummaryStillComplete is treated as not-complete, not a crash', () => {
+  // Copilot review: the hook call must be safe against its own failure (e.g.
+  // a transient network error fetching the fresh head/body) -- never let it
+  // abort the whole --apply run.
+  const plan = fakeCodexSummaryPlan(805);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => ({ id: 9805 }),
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: () => {
+      throw new Error('gh api: network timeout');
+    },
+  };
+  assert.doesNotThrow(() => applyDispositionPlan(plan, deps));
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.staleSkipped, [
+    {
+      noticeId: 805,
+      botLogin: CODEX,
+      reason: 'codex-review-running-at-post-time',
+    },
+  ]);
+});
