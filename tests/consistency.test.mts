@@ -2727,6 +2727,13 @@ test('D4 pending:true recovery ties each advisory-wait outcome to its actual act
   // not matching HEAD) must exit to E1 like CAP_EXHAUSTED/RECOVERY_NEEDED,
   // or D4 would rerun a check that can never turn green from that rerun
   // alone and loop forever.
+  //
+  // REQUEST_NEEDED also splits on `copilotPending` (idd-skill#2712): the
+  // ordinary case (no pending reviewer) posts a fresh request + marker, but
+  // a pending reviewer with unproven HEAD coverage is AW3-S's own pending
+  // entry -- posting an ordinary marker there bypasses AW3-S's bounded
+  // recovery budget, so that sub-case exits to E1 like CAP_EXHAUSTED
+  // instead.
   const path =
     'idd-template/.github/instructions/idd-pr-submit.instructions.md';
   const bullet = extractBoundedRegion(
@@ -2745,6 +2752,25 @@ test('D4 pending:true recovery ties each advisory-wait outcome to its actual act
     path,
   );
   assert.match(requestNow, /only `REQUEST_NEEDED`/);
+
+  const requestNeededSplit = extractBoundedRegion(
+    bullet,
+    'This splits on `copilotPending`.',
+    'same as `CAP_EXHAUSTED`/`RECOVERY_NEEDED` below.',
+    path,
+  );
+  assert.match(requestNeededSplit, /When `false`/);
+  assert.match(
+    requestNeededSplit,
+    /post the same-head `advisory-wait:` marker/,
+  );
+  assert.match(requestNeededSplit, /AW3-R/);
+  assert.match(requestNeededSplit, /When `copilotPending` is `true`/);
+  assert.match(requestNeededSplit, /AW3-S/);
+  assert.match(
+    requestNeededSplit,
+    /idd-review-snapshot\.instructions\.md[\s\S]*\(E1\)/,
+  );
 
   const waitAndRerun = extractBoundedRegion(
     bullet,
