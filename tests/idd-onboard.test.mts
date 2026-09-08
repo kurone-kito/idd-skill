@@ -4854,3 +4854,13 @@ test('bin/idd-onboard.mjs --help documents --allow-root', () => {
   });
   assert.match(help, /--allow-root <dir>/);
 });
+
+test('bin/idd-onboard.mjs --help warns that a broad --allow-root removes confinement', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  const normalized = help.replace(/\s+/g, ' ');
+  const warningCount =
+    normalized.split('removes this confinement guarantee entirely').length - 1;
+  assert.equal(warningCount, 5);
+});
