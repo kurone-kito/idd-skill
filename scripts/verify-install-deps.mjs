@@ -145,12 +145,12 @@ function runInstallCommand(installCommand) {
   }
 }
 /**
- * `shell: true` is required, not incidental, for the same reason
- * `runInstallCommand` above needs it: a globally installed `corepack`
- * can be a `.CMD`/`.ps1` shim on Windows that isn't directly
- * executable without a shell (see also `build-ts.mts`'s header on the
- * `tsc`/`biome` shim case) -- omitting it risks a false "missing" read
- * on Windows even when corepack is present.
+ * `shell: true` is required, not incidental: a globally installed
+ * `corepack` can be a `.CMD`/`.ps1` shim on Windows that isn't
+ * directly executable without a shell -- the same class of problem
+ * `build-ts.mts`'s header documents for the `tsc`/`biome` shim case --
+ * omitting it risks a false "missing" read on Windows even when
+ * corepack is present.
  */
 function isCorepackAvailable() {
   try {
