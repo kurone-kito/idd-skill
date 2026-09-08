@@ -5678,11 +5678,30 @@ function resolvePresentRunConclusion(
   const effective = normalizedChecks.map((check) =>
     check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
   );
-  const { status } = classifyCiChecks(effective);
-  if (status === 'success') {
+  const classification = classifyCiChecks(effective);
+  if (classification.status === 'success') {
     return 'all-passing';
   }
-  if (status === 'pending') {
+  if (classification.status === 'pending') {
+    return 'pending';
+  }
+  // #2714: a lone CANCELLED instance with no same-producer successor to
+  // dedup against lands in classifyCiChecks's residual `unknown` bucket --
+  // CANCELLED is deliberately excluded from both `failed` and `passing`
+  // (see CI_FAILURE_CONCLUSION_STATES's own doc comment). Map that exact
+  // shape to 'pending' -- a cancelled-with-no-successor run is a plausible
+  // rerun candidate -- rather than folding it into 'some-failing', which
+  // reads as terminal/actionable and reproduces through this fallback
+  // exactly the outcome classifyCiChecks's own CANCELLED exclusion exists
+  // to avoid. Scoped to CANCELLED-only `unknown` entries: an `unknown`
+  // bucket containing any other, genuinely unrecognized state stays
+  // 'some-failing', the conservative default.
+  const unknownChecks = classification.unknown ?? [];
+  if (
+    classification.status === 'unknown' &&
+    unknownChecks.length > 0 &&
+    unknownChecks.every((check) => check.state === 'CANCELLED')
+  ) {
     return 'pending';
   }
   return 'some-failing';

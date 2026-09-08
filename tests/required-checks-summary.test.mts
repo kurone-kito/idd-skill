@@ -56,6 +56,62 @@ test('unprotected + pending runs: presentRunConclusion is pending', () => {
   assert.equal(r.presentRunConclusion, 'pending');
 });
 
+// #2714: a lone CANCELLED instance with no same-producer successor to dedup
+// against is deliberately excluded from both classifyCiChecks's `failed`
+// and `passing` buckets, landing in its residual `unknown` bucket. Before
+// this fix, resolvePresentRunConclusion folded that `unknown` status into
+// 'some-failing' -- reproducing exactly the outcome CANCELLED's exclusion
+// from `failed` exists to avoid. A single genuinely-passing companion check
+// (`lint`) alongside it rules out a passing-run-count coincidence.
+test('unprotected + a lone CANCELLED run with no successor: presentRunConclusion is pending, not some-failing', () => {
+  const r = summarize(
+    [
+      { name: 'lint', state: 'SUCCESS' },
+      { name: 'companion', state: 'CANCELLED' },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'pending');
+});
+
+// A CANCELLED instance that DOES have a same-producer successor is an
+// ordinary, already-handled dedup case (#1471/#1745): selectLatestCheckPerName
+// selects the successor, so the CANCELLED instance never reaches the
+// `unknown` bucket at all. This must stay 'all-passing', not 'pending' --
+// confirms the #2714 fix is scoped to the lone/no-successor shape only.
+test('unprotected + a CANCELLED run superseded by a later SUCCESS for the same name: presentRunConclusion is all-passing', () => {
+  const r = summarize(
+    [
+      {
+        name: 'build',
+        state: 'CANCELLED',
+        completedAt: '2026-01-01T00:00:00Z',
+      },
+      { name: 'build', state: 'SUCCESS', completedAt: '2026-01-01T00:05:00Z' },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'all-passing');
+});
+
+// The #2714 fix is scoped to CANCELLED specifically -- an `unknown` bucket
+// caused by some other, genuinely unrecognized state string stays
+// 'some-failing', the conservative default, rather than being broadened to
+// every `unknown` cause.
+test('unprotected + an unrecognized non-CANCELLED state: presentRunConclusion stays some-failing', () => {
+  const r = summarize(
+    [
+      { name: 'lint', state: 'SUCCESS' },
+      { name: 'companion', state: 'SOME_FUTURE_GITHUB_STATE' },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'some-failing');
+});
+
 // A pinned/indeterminate required-check source (workflows rule, or an app-pinned
 // classic check with no enumerable context) must NOT be reported as "no required
 // checks configured" — there may be required checks we cannot enumerate, so F2
