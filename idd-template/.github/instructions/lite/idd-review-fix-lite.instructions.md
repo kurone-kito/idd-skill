@@ -136,11 +136,16 @@ other GitHub side effect, confirm all of the following:
 ## E11 — Resolve conflicts with main
 
 1. Check state read-only: `idd-branch-conflict-state --pr {pr-number}`
-   (helper) or `gh pr view {pr-number} --json mergeable,mergeStateStatus`
-   otherwise — reflects the last pushed head, not local unpushed fixes.
-2. Not a confirmed conflict (clean, behind-no-conflict, computing,
-   dirty, unknown)? Skip the merge and continue to E12 — a dirty or
-   unresolved read isn't this step's problem to fix; F1
+   — reflects the last pushed head, not local unpushed fixes. Missing,
+   failing, or disagreeing with live state? Stop and ask per the Helper
+   runtime contract above — do not fall back to a non-helper read here.
+2. `force-push-exception` (a hold state per
+   [IDD policy constants](../../../docs/policy-constants.md), like
+   `dirty`/`unknown`)? Stop here — post a PR comment documenting the
+   state, and do not continue to E12; a maintainer must clear the
+   hold. Otherwise not a confirmed conflict (clean, behind-no-conflict,
+   computing, dirty, unknown)? Skip the merge and continue to E12 — a
+   dirty or unresolved read isn't this step's problem to fix; F1
    (`idd-pre-merge-lite.instructions.md`) stops and asks on any
    non-clean pre-merge branch state.
 3. Conflict reported (`mergeable` `CONFLICTING`)? If the PR has
