@@ -929,9 +929,11 @@ test('findTrustedSuitabilityRejection: a trusted-actor rejection is detected and
 });
 
 // #2708: a comment that cites an earlier check number for context before
-// stating a different final verdict must surface the LATER (final) check,
-// not the first incidental "Check N (...)" substring in the body.
-test('findTrustedSuitabilityRejection: a check cited for context before the final verdict is not returned over the later, real verdict', () => {
+// stating a different, failing final verdict must surface the check
+// actually described as failing (Check 7, next to "fails"), not the
+// earlier-cited, merely-contextual one (Check 5) -- an incidental first
+// match would report the wrong, already-superseded check.
+test('findTrustedSuitabilityRejection: a check cited for context before the real, failing verdict is not returned over the failing check', () => {
   const result = findTrustedSuitabilityRejection(
     [
       makeRejectionComment({
@@ -939,6 +941,28 @@ test('findTrustedSuitabilityRejection: a check cited for context before the fina
           `${SUITABILITY_REJECTION_PREFIX} — Check 5 (Actionability) was ` +
           'previously cited, but on review this time it fails Check 7 ' +
           '(Verifiability).\n\noutcome: needs-decision',
+      }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.equal(result?.outcome, 'needs-decision');
+  assert.equal(result?.check, 'Check 7 (Verifiability)');
+});
+
+// Codex review finding on PR #2732: the opposite ordering -- a comment that
+// states its real, failing verdict FIRST as a headline, then mentions a
+// second check afterward only as passing (no failure verb anywhere in the
+// body) -- must not have a "last match wins" extraction report the later,
+// merely-contextual, passing check over the real, headline verdict.
+test('findTrustedSuitabilityRejection: a passing check mentioned after the headline verdict is not returned over the real verdict', () => {
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({
+        body:
+          `${SUITABILITY_REJECTION_PREFIX} — Check 7 (Verifiability): the ` +
+          'review evidence does not hold up under scrutiny. Check 5 ' +
+          '(Actionability) passes cleanly on its own.\n\n' +
+          'outcome: needs-decision',
       }),
     ],
     ['kurone-kito'],

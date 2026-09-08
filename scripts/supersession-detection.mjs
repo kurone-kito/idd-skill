@@ -187,27 +187,64 @@ export const SUITABILITY_REJECTION_PREFIX = 'A4.5 suitability gate rejection';
 const SUITABILITY_REJECTION_OUTCOME_PATTERN =
   /outcome:\s*(unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid)\b/i;
 const SUITABILITY_REJECTION_CHECK_PATTERN_GLOBAL = /Check\s+\d+\s*\([^)]+\)/gi;
+const SUITABILITY_REJECTION_FAILURE_VERB_PATTERN = /\bfail(?:s|ed|ing)?\b/gi;
 /**
- * Extract the `Check N (<Name>)` excerpt matching the comment's own final
- * stated verdict (#2708), not merely the first incidental match anywhere in
- * the body. A rejection comment may cite an earlier check number for
- * context ("Check 5 (Actionability) was previously cited, but...") before
- * stating its actual, different final verdict ("...this time it fails
- * Check 7 (Verifiability)") -- a natural, even encouraged pattern, and one
- * this repository's own real rejection comments already exhibit in both
- * relative orderings (check-citation-then-outcome-line, and
- * outcome-then-check-citation) -- so anchoring to the `outcome:` line's
- * position is not a reliable signal either way. The last occurrence in
- * prose reading order is: a single-mention comment (the common case)
- * returns that one mention unchanged; a multi-mention comment returns the
- * final, most-recently-stated one, matching how the acceptance criteria's
- * repro is phrased (earlier context, then a final differing verdict).
+ * Extract the `Check N (<Name>)` excerpt describing the comment's actual
+ * failed check, not merely an incidentally-mentioned one (#2708). A
+ * rejection comment may mention more than one check in the same sentence --
+ * one it actually fails, and another cited only for context. Both relative
+ * orderings occur in practice ("Check 5 (Actionability) was previously
+ * cited, but on review this time it fails Check 7 (Verifiability)" vs.
+ * "Check 7 (Verifiability): ... Check 5 (Actionability) passes ... outcome:
+ * ..."), and both place every `Check N (...)` mention before the trailing
+ * `outcome:` line -- so neither "first match", "last match", nor anchoring
+ * to the `outcome:` line's position can discriminate the two shapes; each
+ * of those gets one shape right and the other wrong.
+ *
+ * The signal that actually discriminates them is not position, it is that
+ * the failed check is described with a failure verb ("fails"/"failed"/
+ * "failing") near its own mention, while a merely-cited check is not. When
+ * a failure verb appears anywhere in the body, this returns the `Check N
+ * (...)` mention closest to it (character distance; ties keep the earlier
+ * mention). When no failure verb appears at all -- the common case: a
+ * comment stating its verdict as a headline, "Check N (<Name>): reason",
+ * with no other check mentioned, or a comment mentioning a second check
+ * only as passing with no failure verb anywhere -- this falls back to the
+ * first mention, the documented headline convention (the verdict check is
+ * stated first; anything mentioned afterward is context).
+ *
+ * This is a best-effort heuristic over freely-authored prose, not a
+ * guarantee against every possible phrasing: see {@link
+ * SuitabilityRejectionRecord.check}'s own doc comment for why that is an
+ * acceptable, bounded limitation here.
  */
-function extractLatestSuitabilityCheckMatch(body) {
-  const matches = [
+function extractSuitabilityVerdictCheckMatch(body) {
+  const checkMatches = [
     ...body.matchAll(SUITABILITY_REJECTION_CHECK_PATTERN_GLOBAL),
   ];
-  return matches.length > 0 ? matches[matches.length - 1] : null;
+  if (checkMatches.length <= 1) {
+    return checkMatches[0] ?? null;
+  }
+  const failureVerbMatches = [
+    ...body.matchAll(SUITABILITY_REJECTION_FAILURE_VERB_PATTERN),
+  ];
+  if (failureVerbMatches.length === 0) {
+    return checkMatches[0] ?? null;
+  }
+  let closest = checkMatches[0] ?? null;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (const checkMatch of checkMatches) {
+    const checkIndex = checkMatch.index ?? 0;
+    for (const verbMatch of failureVerbMatches) {
+      const verbIndex = verbMatch.index ?? 0;
+      const distance = Math.abs(checkIndex - verbIndex);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closest = checkMatch;
+      }
+    }
+  }
+  return closest;
 }
 /** The four A4.5 outcomes with no dedicated label (#2243): the only values
  * `<!-- {prefix}-triage-verdict: <outcome> -->` may declare.
@@ -405,7 +442,7 @@ export function findTrustedSuitabilityRejection(
     }
     latestTimestamp = timestamp;
     const outcomeMatch = SUITABILITY_REJECTION_OUTCOME_PATTERN.exec(body);
-    const checkMatch = extractLatestSuitabilityCheckMatch(body);
+    const checkMatch = extractSuitabilityVerdictCheckMatch(body);
     const markerDetection = parseSuitabilityTriageVerdictMarker(
       body,
       markerPrefix,
