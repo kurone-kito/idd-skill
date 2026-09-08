@@ -16,6 +16,13 @@ import { readText } from './test-utils.mts';
 // without depending on this repository's own dogfooding state or
 // `.github/idd/config.json`: every config/body input is a fixture file
 // under this tree, never the live repo config.
+//
+// "Composed" here means literal: every auditAuthoredIssue call below
+// passes `upstreamEscalationEnabled` derived from a fixture config file
+// through `loadPolicyConfig` + `isUpstreamEscalationEnabled` -- not a
+// hand-picked literal -- so a regression in either piece (the resolver,
+// or the audit's own gating on it) would show up here (#2721 review,
+// CodeRabbit).
 
 function fixturePath(relativeToFixtureRoot: string): string {
   return fileURLToPath(
@@ -24,6 +31,13 @@ function fixturePath(relativeToFixtureRoot: string): string {
       import.meta.url,
     ),
   );
+}
+
+function resolveUpstreamEscalationEnabled(
+  configRelativeToFixtureRoot: string,
+): boolean {
+  const { config } = loadPolicyConfig(fixturePath(configRelativeToFixtureRoot));
+  return isUpstreamEscalationEnabled(config);
 }
 
 function findingResult(
@@ -38,22 +52,27 @@ function findingResult(
 // --- config resolution: fixture .github/idd/config.json -> isUpstreamEscalationEnabled ---
 
 test('a fixture config with upstreamEscalation absent resolves to disabled', () => {
-  const { config } = loadPolicyConfig(
-    fixturePath('disabled/.github/idd/config.json'),
+  assert.equal(
+    resolveUpstreamEscalationEnabled('disabled/.github/idd/config.json'),
+    false,
   );
-  assert.equal(isUpstreamEscalationEnabled(config), false);
 });
 
 test('a fixture config with upstreamEscalation.enabled: true resolves to enabled', () => {
-  const { config } = loadPolicyConfig(
-    fixturePath('enabled/.github/idd/config.json'),
+  assert.equal(
+    resolveUpstreamEscalationEnabled('enabled/.github/idd/config.json'),
+    true,
   );
-  assert.equal(isUpstreamEscalationEnabled(config), true);
 });
 
-// --- mechanical marker/label check: fixture issue bodies, all four combinations ---
+// --- mechanical marker/label check, gated on the resolved config toggle ---
+//
+// Each test below feeds a fixture config's *resolved* upstreamEscalationEnabled
+// value into auditAuthoredIssue, rather than a literal true/false, so the
+// config-resolution half and the marker/label-check half are genuinely
+// exercised together, not just side-by-side in the same file.
 
-test('the label-only fixture body fails the upstream-candidate-marker-label check', () => {
+test('with the enabled fixture config, the label-only fixture body fails the upstream-candidate-marker-label check', () => {
   const body = readText(
     'tests/fixtures/upstream-candidate/bodies/label-only.md',
   );
@@ -61,6 +80,9 @@ test('the label-only fixture body fails the upstream-candidate-marker-label chec
     shape: 'orphan',
     markerPrefix: 'example-adopter',
     labels: ['status:upstream-candidate'],
+    upstreamEscalationEnabled: resolveUpstreamEscalationEnabled(
+      'enabled/.github/idd/config.json',
+    ),
   });
   assert.equal(
     findingResult(report, 'upstream-candidate-marker-label'),
@@ -68,7 +90,7 @@ test('the label-only fixture body fails the upstream-candidate-marker-label chec
   );
 });
 
-test('the marker-only fixture body fails the upstream-candidate-marker-label check', () => {
+test('with the enabled fixture config, the marker-only fixture body fails the upstream-candidate-marker-label check', () => {
   const body = readText(
     'tests/fixtures/upstream-candidate/bodies/marker-only.md',
   );
@@ -76,6 +98,9 @@ test('the marker-only fixture body fails the upstream-candidate-marker-label che
     shape: 'orphan',
     markerPrefix: 'example-adopter',
     labels: [],
+    upstreamEscalationEnabled: resolveUpstreamEscalationEnabled(
+      'enabled/.github/idd/config.json',
+    ),
   });
   assert.equal(
     findingResult(report, 'upstream-candidate-marker-label'),
@@ -83,12 +108,15 @@ test('the marker-only fixture body fails the upstream-candidate-marker-label che
   );
 });
 
-test('the both-present fixture body passes the upstream-candidate-marker-label check', () => {
+test('with the enabled fixture config, the both-present fixture body passes the upstream-candidate-marker-label check', () => {
   const body = readText('tests/fixtures/upstream-candidate/bodies/both.md');
   const report = auditAuthoredIssue(body, {
     shape: 'orphan',
     markerPrefix: 'example-adopter',
     labels: ['status:upstream-candidate'],
+    upstreamEscalationEnabled: resolveUpstreamEscalationEnabled(
+      'enabled/.github/idd/config.json',
+    ),
   });
   assert.equal(
     findingResult(report, 'upstream-candidate-marker-label'),
@@ -96,12 +124,33 @@ test('the both-present fixture body passes the upstream-candidate-marker-label c
   );
 });
 
-test('the neither-present fixture body passes the upstream-candidate-marker-label check', () => {
+test('with the enabled fixture config, the neither-present fixture body passes the upstream-candidate-marker-label check', () => {
   const body = readText('tests/fixtures/upstream-candidate/bodies/neither.md');
   const report = auditAuthoredIssue(body, {
     shape: 'orphan',
     markerPrefix: 'example-adopter',
     labels: [],
+    upstreamEscalationEnabled: resolveUpstreamEscalationEnabled(
+      'enabled/.github/idd/config.json',
+    ),
+  });
+  assert.equal(
+    findingResult(report, 'upstream-candidate-marker-label'),
+    'pass',
+  );
+});
+
+test('with the disabled fixture config, the same label-only fixture body passes as not applicable (#2700 "no behavior change when disabled")', () => {
+  const body = readText(
+    'tests/fixtures/upstream-candidate/bodies/label-only.md',
+  );
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    markerPrefix: 'example-adopter',
+    labels: ['status:upstream-candidate'],
+    upstreamEscalationEnabled: resolveUpstreamEscalationEnabled(
+      'disabled/.github/idd/config.json',
+    ),
   });
   assert.equal(
     findingResult(report, 'upstream-candidate-marker-label'),

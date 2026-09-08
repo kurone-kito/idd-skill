@@ -34,7 +34,11 @@ import {
 } from './discover-readiness-check.mjs';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { parseEffortMarker } from './effort.mjs';
-import { loadIddConfig, loadPolicyConfig } from './idd-config.mjs';
+import {
+  isUpstreamEscalationEnabled,
+  loadIddConfig,
+  loadPolicyConfig,
+} from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import {
   parseAuthoringOwnerComment,
@@ -387,7 +391,12 @@ export function auditAuthoredIssue(body, options) {
     checkEffortVisibleLineAgreement(text, markerPrefix),
     checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
     checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options),
-    checkUpstreamCandidateMarkerLabel(text, markerPrefix, labels),
+    checkUpstreamCandidateMarkerLabel(
+      text,
+      markerPrefix,
+      labels,
+      options.upstreamEscalationEnabled === true,
+    ),
   ];
   return {
     shape,
@@ -551,19 +560,58 @@ function checkAuthoringBucketMarkerRequired(authoringBucket, expectedBucket) {
  * pre-existing issues predating it, so there is no backward-compatibility
  * reason to keep it one-directional.
  *
- * Presence-only: `countMarkerOccurrences` matches the marker regardless
- * of its value, so a malformed value (e.g. a stray `upstream-candidate:
- * false`) still counts as "present" here. Value-coherence is out of
- * scope for this pairing check, the same way `checkAuthoringBucketMarkerRequired`
- * addresses malformed *values* as a separate concern from this file's
- * presence/label-pairing checks.
+ * Gated on `upstreamEscalationEnabled`: reports "not applicable" when
+ * false (the resolved default), per roadmap #2700's own success
+ * criterion that a repository which has not opted in "sees no behavior
+ * change at all" -- this file's `audit-authored-issue` gate runs
+ * unconditionally on every published body in every adopter repository
+ * (`skills/issue-authoring/references/workflow-boundary.md`), so without
+ * this gate a repository that never enabled the feature could still see
+ * a new publish-blocking failure from an incidental `status:
+ * upstream-candidate` label applied for an unrelated reason (#2721
+ * review, Codex).
+ *
+ * Value-coherent, not presence-only (#2721 review, Codex): a marker
+ * occurrence whose value is not exactly `true`, or that disagrees with
+ * another occurrence, is `malformed` and is treated as fail-safe
+ * *absent* -- mirroring {@link parseAuthoringBucketMarker}'s malformed
+ * handling -- rather than as "present". A malformed marker paired with
+ * the label still fails (with a distinct detail), since the label
+ * asserts upstream candidacy while the marker itself does not carry a
+ * coherent confirming value.
  */
-function checkUpstreamCandidateMarkerLabel(text, markerPrefix, labels) {
+function checkUpstreamCandidateMarkerLabel(
+  text,
+  markerPrefix,
+  labels,
+  upstreamEscalationEnabled,
+) {
   const id = 'upstream-candidate-marker-label';
   const name = `${UPSTREAM_CANDIDATE_LABEL_NAME} label and the upstream-candidate marker agree`;
-  const hasMarker =
-    countMarkerOccurrences(text, markerPrefix, 'upstream-candidate') > 0;
+  if (!upstreamEscalationEnabled) {
+    return pass(
+      id,
+      name,
+      'not applicable: upstreamEscalation.enabled is not set for this repository',
+    );
+  }
+  const marker = parseUpstreamCandidateMarker(text, markerPrefix);
   const hasLabel = labels.includes(UPSTREAM_CANDIDATE_LABEL_NAME.toLowerCase());
+  if (marker.malformed) {
+    if (hasLabel) {
+      return fail(
+        id,
+        name,
+        `${UPSTREAM_CANDIDATE_LABEL_NAME} label is present but the upstream-candidate marker is malformed (expected exactly one coherent "...: true" occurrence)`,
+      );
+    }
+    return pass(
+      id,
+      name,
+      'neither the label nor a coherent upstream-candidate marker is present (a malformed marker occurrence is fail-safe to absent)',
+    );
+  }
+  const hasMarker = marker.present;
   if (hasMarker === hasLabel) {
     return pass(
       id,
@@ -580,6 +628,40 @@ function checkUpstreamCandidateMarkerLabel(text, markerPrefix, labels) {
       ? `${UPSTREAM_CANDIDATE_LABEL_NAME} label is present but the upstream-candidate marker was not found`
       : `upstream-candidate marker is present but the ${UPSTREAM_CANDIDATE_LABEL_NAME} label was not provided`,
   );
+}
+/**
+ * Canonical parser for the authored
+ * `<!-- {prefix}-upstream-candidate: true -->` marker (roadmap #2700),
+ * mirroring {@link parseAuthoringBucketMarker}'s fail-safe shape and
+ * repeated/disagreeing-value handling -- except this marker has exactly
+ * one valid value (`true`), so any other token, a value-less occurrence,
+ * or an occurrence whose case does not match exactly (`True`/`TRUE`) is
+ * malformed the same way a second, disagreeing `authoring-bucket` value
+ * would be.
+ */
+function parseUpstreamCandidateMarker(text, markerPrefix) {
+  const rawCount = countMarkerOccurrences(
+    text,
+    markerPrefix,
+    'upstream-candidate',
+  );
+  if (rawCount === 0) {
+    return { present: false, malformed: false };
+  }
+  const regex = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-upstream-candidate:\\s*([^\\s>]+)\\s*-->`,
+    'gi',
+  );
+  let coherentCount = 0;
+  for (const match of text.matchAll(regex)) {
+    if (match[1] === 'true') {
+      coherentCount += 1;
+    }
+  }
+  if (coherentCount !== rawCount) {
+    return { present: true, malformed: true };
+  }
+  return { present: true, malformed: false };
 }
 /**
  * Canonical parser for the authored
@@ -1705,6 +1787,7 @@ function main() {
       ? readCommentsFile(args.journalCommentsFile)
       : undefined,
     newIssue: args.newIssue,
+    upstreamEscalationEnabled: policy.upstreamEscalationEnabled,
   });
   writeReport(report, args.format);
   process.exit(report.passed ? 0 : 1);
@@ -1763,6 +1846,7 @@ function loadPolicy(configPath) {
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
       needsDecisionLabelName: POLICY_DEFAULTS.labels.needsDecisionLabelName,
       authoringLabelName: POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
+      upstreamEscalationEnabled: false,
     };
   }
   return {
@@ -1773,6 +1857,7 @@ function loadPolicy(configPath) {
       normalizePolicyConfig(config).labels.needsDecisionLabelName,
     authoringLabelName:
       normalizePolicyConfig(config).issueAuthoring.authoringLabelName,
+    upstreamEscalationEnabled: isUpstreamEscalationEnabled(config),
   };
 }
 function writeReport(report, format) {
@@ -1852,7 +1937,9 @@ Options:
   --body-file <path>               read the drafted issue body from a file
   --stdin                          read the drafted issue body from stdin
   --marker-prefix <prefix>         override the resolved markerPrefix
-  --config <path>                  policy config path (default: .github/idd/config.json)
+  --config <path>                  policy config path (default: .github/idd/config.json);
+                                    also resolves upstreamEscalation.enabled, which
+                                    gates the upstream-candidate-marker-label check
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1 /
                                     authoring-bucket cross-field checks, the

@@ -2567,10 +2567,35 @@ function withUpstreamCandidateMarker(body: string): string {
   return `${body}\n\n<!-- idd-skill-upstream-candidate: true -->`;
 }
 
+test('upstream-candidate-marker-label is not applicable when upstreamEscalationEnabled is unset, even with a label/marker mismatch (#2721 review, Codex)', () => {
+  const report = auditAuthoredIssue(orphanBody({ score: 4 }), {
+    shape: 'orphan',
+    labels: ['status:upstream-candidate'],
+  });
+  assert.equal(
+    findingResult(report, 'upstream-candidate-marker-label'),
+    'pass',
+  );
+});
+
+test('upstream-candidate-marker-label is not applicable when upstreamEscalationEnabled is explicitly false', () => {
+  const body = withUpstreamCandidateMarker(orphanBody({ score: 4 }));
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: [],
+    upstreamEscalationEnabled: false,
+  });
+  assert.equal(
+    findingResult(report, 'upstream-candidate-marker-label'),
+    'pass',
+  );
+});
+
 test('upstream-candidate-marker-label fails when the label is present without the marker', () => {
   const report = auditAuthoredIssue(orphanBody({ score: 4 }), {
     shape: 'orphan',
     labels: ['status:upstream-candidate'],
+    upstreamEscalationEnabled: true,
   });
   assert.equal(
     findingResult(report, 'upstream-candidate-marker-label'),
@@ -2580,7 +2605,11 @@ test('upstream-candidate-marker-label fails when the label is present without th
 
 test('upstream-candidate-marker-label fails when the marker is present without the label', () => {
   const body = withUpstreamCandidateMarker(orphanBody({ score: 4 }));
-  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: [],
+    upstreamEscalationEnabled: true,
+  });
   assert.equal(
     findingResult(report, 'upstream-candidate-marker-label'),
     'fail',
@@ -2592,6 +2621,7 @@ test('upstream-candidate-marker-label passes when both the marker and the label 
   const report = auditAuthoredIssue(body, {
     shape: 'orphan',
     labels: ['status:upstream-candidate'],
+    upstreamEscalationEnabled: true,
   });
   assert.equal(
     findingResult(report, 'upstream-candidate-marker-label'),
@@ -2603,6 +2633,7 @@ test('upstream-candidate-marker-label passes when neither the marker nor the lab
   const report = auditAuthoredIssue(orphanBody({ score: 4 }), {
     shape: 'orphan',
     labels: [],
+    upstreamEscalationEnabled: true,
   });
   assert.equal(
     findingResult(report, 'upstream-candidate-marker-label'),
@@ -2613,7 +2644,7 @@ test('upstream-candidate-marker-label passes when neither the marker nor the lab
 test('upstream-candidate-marker-label runs the same way across all three shapes', () => {
   const roadmap = auditAuthoredIssue(
     withUpstreamCandidateMarker(roadmapBody()),
-    { shape: 'roadmap', labels: [] },
+    { shape: 'roadmap', labels: [], upstreamEscalationEnabled: true },
   );
   assert.equal(
     findingResult(roadmap, 'upstream-candidate-marker-label'),
@@ -2623,29 +2654,47 @@ test('upstream-candidate-marker-label runs the same way across all three shapes'
   const child = auditAuthoredIssue(withUpstreamCandidateMarker(childBody()), {
     shape: 'child',
     labels: ['status:upstream-candidate'],
+    upstreamEscalationEnabled: true,
   });
   assert.equal(findingResult(child, 'upstream-candidate-marker-label'), 'pass');
 });
 
-test('upstream-candidate-marker-label treats a malformed-value marker occurrence as present (presence-only, per docstring)', () => {
+test('upstream-candidate-marker-label treats a malformed-value marker occurrence as fail-safe absent, not present (#2721 review, Codex)', () => {
   const body = `${orphanBody({ score: 4 })}\n\n<!-- idd-skill-upstream-candidate: false -->`;
   const withLabel = auditAuthoredIssue(body, {
     shape: 'orphan',
     labels: ['status:upstream-candidate'],
+    upstreamEscalationEnabled: true,
   });
-  assert.equal(
-    findingResult(withLabel, 'upstream-candidate-marker-label'),
-    'pass',
+  const withLabelFinding = withLabel.findings.find(
+    (entry) => entry.id === 'upstream-candidate-marker-label',
   );
+  assert.equal(withLabelFinding?.result, 'fail');
+  assert.match(withLabelFinding?.detail ?? '', /malformed/);
 
   const withoutLabel = auditAuthoredIssue(body, {
     shape: 'orphan',
     labels: [],
+    upstreamEscalationEnabled: true,
   });
   assert.equal(
     findingResult(withoutLabel, 'upstream-candidate-marker-label'),
-    'fail',
+    'pass',
   );
+});
+
+test('upstream-candidate-marker-label treats a value-less marker occurrence as fail-safe absent, not present', () => {
+  const body = `${orphanBody({ score: 4 })}\n\n<!-- idd-skill-upstream-candidate: -->`;
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:upstream-candidate'],
+    upstreamEscalationEnabled: true,
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'upstream-candidate-marker-label',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /malformed/);
 });
 
 test('marker-prefix-consistency flags a wrong-prefix upstream-candidate marker', () => {
