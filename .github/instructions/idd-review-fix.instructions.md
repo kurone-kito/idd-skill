@@ -120,21 +120,32 @@ recovery.
 
 ## E11 — Resolve conflicts with {development-branch}
 
-Check for conflicts between the feature branch and `{development-branch}`
-(the value resolved in `idd-work.instructions.md`'s B1
-[Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch)
-step). If conflicts exist, merge `{development-branch}` into the feature
-branch (`git fetch origin {development-branch} && git merge
-origin/{development-branch}`), resolve them, and complete the merge. On a
-signed-commit repo with non-interactive-hostile primary signing (GPG
-pinentry / hardware-touch), use the
+Check branch state **read-only** first, same method as the E-phase
+branch-sync check (`idd-review-triage.instructions.md`) and F1
+(`idd-pre-merge.instructions.md`): `idd-branch-conflict-state --pr
+{pr-number}` (helper runtime) or `gh pr view {pr-number} --json
+mergeable,mergeStateStatus` otherwise — reflects the last **pushed**
+head, not unpushed E9 fixes.
+
+Only on an actual conflict (`mergeable` `CONFLICTING` /
+`content-conflict`): merge `{development-branch}` (resolved in
+`idd-work.instructions.md`'s B1
+[Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch))
+into the feature branch (`git fetch origin {development-branch} && git
+merge origin/{development-branch}`), resolve conflicts, and complete
+the merge. On non-interactive-hostile primary signing (GPG pinentry /
+hardware-touch), use the
 [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
-for the whole operation instead of the plain command — see
-`idd-review-triage.instructions.md`'s Sync path step 2 for the
-wrapper's `-m` subject requirement.
+for the whole operation — see `idd-review-triage.instructions.md`'s
+Sync path step 2 for the `-m` subject requirement.
+
+Any other state (clean, behind-no-conflict, computing, dirty, unknown)
+is a **no-op**: proceed to E12 without merging or committing anything —
+E11 never re-polls or holds; the post-E12 branch-sync check owns that.
 
 **Active review gate**: same check as
-`idd-review-triage.instructions.md`'s Sync path step 1.
+`idd-review-triage.instructions.md`'s Sync path step 1 — only when the
+merge above runs.
 
 ## E12 — Lint, test, push
 

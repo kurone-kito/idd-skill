@@ -140,12 +140,16 @@ other GitHub side effect, confirm all of the following:
 
 ## E11 — Resolve conflicts with main
 
-1. Check for conflicts between the feature branch and `main`.
-2. If none exist, continue to E12.
-3. If conflicts exist, and the PR has unresolved review threads,
-   unreplied comments, or a reviewer's latest state is
-   `CHANGES_REQUESTED`, get explicit operator confirmation before
-   merging — the merge commit will appear in the PR history.
+1. Check state read-only: `idd-branch-conflict-state --pr {pr-number}`
+   (helper) or `gh pr view {pr-number} --json mergeable,mergeStateStatus`
+   otherwise — reflects the last pushed head, not local unpushed fixes.
+2. No conflict (clean, behind-no-conflict, computing, dirty, unknown)?
+   Continue to E12 — do not merge; a later check owns re-poll/hold.
+3. Conflict reported (`mergeable` `CONFLICTING`)? If the PR has
+   unresolved review threads, unreplied comments, or a reviewer's
+   latest state is `CHANGES_REQUESTED`, get explicit operator
+   confirmation before merging — the merge commit will appear in the
+   PR history.
 4. Run `git fetch origin main && git merge origin/main`.
 5. On a signed-commit repo whose primary signing is non-interactive
    hostile (GPG pinentry or hardware-touch) but that provides a
