@@ -8,6 +8,7 @@ import {
   buildDispositionPlan,
   buildSummaryDispositionBody,
   type DispositionPlan,
+  isCodexReviewSummaryCompleteForHeadSha,
   type NoticeComment,
   noticeReason,
   parseArgs,
@@ -47,6 +48,26 @@ const CODERABBIT_SKIP_REVIEW =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
   '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n' +
   '> [!WARNING]\n> ## Review skipped\nReview was skipped due to path filters.';
+// #2695: chatgpt-codex-connector[bot]'s own recurring review-status comment,
+// edited in place on every push -- a status table against the current commit
+// that cycles through "Running" and "Completed" states, analogous to
+// CODERABBIT_SUMMARY above but for Codex. Modeled on the real comment body
+// (kurone-kito/idd-skill#2722) rather than a guessed shape.
+const CODEX_SUMMARY_RUNNING =
+  '<!-- codex-pull-request-review-summary -->\n\n' +
+  '## Codex Review Summary\n\n' +
+  'This comment shows the latest Codex review activity on this pull request.\n\n' +
+  '| Review | Status | Commit | Review trigger |\n' +
+  '| --- | --- | --- | --- |\n' +
+  '| 📝 **Code Review** | 🔄 **Running** | `abc1234` | PR opened |\n';
+const CODEX_SUMMARY_COMPLETED =
+  '<!-- codex-pull-request-review-summary -->\n\n' +
+  '## Codex Review Summary\n\n' +
+  'This comment shows the latest Codex review activity on this pull request.\n\n' +
+  '| Review | Status | Commit | Review trigger |\n' +
+  '| --- | --- | --- | --- |\n' +
+  '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-05-12T00:00:00Z">' +
+  '2026-05-12T00:00:00Z</relative-time> | `abc1234` | PR opened |\n';
 // A full 40-char head SHA for the cases that validate against the schema, which
 // now constrains `headSha` to `^[0-9a-f]{40}$`.
 const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -659,6 +680,107 @@ test('#2161: a genuine walkthrough (no inner skip-review marker) is still a summ
   assert.equal(isAdvisoryNonReviewNotice(CODERABBIT_SUMMARY), false);
 });
 
+test('#2695: isReviewSummaryComment recognizes a Codex review-status comment in both "Running" and "Completed" table states', () => {
+  // Marker recognition alone is state-agnostic; the Running/Completed
+  // distinction is enforced separately by isCodexReviewSummaryCompleteForHeadSha
+  // (see the tests below), not by isReviewSummaryComment itself.
+  assert.equal(isReviewSummaryComment(CODEX_SUMMARY_RUNNING), true);
+  assert.equal(isReviewSummaryComment(CODEX_SUMMARY_COMPLETED), true);
+});
+
+test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is true only for a Completed row matching the current HEAD', () => {
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(CODEX_SUMMARY_COMPLETED, 'abc1234'),
+    true,
+  );
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(CODEX_SUMMARY_RUNNING, 'abc1234'),
+    false,
+  );
+});
+
+test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is false for a Completed row naming a different (stale) commit', () => {
+  // A stale summary left over from a prior HEAD must not be mistaken for
+  // completion at the CURRENT HEAD merely because some row says Completed.
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(CODEX_SUMMARY_COMPLETED, 'def5678'),
+    false,
+  );
+});
+
+test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is false for a body with no parseable status table', () => {
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(
+      'just plain text, no table',
+      'abc1234',
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(CODEX_SUMMARY_COMPLETED, ''),
+    false,
+  );
+});
+
+test('#2695: buildDispositionPlan plans an **Accepted** for an undispositioned Codex review-status comment, same as CodeRabbit', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODEX, CODEX_SUMMARY_COMPLETED)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  const entry = plan.planned[0];
+  assert.equal(entry.botLogin, CODEX);
+  assert.ok(entry.body.startsWith('**Accepted**'));
+  assert.match(
+    entry.body,
+    /chatgpt-codex-connector\[bot\] summary walkthrough at HEAD abc1234/,
+  );
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('#2695 (Codex review, P1): buildDispositionPlan never auto-accepts a Codex summary while its table still shows the HEAD as Running', () => {
+  // Guards the exact TOCTOU hazard Codex's own review flagged on this fix's
+  // first commit: accepting a still-Running summary would let the gate treat
+  // the review as settled before Codex has posted its real findings.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODEX, CODEX_SUMMARY_RUNNING)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 1, botLogin: CODEX, reason: 'codex-review-running' },
+  ]);
+});
+
+test('#2695: buildDispositionPlan skips a Codex summary already accepted by a strictly-newer disposition (idempotent re-run)', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODEX, CODEX_SUMMARY_COMPLETED, '2026-05-12T00:00:00Z'),
+        notice(
+          2,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODEX, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.noticeId),
+    [1],
+  );
+});
+
 test('#2161: buildDispositionPlan proposes **Rejected**, never **Accepted**, for a CodeRabbit skip-review notice', () => {
   const plan = buildDispositionPlan(
     {
@@ -1104,6 +1226,7 @@ test('applyDispositionPlan: an empty plan is a no-op that touches no dep', () =>
   assert.deepEqual(result, {
     applied: [],
     failed: [],
+    staleSkipped: [],
     claimLost: false,
     knownViewerCommentIds: new Set([7]),
   });
@@ -1248,5 +1371,172 @@ test('applyDispositionPlan: preserves a non-Error thrown value instead of collap
   assert.deepEqual(result.applied, []);
   assert.deepEqual(result.failed, [
     { noticeId: 701, error: 'rate limited: retry after 30s' },
+  ]);
+});
+
+// --- #2695 (Codex review, P1 follow-up): revalidateCodexSummaryStillComplete
+
+function fakeCodexSummaryPlan(noticeId: number): DispositionPlan {
+  return {
+    headSha: 'abc1234',
+    planned: [
+      {
+        noticeId,
+        botLogin: CODEX,
+        reason: 'summary walkthrough',
+        body: buildSummaryDispositionBody(CODEX, 'abc1234'),
+      },
+    ],
+    skipped: [],
+  };
+}
+
+test('applyDispositionPlan: skips (not fails) a planned Codex summary that revalidateCodexSummaryStillComplete reports as no longer complete', () => {
+  const calls: string[] = [];
+  const plan = fakeCodexSummaryPlan(801);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => {
+      calls.push('claim');
+      return true;
+    },
+    postDisposition: () => {
+      calls.push('post');
+      return { id: 1 };
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: (item) => {
+      calls.push(`revalidate:${item.noticeId}`);
+      return false;
+    },
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.staleSkipped, [
+    {
+      noticeId: 801,
+      botLogin: CODEX,
+      reason: 'codex-review-running-at-post-time',
+    },
+  ]);
+  // Claim revalidation and the staleness check both run, but post() never does.
+  assert.deepEqual(calls, ['claim', 'revalidate:801']);
+});
+
+test('applyDispositionPlan: posts a planned Codex summary that revalidateCodexSummaryStillComplete confirms is still complete', () => {
+  const plan = fakeCodexSummaryPlan(802);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => ({ id: 9802 }),
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: () => true,
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, [{ noticeId: 802, commentId: 9802 }]);
+  assert.deepEqual(result.staleSkipped, []);
+});
+
+test('applyDispositionPlan: omitting revalidateCodexSummaryStillComplete posts a Codex summary unconditionally (backward compatible)', () => {
+  const plan = fakeCodexSummaryPlan(803);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => ({ id: 9803 }),
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, [{ noticeId: 803, commentId: 9803 }]);
+  assert.deepEqual(result.staleSkipped, []);
+});
+
+test('applyDispositionPlan: revalidateCodexSummaryStillComplete is never consulted for a non-Codex-summary item', () => {
+  // A CodeRabbit notice item (fakePlan's default shape) must never trigger the
+  // Codex-only staleness hook, even when one is supplied.
+  const plan = fakePlan([901]);
+  let revalidateCalled = false;
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => ({ id: 9901 }),
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: () => {
+      revalidateCalled = true;
+      return false;
+    },
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.equal(revalidateCalled, false);
+  assert.deepEqual(result.applied, [{ noticeId: 901, commentId: 9901 }]);
+  assert.deepEqual(result.staleSkipped, []);
+});
+
+test('applyDispositionPlan: re-revalidates before the retry POST and stale-skips instead of retrying when Codex flips to Running mid-retry', () => {
+  // Codex review (P1 follow-up on the first staleness-gate commit): the
+  // first postDisposition throws, recovery finds nothing, and by the time
+  // the retry would run Codex has flipped its own comment back to Running.
+  // The retry must never fire -- the item is stale-skipped, not failed.
+  const calls: string[] = [];
+  const plan = fakeCodexSummaryPlan(804);
+  let revalidateCallCount = 0;
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      calls.push('post');
+      throw new Error('transient create failure');
+    },
+    recoverPostedDisposition: () => {
+      calls.push('recover');
+      return null;
+    },
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: () => {
+      revalidateCallCount += 1;
+      calls.push(`revalidate:${revalidateCallCount}`);
+      // Complete on the first check (before attempt 0), Running by the time
+      // the retry would check again.
+      return revalidateCallCount === 1;
+    },
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.staleSkipped, [
+    {
+      noticeId: 804,
+      botLogin: CODEX,
+      reason: 'codex-review-running-at-post-time',
+    },
+  ]);
+  // Attempt 0's revalidation passes, its post throws, recovery finds
+  // nothing, the retry's revalidation fails -- and the retry POST never runs.
+  assert.deepEqual(calls, ['revalidate:1', 'post', 'recover', 'revalidate:2']);
+});
+
+test('applyDispositionPlan: a throwing revalidateCodexSummaryStillComplete is treated as not-complete, not a crash', () => {
+  // Copilot review: the hook call must be safe against its own failure (e.g.
+  // a transient network error fetching the fresh head/body) -- never let it
+  // abort the whole --apply run.
+  const plan = fakeCodexSummaryPlan(805);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => ({ id: 9805 }),
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexSummaryStillComplete: () => {
+      throw new Error('gh api: network timeout');
+    },
+  };
+  assert.doesNotThrow(() => applyDispositionPlan(plan, deps));
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.staleSkipped, [
+    {
+      noticeId: 805,
+      botLogin: CODEX,
+      reason: 'codex-review-running-at-post-time',
+    },
   ]);
 });

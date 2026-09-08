@@ -110,6 +110,10 @@ export interface DispositionReport {
   status?: 'applied' | 'failed';
   applied?: AppliedDisposition[];
   failed?: FailedDisposition[];
+  /** `--apply` only: Codex summary items skipped by an immediately-pre-post
+   * revalidation (#2695 P1 follow-up) -- see
+   * `ApplyDispositionPlanResult.staleSkipped`. */
+  staleSkipped?: SkippedNotice[];
   skipped: SkippedNotice[];
 }
 
@@ -179,6 +183,68 @@ export function buildSummaryDispositionBody(
     `**Accepted** — ${botLogin} summary walkthrough at HEAD ${headSha}; actionable comments, if any, are dispositioned as their own review threads`,
     markerPrefix,
   );
+}
+
+// #2695 (Codex review, P1): chatgpt-codex-connector[bot] edits its own
+// review-status comment IN PLACE across its whole lifecycle -- including
+// while its own table still reads "Running" for the current HEAD.
+// Auto-accepting it at that point (before Codex has posted its actual
+// findings as their own review threads) would let the disposition-evidence
+// gate treat the review as settled ahead of findings that arrive later --
+// "a false positive is a false merge", the same hazard the CodeRabbit
+// per-HEAD re-disposition above guards against. CodeRabbit's own summary
+// marker has no analogous in-progress state (only posted once a walkthrough
+// is genuinely complete), so this gate applies to Codex only. Parses the
+// comment's own status table (columns identified by header text, so a
+// reordered or renamed non-Status/Commit column does not break it) and
+// requires the row for the current HEAD's (possibly-abbreviated) commit to
+// read "Completed" (case-insensitively, tolerating the emoji/bold markup
+// Codex wraps it in); any other outcome -- Running, no matching row, or an
+// unparseable table -- is treated as not-yet-complete so the caller must not
+// disposition it yet.
+export function isCodexReviewSummaryCompleteForHeadSha(
+  body: string,
+  headSha: string,
+): boolean {
+  const fullHeadSha = String(headSha ?? '')
+    .trim()
+    .toLowerCase();
+  if (!fullHeadSha) {
+    return false;
+  }
+  const rows = String(body ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('|') && line.endsWith('|'))
+    .map((line) =>
+      line
+        .slice(1, -1)
+        .split('|')
+        .map((cell) => cell.trim()),
+    );
+  if (rows.length === 0) {
+    return false;
+  }
+  const header = rows[0].map((cell) => cell.toLowerCase());
+  const statusColumn = header.findIndex((cell) => cell.includes('status'));
+  const commitColumn = header.findIndex((cell) => cell.includes('commit'));
+  if (statusColumn === -1 || commitColumn === -1) {
+    return false;
+  }
+  // Last matching row wins in case the table ever lists a commit more than
+  // once, mirroring the "current state" semantics of an in-place edit.
+  let latestStatus: string | null = null;
+  for (const row of rows.slice(1)) {
+    const commitCell = (row[commitColumn] ?? '')
+      .replace(/`/g, '')
+      .trim()
+      .toLowerCase();
+    if (!commitCell || !fullHeadSha.startsWith(commitCell)) {
+      continue;
+    }
+    latestStatus = row[statusColumn] ?? '';
+  }
+  return latestStatus !== null && /completed/i.test(latestStatus);
 }
 
 /**
@@ -386,6 +452,20 @@ export function buildDispositionPlan(
         noticeId: comment.id,
         botLogin: comment.login,
         reason: 'summary-resolved-no-actionable-comments',
+      });
+      continue;
+    }
+    // #2695: never auto-accept a Codex review-status comment while its own
+    // table still shows the current HEAD as Running -- see
+    // isCodexReviewSummaryCompleteForHeadSha's doc comment for the hazard.
+    if (
+      identity === 'chatgpt-codex-connector' &&
+      !isCodexReviewSummaryCompleteForHeadSha(comment.body, headSha)
+    ) {
+      skipped.push({
+        noticeId: comment.id,
+        botLogin: comment.login,
+        reason: 'codex-review-running',
       });
       continue;
     }
@@ -705,11 +785,35 @@ export interface ApplyDispositionPlanDeps {
    * the same loop never re-matches an id this loop already attributed.
    */
   knownViewerCommentIds: ReadonlySet<number>;
+  /**
+   * #2695 (Codex review, P1 follow-up): immediately before posting a planned
+   * Codex summary-walkthrough acceptance, re-verify the SOURCE comment
+   * (`item.noticeId`) still reads Completed for the CURRENT head. This
+   * closes the gap between `planNow()` (a snapshot taken once before the
+   * loop) and this specific post -- claim revalidation and earlier items'
+   * posts both take real network time, during which Codex could re-trigger
+   * and flip its own in-place-edited comment back to Running. Only called
+   * for a planned item whose `reason` is `'summary walkthrough'` and whose
+   * `botLogin` resolves to the `chatgpt-codex-connector` identity; every
+   * other item (notices, CodeRabbit summaries) posts unconditionally, as
+   * before. Omit in a test double with no live source to re-check --
+   * omitting it skips this revalidation entirely (never fails closed) so
+   * existing non-Codex-focused tests need no change.
+   */
+  revalidateCodexSummaryStillComplete?: (item: PlannedDisposition) => boolean;
 }
 
 export interface ApplyDispositionPlanResult {
   applied: AppliedDisposition[];
   failed: FailedDisposition[];
+  /**
+   * Codex summary items skipped because `revalidateCodexSummaryStillComplete`
+   * reported the source comment no longer Completed for the current HEAD
+   * immediately before posting (#2695 P1 follow-up). Not an error: left for
+   * a later pass once Codex actually finishes, the same way `plan.skipped`'s
+   * `codex-review-running` items are.
+   */
+  staleSkipped: SkippedNotice[];
   /** `true` when the claim was lost mid-loop, stopping further posts. */
   claimLost: boolean;
   /** Every viewer-authored comment id known by the end of the run: the
@@ -742,6 +846,7 @@ export function applyDispositionPlan(
   const knownViewerCommentIds = new Set(deps.knownViewerCommentIds);
   const applied: AppliedDisposition[] = [];
   const failed: FailedDisposition[] = [];
+  const staleSkipped: SkippedNotice[] = [];
   let claimLost = false;
   for (let index = 0; index < plan.planned.length; index += 1) {
     const item = plan.planned[index];
@@ -759,9 +864,36 @@ export function applyDispositionPlan(
       }
       break;
     }
+    const isCodexSummaryWalkthrough =
+      item.reason === 'summary walkthrough' &&
+      advisoryBotIdentityToken(item.botLogin) === 'chatgpt-codex-connector';
     let posted: { id: number } | null = null;
     let lastError: string | null = null;
+    let becameStale = false;
     for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
+      // #2695 (Codex review, P1 follow-up): re-checked immediately before
+      // EACH actual POST attempt, not once before the retry loop -- a failed
+      // first attempt plus recovery lookup both take real network time, long
+      // enough for Codex to re-trigger and flip its own comment back to
+      // Running before the retry. A revalidation failure (Copilot review: a
+      // thrown error from the fetch itself, e.g. a transient network error)
+      // is treated the same as "not confirmed complete" -- never let it
+      // crash the whole apply loop, and never post on an unconfirmed state.
+      if (
+        isCodexSummaryWalkthrough &&
+        deps.revalidateCodexSummaryStillComplete
+      ) {
+        let stillComplete: boolean;
+        try {
+          stillComplete = deps.revalidateCodexSummaryStillComplete(item);
+        } catch {
+          stillComplete = false;
+        }
+        if (!stillComplete) {
+          becameStale = true;
+          break;
+        }
+      }
       try {
         posted = deps.postDisposition(item.body);
       } catch (error) {
@@ -780,7 +912,13 @@ export function applyDispositionPlan(
         );
       }
     }
-    if (posted) {
+    if (becameStale) {
+      staleSkipped.push({
+        noticeId: item.noticeId,
+        botLogin: item.botLogin,
+        reason: 'codex-review-running-at-post-time',
+      });
+    } else if (posted) {
       knownViewerCommentIds.add(posted.id);
       applied.push({ noticeId: item.noticeId, commentId: posted.id });
     } else {
@@ -790,7 +928,7 @@ export function applyDispositionPlan(
       });
     }
   }
-  return { applied, failed, claimLost, knownViewerCommentIds };
+  return { applied, failed, staleSkipped, claimLost, knownViewerCommentIds };
 }
 
 if (import.meta.main) {
@@ -946,17 +1084,50 @@ if (import.meta.main) {
   // own post instead of some other pre-existing comment that happens to
   // carry the identical (now per-notice-unique, #1482) body text.
   const knownViewerCommentIds = viewerCommentIds(owner, repo, pr, viewerLogin);
-  const { applied, failed, claimLost } = applyDispositionPlan(plan, {
-    revalidateClaim,
-    postDisposition: (body) => postDisposition(owner, repo, pr, body),
-    recoverPostedDisposition: (body, knownIds) =>
-      recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
-    knownViewerCommentIds,
-  });
+  // #2695 (Codex review, P1 follow-up): re-fetch the live PR head and the
+  // SOURCE comment's current body immediately before posting a planned Codex
+  // summary acceptance, closing the window since planNow()'s snapshot where
+  // Codex could have re-triggered and flipped its own comment back to
+  // Running.
+  const revalidateCodexSummaryStillComplete = (
+    item: PlannedDisposition,
+  ): boolean => {
+    // #2695 (CodeRabbit review): fetch the SOURCE comment body first, THEN
+    // the PR head. A push between the two fetches must never let a stale,
+    // already-superseded headSha validate against a body snapshot taken
+    // after that push -- reading the body first guarantees freshHeadSha is
+    // never OLDER than what freshBody reflects, so a mid-fetch push can only
+    // make freshHeadSha newer than any row the (older) body actually has,
+    // correctly failing the match instead of falsely confirming completion.
+    const freshBody = ghText([
+      'api',
+      `repos/${owner}/${repo}/issues/comments/${item.noticeId}`,
+      '--jq',
+      '.body',
+    ]);
+    const freshHeadSha = ghText([
+      'api',
+      `repos/${owner}/${repo}/pulls/${pr}`,
+      '--jq',
+      '.head.sha',
+    ]);
+    return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
+  };
+  const { applied, failed, staleSkipped, claimLost } = applyDispositionPlan(
+    plan,
+    {
+      revalidateClaim,
+      postDisposition: (body) => postDisposition(owner, repo, pr, body),
+      recoverPostedDisposition: (body, knownIds) =>
+        recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
+      knownViewerCommentIds,
+      revalidateCodexSummaryStillComplete,
+    },
+  );
 
   const status = failed.length > 0 ? 'failed' : 'applied';
   process.stdout.write(
-    `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, skipped: plan.skipped }, null, 2)}\n`,
+    `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, staleSkipped, skipped: plan.skipped }, null, 2)}\n`,
   );
   process.exit(claimLost || failed.length > 0 ? 1 : 0);
 }

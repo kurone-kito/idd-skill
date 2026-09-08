@@ -1485,6 +1485,7 @@ const dispositionNonReviewNoticesKeys = [
   'status',
   'applied',
   'failed',
+  'staleSkipped',
   'skipped',
 ] as const satisfies readonly (keyof DispositionReport)[];
 
@@ -1496,6 +1497,13 @@ const dispositionNonReviewNoticesFixture = {
   status: 'applied',
   applied: [{ noticeId: 1, commentId: 1000 }],
   failed: [],
+  staleSkipped: [
+    {
+      noticeId: 3,
+      botLogin: 'chatgpt-codex-connector[bot]',
+      reason: 'codex-review-running-at-post-time',
+    },
+  ],
   skipped: [
     {
       noticeId: 2,

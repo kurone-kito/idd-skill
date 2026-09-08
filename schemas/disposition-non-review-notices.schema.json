@@ -114,6 +114,29 @@
           }
         }
       }
+    },
+    "staleSkipped": {
+      "type": "array",
+      "description": "Codex summary-walkthrough items (#2695) skipped in apply mode because an immediately-pre-post revalidation found the source comment no longer Completed for the current HEAD -- distinct from `skipped`, which is decided once during planning rather than re-checked just before the write.",
+      "items": {
+        "type": "object",
+        "required": ["noticeId", "botLogin", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "noticeId": {
+            "type": "integer",
+            "description": "GitHub comment identifier of the skipped Codex summary walkthrough."
+          },
+          "botLogin": {
+            "type": "string",
+            "description": "Bot login associated with the skipped summary walkthrough."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason the summary walkthrough was skipped immediately before posting."
+          }
+        }
+      }
     }
   },
   "additionalProperties": false
