@@ -4501,6 +4501,47 @@ TBD
   assert.equal(result.pass, true);
 });
 
+test("verifiability preserves a checklist item past the primary scan's own 500-char window (PR #2735 Codex review round 3)", () => {
+  // The primary section-scoped scan only ever examines the first 500
+  // characters after the "Acceptance Criteria" heading. An earlier
+  // revision's exclusion masked the section's FULL extent from the
+  // Alternative fallback instead of matching that same 500-char window,
+  // so a genuine checklist item past it -- which the primary scan never
+  // examined either -- was doubly hidden rather than left available.
+  const filler = 'This section explains context at length. '.repeat(15);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+${filler}
+- [ ] The result is deterministic.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability ignores a literal "~~" demonstrated in inline code when pairing strikethrough (PR #2735 Codex review round 3)', () => {
+  // isInStrikethroughSpan previously scanned the raw, unmasked body for
+  // "~~" delimiters -- two literal "~~" tokens quoted in inline code
+  // (documenting the syntax itself) were paired as real strikethrough
+  // delimiters, wrongly treating the genuine decision marker between them
+  // as struck through / retracted.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+The syntax \`~~\` is documented. Maintainer decision (Groom hearing, 2026-09-05): proceed as described. Keep \`~~\` escaped.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {

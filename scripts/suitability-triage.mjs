@@ -363,14 +363,23 @@ function isInBlockquotedParagraph(normalizedBody, paragraphSpans, offset) {
 // containing paragraph (a soft heuristic, not full CommonMark strikethrough
 // parsing, matching this file's existing style for inline-span detection)
 // and reports whether `offset` falls strictly inside any pair's content.
-function isInStrikethroughSpan(normalizedBody, paragraphSpans, offset) {
+//
+// #2711 PR #2735 review round 3 (Codex): scans `codeMaskedBody` (e.g.
+// `normalizedCodeMaskedBody`), not the raw `normalizedBody`, so a literal
+// "~~" inside an inline/fenced code example demonstrating the syntax --
+// masked to spaces there -- is never mistaken for a real delimiter.
+// `codeMaskedBody` must be the SAME length and position-preserving
+// relative to `normalizedBody` (as `maskMarkdownCodeRegionsPreservingPositions`
+// guarantees) so `paragraphSpans` and `offset`, both computed against
+// `normalizedBody`, stay valid against it.
+function isInStrikethroughSpan(codeMaskedBody, paragraphSpans, offset) {
   const span =
     paragraphSpans.find(
       (candidate) => offset >= candidate.start && offset <= candidate.end,
     ) ?? paragraphSpans[paragraphSpans.length - 1];
   const paragraphStart = span?.start ?? 0;
-  const paragraphEnd = span?.end ?? normalizedBody.length;
-  const paragraphText = normalizedBody.slice(paragraphStart, paragraphEnd);
+  const paragraphEnd = span?.end ?? codeMaskedBody.length;
+  const paragraphText = codeMaskedBody.slice(paragraphStart, paragraphEnd);
   const relativeOffset = offset - paragraphStart;
   const delimiterPattern = /~~/g;
   const delimiterStarts = [];
@@ -2449,9 +2458,17 @@ export function checkVerifiability(context) {
         acHeadingStart + (acceptanceCriteriaMatch[0]?.length ?? 0);
       const acRestOfBody = fenceMaskedBody.slice(acContentStart);
       const acNextHeadingIdx = acRestOfBody.search(NEXT_HEADING_PATTERN);
-      const acContentEnd =
+      const acSectionEnd =
         acContentStart +
         (acNextHeadingIdx === -1 ? acRestOfBody.length : acNextHeadingIdx);
+      // #2711 PR #2735 review round 3 (Codex): the primary section-scoped
+      // scan above only ever examines the first 500 characters after the
+      // heading (`contentAfter`'s own slice window) -- capping the
+      // exclusion at that SAME boundary, not the section's full extent,
+      // so a genuine checklist item past that window (which the primary
+      // scan never saw either) remains available to this fallback instead
+      // of being doubly hidden.
+      const acContentEnd = Math.min(acSectionEnd, acContentStart + 500);
       alternativeScanExclusions.push({
         start: acHeadingStart,
         end: acContentEnd,
@@ -2625,7 +2642,7 @@ export function checkVerifiability(context) {
           inlineMatch.index,
         ) &&
         !isInStrikethroughSpan(
-          normalizedBody,
+          normalizedCodeMaskedBody,
           paragraphSpans,
           inlineMatch.index,
         )
