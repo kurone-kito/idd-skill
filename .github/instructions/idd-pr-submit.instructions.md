@@ -532,16 +532,39 @@ confirmed condition above. Delegate polling mechanics to
   can all read as "not outstanding" too (`idd-skill#2622`). Run the
   [canonical `advisory-wait-state`
   invocation](idd-advisory-wait.instructions.md#1-canonical-path-helper-first)
-  for this PR first and read `outcome`: only `REQUEST_NEEDED` means
-  request a review now. `SATISFIED` (`lastCopilotCommit` already
-  matches this HEAD SHA — Copilot's review already covers it) or `WAIT`
-  (a same-head request already exists, still inside its settle window)
-  both mean request nothing — wait for Copilot's review to land for the
-  current HEAD SHA (already true in the `SATISFIED` case), then rerun
-  via `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md`
-  §Rerun mechanics) and resume D4. `CAP_EXHAUSTED` (the request cap is
+  for this PR first and read `outcome`: only `REQUEST_NEEDED` triggers
+  new action here, and it splits on `copilotPending`. When `false`,
+  request a review now and post the same-head `advisory-wait:` marker
+  in the same step (helper-first: the profile-selected
+  `post-idd-marker` command per **AW3-R**, which documents
+  `--type advisory` as this same request-marker form), matching E14's
+  `REQUEST_NEEDED`
+  marker step — without it, `requestMarkerCount` never advances and
+  every resumed D4 pass reads `REQUEST_NEEDED` again instead of
+  progressing toward the cap. When `copilotPending` is `true` instead
+  (a pending reviewer with unproven HEAD coverage and no same-head
+  marker), this is **AW3-S**'s own pending entry — the fuller
+  remove/re-request cycle this bullet does not reimplement — exit
+  CI-wait and proceed directly to `idd-review-snapshot.instructions.md`
+  (E1) instead, same as `CAP_EXHAUSTED`/`RECOVERY_NEEDED` below.
+  `WAIT` (a same-head request already exists,
+  still inside its settle window) means request nothing — wait for
+  Copilot's review to land for the current HEAD SHA, then rerun via
+  `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md` §Rerun
+  mechanics) and resume D4. `SATISFIED` splits on `lastCopilotCommit`:
+  when it already matches this HEAD SHA, Copilot's review already
+  covers it — request nothing and take the same rerun-and-resume-D4
+  action as `WAIT` above. When it does **not** match this HEAD SHA,
+  `SATISFIED` instead means a same-head request's elapsed window ran
+  out with no review ever landing for this HEAD (see
+  `idd-advisory-wait.instructions.md`'s AW3 elapsed-window rows);
+  `idd-advisory-convergence` stays `pending: true` for this HEAD
+  regardless, so rerunning and resuming D4 would only reproduce the
+  same wait indefinitely — treat it like `CAP_EXHAUSTED`/
+  `RECOVERY_NEEDED` below instead. `CAP_EXHAUSTED` (the request cap is
   already spent) or `RECOVERY_NEEDED` (a proven same-head request
   exists but needs its marker, not a new request) both need the fuller
   AW3 handling this bullet does not reimplement — exit CI-wait and
   proceed directly to `idd-review-snapshot.instructions.md` (E1)
-  instead, the same carve-out the pending-disposition case above takes.
+  instead, the same carve-out the pending-disposition case above and
+  the elapsed-window `SATISFIED` case take.

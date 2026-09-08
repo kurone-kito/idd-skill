@@ -2720,12 +2720,26 @@ test('D4 pending:true recovery ties each advisory-wait outcome to its actual act
   // merely that the outcome name appears somewhere in the bullet (a bare
   // name-presence check would still pass if a future edit moved an outcome
   // into the wrong clause).
+  //
+  // SATISFIED itself splits further (idd-skill#2712): a genuine
+  // `lastCopilotCommit` match reruns and resumes D4 same as WAIT, but an
+  // elapsed-window SATISFIED (AW3's timeout rows, `lastCopilotCommit` still
+  // not matching HEAD) must exit to E1 like CAP_EXHAUSTED/RECOVERY_NEEDED,
+  // or D4 would rerun a check that can never turn green from that rerun
+  // alone and loop forever.
+  //
+  // REQUEST_NEEDED also splits on `copilotPending` (idd-skill#2712): the
+  // ordinary case (no pending reviewer) posts a fresh request + marker, but
+  // a pending reviewer with unproven HEAD coverage is AW3-S's own pending
+  // entry -- posting an ordinary marker there bypasses AW3-S's bounded
+  // recovery budget, so that sub-case exits to E1 like CAP_EXHAUSTED
+  // instead.
   const path =
     'idd-template/.github/instructions/idd-pr-submit.instructions.md';
   const bullet = extractBoundedRegion(
     readText(path),
     'reports `pending: true`**',
-    'the pending-disposition case above takes.',
+    'the elapsed-window `SATISFIED` case take.',
     path,
   );
   assert.match(bullet, /advisory-wait-state/);
@@ -2734,25 +2748,57 @@ test('D4 pending:true recovery ties each advisory-wait outcome to its actual act
   const requestNow = extractBoundedRegion(
     bullet,
     'read `outcome`:',
-    'request a review now.',
+    'and it splits on `copilotPending`.',
     path,
   );
   assert.match(requestNow, /only `REQUEST_NEEDED`/);
 
-  const requestNothingWaitAndRerun = extractBoundedRegion(
+  const requestNeededSplit = extractBoundedRegion(
     bullet,
-    'request a review now.',
-    'resume D4.',
+    'and it splits on `copilotPending`.',
+    'same as `CAP_EXHAUSTED`/`RECOVERY_NEEDED` below.',
     path,
   );
-  assert.match(requestNothingWaitAndRerun, /`SATISFIED`/);
-  assert.match(requestNothingWaitAndRerun, /`WAIT`/);
-  assert.match(requestNothingWaitAndRerun, /request nothing/);
+  assert.match(requestNeededSplit, /When `false`/);
+  assert.match(requestNeededSplit, /request a review now/);
+  assert.match(
+    requestNeededSplit,
+    /post the same-head `advisory-wait:` marker/,
+  );
+  assert.match(requestNeededSplit, /AW3-R/);
+  assert.match(requestNeededSplit, /When `copilotPending` is `true`/);
+  assert.match(requestNeededSplit, /AW3-S/);
+  assert.match(
+    requestNeededSplit,
+    /idd-review-snapshot\.instructions\.md[\s\S]*\(E1\)/,
+  );
+
+  const waitAndRerun = extractBoundedRegion(
+    bullet,
+    'same as `CAP_EXHAUSTED`/`RECOVERY_NEEDED` below.',
+    'and resume D4.',
+    path,
+  );
+  assert.match(waitAndRerun, /`WAIT`/);
+  assert.match(waitAndRerun, /request nothing/);
+
+  const satisfiedSplit = extractBoundedRegion(
+    bullet,
+    'and resume D4.',
+    'below instead.',
+    path,
+  );
+  assert.match(satisfiedSplit, /`SATISFIED`/);
+  assert.match(satisfiedSplit, /matches this HEAD SHA/);
+  assert.match(satisfiedSplit, /rerun-and-resume-D4/);
+  assert.match(satisfiedSplit, /does \*\*not\*\* match this HEAD SHA/);
+  assert.match(satisfiedSplit, /elapsed window/);
+  assert.match(satisfiedSplit, /pending: true.*for this HEAD/);
 
   const exitToE1 = extractBoundedRegion(
     readText(path),
-    'resume D4.',
-    'the pending-disposition case above takes.',
+    'below instead.',
+    'the elapsed-window `SATISFIED` case take.',
     path,
   );
   assert.match(exitToE1, /`CAP_EXHAUSTED`/);
