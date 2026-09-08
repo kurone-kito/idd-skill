@@ -30,6 +30,18 @@ test('protected branch with a failing required check: gate does not pass', () =>
   assert.equal(r.requiredChecksPassing, false);
 });
 
+// #2714's fix is deliberately scoped to resolvePresentRunConclusion (the
+// no-required-checks fallback), not classifyCiChecks itself, because a
+// REQUIRED check that is itself CANCELLED with no successor must not
+// silently read as passing. Lock that design intent directly: the
+// required-checks status must stay 'unknown', never 'success'.
+test('protected branch with a lone CANCELLED required check: status stays unknown, gate does not pass', () => {
+  const r = summarize([{ name: 'lint', state: 'CANCELLED' }], protectedRules);
+  assert.equal(r.noRequiredChecksConfigured, false);
+  assert.equal(r.status, 'unknown');
+  assert.equal(r.requiredChecksPassing, false);
+});
+
 test('unprotected + green runs: reported distinctly from a passing required gate', () => {
   const r = summarize([{ name: 'build', state: 'SUCCESS' }], []);
   assert.equal(r.noRequiredChecksConfigured, true);
