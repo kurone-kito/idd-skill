@@ -2561,6 +2561,82 @@ test('authoring-owner-marker-trail rejects issue=none at state=member even when 
   assert.equal(finding?.result, 'fail');
 });
 
+// --- upstream-candidate-marker-label: bidirectional pairing (#2700/#2703) ---
+
+function withUpstreamCandidateMarker(body: string): string {
+  return `${body}\n\n<!-- idd-skill-upstream-candidate: true -->`;
+}
+
+test('upstream-candidate-marker-label fails when the label is present without the marker', () => {
+  const report = auditAuthoredIssue(orphanBody({ score: 4 }), {
+    shape: 'orphan',
+    labels: ['status:upstream-candidate'],
+  });
+  assert.equal(
+    findingResult(report, 'upstream-candidate-marker-label'),
+    'fail',
+  );
+});
+
+test('upstream-candidate-marker-label fails when the marker is present without the label', () => {
+  const body = withUpstreamCandidateMarker(orphanBody({ score: 4 }));
+  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  assert.equal(
+    findingResult(report, 'upstream-candidate-marker-label'),
+    'fail',
+  );
+});
+
+test('upstream-candidate-marker-label passes when both the marker and the label are present', () => {
+  const body = withUpstreamCandidateMarker(orphanBody({ score: 4 }));
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:upstream-candidate'],
+  });
+  assert.equal(
+    findingResult(report, 'upstream-candidate-marker-label'),
+    'pass',
+  );
+});
+
+test('upstream-candidate-marker-label passes when neither the marker nor the label is present (no regression)', () => {
+  const report = auditAuthoredIssue(orphanBody({ score: 4 }), {
+    shape: 'orphan',
+    labels: [],
+  });
+  assert.equal(
+    findingResult(report, 'upstream-candidate-marker-label'),
+    'pass',
+  );
+});
+
+test('upstream-candidate-marker-label runs the same way across all three shapes', () => {
+  const roadmap = auditAuthoredIssue(
+    withUpstreamCandidateMarker(roadmapBody()),
+    { shape: 'roadmap', labels: [] },
+  );
+  assert.equal(
+    findingResult(roadmap, 'upstream-candidate-marker-label'),
+    'fail',
+  );
+
+  const child = auditAuthoredIssue(withUpstreamCandidateMarker(childBody()), {
+    shape: 'child',
+    labels: ['status:upstream-candidate'],
+  });
+  assert.equal(findingResult(child, 'upstream-candidate-marker-label'), 'pass');
+});
+
+test('marker-prefix-consistency flags a wrong-prefix upstream-candidate marker', () => {
+  const body = `${orphanBody({ score: 4 })}\n\n<!-- other-prefix-upstream-candidate: true -->`;
+  const report = auditAuthoredIssue(body, { shape: 'orphan', labels: [] });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'marker-prefix-consistency',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /other-prefix-upstream-candidate/);
+});
+
 test('authoring-owner-marker-trail rejects an owner marker with a mismatched anchor from the publication generation', () => {
   const report = auditAuthoredIssue(bodyWithPublicationLine(), {
     shape: 'orphan',

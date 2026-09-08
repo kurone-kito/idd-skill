@@ -64,7 +64,17 @@ const AUTHORING_MARKER_SUFFIXES = [
   'autopilot-suitability',
   'effort',
   'authoring-bucket',
+  'upstream-candidate',
 ];
+/**
+ * The fixed GitHub label paired with the
+ * `<!-- {prefix}-upstream-candidate: true -->` marker (roadmap #2700's
+ * "Naming" section). Unlike `blockedByHumanLabelName` /
+ * `needsDecisionLabelName`, this name is fixed by the roadmap itself, not
+ * policy-configurable -- every adopter that opts in via
+ * `upstreamEscalation.enabled` uses the same literal label.
+ */
+const UPSTREAM_CANDIDATE_LABEL_NAME = 'status:upstream-candidate';
 const SHAPE_HEADING_REQUIREMENTS = {
   orphan: [
     { anyOf: ['Background', 'Goal'] },
@@ -374,6 +384,7 @@ export function auditAuthoredIssue(body, options) {
     checkEffortVisibleLineAgreement(text, markerPrefix),
     checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
     checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options),
+    checkUpstreamCandidateMarkerLabel(text, markerPrefix, labels),
   ];
   return {
     shape,
@@ -523,6 +534,48 @@ function checkAuthoringBucketMarkerRequired(authoringBucket, expectedBucket) {
     id,
     name,
     `expected an authoring-bucket: ${expectedBucket} marker, but found authoring-bucket: ${authoringBucket.value} instead`,
+  );
+}
+/**
+ * Mirrors {@link checkSuitabilityBlockedByHuman}'s marker/label
+ * cross-field pattern, but bidirectionally (#2700/#2703): the
+ * `status:upstream-candidate` label and the
+ * `<!-- {prefix}-upstream-candidate: true -->` marker must always agree,
+ * in either direction -- one present without the other is a fail, both
+ * or neither is a pass. This is stricter than the one-directional
+ * suitability-1 check above, which only fails a label omission and never
+ * flags a label applied without the matching condition; this pair has no
+ * pre-existing issues predating it, so there is no backward-compatibility
+ * reason to keep it one-directional.
+ *
+ * Presence-only: `countMarkerOccurrences` matches the marker regardless
+ * of its value, so a malformed value (e.g. a stray `upstream-candidate:
+ * false`) still counts as "present" here. Value-coherence is out of
+ * scope for this pairing check, the same way `checkAuthoringBucketMarkerRequired`
+ * addresses malformed *values* as a separate concern from this file's
+ * presence/label-pairing checks.
+ */
+function checkUpstreamCandidateMarkerLabel(text, markerPrefix, labels) {
+  const id = 'upstream-candidate-marker-label';
+  const name = `${UPSTREAM_CANDIDATE_LABEL_NAME} label and the upstream-candidate marker agree`;
+  const hasMarker =
+    countMarkerOccurrences(text, markerPrefix, 'upstream-candidate') > 0;
+  const hasLabel = labels.includes(UPSTREAM_CANDIDATE_LABEL_NAME.toLowerCase());
+  if (hasMarker === hasLabel) {
+    return pass(
+      id,
+      name,
+      hasLabel
+        ? `both the ${UPSTREAM_CANDIDATE_LABEL_NAME} label and the upstream-candidate marker are present`
+        : `neither the ${UPSTREAM_CANDIDATE_LABEL_NAME} label nor the upstream-candidate marker is present`,
+    );
+  }
+  return fail(
+    id,
+    name,
+    hasLabel
+      ? `${UPSTREAM_CANDIDATE_LABEL_NAME} label is present but the upstream-candidate marker was not found`
+      : `upstream-candidate marker is present but the ${UPSTREAM_CANDIDATE_LABEL_NAME} label was not provided`,
   );
 }
 /**
