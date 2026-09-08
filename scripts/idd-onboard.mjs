@@ -2910,7 +2910,11 @@ in that case); 2 usage or configuration error.
   --allow-root <dir>   additionally confine --target to this root, on top
                        of the current working directory (#2216); repeat
                        for more than one. Required only when --target
-                       resolves outside both
+                       resolves outside the working directory. A
+                       filesystem root removes this confinement
+                       guarantee entirely; a narrower but still broad
+                       value (e.g. a home directory) substantially
+                       widens it instead.
   --from-transcript <file>
                        read placeholder answers from a confirmed --hear
                        transcript (mapsToPlaceholder items); an explicit
@@ -2945,7 +2949,11 @@ nothing in that case); 2 usage or configuration error.
   --allow-root <dir>                additionally confine --source / --target
                                      to this root, on top of the current
                                      working directory (#2216); repeat for
-                                     more than one
+                                     more than one. A filesystem root
+                                     removes this confinement guarantee
+                                     entirely; a narrower but still
+                                     broad value (e.g. a home directory)
+                                     substantially widens it instead.
   --profile <name>                  ${PROFILE_NAMES.join(' | ')}
   --force                           allow overwriting a differing target file
   --dry-run                         print the plan without writing anything
@@ -2971,7 +2979,11 @@ or placeholder residue); 2 usage or configuration error.
   --allow-root <dir>                 additionally confine --source / --target
                                       to this root, on top of the current
                                       working directory (#2216); repeat for
-                                      more than one
+                                      more than one. A filesystem root
+                                      removes this confinement guarantee
+                                      entirely; a narrower but still
+                                      broad value (e.g. a home directory)
+                                      substantially widens it instead.
   --profile <name>                   ${PROFILE_NAMES.join(' | ')}
   --help, -h                         show this help
 
@@ -3008,7 +3020,11 @@ never writes .github/idd/config.json, never requires --source.
   --target <dir>               target repository (default: current directory)
   --allow-root <dir>           additionally confine --target to this root,
                                on top of the current working directory
-                               (#2216); repeat for more than one
+                               (#2216); repeat for more than one. A
+                               filesystem root removes this confinement
+                               guarantee entirely; a narrower but still
+                               broad value (e.g. a home directory)
+                               substantially widens it instead.
   --answers <file>              path to the --apply answers JSON file
   --help, -h                    show this help
 
@@ -3040,7 +3056,11 @@ AGENTS.md, or GEMINI.md.
   --target <dir>               target repository (default: current directory)
   --allow-root <dir>           additionally confine --target to this root,
                                on top of the current working directory
-                               (#2216); repeat for more than one
+                               (#2216); repeat for more than one. A
+                               filesystem root removes this confinement
+                               guarantee entirely; a narrower but still
+                               broad value (e.g. a home directory)
+                               substantially widens it instead.
   --transcript <file>          path to the confirmed --hear transcript
   --help, -h                    show this help
 `);

@@ -510,7 +510,19 @@ allow/deny split, softened as described below.
   the next section for this deny's actual, more limited reach. This
   repository's own dogfood `.claude/settings.json` does **not** carry
   that deny, consistent with also allowing `gh pr merge` under this
-  repository's recorded `fully_autonomous_merge` policy.
+  repository's recorded `fully_autonomous_merge` policy. A different
+  helper script under this same allowlisted surface carries its own
+  residual: `idd-onboard`'s `--allow-root <dir>` flag accepts any
+  existing directory and adds it to the path-confinement boundary list
+  verbatim, with no upper bound. A filesystem root removes the
+  confinement that issue #2216 fixed entirely; a narrower but still
+  broad value (e.g. a home directory) substantially widens it instead
+  -- either way defeating
+  the exact unattended/agent-dispatch threat model that fix's own doc
+  comment names (preventive; no observed incident yet). Neither the
+  script's own argument validation nor the allowlisted
+  `Bash(node scripts/*)` / `Bash(node bin/*)` patterns above treat an
+  overly broad `--allow-root` value as unusual.
 
 ### What the baseline denies
 
