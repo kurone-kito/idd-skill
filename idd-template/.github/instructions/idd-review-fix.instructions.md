@@ -122,9 +122,9 @@ branch-sync check (`idd-review-triage.instructions.md`) and F1
 mergeable,mergeStateStatus` otherwise — reflects the last **pushed**
 head, not unpushed E9 fixes.
 
-Only on an actual conflict (`mergeable` `CONFLICTING` /
-`content-conflict`): merge `{development-branch}` (resolved in
-`idd-work.instructions.md`'s B1
+Only on a confirmed `content-conflict` (`mergeable` `CONFLICTING`):
+merge `{development-branch}` (resolved in `idd-work.instructions.md`'s
+B1
 [Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch))
 into the feature branch (`git fetch origin {development-branch} && git
 merge origin/{development-branch}`), resolve conflicts, and complete
@@ -134,9 +134,10 @@ hardware-touch), use the
 for the whole operation — see `idd-review-triage.instructions.md`'s
 Sync path step 2 for the `-m` subject requirement.
 
-Any other state (clean, behind-no-conflict, computing, dirty, unknown)
-is a **no-op**: proceed to E12 without merging or committing anything —
-E11 never re-polls or holds; the post-E12 branch-sync check owns that.
+Any other read (clean, behind-no-conflict, computing, dirty, unknown)
+skips the merge here — E11 never re-polls a transient read or holds on
+a dirty/unknown one; proceed to E12 and let the post-E12 branch-sync
+check handle those states properly.
 
 **Active review gate**: same check as
 `idd-review-triage.instructions.md`'s Sync path step 1 — only when the

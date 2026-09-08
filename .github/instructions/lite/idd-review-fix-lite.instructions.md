@@ -143,8 +143,9 @@ other GitHub side effect, confirm all of the following:
 1. Check state read-only: `idd-branch-conflict-state --pr {pr-number}`
    (helper) or `gh pr view {pr-number} --json mergeable,mergeStateStatus`
    otherwise — reflects the last pushed head, not local unpushed fixes.
-2. No conflict (clean, behind-no-conflict, computing, dirty, unknown)?
-   Continue to E12 — do not merge; a later check owns re-poll/hold.
+2. Not a confirmed conflict (clean, behind-no-conflict, computing,
+   dirty, unknown)? Skip the merge and continue to E12 — a later check
+   re-polls a transient read and holds on dirty/unknown.
 3. Conflict reported (`mergeable` `CONFLICTING`)? If the PR has
    unresolved review threads, unreplied comments, or a reviewer's
    latest state is `CHANGES_REQUESTED`, get explicit operator
