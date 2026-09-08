@@ -135,10 +135,13 @@ other GitHub side effect, confirm all of the following:
 
 ## E11 — Resolve conflicts with main
 
-1. Check state read-only: `idd-branch-conflict-state --pr {pr-number}`
-   — reflects the last pushed head, not local unpushed fixes. Missing,
-   failing, or disagreeing? Stop and ask (Helper runtime contract
-   above) — no non-helper fallback here.
+1. Check state with the profile-selected branch-conflict-state helper:
+   `node scripts/branch-conflict-state.mjs --pr {pr-number}`, or the
+   package-manager-profile `idd:branch-conflict-state` command
+   (resolve the exact command from `docs/idd-helper-scripts.md` if
+   unsure) — reflects the last pushed head, not local unpushed fixes.
+   Missing, failing, or disagreeing? Stop and ask (Helper runtime
+   contract above) — no non-helper fallback here.
 2. Not a confirmed conflict (clean, behind-no-conflict, computing,
    dirty, force-push-exception, unknown)? Skip the merge, continue to
    E12 — F1 (`idd-pre-merge-lite.instructions.md`) holds on those
