@@ -115,21 +115,23 @@ recovery.
 
 ## E11 — Resolve conflicts with {development-branch}
 
-Check for conflicts between the feature branch and `{development-branch}`
-(the value resolved in `idd-work.instructions.md`'s B1
-[Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch)
-step). If conflicts exist, merge `{development-branch}` into the feature
-branch (`git fetch origin {development-branch} && git merge
-origin/{development-branch}`), resolve them, and complete the merge. On a
-signed-commit repo with non-interactive-hostile primary signing (GPG
-pinentry / hardware-touch), use the
-[signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
-for the whole operation instead of the plain command — see
-`idd-review-triage.instructions.md`'s Sync path step 2 for the
-wrapper's `-m` subject requirement.
+Same read-only check as
+`idd-review-triage.instructions.md`'s E-phase branch-sync check and
+`idd-pre-merge.instructions.md`'s F1 (`idd-branch-conflict-state --pr
+{pr-number}` or `gh pr view {pr-number} --json
+mergeable,mergeStateStatus`) — reflects the last pushed head, not
+unpushed E9 fixes.
 
-**Active review gate**: same check as
-`idd-review-triage.instructions.md`'s Sync path step 1.
+- **`content-conflict`** (`mergeable` `CONFLICTING`): pass the active
+  review gate, merge `{development-branch}` into the feature branch
+  (`git fetch origin {development-branch} && git merge
+  origin/{development-branch}`), resolve, complete the merge.
+  Non-interactive-hostile signing: use the
+  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
+  instead.
+- Otherwise (clean, behind-no-conflict, computing, dirty,
+  force-push-exception, unknown): skip the merge, proceed to E12 —
+  the E-phase branch-sync check and F1 handle those downstream.
 
 ## E12 — Lint, test, push
 

@@ -135,28 +135,28 @@ other GitHub side effect, confirm all of the following:
 
 ## E11 — Resolve conflicts with main
 
-1. Check for conflicts between the feature branch and `main`.
-2. If none exist, continue to E12.
-3. If conflicts exist, and the PR has unresolved review threads,
-   unreplied comments, or a reviewer's latest state is
-   `CHANGES_REQUESTED`, get explicit operator confirmation before
-   merging — the merge commit will appear in the PR history.
-4. Run `git fetch origin main && git merge origin/main`.
-5. On a signed-commit repo whose primary signing is non-interactive
-   hostile (GPG pinentry or hardware-touch) but that provides a
-   fallback signing wrapper for arbitrary git subcommands (pass
-   `-c gpg.format=ssh -c user.signingkey=<abs-path> -c
-   commit.gpgsign=true` to `git` before the subcommand, plus
-   `-m "chore: merge origin/main into the claimed branch"` on the
-   first `merge` so a commitlint hook accepts the subject — `git -c …
-   merge`, not `git merge -c …`; a commit-only alias like
-   `git commit-ssh` will not run `merge`), run this merge through that
-   wrapper, not the plain command.
-6. Resolve any conflicts and complete the merge.
-7. If the merge needed `--continue`, run it through the same wrapper
-   used in step 5 (`git -c … merge --continue`), never the plain
-   `git merge --continue` — the wrapper must own the whole operation, or
-   the merge commit reverts to the stalling primary signing.
+1. Check state with the profile-selected branch-conflict-state helper:
+   `node scripts/branch-conflict-state.mjs --pr {pr-number}`, or the
+   package-manager-profile `idd:branch-conflict-state` command
+   (resolve the exact command from `docs/idd-helper-scripts.md` if
+   unsure) — reflects the last pushed head, not local unpushed fixes.
+   Missing, failing, or disagreeing? Stop and ask (Helper runtime
+   contract above) — no non-helper fallback here.
+2. Not a confirmed conflict (clean, behind-no-conflict, computing,
+   dirty, force-push-exception, unknown)? Skip the merge, continue to
+   E12 — F1 (`idd-pre-merge-lite.instructions.md`) handles those
+   downstream.
+3. Conflict (`mergeable` `CONFLICTING`)? Unresolved review threads,
+   unreplied comments, or reviewer state `CHANGES_REQUESTED`: get
+   explicit operator confirmation first — the merge commit will appear
+   in the PR history.
+4. Run `git fetch origin main && git merge origin/main`. On
+   non-interactive-hostile primary signing (GPG pinentry or
+   hardware-touch) with a fallback wrapper, run the whole merge
+   (including `--continue`) through that wrapper instead — see
+   `docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure`
+   for the command form and the commitlint `-m` requirement.
+5. Resolve conflicts, complete the merge.
 
 ## E12 — Lint, test, push
 
