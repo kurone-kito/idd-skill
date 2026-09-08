@@ -4609,6 +4609,26 @@ test('verifiability ignores backslash-escaped strikethrough delimiters (PR #2735
   assert.equal(result.pass, true);
 });
 
+test('verifiability falls through to the Alternative scan when the AC section opens with introductory prose (PR #2735 Codex review round 6)', () => {
+  // The primary AC scan only enters its list-shaped outer gate when the
+  // section's own trimmed content starts with a list marker -- an
+  // introductory line before the checklist ("The implementation must
+  // satisfy:") never reaches that gate, so hasObjectiveCriteria stays
+  // false without the section ever being fairly reviewed. Excluding the
+  // section from the Alternative fallback regardless made its real
+  // checklist item doubly invisible instead of falling through to it.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+The implementation must satisfy:
+- [ ] The result is deterministic.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {

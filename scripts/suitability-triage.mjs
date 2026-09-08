@@ -2426,6 +2426,16 @@ export function checkVerifiability(context) {
   const acceptanceCriteriaMatch = fenceMaskedBody.match(
     ACCEPTANCE_CRITERIA_PATTERN,
   );
+  // #2711 PR #2735 review round 6 (Codex): tracks whether the primary scan
+  // below actually reached its list-shaped outer gate, so the Alternative
+  // fallback (further down) only treats the AC section as "already fairly
+  // reviewed" -- and excludes it -- when that gate genuinely ran. An AC
+  // section starting with introductory prose before its checklist (e.g.
+  // "The implementation must satisfy:\n- [ ] ...") never enters the gate
+  // here (the section's own text doesn't start with a list marker), so its
+  // real checklist item was never seen by either scan; excluding it from
+  // the fallback too made it doubly invisible instead of falling through.
+  let acListGateReached = false;
   if (acceptanceCriteriaMatch) {
     const indexAfter =
       (acceptanceCriteriaMatch.index ?? 0) +
@@ -2453,6 +2463,7 @@ export function checkVerifiability(context) {
     // form, matching LIST_ITEM_LINE_PATTERN's own fix -- an AC section
     // written entirely with that numbering used to never enter this block.
     if (/^[-*]\s+/.test(listSection) || /^\d+[.)]\s+/.test(listSection)) {
+      acListGateReached = true;
       const listItemsOnly = extractListItemLines(listSection);
       hasObjectiveCriteria =
         hasSubstantiveBullet(listItemsOnly) ||
@@ -2461,9 +2472,10 @@ export function checkVerifiability(context) {
   }
   // Alternative: check for numbered steps with outcome signals or
   // checklists, excluding (a) the Acceptance Criteria section's own
-  // content, already given a fair, bounded review above, and (b) this
-  // repo's own "## Candidate files" convention (#2589) -- a list of files
-  // to EDIT, never a verification signal. A genuine numbered-steps or
+  // content, but ONLY when `acListGateReached` -- i.e. the primary scan
+  // above actually gave it a fair, bounded review -- and (b) this repo's
+  // own "## Candidate files" convention (#2589) -- a list of files to
+  // EDIT, never a verification signal. A genuine numbered-steps or
   // checklist section elsewhere in the body (e.g. "## Expected Behavior",
   // "## Reproduction") still counts: an earlier revision (#2711) instead
   // skipped this whole fallback whenever ANY Acceptance Criteria heading
@@ -2478,7 +2490,7 @@ export function checkVerifiability(context) {
   // once paired with an unrelated outcome-signal word anywhere else.
   if (!hasObjectiveCriteria) {
     const alternativeScanExclusions = [];
-    if (acceptanceCriteriaMatch) {
+    if (acceptanceCriteriaMatch && acListGateReached) {
       const acHeadingStart = acceptanceCriteriaMatch.index ?? 0;
       const acContentStart =
         acHeadingStart + (acceptanceCriteriaMatch[0]?.length ?? 0);
