@@ -293,7 +293,101 @@ export const SUITABILITY_REJECTION_PREFIX = 'A4.5 suitability gate rejection';
 // never invents a token the protocol doesn't recognize.
 const SUITABILITY_REJECTION_OUTCOME_PATTERN =
   /outcome:\s*(unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid)\b/i;
-const SUITABILITY_REJECTION_CHECK_PATTERN = /Check\s+\d+\s*\([^)]+\)/i;
+const SUITABILITY_REJECTION_CHECK_PATTERN_GLOBAL = /Check\s+\d+\s*\([^)]+\)/gi;
+const SUITABILITY_REJECTION_FAILURE_VERB_PATTERN = /\bfail(?:s|ed|ing)?\b/gi;
+
+/**
+ * Distance between two half-open text spans `[aStart, aEnd)` and
+ * `[bStart, bEnd)`: 0 when they overlap or touch, otherwise the gap between
+ * the nearer edges. Codex and CodeRabbit review findings on PR #2732 both
+ * caught that comparing match *start* positions alone (as an earlier
+ * revision of this function did) misattributes a failure verb to the wrong
+ * check once check names have different lengths -- e.g. "Check 4
+ * (Duplicate or Superseded Work) fails, while Check 5 (Actionability)
+ * passes": Check 5's short *start*-to-start gap to "fails" can read as
+ * closer than Check 4's own, immediately-adjacent *span*-to-span gap.
+ * Measuring from the nearer span edge instead of the start alone fixes
+ * this regardless of either match's length.
+ */
+function spanDistance(
+  aStart: number,
+  aEnd: number,
+  bStart: number,
+  bEnd: number,
+): number {
+  if (aEnd <= bStart) {
+    return bStart - aEnd;
+  }
+  if (bEnd <= aStart) {
+    return aStart - bEnd;
+  }
+  return 0;
+}
+
+/**
+ * Extract the `Check N (<Name>)` excerpt describing the comment's actual
+ * failed check, not merely an incidentally-mentioned one (#2708). A
+ * rejection comment may mention more than one check in the same sentence --
+ * one it actually fails, and another cited only for context. Both relative
+ * orderings occur in practice ("Check 5 (Actionability) was previously
+ * cited, but on review this time it fails Check 7 (Verifiability)" vs.
+ * "Check 7 (Verifiability): ... Check 5 (Actionability) passes ... outcome:
+ * ..."), and both place every `Check N (...)` mention before the trailing
+ * `outcome:` line -- so neither "first match", "last match", nor anchoring
+ * to the `outcome:` line's position can discriminate the two shapes; each
+ * of those gets one shape right and the other wrong.
+ *
+ * The signal that actually discriminates them is not position, it is that
+ * the failed check is described with a failure verb ("fails"/"failed"/
+ * "failing") near its own mention, while a merely-cited check is not. When
+ * a failure verb appears anywhere in the body, this returns the `Check N
+ * (...)` mention closest to it ({@link spanDistance} between the two
+ * matched spans, not merely their start positions -- see that function's
+ * own doc comment for why; ties keep the earlier mention). When no failure
+ * verb appears at all -- the common case: a
+ * comment stating its verdict as a headline, "Check N (<Name>): reason",
+ * with no other check mentioned, or a comment mentioning a second check
+ * only as passing with no failure verb anywhere -- this falls back to the
+ * first mention, the documented headline convention (the verdict check is
+ * stated first; anything mentioned afterward is context).
+ *
+ * This is a best-effort heuristic over freely-authored prose, not a
+ * guarantee against every possible phrasing: see {@link
+ * SuitabilityRejectionRecord.check}'s own doc comment for why that is an
+ * acceptable, bounded limitation here.
+ */
+function extractSuitabilityVerdictCheckMatch(
+  body: string,
+): RegExpMatchArray | null {
+  const checkMatches = [
+    ...body.matchAll(SUITABILITY_REJECTION_CHECK_PATTERN_GLOBAL),
+  ];
+  if (checkMatches.length <= 1) {
+    return checkMatches[0] ?? null;
+  }
+  const failureVerbMatches = [
+    ...body.matchAll(SUITABILITY_REJECTION_FAILURE_VERB_PATTERN),
+  ];
+  if (failureVerbMatches.length === 0) {
+    return checkMatches[0] ?? null;
+  }
+  let closest = checkMatches[0] ?? null;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (const checkMatch of checkMatches) {
+    const checkStart = checkMatch.index ?? 0;
+    const checkEnd = checkStart + checkMatch[0].length;
+    for (const verbMatch of failureVerbMatches) {
+      const verbStart = verbMatch.index ?? 0;
+      const verbEnd = verbStart + verbMatch[0].length;
+      const distance = spanDistance(checkStart, checkEnd, verbStart, verbEnd);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closest = checkMatch;
+      }
+    }
+  }
+  return closest;
+}
 
 /** The four A4.5 outcomes with no dedicated label (#2243): the only values
  * `<!-- {prefix}-triage-verdict: <outcome> -->` may declare.
@@ -477,8 +571,15 @@ export interface SuitabilityRejectionRecord {
    * occurrence; `null` when the comment does not declare one in that
    * recognized form. */
   outcome: string | null;
-  /** Best-effort `Check N (<Name>)` excerpt parsed from the comment body's
-   * own headline convention; `null` when absent. */
+  /** Best-effort `Check N (<Name>)` excerpt parsed from the comment body,
+   * preferring a mention near a failure verb over an incidentally-cited one
+   * (#2708); `null` when absent. Informational only, for human/log
+   * readability -- no routing decision in this codebase branches on it (see
+   * the consumers of {@link findTrustedSuitabilityRejection}, which only
+   * read {@link outcome} and {@link markerOutcome}); freely-authored prose
+   * has no fully reliable mechanical signal for "which check is the real
+   * verdict", so this field accepts a bounded residual failure mode rather
+   * than chasing every possible phrasing. */
   check: string | null;
   /** Outcome declared by the comment's `<!-- {prefix}-triage-verdict:
    * <outcome> -->` marker (#2243), or `null` when absent, malformed, or
@@ -556,7 +657,7 @@ export function findTrustedSuitabilityRejection(
     }
     latestTimestamp = timestamp;
     const outcomeMatch = SUITABILITY_REJECTION_OUTCOME_PATTERN.exec(body);
-    const checkMatch = SUITABILITY_REJECTION_CHECK_PATTERN.exec(body);
+    const checkMatch = extractSuitabilityVerdictCheckMatch(body);
     const markerDetection = parseSuitabilityTriageVerdictMarker(
       body,
       markerPrefix,
