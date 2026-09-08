@@ -3951,6 +3951,282 @@ test('verifiability still fails a genuine subjective gate in a CRLF body (#2531 
   assert.equal(result.pass, false);
 });
 
+test('verifiability rejects an either/or escape-hatch bullet whose documentation branch names no checkable content (#2709)', () => {
+  // Live-confirmed false-pass reproduced from #2709's own Background: a
+  // substantive fix on one side, and a no-further-requirement "document why
+  // not" branch on the other -- pre-fix this returned pass:true.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still passes when the documentation branch itself names a checkable artifact (#2709)', () => {
+  // Same either/or shape, but the documentation branch discloses its own
+  // concrete requirement -- must not be flagged.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add input validation to \`parseConfig\`, or document why not in a new ADR file and add a lint rule enforcing the decision.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still passes an ordinary either/or offering two already-resolved, equivalent options (#2709, no regression)', () => {
+  // An either/or with no documentation/disclosure verb at all is an
+  // ordinary resolved-options bullet (#2219's own baseline case), not an
+  // escape hatch -- must keep passing.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either \`config.json\` or \`config.yaml\` is accepted as the input format.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability rejects an escape hatch that names the tradeoff without the word "why" (#2709, Codex review PR #2725)', () => {
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either implement retries, or document the tradeoff.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability rejects an escape hatch even when it merely NAMES a concrete artifact while declining to provide it (#2709, Codex review PR #2725)', () => {
+  // "document why tests are not needed" only NAMES tests while explicitly
+  // declining to provide them -- must not be credited as a real
+  // requirement just because the word "tests" appears.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add tests, or document why tests are not needed.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability catches an escape-hatch documentation branch on the LEFT side of the either/or (#2709, Copilot review PR #2725)', () => {
+  // Order must not matter: "Either document why…, or fix…" puts the
+  // documentation branch first.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either document why validation is not needed, or add input validation to \`parseConfig\`.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not flag an escape-hatch-shaped sentence outside the Acceptance Criteria section (#2709, Codex review PR #2725)', () => {
+  // Scoped to the AC section only: ordinary Background prose using the same
+  // "either... or... explain why" shape must not trip Check 7 when the
+  // actual AC bullets are fully objective.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Background
+We either retain the existing behavior or explain why it differs from the docs.
+
+## Acceptance Criteria
+- tests pass
+- lint passes
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability follows an escape-hatch disclosure onto a wrapped continuation line (#2709, Codex review PR #2725 round 2)', () => {
+  // A soft-wrapped bullet: the documentation branch's disclosure sits on an
+  // indented continuation line, not the same line as "either...or". The
+  // right branch must be bounded by the end of the LIST ITEM (including its
+  // continuation lines), not the first '\n' -- otherwise it is cut off
+  // right after "or" and always passes as empty.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation, or
+  document why validation is not needed.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still passes a continuation-line escape hatch that discloses a checkable artifact (#2709, Codex review PR #2725 round 2)', () => {
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation, or
+  document why not in a new ADR file and add a lint rule enforcing the decision.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability keeps a nested disclosure paired with its parent bullet across a blank line (#2709, Codex review PR #2725 round 5)', () => {
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation, or:
+
+  - document why validation is not needed
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability tries every either-to-or split, not just the first "or" (#2709, Codex review PR #2725 round 5)', () => {
+  // A non-greedy single match would pair "either" with the inner "or"
+  // inside "the approach or rationale", missing the real separator before
+  // "implement retries".
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either document the approach or rationale, or implement retries.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability tries every either-to-or split, not just the last "or" (#2709, Codex review PR #2725 round 5)', () => {
+  // A greedy single match would pair "either" with the LAST "or" (before
+  // "add lint"), pulling the un-negated "tests" mention into the
+  // documentation branch and hiding it from the artifact check.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either document why not, or add tests, or add lint.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still credits a genuine inline-code artifact reference in the documentation branch (#2709, Codex review PR #2725 round 5)', () => {
+  // The code-span masking that keeps a quoted escape-hatch EXAMPLE from
+  // being treated as operative prose must not also blind the artifact scan
+  // to a real inline-code artifact reference in otherwise-real prose.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either implement retries, or document the rationale and verify it through \`pnpm lint\`.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability does not flag an escape-hatch phrase quoted as a literal example in inline code (#2709, Codex review PR #2725 round 4)', () => {
+  // The AC bullet is ABOUT detecting/documenting this exact pattern, quoting
+  // it verbatim inside a code span -- the quoted example must not be
+  // scanned as the issue's own operative either/or bullet.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Add a lint rule rejecting \`Either add validation, or document why validation is not needed\`.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still catches an escape hatch whose left branch exceeds the shared proximity window (#2709, Codex review PR #2725 round 4)', () => {
+  // The substantive left branch runs well past
+  // EITHER_OR_PROXIMITY_WINDOW_CHARS (120 chars) before its own "or" --
+  // since the scan is already scoped to one list item, there is no
+  // cross-bullet contamination risk left to guard against by capping the
+  // search here too.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either preserve full backward compatibility with every existing caller of the deprecated \`loadLegacyConfig\` helper across all supported Node.js versions and configuration formats, or document why preserving aliases is not needed.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability catches an escape-hatch disclosure nested as a deeper-indented sub-bullet (#2709, Codex review PR #2725 round 3)', () => {
+  // A nested marker line (indented deeper than the enclosing item's own
+  // marker) is a sub-item elaborating the outer bullet, not an unrelated
+  // sibling -- it must fold into the enclosing item's text instead of
+  // starting a new item whose own right branch is empty.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation, or:
+  - document why validation is not needed
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not pair "either" in one bullet with an unrelated "or" in a later bullet (#2709, Codex review PR #2725 round 2)', () => {
+  // Neither bullet on its own forms an either/or escape hatch -- "Either
+  // add validation to `parseConfig`" has no "or" of its own, and "Skip
+  // strict mode, or fall back to the default config." has no "either" of
+  // its own. Scanning the whole AC section's raw text (rather than one
+  // list item at a time) previously let EITHER_OR_PATTERN's `[\s\S]{0,120}`
+  // window pair the first bullet's "Either" with the second bullet's "or",
+  // manufacturing a construct that spans two unrelated AC lines.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation to \`parseConfig\`
+- Skip strict mode, or fall back to the default config.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {
