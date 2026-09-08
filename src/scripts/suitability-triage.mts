@@ -575,6 +575,16 @@ const POLICY_OVERRIDE_NOUN_PATTERN = new RegExp(
   `\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
   'i',
 );
+// #2734: used only by isOrdinaryHyphenatedCompoundToken's head-compound
+// branch to test a compound's own TAIL WORD in isolation (already sliced
+// out of the raw source, never matched against `\b...\b` boundaries in
+// running text), so -- unlike `POLICY_OVERRIDE_NOUN_SOURCE` above --
+// deliberately includes simple plural forms ("checks", "gates"): a sliced
+// tail word has no following context to naturally supply one via a
+// separate word, the way "the repository gate**s**" would already match
+// the singular noun through its own `\b` boundary in ordinary prose.
+const POLICY_OVERRIDE_NOUN_TAIL_PATTERN =
+  /^(?:repositories|repository|repos?|policies|policy|workflows?|idd|process(?:es)?|checks?|gates?|requirements?)$/i;
 // #2468: the pattern's `[\s\S]{0,60}` window has no concept of a Markdown
 // heading boundary, so a verb ending one line -- most commonly this
 // repository's issue title, given the near-universal repeated-title-as-H1
@@ -1437,21 +1447,39 @@ function isOrdinaryHyphenatedCompoundToken(
     // review round 5 (Codex, known limit)" comment on the leading-side walk's
     // own bare case) -- symmetric with `POLICY_OVERRIDE_NOUN_SOURCE`'s own
     // trailing `(?![\w-])` guard, which the noun side already has baked into
-    // its regex and the verb side never did. This is a deliberate tradeoff,
-    // not a claim that the shape is unambiguous: a bare compound like
-    // "skip-checks" with a genuine override noun nearby ("Pass skip-checks
-    // so the repository gate is not evaluated") now also passes, same as
-    // bare "force-skip" already does -- narrowing this by inspecting the
-    // compound's own tail word would be asymmetric with the tail-position
-    // case (nothing there inspects the word before its hyphen either) and
-    // would reintroduce false positives on ordinary "skip-checks feature"
-    // prose, the exact shape #2734 exists to fix (#2734 review, Copilot;
-    // see the dedicated pinned regression test below). The same applies to
-    // an "=true"-style assignment after the compound ("skip-checks=true",
-    // #2734 review, Codex): neither compound side inspects what follows
-    // the token at all, so "force-skip=true" already passed on the
-    // tail-position side before this change too -- adding assignment
-    // detection to only one side would be a new asymmetry, not a fix.
+    // its regex and the verb side never did.
+    //
+    // #2734 review (Copilot, CodeRabbit): a first version of this branch
+    // excluded ANY bare head compound unconditionally, which silently
+    // un-detected "Pass skip-checks so the repository gate is not
+    // evaluated" -- a genuine directive that WAS correctly caught before
+    // this change. That is a real regression, not the same accepted
+    // tradeoff as the tail-position bare-compound case below (which has
+    // never detected that shape, on `main`, at any point): the fix here is
+    // to check whether the compound's own TAIL word is itself one of
+    // `POLICY_OVERRIDE_NOUN_TAIL_PATTERN`'s override nouns before
+    // excluding. "skip-condition" -> "condition" is not a listed noun ->
+    // still excluded (the actual #2734 shape this branch exists to fix).
+    // "skip-checks" -> "checks" IS one (this pattern includes simple
+    // plurals; `POLICY_OVERRIDE_NOUN_SOURCE` deliberately does not, since
+    // it is matched directly against already-tokenized `\b...\b` text, not
+    // sliced out of a raw compound tail) -> NOT excluded, so "skip" stays
+    // live and correctly pairs with "repository" nearby. Checking the
+    // NEARBY window instead of the compound's own tail word (CodeRabbit's
+    // literal suggestion) does not work: the #2734 repro's own trailing
+    // "...suitability-triage.mjs's Check" contains a genuine, non-heading
+    // noun match ("Check", case-insensitively) within the window, so a
+    // window-based guard would reintroduce #2734 on its own reporting
+    // issue. This narrowing is intentionally asymmetric with the
+    // tail-position walk below, which inspects no such thing -- a
+    // directive phrased as "policy-skip" or "gate-skip" is not natural
+    // English and not a shape either reviewer's finding raised. This tail
+    // word check also incidentally closes an "=true"-style assignment
+    // directive ("skip-checks=true", Codex): the tail word "checks" is
+    // still extracted and matched the same way regardless of what follows
+    // it. The tail-position side's own assignment shape
+    // ("force-skip=true") is unaffected -- unchanged since #2407, tracked
+    // as a follow-up in the PR body rather than fixed here.
     //
     // This classification only applies when the token's OWN start is a
     // genuine prose boundary (start of string, or
@@ -1471,9 +1499,18 @@ function isOrdinaryHyphenatedCompoundToken(
       return false;
     }
     const afterMatch = rawSource[matchIndex + matchLength];
+    if (
+      afterMatch !== '-' ||
+      !/\w/.test(rawSource[matchIndex + matchLength + 1] ?? '')
+    ) {
+      return false;
+    }
+    const tailWordMatch = /^[A-Za-z]+/.exec(
+      rawSource.slice(matchIndex + matchLength + 1),
+    );
     return (
-      afterMatch === '-' &&
-      /\w/.test(rawSource[matchIndex + matchLength + 1] ?? '')
+      tailWordMatch === null ||
+      !POLICY_OVERRIDE_NOUN_TAIL_PATTERN.test(tailWordMatch[0])
     );
   }
   let cursor = matchIndex - 1;
