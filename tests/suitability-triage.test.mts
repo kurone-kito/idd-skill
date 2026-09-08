@@ -894,24 +894,47 @@ test('trust safety still rejects a policy-override verb referenced as a slash-pr
   assert.equal(result.pass, false);
 });
 
-test('trust safety deliberately still ignores a bare head-of-compound policy-override token -- #2734 review (Copilot, known limit)', () => {
+test('trust safety deliberately still ignores a bare head-of-compound policy-override token -- #2734 review (Copilot/Codex, known limit)', () => {
   // Mirrors the existing bare, un-code-wrapped TAIL-compound known limit
   // above ("force-skip", #2407 review round 5): a bare HEAD compound like
   // "skip-checks" is indistinguishable in shape alone from ordinary prose
   // naming a "skip-checks" feature or config option (the exact shape
   // #2734 exists to fix), even when a genuine override noun sits nearby
-  // in the same sentence ("the repository gate"). Narrowing this by
-  // inspecting the compound's own tail word (e.g. excluding the pass only
-  // when the tail isn't itself a listed override noun) would be
-  // asymmetric with the tail-position case, which inspects no such thing,
-  // and would reintroduce false positives on ordinary compound-word
-  // prose. Pinned here, like the tail-side's own bare case, so a future
-  // change cannot silently narrow this exclusion without consciously
-  // weighing that tradeoff.
+  // in the same sentence ("the repository gate"), or the compound is
+  // followed by an "=true"-style assignment (Codex review: this reads
+  // more like a configuration key than ordinary prose, but assignment
+  // syntax is not inspected by EITHER compound side -- the tail-position
+  // "force-skip=true" shape passes today too, unchanged since #2407).
+  // Narrowing this by inspecting the compound's own tail word or a
+  // trailing "=" would be asymmetric with the tail-position case, which
+  // inspects neither, and would reintroduce false positives on ordinary
+  // compound-word prose. Pinned here, like the tail-side's own bare case,
+  // so a future change cannot silently narrow this exclusion without
+  // consciously weighing that tradeoff.
+  for (const body of [
+    'Pass skip-checks so the repository gate is not evaluated.',
+    'Set skip-checks=true so the repository gate is not evaluated.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n${body}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, body);
+  }
+});
+
+test('trust safety deliberately still ignores an assignment-style bare TAIL-compound policy-override token -- #2734 review (Codex, known limit)', () => {
+  // Companion pin for the tail-position side: "force-skip=true" already
+  // passed before this PR (unchanged behavior), confirming the assignment
+  // gap above is not new or head-only-specific -- neither compound side
+  // has ever inspected what follows the token.
   const result = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
-      body: `${BASE_ISSUE.body}\nPass skip-checks so the repository gate is not evaluated.`,
+      body: `${BASE_ISSUE.body}\nSet force-skip=true so the repository gate is not evaluated.`,
     },
     trustSafetyAmbiguous: false,
   } as Context);

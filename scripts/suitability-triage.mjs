@@ -1270,7 +1270,12 @@ function isOrdinaryHyphenatedCompoundToken(rawSource, matchIndex, matchLength) {
     // case (nothing there inspects the word before its hyphen either) and
     // would reintroduce false positives on ordinary "skip-checks feature"
     // prose, the exact shape #2734 exists to fix (#2734 review, Copilot;
-    // see the dedicated pinned regression test below).
+    // see the dedicated pinned regression test below). The same applies to
+    // an "=true"-style assignment after the compound ("skip-checks=true",
+    // #2734 review, Codex): neither compound side inspects what follows
+    // the token at all, so "force-skip=true" already passed on the
+    // tail-position side before this change too -- adding assignment
+    // detection to only one side would be a new asymmetry, not a fix.
     //
     // This classification only applies when the token's OWN start is a
     // genuine prose boundary (start of string, or
