@@ -139,8 +139,10 @@ other GitHub side effect, confirm all of the following:
    (helper) or `gh pr view {pr-number} --json mergeable,mergeStateStatus`
    otherwise — reflects the last pushed head, not local unpushed fixes.
 2. Not a confirmed conflict (clean, behind-no-conflict, computing,
-   dirty, unknown)? Skip the merge and continue to E12 — a later check
-   re-polls a transient read and holds on dirty/unknown.
+   dirty, unknown)? Skip the merge and continue to E12 — a dirty or
+   unresolved read isn't this step's problem to fix; F1
+   (`idd-pre-merge-lite.instructions.md`) stops and asks on any
+   non-clean pre-merge branch state.
 3. Conflict reported (`mergeable` `CONFLICTING`)? If the PR has
    unresolved review threads, unreplied comments, or a reviewer's
    latest state is `CHANGES_REQUESTED`, get explicit operator
