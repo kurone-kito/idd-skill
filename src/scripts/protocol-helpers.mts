@@ -5699,7 +5699,6 @@ function resolvePresentRunConclusion(
   const unknownChecks = classification.unknown ?? [];
   if (
     classification.status === 'unknown' &&
-    unknownChecks.length > 0 &&
     unknownChecks.every((check) => check.state === 'CANCELLED')
   ) {
     return 'pending';

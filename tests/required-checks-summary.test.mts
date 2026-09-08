@@ -112,6 +112,23 @@ test('unprotected + an unrecognized non-CANCELLED state: presentRunConclusion st
   assert.equal(r.presentRunConclusion, 'some-failing');
 });
 
+// A mix of CANCELLED and a genuinely unrecognized state in the `unknown`
+// bucket must not be laxly treated as "contains a CANCELLED, so pending" --
+// the `.every()` check exists precisely to require the WHOLE bucket be
+// CANCELLED before relaxing to 'pending'.
+test('unprotected + CANCELLED mixed with an unrecognized state: presentRunConclusion stays some-failing', () => {
+  const r = summarize(
+    [
+      { name: 'lint', state: 'SUCCESS' },
+      { name: 'companion-a', state: 'CANCELLED' },
+      { name: 'companion-b', state: 'SOME_FUTURE_GITHUB_STATE' },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'some-failing');
+});
+
 // A pinned/indeterminate required-check source (workflows rule, or an app-pinned
 // classic check with no enumerable context) must NOT be reported as "no required
 // checks configured" — there may be required checks we cannot enumerate, so F2
