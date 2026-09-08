@@ -4860,7 +4860,18 @@ test('bin/idd-onboard.mjs --help warns that a broad --allow-root removes confine
     encoding: 'utf8',
   });
   const normalized = help.replace(/\s+/g, ' ');
-  const warningCount =
-    normalized.split('removes this confinement guarantee entirely').length - 1;
-  assert.equal(warningCount, 5);
+  const sections = normalized.split(
+    /(?=--(?:substitute \(wave 1\)|import \(wave 2\)|verify \(wave 3\)|hear \(#2281\)|record-policy \(#2282\)):)/,
+  );
+  assert.equal(sections.length, 6);
+  for (const section of sections.slice(1)) {
+    assert.match(
+      section,
+      /filesystem root removes this confinement guarantee entirely/,
+    );
+    assert.match(
+      section,
+      /broad value \(e\.g\. a home directory\) substantially widens it instead/,
+    );
+  }
 });
