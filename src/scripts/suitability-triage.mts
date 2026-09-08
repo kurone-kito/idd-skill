@@ -2810,6 +2810,18 @@ export function checkVerifiability(context: Context): CheckOutcome {
     }
 
     for (const item of acListItems) {
+      // Short-circuit before the either/or split search below (Codex
+      // review, PR #2725 round 6): if the escape-hatch verb+topic pattern
+      // matches nowhere in the item's own (masked) text, no sub-slice of
+      // it can match either, so no split could ever flag this item -- an
+      // item with many "either"/"or" occurrences but no disclosure verb
+      // (e.g. a synthetic worst case with hundreds of "either alpha or
+      // beta" phrases) costs one regex test instead of the full pair
+      // search, and a realistic AC bullet has no disclosure verb at all in
+      // the common case.
+      if (!ESCAPE_HATCH_DOCUMENT_PATTERN.test(item.text)) {
+        continue;
+      }
       const eitherEnds: number[] = [];
       for (const match of item.text.matchAll(EITHER_WORD_PATTERN)) {
         eitherEnds.push((match.index ?? 0) + match[0].length);
