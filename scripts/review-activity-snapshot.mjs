@@ -207,6 +207,7 @@ function normalizeReview(review) {
 }
 function normalizeThread(thread) {
   return {
+    id: thread.id,
     isResolved: Boolean(thread.isResolved),
     updatedAt: '',
     comments: {

@@ -97,6 +97,7 @@ test('normalizeReview maps REST review fields, deriving createdAt from submitted
 test('normalizeThread maps a ProviderPort review-thread node, including nested comments', () => {
   assert.deepEqual(
     normalizeThread({
+      id: 'RT_1',
       isResolved: false,
       comments: [
         {
@@ -109,6 +110,7 @@ test('normalizeThread maps a ProviderPort review-thread node, including nested c
       ],
     }),
     {
+      id: 'RT_1',
       isResolved: false,
       updatedAt: '',
       comments: {
@@ -437,22 +439,19 @@ test('pre-merge-readiness.mjs CLI: clean scenario collects and normalizes raw gh
     },
   ]);
 
-  // normalizeThread: isResolved flows into dispositionEvidence.missingThreads.
-  // #2267: `id` is now the `thread-${index+1}` fallback, not the raw GraphQL
-  // node id -- `ProviderPort.listChangeRequestReviewThreadsWithComments`
-  // (byte-identical query, shared with the already-migrated
-  // review-activity-snapshot.mts) does not surface it, matching that file's
-  // own already-reviewed `normalizeThread`. This id is diagnostic-only in
-  // this report: `advisory-convergence.mts` (the one real id-matching
-  // consumer, `copilotThreadIds.has(thread.id)`) fetches its own,
-  // independent `threads` array via its own port method and never reads
-  // this file's output.
+  // normalizeThread: isResolved and the real thread id both flow into
+  // dispositionEvidence.missingThreads. #2696: the raw GraphQL node's
+  // `id: 'RT_1'` (see `reviewThreadsPayload` above) now survives
+  // `ProviderPort.listChangeRequestReviewThreadsWithComments` and this
+  // file's own `normalizeThread` -- previously both dropped it, forcing
+  // the positional `thread-${index+1}` fallback even though the id was
+  // already fetched and available.
   const threads = report.threads as { unresolvedCount: number };
   assert.equal(threads.unresolvedCount, 0);
   const dispositionEvidence = report.dispositionEvidence as {
     missingThreads: { id: string; isResolved: boolean }[];
   };
-  assert.equal(dispositionEvidence.missingThreads[0]?.id, 'thread-1');
+  assert.equal(dispositionEvidence.missingThreads[0]?.id, 'RT_1');
   assert.equal(dispositionEvidence.missingThreads[0]?.isResolved, true);
 
   // #2042: `fetchReviewsAndHeadCommit`'s own `gh api graphql` call must
@@ -679,6 +678,7 @@ test('collectPreMergeReadiness against a fake provider: unreadable CI governance
       reviewThreadsWithComments: {
         42: [
           {
+            id: 'RT_unresolved',
             isResolved: false,
             comments: [
               {

@@ -914,6 +914,7 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
   );
   assert.deepEqual(port.listChangeRequestReviewThreadsWithComments(7), [
     {
+      id: 't1',
       isResolved: true,
       comments: [
         {

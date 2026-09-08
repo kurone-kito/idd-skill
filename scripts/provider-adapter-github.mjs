@@ -1460,6 +1460,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         'body createdAt updatedAt author { login } pullRequestReview { id }',
       );
       return nodes.map((node) => ({
+        id: node.id,
         isResolved: node.isResolved,
         comments: node.comments.map((comment) => ({
           body: String(comment.body ?? ''),

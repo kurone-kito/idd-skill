@@ -883,17 +883,17 @@ export function normalizeReview(review) {
 /**
  * Normalize a `ProviderPort.listChangeRequestReviewThreadsWithComments`
  * node into the summarizer-shape `ThreadLike`. Exported for direct unit
- * testing (#1708), see {@link normalizeComment}'s doc comment. `id` and
- * `reviewerReopenedAt` are omitted (both `ThreadLike` fields are optional):
- * the pre-migration GraphQL query never selected `reviewerReopenedAt` at
- * all (`inferReviewerReopenedAt` always returned `''`), and the outer
- * thread `id` fed only `ThreadLike`'s own optional diagnostic fields, not
- * any gating decision -- `review-activity-snapshot.mts`'s own
- * `normalizeThread` already dropped both for the identical shared
- * GraphQL query, reviewed and merged without incident.
+ * testing (#1708), see {@link normalizeComment}'s doc comment.
+ * `reviewerReopenedAt` is omitted (`ThreadLike`'s field is optional): the
+ * pre-migration GraphQL query never selected it at all
+ * (`inferReviewerReopenedAt` always returned `''`). `id` (#2696) is
+ * threaded through -- it feeds `dispositionEvidence.missingThreads[].id`,
+ * which a caller reads to identify which live thread to reply to; dropping
+ * it forced a separate positional lookup to recover the real thread.
  */
 export function normalizeThread(thread) {
   return {
+    id: thread.id,
     isResolved: Boolean(thread.isResolved),
     updatedAt: '',
     comments: {
