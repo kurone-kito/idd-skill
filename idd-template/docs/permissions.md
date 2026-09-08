@@ -515,13 +515,14 @@ allow/deny split, softened as described below.
   residual: `idd-onboard`'s `--allow-root <dir>` flag
   (`src/scripts/idd-onboard.mts`) accepts any existing directory and
   adds it to the path-confinement boundary list verbatim, with no
-  upper bound -- a filesystem root, a home directory, or any ancestor
-  of the intended target all satisfy the same boundary check. A broad
-  value there removes the confinement fix #2216 shipped entirely,
-  defeating the exact unattended/agent-dispatch threat model that
-  fix's own doc comment names. Neither the script's own argument
-  validation nor the allowlisted `Bash(node scripts/*)` pattern treats
-  an overly broad `--allow-root` value as unusual.
+  upper bound. A filesystem root removes the confinement fix #2216
+  shipped entirely; a narrower but still broad value (e.g. a home
+  directory) substantially widens it instead -- either way defeating
+  the exact unattended/agent-dispatch threat model that fix's own doc
+  comment names (preventive; no observed incident yet). Neither the
+  script's own argument validation nor the allowlisted
+  `Bash(node scripts/*)` / `Bash(node bin/*)` patterns above treat an
+  overly broad `--allow-root` value as unusual.
 
 ### What the baseline denies
 
