@@ -167,8 +167,9 @@ export function buildIddConfigContentsArgs(
  * ref via the workflow's own ephemeral `GITHUB_TOKEN`. Observed response:
  * `403` with `{"message": "Resource not accessible by integration"}` --
  * a genuine, unambiguous permission denial, distinguishable from a real
- * 404. `deriveGhHttpStatus(error) === 404` above correctly fails closed
- * (throws) for this case rather than misclassifying it as absence. See
+ * 404. The `deriveGhHttpStatus(error) === 404` guard in the function body
+ * below correctly evaluates false for a 403, so this case falls through
+ * to the throw branch instead of being misclassified as absence. See
  * `docs/idd-helper-scripts.md` for the full test methodology.
  */
 export function loadTrustedIddConfig(

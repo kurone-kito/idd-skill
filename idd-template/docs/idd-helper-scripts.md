@@ -88,7 +88,7 @@ posting), which does not affect `status`; `resolve-review-thread.mjs`
 returns `mode` (`dry-run`/`apply`) alongside its own separate
 `status?` (`applied`/`failed`).
 
-## Contents API permission-masking probe (#2716)
+## Contents API permission-masking probe (kurone-kito/idd-skill#2716)
 
 `loadTrustedIddConfig` (`src/scripts/idd-config.mts`) fetches
 `.github/idd/config.json` at a trusted `ref` via the GitHub Contents API
@@ -103,7 +103,7 @@ see `docs/policy-constants.md`).
 **Verified 2026-09-08**: no masking observed for the Contents API. A
 disposable **private** repository
 (`kurone-kito/idd-skill-issue-2716-contents-api-probe`, intentionally
-retained rather than deleted -- see the linked issue) ran a GitHub
+retained rather than deleted -- see kurone-kito/idd-skill#2716) ran a GitHub
 Actions workflow declaring `permissions: { contents: none }` at the job
 level, then used the workflow's own ephemeral `GITHUB_TOKEN` to request
 an existing file at a valid ref via
