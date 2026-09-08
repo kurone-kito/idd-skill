@@ -27,8 +27,9 @@ forbids a bare CI-green merge without a fresh covering snapshot.
 The advisory bot usually reviews current HEAD within minutes, reducing
 the gate to one check: poll `LAST_COPILOT_COMMIT`; once it equals
 `PR_HEAD_SHA`, the gate is **SATISFIED** — skip the AW2-AW5 machinery
-and take the caller's `SATISFIED` action (E14 → E15, F2 → CI check, F3
-→ merge; common to both the canonical path and shell-fallback AW3 row
+and take the caller's `SATISFIED` action (D4 → rerun
+advisory-convergence and resume D4, E14 → E15, F2 → CI check, F3 →
+merge; common to both the canonical path and shell-fallback AW3 row
 one). Enter the full protocol below **only** when
 `LAST_COPILOT_COMMIT != PR_HEAD_SHA`.
 
