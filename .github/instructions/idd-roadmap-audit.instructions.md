@@ -52,14 +52,16 @@ node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> \
 below; an ordinary execution claim on the roadmap issue does not
 authorize closure. `--apply` re-validates that claim and re-evaluates
 the graph immediately before mutating, then posts the evidence
-comment, closes the roadmap, and releases the claim — atomically.
+comment, closes the roadmap, and releases the claim, re-validating
+ownership again before each of those last two steps.
 
-A non-zero exit paired with well-formed JSON — a not-ready `{ready:
-false, blockers: [...]}` result, or an `--apply` claim-rejection
-reason such as `claim-branch-mismatch` or `claim-stale` — is an
-authoritative verdict, not a malfunction: act on it directly. Fall
-back to the written A1.5 procedure below only when the helper is
-unavailable, malformed, or its output disagrees with live state.
+A non-zero exit paired with well-formed JSON — a not-ready result
+(`"ready": false` with a `"blockers"` array), or an `--apply`
+claim-rejection reason such as `claim-branch-mismatch` or
+`claim-stale` — is an authoritative verdict, not a malfunction: act on
+it directly. Fall back to the written A1.5 procedure below only when
+the helper is unavailable, malformed, or its output disagrees with
+live state.
 
 ## A1.5 — Audit completed roadmaps
 
