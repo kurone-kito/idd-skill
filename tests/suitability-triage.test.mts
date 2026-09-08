@@ -4093,6 +4093,67 @@ test('verifiability still passes a continuation-line escape hatch that discloses
   assert.equal(result.pass, true);
 });
 
+test('verifiability keeps a nested disclosure paired with its parent bullet across a blank line (#2709, Codex review PR #2725 round 5)', () => {
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation, or:
+
+  - document why validation is not needed
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability tries every either-to-or split, not just the first "or" (#2709, Codex review PR #2725 round 5)', () => {
+  // A non-greedy single match would pair "either" with the inner "or"
+  // inside "the approach or rationale", missing the real separator before
+  // "implement retries".
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either document the approach or rationale, or implement retries.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability tries every either-to-or split, not just the last "or" (#2709, Codex review PR #2725 round 5)', () => {
+  // A greedy single match would pair "either" with the LAST "or" (before
+  // "add lint"), pulling the un-negated "tests" mention into the
+  // documentation branch and hiding it from the artifact check.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either document why not, or add tests, or add lint.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still credits a genuine inline-code artifact reference in the documentation branch (#2709, Codex review PR #2725 round 5)', () => {
+  // The code-span masking that keeps a quoted escape-hatch EXAMPLE from
+  // being treated as operative prose must not also blind the artifact scan
+  // to a real inline-code artifact reference in otherwise-real prose.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either implement retries, or document the rationale and verify it through \`pnpm lint\`.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('verifiability does not flag an escape-hatch phrase quoted as a literal example in inline code (#2709, Codex review PR #2725 round 4)', () => {
   // The AC bullet is ABOUT detecting/documenting this exact pattern, quoting
   // it verbatim inside a code span -- the quoted example must not be

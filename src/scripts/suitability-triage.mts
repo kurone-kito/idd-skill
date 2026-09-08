@@ -664,19 +664,28 @@ const EITHER_OR_PATTERN = new RegExp(
   `\\beither\\b[\\s\\S]{0,${EITHER_OR_PROXIMITY_WINDOW_CHARS}}?\\bor\\b`,
   'gi',
 );
-// #2709: checkVerifiability's own either/or matcher, deliberately WITHOUT
-// EITHER_OR_PROXIMITY_WINDOW_CHARS's cap (Codex review, PR #2725 round 4). A
-// substantive left branch can legitimately run past 120 chars before its
-// own "or" -- e.g. a compatibility-requirements bullet -- and the shared
-// EITHER_OR_PATTERN above then finds no match at all, silently passing the
-// escape hatch. The cross-bullet contamination EITHER_OR_PROXIMITY_WINDOW_CHARS
-// exists to prevent no longer applies here: checkVerifiability already scans
-// one list item (a single bounded unit) at a time, not the whole AC
-// section, so there is no unrelated later bullet left to accidentally pair
-// with. Kept as a separate pattern (not a change to the shared
-// EITHER_OR_PATTERN) so checkAutonomy's own whole-body proximity matching,
-// which still needs the cross-bullet guard, is unaffected.
-const EITHER_OR_WITHIN_ITEM_PATTERN = /\beither\b[\s\S]*?\bor\b/gi;
+// #2709: locates every "either"/"or" word-boundary occurrence within one AC
+// list item so checkVerifiability can try every either-to-or split, not
+// just one (Codex review, PR #2725 rounds 4-5). Deliberately independent of
+// the shared EITHER_OR_PATTERN/EITHER_OR_PROXIMITY_WINDOW_CHARS above (whose
+// cap exists so checkAutonomy's own whole-body proximity matching doesn't
+// pair unrelated text) -- checkVerifiability already scans one list item (a
+// single bounded unit) at a time, so there is no cross-bullet contamination
+// risk left to cap against, and a substantive left branch can legitimately
+// run past 120 chars before its own "or" (e.g. a compatibility-requirements
+// bullet). A single non-greedy either/or match also picks the FIRST "or",
+// which can be the wrong one when the substantive branch's own text
+// contains an unrelated "or" before the true separator ("Either document
+// the approach or rationale, or implement retries" pairs with the inner
+// "or" and misses the real escape hatch); a single greedy match instead
+// fails the opposite direction ("Either document why not, or add tests, or
+// add lint" pairs with the LAST "or", pulling the un-negated "tests" into
+// the left/documentation branch and hiding it from the artifact check).
+// Trying every either-to-or split (below) is the only strategy that
+// handles both; bounded by one already-bounded list item, this stays a
+// small, finite search.
+const EITHER_WORD_PATTERN = /\beither\b/gi;
+const OR_WORD_PATTERN = /\bor\b/gi;
 // #2709: the documentation-branch alternative of an either/or
 // acceptance-criteria escape hatch, e.g. "either fix X, or document why
 // not" / "or document the tradeoff" -- a verb naming disclosure/write-up
@@ -2669,7 +2678,8 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // full NLP, and each keyword added to close one counterexample only
   // relocates the same gap to the next one.
   //
-  // Matched against normalizedCodeMaskedBody (not normalizedBody), the same
+  // The verb+topic check just above is matched against
+  // normalizedCodeMaskedBody (not normalizedBody), the same
   // position-preserving code-masked body the resolved-decision scan above
   // already uses (Codex review, PR #2725 round 4): an AC bullet that quotes
   // this exact escape-hatch phrasing as a literal example inside inline or
@@ -2683,8 +2693,20 @@ export function checkVerifiability(context: Context): CheckOutcome {
     if (!ESCAPE_HATCH_DOCUMENT_PATTERN.test(branchText)) {
       return false;
     }
+    // The artifact keyword scan below, in contrast, is matched against the
+    // RAW (unmasked) branch text (Codex review, PR #2725 round 5): masking
+    // exists only to keep a quoted illustrative example -- already ruled
+    // out by the verb+topic check above having matched on real prose -- from
+    // being treated as operative; a genuine inline-code artifact reference
+    // inside that same real prose (e.g. "verify it through `pnpm lint`")
+    // must still count. Recovering the raw text via a same-length slice at
+    // the same offset works because masking is position-preserving.
+    const rawBranchText = normalizedBody.slice(
+      branchStart,
+      branchStart + branchText.length,
+    );
     const artifactPattern = new RegExp(CONCRETE_ARTIFACT_PATTERN.source, 'gi');
-    for (const artifactMatch of branchText.matchAll(artifactPattern)) {
+    for (const artifactMatch of rawBranchText.matchAll(artifactPattern)) {
       const artifactText = artifactMatch[0] ?? '';
       const artifactIndex = branchStart + (artifactMatch.index ?? 0);
       // A NEGATED artifact mention ("document why tests are NOT needed")
@@ -2693,7 +2715,7 @@ export function checkVerifiability(context: Context): CheckOutcome {
       // review, PR #2725).
       if (
         !isNegatedNearby(
-          normalizedCodeMaskedBody,
+          normalizedBody,
           artifactText,
           artifactIndex,
           ARTIFACT_NEGATION_WINDOW_CHARS,
@@ -2770,48 +2792,67 @@ export function checkVerifiability(context: Context): CheckOutcome {
           itemMarkerIndent = indent;
         } else if (isIndentedContinuation) {
           itemEnd = lineEnd;
-        } else {
+        } else if (!isBlank) {
           closeItem();
           itemStart = null;
         }
+        // A blank line falls through every branch untouched (Codex review,
+        // PR #2725 round 5): it neither extends nor closes the current
+        // item, so the NEXT non-blank line still decides whether the item
+        // continues (a nested marker or indented continuation past the
+        // blank line, e.g. "- Either add validation, or:\n\n  - document
+        // why validation is not needed") or ends (a sibling marker or
+        // unrelated prose). `item.text`'s eventual slice spans the blank
+        // line either way once a later line extends `itemEnd` past it.
         cursor += line.length + 1;
       }
       closeItem();
     }
 
     for (const item of acListItems) {
-      for (const match of item.text.matchAll(EITHER_OR_WITHIN_ITEM_PATTERN)) {
-        const matchText = match[0] ?? '';
-        const matchIndexInItem = match.index ?? 0;
-        const matchStart = item.start + matchIndexInItem;
+      const eitherEnds: number[] = [];
+      for (const match of item.text.matchAll(EITHER_WORD_PATTERN)) {
+        eitherEnds.push((match.index ?? 0) + match[0].length);
+      }
+      if (eitherEnds.length === 0) {
+        continue;
+      }
+      const orSpans: Array<{ start: number; end: number }> = [];
+      for (const match of item.text.matchAll(OR_WORD_PATTERN)) {
+        const start = match.index ?? 0;
+        orSpans.push({ start, end: start + match[0].length });
+      }
 
-        // Right branch: from the end of the either/or match to the end of
-        // its own list item -- including any indented continuation lines
-        // already folded into `item.text` above.
-        const rightBranchStart = matchStart + matchText.length;
-        const rightBranchText = item.text.slice(
-          matchIndexInItem + matchText.length,
-        );
+      // Try every either-to-or split within this item, not just the first
+      // (Codex review, PR #2725 round 5) -- see EITHER_WORD_PATTERN's
+      // comment above for why neither a non-greedy nor a greedy single
+      // match handles every case.
+      for (const eitherEnd of eitherEnds) {
+        for (const or of orSpans) {
+          if (or.start < eitherEnd) {
+            continue;
+          }
 
-        // Left branch: the content between "either" and "or" WITHIN the
-        // match itself -- "Either document why…, or fix…" puts the
-        // documentation branch first, and the escape hatch must be caught
-        // regardless of which side it's on (Copilot review, PR #2725).
-        const leftBranchStart = matchStart + 'either'.length;
-        const leftBranchText = matchText.slice(
-          'either'.length,
-          matchText.length - 'or'.length,
-        );
+          // Left branch: the content between "either" and this "or".
+          const leftBranchStart = item.start + eitherEnd;
+          const leftBranchText = item.text.slice(eitherEnd, or.start);
 
-        if (
-          isEscapeHatchBranch(rightBranchText, rightBranchStart) ||
-          isEscapeHatchBranch(leftBranchText, leftBranchStart)
-        ) {
-          return {
-            pass: false,
-            evidence:
-              'Issue offers an either/or acceptance-criteria escape hatch whose documentation-branch alternative names no un-negated, concrete, checkable requirement.',
-          };
+          // Right branch: from the end of this "or" to the end of the
+          // item -- including any indented continuation lines already
+          // folded into `item.text` above.
+          const rightBranchStart = item.start + or.end;
+          const rightBranchText = item.text.slice(or.end);
+
+          if (
+            isEscapeHatchBranch(rightBranchText, rightBranchStart) ||
+            isEscapeHatchBranch(leftBranchText, leftBranchStart)
+          ) {
+            return {
+              pass: false,
+              evidence:
+                'Issue offers an either/or acceptance-criteria escape hatch whose documentation-branch alternative names no un-negated, concrete, checkable requirement.',
+            };
+          }
         }
       }
     }
