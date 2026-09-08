@@ -676,18 +676,21 @@ const EITHER_OR_PATTERN = new RegExp(
 // checkAutonomy.
 const ESCAPE_HATCH_DOCUMENT_PATTERN =
   /\b(?:document|explain|write[- ]up|note|record|describe)\w*\b[\s\S]{0,40}\b(?:why|trade-?offs?|gaps?|limitations?|rationale|reasons?)\b/i;
-// #2709: a concrete, checkable artifact reference -- reusing the same
-// keyword family checkVerifiability's own hasVerificationChannel already
-// treats as an objective verification signal, scoped here to just the
-// escape-hatch branch's own text (not the whole issue body) so a checkable
-// artifact named elsewhere cannot be borrowed to pass a branch that itself
-// names nothing checkable. A match is additionally required to be
-// un-negated (via isNegatedNearby) at the call site: "or document why tests
-// are not needed" merely NAMES tests while declining to provide them, which
-// must not count as the branch specifying a real requirement (Codex review,
-// PR #2725).
+// #2709: a concrete, checkable artifact reference -- the same keyword
+// family checkVerifiability's own hasVerificationChannel already treats as
+// an objective verification signal, scoped here to just the escape-hatch
+// branch's own text (not the whole issue body) so a checkable artifact
+// named elsewhere cannot be borrowed to pass a branch that itself names
+// nothing checkable. A match is additionally required to be un-negated (via
+// isNegatedNearby) at the call site: "or document why tests are not
+// needed" merely NAMES tests while declining to provide them, which must
+// not count as the branch specifying a real requirement (Codex review, PR
+// #2725). Deliberately does NOT add its own "artifact" keyword beyond
+// hasVerificationChannel's set (Copilot review, PR #2725 round 2): the two
+// patterns must stay the same keyword family the comment above describes,
+// not merely overlap.
 const CONCRETE_ARTIFACT_PATTERN =
-  /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b|\bartifact\b/gi;
+  /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/gi;
 // #2709: a deliberately TIGHT negation window for the artifact-negation
 // check above (narrower than the general NEGATION_WINDOW_CHARS below,
 // which several checkAutonomy phrase families share). The escape-hatch
@@ -2617,6 +2620,36 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // issue (e.g. a Background sentence phrased as "either... or... explain
   // why") must not trip Check 7 when the actual AC bullets are fully
   // objective.
+  //
+  // Further scoped to one list item (bullet) at a time, not the AC
+  // section's raw text as a whole (Codex review, PR #2725 round 2): scanning
+  // the section's full text let "either" in one bullet pair with an
+  // unrelated "or" in a LATER bullet within EITHER_OR_PROXIMITY_WINDOW_CHARS,
+  // manufacturing an either/or construct that spans two unrelated AC lines.
+  // Bounding the right branch to the end of its own list item (instead of
+  // just its first line, via indexOf('\n')) also lets a soft-wrapped
+  // disclosure on an indented continuation line -- "Either add validation,
+  // or\n  document why validation is not needed" -- be seen at all; the
+  // previous single-line bound cut the branch off right after "or",
+  // guaranteeing an empty (and therefore always-passing) right-branch text.
+  // A continuation line must be indented and not itself a new list marker;
+  // an unindented "lazy continuation" line is deliberately excluded here for
+  // the same reason extractListItemLines excludes it above -- it cannot be
+  // told apart from unrelated trailing prose without full Markdown paragraph
+  // parsing.
+  //
+  // Accepted limitation (Codex review, PR #2725 round 2): the artifact check
+  // below confirms the branch NAMES a checkable keyword co-occurring in the
+  // same bullet, not that the named artifact actually verifies the
+  // documentation's content -- "or document the tradeoff and run the
+  // existing tests" passes even if those tests exercise something unrelated
+  // to the tradeoff. This is a conservative keyword heuristic by design, per
+  // idd-suitability.instructions.md's Edge Cases entry for this pattern:
+  // the check's job is to route an ambiguous branch to needs-decision for a
+  // human to judge, not to itself semantically verify that an artifact
+  // constrains a specific claim -- no regex-based check can do that without
+  // full NLP, and each keyword added to close one counterexample only
+  // relocates the same gap to the next one.
   const isEscapeHatchBranch = (
     branchText: string,
     branchStart: number,
@@ -2657,38 +2690,83 @@ export function checkVerifiability(context: Context): CheckOutcome {
       (nextHeadingIdx === -1 ? restOfBody.length : nextHeadingIdx);
     const acSectionText = normalizedBody.slice(acSectionStart, acSectionEnd);
 
-    for (const match of acSectionText.matchAll(EITHER_OR_PATTERN)) {
-      const matchText = match[0] ?? '';
-      const matchStart = acSectionStart + (match.index ?? 0);
+    // Split the AC section into individual list items -- a marker line
+    // (LIST_ITEM_LINE_PATTERN) plus any immediately-following indented,
+    // non-blank, non-marker continuation lines -- so the either/or scan
+    // below stays within one bullet's own text instead of the whole
+    // section's raw text (Codex review, PR #2725 round 2). Each item's
+    // `text` is a contiguous slice of normalizedBody (not a manual
+    // line-join), so absolute offsets computed from it stay valid for the
+    // isNegatedNearby calls inside isEscapeHatchBranch below.
+    const acListItems: Array<{ text: string; start: number }> = [];
+    {
+      let itemStart: number | null = null;
+      let itemEnd = 0;
+      let cursor = 0;
+      const closeItem = (): void => {
+        if (itemStart !== null) {
+          acListItems.push({
+            text: normalizedBody.slice(itemStart, itemEnd),
+            start: itemStart,
+          });
+        }
+      };
+      for (const line of acSectionText.split('\n')) {
+        const lineStart = acSectionStart + cursor;
+        const lineEnd = lineStart + line.length;
+        const isBlank = line.trim().length === 0;
+        const isMarker = LIST_ITEM_LINE_PATTERN.test(line);
+        const isIndentedContinuation =
+          itemStart !== null && !isBlank && !isMarker && /^\s/.test(line);
+        if (isMarker) {
+          closeItem();
+          itemStart = lineStart;
+          itemEnd = lineEnd;
+        } else if (isIndentedContinuation) {
+          itemEnd = lineEnd;
+        } else {
+          closeItem();
+          itemStart = null;
+        }
+        cursor += line.length + 1;
+      }
+      closeItem();
+    }
 
-      // Right branch: from the end of the either/or match to the end of
-      // its line -- AC bullets are typically single Markdown list lines.
-      const rightBranchStart = matchStart + matchText.length;
-      const rightLineEnd = normalizedBody.indexOf('\n', rightBranchStart);
-      const rightBranchText = normalizedBody.slice(
-        rightBranchStart,
-        rightLineEnd === -1 ? normalizedBody.length : rightLineEnd,
-      );
+    for (const item of acListItems) {
+      for (const match of item.text.matchAll(EITHER_OR_PATTERN)) {
+        const matchText = match[0] ?? '';
+        const matchIndexInItem = match.index ?? 0;
+        const matchStart = item.start + matchIndexInItem;
 
-      // Left branch: the content between "either" and "or" WITHIN the
-      // match itself -- "Either document why…, or fix…" puts the
-      // documentation branch first, and the escape hatch must be caught
-      // regardless of which side it's on (Copilot review, PR #2725).
-      const leftBranchStart = matchStart + 'either'.length;
-      const leftBranchText = matchText.slice(
-        'either'.length,
-        matchText.length - 'or'.length,
-      );
+        // Right branch: from the end of the either/or match to the end of
+        // its own list item -- including any indented continuation lines
+        // already folded into `item.text` above.
+        const rightBranchStart = matchStart + matchText.length;
+        const rightBranchText = item.text.slice(
+          matchIndexInItem + matchText.length,
+        );
 
-      if (
-        isEscapeHatchBranch(rightBranchText, rightBranchStart) ||
-        isEscapeHatchBranch(leftBranchText, leftBranchStart)
-      ) {
-        return {
-          pass: false,
-          evidence:
-            'Issue offers an either/or acceptance-criteria escape hatch whose documentation-branch alternative names no concrete, checkable content.',
-        };
+        // Left branch: the content between "either" and "or" WITHIN the
+        // match itself -- "Either document why…, or fix…" puts the
+        // documentation branch first, and the escape hatch must be caught
+        // regardless of which side it's on (Copilot review, PR #2725).
+        const leftBranchStart = matchStart + 'either'.length;
+        const leftBranchText = matchText.slice(
+          'either'.length,
+          matchText.length - 'or'.length,
+        );
+
+        if (
+          isEscapeHatchBranch(rightBranchText, rightBranchStart) ||
+          isEscapeHatchBranch(leftBranchText, leftBranchStart)
+        ) {
+          return {
+            pass: false,
+            evidence:
+              'Issue offers an either/or acceptance-criteria escape hatch whose documentation-branch alternative names no concrete, checkable content.',
+          };
+        }
       }
     }
   }

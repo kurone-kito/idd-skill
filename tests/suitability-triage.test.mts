@@ -4060,6 +4060,60 @@ We either retain the existing behavior or explain why it differs from the docs.
   assert.equal(result.pass, true);
 });
 
+test('verifiability follows an escape-hatch disclosure onto a wrapped continuation line (#2709, Codex review PR #2725 round 2)', () => {
+  // A soft-wrapped bullet: the documentation branch's disclosure sits on an
+  // indented continuation line, not the same line as "either...or". The
+  // right branch must be bounded by the end of the LIST ITEM (including its
+  // continuation lines), not the first '\n' -- otherwise it is cut off
+  // right after "or" and always passes as empty.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation, or
+  document why validation is not needed.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still passes a continuation-line escape hatch that discloses a checkable artifact (#2709, Codex review PR #2725 round 2)', () => {
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation, or
+  document why not in a new ADR file and add a lint rule enforcing the decision.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability does not pair "either" in one bullet with an unrelated "or" in a later bullet (#2709, Codex review PR #2725 round 2)', () => {
+  // Neither bullet on its own forms an either/or escape hatch -- "Either
+  // add validation to `parseConfig`" has no "or" of its own, and "Skip
+  // strict mode, or fall back to the default config." has no "either" of
+  // its own. Scanning the whole AC section's raw text (rather than one
+  // list item at a time) previously let EITHER_OR_PATTERN's `[\s\S]{0,120}`
+  // window pair the first bullet's "Either" with the second bullet's "or",
+  // manufacturing a construct that spans two unrelated AC lines.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Either add validation to \`parseConfig\`
+- Skip strict mode, or fall back to the default config.
+- tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {
