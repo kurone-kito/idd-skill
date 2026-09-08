@@ -2705,6 +2705,11 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // #2735) -- only these two specific, already-recognized
   // non-verification regions are excluded now, not every sibling section.
   // Also accepts the "1)" ordered-list form (matching the fix above).
+  // #2711 PR #2735 review round 4 (Codex): starts from `fenceMaskedBody`
+  // (already fenced/indented/HTML-comment masked), not the raw `body` --
+  // a fenced or indented example demonstrating a "1)" step, or one hidden
+  // in an HTML comment, could otherwise satisfy this fallback on its own
+  // once paired with an unrelated outcome-signal word anywhere else.
   if (!hasObjectiveCriteria) {
     const alternativeScanExclusions: MarkdownCodeRange[] = [];
     if (acceptanceCriteriaMatch) {
@@ -2749,10 +2754,10 @@ export function checkVerifiability(context: Context): CheckOutcome {
     const bodyForAlternativeScan =
       alternativeScanExclusions.length > 0
         ? maskMarkdownCodeRegionsPreservingPositions(
-            body,
+            fenceMaskedBody,
             alternativeScanExclusions,
           )
-        : body;
+        : fenceMaskedBody;
     const hasNumSteps =
       /^\s*\d+[.)]\s+/m.test(bodyForAlternativeScan) &&
       OUTCOME_SIGNAL_PATTERN.test(bodyForAlternativeScan);

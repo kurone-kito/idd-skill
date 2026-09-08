@@ -4542,6 +4542,34 @@ The syntax \`~~\` is documented. Maintainer decision (Groom hearing, 2026-09-05)
   assert.equal(result.pass, true);
 });
 
+test('verifiability masks fenced/indented code and HTML comments before the Alternative fallback scan (PR #2735 Codex review round 4)', () => {
+  // The Alternative fallback's own body -- after excluding the
+  // Acceptance Criteria and Candidate-files sections -- previously used
+  // raw `body`, unmasked: a "1)" step demonstrated inside a fenced code
+  // example, paired with an unrelated outcome-signal word elsewhere in
+  // the body, wrongly satisfied hasNumSteps. Neither section is present
+  // here (a placeholder AC section and an unrelated "## Notes" section),
+  // isolating the code-masking gap itself from the section-exclusion
+  // fixes above.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+TBD
+
+## Notes
+
+\`\`\`
+1) Placeholder instruction
+\`\`\`
+
+This will produce the expected result.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {
