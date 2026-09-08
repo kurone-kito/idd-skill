@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -89,6 +89,20 @@ function fakeInstallCommand(
   return `node -e "${script}"`;
 }
 
+/**
+ * Same probe the CLI itself runs (`isCorepackAvailable` in
+ * verify-install-deps.mts): whether *this* environment actually has
+ * corepack, so tests can assert against reality instead of assuming a
+ * dev-machine default. `engines.node` supports Node 26.x, which does
+ * not bundle corepack, so this can genuinely be false in CI.
+ */
+function isCorepackOnPath(): boolean {
+  return (
+    spawnSync('corepack', ['--version'], { shell: true, stdio: 'ignore' })
+      .status === 0
+  );
+}
+
 interface CliRun {
   status: number | null;
   stderr: string;
@@ -155,10 +169,54 @@ test('CLI: exits 1 with an actionable message when the binary never appears', ()
   assert.equal(attempts, 2);
   assert.match(stderr, /still missing after retrying/);
   assert.match(stderr, /retry manually/);
-  // This sandbox's dev environment has corepack available, so the
-  // corepack hint must not fire here -- see describeCorepackGuidance's
-  // own unit tests above for the absent-corepack case.
-  assert.doesNotMatch(stderr, /corepack was not found/);
+  // The corepack hint's presence mirrors this environment's own
+  // corepack availability -- asserting a fixed expectation here would
+  // be wrong on a Node >=25 runner with no corepack installed, exactly
+  // the population this issue exists to help. See the isolated-PATH
+  // test below for a deterministic check of the absent-corepack path.
+  if (isCorepackOnPath()) {
+    assert.doesNotMatch(stderr, /corepack was not found/);
+  } else {
+    assert.match(stderr, /corepack was not found/);
+  }
+});
+
+test('CLI: hints at installing corepack when it is absent from PATH', {
+  skip: process.platform === 'win32',
+}, () => {
+  // Deterministic, environment-independent check for the absent-corepack
+  // path: isolate PATH down to a directory containing only a `node`
+  // symlink, so `isCorepackAvailable()`'s `corepack --version` probe
+  // genuinely fails regardless of whether this host has corepack
+  // installed. Skipped on win32: symlinking an executable there needs
+  // elevated privilege or Developer Mode, which CI cannot assume.
+  const cwd = mkdtempSync(join(tmpdir(), 'idd-verify-install-deps-'));
+  const isolatedBin = mkdtempSync(join(tmpdir(), 'idd-no-corepack-bin-'));
+  const callLog = join(cwd, '.call-log');
+  try {
+    symlinkSync(process.execPath, join(isolatedBin, 'node'));
+    const result = spawnSync(
+      'node',
+      [
+        CLI_ENTRY,
+        '--key-binary',
+        KEY_BINARY,
+        '--install-command',
+        fakeInstallCommand(99),
+      ],
+      {
+        cwd,
+        env: { PATH: isolatedBin, CALL_LOG: callLog },
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr ?? '', /corepack was not found/);
+    assert.match(result.stderr ?? '', /npm install -g corepack/);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(isolatedBin, { recursive: true, force: true });
+  }
 });
 
 test('CLI: --help prints usage and exits 0 without running any install', () => {
