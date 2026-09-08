@@ -585,6 +585,16 @@ const POLICY_OVERRIDE_NOUN_PATTERN = new RegExp(
   `\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
   'i',
 );
+// #2734: used only by isOrdinaryHyphenatedCompoundToken's head-compound
+// branch to test a compound's own TAIL WORD in isolation (already sliced
+// out of the raw source, never matched against `\b...\b` boundaries in
+// running text), so -- unlike `POLICY_OVERRIDE_NOUN_SOURCE` above --
+// deliberately includes simple plural forms ("checks", "gates"): a sliced
+// tail word has no following context to naturally supply one via a
+// separate word, the way "the repository gate**s**" would already match
+// the singular noun through its own `\b` boundary in ordinary prose.
+const POLICY_OVERRIDE_NOUN_TAIL_PATTERN =
+  /^(?:repositories|repository|repos?|policies|policy|workflows?|idd|process(?:es)?|checks?|gates?|requirements?)$/i;
 // #2468: the pattern's `[\s\S]{0,60}` window has no concept of a Markdown
 // heading boundary, so a verb ending one line -- most commonly this
 // repository's issue title, given the near-universal repeated-title-as-H1
@@ -1339,7 +1349,11 @@ function findGenuineNounMatch(
     // for isCodeIdentifierProcessMention.
     if (
       (getCodeRangeAt(absoluteIndex) ||
-        (!isOrdinaryHyphenatedCompoundToken(rawSource, absoluteIndex) &&
+        (!isOrdinaryHyphenatedCompoundToken(
+          rawSource,
+          absoluteIndex,
+          nounMatch[0].length,
+        ) &&
           !isNarrativeIddMention(rawSource, absoluteIndex) &&
           !isCodeIdentifierProcessMention(rawSource, absoluteIndex))) &&
       !(
@@ -1442,9 +1456,88 @@ const COMPOUND_TOKEN_BOUNDARY_PATTERN = /[\s\x60'"(]/;
 // origin" mechanism, not anything specific to the verb word list, so the
 // noun side needed no logic changes here, only a second call site in
 // `findPolicyOverrideMatch` at the noun's own match position.
-function isOrdinaryHyphenatedCompoundToken(rawSource, matchIndex) {
+function isOrdinaryHyphenatedCompoundToken(rawSource, matchIndex, matchLength) {
   if (rawSource[matchIndex - 1] !== '-') {
-    return false;
+    // #2734: no leading hyphen at all, so this token is not the tail of a
+    // compound and not a flag reference either -- every flag shape this
+    // file already handles ("--skip", "/force-skip") is hyphen/slash/plus
+    // PREFIXED, never hyphen-SUFFIXED with nothing leading it. The same
+    // "ordinary compound" false-positive shape the leading-side walk below
+    // exists for can still occur with this token as the compound's HEAD
+    // instead of its tail (e.g. "skip-condition", reported on issue #2734
+    // itself, a feature-spec sentence describing a *different* check's own
+    // skip condition). This needs no equivalent trace-to-origin walk: a
+    // trailing hyphen immediately followed by a word character, with
+    // nothing hyphen-like leading this token, is treated the same way a
+    // bare, un-code-wrapped TAIL compound already is below (see the "#2407
+    // review round 5 (Codex, known limit)" comment on the leading-side walk's
+    // own bare case) -- symmetric with `POLICY_OVERRIDE_NOUN_SOURCE`'s own
+    // trailing `(?![\w-])` guard, which the noun side already has baked into
+    // its regex and the verb side never did.
+    //
+    // #2734 review (Copilot, CodeRabbit): a first version of this branch
+    // excluded ANY bare head compound unconditionally, which silently
+    // un-detected "Pass skip-checks so the repository gate is not
+    // evaluated" -- a genuine directive that WAS correctly caught before
+    // this change. That is a real regression, not the same accepted
+    // tradeoff as the tail-position bare-compound case below (which has
+    // never detected that shape, on `main`, at any point): the fix here is
+    // to check whether the compound's own TAIL word is itself one of
+    // `POLICY_OVERRIDE_NOUN_TAIL_PATTERN`'s override nouns before
+    // excluding. "skip-condition" -> "condition" is not a listed noun ->
+    // still excluded (the actual #2734 shape this branch exists to fix).
+    // "skip-checks" -> "checks" IS one (this pattern includes simple
+    // plurals; `POLICY_OVERRIDE_NOUN_SOURCE` deliberately does not, since
+    // it is matched directly against already-tokenized `\b...\b` text, not
+    // sliced out of a raw compound tail) -> NOT excluded, so "skip" stays
+    // live and correctly pairs with "repository" nearby. Checking the
+    // NEARBY window instead of the compound's own tail word (CodeRabbit's
+    // literal suggestion) does not work: the #2734 repro's own trailing
+    // "...suitability-triage.mjs's Check" contains a genuine, non-heading
+    // noun match ("Check", case-insensitively) within the window, so a
+    // window-based guard would reintroduce #2734 on its own reporting
+    // issue. This narrowing is intentionally asymmetric with the
+    // tail-position walk below, which inspects no such thing -- a
+    // directive phrased as "policy-skip" or "gate-skip" is not natural
+    // English and not a shape either reviewer's finding raised. This tail
+    // word check also incidentally closes an "=true"-style assignment
+    // directive ("skip-checks=true", Codex): the tail word "checks" is
+    // still extracted and matched the same way regardless of what follows
+    // it. The tail-position side's own assignment shape
+    // ("force-skip=true") is unaffected -- unchanged since #2407, tracked
+    // as a follow-up in the PR body rather than fixed here.
+    //
+    // This classification only applies when the token's OWN start is a
+    // genuine prose boundary (start of string, or
+    // `COMPOUND_TOKEN_BOUNDARY_PATTERN`) -- mirroring the leading-side
+    // walk's own terminal test below. A non-hyphen flag prefix that still
+    // abuts the token with no boundary (`/skip-checks`, `+skip-checks`)
+    // must stay detectable as a directive, exactly like the existing
+    // `--skip-checks` / `/force-skip` shapes the leading-side walk already
+    // handles; only the leading character actually being `-` routes into
+    // that walk, so a `/`- or `+`-prefixed flag would otherwise slip
+    // through this trailing-hyphen branch unclassified as an "ordinary
+    // compound" false negative.
+    if (
+      matchIndex !== 0 &&
+      !COMPOUND_TOKEN_BOUNDARY_PATTERN.test(rawSource[matchIndex - 1] ?? '')
+    ) {
+      return false;
+    }
+    const afterMatch = rawSource[matchIndex + matchLength];
+    if (
+      afterMatch !== '-' ||
+      !/\w/.test(rawSource[matchIndex + matchLength + 1] ?? '')
+    ) {
+      return false;
+    }
+    const tailWordMatch = /^[A-Za-z]+/.exec(
+      rawSource.slice(matchIndex + matchLength + 1),
+    );
+    return (
+      tailWordMatch === null ||
+      !POLICY_OVERRIDE_NOUN_TAIL_PATTERN.test(tailWordMatch[0])
+    );
   }
   let cursor = matchIndex - 1;
   while (cursor > 0 && /[\w-]/.test(rawSource[cursor - 1] ?? '')) {
@@ -1634,7 +1727,7 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
     const verb = maskedMatch[1] ?? '';
     if (
       (!getCodeRangeAt(index) &&
-        isOrdinaryHyphenatedCompoundToken(text, index)) ||
+        isOrdinaryHyphenatedCompoundToken(text, index, verb.length)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
@@ -1693,7 +1786,7 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
     const verb = match[1] ?? '';
     if (
       (!getCodeRangeAt(index) &&
-        isOrdinaryHyphenatedCompoundToken(text, index)) ||
+        isOrdinaryHyphenatedCompoundToken(text, index, verb.length)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
