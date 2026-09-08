@@ -120,36 +120,23 @@ recovery.
 
 ## E11 — Resolve conflicts with {development-branch}
 
-Check branch state **read-only** first, same method as the E-phase
-branch-sync check (`idd-review-triage.instructions.md`) and F1
-(`idd-pre-merge.instructions.md`): `idd-branch-conflict-state --pr
-{pr-number}` (helper runtime) or `gh pr view {pr-number} --json
-mergeable,mergeStateStatus` otherwise — reflects the last **pushed**
-head, not unpushed E9 fixes.
+Same read-only check as
+`idd-review-triage.instructions.md`'s E-phase branch-sync check and
+`idd-pre-merge.instructions.md`'s F1 (`idd-branch-conflict-state --pr
+{pr-number}` or `gh pr view {pr-number} --json
+mergeable,mergeStateStatus`) — reflects the last pushed head, not
+unpushed E9 fixes.
 
-On a confirmed `content-conflict` (`mergeable` `CONFLICTING`): first
-pass the **active review gate** (same check as
-`idd-review-triage.instructions.md`'s Sync path step 1), then merge
-`{development-branch}` (resolved in `idd-work.instructions.md`'s B1
-[Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch))
-into the feature branch (`git fetch origin {development-branch} && git
-merge origin/{development-branch}`), resolve conflicts, and complete
-the merge. On non-interactive-hostile primary signing (GPG pinentry /
-hardware-touch), use the
-[signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
-for the whole operation — see `idd-review-triage.instructions.md`'s
-Sync path step 2 for the `-m` subject requirement.
-
-On `force-push-exception` (a hold state per
-[IDD policy constants](../../docs/policy-constants.md), like
-`dirty`/`unknown`): stop — post a PR comment documenting the state and
-do not proceed to E12; a maintainer must clear the hold.
-
-Any other read (clean, behind-no-conflict, computing, dirty, unknown)
-skips the merge here — E11 never re-polls a transient read or holds on
-a dirty/unknown one; proceed to E12 and let
-`idd-review-triage.instructions.md`'s E-phase branch-sync check handle
-those states properly once PATH A reaches zero.
+- **`content-conflict`** (`mergeable` `CONFLICTING`): pass the active
+  review gate, merge `{development-branch}` into the feature branch
+  (`git fetch origin {development-branch} && git merge
+  origin/{development-branch}`), resolve, complete the merge.
+  Non-interactive-hostile signing: use the
+  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
+  instead.
+- Otherwise (clean, behind-no-conflict, computing, dirty,
+  force-push-exception, unknown): skip the merge, proceed to E12 —
+  the E-phase branch-sync check and F1 hold on those later.
 
 ## E12 — Lint, test, push
 

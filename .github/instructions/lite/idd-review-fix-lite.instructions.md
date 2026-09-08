@@ -142,38 +142,23 @@ other GitHub side effect, confirm all of the following:
 
 1. Check state read-only: `idd-branch-conflict-state --pr {pr-number}`
    — reflects the last pushed head, not local unpushed fixes. Missing,
-   failing, or disagreeing with live state? Stop and ask per the Helper
-   runtime contract above — do not fall back to a non-helper read here.
-2. `force-push-exception` (a hold state per
-   [IDD policy constants](../../../docs/policy-constants.md), like
-   `dirty`/`unknown`)? Stop here — post a PR comment documenting the
-   state, and do not continue to E12; a maintainer must clear the
-   hold. Otherwise not a confirmed conflict (clean, behind-no-conflict,
-   computing, dirty, unknown)? Skip the merge and continue to E12 — a
-   dirty or unresolved read isn't this step's problem to fix; F1
-   (`idd-pre-merge-lite.instructions.md`) stops and asks on any
-   non-clean pre-merge branch state.
-3. Conflict reported (`mergeable` `CONFLICTING`)? If the PR has
-   unresolved review threads, unreplied comments, or a reviewer's
-   latest state is `CHANGES_REQUESTED`, get explicit operator
-   confirmation before merging — the merge commit will appear in the
-   PR history.
-4. Run `git fetch origin main && git merge origin/main`.
-5. On a signed-commit repo whose primary signing is non-interactive
-   hostile (GPG pinentry or hardware-touch) but that provides a
-   fallback signing wrapper for arbitrary git subcommands (pass
-   `-c gpg.format=ssh -c user.signingkey=<abs-path> -c
-   commit.gpgsign=true` to `git` before the subcommand, plus
-   `-m "chore: merge origin/main into the claimed branch"` on the
-   first `merge` so a commitlint hook accepts the subject — `git -c …
-   merge`, not `git merge -c …`; a commit-only alias like
-   `git commit-ssh` will not run `merge`), run this merge through that
-   wrapper, not the plain command.
-6. Resolve any conflicts and complete the merge.
-7. If the merge needed `--continue`, run it through the same wrapper
-   used in step 5 (`git -c … merge --continue`), never the plain
-   `git merge --continue` — the wrapper must own the whole operation, or
-   the merge commit reverts to the stalling primary signing.
+   failing, or disagreeing? Stop and ask (Helper runtime contract
+   above) — no non-helper fallback here.
+2. Not a confirmed conflict (clean, behind-no-conflict, computing,
+   dirty, force-push-exception, unknown)? Skip the merge, continue to
+   E12 — F1 (`idd-pre-merge-lite.instructions.md`) holds on those
+   later.
+3. Conflict (`mergeable` `CONFLICTING`)? Unresolved review threads,
+   unreplied comments, or reviewer state `CHANGES_REQUESTED`: get
+   explicit operator confirmation first — the merge commit will appear
+   in the PR history.
+4. Run `git fetch origin main && git merge origin/main`. On
+   non-interactive-hostile primary signing (GPG pinentry or
+   hardware-touch) with a fallback wrapper, run the whole merge
+   (including `--continue`) through that wrapper instead — see
+   `docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure`
+   for the command form and the commitlint `-m` requirement.
+5. Resolve conflicts, complete the merge.
 
 ## E12 — Lint, test, push
 
