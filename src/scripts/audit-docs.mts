@@ -37,6 +37,7 @@ import {
   parseGeneratedFromBannerSource,
   renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
+  selectStricterNoticeUtilizationPct,
   stripGeneratedFromBanner,
   uniqueSorted,
 } from './consistency-helpers.mts';
@@ -1199,9 +1200,13 @@ function checkNearCeilingRatchet(
     baseRef,
     baseManifest.bundleBudgets ?? [],
   );
+  const effectiveNoticeUtilizationPct = selectStricterNoticeUtilizationPct(
+    noticeUtilizationPct,
+    baseManifest.contextCeiling?.noticeUtilizationPct,
+  );
   errors.push(
     ...collectNearCeilingRatchetViolations(
-      noticeUtilizationPct,
+      effectiveNoticeUtilizationPct,
       currentBundleStats,
       baseBundleStats,
     ),

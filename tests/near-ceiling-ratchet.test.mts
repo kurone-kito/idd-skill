@@ -1,9 +1,34 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { collectNearCeilingRatchetViolations } from '../src/scripts/consistency-helpers.mts';
+import {
+  collectNearCeilingRatchetViolations,
+  selectStricterNoticeUtilizationPct,
+} from '../src/scripts/consistency-helpers.mts';
 
 const NOTICE_PCT = 95;
+
+test('selectStricterNoticeUtilizationPct keeps the current value when the base value is missing', () => {
+  assert.equal(selectStricterNoticeUtilizationPct(95, undefined), 95);
+});
+
+test('selectStricterNoticeUtilizationPct keeps the current value when the base value is not a valid number', () => {
+  assert.equal(selectStricterNoticeUtilizationPct(95, 'not-a-number'), 95);
+});
+
+test('selectStricterNoticeUtilizationPct picks the lower base value over a raised current value', () => {
+  // #2697 Codex review finding: raising noticeUtilizationPct in the same PR
+  // that raises a bundle's limitBytes must not loosen the guard.
+  assert.equal(selectStricterNoticeUtilizationPct(97, 95), 95);
+});
+
+test('selectStricterNoticeUtilizationPct picks the lower current value when the base value is higher', () => {
+  assert.equal(selectStricterNoticeUtilizationPct(90, 95), 90);
+});
+
+test('selectStricterNoticeUtilizationPct picks the shared value when base and current match', () => {
+  assert.equal(selectStricterNoticeUtilizationPct(95, 95), 95);
+});
 
 test('a brand-new bundle with no base-ref entry does not error', () => {
   const current = [{ id: 'bundle-new', limitBytes: 10000, totalBytes: 9000 }];
