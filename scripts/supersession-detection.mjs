@@ -186,7 +186,29 @@ export const SUITABILITY_REJECTION_PREFIX = 'A4.5 suitability gate rejection';
 // never invents a token the protocol doesn't recognize.
 const SUITABILITY_REJECTION_OUTCOME_PATTERN =
   /outcome:\s*(unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid)\b/i;
-const SUITABILITY_REJECTION_CHECK_PATTERN = /Check\s+\d+\s*\([^)]+\)/i;
+const SUITABILITY_REJECTION_CHECK_PATTERN_GLOBAL = /Check\s+\d+\s*\([^)]+\)/gi;
+/**
+ * Extract the `Check N (<Name>)` excerpt matching the comment's own final
+ * stated verdict (#2708), not merely the first incidental match anywhere in
+ * the body. A rejection comment may cite an earlier check number for
+ * context ("Check 5 (Actionability) was previously cited, but...") before
+ * stating its actual, different final verdict ("...this time it fails
+ * Check 7 (Verifiability)") -- a natural, even encouraged pattern, and one
+ * this repository's own real rejection comments already exhibit in both
+ * relative orderings (check-citation-then-outcome-line, and
+ * outcome-then-check-citation) -- so anchoring to the `outcome:` line's
+ * position is not a reliable signal either way. The last occurrence in
+ * prose reading order is: a single-mention comment (the common case)
+ * returns that one mention unchanged; a multi-mention comment returns the
+ * final, most-recently-stated one, matching how the acceptance criteria's
+ * repro is phrased (earlier context, then a final differing verdict).
+ */
+function extractLatestSuitabilityCheckMatch(body) {
+  const matches = [
+    ...body.matchAll(SUITABILITY_REJECTION_CHECK_PATTERN_GLOBAL),
+  ];
+  return matches.length > 0 ? matches[matches.length - 1] : null;
+}
 /** The four A4.5 outcomes with no dedicated label (#2243): the only values
  * `<!-- {prefix}-triage-verdict: <outcome> -->` may declare.
  * `needs-decision`/`blocked-by-human` are deliberately excluded -- those
@@ -383,7 +405,7 @@ export function findTrustedSuitabilityRejection(
     }
     latestTimestamp = timestamp;
     const outcomeMatch = SUITABILITY_REJECTION_OUTCOME_PATTERN.exec(body);
-    const checkMatch = SUITABILITY_REJECTION_CHECK_PATTERN.exec(body);
+    const checkMatch = extractLatestSuitabilityCheckMatch(body);
     const markerDetection = parseSuitabilityTriageVerdictMarker(
       body,
       markerPrefix,

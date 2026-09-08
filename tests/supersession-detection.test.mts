@@ -928,6 +928,25 @@ test('findTrustedSuitabilityRejection: a trusted-actor rejection is detected and
   assert.equal(result?.check, 'Check 7 (Verifiability)');
 });
 
+// #2708: a comment that cites an earlier check number for context before
+// stating a different final verdict must surface the LATER (final) check,
+// not the first incidental "Check N (...)" substring in the body.
+test('findTrustedSuitabilityRejection: a check cited for context before the final verdict is not returned over the later, real verdict', () => {
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({
+        body:
+          `${SUITABILITY_REJECTION_PREFIX} — Check 5 (Actionability) was ` +
+          'previously cited, but on review this time it fails Check 7 ' +
+          '(Verifiability).\n\noutcome: needs-decision',
+      }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.equal(result?.outcome, 'needs-decision');
+  assert.equal(result?.check, 'Check 7 (Verifiability)');
+});
+
 test('findTrustedSuitabilityRejection: the same rejection-shaped comment from an untrusted actor is not surfaced', () => {
   const result = findTrustedSuitabilityRejection(
     [makeRejectionComment({ user: { login: 'random-untrusted-user' } })],
