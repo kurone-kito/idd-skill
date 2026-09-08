@@ -744,9 +744,24 @@ Running this variant safely requires:
 - **Resume-specific recovery when a worker dies mid-turn.** Re-verify
   claim ownership and worktree state before continuing; treat any
   uncommitted work found in the worktree as unverified input to check,
-  never as something to trust or silently discard; then delegate a fresh
-  subagent with a resume-specific briefing rather than resuming the dead
-  worker's own context.
+  never as something to trust or silently discard. Also check for a
+  stale clone-scoped lock before redelegating -- skip this check under
+  `instructions-only` running one worker at a time, which never
+  contends for the lock; see
+  [Clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) for that
+  profile's own multi-worker-one-clone caveat: run
+  `node scripts/clone-lock.mjs --check` (or the profile-selected
+  `idd:clone-lock` command with `--check`, per that same section, for
+  the literal per-profile invocation) and, if it reports a held lock, follow
+  the existing manual-recovery procedure: confirm the whole lock-owning
+  operation -- the recorded wrapper and any git process it spawned -- is
+  actually gone, not merely that the recorded pid has exited (a dead
+  wrapper can still leave a live git child that still needs the lock --
+  kurone-kito/idd-skill#2223), then remove the lock file by hand and
+  retry -- the same approach git's own `index.lock` takes on a
+  stale-lock collision -- before delegating a fresh subagent with a
+  resume-specific briefing rather than resuming the dead worker's own
+  context.
 - **Independently verify a worker's reported terminal outcome before
   trusting it.** A worker's final-turn text describes what it
   _attempted_, not proof of what actually landed on the forge. Before
