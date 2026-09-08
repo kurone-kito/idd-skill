@@ -88,6 +88,37 @@ posting), which does not affect `status`; `resolve-review-thread.mjs`
 returns `mode` (`dry-run`/`apply`) alongside its own separate
 `status?` (`applied`/`failed`).
 
+## Contents API permission-masking probe (kurone-kito/idd-skill#2716)
+
+`loadTrustedIddConfig` (`src/scripts/idd-config.mts`) fetches
+`.github/idd/config.json` at a trusted `ref` via the GitHub Contents API
+and returns `null` (documented-defaults fallback) only on a confirmed
+404; any other failure, including a permission denial, throws instead of
+guessing. Whether GitHub's Contents API masks a `403` (permission denied)
+as a `404` for a token lacking Contents read access was an open empirical
+question -- a related masking pattern is already documented for the
+branch-protection/ruleset endpoints specifically (`trustEmptyProtectionReads`,
+see `docs/policy-constants.md`).
+
+**Verified 2026-09-08**: no masking observed for the Contents API. A
+disposable **private** repository
+(`kurone-kito/idd-skill-issue-2716-contents-api-probe`, intentionally
+retained rather than deleted -- see kurone-kito/idd-skill#2716) ran a GitHub
+Actions workflow declaring `permissions: { contents: none }` at the job
+level, then used the workflow's own ephemeral `GITHUB_TOKEN` to request
+an existing file at a valid ref via
+`GET /repos/{owner}/{repo}/contents/{path}?ref={sha}`. Response:
+`403` with body `{"message": "Resource not accessible by integration"}`
+-- a genuine, unambiguous permission denial, not a `404`. The repo is
+**private** deliberately: a public repo's `contents: none` token can
+still read publicly-visible content and return `200`, which would prove
+nothing about masking.
+
+`loadTrustedIddConfig`'s existing fail-closed `deriveGhHttpStatus(error)
+=== 404` check is therefore correct as written and needs no change for
+this finding. See the function's own JSDoc for the same note attached
+directly to its contract.
+
 ## Decision
 
 In the idd-skill source repository, the following optional helpers were adopted:
