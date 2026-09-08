@@ -491,7 +491,10 @@ require explicit operator confirmation:
     three configured label names to an ordinary issue with no error,
     dropping it from execution candidates or parking it behind a hold;
     omitting a label from the labeler's own instruction list does not
-    restrict which labels it may apply. See
+    restrict which labels it may apply. When that risk applies, also
+    confirm `labels.untrustedLabelerLogins`: declaring it lets a helper
+    runtime generate the matching guard workflow automatically instead
+    of requiring the manual recipe. See
     [IDD label names](docs/onboarding/policy-decisions.md#idd-label-names)
     for the field evidence and the guard recipe.
 13. up-to-date-head ruleset check
