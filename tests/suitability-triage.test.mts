@@ -4227,6 +4227,429 @@ test('verifiability does not pair "either" in one bullet with an unrelated "or" 
   assert.equal(result.pass, true);
 });
 
+test('verifiability does not treat a placeholder domain or an email address as a bare filename (#2711 gap 1)', () => {
+  // BARE_DOTTED_FILENAME_PATTERN's own dictionary-word-shaped match also
+  // fires on a placeholder domain mentioned in ordinary prose -- neither
+  // "example.com" (the RFC 2606 reserved placeholder domain) nor
+  // "owner@example.com" (an email address, whose domain part alone also
+  // matches the pattern) names a real file.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] Update the contact listed as example.com
+- [ ] Notify owner@example.com when done
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test("verifiability does not let an unrelated later section's checklist flip a placeholder Acceptance Criteria section (#2711 gap 2)", () => {
+  // The whole-body numbered-steps/checklist fallback previously had no
+  // section-boundary awareness: this repo's own "## Candidate files"
+  // bullet-list convention (itself a checklist, unrelated to the AC
+  // section) combined with an outcome-signal word anywhere else in the
+  // body wrongly flipped a genuinely placeholder AC section to "has
+  // objective criteria."
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+TBD
+
+## Candidate files
+- [ ] src/scripts/foo.mts
+
+This change should pass on merge.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let a hidden HTML comment leak substance into the Acceptance Criteria scan (#2711 gap 3)', () => {
+  // A concrete-looking code span and outcome-signal keyword hidden inside
+  // an HTML comment on the same line as a placeholder bullet is invisible
+  // in the rendered issue and must not count as real content.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO <!-- ${tick}scripts/real.mjs${tick} outputs the result -->
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let an unmatched fenced-example "<!--" swallow a later genuine decision (#2711 gap 4)', () => {
+  // findHtmlCommentRanges previously scanned for a literal "<!--" with no
+  // awareness of fenced code: an issue documenting the HTML-comment marker
+  // syntax inside a fenced example, with no closing "-->" anywhere in the
+  // body, masked from that position all the way to EOF, swallowing a
+  // genuine "Maintainer decision (...)" that followed the fence.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off before merging.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+Example marker syntax:
+\`\`\`
+<!-- unterminated example
+\`\`\`
+
+Maintainer decision (Groom hearing, 2026-09-05): proceed as described above.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability recognizes a parenthesized ordered-list marker as a real checklist line (#2711 gap 5)', () => {
+  // LIST_ITEM_LINE_PATTERN previously recognized only "1." numbering, not
+  // the equally valid CommonMark "1)" form -- a substantive bullet written
+  // that way was silently dropped from the AC-section list-item scan,
+  // leaving only the placeholder line and wrongly failing the check. The
+  // placeholder line deliberately avoids checkbox ("- [ ]") syntax so this
+  // fixture isolates LIST_ITEM_LINE_PATTERN's own gap from the unscoped
+  // whole-body checklist fallback (#2711 gap 2, fixed separately) that a
+  // checkbox-shaped placeholder line would otherwise also satisfy.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- TODO
+1) ${tick}scripts/real-thing.mjs${tick} passes
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability does not let a keyword-free indented-code example leak into the Acceptance Criteria scan (#2711 gap 6)', () => {
+  // No indented (4-space) code masking existed before the AC-substance
+  // scan -- a fenced-only mask left an indented Markdown example (here,
+  // one demonstrating the checklist syntax itself) fully visible, so its
+  // own concrete-looking code span was read as a real, substantive bullet.
+  // Two blank lines fully exit the preceding "- [ ] TODO" bullet's own
+  // list-content zone (one blank line alone keeps a list zone active,
+  // which raises the indented-code threshold above 4 columns and would
+  // read this same line as a nested list item instead of a code example).
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO
+
+
+    - [ ] ${tick}scripts/real.mjs${tick} passes
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability bounds the Acceptance Criteria section at a Setext-style sibling heading (#2711 gap 7)', () => {
+  // NEXT_HEADING_PATTERN previously recognized only ATX ("#") headings --
+  // a Setext-style sibling heading (a text line underlined with "---")
+  // reproduced the same section-boundary leak as an unbounded scan: a
+  // trailing "## Candidate files"-shaped section's own bullet leaked into
+  // a genuinely placeholder AC section.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO
+
+Candidate files
+---
+- [ ] ${tick}scripts/real.mjs${tick}
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability treats a struck-through inline decision as not resolved (#2711 gap 8)', () => {
+  // A GFM strikethrough span ("~~...~~") marks its content as retracted or
+  // superseded -- a struck-through "Maintainer decision (...)" must not
+  // count as this issue's own current live resolution.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+~~Maintainer decision (Groom hearing, 2026-09-05): proceed as described above.~~ Superseded, see the follow-up discussion for the current plan.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test("verifiability recognizes an inverted-attribution quotation of another issue's decision (#2711 gap 9)", () => {
+  // A reporting verb can follow the quoted marker instead of preceding it
+  // -- "'Maintainer decision (...): choose A,' reports the linked
+  // discussion" -- which the backward-only framing-verb scan never saw,
+  // wrongly treating an externally-reported quotation as this issue's own
+  // resolution.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+Issue #4321 'Maintainer decision (Groom hearing, 2026-09-05): choose option A,' reports the linked discussion.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let an earlier sentence ending in a closing quote widen the framing-verb scan (#2711 gap 10)', () => {
+  // The literal ". "/"! "/"? " sentence-boundary scan found no boundary at
+  // a sentence ending in a closing quote before the space (`out." `) and
+  // fell back to scanning from the paragraph start, wrongly pulling an
+  // earlier, unrelated sentence's own framing verb ("states") into the
+  // window and suppressing this issue's own genuine, later, unrelated
+  // resolution.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+The doc states "figure it out." Maintainer decision (Groom hearing, 2026-09-05): choose option A.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability recognizes an Acceptance Criteria section written entirely with "1)" numbering (PR #2735 Copilot review)', () => {
+  // The outer "does this section look like a list at all" gate recognized
+  // only "1." ordered-list numbering, not the "1)" form LIST_ITEM_LINE_PATTERN
+  // itself already supports (#2711 gap 5) -- an AC section using ONLY that
+  // numbering style (no "-"/"*" bullet anywhere) never entered the
+  // section-scoped scan at all, regardless of the list-item-line fix.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+1) TBD
+2) ${tick}scripts/real.mjs${tick} passes
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability ignores an HTML-comment-marker opener demonstrated in inline code (PR #2735 Codex review round 2)', () => {
+  // findHtmlCommentRanges excluded an unmatched "<!--" only when it was
+  // inside a FENCED code example (#2711 gap 4); the same demonstration
+  // written as an inline code span -- `` `<!--` `` -- was still treated as
+  // a real unterminated comment and masked the rest of the section,
+  // including the following bullet's own concrete artifact, through EOF.
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- Document the literal ${tick}<!--${tick} marker
+- ${tick}src/parser.mts${tick} is deterministic
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still credits a genuine numbered section unrelated to a placeholder Acceptance Criteria heading (PR #2735 Codex review round 2)', () => {
+  // An earlier revision (#2711 gap 2) skipped the whole-body numbered-
+  // steps/checklist fallback entirely whenever ANY Acceptance Criteria
+  // heading existed, over-correcting for the "## Candidate files" leak: a
+  // genuinely separate, later section (here "## Expected Behavior") with
+  // real numbered verification content was wrongly suppressed too. Only
+  // the Acceptance Criteria section's own content and the recognized
+  // "## Candidate files" convention are excluded now, not every sibling
+  // section.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+TBD
+
+## Expected Behavior
+1. The result is deterministic.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test("verifiability preserves a checklist item past the primary scan's own 500-char window (PR #2735 Codex review round 3)", () => {
+  // The primary section-scoped scan only ever examines the first 500
+  // characters after the "Acceptance Criteria" heading. An earlier
+  // revision's exclusion masked the section's FULL extent from the
+  // Alternative fallback instead of matching that same 500-char window,
+  // so a genuine checklist item past it -- which the primary scan never
+  // examined either -- was doubly hidden rather than left available.
+  const filler = 'This section explains context at length. '.repeat(15);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+${filler}
+- [ ] The result is deterministic.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability ignores a literal "~~" demonstrated in inline code when pairing strikethrough (PR #2735 Codex review round 3)', () => {
+  // isInStrikethroughSpan previously scanned the raw, unmasked body for
+  // "~~" delimiters -- two literal "~~" tokens quoted in inline code
+  // (documenting the syntax itself) were paired as real strikethrough
+  // delimiters, wrongly treating the genuine decision marker between them
+  // as struck through / retracted.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+The syntax \`~~\` is documented. Maintainer decision (Groom hearing, 2026-09-05): proceed as described. Keep \`~~\` escaped.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability masks fenced/indented code and HTML comments before the Alternative fallback scan (PR #2735 Codex review round 4)', () => {
+  // The Alternative fallback's own body -- after excluding the
+  // Acceptance Criteria and Candidate-files sections -- previously used
+  // raw `body`, unmasked: a "1)" step demonstrated inside a fenced code
+  // example, paired with an unrelated outcome-signal word elsewhere in
+  // the body, wrongly satisfied hasNumSteps. Neither section is present
+  // here (a placeholder AC section and an unrelated "## Notes" section),
+  // isolating the code-masking gap itself from the section-exclusion
+  // fixes above.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+TBD
+
+## Notes
+
+\`\`\`
+1) Placeholder instruction
+\`\`\`
+
+This will produce the expected result.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability ignores a backslash-escaped HTML comment opener (PR #2735 Codex review round 5)', () => {
+  // A backslash-escaped "\<!--" renders as a literal string in CommonMark,
+  // not a real HTML comment start. findHtmlCommentRanges previously masked
+  // everything after it through EOF (no matching "-->" ever follows),
+  // hiding a genuine later Acceptance Criteria checklist item.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Document the literal \\<!-- marker in the README.
+
+## Acceptance Criteria
+- [ ] Ship the fix in src/foo.ts
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability ignores backslash-escaped strikethrough delimiters (PR #2735 Codex review round 5)', () => {
+  // A backslash-escaped "\~~" renders as a literal string in CommonMark,
+  // not a real strikethrough delimiter. isInStrikethroughSpan previously
+  // paired two such literal, escaped tokens as a real delimiter pair,
+  // wrongly treating the genuine decision marker between them as struck
+  // through / retracted.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Needs maintainer sign-off on the final approach.
+
+## Acceptance Criteria
+- [ ] tests pass
+
+\\~~ Maintainer decision (Groom hearing, 2026-09-05): proceed as described. \\~~
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability falls through to the Alternative scan when the AC section opens with introductory prose (PR #2735 Codex review round 6)', () => {
+  // The primary AC scan only enters its list-shaped outer gate when the
+  // section's own trimmed content starts with a list marker -- an
+  // introductory line before the checklist ("The implementation must
+  // satisfy:") never reaches that gate, so hasObjectiveCriteria stays
+  // false without the section ever being fairly reviewed. Excluding the
+  // section from the Alternative fallback regardless made its real
+  // checklist item doubly invisible instead of falling through to it.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+The implementation must satisfy:
+- [ ] The result is deterministic.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability keeps a checklist item together when it straddles the 500-char cutoff (PR #2735 Codex review round 7)', () => {
+  // A single checklist item whose marker/prefix sits before the 500-char
+  // cutoff and whose objective clause sits after it was previously split
+  // by char-precise exclusion: the marker was excluded (masked as part of
+  // the "already reviewed" AC section) while only the bare suffix reached
+  // the Alternative fallback -- with no "- [ ]" of its own, the suffix
+  // never matched hasChecklist's marker pattern. Now the cutoff snaps back
+  // to the start of the straddling line, so the whole item either stays
+  // fully excluded or reaches the fallback intact.
+  const filler = 'This section explains context at length. '.repeat(12);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] ${filler}The result is deterministic.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {

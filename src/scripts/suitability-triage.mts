@@ -20,6 +20,7 @@ import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import {
   findFencedCodeRanges,
+  findIndentedCodeRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   type MarkdownCodeRange,
@@ -371,6 +372,32 @@ function isFramedAsDescriptive(
 // Maintainer decision (...): choose A" -- must not suppress a genuine
 // decision merely for sharing a paragraph with an unrelated use of the same
 // vocabulary.
+// #2711: the terminal punctuation of a sentence may be immediately
+// followed by a closing Markdown emphasis marker or quote character before
+// the whitespace that ends it -- e.g. a sentence ending `"done."` or
+// `*settled*.`. The previous literal ". "/"! "/"? " scan below found no
+// boundary at such a position (the quote/emphasis character sits between
+// the punctuation and the space) and fell back to an EARLIER, unrelated
+// sentence boundary instead, widening the scan window enough to catch that
+// earlier sentence's own framing verb.
+const SENTENCE_TERMINATOR_PATTERN = /[.!?][)"'*_`\]]*(?=\s|$)/;
+
+function findLastSentenceBoundaryEnd(scanText: string): number {
+  const pattern = new RegExp(SENTENCE_TERMINATOR_PATTERN.source, 'g');
+  let end = -1;
+  let match = pattern.exec(scanText);
+  while (match !== null) {
+    end = match.index + match[0].length;
+    match = pattern.exec(scanText);
+  }
+  return end;
+}
+
+function findFirstSentenceBoundaryEnd(scanText: string): number {
+  const match = SENTENCE_TERMINATOR_PATTERN.exec(scanText);
+  return match === null ? scanText.length : match.index + match[0].length;
+}
+
 function isPrecededByFramingVerb(
   normalizedBody: string,
   paragraphSpans: { start: number; end: number }[],
@@ -381,17 +408,58 @@ function isPrecededByFramingVerb(
       (candidate) => offset >= candidate.start && offset <= candidate.end,
     ) ?? paragraphSpans[paragraphSpans.length - 1];
   const scanText = normalizedBody.slice(span?.start ?? 0, offset);
-  const lastSentenceBoundary = Math.max(
-    scanText.lastIndexOf('. '),
-    scanText.lastIndexOf('! '),
-    scanText.lastIndexOf('? '),
-    scanText.lastIndexOf('.\n'),
-    scanText.lastIndexOf('!\n'),
-    scanText.lastIndexOf('?\n'),
+  const sentenceStart = findLastSentenceBoundaryEnd(scanText);
+  return FRAMING_VERB_PATTERN.test(
+    scanText.slice(sentenceStart === -1 ? 0 : sentenceStart),
   );
-  const sentenceStart =
-    lastSentenceBoundary === -1 ? 0 : lastSentenceBoundary + 2;
-  return FRAMING_VERB_PATTERN.test(scanText.slice(sentenceStart));
+}
+
+// #2711: an inverted-attribution quotation states the marker FIRST and its
+// reporting verb after it -- "'Maintainer decision (...): choose A,'
+// reports the referenced tracking issue" -- which `isPrecededByFramingVerb`
+// above never sees, since it only scans text BEFORE the match. Mirrors that
+// function's own single-sentence bound, forward instead of backward, so an
+// unrelated LATER sentence's own framing verb doesn't wrongly suppress a
+// genuine decision two sentences later.
+const QUOTE_CHARS = ['"', "'"];
+
+function isFollowedByFramingVerb(
+  normalizedBody: string,
+  paragraphSpans: { start: number; end: number }[],
+  matchStart: number,
+  matchEnd: number,
+): boolean {
+  const span =
+    paragraphSpans.find(
+      (candidate) =>
+        matchStart >= candidate.start && matchStart <= candidate.end,
+    ) ?? paragraphSpans[paragraphSpans.length - 1];
+  const paragraphStart = span?.start ?? 0;
+  const paragraphEnd = span?.end ?? normalizedBody.length;
+
+  // Deliberately narrower than "any framing verb somewhere later in the
+  // sentence": the marker must be immediately preceded by an opening quote
+  // character, closed by that SAME character before the framing verb.
+  // Without this, an ordinary reporting verb inside the marker's OWN
+  // resolution text -- "Maintainer decision (...): the helper reports an
+  // actionable error..." -- would be wrongly read as external framing (PR
+  // #2662 Codex review's own regression coverage for the backward-scan
+  // case; the forward scan needs the identical guard).
+  const precedingChar = normalizedBody[matchStart - 1];
+  if (
+    matchStart <= paragraphStart ||
+    !QUOTE_CHARS.includes(precedingChar ?? '')
+  ) {
+    return false;
+  }
+  const followingText = normalizedBody.slice(matchEnd, paragraphEnd);
+  const closingQuoteIndex = followingText.indexOf(precedingChar as string);
+  if (closingQuoteIndex === -1) {
+    return false;
+  }
+  const afterQuote = followingText.slice(closingQuoteIndex + 1);
+  const sentenceEnd = findFirstSentenceBoundaryEnd(afterQuote);
+  return FRAMING_VERB_PATTERN.test(afterQuote.slice(0, sentenceEnd));
 }
 
 // #2661 PR #2662 review round 2 (Codex): a Markdown blockquote ("> Maintainer
@@ -432,6 +500,64 @@ function isInBlockquotedParagraph(
   return /^[ \t]*>/.test(firstLine);
 }
 
+// #2711: a GFM strikethrough span ("~~Maintainer decision (...): choose
+// A~~") marks its content as struck through -- rendered convention for
+// "retracted" or "superseded" -- so a decision inside one must not count
+// as this issue's current live resolution, independent of any framing verb
+// or blockquote. Pairs consecutive "~~" delimiters left-to-right within the
+// containing paragraph (a soft heuristic, not full CommonMark strikethrough
+// parsing, matching this file's existing style for inline-span detection)
+// and reports whether `offset` falls strictly inside any pair's content.
+//
+// #2711 PR #2735 review round 3 (Codex): scans `codeMaskedBody` (e.g.
+// `normalizedCodeMaskedBody`), not the raw `normalizedBody`, so a literal
+// "~~" inside an inline/fenced code example demonstrating the syntax --
+// masked to spaces there -- is never mistaken for a real delimiter.
+// `codeMaskedBody` must be the SAME length and position-preserving
+// relative to `normalizedBody` (as `maskMarkdownCodeRegionsPreservingPositions`
+// guarantees) so `paragraphSpans` and `offset`, both computed against
+// `normalizedBody`, stay valid against it.
+//
+// #2711 PR #2735 review round 5 (Codex): a backslash-escaped delimiter
+// (`\~~`) renders as a literal string in CommonMark, not a real
+// strikethrough boundary -- two literal `\~~` examples surrounding a
+// genuine, unstruck "Maintainer decision (...)" must not be paired as if
+// they were real delimiters. A single preceding backslash is enough to
+// treat a `~~` as escaped (soft heuristic, matching this file's existing
+// style; does not attempt full backslash-run parity for `\\~~`).
+function isInStrikethroughSpan(
+  codeMaskedBody: string,
+  paragraphSpans: { start: number; end: number }[],
+  offset: number,
+): boolean {
+  const span =
+    paragraphSpans.find(
+      (candidate) => offset >= candidate.start && offset <= candidate.end,
+    ) ?? paragraphSpans[paragraphSpans.length - 1];
+  const paragraphStart = span?.start ?? 0;
+  const paragraphEnd = span?.end ?? codeMaskedBody.length;
+  const paragraphText = codeMaskedBody.slice(paragraphStart, paragraphEnd);
+  const relativeOffset = offset - paragraphStart;
+  const delimiterPattern = /~~/g;
+  const delimiterStarts: number[] = [];
+  let delimiterMatch = delimiterPattern.exec(paragraphText);
+  while (delimiterMatch !== null) {
+    if (paragraphText[delimiterMatch.index - 1] !== '\\') {
+      delimiterStarts.push(delimiterMatch.index);
+    }
+    delimiterPattern.lastIndex = delimiterMatch.index + 2;
+    delimiterMatch = delimiterPattern.exec(paragraphText);
+  }
+  for (let index = 0; index + 1 < delimiterStarts.length; index += 2) {
+    const contentStart = (delimiterStarts[index] ?? 0) + 2;
+    const contentEnd = delimiterStarts[index + 1] ?? 0;
+    if (relativeOffset >= contentStart && relativeOffset < contentEnd) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // #2661 PR #2662 review round 6 (Codex): an issue-template author commonly
 // leaves hidden instructional scaffolding as an HTML comment -- e.g.
 // `<!-- Maintainer decision (Groom hearing, YYYY-MM-DD): <resolution text>
@@ -443,14 +569,52 @@ function isInBlockquotedParagraph(
 // EOF, so the entire remaining body -- a genuine marker and Acceptance
 // Criteria included -- can be invisible in the rendered issue while still
 // matching this scan if left unmasked (round 7, PR #2662).
-function findHtmlCommentRanges(text: string): MarkdownCodeRange[] {
+//
+// #2711: an issue that documents this convention's own syntax inside a
+// fenced code example -- e.g. a fence containing a literal, deliberately
+// unterminated `<!--` to illustrate the shape -- must not have that
+// example's opener treated as a REAL unterminated comment: doing so masks
+// through EOF and swallows a genuine later "Maintainer decision (...)"
+// that follows the fence. The same applies to an INLINE code span
+// demonstrating the same syntax (PR #2735 Codex review round 2) -- e.g.
+// `` `<!--` `` followed by a later bullet naming the real artifact.
+// `ignoredOpenerRanges` (optional, defaults to none so existing callers
+// with no code content to worry about are unaffected) lets a caller
+// exclude any `<!--` whose own opening `<` falls inside one of these
+// ranges from consideration entirely; pass fenced + indented + inline
+// ranges (e.g. `findMarkdownCodeRanges`'s result) to cover every code
+// shape, not just fenced blocks.
+//
+// #2711 PR #2735 review round 5 (Codex): a backslash-escaped opener
+// (`\<!--`) renders as a literal string in CommonMark, not a real HTML
+// comment start -- an issue documenting the literal marker syntax (e.g.
+// `Document the literal \<!-- marker`) must not have everything after it
+// masked through EOF. A single preceding backslash is enough to treat it
+// as escaped (soft heuristic, matching this file's existing style; does
+// not attempt full backslash-run parity for a doubly-escaped `\\<!--`).
+function findHtmlCommentRanges(
+  text: string,
+  ignoredOpenerRanges: MarkdownCodeRange[] = [],
+): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
   const openPattern = /<!--/g;
   let openMatch = openPattern.exec(text);
   while (openMatch) {
-    const closeIndex = text.indexOf('-->', openMatch.index + 4);
+    const openIndex = openMatch.index;
+    const isEscaped = text[openIndex - 1] === '\\';
+    const isIgnored =
+      isEscaped ||
+      ignoredOpenerRanges.some(
+        (range) => openIndex >= range.start && openIndex < range.end,
+      );
+    if (isIgnored) {
+      openPattern.lastIndex = openIndex + 4;
+      openMatch = openPattern.exec(text);
+      continue;
+    }
+    const closeIndex = text.indexOf('-->', openIndex + 4);
     const end = closeIndex === -1 ? text.length : closeIndex + 3;
-    ranges.push({ start: openMatch.index, end });
+    ranges.push({ start: openIndex, end });
     openPattern.lastIndex = end;
     openMatch = openPattern.exec(text);
   }
@@ -848,6 +1012,13 @@ function isEnumeratedParentheticalEntry(
   return otherEntries.length > 0 && otherEntries.every(looksLikeLabelEntry);
 }
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
+// #2711 PR #2735 review (Codex): this repo's own "## Candidate files"
+// convention (#2589) names files to EDIT, never a verification signal --
+// matched here (mirroring ACCEPTANCE_CRITERIA_PATTERN's own shape) so the
+// "Alternative" whole-body fallback below can exclude just this specific,
+// already-recognized non-verification section instead of every sibling
+// section unconditionally.
+const CANDIDATE_FILES_SECTION_PATTERN = /^#+\s*Candidate\s+files\s*$/im;
 // #2589: a bullet under "## Acceptance Criteria" that names something
 // concrete -- an inline-code span (covers a quoted file path, command, or
 // identifier) or a bare dotted filename -- is substantive on its own,
@@ -901,12 +1072,36 @@ const CODE_SPAN_STRUCTURE_PATTERN = /[/._:-]/;
 // CODE_SPAN_STRUCTURE_PATTERN.
 const CODE_SPAN_ALNUM_PATTERN = /[a-zA-Z0-9]/;
 const BARE_DOTTED_FILENAME_PATTERN = /\b[\w-]{2,}\.[a-zA-Z]{1,5}\b/;
+// #2711: BARE_DOTTED_FILENAME_PATTERN's own dictionary-word-shaped match
+// also fires on a placeholder domain mentioned in ordinary prose -- an
+// Acceptance Criteria bullet that merely SAYS "update the contact at
+// example.com" or "notify owner@example.com" names no real file. Two
+// independent exclusions, checked per match rather than once over the
+// whole text (so one genuine bare filename elsewhere in the same section
+// still counts even when a placeholder domain also appears):
+// EXAMPLE_PLACEHOLDER_DOMAIN_PATTERN excludes the RFC 2606 reserved
+// example domains (the convention's own go-to placeholder), and a match
+// immediately preceded by "@" is an email address's domain part -- for
+// ANY domain, not just the reserved ones -- never a bare filename.
+const EXAMPLE_PLACEHOLDER_DOMAIN_PATTERN = /^example\.(?:com|org|net|edu)$/i;
 // CodeRabbit review (PR #2602): an ATX heading may carry up to three
 // leading spaces per CommonMark, so the AC-section boundary below must
 // tolerate that indentation or an indented sibling heading (e.g. this
 // repo's own "   ## Candidate files", however it happens to be indented)
 // would not stop the section.
-const NEXT_HEADING_PATTERN = /\n {0,3}#{1,6}\s/;
+// #2711: also matches the boundary immediately before a Setext-style
+// sibling heading's own content line (a text line directly followed, with
+// no blank line between, by a lone run of "=" or "-" characters) -- ATX
+// alone reproduced this same section-boundary leak for that heading
+// style. The lookahead anchors the match at the same "\n before the
+// heading" position as the ATX alternative, so `.slice(0, index)` still
+// excludes the sibling heading's own text either way. Accepted limitation
+// (soft heuristic, matching this file's existing style): a "-" underline
+// immediately following a list-item line is treated as a Setext boundary
+// even where CommonMark itself would keep it inside the list -- full
+// container-aware disambiguation is out of scope for this fix.
+const NEXT_HEADING_PATTERN =
+  /\n(?: {0,3}#{1,6}\s|(?=[ \t]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)))/;
 // CodeRabbit review (PR #2602): scanning the whole AC section's raw text
 // -- rather than just its list-item lines -- let a placeholder bullet
 // ("- [ ] TODO") followed by unrelated, non-list prose containing a
@@ -915,7 +1110,10 @@ const NEXT_HEADING_PATTERN = /\n {0,3}#{1,6}\s/;
 // continuation line is intentionally excluded too, since it cannot be
 // told apart from unrelated trailing prose without full Markdown
 // paragraph parsing) are considered for either check.
-const LIST_ITEM_LINE_PATTERN = /^\s*(?:[-*]|\d+\.)\s+/;
+// #2711: also recognizes the parenthesized ordered-list form ("1)"
+// alongside "1."), which CommonMark treats as an equally valid ordered
+// list marker.
+const LIST_ITEM_LINE_PATTERN = /^\s*(?:[-*]|\d+[.)])\s+/;
 
 function looksLikePlaceholder(content: string): boolean {
   return PLACEHOLDER_LEAD_PATTERN.test(content);
@@ -949,7 +1147,26 @@ function hasSubstantiveBullet(text: string): boolean {
       return true;
     }
   }
-  return BARE_DOTTED_FILENAME_PATTERN.test(text);
+  return hasBareDottedFilename(text);
+}
+
+// #2711: per-match variant of BARE_DOTTED_FILENAME_PATTERN.test(text) --
+// see EXAMPLE_PLACEHOLDER_DOMAIN_PATTERN above for why a single whole-text
+// `.test()` is not enough. Checked per match, not short-circuited by the
+// first one found, so a placeholder domain earlier in the text never
+// hides a genuine bare filename later in the same section.
+function hasBareDottedFilename(text: string): boolean {
+  const pattern = new RegExp(BARE_DOTTED_FILENAME_PATTERN.source, 'g');
+  let match = pattern.exec(text);
+  while (match !== null) {
+    const matchText = match[0];
+    const precededByAt = text[match.index - 1] === '@';
+    if (!precededByAt && !EXAMPLE_PLACEHOLDER_DOMAIN_PATTERN.test(matchText)) {
+      return true;
+    }
+    match = pattern.exec(text);
+  }
+  return false;
 }
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
@@ -2435,19 +2652,44 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // bullet, or a heading-like line meant only as sample output) must not
   // leak into this scan either way -- as a fake substantive bullet, or as a
   // fake section-boundary heading that truncates the section before a real
-  // bullet after the fence. Mask fence content only (not inline code spans,
+  // bullet after the fence. Mask fence content (not inline code spans,
   // which hasSubstantiveBullet below still needs) over the whole body before
   // any slicing, so a fence that opens inside the eventual 500-char window
   // and closes outside it is still fully masked (E2 critique subagent,
   // #2589 round 6). Masking preserves character positions, so every offset
   // computed below stays valid against the original body.
-  const fenceMaskedBody = maskMarkdownCodeRegionsPreservingPositions(
-    body,
-    findFencedCodeRanges(body),
-  );
+  //
+  // #2711: also masks indented (4-space) code blocks and HTML comments,
+  // neither of which the fenced-only mask above covered -- a keyword-free
+  // example written as an indented block, or hidden template scaffolding
+  // inside an HTML comment, could otherwise leak a fake substantive bullet
+  // or a fake outcome-signal keyword into this same scan. `findHtmlCommentRanges`
+  // is given every code range (fenced, indented, AND inline -- PR #2735
+  // Codex review round 2) so an unterminated `<!--` used as a code
+  // EXAMPLE of the syntax, in any of those three shapes, doesn't mask
+  // through EOF; only fenced and indented ranges are actually masked into
+  // `fenceMaskedBody` itself, since inline spans stay unmasked for
+  // hasSubstantiveBullet's own backtick scan below.
+  const fencedRangesForVerifiability = findFencedCodeRanges(body);
+  const codeRangesForVerifiability = findMarkdownCodeRanges(body);
+  const fenceMaskedBody = maskMarkdownCodeRegionsPreservingPositions(body, [
+    ...fencedRangesForVerifiability,
+    ...findIndentedCodeRanges(body, fencedRangesForVerifiability),
+    ...findHtmlCommentRanges(body, codeRangesForVerifiability),
+  ]);
   const acceptanceCriteriaMatch = fenceMaskedBody.match(
     ACCEPTANCE_CRITERIA_PATTERN,
   );
+  // #2711 PR #2735 review round 6 (Codex): tracks whether the primary scan
+  // below actually reached its list-shaped outer gate, so the Alternative
+  // fallback (further down) only treats the AC section as "already fairly
+  // reviewed" -- and excludes it -- when that gate genuinely ran. An AC
+  // section starting with introductory prose before its checklist (e.g.
+  // "The implementation must satisfy:\n- [ ] ...") never enters the gate
+  // here (the section's own text doesn't start with a list marker), so its
+  // real checklist item was never seen by either scan; excluding it from
+  // the fallback too made it doubly invisible instead of falling through.
+  let acListGateReached = false;
   if (acceptanceCriteriaMatch) {
     const indexAfter =
       (acceptanceCriteriaMatch.index ?? 0) +
@@ -2471,7 +2713,11 @@ export function checkVerifiability(context: Context): CheckOutcome {
     // only the section's own list-item lines, not its full raw text, so a
     // placeholder bullet followed by unrelated non-list prose can't
     // borrow that prose's substance or keywords (#2589 CodeRabbit review).
-    if (/^[-*]\s+/.test(listSection) || /^\d+\.\s+/.test(listSection)) {
+    // #2711 PR #2735 review (Copilot): also accepts the "1)" ordered-list
+    // form, matching LIST_ITEM_LINE_PATTERN's own fix -- an AC section
+    // written entirely with that numbering used to never enter this block.
+    if (/^[-*]\s+/.test(listSection) || /^\d+[.)]\s+/.test(listSection)) {
+      acListGateReached = true;
       const listItemsOnly = extractListItemLines(listSection);
       hasObjectiveCriteria =
         hasSubstantiveBullet(listItemsOnly) ||
@@ -2479,12 +2725,100 @@ export function checkVerifiability(context: Context): CheckOutcome {
     }
   }
 
-  // Alternative: check for numbered steps with outcome signals or checklists
+  // Alternative: check for numbered steps with outcome signals or
+  // checklists, excluding (a) the Acceptance Criteria section's own
+  // content, but ONLY when `acListGateReached` -- i.e. the primary scan
+  // above actually gave it a fair, bounded review -- and (b) this repo's
+  // own "## Candidate files" convention (#2589) -- a list of files to
+  // EDIT, never a verification signal. A genuine numbered-steps or
+  // checklist section elsewhere in the body (e.g. "## Expected Behavior",
+  // "## Reproduction") still counts: an earlier revision (#2711) instead
+  // skipped this whole fallback whenever ANY Acceptance Criteria heading
+  // existed, which also suppressed that legitimate case (Codex review, PR
+  // #2735) -- only these two specific, already-recognized
+  // non-verification regions are excluded now, not every sibling section.
+  // Also accepts the "1)" ordered-list form (matching the fix above).
+  // #2711 PR #2735 review round 4 (Codex): starts from `fenceMaskedBody`
+  // (already fenced/indented/HTML-comment masked), not the raw `body` --
+  // a fenced or indented example demonstrating a "1)" step, or one hidden
+  // in an HTML comment, could otherwise satisfy this fallback on its own
+  // once paired with an unrelated outcome-signal word anywhere else.
   if (!hasObjectiveCriteria) {
+    const alternativeScanExclusions: MarkdownCodeRange[] = [];
+    if (acceptanceCriteriaMatch && acListGateReached) {
+      const acHeadingStart = acceptanceCriteriaMatch.index ?? 0;
+      const acContentStart =
+        acHeadingStart + (acceptanceCriteriaMatch[0]?.length ?? 0);
+      const acRestOfBody = fenceMaskedBody.slice(acContentStart);
+      const acNextHeadingIdx = acRestOfBody.search(NEXT_HEADING_PATTERN);
+      const acSectionEnd =
+        acContentStart +
+        (acNextHeadingIdx === -1 ? acRestOfBody.length : acNextHeadingIdx);
+      // #2711 PR #2735 review round 3 (Codex): the primary section-scoped
+      // scan above only ever examines the first 500 characters after the
+      // heading (`contentAfter`'s own slice window) -- capping the
+      // exclusion at that SAME boundary, not the section's full extent,
+      // so a genuine checklist item past that window (which the primary
+      // scan never saw either) remains available to this fallback instead
+      // of being doubly hidden.
+      //
+      // #2711 PR #2735 review round 7 (Codex): a single checklist item
+      // that itself straddles the 500-character cutoff -- marker and
+      // explanatory prefix before it, objective clause after -- must not
+      // have its exclusion cut mid-line: char-precise truncation left the
+      // marker excluded while only the suffix reached the fallback, and
+      // the bare suffix text (with no "- [ ]" of its own) never matched
+      // `hasChecklist`'s marker pattern. Snap the cutoff back to the start
+      // of the straddling line so the whole item stays together, either
+      // fully excluded (primary scan's job) or fully visible to the
+      // fallback -- never split across the boundary.
+      const rawCutoff = acContentStart + 500;
+      let acContentEnd: number;
+      if (rawCutoff >= acSectionEnd) {
+        acContentEnd = acSectionEnd;
+      } else {
+        const straddleLineStart =
+          fenceMaskedBody.lastIndexOf('\n', rawCutoff) + 1;
+        acContentEnd =
+          straddleLineStart <= acContentStart
+            ? acContentStart
+            : straddleLineStart;
+      }
+      alternativeScanExclusions.push({
+        start: acHeadingStart,
+        end: acContentEnd,
+      });
+    }
+    const candidateFilesMatch = fenceMaskedBody.match(
+      CANDIDATE_FILES_SECTION_PATTERN,
+    );
+    if (candidateFilesMatch) {
+      const cfHeadingStart = candidateFilesMatch.index ?? 0;
+      const cfContentStart =
+        cfHeadingStart + (candidateFilesMatch[0]?.length ?? 0);
+      const cfRestOfBody = fenceMaskedBody.slice(cfContentStart);
+      const cfNextHeadingIdx = cfRestOfBody.search(NEXT_HEADING_PATTERN);
+      const cfContentEnd =
+        cfContentStart +
+        (cfNextHeadingIdx === -1 ? cfRestOfBody.length : cfNextHeadingIdx);
+      alternativeScanExclusions.push({
+        start: cfHeadingStart,
+        end: cfContentEnd,
+      });
+    }
+    const bodyForAlternativeScan =
+      alternativeScanExclusions.length > 0
+        ? maskMarkdownCodeRegionsPreservingPositions(
+            fenceMaskedBody,
+            alternativeScanExclusions,
+          )
+        : fenceMaskedBody;
     const hasNumSteps =
-      /^\s*\d+\.\s+/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
+      /^\s*\d+[.)]\s+/m.test(bodyForAlternativeScan) &&
+      OUTCOME_SIGNAL_PATTERN.test(bodyForAlternativeScan);
     const hasChecklist =
-      /^\s*[-*]\s+\[[ xX]\]/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
+      /^\s*[-*]\s+\[[ xX]\]/m.test(bodyForAlternativeScan) &&
+      OUTCOME_SIGNAL_PATTERN.test(bodyForAlternativeScan);
     hasObjectiveCriteria = hasNumSteps || hasChecklist;
   }
 
@@ -2521,13 +2855,18 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // syntax with `` `Maintainer decision (Groom hearing, 2026-09-05): choose
   // A` ``) and hidden HTML-comment template scaffolding (round 6:
   // `<!-- Maintainer decision (...): <resolution text> -->`).
-  // `findMarkdownCodeRanges` covers both inline and fenced spans, unlike
-  // `findFencedCodeRanges` alone.
+  // `findMarkdownCodeRanges` covers fenced, indented, AND inline spans,
+  // unlike `findFencedCodeRanges` alone. `findHtmlCommentRanges` is given
+  // that same superset (#2711; widened to include inline spans too per PR
+  // #2735 Codex review round 2) so an unterminated `<!--` used as a code
+  // EXAMPLE of the HTML-comment-marker syntax, fenced or inline, isn't
+  // treated as a real unterminated comment masking through EOF.
+  const codeRangesForCommentMasking = findMarkdownCodeRanges(normalizedBody);
   const normalizedCodeMaskedBody = maskMarkdownCodeRegionsPreservingPositions(
     normalizedBody,
     [
-      ...findMarkdownCodeRanges(normalizedBody),
-      ...findHtmlCommentRanges(normalizedBody),
+      ...codeRangesForCommentMasking,
+      ...findHtmlCommentRanges(normalizedBody, codeRangesForCommentMasking),
     ],
   );
   const hasSubjectiveApproval = ((): boolean => {
@@ -2583,11 +2922,18 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // whole-paragraph `isFramedAsDescriptive`) so a genuine resolution whose
   // OWN text happens to use a reporting verb -- "Maintainer decision (...):
   // the helper reports an actionable error" -- is not wrongly excluded
-  // (Codex review, PR #2662). A Markdown blockquote is a second, independent
-  // quoting signal with no reporting verb of its own -- "> Maintainer
-  // decision (...): ..." -- so `isInBlockquotedParagraph` also excludes a
-  // match (Codex review rounds 2 and 4, PR #2662). The heading form has no
-  // equivalent gap: a "## Decision (resolved …)" section is, by
+  // (Codex review, PR #2662). `isFollowedByFramingVerb` (#2711) catches the
+  // inverted-attribution shape of the same quoting problem, where the
+  // reporting verb follows the marker instead of preceding it -- "'Maintainer
+  // decision (...): choose A,' reports the referenced tracking issue". A
+  // Markdown blockquote is a third, independent quoting signal with no
+  // reporting verb of its own -- "> Maintainer decision (...): ..." -- so
+  // `isInBlockquotedParagraph` also excludes a match (Codex review rounds 2
+  // and 4, PR #2662). A GFM strikethrough span (#2711) is a fourth,
+  // independent signal: a struck-through decision reads as retracted/
+  // superseded, not this issue's current live resolution, regardless of
+  // whether any framing verb or blockquote is also present. The heading
+  // form has no equivalent gap: a "## Decision (resolved …)" section is, by
   // construction, this issue's own decision record, never a quoted example
   // of someone else's.
   const hasInlineResolvedDecision = ((): boolean => {
@@ -2597,14 +2943,26 @@ export function checkVerifiability(context: Context): CheckOutcome {
     );
     let inlineMatch = inlinePattern.exec(normalizedCodeMaskedBody);
     while (inlineMatch) {
+      const matchEnd = inlineMatch.index + inlineMatch[0].length;
       if (
         !isPrecededByFramingVerb(
           normalizedBody,
           paragraphSpans,
           inlineMatch.index,
         ) &&
+        !isFollowedByFramingVerb(
+          normalizedBody,
+          paragraphSpans,
+          inlineMatch.index,
+          matchEnd,
+        ) &&
         !isInBlockquotedParagraph(
           normalizedBody,
+          paragraphSpans,
+          inlineMatch.index,
+        ) &&
+        !isInStrikethroughSpan(
+          normalizedCodeMaskedBody,
           paragraphSpans,
           inlineMatch.index,
         )
