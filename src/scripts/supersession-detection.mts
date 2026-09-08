@@ -297,6 +297,34 @@ const SUITABILITY_REJECTION_CHECK_PATTERN_GLOBAL = /Check\s+\d+\s*\([^)]+\)/gi;
 const SUITABILITY_REJECTION_FAILURE_VERB_PATTERN = /\bfail(?:s|ed|ing)?\b/gi;
 
 /**
+ * Distance between two half-open text spans `[aStart, aEnd)` and
+ * `[bStart, bEnd)`: 0 when they overlap or touch, otherwise the gap between
+ * the nearer edges. Codex and CodeRabbit review findings on PR #2732 both
+ * caught that comparing match *start* positions alone (as an earlier
+ * revision of this function did) misattributes a failure verb to the wrong
+ * check once check names have different lengths -- e.g. "Check 4
+ * (Duplicate or Superseded Work) fails, while Check 5 (Actionability)
+ * passes": Check 5's short *start*-to-start gap to "fails" can read as
+ * closer than Check 4's own, immediately-adjacent *span*-to-span gap.
+ * Measuring from the nearer span edge instead of the start alone fixes
+ * this regardless of either match's length.
+ */
+function spanDistance(
+  aStart: number,
+  aEnd: number,
+  bStart: number,
+  bEnd: number,
+): number {
+  if (aEnd <= bStart) {
+    return bStart - aEnd;
+  }
+  if (bEnd <= aStart) {
+    return aStart - bEnd;
+  }
+  return 0;
+}
+
+/**
  * Extract the `Check N (<Name>)` excerpt describing the comment's actual
  * failed check, not merely an incidentally-mentioned one (#2708). A
  * rejection comment may mention more than one check in the same sentence --
@@ -313,8 +341,10 @@ const SUITABILITY_REJECTION_FAILURE_VERB_PATTERN = /\bfail(?:s|ed|ing)?\b/gi;
  * the failed check is described with a failure verb ("fails"/"failed"/
  * "failing") near its own mention, while a merely-cited check is not. When
  * a failure verb appears anywhere in the body, this returns the `Check N
- * (...)` mention closest to it (character distance; ties keep the earlier
- * mention). When no failure verb appears at all -- the common case: a
+ * (...)` mention closest to it ({@link spanDistance} between the two
+ * matched spans, not merely their start positions -- see that function's
+ * own doc comment for why; ties keep the earlier mention). When no failure
+ * verb appears at all -- the common case: a
  * comment stating its verdict as a headline, "Check N (<Name>): reason",
  * with no other check mentioned, or a comment mentioning a second check
  * only as passing with no failure verb anywhere -- this falls back to the
@@ -344,10 +374,12 @@ function extractSuitabilityVerdictCheckMatch(
   let closest = checkMatches[0] ?? null;
   let closestDistance = Number.POSITIVE_INFINITY;
   for (const checkMatch of checkMatches) {
-    const checkIndex = checkMatch.index ?? 0;
+    const checkStart = checkMatch.index ?? 0;
+    const checkEnd = checkStart + checkMatch[0].length;
     for (const verbMatch of failureVerbMatches) {
-      const verbIndex = verbMatch.index ?? 0;
-      const distance = Math.abs(checkIndex - verbIndex);
+      const verbStart = verbMatch.index ?? 0;
+      const verbEnd = verbStart + verbMatch[0].length;
+      const distance = spanDistance(checkStart, checkEnd, verbStart, verbEnd);
       if (distance < closestDistance) {
         closestDistance = distance;
         closest = checkMatch;

@@ -971,6 +971,27 @@ test('findTrustedSuitabilityRejection: a passing check mentioned after the headl
   assert.equal(result?.check, 'Check 7 (Verifiability)');
 });
 
+// Codex + CodeRabbit review findings on PR #2732: a long check name before
+// its own failure verb must not lose to a short, later, merely-contextual
+// check whose *start* position happens to sit closer to that verb than the
+// long check's own start does -- distance must be measured from the
+// nearer edge of each match's span, not from match starts alone.
+test('findTrustedSuitabilityRejection: a long-named failing check adjacent to "fails" beats a shorter later check whose start is nominally closer', () => {
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({
+        body:
+          `${SUITABILITY_REJECTION_PREFIX} — Check 4 (Duplicate or ` +
+          'Superseded Work) fails, while Check 5 (Actionability) passes ' +
+          'on its own.\n\noutcome: needs-decision',
+      }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.equal(result?.outcome, 'needs-decision');
+  assert.equal(result?.check, 'Check 4 (Duplicate or Superseded Work)');
+});
+
 test('findTrustedSuitabilityRejection: the same rejection-shaped comment from an untrusted actor is not surfaced', () => {
   const result = findTrustedSuitabilityRejection(
     [makeRejectionComment({ user: { login: 'random-untrusted-user' } })],
