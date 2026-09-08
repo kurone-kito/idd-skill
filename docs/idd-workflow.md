@@ -760,12 +760,15 @@ Running this variant safely requires:
   never as something to trust or silently discard. Also check for a
   stale clone-scoped lock before redelegating: run
   `node scripts/clone-lock.mjs --check` (or the profile-selected
-  `idd:clone-lock --check` equivalent -- see
-  [Clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock)) and, if
-  it reports a held lock, follow the existing manual-recovery procedure
-  (independently confirm the recorded holder's pid is actually gone,
+  `idd:clone-lock` command with `--check` -- see
+  [Clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) for the
+  literal per-profile invocation) and, if it reports a held lock, follow
+  the existing manual-recovery procedure: confirm the whole lock-owning
+  operation -- the recorded wrapper and any git process it spawned -- is
+  actually gone, not merely that the recorded pid has exited (a dead
+  wrapper can still leave a live git child that still needs the lock),
   then remove the lock file by hand and retry -- the same recovery
-  git's own `index.lock` expects on a stale-lock collision) before
+  git's own `index.lock` expects on a stale-lock collision -- before
   delegating a fresh subagent with a resume-specific briefing rather
   than resuming the dead worker's own context.
 - **Independently verify a worker's reported terminal outcome before
