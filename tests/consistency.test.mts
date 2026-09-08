@@ -2748,18 +2748,19 @@ test('D4 pending:true recovery ties each advisory-wait outcome to its actual act
   const requestNow = extractBoundedRegion(
     bullet,
     'read `outcome`:',
-    'request a review now.',
+    'and it splits on `copilotPending`.',
     path,
   );
   assert.match(requestNow, /only `REQUEST_NEEDED`/);
 
   const requestNeededSplit = extractBoundedRegion(
     bullet,
-    'This splits on `copilotPending`.',
+    'and it splits on `copilotPending`.',
     'same as `CAP_EXHAUSTED`/`RECOVERY_NEEDED` below.',
     path,
   );
   assert.match(requestNeededSplit, /When `false`/);
+  assert.match(requestNeededSplit, /request a review now/);
   assert.match(
     requestNeededSplit,
     /post the same-head `advisory-wait:` marker/,
@@ -2774,7 +2775,7 @@ test('D4 pending:true recovery ties each advisory-wait outcome to its actual act
 
   const waitAndRerun = extractBoundedRegion(
     bullet,
-    'request a review now.',
+    'same as `CAP_EXHAUSTED`/`RECOVERY_NEEDED` below.',
     'and resume D4.',
     path,
   );

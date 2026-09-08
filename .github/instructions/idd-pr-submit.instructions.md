@@ -532,12 +532,13 @@ confirmed condition above. Delegate polling mechanics to
   can all read as "not outstanding" too (`idd-skill#2622`). Run the
   [canonical `advisory-wait-state`
   invocation](idd-advisory-wait.instructions.md#1-canonical-path-helper-first)
-  for this PR first and read `outcome`: only `REQUEST_NEEDED` means
-  request a review now. This splits on `copilotPending`. When `false`,
-  post the same-head `advisory-wait:` marker in the same step
-  (helper-first: the profile-selected `post-idd-marker` command per
-  **AW3-R**, which documents `--type advisory` as this same
-  request-marker form), matching E14's `REQUEST_NEEDED`
+  for this PR first and read `outcome`: only `REQUEST_NEEDED` triggers
+  new action here, and it splits on `copilotPending`. When `false`,
+  request a review now and post the same-head `advisory-wait:` marker
+  in the same step (helper-first: the profile-selected
+  `post-idd-marker` command per **AW3-R**, which documents
+  `--type advisory` as this same request-marker form), matching E14's
+  `REQUEST_NEEDED`
   marker step — without it, `requestMarkerCount` never advances and
   every resumed D4 pass reads `REQUEST_NEEDED` again instead of
   progressing toward the cap. When `copilotPending` is `true` instead
