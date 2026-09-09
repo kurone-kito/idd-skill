@@ -554,13 +554,24 @@ confirmed condition above. Delegate polling mechanics to
   mechanics) and resume D4. `SATISFIED` splits on `lastCopilotCommit`:
   when it already matches this HEAD SHA, Copilot's review already
   covers it — request nothing and take the same rerun-and-resume-D4
-  action as `WAIT` above. When it does **not** match this HEAD SHA,
-  `SATISFIED` instead means a same-head request's elapsed window ran
-  out with no review ever landing for this HEAD (see
-  `idd-advisory-wait.instructions.md`'s AW3 elapsed-window rows);
-  `idd-advisory-convergence` stays `pending: true` for this HEAD
-  regardless, so rerunning and resuming D4 would only reproduce the
-  same wait indefinitely — treat it like `CAP_EXHAUSTED`/
+  action as `WAIT` above (this proven-coverage sub-case is unchanged;
+  it never consults **AW3-S**). When it does **not** match this HEAD SHA,
+  `SATISFIED` may reflect either `COPILOT_PENDING` state (see
+  `idd-advisory-wait.instructions.md`'s AW3 elapsed-window rows):
+  `"true"`, settled by `PENDING_WINDOW_MINUTES` alone; or `"false"` — a
+  same-head request's elapsed window ran out with no review ever
+  landing for this HEAD, the settled-window (non-pending) sub-case E14
+  step 4 already consults **AW3-S** for. Consult **AW3-S**'s
+  `staleRequestRecovery` before exiting either way — its non-pending
+  entry requires `COPILOT_PENDING` `"false"`, so the `"true"` sub-case
+  reports `"not-applicable"` and falls through as a safe no-op:
+  `"attempt"` runs the bounded cycle (skip **Remove**, start at
+  **Request**; a proven failure-to-register completes the cycle per
+  the entry's inverted step 4/5 disposition); `"cap-exhausted"` handles
+  like **CAP_EXHAUSTED** below. Either way, `idd-advisory-convergence`
+  stays `pending: true` for this HEAD regardless, so rerunning and
+  resuming D4 would only reproduce the same wait indefinitely — treat
+  it like `CAP_EXHAUSTED`/
   `RECOVERY_NEEDED` below instead. `CAP_EXHAUSTED` (the request cap is
   already spent) or `RECOVERY_NEEDED` (a proven same-head request
   exists but needs its marker, not a new request) both need the fuller

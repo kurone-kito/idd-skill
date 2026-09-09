@@ -200,11 +200,26 @@ turns an operator-visible failure into a silent stall.
   (`idd-advisory-wait.instructions.md`):
 
   1. Run **AW1**. If **SATISFIED** → this check is **satisfied**;
-     continue to the **CI** check.
+     continue to the **CI** check. (This short circuit is always the
+     proven-coverage case — `LAST_COPILOT_COMMIT == PR_HEAD_SHA` —
+     since AW1 alone has no marker data to evaluate the settled-window
+     sub-case below; it never consults **AW3-S**.)
   2. Run **AW2** to fetch markers.
   3. Apply the **AW3** decision table:
-     - **SATISFIED** → this check is **satisfied**; continue to the CI
-       check.
+     - **SATISFIED**, `COPILOT_PENDING` `"false"`, `COPILOT_PENDING_COVERS_HEAD`
+       `"false"` (settled by elapsed time alone, never proven the
+       request reached Copilot — `#2327`): consult **AW3-S**'s
+       `staleRequestRecovery` first, the same way E14 step 4 does.
+       `"attempt"` runs its bounded cycle (non-pending entry: skip
+       **Remove**, start at **Request**; a proven failure-to-register
+       completes the cycle per the entry's inverted step 4/5
+       disposition); `"cap-exhausted"` handles like **CAP_EXHAUSTED**
+       below; `"not-applicable"` falls through unchanged. Either way,
+       continue to the CI check afterward (this accumulates
+       recovery-cycle evidence toward `COPILOT_UNAVAILABLE`; the
+       check's own satisfied status is unaffected).
+     - **SATISFIED** (otherwise) → this check is **satisfied**;
+       continue to the CI check.
      - **HOLD** → post the hold comment from **AW4** and stop.
      - **RECOVERY_NEEDED** → post the recovery marker from **AW3-R**
        without requesting another Copilot review, then enter the normal
