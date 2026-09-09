@@ -23,6 +23,7 @@ import { resolve } from 'node:path';
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
+  isTrustedAuthor,
   resolveTrustedActors,
   runMinimize,
 } from './minimize-superseded-markers.mts';
@@ -682,14 +683,18 @@ function runReviewActivitySnapshot(
  * caller's own `comment.id < postedCommentId` ordering filter, never by the
  * finder functions themselves), the GraphQL `nodeId` `minimizeComment`
  * needs, and `body` to parse. Narrowed from {@link ProviderComment} (which
- * carries `nodeId` as an OPTIONAL field, #2754) down to the three fields
+ * carries `nodeId` as an OPTIONAL field, #2754) down to the four fields
  * this module actually reads -- `findSupersededReviewAckSubjects` /
  * `findSupersededCopilotUnavailableSubjects` themselves only read `nodeId`
- * and `body`. */
+ * and `body`; `authorLogin` is read by `hideSupersededPostTimeMarkers`
+ * itself, to confirm the just-posted marker's OWN author is trusted before
+ * scanning for anything to hide (#2754, chatgpt-codex-connector review on
+ * PR #2788). */
 export interface MarkerCandidateComment {
   id: number;
   nodeId: string;
   body: string;
+  authorLogin: string;
 }
 
 /**
@@ -714,6 +719,7 @@ function listMarkerCandidateComments(
       id: comment.id,
       nodeId: comment.nodeId ?? '',
       body: comment.body,
+      authorLogin: comment.authorLogin ?? '',
     }));
 }
 
@@ -841,6 +847,22 @@ const HIDE_STEP_DEADLINE_MS = 45_000;
  * and this check is skipped for that type. A failed re-read (not a PR, `gh`
  * error, anything else) falls through to the outer catch below and skips
  * the whole pass, same as any other best-effort failure.
+ *
+ * This step ALSO requires `postedCommentId`'s own author to be in the same
+ * `trustedSet` `runMinimize` already gates candidates on (caught by
+ * chatgpt-codex-connector review on PR #2788): `post-idd-marker.mjs`
+ * performs no author gating of its own -- anyone with `gh` credentials can
+ * invoke `--apply` -- so downstream trust-filtered consumers already
+ * ignore an untrusted marker as if it never existed. Without this check,
+ * that untrusted post's mere presence would still drive this scan, and an
+ * older TRUSTED candidate sharing its supersession key (a same-claim
+ * `copilot-unavailable`, or a same-HEAD `review-ack`) would still get
+ * minimized purely because ITS OWN author is trusted -- collapsing the one
+ * copy of the marker downstream consumers actually rely on, leaving only
+ * the ignored untrusted replacement expanded. Bails out (no scan, no
+ * mutation) when `postedCommentId`'s own comment cannot be re-read at all,
+ * fail-closed the same way an unreadable comment list already fails
+ * closed elsewhere in this function.
  */
 function hideSupersededPostTimeMarkers(
   type: HideAtPostTimeMarkerType,
@@ -864,7 +886,31 @@ function hideSupersededPostTimeMarkers(
         return;
       }
     }
-    const comments = listMarkerCandidateComments(owner, repo, number).filter(
+    const { actors } = resolveTrustedActors({
+      flagValue: trustedMarkerLoginsFlag,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+      config: loadIddConfig(),
+    });
+    const trustedSet = new Set(actors);
+    const allComments = listMarkerCandidateComments(owner, repo, number);
+    const postedComment = allComments.find(
+      (comment) => comment.id === postedCommentId,
+    );
+    if (
+      !postedComment ||
+      !isTrustedAuthor(postedComment.authorLogin, trustedSet)
+    ) {
+      // The marker this call just posted is itself untrusted (or its own
+      // record could not be re-read) -- never let an untrusted post drive
+      // this step to minimize an older, TRUSTED candidate. Downstream
+      // trust-filtered consumers already ignore an untrusted marker as if
+      // it never existed; letting it collapse the trusted terminal marker
+      // it claims to supersede would erase the only copy those consumers
+      // actually rely on (#2754, chatgpt-codex-connector review on PR
+      // #2788).
+      return;
+    }
+    const comments = allComments.filter(
       (comment) => comment.id < postedCommentId,
     );
     const subjectIds =
@@ -877,15 +923,10 @@ function hideSupersededPostTimeMarkers(
     if (subjectIds.length === 0) {
       return;
     }
-    const { actors } = resolveTrustedActors({
-      flagValue: trustedMarkerLoginsFlag,
-      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
-      config: loadIddConfig(),
-    });
     runMinimize({
       subjectIds,
       classifier: 'OUTDATED',
-      trustedSet: new Set(actors),
+      trustedSet,
       apply: true,
       allowUntrusted: false,
       deadlineMs: HIDE_STEP_DEADLINE_MS,

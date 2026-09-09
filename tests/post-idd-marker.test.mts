@@ -2121,16 +2121,39 @@ function withHideAtPostTimeGhStub(options: {
    * mismatch short-circuiting them.
    */
   liveHeadSha?: string;
+  /**
+   * `user.login` for the marker comment this call itself just "posted"
+   * (`newCommentId`) once it reappears in the post-POST `--paginate`
+   * listing (#2754, chatgpt-codex-connector review on PR #2788):
+   * `hideSupersededPostTimeMarkers` now re-reads this comment's own author
+   * and requires it to be in `trustedSet` before scanning for anything to
+   * hide. Defaults to `'kurone-kito'` (the sole trusted login every
+   * existing hide-and-spare / race-condition / permission-failure test
+   * already passes via `--trusted-marker-logins`), so those callers keep
+   * passing without this new gate short-circuiting them.
+   */
+  postedAuthorLogin?: string;
 }): () => void {
   const failMutationFor = options.failMutationFor ?? [];
+  const newCommentId = options.newCommentId ?? 9999;
+  const postedAuthorLogin = options.postedAuthorLogin ?? 'kurone-kito';
+  const listedComments = [
+    ...options.priorComments,
+    {
+      id: newCommentId,
+      node_id: 'IC_posted_self',
+      body: '(the marker this call itself just posted)',
+      user: { login: postedAuthorLogin },
+    },
+  ];
   return stubExecutable(
     'gh',
     `const fs = require('node:fs');
 const args = process.argv.slice(2);
-const priorComments = ${JSON.stringify(options.priorComments)};
+const priorComments = ${JSON.stringify(listedComments)};
 const probeIndex = ${JSON.stringify(options.probeIndex)};
 const failMutationFor = ${JSON.stringify(failMutationFor)};
-const newCommentId = ${JSON.stringify(options.newCommentId ?? 9999)};
+const newCommentId = ${JSON.stringify(newCommentId)};
 const mutationLogFile = ${JSON.stringify(options.mutationLogFile)};
 const liveHeadSha = ${JSON.stringify(options.liveHeadSha ?? SHA)};
 function out(s) { fs.writeSync(1, s); process.exit(0); }
@@ -2561,6 +2584,81 @@ test('--apply --type review-ack: a minimize-mutation permission failure never bl
       mutationAttempts.filter((entry) => entry.mutation),
       [{ id: 'IC_permission_denied', mutation: true }],
     );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type review-ack never scans for candidates when the just-posted marker is itself untrusted (#2754, chatgpt-codex-connector review on PR #2788)', () => {
+  // An untrusted poster's own new marker is already ignored by downstream
+  // trust-filtered consumers -- but without this gate, its mere presence
+  // would still drive this scan, and the OLDER trusted candidate below
+  // (differing HEAD SHA, so it would otherwise qualify) would still get
+  // minimized purely because ITS OWN author is trusted: collapsing the
+  // one copy of the marker consumers actually rely on.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-untrusted-poster-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [
+      {
+        id: 100,
+        node_id: 'IC_trusted_stale_review_ack',
+        body: `review-ack: a ${OTHER_SHA} ${TS}`,
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    probeIndex: {
+      IC_trusted_stale_review_ack: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9800,
+    postedAuthorLogin: 'untrusted-stranger',
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    // The marker's own POST result is unaffected: it still succeeds and
+    // reports the newly created comment, even though the hide step bailed
+    // out entirely (best-effort, #2754) because ITS OWN author is
+    // untrusted.
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'review-ack',
+      target: 'pr',
+      number: 1200,
+      commentId: 9800,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9800',
+    });
+    // No graphql call reached the probe/mutation stage at all: the trusted
+    // stale candidate (which has a valid probeIndex entry and would
+    // otherwise happily minimize) was never touched.
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), []);
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
