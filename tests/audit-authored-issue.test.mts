@@ -2874,3 +2874,35 @@ test('authoring-owner-marker-trail treats a malformed multi-segment publication 
   );
   assert.equal(finding?.result, 'pass');
 });
+
+test('authoring-owner-marker-trail never exempts a child-shaped audit, even when the owner marker falsely claims self-anchoring (#2681 review, Codex)', () => {
+  // A `child` issue is anchored to an already-numbered real parent by
+  // definition and can never legitimately bootstrap a standalone
+  // anchor. Without the shape restriction, a forged or malformed owner
+  // marker that merely sets target === anchor could bypass the real
+  // parent-anchor binding this check exists to enforce.
+  const body = `<!-- idd-skill-authoring-publication: target=target-abc123; anchor=anchor-xyz789; set=set-xyz789; session=sess-1; token=pub-token1 -->\n\n${orphanBody()}`;
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [
+      {
+        // Falsely self-anchored: target === anchor, both this issue's
+        // own real ref, even though it is being audited as a child.
+        body: '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9001; anchor=kurone-kito/idd-skill#9001; mode=acquire; owner=owner-tok1; set=set-xyz789; session=sess-1; body-sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; snapshot-sha256=none; supersedes=none -->',
+      },
+    ],
+    journalComments: [
+      {
+        body: '<!-- idd-skill-authoring-publication-intent: target=target-abc123; anchor=anchor-xyz789; set=set-xyz789; session=sess-1; token=pub-token1; journal=kurone-kito/idd-skill#9001; issue=kurone-kito/idd-skill#9001; actor=kurone-kito; state=member -->',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});

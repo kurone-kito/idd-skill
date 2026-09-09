@@ -1028,8 +1028,23 @@ function checkEffortVisibleLineAgreement(text, markerPrefix) {
 // non-self-anchored owner marker (child issue under a real,
 // already-numbered anchor) always keeps the strict literal-equality
 // requirement below.
-function ownerMarkerAnchorMatchesPublication(ownerMarker, publicationMarker) {
+function ownerMarkerAnchorMatchesPublication(
+  ownerMarker,
+  publicationMarker,
+  shape,
+) {
+  // A `child` issue is anchored to an already-numbered real parent by
+  // definition -- it can never legitimately bootstrap a standalone
+  // anchor, so the exemption below must never apply to it, regardless of
+  // what an owner marker (forged, malformed, or otherwise) claims about
+  // its own target/anchor equality (#2681 review, Codex: restricting the
+  // bootstrap exemption to non-child shapes so a child audit can't use a
+  // falsely self-anchored owner marker to bypass the real-anchor binding
+  // the check exists to enforce). `orphan` and `roadmap` are the only
+  // shapes that can be the first, self-anchored issue of a standalone
+  // set.
   const ownerIsSelfAnchored =
+    shape !== 'child' &&
     ownerMarker.target.toLowerCase() === ownerMarker.anchor.toLowerCase();
   if (
     ownerIsSelfAnchored &&
@@ -1117,7 +1132,11 @@ function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
       (currentIssueRef === undefined ||
         marker.target.toLowerCase() === currentIssueRef) &&
       (publicationMarker === null ||
-        (ownerMarkerAnchorMatchesPublication(marker, publicationMarker) &&
+        (ownerMarkerAnchorMatchesPublication(
+          marker,
+          publicationMarker,
+          options.shape,
+        ) &&
           marker.set === publicationMarker.set &&
           marker.session === publicationMarker.session)),
   );
