@@ -89,6 +89,69 @@ function assertNoGraphqlErrors(payload, context) {
   }
 }
 /**
+ * Backs {@link ProviderPort.getWorkItemUserContentEdits} and (as a thin
+ * `.map`) {@link ProviderPort.getWorkItemUserContentEditTimestamps} --
+ * extracted to a standalone function, rather than one method calling the
+ * other via `this`, since every other method on the returned adapter
+ * object is a plain closure over `deps`/`owner`/`repo` with no `this`
+ * usage anywhere else in this file.
+ *
+ * #2767: widened from #2762's original `editedAt`-only query to also
+ * select `editor { login }`, so a caller can evaluate WHO made each edit
+ * (a `trustedEditor` structural-evidence signal) as well as WHEN.
+ * `editor` resolves to `null` for a deleted/ghost account -- GitHub still
+ * records the edit itself.
+ */
+function fetchWorkItemUserContentEdits(deps, owner, repo, number) {
+  const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      userContentEdits(last:100){
+        nodes { editedAt editor { login } }
+      }
+    }
+  }
+}`;
+  const apiArgs = [
+    'api',
+    'graphql',
+    ...graphqlHostnameArgs(),
+    '-f',
+    `query=${query}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${number}`,
+  ];
+  const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+  assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
+  // Codex review, PR #2836: reject an absent connection/nodes array
+  // instead of defaulting to `[]` -- a null `issue` (deleted/
+  // inaccessible between the earlier REST fetch and this call), a null
+  // `userContentEdits`, or a payload missing `nodes` entirely are all
+  // genuine read failures, indistinguishable from "zero edits" if
+  // silently coerced to an empty array. Every caller of this method
+  // already treats a throw as "anchor unknown" and degrades accordingly
+  // (never falling back to a bare `created_at` anchor) -- swallowing
+  // this case here would silently reintroduce that exact failure mode
+  // one layer down.
+  const connection = parsed.data?.repository?.issue?.userContentEdits;
+  if (!connection || !Array.isArray(connection.nodes)) {
+    throw new Error(
+      'userContentEdits: issue, connection, or nodes is null/absent',
+    );
+  }
+  return connection.nodes
+    .filter((node) => typeof node?.editedAt === 'string')
+    .map((node) => ({
+      editedAt: node.editedAt,
+      editorLogin:
+        typeof node.editor?.login === 'string' ? node.editor.login : null,
+    }));
+}
+/**
  * #2460: synchronous bounded sleep via `Atomics.wait` on a throwaway
  * `SharedArrayBuffer` -- the same technique `advisory-convergence.mts`,
  * `clone-lock.mts`, and `rerun-advisory-convergence.mts` each already
@@ -580,50 +643,15 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         extraArgs: ['-H', 'Accept: application/vnd.github+json'],
       });
     },
+    getWorkItemUserContentEdits(number) {
+      return fetchWorkItemUserContentEdits(deps, owner, repo, number);
+    },
     getWorkItemUserContentEditTimestamps(number) {
-      const query = `query($owner:String!,$repo:String!,$number:Int!){
-  repository(owner:$owner,name:$repo){
-    issue(number:$number){
-      userContentEdits(last:100){
-        nodes { editedAt }
-      }
-    }
-  }
-}`;
-      const apiArgs = [
-        'api',
-        'graphql',
-        ...graphqlHostnameArgs(),
-        '-f',
-        `query=${query}`,
-        '-f',
-        `owner=${owner}`,
-        '-f',
-        `repo=${repo}`,
-        '-F',
-        `number=${number}`,
-      ];
-      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
-      assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
-      // Codex review, PR #2836: reject an absent connection/nodes array
-      // instead of defaulting to `[]` -- a null `issue` (deleted/
-      // inaccessible between the earlier REST fetch and this call), a
-      // null `userContentEdits`, or a payload missing `nodes` entirely
-      // are all genuine read failures, indistinguishable from "zero
-      // edits" if silently coerced to an empty array. Every caller of
-      // this method already treats a throw as "anchor unknown" and
-      // degrades accordingly (never falling back to a bare `created_at`
-      // anchor) -- swallowing this case here would silently reintroduce
-      // that exact failure mode one layer down.
-      const connection = parsed.data?.repository?.issue?.userContentEdits;
-      if (!connection || !Array.isArray(connection.nodes)) {
-        throw new Error(
-          'userContentEdits: issue, connection, or nodes is null/absent',
-        );
-      }
-      return connection.nodes
-        .map((node) => node?.editedAt)
-        .filter((value) => typeof value === 'string');
+      // #2767: thin delegate over getWorkItemUserContentEdits so this
+      // shape (#2762's original contract) needs no call-site changes.
+      return fetchWorkItemUserContentEdits(deps, owner, repo, number).map(
+        (edit) => edit.editedAt,
+      );
     },
     getWorkItemState(number) {
       try {

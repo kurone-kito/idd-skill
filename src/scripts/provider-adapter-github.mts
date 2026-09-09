@@ -57,6 +57,7 @@ import type {
   ProviderReviewThreadWithComments,
   ProviderTimelineEvent,
   ProviderTraversalIssueLookup,
+  ProviderUserContentEdit,
   ProviderWorkItem,
 } from './provider-port.mts';
 
@@ -146,6 +147,93 @@ function assertNoGraphqlErrors(payload: unknown, context: string): void {
         .slice(0, 200)}`,
     );
   }
+}
+
+/**
+ * Backs {@link ProviderPort.getWorkItemUserContentEdits} and (as a thin
+ * `.map`) {@link ProviderPort.getWorkItemUserContentEditTimestamps} --
+ * extracted to a standalone function, rather than one method calling the
+ * other via `this`, since every other method on the returned adapter
+ * object is a plain closure over `deps`/`owner`/`repo` with no `this`
+ * usage anywhere else in this file.
+ *
+ * #2767: widened from #2762's original `editedAt`-only query to also
+ * select `editor { login }`, so a caller can evaluate WHO made each edit
+ * (a `trustedEditor` structural-evidence signal) as well as WHEN.
+ * `editor` resolves to `null` for a deleted/ghost account -- GitHub still
+ * records the edit itself.
+ */
+function fetchWorkItemUserContentEdits(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  number: number,
+): ProviderUserContentEdit[] {
+  const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      userContentEdits(last:100){
+        nodes { editedAt editor { login } }
+      }
+    }
+  }
+}`;
+  const apiArgs = [
+    'api',
+    'graphql',
+    ...graphqlHostnameArgs(),
+    '-f',
+    `query=${query}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${number}`,
+  ];
+  const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
+    data?: {
+      repository?: {
+        issue?: {
+          userContentEdits?: {
+            nodes?:
+              | { editedAt?: unknown; editor?: { login?: unknown } | null }[]
+              | null;
+          } | null;
+        } | null;
+      } | null;
+    };
+    errors?: { message?: unknown }[];
+  };
+  assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
+  // Codex review, PR #2836: reject an absent connection/nodes array
+  // instead of defaulting to `[]` -- a null `issue` (deleted/
+  // inaccessible between the earlier REST fetch and this call), a null
+  // `userContentEdits`, or a payload missing `nodes` entirely are all
+  // genuine read failures, indistinguishable from "zero edits" if
+  // silently coerced to an empty array. Every caller of this method
+  // already treats a throw as "anchor unknown" and degrades accordingly
+  // (never falling back to a bare `created_at` anchor) -- swallowing
+  // this case here would silently reintroduce that exact failure mode
+  // one layer down.
+  const connection = parsed.data?.repository?.issue?.userContentEdits;
+  if (!connection || !Array.isArray(connection.nodes)) {
+    throw new Error(
+      'userContentEdits: issue, connection, or nodes is null/absent',
+    );
+  }
+  return connection.nodes
+    .filter(
+      (
+        node,
+      ): node is { editedAt: string; editor?: { login?: unknown } | null } =>
+        typeof node?.editedAt === 'string',
+    )
+    .map((node) => ({
+      editedAt: node.editedAt,
+      editorLogin:
+        typeof node.editor?.login === 'string' ? node.editor.login : null,
+    }));
 }
 
 /**
@@ -776,59 +864,16 @@ export function createGithubProviderAdapter(
       }) as ProviderTimelineEvent[];
     },
 
+    getWorkItemUserContentEdits(number: number): ProviderUserContentEdit[] {
+      return fetchWorkItemUserContentEdits(deps, owner, repo, number);
+    },
+
     getWorkItemUserContentEditTimestamps(number: number): string[] {
-      const query = `query($owner:String!,$repo:String!,$number:Int!){
-  repository(owner:$owner,name:$repo){
-    issue(number:$number){
-      userContentEdits(last:100){
-        nodes { editedAt }
-      }
-    }
-  }
-}`;
-      const apiArgs = [
-        'api',
-        'graphql',
-        ...graphqlHostnameArgs(),
-        '-f',
-        `query=${query}`,
-        '-f',
-        `owner=${owner}`,
-        '-f',
-        `repo=${repo}`,
-        '-F',
-        `number=${number}`,
-      ];
-      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
-        data?: {
-          repository?: {
-            issue?: {
-              userContentEdits?: { nodes?: { editedAt?: unknown }[] } | null;
-            } | null;
-          } | null;
-        };
-        errors?: { message?: unknown }[];
-      };
-      assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
-      // Codex review, PR #2836: reject an absent connection/nodes array
-      // instead of defaulting to `[]` -- a null `issue` (deleted/
-      // inaccessible between the earlier REST fetch and this call), a
-      // null `userContentEdits`, or a payload missing `nodes` entirely
-      // are all genuine read failures, indistinguishable from "zero
-      // edits" if silently coerced to an empty array. Every caller of
-      // this method already treats a throw as "anchor unknown" and
-      // degrades accordingly (never falling back to a bare `created_at`
-      // anchor) -- swallowing this case here would silently reintroduce
-      // that exact failure mode one layer down.
-      const connection = parsed.data?.repository?.issue?.userContentEdits;
-      if (!connection || !Array.isArray(connection.nodes)) {
-        throw new Error(
-          'userContentEdits: issue, connection, or nodes is null/absent',
-        );
-      }
-      return connection.nodes
-        .map((node) => node?.editedAt)
-        .filter((value): value is string => typeof value === 'string');
+      // #2767: thin delegate over getWorkItemUserContentEdits so this
+      // shape (#2762's original contract) needs no call-site changes.
+      return fetchWorkItemUserContentEdits(deps, owner, repo, number).map(
+        (edit) => edit.editedAt,
+      );
     },
 
     getWorkItemState(number: number): string | null {

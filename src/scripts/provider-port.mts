@@ -93,6 +93,14 @@ export interface ProviderComment {
   nodeId?: string;
 }
 
+/** One GraphQL `Issue.userContentEdits` node -- see
+ * {@link ProviderPort.getWorkItemUserContentEdits}. */
+export interface ProviderUserContentEdit {
+  editedAt: string;
+  /** `null` for a deleted/ghost editor account. */
+  editorLogin: string | null;
+}
+
 /** Result of {@link ProviderPort.postWorkItemComment}. */
 export interface ProviderPostedComment {
   id: number;
@@ -441,15 +449,29 @@ export interface ProviderPort {
    * separate, unimplemented surface, even though GraphQL's
    * `userContentEdits` field is not itself issue-exclusive -- both
    * `Issue` and `PullRequest` implement the underlying `UpdatableComment`
-   * interface). The GraphQL `Issue.userContentEdits { editedAt }`
-   * read (#2762) -- the only place GitHub records a body edit; a REST
-   * timeline `edited` event with a `changes.body` payload is never emitted
-   * for a real edit. Bounded to the most recent 100 edits (`last: 100`,
-   * not `first`, so a long edit history keeps the newest edits rather than
-   * the oldest -- callers only ever need the latest one). Returns the
-   * `editedAt` values in ascending order as GitHub itself returns them;
-   * throws on any `gh` failure, matching {@link getWorkItemTimeline}'s
-   * throw-on-failure contract rather than swallowing it.
+   * interface). The GraphQL `Issue.userContentEdits { editedAt editor {
+   * login } }` read (#2762, widened by #2767 to also select `editor`) --
+   * the only place GitHub records a body edit; a REST timeline `edited`
+   * event with a `changes.body` payload is never emitted for a real edit.
+   * Bounded to the most recent 100 edits (`last: 100`, not `first`, so a
+   * long edit history keeps the newest edits rather than the oldest --
+   * callers only ever need the latest ones). Returns edits in ascending
+   * order as GitHub itself returns them; `editorLogin` is `null` for a
+   * deleted/ghost editor account (GitHub still records the edit but the
+   * `editor` field resolves to `null`) -- callers that need a trust
+   * decision must treat `null` as untrusted, not skip it. Throws on any
+   * `gh` failure, matching {@link getWorkItemTimeline}'s throw-on-failure
+   * contract rather than swallowing it.
+   */
+  getWorkItemUserContentEdits(number: number): ProviderUserContentEdit[];
+
+  /**
+   * work-items (issues only). Thin convenience wrapper over
+   * {@link getWorkItemUserContentEdits} that keeps returning just the
+   * `editedAt` values (#2762's original shape) for the callers that only
+   * ever needed timestamps -- `discover-readiness-check.mts`,
+   * `discover-orphan-filter.mts`, `claim-approval-gate.mts` -- so none of
+   * them needed a call-site change when #2767 added editor identity.
    */
   getWorkItemUserContentEditTimestamps(number: number): string[];
 
