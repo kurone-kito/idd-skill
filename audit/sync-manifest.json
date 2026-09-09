@@ -166,6 +166,18 @@
       ]
     },
     {
+      "id": "idd-spec-audit-companion-files",
+      "file": "idd-template/ONBOARDING.md",
+      "language": "text",
+      "sourceGlobs": [
+        "skills/idd-spec-audit/**"
+      ],
+      "paths": [
+        "skills/idd-spec-audit/SKILL.md",
+        "skills/idd-spec-audit/references/report-template.md"
+      ]
+    },
+    {
       "id": "idd-template-readme-core-files",
       "file": "idd-template/README.md",
       "language": "text",
@@ -186,6 +198,18 @@
         "skills/issue-authoring/references/contract.md",
         "skills/issue-authoring/references/draft-patterns.md",
         "skills/issue-authoring/references/workflow-boundary.md"
+      ]
+    },
+    {
+      "id": "idd-template-readme-idd-spec-audit-files",
+      "file": "idd-template/README.md",
+      "language": "text",
+      "sourceGlobs": [
+        "skills/idd-spec-audit/**"
+      ],
+      "paths": [
+        "skills/idd-spec-audit/SKILL.md",
+        "skills/idd-spec-audit/references/report-template.md"
       ]
     },
     {
@@ -248,6 +272,12 @@
       "stripPrefix": "skills/issue-authoring/"
     },
     {
+      "id": "idd-spec-audit-companion-gh-api-loop",
+      "file": "idd-template/docs/onboarding/template-distribution.md",
+      "generatedBlock": "idd-spec-audit-companion-files",
+      "stripPrefix": "skills/idd-spec-audit/"
+    },
+    {
       "id": "idd-template-core-curl-loop",
       "file": "idd-template/docs/onboarding/template-distribution.md",
       "generatedBlock": "idd-template-core-files"
@@ -257,6 +287,12 @@
       "file": "idd-template/docs/onboarding/template-distribution.md",
       "generatedBlock": "issue-authoring-companion-files",
       "stripPrefix": "skills/issue-authoring/"
+    },
+    {
+      "id": "idd-spec-audit-companion-curl-loop",
+      "file": "idd-template/docs/onboarding/template-distribution.md",
+      "generatedBlock": "idd-spec-audit-companion-files",
+      "stripPrefix": "skills/idd-spec-audit/"
     }
   ],
   "instructionSizeBudgets": [

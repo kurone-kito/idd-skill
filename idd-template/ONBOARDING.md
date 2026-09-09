@@ -849,6 +849,15 @@ skills/issue-authoring/references/workflow-boundary.md
 
 <!-- /audit:generated -->
 
+<!-- audit:generated id=idd-spec-audit-companion-files -->
+
+```text
+skills/idd-spec-audit/SKILL.md
+skills/idd-spec-audit/references/report-template.md
+```
+
+<!-- /audit:generated -->
+
 Create the target directories if they do not exist.
 
 ### Option A — Remote fetch (no local clone required)
@@ -857,7 +866,8 @@ Use `gh api` or `curl` to download each file from the raw-content
 endpoint. See
 [Remote fetch examples](docs/onboarding/template-distribution.md#remote-fetch-examples)
 for the exact `gh api` and `curl` loops (core files and the optional
-issue-authoring companion), including the Codex `SKILL_DEST` example.
+issue-authoring and `idd-spec-audit` companions), including the Codex
+`SKILL_DEST` examples.
 
 ### Option B — Local copy (idd-skill cloned)
 
@@ -888,6 +898,11 @@ its source from its installed destination:
 - In the source `idd-skill` repository, maintainers must keep
   `skills/issue-authoring/` and its bundled references aligned with
   `docs/issue-authoring-skill.md`.
+
+The `idd-spec-audit` companion is read-only: it audits the installed
+instruction corpus for semantic drift and routes every finding back
+through the issue-authoring companion for revision. It never edits
+files or mutates issues on its own.
 
 ### Optional — enable the local worktree guard
 
