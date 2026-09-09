@@ -570,7 +570,8 @@ HEAD than Step 1 saw.
 new marker POSTs successfully, this command also hides (classifier
 OUTDATED, via minimize-superseded-markers.mjs) prior same-family comments
 it supersedes -- a review-ack: whose embedded HEAD SHA differs from the one
-just posted, or a copilot-unavailable: carrying the same claim: value.
+just posted, or a copilot-unavailable: carrying the same claim: value and a
+STRICTLY LOWER attempt: number (a same-or-higher attempt is left alone).
 --trusted-marker-logins gates that hide step's trusted-author check too
 (falls back to IDD_TRUSTED_MARKER_ACTORS / the config trustedMarkerActors
 list, same ladder as minimize-superseded-markers.mjs). Best-effort: a

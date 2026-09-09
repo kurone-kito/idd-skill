@@ -156,8 +156,9 @@ mechanisms:
   agent-followed instruction step exists or is needed for these
   three, since their grouping keys are purely mechanical:
   `review-ack:` (grouped by embedded HEAD SHA mismatch) and
-  `copilot-unavailable:` (grouped by the same `claim:` value,
-  differing `attempt:` numbers) are both hidden by
+  `copilot-unavailable:` (grouped by the same `claim:` value and a
+  strictly lower `attempt:` number -- a same-or-higher attempt is left
+  alone) are both hidden by
   `post-idd-marker.mjs` itself right after its own new marker POSTs
   successfully (`--apply --type review-ack` / `--type
   copilot-unavailable`); `<!-- idd-local-validation-evidence:`
