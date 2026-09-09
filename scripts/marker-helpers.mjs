@@ -210,6 +210,122 @@ const OPERATIONAL_MARKER_ENTRIES = [
 export const OPERATIONAL_MARKERS = Object.freeze(
   OPERATIONAL_MARKER_ENTRIES.map((marker) => Object.freeze(marker)),
 );
+const MARKER_HIDE_POLICY_ENTRIES = [
+  {
+    label: '<!-- claimed-by:',
+    policy: 'wired',
+    reason:
+      'Claim chain, grouped by supersedes: claim-id lineage (idd-claim.instructions.md).',
+  },
+  {
+    label: '<!-- unclaimed-by:',
+    policy: 'wired',
+    reason:
+      'Claim chain, grouped by supersedes: claim-id lineage (idd-claim.instructions.md).',
+  },
+  {
+    label: '<!-- activation-nonce:',
+    policy: 'wired',
+    reason:
+      'Claim chain, grouped by supersedes: claim-id lineage (idd-claim.instructions.md).',
+  },
+  {
+    label: '<!-- review-watermark:',
+    policy: 'wired',
+    reason: 'Grouped by same claim-id (idd-review-snapshot.instructions.md).',
+  },
+  {
+    label: '<!-- review-baseline:',
+    policy: 'wired',
+    reason: 'Grouped by same claim-id (idd-review-snapshot.instructions.md).',
+  },
+  {
+    label: 'advisory-wait:',
+    policy: 'wired',
+    reason:
+      'Advisory-wait family, grouped by embedded HEAD SHA mismatch, AW3-H (idd-advisory-wait.instructions.md).',
+  },
+  {
+    label: 'advisory-wait-recovery:',
+    policy: 'wired',
+    reason:
+      'Advisory-wait family, grouped by embedded HEAD SHA mismatch, AW3-H (idd-advisory-wait.instructions.md).',
+  },
+  {
+    label: '<!-- advisory-wait:',
+    policy: 'wired',
+    reason:
+      'Advisory-wait family (HTML-comment form), grouped by embedded HEAD SHA mismatch, AW3-H (idd-advisory-wait.instructions.md).',
+  },
+  {
+    label: 'advisory-reroll:',
+    policy: 'wired',
+    reason:
+      'Advisory-wait family, grouped by embedded HEAD SHA mismatch, AW3-H (idd-advisory-wait.instructions.md).',
+  },
+  {
+    label: 'review-ack:',
+    policy: 'f4-only',
+    reason:
+      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 2 (#2754).',
+  },
+  {
+    label: 'copilot-unavailable:',
+    policy: 'f4-only',
+    reason:
+      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 2 (#2754).',
+  },
+  {
+    label: '<!-- forced-handoff:',
+    policy: 'excluded',
+    reason:
+      'Permanent maintainer-authority audit record of a claim transfer; never listed in any documented F4 minimization candidate-prefix list and never minimized.',
+  },
+  {
+    label: '<!-- idd-external-check-waiver:',
+    policy: 'excluded',
+    reason:
+      'Maintainer-authority marker; a correct grouping key needs the embedded check: selector, and hiding a still-relevant waiver for a different check would hide live authorization (roadmap #2751 Background).',
+  },
+  {
+    label: '<!-- idd-provider-outage-declaration:',
+    policy: 'excluded',
+    reason:
+      'Issue-scoped, cross-PR declare/advance protocol with no clean single-PR grouping key (roadmap #2751 Background).',
+  },
+  {
+    label: '<!-- idd-provider-outage-advanced:',
+    policy: 'excluded',
+    reason:
+      'Issue-scoped, cross-PR declare/advance protocol with no clean single-PR grouping key (roadmap #2751 Background).',
+  },
+  {
+    label: '<!-- idd-provider-outage-park:',
+    policy: 'excluded',
+    reason:
+      'Supersession would need to track claim lineage the way the claim chain does, but the marker carries no supersedes: reference back to it -- a same-claim-only rule risks leaving a park marker for an already-superseded claim visible, while a lineage-aware rule risks the reverse; needs its own design pass (roadmap #2751 Background).',
+  },
+  {
+    label: '<!-- idd-local-validation-evidence:',
+    policy: 'f4-only',
+    reason:
+      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 3 (#2755).',
+  },
+];
+/**
+ * Frozen, exported lookup from an `OPERATIONAL_MARKERS` entry's `label` to
+ * its hide-at-post-time classification (#2751/#2752).
+ * `tests/marker-helpers-facade.test.mts` asserts this map's key set exactly
+ * matches `OPERATIONAL_MARKERS`' labels, so a future new marker family with
+ * no entry here fails that test instead of silently drifting the way issue
+ * #1705 did.
+ */
+export const MARKER_HIDE_POLICY = new Map(
+  MARKER_HIDE_POLICY_ENTRIES.map((entry) => [
+    entry.label,
+    Object.freeze(entry),
+  ]),
+);
 export const IDD_AGENT_DERIVED_MARKERS = new Set([
   '<!-- claimed-by:',
   '<!-- unclaimed-by:',
