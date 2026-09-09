@@ -101,13 +101,24 @@ cross-reference (a phase or marker name used before it is defined).
 Cross-check every instruction that asks an agent to pause, confirm, or
 escalate against IDD Autonomy Contract (`docs/idd-autonomy-contract.md`,
 `#1592`)'s reversible/irreversible classification, using that table as
-the closed source of truth rather than re-deriving it from prose:
+a comparison baseline rather than re-deriving it from prose — but not
+as unconditionally authoritative: the contract's own derivation
+disclaimer states that on any disagreement with an instruction file,
+the instruction file wins and the contract is the one that needs
+correcting:
 
 - an instruction to "confirm with the user" (or equivalent) attached to
-  a mutation the contract classifies **Reversible** is a finding — its
-  named undo path means no confirmation gate is needed there;
+  a mutation the contract classifies **Reversible** is a finding only
+  once the instruction's own described undo path confirms the mutation
+  really is reversible — its named undo path means no confirmation
+  gate is needed there;
 - the same phrase attached to a mutation the contract classifies
-  **Irreversible** is expected behavior and must never be flagged.
+  **Irreversible** is expected behavior and must never be flagged;
+- when the table's classification looks wrong against the
+  instruction's actual described behavior, do not flag the
+  instruction as defective — `docs/idd-autonomy-contract.md` is out of
+  scope as a finding target, so note the suspected contract drift
+  outside this skill's normal finding flow instead.
 
 A mutation with no row in the contract falls back to the contract's own
 default (irreversible); that default governs the contract itself; do
