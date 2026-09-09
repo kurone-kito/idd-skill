@@ -382,11 +382,11 @@ reporting the sibling path is not evidence those tools moved with it.
 Grok Build's critique-pass row, unlike Codex CLI's, had no fallback
 when `spawn_subagent` is unavailable, unsuitable, or fails — Grok
 _has_ `spawn_subagent`, so a successful-but-unbounded pass never fell
-back to a structured self-critique. Observed 2026-09-09 in the Grok
-Build IDD loop that shipped kurone-kito/idd-skill#2814 (issue
-kurone-kito/idd-skill#2774): B2 plan critique ran 387 s across 43 tool
-calls, C1 diff critique ran 575 s across 40 tool calls, and a C1
-re-critique whose brief named two files plus
+back to a structured self-critique. In the Grok Build IDD loop that
+shipped kurone-kito/idd-skill#2814 for issue kurone-kito/idd-skill#2774
+(observed 2026-09-09, kurone-kito/idd-skill#2814): B2 plan critique
+ran 387 s across 43 tool calls, C1 diff critique ran 575 s across 40
+tool calls, and a C1 re-critique whose brief named two files plus
 `git diff origin/main...HEAD` and said "keep this short" still ran
 172 s across 25 tool calls and opened extra search rather than staying
 on the named slice. The findings were usable, but one docs-only issue
