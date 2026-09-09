@@ -1039,14 +1039,11 @@ continuing; if delegation fails, use the structured fallback.
 For Grok Build, the critique brief must name the specific files or
 diff under review by their sibling-worktree absolute paths (never a
 relative path or a bare `cd`) and instruct the subagent to stay within
-that scope: `spawn_subagent`'s working-directory parameter does not
-rebind Grok's file tools, so a relative reference can silently inspect
-the primary checkout's stale `main` instead of the worktree under
-review (B1's self-check already requires the same absolute-path rule;
-that rebind gap itself is `kurone-kito/idd-skill#2819`). This
-constrains the pass prospectively but does not guarantee compliance —
-the unsuitable fallback above still applies when the subagent wanders
-past it anyway.
+that scope — `spawn_subagent`'s working-directory parameter does not
+rebind Grok's file tools (that rebind gap is
+`kurone-kito/idd-skill#2819`). This constrains the pass prospectively
+but does not guarantee compliance — the unsuitable fallback above
+still applies when the subagent wanders past it anyway.
 
 When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
