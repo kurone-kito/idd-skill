@@ -2651,24 +2651,40 @@ export function checkAutonomy(context: Context): CheckOutcome {
   // and a hidden authoring-bucket marker, neither of which the label
   // check above reads. Both are mechanical, pre-label signals the
   // issue-authoring contract pairs with that label, so this check must
-  // also honor them. The title-prefix stem is derived from the
-  // configured label's own local name (the part after its `status:`-style
-  // namespace) rather than a hardcoded literal, so a repository that
-  // renames the label keeps both signals in sync.
-  const blockedByHumanStem = blockedByHumanLabelName.includes(':')
+  // also honor them.
+  //
+  // The title-prefix convention itself is the same stable
+  // `blocked-by-human` value the authoring-bucket marker below uses
+  // (AuthoringBucketMarkerValue is a fixed enum, never configurable) --
+  // renaming the GitHub label is a repo-local UI concern and must not
+  // silently change which title prefix an issue author is expected to
+  // write, or a legacy/adopter issue titled `blocked-by-human: ...`
+  // would stop being recognized the moment a repository customizes the
+  // label name, reopening the exact pre-label gap this check exists to
+  // close (#2737 review, Codex). So the canonical stem is always
+  // checked; the configured label's own local name (the part after its
+  // `status:`-style namespace) is checked too, as a secondary alias for
+  // a repository that has already standardized its own title
+  // convention around a renamed label. A label misconfigured to end in
+  // `:` (empty local-name stem) contributes no alias rather than
+  // matching every title (#2737 review, Copilot).
+  const CANONICAL_BLOCKED_BY_HUMAN_STEM = 'blocked-by-human';
+  const configuredStem = blockedByHumanLabelName.includes(':')
     ? blockedByHumanLabelName.slice(
         blockedByHumanLabelName.lastIndexOf(':') + 1,
       )
     : blockedByHumanLabelName;
-  const titlePrefixPattern = new RegExp(
-    `^${escapeRegex(blockedByHumanStem)}:\\s*`,
-    'i',
-  );
-  if (titlePrefixPattern.test(issue.title)) {
-    return {
-      pass: false,
-      evidence: `Title carries the ${blockedByHumanStem}: prefix.`,
-    };
+  const titlePrefixStems = new Set([CANONICAL_BLOCKED_BY_HUMAN_STEM]);
+  if (configuredStem.length > 0) {
+    titlePrefixStems.add(configuredStem);
+  }
+  for (const stem of titlePrefixStems) {
+    if (new RegExp(`^${escapeRegex(stem)}:\\s*`, 'i').test(issue.title)) {
+      return {
+        pass: false,
+        evidence: `Title carries the ${stem}: prefix.`,
+      };
+    }
   }
 
   const markerPrefix = context.markerPrefix ?? DEFAULT_MARKER_PREFIX;

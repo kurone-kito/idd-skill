@@ -4918,9 +4918,11 @@ test('checkAutonomy title-prefix match is case-insensitive and tolerates extra w
   assert.equal(result.pass, false);
 });
 
-test('checkAutonomy title-prefix stem follows a reconfigured blockedByHumanLabelName', () => {
-  // Default stem ("blocked-by-human") no longer matches once the label
-  // is reconfigured to a different local name.
+test('checkAutonomy title-prefix check recognizes both the canonical stem and a reconfigured blockedByHumanLabelName as aliases (#2737 review, Codex)', () => {
+  // The canonical "blocked-by-human:" stem always matches -- it is the
+  // stable authoring-bucket contract value, not the configurable label
+  // name, so a legacy/adopter issue keeps being recognized even after
+  // the label is renamed.
   assert.equal(
     checkAutonomy({
       issue: {
@@ -4929,10 +4931,12 @@ test('checkAutonomy title-prefix stem follows a reconfigured blockedByHumanLabel
       },
       blockedByHumanLabelName: 'triage:human-gate',
     } as Context).pass,
-    true,
+    false,
   );
 
-  // The reconfigured stem ("human-gate") matches instead.
+  // The reconfigured stem ("human-gate") also matches, as a secondary
+  // alias for a repository that standardized its own title convention
+  // around the renamed label.
   assert.equal(
     checkAutonomy({
       issue: {
@@ -4940,6 +4944,46 @@ test('checkAutonomy title-prefix stem follows a reconfigured blockedByHumanLabel
         title: 'human-gate: needs a maintainer decision',
       },
       blockedByHumanLabelName: 'triage:human-gate',
+    } as Context).pass,
+    false,
+  );
+
+  // An unrelated title matches neither stem.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: 'feat: add deterministic helper',
+      },
+      blockedByHumanLabelName: 'triage:human-gate',
+    } as Context).pass,
+    true,
+  );
+});
+
+test('checkAutonomy title-prefix check tolerates a misconfigured label ending in ":" (empty alias stem contributes no match, #2737 review, Copilot)', () => {
+  // The empty alias is never added to the stem set, so only the
+  // canonical "blocked-by-human:" stem is checked -- a title that
+  // merely starts with a bare colon must not be flagged.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: ': needs a maintainer decision',
+      },
+      blockedByHumanLabelName: 'status:',
+    } as Context).pass,
+    true,
+  );
+
+  // The canonical stem still fires even under the same misconfiguration.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: 'blocked-by-human: needs a maintainer decision',
+      },
+      blockedByHumanLabelName: 'status:',
     } as Context).pass,
     false,
   );
