@@ -900,7 +900,7 @@ its source from its installed destination:
   `docs/issue-authoring-skill.md`.
 
 The `idd-spec-audit` companion is read-only: it audits the installed
-instruction corpus for semantic drift. When the issue-authoring
+instruction corpus for semantic drift. When the `issue-authoring`
 companion is also installed, it routes every finding back through
 that flow for revision; otherwise it routes findings through the
 installation's normal manual issue-filing process instead (see the

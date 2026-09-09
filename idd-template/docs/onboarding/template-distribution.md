@@ -566,7 +566,7 @@ Before merging a distribution-surface change, verify:
   the new path.
 - the `gh api` and `curl` loops in [Remote fetch examples](#remote-fetch-examples)
   above include the same path.
-- optional issue-authoring and `idd-spec-audit` files remain in their
+- optional `issue-authoring` and `idd-spec-audit` files remain in their
   respective optional companion lists.
 - a new companion file is also added to that companion's matching
   `idd-template-readme-*-files` `paths` list
