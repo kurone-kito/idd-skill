@@ -120,13 +120,15 @@ needs-decision, blocked-by-human, and out-of-scope.
      marker and immediately re-fetch both anchor and child. Stop with the
      label in place if anchor ownership changed between those reads
    - **Heartbeat coalescing** (`issueAuthoring.heartbeatCoalesceWindow`,
-     default `PT2M`): before appending any heartbeat, replay the target's
-     paginated log; reuse the latest trusted marker instead when it is the
-     same owner/set/session, its mode is `acquire`/`bootstrap`/`resume`/
-     `heartbeat`, it is younger than the window, and its `body-sha256`
-     matches the just-fetched body — re-fetch and verify the reused marker
-     exactly as a fresh one. Never applies to `acquire`, `bootstrap`,
-     `resume`, `release`, `release-guard`, or `release-complete` markers
+     default `PT2M`): before appending a heartbeat, replay the target's
+     paginated log; reuse the latest trusted marker instead of appending
+     when it is the same owner/set/session, its mode is
+     `acquire`/`bootstrap`/`resume`/`heartbeat`, it is younger than the
+     window, and its `body-sha256` matches the just-fetched body — re-fetch
+     and verify the reused marker exactly as a fresh one. This window never
+     applies to `acquire`, `bootstrap`, `resume`, `release`,
+     `release-guard`, or `release-complete` appends themselves — only a
+     `heartbeat` append may be skipped
    - persist the anchor's canonical repository/issue identity in every owner
      marker for the set; the anchor marker points to itself, and a resume must
      stop if the interrupted set's anchor cannot be proven
