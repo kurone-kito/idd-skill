@@ -1041,7 +1041,7 @@ test('keeps a back-edge from a closed ROADMAP node as a blocking cycle', async (
   ]);
 });
 
-test('counts exact duplicate references from the same issue body', async () => {
+test('collapses exact same-triple mentions from the same issue body', async () => {
   const issues = new Map([
     [320, roadmapIssue(320, '- [ ] #321\n- [ ] #321', 'root-roadmap')],
     [321, executionIssue(321, 'leaf execution')],
@@ -1059,15 +1059,65 @@ test('counts exact duplicate references from the same issue body', async () => {
       evidence: '- [ ] #321',
     },
   ]);
-  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('collapses same-body Blocked-by prose and standalone line to one dependency', async () => {
+  // #2799: issue-authoring routinely narrates why a dependency exists and
+  // restates it as a standalone `Blocked by #N` line. Both are `dependency`
+  // with different evidence; that must not emit duplicateReferences.
+  const issues = new Map([
+    [330, roadmapIssue(330, '- [ ] #331', 'blocked-by-double-mention-roadmap')],
+    [
+      331,
+      executionIssue(
+        331,
+        'sessions follow when they hit the condition (Blocked by #332)\n\nBlocked by #332',
+      ),
+    ],
+    [332, executionIssue(332, 'closed dependency', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(330, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  const dependencyEdges = graph.edges.filter(
+    (edge) =>
+      edge.source === 331 &&
+      edge.target === 332 &&
+      edge.relationship === 'dependency',
+  );
+  assert.deepEqual(dependencyEdges, [
     {
-      source: 320,
-      target: 321,
-      relationship: 'task-list',
-      evidence: '- [ ] #321',
-      firstSeenFrom: 320,
+      source: 331,
+      target: 332,
+      relationship: 'dependency',
+      evidence: 'sessions follow when they hit the condition (Blocked by #332)',
     },
   ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('does not flag two sources that share a Blocked-by target as a duplicate', async () => {
+  const issues = new Map([
+    [340, roadmapIssue(340, '- [ ] #341\n- [ ] #342', 'blocked-by-diamond')],
+    [341, executionIssue(341, 'Blocked by #343')],
+    [342, executionIssue(342, 'Blocked by #343')],
+    [343, executionIssue(343, 'shared dependency', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(340, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.equal(
+    graph.edges.filter(
+      (edge) => edge.target === 343 && edge.relationship === 'dependency',
+    ).length,
+    2,
+  );
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
 });
 
 test('keeps traversing descendants when a shared node is reached through multiple paths', async () => {
