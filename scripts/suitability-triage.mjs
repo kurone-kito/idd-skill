@@ -4,7 +4,7 @@
 // The scripts/suitability-triage.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   normalizeMarkerPrefix,
@@ -12,6 +12,7 @@ import {
 } from './audit-authored-issue.mjs';
 import { computeBranchName } from './branch-name.mjs';
 import { parseCliArgs } from './cli-args.mjs';
+import { collaboratorPermission } from './collaborator-permission.mjs';
 import {
   DEFAULT_BUNDLE_IDS,
   DEFAULT_MANIFEST_PATH,
@@ -47,6 +48,11 @@ import {
   prReferencesIssue,
   resolveCandidateFileSet,
 } from './supersession-detection.mjs';
+import {
+  buildTrustedLoginPredicate,
+  evaluateStructuralEvidence,
+  hasAllStructuralSignals,
+} from './triage-structural-evidence.mjs';
 
 /**
  * Wall-clock budget for the #1484 merged-PR file-overlap scan (CodeRabbit
@@ -1701,6 +1707,7 @@ export function evaluateSuitability(issue, options = {}) {
     highConfidenceCollectionDegraded: Boolean(
       options.highConfidenceCollectionDegraded,
     ),
+    structuralEvidence: normalizeStructuralEvidence(options.structuralEvidence),
   };
   const checks = [];
   for (const check of CHECKS) {
@@ -1708,7 +1715,10 @@ export function evaluateSuitability(issue, options = {}) {
     checks.push({
       id: check.id,
       name: check.name,
-      result: result.pass ? 'pass' : 'fail',
+      // #2767: a demoted result already carries `pass: true` from the
+      // check itself, so `passed`/`outcome`/the short-circuit below need
+      // no separate handling -- `result: 'warn'` is presentational only.
+      result: result.pass ? (result.demoted ? 'warn' : 'pass') : 'fail',
       evidence: result.evidence,
       ...(result.tier ? { tier: result.tier } : {}),
     });
@@ -2057,6 +2067,17 @@ export function checkActionability(context) {
         'Issue defines actionable scope and verifiable delivery details.',
     };
   }
+  // #2767: this check's one fail branch is exactly the shape the
+  // structural-evidence demotion targets -- demote to a warned pass only
+  // when every signal holds; otherwise behave exactly as before.
+  if (hasAllStructuralSignals(context.structuralEvidence)) {
+    return {
+      pass: true,
+      demoted: true,
+      evidence:
+        'Issue lacks concrete actionable scope or acceptance detail (demoted: structural evidence present).',
+    };
+  }
   return {
     pass: false,
     evidence: 'Issue lacks concrete actionable scope or acceptance detail.',
@@ -2218,6 +2239,19 @@ export function checkAutonomy(context) {
       if (!isNearOrInsideEitherOr) {
         continue;
       }
+      // #2767: demotable -- an either/or lexical-pattern hit, one of the
+      // three branches this issue names. The label / title-prefix /
+      // authoring-bucket-marker checks above this point in the function
+      // are NEVER demoted (the issue's explicit never-demote list) --
+      // this branch is reached only once none of those matched.
+      if (hasAllStructuralSignals(context.structuralEvidence)) {
+        return {
+          pass: true,
+          demoted: true,
+          evidence:
+            'Issue presents an unresolved either/or implementation choice (demoted: structural evidence present).',
+        };
+      }
       return {
         pass: false,
         evidence:
@@ -2241,6 +2275,15 @@ export function checkAutonomy(context) {
       // This is a negated non-requirement; skip this match
       continue;
     }
+    // #2767: demotable -- see the either/or branch's comment above.
+    if (hasAllStructuralSignals(context.structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence:
+          'Issue explicitly requires external human coordination or approval (demoted: structural evidence present).',
+      };
+    }
     return {
       pass: false,
       evidence:
@@ -2258,6 +2301,15 @@ export function checkAutonomy(context) {
     }
     if (isEnumeratedParentheticalEntry(body, markerIndex, markerText.length)) {
       continue;
+    }
+    // #2767: demotable -- see the either/or branch's comment above.
+    if (hasAllStructuralSignals(context.structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence:
+          'Issue names an unresolved product or design choice (demoted: structural evidence present).',
+      };
     }
     return {
       pass: false,
@@ -2458,6 +2510,18 @@ export function checkVerifiability(context) {
   }
   const hasObjectiveSignals = hasVerificationChannel || hasObjectiveCriteria;
   if (!hasObjectiveSignals) {
+    // #2767: demotable -- this is the "no objective verification signal"
+    // shape the issue names, distinct from the escape-hatch either/or
+    // branch further below (deliberately left un-demoted; see that
+    // branch's own comment).
+    if (hasAllStructuralSignals(context.structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence:
+          'Issue does not provide objective verification signals or substantive acceptance criteria (demoted: structural evidence present).',
+      };
+    }
     return {
       pass: false,
       evidence:
@@ -2544,6 +2608,15 @@ export function checkVerifiability(context) {
   // rather than re-derived here.
   const hasResolvedDecision = computeHasResolvedDecision(body);
   if (hasSubjectiveApproval && !(hasResolvedDecision && hasObjectiveCriteria)) {
+    // #2767: demotable -- the "subjective approval or judgment" shape.
+    if (hasAllStructuralSignals(context.structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence:
+          'Issue success depends on subjective approval or judgment (demoted: structural evidence present).',
+      };
+    }
     return {
       pass: false,
       evidence: 'Issue success depends on subjective approval or judgment.',
@@ -2775,6 +2848,13 @@ export function checkVerifiability(context) {
             isEscapeHatchBranch(rightBranchText, rightBranchStart) ||
             isEscapeHatchBranch(leftBranchText, leftBranchStart)
           ) {
+            // #2767: deliberately NOT demoted, unlike this function's other
+            // two fail branches. This check exists precisely to force human
+            // judgment on an ambiguous documentation branch -- a different
+            // failure class from the lexical-pattern false positives the
+            // structural-evidence signal targets, per idd-suitability
+            // .instructions.md's "Escape-hatch acceptance criteria" Edge
+            // Case.
             return {
               pass: false,
               evidence:
@@ -3061,7 +3141,7 @@ function runCli() {
     highConfidenceDuplicate = evidence.highConfidenceDuplicate;
     collectionWarnings = evidence.collectionWarnings;
   }
-  const result = evaluateSuitability(issue, {
+  const suitabilityOptions = {
     repository: { owner, repo },
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
@@ -3069,7 +3149,30 @@ function runCli() {
     markerPrefix: resolveMarkerPrefix(policyConfig),
     highConfidenceDuplicate,
     highConfidenceCollectionDegraded: collectionWarnings.length > 0,
-  });
+  };
+  let result = evaluateSuitability(issue, suitabilityOptions);
+  // #2767: only Checks 5-7 (actionability/autonomy/verifiability) ever
+  // demote, and an issue that already passes on wording alone never needs
+  // the demotion path -- fetch structural evidence (an extra network round
+  // trip: editor logins plus a live collaborator-permission check) only
+  // when the plain evaluation already failed on one of those three.
+  if (
+    !result.passed &&
+    (result.failedCheck === 'actionability' ||
+      result.failedCheck === 'autonomy' ||
+      result.failedCheck === 'verifiability')
+  ) {
+    const structuralEvidence = computeLiveStructuralEvidence(
+      owner,
+      repo,
+      issue,
+      policyConfig,
+    );
+    result = evaluateSuitability(issue, {
+      ...suitabilityOptions,
+      structuralEvidence,
+    });
+  }
   const output = {
     repository: { owner, repo },
     issue: {
@@ -3143,6 +3246,9 @@ export function evaluateSuitabilityLocal(bodyText, options = {}) {
     // locally) -- a wall-clock timestamp here would make this "pure"
     // evaluation nondeterministic for no benefit.
     createdAt: '',
+    // #2767: no live author in local/offline mode -- keeps this path from
+    // ever demoting (see `NormalizedIssue.author`'s doc comment).
+    author: '',
   };
   const context = {
     issue: localIssue,
@@ -3351,13 +3457,23 @@ Live (--issue) output schema:
   "outcome": "ready|unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid",
   "failedCheck": "repository_fit|...|null",
   "existingRejection": {"author":"...","createdAt":"...","url":"...","outcome":"...|null","check":"...|null"},
-  "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|fail","evidence":"..."}]
+  "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|warn|fail","evidence":"..."}]
 }
 
 Each checks[] entry may also carry "tier":"high-confidence|weak" -- present
 only on a duplicate_or_superseded fail (absent on every pass and on every
 other check), distinguishing a high-confidence mechanical hit from the weak
 title/declaration heuristic.
+
+A checks[] entry's "result" is "warn" (#2767) only for actionability,
+autonomy, or verifiability, and only when a lexical-pattern fail was
+demoted to a passed, annotated result because every structural-evidence
+signal (triage-structural-evidence.mts: a runnable verification command,
+an existing candidate file, a fully trusted author+editor set) held for
+this issue; it counts as a pass for "passed"/"outcome"/"failedCheck" but
+is worth a human's attention when composing an A4.5 rejection comment for
+a DIFFERENT check that still failed outright. Never emitted in local
+(--body-file/--stdin) mode, which has no live author/editors to trust.
 
 "existingRejection" (#1887) is present only when a trusted marker actor
 already posted a correctly-formatted "A4.5 suitability gate rejection"
@@ -3427,6 +3543,7 @@ export function splitLocalDraftTitleAndBody(text) {
 }
 function normalizeIssue(issue) {
   const i = issue ?? {};
+  const authorLogin = i.user?.login;
   return {
     number: Number.parseInt(String(i.number), 10),
     title: String(i.title ?? ''),
@@ -3435,6 +3552,7 @@ function normalizeIssue(issue) {
     labels: normalizeLabels(i.labels),
     url: String(i.url ?? i.html_url ?? ''),
     createdAt: String(i.created_at ?? ''),
+    author: typeof authorLogin === 'string' ? authorLogin : '',
   };
 }
 /**
@@ -3445,6 +3563,28 @@ function normalizeIssue(issue) {
  * `evaluateHighConfidenceDuplicate` special-cases `undefined` for exactly
  * this reason). Every array field defaults to `[]` on a malformed shape.
  */
+/** #2767: `undefined` unless `raw` is a well-formed `StructuralEvidence`
+ * object -- a malformed value degrades to "no structural evidence" (never
+ * demotes) rather than throwing, matching every other `normalize*`
+ * helper's tolerant-input contract in this file. */
+function normalizeStructuralEvidence(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const r = raw;
+  if (
+    typeof r.verificationCommand !== 'boolean' ||
+    typeof r.candidateFilesExist !== 'boolean' ||
+    typeof r.trustedEditor !== 'boolean'
+  ) {
+    return undefined;
+  }
+  return {
+    verificationCommand: r.verificationCommand,
+    candidateFilesExist: r.candidateFilesExist,
+    trustedEditor: r.trustedEditor,
+  };
+}
 function normalizeHighConfidenceDuplicateInput(raw) {
   if (!raw || typeof raw !== 'object') {
     return undefined;
@@ -3585,6 +3725,79 @@ function normalizeText(value) {
 function fetchIssue(repoRef, issueNumber) {
   const issue = ghJson(['api', `repos/${repoRef}/issues/${issueNumber}`]);
   return normalizeIssue(issue);
+}
+/**
+ * #2767: the editor logins GraphQL `Issue.userContentEdits` records, for
+ * the `trustedEditor` structural-evidence signal -- `null` for a
+ * deleted/ghost editor account, same contract as
+ * `provider-adapter-github.mts`'s `getWorkItemUserContentEdits`. This
+ * file is not yet migrated onto `provider-port.mts` (see
+ * `tests/provider-port-migration-guard.test.mts`'s `MIGRATED_HELPERS`
+ * list), so it makes its own direct `gh api graphql` call rather than
+ * adopting the port abstraction mid-issue; the query mirrors that
+ * adapter's own.
+ */
+function fetchUserContentEditors(owner, repo, issueNumber) {
+  const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      userContentEdits(last:100){
+        nodes { editor { login } }
+      }
+    }
+  }
+}`;
+  const parsed = ghJson([
+    'api',
+    'graphql',
+    '-f',
+    `query=${query}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${issueNumber}`,
+  ]);
+  const nodes = parsed.data?.repository?.issue?.userContentEdits?.nodes;
+  if (!Array.isArray(nodes)) {
+    return [];
+  }
+  return nodes.map((node) =>
+    typeof node?.editor?.login === 'string' ? node.editor.login : null,
+  );
+}
+/**
+ * #2767 live CLI wiring: builds the trust predicate from this
+ * repository's configured `trustedMarkerActors` plus a live
+ * collaborator-permission check, then computes the structural-evidence
+ * signal for `issue`.
+ */
+function computeLiveStructuralEvidence(owner, repo, issue, policyConfig) {
+  const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: policyConfig,
+  });
+  const collaboratorCache = new Map();
+  const isTrustedLogin = buildTrustedLoginPredicate(
+    trustedMarkerLogins,
+    (login) => {
+      const { permission } = collaboratorPermission(
+        owner,
+        repo,
+        login,
+        collaboratorCache,
+      );
+      return permission === 'admin' || permission === 'write';
+    },
+  );
+  return evaluateStructuralEvidence({
+    body: issue.body,
+    author: issue.author,
+    editorLogins: fetchUserContentEditors(owner, repo, issue.number),
+    isTrustedLogin,
+    existsAt: existsSync,
+  });
 }
 function fetchDuplicateCandidates(repoRef, issue) {
   const escapedTitle = issue.title.replaceAll('"', '\\"');

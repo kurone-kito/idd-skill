@@ -25,6 +25,7 @@ import {
   resolveInputMode,
   splitLocalDraftTitleAndBody,
 } from '../src/scripts/suitability-triage.mts';
+import type { StructuralEvidence } from '../src/scripts/triage-structural-evidence.mts';
 import { stubExecutable } from './test-utils.mts';
 
 // Stub `gh` on PATH with an invocation counter (the discover-roadmap-graph.
@@ -219,6 +220,10 @@ Implement helper behavior.
   // never trips TypeScript's "insufficient overlap" cast-safety check.
   createdAt: '2026-01-01T00:00:00Z',
   url: 'https://example.com/issues/1',
+  // #2767: NormalizedIssue.author is required; empty is fine here -- none
+  // of the check functions read it directly (only the live CLI's
+  // structural-evidence computation does, outside this fixture's scope).
+  author: '',
 };
 
 test('evaluateSuitability returns pass when all checks pass', () => {
@@ -229,6 +234,37 @@ test('evaluateSuitability returns pass when all checks pass', () => {
   assert.equal(result.passed, true);
   assert.equal(result.outcome, 'ready');
   assert.equal(result.failedCheck, null);
+});
+
+test('#2767: evaluateSuitability demotes a would-be actionability fail to warn and reports the issue as ready', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'This needs work but nothing formal is specified.',
+  };
+
+  const withoutEvidence = evaluateSuitability(issue, {
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    duplicateCandidates: [{ number: 1, title: issue.title }],
+  });
+  assert.equal(withoutEvidence.passed, false);
+  assert.equal(withoutEvidence.failedCheck, 'actionability');
+
+  const withEvidence = evaluateSuitability(issue, {
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    duplicateCandidates: [{ number: 1, title: issue.title }],
+    structuralEvidence: {
+      verificationCommand: true,
+      candidateFilesExist: true,
+      trustedEditor: true,
+    },
+  });
+  assert.equal(withEvidence.passed, true);
+  assert.equal(withEvidence.outcome, 'ready');
+  assert.equal(withEvidence.failedCheck, null);
+  const actionability = withEvidence.checks.find(
+    (c) => c.id === 'actionability',
+  );
+  assert.equal(actionability?.result, 'warn');
 });
 
 test('repository fit failure maps to out-of-scope', () => {
@@ -3300,6 +3336,175 @@ test('actionability accepts checklist without Scope/Purpose headings', () => {
     },
   } as Context);
   assert.equal(result.pass, true);
+});
+
+// --- #2767: structural-evidence demotion ------------------------------------
+
+const ALL_STRUCTURAL_SIGNALS: StructuralEvidence = {
+  verificationCommand: true,
+  candidateFilesExist: true,
+  trustedEditor: true,
+};
+
+test('#2767: checkActionability demotes its one fail branch to warn when all structural signals hold', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'This needs work but nothing formal is specified.',
+  };
+
+  const withoutEvidence = checkActionability({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+  assert.equal(withoutEvidence.demoted, undefined);
+
+  const withEvidence = checkActionability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+});
+
+test('#2767: checkActionability keeps failing when any one structural signal is false', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'This needs work but nothing formal is specified.',
+  };
+  for (const key of Object.keys(
+    ALL_STRUCTURAL_SIGNALS,
+  ) as (keyof StructuralEvidence)[]) {
+    const result = checkActionability({
+      issue,
+      structuralEvidence: { ...ALL_STRUCTURAL_SIGNALS, [key]: false },
+    } as Context);
+    assert.equal(result.pass, false, `expected fail with ${key}: false`);
+  }
+});
+
+test('#2767: checkAutonomy demotes an either/or unresolved-choice fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'Either add validation, or TBD -- not yet decided.',
+  };
+
+  const withoutEvidence = checkAutonomy({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const withEvidence = checkAutonomy({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+});
+
+test('#2767: checkAutonomy demotes a stakeholder-coordination fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'Requires stakeholder sign-off before this can proceed.',
+  };
+
+  const withoutEvidence = checkAutonomy({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const withEvidence = checkAutonomy({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+});
+
+test('#2767: checkAutonomy demotes a standalone unresolved-choice fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'The exact retry count is TBD.',
+  };
+
+  const withoutEvidence = checkAutonomy({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const withEvidence = checkAutonomy({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+});
+
+test('#2767: checkAutonomy never demotes a blocked-by-human label fail (never-demote list)', () => {
+  const result = checkAutonomy({
+    issue: { ...BASE_ISSUE, labels: ['status:blocked-by-human'] },
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.demoted, undefined);
+});
+
+test('#2767: checkAutonomy never demotes a blocked-by-human title-prefix fail (never-demote list)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'blocked-by-human: needs a maintainer call',
+    },
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.demoted, undefined);
+});
+
+test('#2767: checkVerifiability demotes a missing-objective-signal fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'Ship it in a way that is fine.',
+  };
+
+  const withoutEvidence = checkVerifiability({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const withEvidence = checkVerifiability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+});
+
+test('#2767: checkVerifiability demotes a subjective-approval fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'Success is when it looks good and passes maintainer preference review.',
+  };
+
+  const withoutEvidence = checkVerifiability({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const withEvidence = checkVerifiability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+});
+
+test('#2767: checkVerifiability never demotes the escape-hatch either/or fail (deliberately out of scope)', () => {
+  // A leading substantive bullet clears the objective-signal/subjective
+  // screens (so the escape-hatch scan below is actually reached, rather
+  // than an earlier, demotable branch failing first).
+  const issue = {
+    ...BASE_ISSUE,
+    body: `## Acceptance Criteria
+- \`node --test tests/foo.test.mts\` passes
+- Either add retry logic to the flaky network call, or document why retries are unsafe here.`,
+  };
+  const withoutEvidence = checkVerifiability({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const result = checkVerifiability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.demoted, undefined);
 });
 
 test('verifiability accepts objective acceptance criteria without test keywords', () => {
