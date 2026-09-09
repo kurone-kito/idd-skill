@@ -697,7 +697,9 @@ Validation expectations:
 - the issue stays discoverable under the target repository's
   `issue-scope` setting
 - exactly one autopilot-suitability footer with an integer 1-5
-  marker; a score of `1` also carries `status:blocked-by-human`
+  marker; a score of `1` carries `status:blocked-by-human` unless an
+  `authoring-bucket: needs-decision` marker exempts it (see
+  [Authoring-bucket marker](#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `orphan` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
@@ -726,7 +728,9 @@ Validation expectations:
 - nested roadmap entries stay identifiable as coordination/audit nodes
   instead of normal execution leaves
 - exactly one autopilot-suitability footer with an integer 1-5
-  marker; a score of `1` also carries `status:blocked-by-human`
+  marker; a score of `1` carries `status:blocked-by-human` unless an
+  `authoring-bucket: needs-decision` marker exempts it (see
+  [Authoring-bucket marker](#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `roadmap` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
@@ -758,7 +762,9 @@ Validation expectations:
   justified
 - the issue can be claimed independently without absorbing sibling work
 - exactly one autopilot-suitability footer with an integer 1-5
-  marker; a score of `1` also carries `status:blocked-by-human`
+  marker; a score of `1` carries `status:blocked-by-human` unless an
+  `authoring-bucket: needs-decision` marker exempts it (see
+  [Authoring-bucket marker](#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `child` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
@@ -774,8 +780,7 @@ A drafted issue's human-readable prose sections — `## Background` (or
   drafted prose use that language.
 - The literal `match-source` matches the operator's live conversational
   language during an interactive/hearing issue-authoring session.
-- An absent field defaults to English, codifying today's actual
-  emergent behavior.
+- An absent field defaults to English.
 
 See `docs/customization.md`'s Authoring Language section for the full
 field definition.
@@ -927,8 +932,9 @@ can never match. A nested/child list item's reference is evaluated
 together with its full ancestor chain's coordination-language text
 instead of being scoped away from it, while a sibling bullet at the same
 indentation — nested or top-level — still starts its own separate scope,
-preserving the tight-list sentence-conflation fix mentioned above. This
-holds for every nested child under a given parent, at any depth — not
+so a tight list (no blank line between sibling items) never reads two
+consecutive bullets' coordination language as one continuous sentence.
+This holds for every nested child under a given parent, at any depth — not
 only the first. A continuation line resuming at an ancestor's own
 indentation, after a deeper child has already opened, is attributed to
 that ancestor rather than the deepest open child. A loose list (a blank
@@ -1110,9 +1116,9 @@ Binding rules:
   gates, and a large (`L`) issue stays fully claimable when it is the only
   ready work.
 - **Fail-safe on absence.** A missing, non-`S|M|L`, or conflicting
-  marker means "no effort hint": selection behaves exactly as it does
-  today (a missing hint sorts as the neutral middle, as-if `M`).
-  Pre-existing issues with no effort footer keep flowing.
+  marker means "no effort hint": it sorts as the neutral middle, as-if
+  `M`, per `idd-discover.instructions.md` A4 Step 2. Pre-existing issues
+  with no effort footer keep flowing.
 
 Backfill is opportunistic and follows the same claim-state precondition
 as the suitability footer.
@@ -1137,8 +1143,8 @@ published before this marker existed.
 
 Binding rules:
 
-- **Two axes only.** Scoped to the two buckets with a real behavioral
-  consequence today (a required label) — `deferred` and `out-of-scope`
+- **Two axes only.** Scoped to the two buckets that require a label
+  (`needs-decision`, `blocked-by-human`) — `deferred` and `out-of-scope`
   have none, so they carry no marker.
 - **Folds the existing suitability-1 check.** When present, this marker
   decides `suitability-blocked-by-human`'s applicability instead of the

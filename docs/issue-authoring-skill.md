@@ -198,8 +198,8 @@ rules.
   lowest-issue-number tie-break); it never skips, gates, crosses a score
   band, or bypasses the A4.5/A5 gates, and a large issue stays claimable
   when it is the only ready work.
-- A missing or invalid hint is **fail-safe**: selection behaves exactly
-  as today (a missing hint sorts as the neutral middle, as-if `M`).
+- A missing or invalid hint is **fail-safe**: it sorts as the neutral
+  middle, as-if `M`, per `idd-discover.instructions.md` A4 Step 2.
 
 ### Authoring-bucket marker
 
@@ -216,8 +216,9 @@ the
 [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker)
 section of the contract for the binding rules.
 
-- Scoped to the two buckets with a real behavioral consequence today;
-  `ready`, `deferred`, and `out-of-scope` carry no marker.
+- Scoped to the two buckets that require a label (`needs-decision`,
+  `blocked-by-human`); `ready`, `deferred`, and `out-of-scope` carry no
+  marker.
 - When present, it decides the suitability-1/`blocked-by-human` check's
   applicability instead of the score; absent or malformed, that check
   falls back to its pre-existing suitability-1-only rule (no backfill
@@ -1451,7 +1452,9 @@ Validation expectations:
   the draft includes a post-publication maintainer approval step after
   the final title, body, and generated plan are stable
 - exactly one autopilot-suitability footer with an integer 1-5 marker; a
-  score of `1` also carries `status:blocked-by-human`
+  score of `1` carries `status:blocked-by-human` unless an
+  `authoring-bucket: needs-decision` marker exempts it (see
+  [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `orphan` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
@@ -1495,7 +1498,9 @@ Validation expectations:
 - the roadmap can survive multi-session handoffs without relying on
   private session memory
 - exactly one autopilot-suitability footer with an integer 1-5 marker; a
-  score of `1` also carries `status:blocked-by-human`
+  score of `1` carries `status:blocked-by-human` unless an
+  `authoring-bucket: needs-decision` marker exempts it (see
+  [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `roadmap` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
@@ -1533,7 +1538,9 @@ Validation expectations:
   justified
 - the issue can be claimed independently without absorbing sibling work
 - exactly one autopilot-suitability footer with an integer 1-5 marker; a
-  score of `1` also carries `status:blocked-by-human`
+  score of `1` carries `status:blocked-by-human` unless an
+  `authoring-bucket: needs-decision` marker exempts it (see
+  [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate using
   `--shape child` (the linter's shape enum names this schema `child`,
   matching `contract.md`'s "Child issue under a roadmap"; see
@@ -1551,8 +1558,7 @@ A drafted issue's human-readable prose sections — `## Background` (or
   drafted prose use that language.
 - The literal `match-source` matches the operator's live conversational
   language during an interactive/hearing issue-authoring session.
-- An absent field defaults to English, codifying today's actual
-  emergent behavior.
+- An absent field defaults to English.
 
 See
 [Authoring Language](https://github.com/kurone-kito/idd-skill/blob/main/docs/customization.md#authoring-language)
