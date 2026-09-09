@@ -159,6 +159,57 @@ continuation of the pre-crash round-6 baseline (`n=1`, 2026-09-02); a reader
 comparing sample counts across time should expect the count to restart from
 this date rather than accumulate from the earlier history.
 
+## Turn and tool-call counts
+
+Every sample also carries `turnCount` and `toolCallCount` (#2769):
+cheap signals that distinguish "many short polling turns re-reading a
+large context" from "few turns over an oversized context," which raw
+token totals alone cannot tell apart. Both fields are `number | null`,
+never a bare `0` standing in for "unknown" -- `null` means the vendor's
+log carries no signal for that metric at all, a fact worth keeping
+distinct from a genuinely observed zero:
+
+- **Claude**: `turnCount` counts every `type: "assistant"` record in the
+  session log (including subagent/sidechain turns, matching this
+  adapter's own inclusive usage-counting convention); `toolCallCount`
+  sums `tool_use` content blocks across those same records. Both are
+  always a real count, never `null`.
+- **Codex**: `turnCount` counts `turn_context` records in the rollout
+  log. `toolCallCount` is always `null` -- no fixture in this repository
+  names a tool-invocation record type the Codex rollout format exposes
+  yet; this is a known signal gap to close once a real fixture is
+  available, not a counted zero.
+- **Grok**: `toolCallCount` comes from `signals.json`'s own
+  `toolCallCount` field, when present. `turnCount` is always `null` --
+  `signals.json` carries no turn boundary at all.
+
+**Cross-vendor comparability caveat**: Claude's and Codex's `turnCount`
+are not the same unit. A Claude turn is one assistant message; a Codex
+turn is one `turn_context` record, which can itself span a whole
+tool-call loop before the next one starts. Comparing raw `turnCount`
+values across vendors without accounting for this difference will
+overstate how much "chattier" one vendor is relative to the other.
+
+**Per-stage allocation**: `kind: "issue-loop"` samples additionally
+carry `turnCount`/`toolCallCount` nested inside each `stages[].usage`
+entry, allocated the same way per-stage token usage already is (see
+`allocateStageUsage` in `token-cost-harvest.mts`) -- a stage window is
+included whenever it has real token usage **or** real turn activity, so
+a window with turns but no token usage in that exact slice is never
+silently dropped. `toolCallCount` is attached to a stage entry only for
+a vendor that actually tracks it (Claude); Codex's per-stage entries
+carry `turnCount` alone, never a fabricated per-stage `0`. Grok issue-loop
+samples currently report no stage breakdown at all (a pre-existing,
+documented scope limit, unchanged by this addition) -- see the
+`scanGrokVendorSessions` doc comment.
+
+The committed snapshot aggregates both counts into percentiles at the
+total and per-stage level the same way it already does for token usage
+and `compactionCount`, except that a sample offering no value for a
+given count contributes nothing to that percentile rather than a
+fabricated `0` -- so the aggregated field is entirely absent from the
+snapshot whenever no sample in the current window reports one.
+
 ## Current snapshot
 
 <!-- token-cost-docs:start -->
