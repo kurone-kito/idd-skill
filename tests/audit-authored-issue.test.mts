@@ -695,6 +695,50 @@ test('roadmap-tracks-parse warns (does not fail) when only some Tracks checkbox 
   assert.equal(report.passed, true);
 });
 
+test('roadmap-tracks-parse treats a qualified owner/repo#N reference as unverifiable, not malformed, when no --current-repo context is passed (#2765 review, Codex)', () => {
+  // The documented local CLI invocation never passes --current-repo, and
+  // $GITHUB_REPOSITORY is only set by GitHub Actions, so `currentRepo` is
+  // commonly undefined outside CI. A well-formed roadmap using the
+  // qualified trailing form must not hard-fail just because this run
+  // lacks repo context to verify the reference.
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: some description (kurone-kito/idd-skill#100)',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, undefined);
+});
+
+test('roadmap-tracks-parse still resolves a qualified owner/repo#N reference normally when --current-repo IS passed (#2765)', () => {
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: some description (kurone-kito/idd-skill#100)',
+  );
+  const report = auditAuthoredIssue(body, {
+    shape: 'roadmap',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+  // A cross-repo qualified reference is still correctly rejected (not
+  // "unverifiable") once repo context IS available.
+  const crossRepoBody = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: some description (other/repo#100)',
+  );
+  const crossRepoReport = auditAuthoredIssue(crossRepoBody, {
+    shape: 'roadmap',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const crossRepoFinding = crossRepoReport.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(crossRepoFinding?.result, 'fail');
+});
+
 test('roadmap-tracks-parse is not applicable outside the roadmap shape', () => {
   const report = auditAuthoredIssue(orphanBody(), { shape: 'orphan' });
   assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');

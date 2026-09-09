@@ -902,6 +902,22 @@ function checkRoadmapTracksParse(text, shape, isBucketAudit, currentRepo) {
   if (checkboxLineIndexes.length === 0) {
     return pass(id, name, 'no ## Tracks checkbox lines to validate');
   }
+  // Detects a trailing qualified `owner/repo#N` reference -- `(#N)`
+  // optionally wrapped in parens, with an `owner/repo` prefix -- at the
+  // end of a task-list item's text, mirroring
+  // `extractTaskListReferences`'s own trailing-reference shape
+  // (`discover-roadmap-graph.mts`) but without requiring a
+  // `currentRepoRef` match. Used only to distinguish "no reference at
+  // all" from "a qualified reference exists but this run has no repo
+  // context to verify it names the current repository" (idd-skill#2765
+  // review, Codex) -- detection only, never itself trusted as a resolved
+  // child reference. Declared inside the function (not module-level, per
+  // this file's own CLI-entry-order convention -- see
+  // `extractTaskListReferences`'s matching per-call regex construction in
+  // `discover-roadmap-graph.mts`) so it carries no TDZ risk relative to
+  // this file's `if (import.meta.main)` CLI entry block.
+  const qualifiedTrailingReferenceRe =
+    /(?:^|\s)\(?[\w.-]+\/[\w.-]+#\d+\)?[.,;:]*\s*$/u;
   const unparsedLines = [];
   let parsedCount = 0;
   for (const startIndex of checkboxLineIndexes) {
@@ -916,7 +932,20 @@ function checkRoadmapTracksParse(text, shape, isBucketAudit, currentRepo) {
     const itemReferences = extractTaskListReferences(itemText, {
       currentRepoRef: currentRepo,
     });
-    if (itemReferences.length > 0) {
+    if (
+      itemReferences.length > 0 ||
+      // No repo context to verify a qualified `owner/repo#N` reference
+      // against (idd-skill#2765 review, Codex): the documented local
+      // invocation of this linter never passes `--current-repo`, and
+      // `$GITHUB_REPOSITORY` is only set by GitHub Actions, so this is
+      // the common case outside CI. `extractTaskListReferences` then
+      // rejects every qualified reference because it can never equal an
+      // empty current-repository value -- treat a trailing qualified
+      // reference as unverifiable rather than malformed here, so a
+      // well-formed roadmap using that form doesn't hard-fail merely
+      // because this run lacks repo context.
+      (currentRepo === undefined && qualifiedTrailingReferenceRe.test(itemText))
+    ) {
       parsedCount += 1;
     } else {
       unparsedLines.push(sectionLines[startIndex].trim());
