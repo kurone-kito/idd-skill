@@ -132,6 +132,14 @@ interface MinimizeReport {
     unsupportedType: number;
     applied: number;
     failed: number;
+    /**
+     * Candidates left unprocessed because {@link runMinimize}'s optional
+     * `deadlineMs` budget ran out first (#2754). Optional -- and always
+     * initialized to `0` by `runMinimize` itself -- purely so existing
+     * fixtures elsewhere that widen `MinimizeReport` from a partial object
+     * literal (e.g. `computeExitCode`'s own tests) do not need updating.
+     */
+    deadlineSkipped?: number;
   };
   items: ReportItem[];
   trustedMarkerActors?: string[];
@@ -221,12 +229,29 @@ export function runMinimize({
   trustedSet,
   apply,
   allowUntrusted,
+  deadlineMs,
 }: {
   subjectIds: string[];
   classifier: string;
   trustedSet: Set<string>;
   apply: boolean;
   allowUntrusted: boolean;
+  /**
+   * Optional overall wall-clock budget in milliseconds for this whole pass
+   * (#2754, chatgpt-codex-connector review on PR #2788). `probeSubject` and
+   * `applyMinimize` each bound a SINGLE `gh` call to `GH_TIMEOUT_MS` (30s),
+   * but a caller chaining several subjects through this function has no
+   * cap on the pass as a whole: a transport outage can make every
+   * candidate individually time out in sequence, each adding another 30s
+   * (or 60s, once a candidate reaches `applyMinimize`) before this function
+   * returns. Passing `deadlineMs` stops issuing new `gh` calls once the
+   * budget (measured from this function's own entry) is exhausted --
+   * always finishing whichever candidate is already in flight -- and marks
+   * every remaining subject `skipped` / `deadline-exceeded` instead of
+   * probing or mutating it. Omit it (the CLI entry point below does) to
+   * keep the pre-existing unbounded behavior.
+   */
+  deadlineMs?: number;
 }): MinimizeReport {
   const report: MinimizeReport = {
     mode: apply ? 'apply' : 'dry-run',
@@ -239,11 +264,29 @@ export function runMinimize({
       unsupportedType: 0,
       applied: 0,
       failed: 0,
+      deadlineSkipped: 0,
     },
     items: [],
   };
 
-  for (const subjectId of subjectIds) {
+  const startedAt = Date.now();
+  for (const [index, subjectId] of subjectIds.entries()) {
+    if (
+      deadlineMs !== undefined &&
+      index > 0 &&
+      Date.now() - startedAt >= deadlineMs
+    ) {
+      for (const remainingId of subjectIds.slice(index)) {
+        report.items.push({
+          subjectId: remainingId,
+          status: 'skipped',
+          reason: 'deadline-exceeded',
+        });
+      }
+      report.counts.deadlineSkipped =
+        (report.counts.deadlineSkipped ?? 0) + (subjectIds.length - index);
+      break;
+    }
     const probe = probeSubject(subjectId);
     if (!probe.ok) {
       report.items.push({ subjectId, status: 'failed', reason: probe.reason });

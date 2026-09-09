@@ -13,6 +13,7 @@ import {
   probeSubject,
   resolveGhHostnameArgs,
   resolveTrustedActors,
+  runMinimize,
 } from '../src/scripts/minimize-superseded-markers.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -525,4 +526,98 @@ process.exit(1);
       restore();
     }
   });
+});
+
+// --- #2754: runMinimize's optional overall deadlineMs budget --------------
+// (chatgpt-codex-connector review on PR #2788) -- probeSubject/applyMinimize
+// each bound a SINGLE gh call, but chaining several subjects through
+// runMinimize had no cap on the pass as a whole.
+
+/** Stub `gh` so every `graphql` probe call for any subject id resolves
+ * instantly and eligibly (not minimized, viewer can minimize, trusted
+ * author) -- isolates the deadline bookkeeping in `runMinimize` itself from
+ * probe/mutation timing, which `probeSubject`'s own tests already cover. */
+function withInstantEligibleProbeGhStub(): () => void {
+  return stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const fValues = [];
+for (let i = 0; i < args.length; i += 1) {
+  if (args[i] === '-f') fValues.push(args[i + 1]);
+}
+const idEntry = fValues.find((v) => v.indexOf('id=') === 0);
+const id = idEntry ? idEntry.slice('id='.length) : '';
+if (args[0] === 'api' && args[1] === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-' + id, isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+}
+
+test('runMinimize always finishes the first candidate even when deadlineMs is already 0, then marks the rest deadline-exceeded', () => {
+  const restore = withInstantEligibleProbeGhStub();
+  try {
+    const report = runMinimize({
+      subjectIds: ['IC_a', 'IC_b', 'IC_c'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+      deadlineMs: 0,
+    });
+    // The first candidate is always attempted regardless of the deadline
+    // (probed here, reported eligible/would-apply in dry-run mode) --
+    // never zero candidates processed just because the budget is already
+    // exhausted at entry.
+    assert.deepEqual(
+      report.items.map((item) => ({
+        subjectId: item.subjectId,
+        status: item.status,
+        reason: item.reason,
+      })),
+      [
+        { subjectId: 'IC_a', status: 'would-apply', reason: undefined },
+        {
+          subjectId: 'IC_b',
+          status: 'skipped',
+          reason: 'deadline-exceeded',
+        },
+        {
+          subjectId: 'IC_c',
+          status: 'skipped',
+          reason: 'deadline-exceeded',
+        },
+      ],
+    );
+    assert.equal(report.counts.eligible, 1);
+    assert.equal(report.counts.deadlineSkipped, 2);
+    // No count bucket double-charges a deadline-skipped subject as a
+    // transport failure.
+    assert.equal(report.counts.failed, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('runMinimize processes every subject normally when deadlineMs is omitted (pre-existing unbounded behavior)', () => {
+  const restore = withInstantEligibleProbeGhStub();
+  try {
+    const report = runMinimize({
+      subjectIds: ['IC_a', 'IC_b', 'IC_c'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+    });
+    assert.equal(report.items.length, 3);
+    assert.ok(report.items.every((item) => item.status === 'would-apply'));
+    assert.equal(report.counts.eligible, 3);
+    assert.equal(report.counts.deadlineSkipped, 0);
+  } finally {
+    restore();
+  }
 });

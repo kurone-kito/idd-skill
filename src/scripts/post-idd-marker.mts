@@ -781,6 +781,21 @@ export function findSupersededCopilotUnavailableSubjects(
 }
 
 /**
+ * Overall time budget (#2754, chatgpt-codex-connector review on PR #2788)
+ * for {@link hideSupersededPostTimeMarkers}'s best-effort mutation pass.
+ * `minimize-superseded-markers.mts`'s `runGh` bounds each individual `gh`
+ * call to `GH_TIMEOUT_MS` (30s), but that alone does not bound the PASS: a
+ * PR with several superseded markers can chain multiple 30s-timeout probes
+ * and mutations back to back with no overall cap, stalling the caller's
+ * envelope output for a multiple of 30s after the marker it is hiding *for*
+ * has already posted successfully. `runMinimize`'s optional `deadlineMs`
+ * stops issuing new `gh` calls once this budget is exhausted (always
+ * finishing the first candidate it starts) and marks the remainder
+ * `skipped` / `deadline-exceeded` instead of leaving the pass unbounded.
+ */
+const HIDE_STEP_DEADLINE_MS = 45_000;
+
+/**
  * Best-effort hide-at-post-time step for {@link HIDE_AT_POST_TIME_MARKER_TYPES}
  * (#2754). Runs only after `postedCommentId`'s own POST already succeeded
  * (the caller invokes this strictly afterward, never before or interleaved),
@@ -805,6 +820,24 @@ export function findSupersededCopilotUnavailableSubjects(
  * call's own marker that is older by comparison. The `<` restriction
  * excludes it structurally, independent of what its embedded HEAD SHA or
  * `claim:` value happens to be.
+ *
+ * For `review-ack` specifically, this also re-reads the target PR's LIVE
+ * head SHA and bails out (no scan, no mutation) unless it still matches
+ * `fields['head-sha']` (caught by chatgpt-codex-connector review on PR
+ * #2788): `--from-pr` reads HEAD once before composing and POSTing the
+ * marker body, so on a slow POST the branch can advance and a concurrent
+ * session can already have posted a genuine, current-HEAD acknowledgement
+ * by the time this step runs. The `id <` restriction above only orders
+ * candidates by creation time -- it cannot tell a stale marker from a fresh
+ * one once both are "prior" by id, so without this check a stale-HEAD
+ * post could minimize that valid newer acknowledgement while leaving its
+ * own, now-superseded one visible: destroying the correct evidence instead
+ * of the stale evidence. `copilot-unavailable` carries no live-derived
+ * field (its supersession key, `claim-id`, always comes from an explicit
+ * CLI flag, never `--from-pr`), so no equivalent drift is possible there
+ * and this check is skipped for that type. A failed re-read (not a PR, `gh`
+ * error, anything else) falls through to the outer catch below and skips
+ * the whole pass, same as any other best-effort failure.
  */
 function hideSupersededPostTimeMarkers(
   type: HideAtPostTimeMarkerType,
@@ -816,6 +849,18 @@ function hideSupersededPostTimeMarkers(
   trustedMarkerLoginsFlag: string,
 ): void {
   try {
+    if (type === 'review-ack') {
+      const liveHeadSha = createGithubProviderAdapter(
+        owner,
+        repo,
+      ).getChangeRequestHeadSha(number);
+      if (
+        liveHeadSha.trim().toLowerCase() !==
+        fields['head-sha'].trim().toLowerCase()
+      ) {
+        return;
+      }
+    }
     const comments = listMarkerCandidateComments(owner, repo, number).filter(
       (comment) => comment.id < postedCommentId,
     );
@@ -840,6 +885,7 @@ function hideSupersededPostTimeMarkers(
       trustedSet: new Set(actors),
       apply: true,
       allowUntrusted: false,
+      deadlineMs: HIDE_STEP_DEADLINE_MS,
     });
   } catch {
     // Best-effort only (#2754) -- never block or retry-loop the marker post

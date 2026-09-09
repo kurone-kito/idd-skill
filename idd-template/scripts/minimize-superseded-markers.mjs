@@ -154,6 +154,7 @@ export function runMinimize({
   trustedSet,
   apply,
   allowUntrusted,
+  deadlineMs,
 }) {
   const report = {
     mode: apply ? 'apply' : 'dry-run',
@@ -166,10 +167,28 @@ export function runMinimize({
       unsupportedType: 0,
       applied: 0,
       failed: 0,
+      deadlineSkipped: 0,
     },
     items: [],
   };
-  for (const subjectId of subjectIds) {
+  const startedAt = Date.now();
+  for (const [index, subjectId] of subjectIds.entries()) {
+    if (
+      deadlineMs !== undefined &&
+      index > 0 &&
+      Date.now() - startedAt >= deadlineMs
+    ) {
+      for (const remainingId of subjectIds.slice(index)) {
+        report.items.push({
+          subjectId: remainingId,
+          status: 'skipped',
+          reason: 'deadline-exceeded',
+        });
+      }
+      report.counts.deadlineSkipped =
+        (report.counts.deadlineSkipped ?? 0) + (subjectIds.length - index);
+      break;
+    }
     const probe = probeSubject(subjectId);
     if (!probe.ok) {
       report.items.push({ subjectId, status: 'failed', reason: probe.reason });

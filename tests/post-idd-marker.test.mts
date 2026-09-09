@@ -2111,6 +2111,16 @@ function withHideAtPostTimeGhStub(options: {
   mutationLogFile: string;
   failMutationFor?: string[];
   newCommentId?: number;
+  /**
+   * The `headRefOid` a `gh pr view --json headRefOid --jq .headRefOid` call
+   * resolves to (#2754, chatgpt-codex-connector review on PR #2788) --
+   * `hideSupersededPostTimeMarkers`'s pre-scan live-HEAD re-read for
+   * `review-ack`. Defaults to `SHA` (matching every review-ack test's own
+   * `--head-sha`), so existing callers exercising the hide-and-spare /
+   * race-condition / permission-failure paths keep passing without a
+   * mismatch short-circuiting them.
+   */
+  liveHeadSha?: string;
 }): () => void {
   const failMutationFor = options.failMutationFor ?? [];
   return stubExecutable(
@@ -2122,9 +2132,12 @@ const probeIndex = ${JSON.stringify(options.probeIndex)};
 const failMutationFor = ${JSON.stringify(failMutationFor)};
 const newCommentId = ${JSON.stringify(options.newCommentId ?? 9999)};
 const mutationLogFile = ${JSON.stringify(options.mutationLogFile)};
+const liveHeadSha = ${JSON.stringify(options.liveHeadSha ?? SHA)};
 function out(s) { fs.writeSync(1, s); process.exit(0); }
 function fail(s) { fs.writeSync(2, s); process.exit(1); }
-if (args[0] === 'api' && typeof args[1] === 'string' && args[1].indexOf('/comments') !== -1 && args.indexOf('--paginate') !== -1) {
+if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && args.includes('.headRefOid')) {
+  out(liveHeadSha + '\\n');
+} else if (args[0] === 'api' && typeof args[1] === 'string' && args[1].indexOf('/comments') !== -1 && args.indexOf('--paginate') !== -1) {
   out(priorComments.map((c) => JSON.stringify(c)).join('\\n') + '\\n');
 } else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
   fs.readFileSync(0, 'utf8');
@@ -2318,6 +2331,75 @@ test('--apply --type review-ack never hides a differing-HEAD-SHA comment created
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type review-ack skips the whole hide pass when the live PR HEAD no longer matches the just-posted marker (#2754, delayed-POST race)', () => {
+  // Simulates the branch advancing between --from-pr's own headRefOid read
+  // (embedded in the marker body as SHA) and this call reaching the
+  // hide-at-post-time step: a live re-read now reports OTHER_SHA. The
+  // `id <` ordering restriction alone cannot tell a stale marker from a
+  // fresh one once both are "prior" by id, so the step must bail out
+  // BEFORE ever listing comments, rather than risk minimizing a
+  // genuinely newer, current-HEAD acknowledgement while leaving this
+  // stale one visible. Any `--paginate` comments-listing or `graphql`
+  // call here falls through to the catch-all "unexpected gh invocation"
+  // failure, proving the scan itself never runs.
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+function out(s) { fs.writeSync(1, s); process.exit(0); }
+function fail(s) { fs.writeSync(2, s); process.exit(1); }
+if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && args.includes('.headRefOid')) {
+  out('${OTHER_SHA}\\n');
+} else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
+  fs.readFileSync(0, 'utf8');
+  out(JSON.stringify({ id: 9550, html_url: 'https://github.com/o/r/issues/1#issuecomment-9550' }));
+} else {
+  fail('unexpected gh invocation: ' + args.join(' '));
+}
+`,
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    // The marker's own POST result is unaffected: it still succeeds and
+    // reports the newly created comment, even though the hide step bailed
+    // out entirely (best-effort, #2754).
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'review-ack',
+      target: 'pr',
+      number: 1200,
+      commentId: 9550,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9550',
+    });
+  } finally {
+    restore();
   }
 });
 
