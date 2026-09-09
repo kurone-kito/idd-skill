@@ -2687,7 +2687,10 @@ export function checkAutonomy(context: Context): CheckOutcome {
     }
   }
 
-  const markerPrefix = context.markerPrefix ?? DEFAULT_MARKER_PREFIX;
+  // #2737 review, Copilot: checkAutonomy is itself exported and called
+  // directly with a raw Context (including in tests) -- normalize here too
+  // rather than relying solely on the Context-construction call sites.
+  const markerPrefix = normalizeMarkerPrefix(context.markerPrefix);
   const bucketMarker = parseAuthoringBucketMarker(
     stripMarkdownCodeRegions(body),
     markerPrefix,

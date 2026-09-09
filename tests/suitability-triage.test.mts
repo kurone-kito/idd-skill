@@ -5034,6 +5034,21 @@ test('checkAutonomy authoring-bucket marker check honors a configured markerPref
   );
 });
 
+test('checkAutonomy trims a whitespace-padded markerPrefix when called directly with a raw Context (#2761 review, Copilot)', () => {
+  // checkAutonomy is itself exported and directly callable with a raw
+  // Context (as every test here does) -- it must not rely solely on
+  // evaluateSuitability/evaluateSuitabilityLocal's own trimming.
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- idd-skill-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+    },
+    markerPrefix: '  idd-skill  ',
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /authoring-bucket: blocked-by-human/);
+});
+
 test('checkAutonomy passes an authoring-bucket: needs-decision marker (Autonomy is blocked-by-human-specific)', () => {
   const result = checkAutonomy({
     issue: {
