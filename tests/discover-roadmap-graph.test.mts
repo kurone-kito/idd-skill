@@ -724,6 +724,49 @@ test('extractTaskListReferences requires whitespace (or end-of-line) after the c
   assert.deepEqual(extractTaskListReferences('- [ ]'), []);
 });
 
+test('extractTaskListReferences requires whitespace between the bullet and the checkbox, not just "-[ ]" (#2765 review, Codex)', () => {
+  // "-[ ] text (#2752)" (no space between "-" and "[") is not a real
+  // CommonMark list item at all -- a list marker requires at least one
+  // following space to open a list item. Without this bound, the
+  // trailing-reference fallback could attach an unrelated "(#N)" to a
+  // mistyped bullet line.
+  const line = '-[ ] Track 1: text (#2752)';
+  assert.deepEqual(extractTaskListReferences(line), []);
+  // The equivalent, correctly-spaced line still resolves normally.
+  const validLine = '- [ ] Track 1: text (#2752)';
+  assert.deepEqual(extractTaskListReferences(validLine), [
+    { target: 2752, relationship: 'task-list', evidence: validLine },
+  ]);
+});
+
+test('extractTaskListReferences trailing-reference form stops the continuation span at an EMPTY list item or heading marker too (#2765 review, Codex)', () => {
+  // A bare "-" (or "1.", or "#") with no trailing whitespace is still a
+  // valid CommonMark empty list item / heading and must still terminate
+  // the continuation span -- otherwise the scan absorbs it and any
+  // following text, including an unrelated trailing "(#N)", into the
+  // preceding checkbox item.
+  const emptyBullet = [
+    '- [ ] Track 1: no reference here',
+    '-',
+    'Unrelated prose mentioning (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(emptyBullet), []);
+
+  const emptyOrdered = [
+    '- [ ] Track 1: no reference here',
+    '1.',
+    'Unrelated prose mentioning (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(emptyOrdered), []);
+
+  const emptyHeading = [
+    '- [ ] Track 1: no reference here',
+    '#',
+    'Unrelated prose mentioning (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(emptyHeading), []);
+});
+
 test('extractTaskListReferences trailing-reference form respects the current-repo scope for owner/repo#N (#2765)', () => {
   const line = '- [ ] Track 1: text kurone-kito/idd-skill#2752';
   assert.deepEqual(

@@ -2016,10 +2016,19 @@ export function classifyIssue(
  * (bulleted or ordered), or an ATX heading. Shared between the item-
  * grouping loop below and any external caller that needs to slice the
  * same continuation span (e.g. `audit-authored-issue.mts`'s per-line
- * Tracks-parse check, #2765).
+ * Tracks-parse check, #2765). Each marker alternative also accepts
+ * end-of-line, not only trailing whitespace (idd-skill#2765 review,
+ * Codex): CommonMark allows an EMPTY list item or ATX heading (a bare
+ * `-`, `1.`, or `#` with nothing after it), and without the end-of-line
+ * alternative such a line failed to read as a boundary, letting the
+ * continuation span absorb it (and anything after it, including a
+ * later unrelated `(#N)`) into the preceding checkbox item.
  */
 export function isTaskListBlockBoundary(line: string): boolean {
-  return line.trim() === '' || /^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)/u.test(line);
+  return (
+    line.trim() === '' ||
+    /^\s*(?:[-*+](?:\s|$)|\d+[.)](?:\s|$)|#{1,6}(?:\s|$))/u.test(line)
+  );
 }
 
 /**
@@ -2030,11 +2039,20 @@ export function isTaskListBlockBoundary(line: string): boolean {
  * to start with `[ ]`. Without this bound, the trailing-reference
  * fallback below (idd-skill#2765 review, Copilot) could misclassify an
  * ordinary bulleted line as a task-list item merely because it opens
- * with that exact character sequence. Exported for the same reuse
- * reason as {@link isTaskListBlockBoundary}.
+ * with that exact character sequence. Also requires at least one
+ * whitespace character between the bullet marker and the opening `[`
+ * (idd-skill#2765 review, Codex): CommonMark requires whitespace after
+ * a list marker for it to open a list item at all, so `-[ ] text` (no
+ * space) is not a real checkbox either -- a pre-existing laxness the
+ * two leading-form regexes below also share, but one this new
+ * trailing-reference fallback measurably widens the blast radius of
+ * (from "immediately followed by `#N`" to "an arbitrary trailing
+ * reference anywhere in the item's text"), so it is bounded at this
+ * shared gate rather than left unaddressed. Exported for the same
+ * reuse reason as {@link isTaskListBlockBoundary}.
  */
 export function isTaskListCheckboxLine(line: string): boolean {
-  return /^\s*-\s*\[(?: |x|X)\](?:\s|$)/u.test(line);
+  return /^\s*-\s+\[(?: |x|X)\](?:\s|$)/u.test(line);
 }
 
 export function extractTaskListReferences(
