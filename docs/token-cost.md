@@ -164,23 +164,30 @@ this date rather than accumulate from the earlier history.
 Every sample also carries `turnCount` and `toolCallCount` (#2769):
 cheap signals that distinguish "many short polling turns re-reading a
 large context" from "few turns over an oversized context," which raw
-token totals alone cannot tell apart. Both fields are `number | null`,
-never a bare `0` standing in for "unknown" -- `null` means the vendor's
-log carries no signal for that metric at all, a fact worth keeping
-distinct from a genuinely observed zero:
+token totals alone cannot tell apart. Both fields are optional -- a
+sample may omit either key entirely -- and, when present, typed
+`number | null`, never a bare `0` standing in for "unknown." `null`
+means the vendor's own log format carries no signal for that metric at
+all (a permanent, per-vendor fact); omission means this particular
+sample's optional source data happened to lack a value this time (see
+Grok's `toolCallCount` below) -- keep all three states (real count,
+`null`, and omitted) distinct from each other and from a genuinely
+observed zero:
 
 - **Claude**: `turnCount` counts every `type: "assistant"` record in the
   session log (including subagent/sidechain turns, matching this
   adapter's own inclusive usage-counting convention); `toolCallCount`
   sums `tool_use` content blocks across those same records. Both are
-  always a real count, never `null`.
+  always a real count, never `null` or omitted.
 - **Codex**: `turnCount` counts `turn_context` records in the rollout
-  log. `toolCallCount` is always `null` -- no fixture in this repository
-  names a tool-invocation record type the Codex rollout format exposes
-  yet; this is a known signal gap to close once a real fixture is
-  available, not a counted zero.
+  log. `toolCallCount` is always `null` (never omitted) -- no fixture in
+  this repository names a tool-invocation record type the Codex rollout
+  format exposes yet; this is a known signal gap to close once a real
+  fixture is available, not a counted zero.
 - **Grok**: `toolCallCount` comes from `signals.json`'s own
-  `toolCallCount` field, when present. `turnCount` is always `null` --
+  `toolCallCount` field; the key is **omitted entirely** (not set to
+  `null`) whenever `signals.json` lacks a usable value for it, and a
+  real count otherwise. `turnCount` is always `null` (never omitted) --
   `signals.json` carries no turn boundary at all.
 
 **Cross-vendor comparability caveat**: Claude's and Codex's `turnCount`
