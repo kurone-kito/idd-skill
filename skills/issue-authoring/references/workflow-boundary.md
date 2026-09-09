@@ -202,11 +202,13 @@ approval boundary that hands off to IDD execution.
   markers and the anchor's `mode=release-guard` as the expected state
   rather than as a competing generation; the acquisition-time rule that
   a target carrying a release marker cannot be re-acquired until that
-  release's `release-complete` is found applies to a later acquisition
-  or resume, not to the releasing set's own rechecks, and the current
-  winner is unchanged by them until the anchor's reconciled
-  `release-complete` closes the generation. Only after a fresh re-read
-  verifies every target's release
+  release's `release-complete` is found applies to a later session's
+  fresh acquisition of the child, not to the releasing set's own
+  rechecks or to a resume of the exact interrupted set, which stays
+  the established recovery path when `release-complete` is missing;
+  the current winner is unchanged by any of them until the anchor's
+  reconciled `release-complete` closes the generation. Only after a
+  fresh re-read verifies every target's release
   marker and label removal and the anchor's `release-complete` marker does
   the set-level release close all target generations, after which a later
   `acquire` starts a new generation. The
