@@ -1015,9 +1015,15 @@ export function createGithubProviderAdapter(
       return refs.map((entry) => String(entry.ref ?? ''));
     },
 
-    listWorkItemComments(number: number): ProviderComment[] {
+    listWorkItemComments(
+      number: number,
+      options?: { timeoutMs?: number },
+    ): ProviderComment[] {
       const rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
         paginate: true,
+        ...(options?.timeoutMs !== undefined
+          ? { timeout: options.timeoutMs }
+          : {}),
       }) as {
         id?: unknown;
         node_id?: unknown;
@@ -1112,18 +1118,24 @@ export function createGithubProviderAdapter(
       }
     },
 
-    getChangeRequestHeadSha(number: number): string {
-      return deps.ghText([
-        'pr',
-        'view',
-        String(number),
-        '-R',
-        `${owner}/${repo}`,
-        '--json',
-        'headRefOid',
-        '--jq',
-        '.headRefOid',
-      ]);
+    getChangeRequestHeadSha(
+      number: number,
+      options?: { timeoutMs?: number },
+    ): string {
+      return deps.ghText(
+        [
+          'pr',
+          'view',
+          String(number),
+          '-R',
+          `${owner}/${repo}`,
+          '--json',
+          'headRefOid',
+          '--jq',
+          '.headRefOid',
+        ],
+        options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {},
+      );
     },
 
     listRequiredChecks(number: number): ProviderRequiredCheck[] {

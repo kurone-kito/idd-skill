@@ -13,6 +13,7 @@ import {
   findSupersededCopilotUnavailableSubjects,
   findSupersededReviewAckSubjects,
   HIDE_AT_POST_TIME_MARKER_TYPES,
+  hideSupersededPostTimeMarkers,
   isHideAtPostTimeMarkerType,
   MARKER_TYPES,
   parseArgs,
@@ -2662,6 +2663,116 @@ test('--apply --type review-ack never scans for candidates when the just-posted 
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// --- #2754, chatgpt-codex-connector review round 3 on PR #2788: the whole
+// --- step's own HIDE_STEP_DEADLINE_MS budget, not just runMinimize's pass ---
+//
+// Round 2 gave runMinimize an internal deadlineMs, but that clock only
+// started at ITS OWN entry -- every network call BEFORE it (the review-ack
+// live-HEAD re-check, and the comments listing every type makes) stayed
+// outside the budget, bounded only by gh-exec.mts's own defaults (30s for
+// the HEAD re-check, 120s for the paginated comments listing). These tests
+// call the now-exported hideSupersededPostTimeMarkers directly (no CLI
+// subprocess spawn) so a real, enforced execFileSync timeout can be
+// exercised in well under a second instead of needing 45+ real seconds to
+// elapse.
+
+test('hideSupersededPostTimeMarkers makes no gh call at all when deadlineMs is already exhausted at entry (#2754, round 3)', () => {
+  const restore = stubExecutable(
+    'gh',
+    `process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+process.exit(1);
+`,
+  );
+  try {
+    assert.doesNotThrow(() => {
+      hideSupersededPostTimeMarkers(
+        'copilot-unavailable',
+        { 'claim-id': CLAIM_A },
+        'o',
+        'r',
+        1200,
+        9999,
+        'kurone-kito',
+        0,
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('hideSupersededPostTimeMarkers (review-ack) makes no gh call at all when deadlineMs is already exhausted at entry (#2754, round 3)', () => {
+  // Unlike runMinimize's entry check (which always lets the first
+  // candidate's OWN probe through so the pass makes forward progress),
+  // this step's own budget check has no such exemption for its live-HEAD
+  // re-check: an already-exhausted budget must skip everything, review-ack
+  // included.
+  const restore = stubExecutable(
+    'gh',
+    `process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+process.exit(1);
+`,
+  );
+  try {
+    assert.doesNotThrow(() => {
+      hideSupersededPostTimeMarkers(
+        'review-ack',
+        { 'head-sha': SHA },
+        'o',
+        'r',
+        1200,
+        9999,
+        'kurone-kito',
+        0,
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('hideSupersededPostTimeMarkers enforces its remaining budget on the comments listing itself, not just on runMinimize (#2754, round 3)', () => {
+  // The stubbed gh process sleeps a full real second before answering the
+  // --paginate call; a correctly-threaded ~150ms timeoutMs must kill it
+  // long before that, proving the budget bounds this READ, not merely the
+  // later mutation pass (which round 2 already covered).
+  const restore = stubExecutable(
+    'gh',
+    `const { execSync } = require('node:child_process');
+const args = process.argv.slice(2);
+function fail(s) { process.stderr.write(s); process.exit(1); }
+if (args[0] === 'api' && typeof args[1] === 'string' && args[1].indexOf('/comments') !== -1 && args.indexOf('--paginate') !== -1) {
+  execSync('sleep 1');
+  process.stdout.write('');
+  process.exit(0);
+}
+fail('unexpected gh invocation: ' + args.join(' '));
+`,
+  );
+  const start = Date.now();
+  try {
+    assert.doesNotThrow(() => {
+      hideSupersededPostTimeMarkers(
+        'copilot-unavailable',
+        { 'claim-id': CLAIM_A },
+        'o',
+        'r',
+        1200,
+        9999,
+        'kurone-kito',
+        150,
+      );
+    });
+    const elapsed = Date.now() - start;
+    assert.ok(
+      elapsed < 900,
+      `expected the ~150ms timeout to cut off the 1s stub sleep, took ${elapsed}ms`,
+    );
+  } finally {
+    restore();
   }
 });
 

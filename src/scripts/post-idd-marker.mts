@@ -712,9 +712,13 @@ function listMarkerCandidateComments(
   owner: string,
   repo: string,
   number: number,
+  timeoutMs?: number,
 ): MarkerCandidateComment[] {
   return createGithubProviderAdapter(owner, repo)
-    .listWorkItemComments(number)
+    .listWorkItemComments(
+      number,
+      timeoutMs !== undefined ? { timeoutMs } : undefined,
+    )
     .map((comment) => ({
       id: comment.id,
       nodeId: comment.nodeId ?? '',
@@ -791,19 +795,28 @@ export function findSupersededCopilotUnavailableSubjects(
 
 /**
  * Overall time budget (#2754, chatgpt-codex-connector review on PR #2788,
- * two rounds) for {@link hideSupersededPostTimeMarkers}'s best-effort
- * mutation pass. `minimize-superseded-markers.mts`'s `runGh` bounds each
- * individual `gh` call to `GH_TIMEOUT_MS` (30s), but that alone does not
- * bound the PASS: a PR with several superseded markers can chain multiple
- * 30s-timeout probes and mutations back to back with no overall cap,
- * stalling the caller's envelope output well beyond this budget after the
- * marker it is hiding *for* has already posted successfully. `runMinimize`'s
- * optional `deadlineMs` checks this budget at two points per candidate
- * (before starting a new one, and again before mutating it) so no SECOND
- * candidate can ever reach its own mutation once the budget is spent --
- * see `runMinimize`'s own `deadlineMs` doc comment for the exact bound
- * (`deadlineMs + GH_TIMEOUT_MS` worst case for the one candidate already
- * in flight when the budget runs out, not `deadlineMs` alone).
+ * three rounds) for the ENTIRE {@link hideSupersededPostTimeMarkers} step,
+ * from its own first line to its return -- not just `runMinimize`'s
+ * mutation pass. Round 2 gave `runMinimize` an internal `deadlineMs`, but
+ * that clock only started at ITS OWN entry, leaving every network call
+ * BEFORE it (the `review-ack` live-HEAD re-check, and the comments listing
+ * every type makes) outside the budget entirely -- the comments listing
+ * alone defaults to `DEFAULT_GH_PAGINATED_TIMEOUT_MS` (120s, gh-exec.mts)
+ * when not told otherwise, already larger than this whole step's intended
+ * budget. `hideSupersededPostTimeMarkers` now starts its own clock first
+ * and re-checks the REMAINING budget before each of its three network
+ * stages (the optional HEAD re-check, the comments listing, and the
+ * `runMinimize` pass), passing that remainder as each stage's own timeout
+ * (or `deadlineMs`, for `runMinimize`) instead of a fixed constant, and
+ * bailing out (never with a `0`/no-op timeout, which `gh-exec.mts` and
+ * `execFileSync` both read as "unbounded") the instant the remainder is
+ * non-positive. The true worst case for the one stage already in flight
+ * when the budget runs out is that stage's own default timeout beyond
+ * `HIDE_STEP_DEADLINE_MS` (up to `DEFAULT_GH_TIMEOUT_MS` for the HEAD
+ * re-check, `DEFAULT_GH_PAGINATED_TIMEOUT_MS` for the comments listing, or
+ * `GH_TIMEOUT_MS` for `runMinimize`'s own in-flight candidate -- see that
+ * function's `deadlineMs` doc comment) -- but no stage can ever START once
+ * the budget is already spent.
  */
 const HIDE_STEP_DEADLINE_MS = 45_000;
 
@@ -867,7 +880,7 @@ const HIDE_STEP_DEADLINE_MS = 45_000;
  * fail-closed the same way an unreadable comment list already fails
  * closed elsewhere in this function.
  */
-function hideSupersededPostTimeMarkers(
+export function hideSupersededPostTimeMarkers(
   type: HideAtPostTimeMarkerType,
   fields: MarkerFields,
   owner: string,
@@ -875,13 +888,32 @@ function hideSupersededPostTimeMarkers(
   number: number,
   postedCommentId: number,
   trustedMarkerLoginsFlag: string,
+  deadlineMs: number,
 ): void {
+  // Clock starts here, before ANY network call this step makes (#2754,
+  // chatgpt-codex-connector review round 3 on PR #2788) -- round 2's
+  // deadlineMs only bounded runMinimize's OWN pass, timed from ITS entry,
+  // which left every read before that call (the review-ack live-HEAD
+  // re-check, and the comments listing every type makes) outside the
+  // budget entirely. The comments listing in particular defaults to
+  // `DEFAULT_GH_PAGINATED_TIMEOUT_MS` (120s, gh-exec.mts) when not told
+  // otherwise -- alone larger than this whole step's intended budget.
+  const startedAt = Date.now();
+  const remaining = (): number => deadlineMs - (Date.now() - startedAt);
   try {
     if (type === 'review-ack') {
+      const r = remaining();
+      // Never pass `timeout: 0` to a `gh` call below -- gh-exec.mts (like
+      // Node's own `execFileSync`) treats that as "no timeout", the exact
+      // opposite of "budget already exhausted". Bailing out here instead
+      // is what makes a non-positive remainder safe.
+      if (r <= 0) {
+        return;
+      }
       const liveHeadSha = createGithubProviderAdapter(
         owner,
         repo,
-      ).getChangeRequestHeadSha(number);
+      ).getChangeRequestHeadSha(number, { timeoutMs: r });
       if (
         liveHeadSha.trim().toLowerCase() !==
         fields['head-sha'].trim().toLowerCase()
@@ -895,7 +927,16 @@ function hideSupersededPostTimeMarkers(
       config: loadIddConfig(),
     });
     const trustedSet = new Set(actors);
-    const allComments = listMarkerCandidateComments(owner, repo, number);
+    const commentsListR = remaining();
+    if (commentsListR <= 0) {
+      return;
+    }
+    const allComments = listMarkerCandidateComments(
+      owner,
+      repo,
+      number,
+      commentsListR,
+    );
     const postedComment = allComments.find(
       (comment) => comment.id === postedCommentId,
     );
@@ -926,13 +967,17 @@ function hideSupersededPostTimeMarkers(
     if (subjectIds.length === 0) {
       return;
     }
+    const mutationPassR = remaining();
+    if (mutationPassR <= 0) {
+      return;
+    }
     runMinimize({
       subjectIds,
       classifier: 'OUTDATED',
       trustedSet,
       apply: true,
       allowUntrusted: false,
-      deadlineMs: HIDE_STEP_DEADLINE_MS,
+      deadlineMs: mutationPassR,
     });
   } catch {
     // Best-effort only (#2754) -- never block or retry-loop the marker post
@@ -1151,6 +1196,7 @@ if (import.meta.main) {
       number,
       posted.id,
       args.trustedMarkerLogins,
+      HIDE_STEP_DEADLINE_MS,
     );
   }
   const result: PostIddMarkerResult = {
