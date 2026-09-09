@@ -787,6 +787,20 @@ The originating Stage 1 hold uses this append-only publication-intent record:
 <!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; journal=<owner>/<repo>#<number>; issue=<owner>/<repo>#<number>|none; actor=<trusted-marker-actor>; state=<pending|member|cleanup|abandoned> -->
 ```
 
+Append the visible note below immediately after this HTML comment, joined by
+a single newline (no blank line between them, matching the `authoring-owner`
+marker's own posted shape) -- this exact pairing is the canonical rendered
+template `matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`)
+matches for the hide-on-supersede step below. Historical comments predating
+this canonical pin may use a different separator, note text, or no note at
+all (#2750); those never byte-exact-match the canonical template and are
+correctly left visible -- expected fail-closed behavior, not retroactive
+cleanup:
+
+```text
+_Issue-authoring publication-intent record. Do not edit or delete._
+```
+
 `issue` is the returned canonical issue identity or `none`. Append
 `state=pending; issue=none` before creation, then append the returned identity
 while it remains `pending`, append `member` only after the owner marker is
@@ -862,6 +876,15 @@ comment using the resolved marker prefix:
 ```
 
 _Issue-authoring ownership marker. Do not edit or delete._
+
+Join the HTML comment and the visible note above by a single newline (no
+blank line between them) -- this exact pairing, for any `mode`, is the
+canonical rendered template `matchCanonicalAuthoringMarkerFamily`
+(`marker-helpers.mts`) matches for the hide-on-supersede step below.
+Historical comments predating this canonical pin may use a blank-line
+separator instead (#2750); those never byte-exact-match the canonical
+template and are correctly left visible -- expected fail-closed behavior,
+not retroactive cleanup.
 
 The companion uses the same `body-sha256` and `snapshot-sha256` semantics as
 the portable owner protocol. Target markers hash the exact UTF-8 body from the
@@ -1022,9 +1045,10 @@ guessing. Skip the just-posted comment itself and any candidate whose
 `isMinimized` is already `true` (idempotent; the minimize helper's own probe
 already enforces this).
 
-Convert each eligible candidate's REST comment id to its GraphQL node id and
-call the existing minimize helper -- reuse it rather than reimplementing the
-mutation:
+Convert each eligible candidate's REST comment id to its GraphQL node id
+(the paginated comment list already carries it as `node_id` -- no extra
+fetch needed) and call the existing minimize helper -- reuse it rather than
+reimplementing the mutation:
 
 ```sh
 node scripts/minimize-superseded-markers.mjs --subject-ids <id1,id2,...> \

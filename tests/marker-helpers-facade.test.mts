@@ -409,6 +409,33 @@ test('matchCanonicalAuthoringMarkerFamily: an altered field value is a negative 
   );
 });
 
+// #2750 (independent critique pass, PR #2821): the separator/note-text
+// pairing genuinely drifted across past posting sessions before this issue
+// pinned a canonical shape -- a live blank-line-separated authoring-owner
+// comment (kurone-kito/idd-skill#2706, comment id 5580125588, fetched
+// verbatim) predates the pin and never byte-exact-matches the newly-pinned
+// single-newline template. This is the fail-closed behavior the contract
+// documents (skills/issue-authoring/references/contract.md), not a defect:
+// a historical comment in the old shape is correctly left visible rather
+// than guessed at.
+test('matchCanonicalAuthoringMarkerFamily: a real pre-pin blank-line-separated comment is a negative match (fail-closed, not retroactive cleanup)', () => {
+  const legacyBlankLineBody =
+    '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#2706; anchor=kurone-kito/idd-skill#2706; mode=acquire; owner=owner-7f0bdd05cfcb6f75; set=set-5f974e50cf506b08; session=claude-idd1-35ad1f618a3a; body-sha256=2633e24463dbbabf260232d64f267cfd35b452d59c57df0955f24d5c6d60af69; snapshot-sha256=none; supersedes=none -->\n' +
+    '\n' +
+    '_Issue-authoring ownership marker. Do not edit or delete._';
+  assert.ok(
+    direct.parseAuthoringOwnerComment(legacyBlankLineBody, 'idd-skill'),
+    'the legacy body must still parse (sanity check for this test itself)',
+  );
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(
+      legacyBlankLineBody,
+      'idd-skill',
+    ),
+    null,
+  );
+});
+
 test('matchCanonicalAuthoringMarkerFamily: a different marker prefix is a negative match', () => {
   const ownerBody = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
   assert.strictEqual(

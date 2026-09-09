@@ -1285,12 +1285,18 @@ export function parseAuthoringPublicationIntentComment(body, markerPrefix) {
 }
 /**
  * Render the canonical `authoring-owner` marker body (#2750): HTML-comment
- * token + the fixed visible note, joined by a single newline -- confirmed
- * against live posted instances, this pair carries **no** blank line between
- * them, unlike the `claimed-by`-family renderers below. `markerPrefix` is
- * the same value `parseAuthoringOwnerComment` takes as its second argument;
- * every other field mirrors {@link ParsedAuthoringOwnerMarker}. Throws on an
- * invalid payload, matching every other renderer in this module.
+ * token + the fixed visible note, joined by a single newline -- this pair
+ * carries **no** blank line between them, unlike the `claimed-by`-family
+ * renderers below. This is the format the issue-authoring contract
+ * (`skills/issue-authoring/references/contract.md`) now pins as canonical,
+ * matching the most recently posted live instances; a real historical
+ * comment from before that pin can instead use a blank-line separator
+ * (confirmed live, e.g. kurone-kito/idd-skill#2706) and will correctly fail
+ * to byte-exact-match -- fail-closed, not a defect (independent critique
+ * pass, PR #2821). `markerPrefix` is the same value
+ * `parseAuthoringOwnerComment` takes as its second argument; every other
+ * field mirrors {@link ParsedAuthoringOwnerMarker}. Throws on an invalid
+ * payload, matching every other renderer in this module.
  */
 export function renderAuthoringOwnerMarker(payload) {
   const markerPrefix = normalizeNonWhitespaceToken(payload?.markerPrefix);
@@ -1356,8 +1362,15 @@ export function renderAuthoringOwnerMarker(payload) {
  * Render the canonical `authoring-publication-intent` marker body (#2750),
  * mirroring {@link renderAuthoringOwnerMarker}'s contract (single-newline
  * join, `markerPrefix` as the resolved target prefix, one field per
- * {@link ParsedAuthoringPublicationIntentMarker}). Throws on an invalid
- * payload.
+ * {@link ParsedAuthoringPublicationIntentMarker}). Before this issue, the
+ * contract documented no visible note at all for this marker family, and
+ * live comments on the authoring journal (kurone-kito/idd-skill#2674)
+ * drifted across three shapes in practice: no note, a blank-line-separated
+ * note, and a single-newline-separated note with different wording
+ * (confirmed live; independent critique pass, PR #2821). This renderer's
+ * shape is the one the contract now pins as canonical going forward; none
+ * of the pre-pin variants will byte-exact-match it, by design (fail-closed,
+ * not retroactive cleanup). Throws on an invalid payload.
  */
 export function renderAuthoringPublicationIntentMarker(payload) {
   const markerPrefix = normalizeNonWhitespaceToken(payload?.markerPrefix);
