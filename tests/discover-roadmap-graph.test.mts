@@ -672,6 +672,87 @@ test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)
   ]);
 });
 
+test('extractTaskListReferences accepts a trailing (#N) reference on the checkbox line itself (#2765)', () => {
+  const line = '- [ ] Track 1: text (#2752)';
+  assert.deepEqual(extractTaskListReferences(line), [
+    { target: 2752, relationship: 'task-list', evidence: line },
+  ]);
+});
+
+test('extractTaskListReferences accepts a trailing (#N) reference soft-wrapped onto an indented continuation line (#2765)', () => {
+  const body = [
+    '- [ ] Track 1: operational-marker hide-policy enumeration guard +',
+    '      minimization timing doc fix (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(body), [
+    {
+      target: 2752,
+      relationship: 'task-list',
+      evidence:
+        '- [ ] Track 1: operational-marker hide-policy enumeration guard +',
+    },
+  ]);
+});
+
+test('extractTaskListReferences accepts a bare trailing #N reference with no parens (#2765)', () => {
+  const line = '- [ ] text #2752';
+  assert.deepEqual(extractTaskListReferences(line), [
+    { target: 2752, relationship: 'task-list', evidence: line },
+  ]);
+});
+
+test('extractTaskListReferences ignores a trailing-reference checkbox item quoted inside a fence (#2765)', () => {
+  const fenced = ['```md', '- [ ] Track 1: text (#2752)', '```'].join('\n');
+  assert.deepEqual(extractTaskListReferences(fenced), []);
+});
+
+test('extractTaskListReferences trailing-reference form respects the current-repo scope for owner/repo#N (#2765)', () => {
+  const line = '- [ ] Track 1: text kurone-kito/idd-skill#2752';
+  assert.deepEqual(
+    extractTaskListReferences(line, {
+      currentRepoRef: 'kurone-kito/idd-skill',
+    }),
+    [{ target: 2752, relationship: 'task-list', evidence: line }],
+  );
+  // A cross-repo trailing reference is never counted as a local edge.
+  assert.deepEqual(
+    extractTaskListReferences(line, { currentRepoRef: 'other/repo' }),
+    [],
+  );
+});
+
+test('extractTaskListReferences trailing-reference form stops the continuation span at the next list item, blank line, or heading (#2765)', () => {
+  // The next checkbox item is a separate list item and must not be
+  // absorbed into the first item's continuation span, nor treated as a
+  // reference source for the first (unresolved) item.
+  const twoItems = [
+    '- [ ] Track 1: no reference here',
+    '- [ ] Track 2 (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(twoItems), [
+    {
+      target: 2752,
+      relationship: 'task-list',
+      evidence: '- [ ] Track 2 (#2752)',
+    },
+  ]);
+
+  // A blank line also stops the continuation span.
+  const blankSeparated = [
+    '- [ ] Track 1: no reference here',
+    '',
+    'Track 1 continues in prose (#2752), unrelated to the checkbox item.',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(blankSeparated), []);
+
+  // A heading also stops the continuation span.
+  const headingSeparated = [
+    '- [ ] Track 1: no reference here',
+    '## Next section (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(headingSeparated), []);
+});
+
 test('graph traversal creates no phantom edges from code-quoted refs in a child body (#1204)', async () => {
   // Reproduces the #1142/#1143 audit false-positive at the graph level: a
   // completed child that documents the dependency parser quotes example
