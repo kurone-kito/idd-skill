@@ -95,13 +95,15 @@ const TRAILING_QUOTE_PUNCTUATION_PATTERN = /^[.,!?;:]*/;
 // hard-broken (round-2 Copilot/Codex review, PR #2760).
 //
 // Attribution alone does not prove the quoted text is inert history: an
-// issue can cite another issue's prerequisite and explicitly RE-ADOPT it
-// ("Per issue #42: 'confirmed in production before shipping' remains
-// required" -- Codex review, PR #2760). A requirement-assertion word
-// shortly after the quote closes, with no hard break in between, cancels
-// this exclusion the same way `discover-viability-gate.mts`'s
-// requirement-assertion cancellation already does for its own quote
-// exclusion.
+// issue can cite another issue's prerequisite and explicitly RE-ADOPT it,
+// either right after the quote closes ("Per issue #42: 'confirmed in
+// production before shipping' remains required" -- Codex review, PR
+// #2760) or right before the citation opens ("This change still
+// requires issue #42's gate: 'confirmed in production before shipping'"
+// -- Codex review round 4, PR #2760). A requirement-assertion word on
+// EITHER side, with no hard break in between, cancels this exclusion --
+// the same bidirectional shape `discover-viability-gate.mts`'s own
+// requirement-assertion cancellation already uses.
 const CITED_ISSUE_ATTRIBUTION_WINDOW = 80;
 const ISSUE_NUMBER_REFERENCE_PATTERN = /#\d+/g;
 const CITED_ISSUE_ATTRIBUTION_COLON_PATTERN = /:\s*$/;
@@ -110,7 +112,10 @@ const CITED_ISSUE_ATTRIBUTION_COLON_PATTERN = /:\s*$/;
 // also stop an earlier reference from attributing a later quote
 // (Codex review round 3, PR #2760).
 const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN = /[.;?!\n]|--|—/;
-const CLOSE_QUOTE_SEARCH_WINDOW = 300;
+// No cap: this exclusion exists specifically for quotes that copy a
+// "much longer" excerpt verbatim, so an artificial bound left a real
+// closer -- and any re-adoption cue past it -- unreached (Codex review
+// round 4, PR #2760). The scan is still bounded by the corpus length.
 const ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW = 40;
 // `blocked`/`blocking`/`pending`/`waiting` join the same vocabulary
 // `discover-viability-gate.mts`'s own requirement-assertion pattern
@@ -364,21 +369,18 @@ function isQuotedMatch(text: string, start: number, end: number): boolean {
 // A requirement-assertion word shortly after the quote closes, with no
 // hard break in between, means the citing issue RE-ADOPTS the quoted
 // prerequisite as its own live requirement rather than merely reporting
-// inert history (Codex review, PR #2760). The close side searches a
-// generous bounded window for the first close-quote character -- this
+// inert history (Codex review, PR #2760). The close side searches the
+// rest of the corpus for the first close-quote character -- this
 // exclusion exists precisely for "much longer" quotes, so the closer can
-// be far from the match -- without requiring it to pair with any
-// specific open-quote character (mirrors this file's existing loose
-// open/close-quote membership checks elsewhere).
+// be arbitrarily far from the match (Codex review round 4, PR #2760) --
+// without requiring it to pair with any specific open-quote character
+// (mirrors this file's existing loose open/close-quote membership
+// checks elsewhere).
 function isFollowedByRequirementAssertion(
   text: string,
   quotedContentStart: number,
 ): boolean {
-  const searchEnd = Math.min(
-    text.length,
-    quotedContentStart + CLOSE_QUOTE_SEARCH_WINDOW,
-  );
-  const region = text.slice(quotedContentStart, searchEnd);
+  const region = text.slice(quotedContentStart);
   let closeOffset = -1;
   for (let i = 0; i < region.length; i++) {
     if (!CLOSE_QUOTE_CHARS.has(region[i])) {
@@ -403,6 +405,32 @@ function isFollowedByRequirementAssertion(
   );
   const hardBreak = CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.exec(lookahead);
   const scoped = hardBreak ? lookahead.slice(0, hardBreak.index) : lookahead;
+  return ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN.test(scoped);
+}
+
+// The mirror image of {@link isFollowedByRequirementAssertion}: a
+// requirement-assertion word shortly BEFORE the cited reference, with no
+// hard break in between, means the citing issue already re-adopted the
+// prerequisite before ever citing it ("This change still requires issue
+// #42's gate: 'X'" -- Codex review round 4, PR #2760).
+function isPrecededByRequirementAssertion(
+  text: string,
+  referenceStart: number,
+): boolean {
+  const windowStart = Math.max(
+    0,
+    referenceStart - ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW,
+  );
+  const lookbehind = text.slice(windowStart, referenceStart);
+  const breaks = [
+    ...lookbehind.matchAll(
+      new RegExp(CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN, 'g'),
+    ),
+  ];
+  const lastBreak = breaks.at(-1);
+  const scoped = lastBreak
+    ? lookbehind.slice(lastBreak.index + lastBreak[0].length)
+    : lookbehind;
   return ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN.test(scoped);
 }
 
@@ -439,7 +467,9 @@ function isAttributedLongQuote(text: string, start: number): boolean {
   return (
     !CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.test(
       betweenReferenceAndColon,
-    ) && !isFollowedByRequirementAssertion(text, start)
+    ) &&
+    !isFollowedByRequirementAssertion(text, start) &&
+    !isPrecededByRequirementAssertion(text, windowStart + referenceMatch.index)
   );
 }
 

@@ -1417,6 +1417,43 @@ test('classifyIssue does not trip when a soft-wrap newline sits between the intr
   assert.equal(result.reason, 'orphan');
 });
 
+test('classifyIssue still trips when the re-adoption cue precedes the citation instead of following the quote (Codex review round 4, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 119,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'This change still requires issue #42\'s gate: "confirmed in ' +
+        'production before shipping".',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test('classifyIssue still trips a re-adoption cue past a quote longer than the old 300-char search bound (Codex review round 4, PR #2760)', () => {
+  const longExcerpt = `confirmed in production ${'x'.repeat(320)} end of excerpt`;
+  const result = classifyIssue(
+    {
+      number: 120,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body: `Per issue #42: "${longExcerpt}" remains required.`,
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
 test('filterOrphanIssues buckets a runtime-observation precondition under filtered.runtime_observation_precondition (#2467)', async () => {
   const issues = [
     {
