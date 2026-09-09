@@ -337,7 +337,13 @@ const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
 // import.meta.main trigger, not next to
 // ownerMarkerAnchorMatchesPublication()/checkAuthoringOwnerMarkerTrail()
 // further down.
-const REAL_ISSUE_REFERENCE_PATTERN = /^[\w.-]+\/[\w.-]+#[1-9]\d*$/;
+// Exported so tests/schema-type-reconciliation.test.mts can assert this
+// stays textually in sync with schemas/policy.schema.json's
+// issueAuthoring.journalIssue pattern (#2681 review, CodeRabbit) --
+// deliberately using `[0-9]` rather than `\d` so the only normalization
+// needed against the JSON schema string is the regex literal's escaped
+// `/`.
+export const REAL_ISSUE_REFERENCE_PATTERN = /^[\w.-]+\/[\w.-]+#[1-9][0-9]*$/;
 if (import.meta.main) {
   main();
 }
