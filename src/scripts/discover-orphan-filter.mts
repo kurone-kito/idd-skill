@@ -68,6 +68,95 @@ const NEGATION_HARD_BREAK_PATTERN = /[.;\n]|--|—/g;
 const OPEN_QUOTE_CHARS = new Set(['"', "'", '“', '‘']);
 const CLOSE_QUOTE_CHARS = new Set(['"', "'", '”', '’']);
 const TRAILING_QUOTE_PUNCTUATION_PATTERN = /^[.,!?;:]*/;
+// A match opening a much longer quoted excerpt attributed to a different,
+// cited issue by number ("Issue #2743 asserted in its Background:
+// '<trigger phrase>: ...much more quoted prose...' -- describing a
+// specific event.", #2746) is quoted historical context from another
+// issue, not a live precondition on THIS issue -- even though ordinary
+// sentence punctuation (a colon) continues the quotation right after the
+// match instead of a closing quote character, so `isQuotedMatch` below
+// never recognizes it. Scoped narrowly to the shape this issue found: an
+// open-quote character immediately before the match (the same adjacency
+// `isQuotedMatch` requires), preceded within a bounded window by an
+// issue-number reference and then a colon introducing the quotation.
+//
+// Two conditions bound the colon to that same attribution, not just any
+// nearby colon (Copilot/Codex/CodeRabbit review, PR #2760): the colon
+// must directly introduce the quote (only whitespace between the colon
+// and the opening quote character -- "Issue #42: prior history. The
+// requirement is 'X'" has no such colon and must NOT match), and no hard
+// clause break (period/semicolon/em-dash) may separate the issue-number
+// reference from that colon -- "See #42 for rollout details. Acceptance
+// gate: 'X'" has an unrelated label's colon after a sentence break and
+// must NOT match either, even though a colon does directly precede the
+// quote. When more than one issue reference sits in the window ("See #1.
+// Issue #2 asserted: 'X'"), bind to the LAST one, not the first -- an
+// earlier, unrelated reference must not make a genuine attribution look
+// hard-broken (round-2 Copilot/Codex review, PR #2760).
+//
+// Attribution alone does not prove the quoted text is inert history: an
+// issue can cite another issue's prerequisite and explicitly RE-ADOPT it,
+// either right after the quote closes ("Per issue #42: 'confirmed in
+// production before shipping' remains required" -- Codex review, PR
+// #2760) or right before the citation opens ("This change still
+// requires issue #42's gate: 'confirmed in production before shipping'"
+// -- Codex review round 4, PR #2760). A requirement-assertion word on
+// EITHER side, with no hard break in between, cancels this exclusion --
+// the same bidirectional shape `discover-viability-gate.mts`'s own
+// requirement-assertion cancellation already uses.
+const CITED_ISSUE_ATTRIBUTION_WINDOW = 80;
+const ISSUE_NUMBER_REFERENCE_PATTERN = /#\d+/g;
+const CITED_ISSUE_ATTRIBUTION_COLON_PATTERN = /:\s*$/;
+// Every standard English sentence terminator, not just period/semicolon
+// -- a question or exclamation mark ending an unrelated sentence must
+// also stop an earlier reference from attributing a later quote (Codex
+// review round 3, PR #2760). A bare newline is a Markdown SOFT wrap, not
+// a clause break -- only a blank line OR a following list-item marker
+// (a real paragraph/list boundary) counts, matching
+// `discover-viability-gate.mts`'s own CUE_HARD_BREAK_PATTERN exactly: a
+// genuine attribution can wrap between the reference and its colon just
+// as easily as between the colon and the quote (Codex review round 5,
+// PR #2760), but separate bullets written without a blank line ("-
+// Related issue #42\n- Acceptance gate: 'X'") must not connect through
+// each other either (Codex review round 6, PR #2760).
+const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN =
+  /[.;?!]|--|—|\n[ \t]*(?:[-*]\s|\d+[.)]\s)|\n[ \t]*\n/;
+// The requirement-assertion lookahead/lookbehind windows stay bounded
+// (40 chars); only the CLOSE-QUOTE search itself is unbounded, since
+// this exclusion exists specifically for quotes that copy a "much
+// longer" excerpt verbatim -- an artificial bound there left a real
+// closer, and any re-adoption cue past it, unreached (Codex review
+// round 4, PR #2760; comment corrected per Copilot review round 5).
+const ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW = 40;
+// `blocked`/`blocking`/`pending`/`waiting`/`shall`/`essential` join the
+// same vocabulary `discover-viability-gate.mts`'s own requirement-
+// assertion pattern already uses, so a re-adopted prerequisite phrased
+// as "remains blocked" or "shall remain the acceptance gate" is
+// recognized too, not only "remains required" (Codex review rounds 3
+// and 5, PR #2760).
+const ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN =
+  /\b(required|require[sd]?|requiring|must|needed|needs?|mandatory|necessary|blocked|blocking|pending|waiting|shall|essential)\b/i;
+// A quoted excerpt's closer must PAIR with its actual opener, not match
+// any member of the flat CLOSE_QUOTE_CHARS set -- otherwise an unrelated
+// apostrophe of a DIFFERENT quote family inside the excerpt (a plural
+// possessive like "operators'", not merely a contraction already
+// guarded above) can still be mistaken for the closer, making the real
+// closer and any re-adoption cue past it unreachable (Codex review
+// round 5, PR #2760). Mirrors `discover-viability-gate.mts`'s own
+// `QUOTE_CHAR_PAIRS`.
+const QUOTE_CHAR_PAIRS: Record<string, string> = {
+  '"': '"',
+  "'": "'",
+  '‘': '’',
+  '“': '”',
+};
+// A straight/curly apostrophe inside the quoted excerpt itself (a
+// contraction or possessive, e.g. "it's") must not be mistaken for the
+// closing quote -- only a candidate NOT immediately followed by a
+// letter or digit is a plausible closer (Copilot review round 3, PR
+// #2760), mirroring `discover-viability-gate.mts`'s own
+// quote-vs-apostrophe adjacency check.
+const WORD_CHAR_PATTERN = /[A-Za-z0-9]/;
 
 /** Reasons that keep an issue out of the orphan candidate list. */
 export type OrphanFilteredReason =
@@ -303,13 +392,159 @@ function isQuotedMatch(text: string, start: number, end: number): boolean {
   );
 }
 
+// A requirement-assertion word shortly after the quote closes, with no
+// hard break in between, means the citing issue RE-ADOPTS the quoted
+// prerequisite as its own live requirement rather than merely reporting
+// inert history (Codex review, PR #2760). The close side searches the
+// rest of the corpus for a character that PAIRS with `opener` -- this
+// exclusion exists precisely for "much longer" quotes, so the closer can
+// be arbitrarily far from the match (Codex review round 4, PR #2760) --
+// rather than any member of CLOSE_QUOTE_CHARS, so an apostrophe of a
+// DIFFERENT quote family inside the excerpt (a plural possessive like
+// "operators'" inside a double-quoted excerpt) is never mistaken for
+// the real closer (Codex review round 5, PR #2760). Pairing alone still
+// isn't enough for a SINGLE-quoted excerpt: an internal plural
+// possessive apostrophe is the SAME family as the real closer, so every
+// plausible candidate is tried in order (not just the first) until one
+// is followed by a requirement assertion, or none are left (Copilot/
+// Codex review round 6, PR #2760).
+function isFollowedByRequirementAssertion(
+  text: string,
+  quotedContentStart: number,
+  opener: string,
+): boolean {
+  const closer = QUOTE_CHAR_PAIRS[opener];
+  if (closer === undefined) {
+    return false;
+  }
+  const region = text.slice(quotedContentStart);
+  let searchFrom = 0;
+  while (searchFrom < region.length) {
+    let closeOffset = -1;
+    for (let i = searchFrom; i < region.length; i++) {
+      if (region[i] !== closer) {
+        continue;
+      }
+      if (WORD_CHAR_PATTERN.test(region[i + 1] ?? '')) {
+        continue;
+      }
+      closeOffset = i;
+      break;
+    }
+    if (closeOffset === -1) {
+      return false;
+    }
+    const afterClose = quotedContentStart + closeOffset + 1;
+    const lookahead = text.slice(
+      afterClose,
+      Math.min(
+        text.length,
+        afterClose + ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW,
+      ),
+    );
+    const hardBreak =
+      CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.exec(lookahead);
+    const scoped = hardBreak ? lookahead.slice(0, hardBreak.index) : lookahead;
+    if (ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN.test(scoped)) {
+      return true;
+    }
+    searchFrom = closeOffset + 1;
+  }
+  return false;
+}
+
+// The mirror image of {@link isFollowedByRequirementAssertion}: a
+// requirement-assertion word shortly BEFORE the cited reference, with no
+// hard break in between, means the citing issue already re-adopted the
+// prerequisite before ever citing it ("This change still requires issue
+// #42's gate: 'X'" -- Codex review round 4, PR #2760).
+function isPrecededByRequirementAssertion(
+  text: string,
+  referenceStart: number,
+): boolean {
+  const windowStart = Math.max(
+    0,
+    referenceStart - ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW,
+  );
+  const lookbehind = text.slice(windowStart, referenceStart);
+  const breaks = [
+    ...lookbehind.matchAll(
+      new RegExp(CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN, 'g'),
+    ),
+  ];
+  const lastBreak = breaks.at(-1);
+  const scoped = lastBreak
+    ? lookbehind.slice(lastBreak.index + lastBreak[0].length)
+    : lookbehind;
+  return ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN.test(scoped);
+}
+
+// A match that opens a longer quoted excerpt attributed to a different,
+// cited issue by number (#2746) -- see the constants above for the
+// motivating shape. Only the open-quote adjacency is required on the
+// open side (unlike `isQuotedMatch`: the whole point of this exclusion
+// is the shape where no nearby closing quote follows the match itself).
+// `selfIssueNumber`, when given, prevents an issue from attributing a
+// quote to ITSELF: "Issue #122 acceptance criterion: 'X'" inside issue
+// #122's own body is not an external citation, so the cited number must
+// differ from the candidate's own (Codex review round 5, PR #2760).
+function isAttributedLongQuote(
+  text: string,
+  start: number,
+  selfIssueNumber?: number,
+): boolean {
+  const before = text[start - 1];
+  if (before === undefined || !OPEN_QUOTE_CHARS.has(before)) {
+    return false;
+  }
+  const windowStart = Math.max(0, start - 1 - CITED_ISSUE_ATTRIBUTION_WINDOW);
+  const window = text.slice(windowStart, start - 1);
+  const colonMatch = CITED_ISSUE_ATTRIBUTION_COLON_PATTERN.exec(window);
+  if (!colonMatch) {
+    return false;
+  }
+  const referenceMatches = [...window.matchAll(ISSUE_NUMBER_REFERENCE_PATTERN)];
+  const referenceMatch = referenceMatches.at(-1);
+  if (!referenceMatch || referenceMatch.index === undefined) {
+    return false;
+  }
+  if (
+    selfIssueNumber !== undefined &&
+    Number(referenceMatch[0].slice(1)) === selfIssueNumber
+  ) {
+    return false;
+  }
+  // Stop at the introducing colon itself -- the whitespace AFTER it
+  // (which can include a Markdown soft-wrap newline before the quote,
+  // e.g. "Background:\n\"X\"") is not part of the reference-to-colon
+  // relationship this hard-break scan is meant to police (Codex review
+  // round 3, PR #2760).
+  const betweenReferenceAndColon = window.slice(
+    referenceMatch.index + referenceMatch[0].length,
+    colonMatch.index,
+  );
+  return (
+    !CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.test(
+      betweenReferenceAndColon,
+    ) &&
+    !isFollowedByRequirementAssertion(text, start, before) &&
+    !isPrecededByRequirementAssertion(text, windowStart + referenceMatch.index)
+  );
+}
+
 /**
  * Detect prose naming a runtime/production-observation precondition
  * (#2467) anywhere in `body`, outside of code regions. Returns `true` on
  * the first match that is neither quoted nor negated -- callers only need a
- * boolean gate, not the matched span.
+ * boolean gate, not the matched span. `selfIssueNumber`, when given, stops
+ * the candidate's own issue number from being treated as an external
+ * citation by {@link isAttributedLongQuote} (Codex review round 5, PR
+ * #2760).
  */
-export function detectRuntimeObservationPrecondition(body: unknown): boolean {
+export function detectRuntimeObservationPrecondition(
+  body: unknown,
+  selfIssueNumber?: number,
+): boolean {
   const stripped = stripMarkdownCodeRegions(String(body ?? ''));
   for (const pattern of RUNTIME_OBSERVATION_PATTERNS) {
     pattern.lastIndex = 0;
@@ -318,6 +553,7 @@ export function detectRuntimeObservationPrecondition(body: unknown): boolean {
       const end = match.index + match[0].length;
       if (
         !isQuotedMatch(stripped, match.index, end) &&
+        !isAttributedLongQuote(stripped, match.index, selfIssueNumber) &&
         !hasNegationCueBefore(stripped, match.index) &&
         !hasNegationCueAfter(stripped, end)
       ) {
@@ -401,7 +637,7 @@ export function classifyIssue(
   // production-observation precondition has no issue-number reference to
   // resolve, so it must still hold even when every numbered reference below
   // is absent or already closed.
-  if (detectRuntimeObservationPrecondition(body)) {
+  if (detectRuntimeObservationPrecondition(body, Number(issue.number))) {
     return { orphan: false, reason: 'runtime_observation_precondition' };
   }
 
