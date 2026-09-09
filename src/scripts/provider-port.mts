@@ -436,6 +436,19 @@ export interface ProviderPort {
   getWorkItemTimeline(number: number): ProviderTimelineEvent[];
 
   /**
+   * work-items. The GraphQL `Issue.userContentEdits { editedAt }`
+   * read (#2762) -- the only place GitHub records a body edit; a REST
+   * timeline `edited` event with a `changes.body` payload is never emitted
+   * for a real edit. Bounded to the most recent 100 edits (`last: 100`,
+   * not `first`, so a long edit history keeps the newest edits rather than
+   * the oldest -- callers only ever need the latest one). Returns the
+   * `editedAt` values in ascending order as GitHub itself returns them;
+   * throws on any `gh` failure, matching {@link getWorkItemTimeline}'s
+   * throw-on-failure contract rather than swallowing it.
+   */
+  getWorkItemUserContentEditTimestamps(number: number): string[];
+
+  /**
    * work-items. The distinct `gh issue view --json state --jq .state` call
    * shape -- GraphQL-resolved, NOT the REST `issues/{number}` shape
    * {@link getWorkItem} uses. Not interchangeable: empirically, `gh issue

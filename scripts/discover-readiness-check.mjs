@@ -110,6 +110,10 @@ if (import.meta.main) {
     loadIssue: buildIssueLoader(owner, repo),
     fetchCommentsByIssueNumber: buildIssueCommentsLoader(owner, repo),
     fetchTimelineByIssueNumber: buildIssueTimelineLoader(owner, repo),
+    fetchUserContentEditsByIssueNumber: buildIssueUserContentEditsLoader(
+      owner,
+      repo,
+    ),
     trustedMarkerLogins,
     // `--swarm-floor` output never surfaces the stale-authoring warning, so
     // skip the per-issue timeline fetch this loader runs — over a whole-repo
@@ -159,6 +163,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     now = new Date(),
     fetchCommentsByIssueNumber,
     fetchTimelineByIssueNumber,
+    fetchUserContentEditsByIssueNumber,
     trustedMarkerLogins,
   } = options ?? {};
   const triageVerdictCheckEnabled =
@@ -371,11 +376,20 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       }
       let editedAt = null;
       if (record?.markerOutcome) {
+        // Both fetches evaluate inside this one try block (#2762): a
+        // failure from EITHER the timeline or the userContentEdits read
+        // degrades the whole anchor to null ("unknown") rather than
+        // computing a partial result from whichever fetch happened to
+        // succeed -- a partial result could still collapse to the bare
+        // `created_at` anchor this issue fixes.
         try {
           editedAt = resolveLatestSubstantiveIssueEditAt(
             issue.createdAt,
             typeof fetchTimelineByIssueNumber === 'function'
               ? fetchTimelineByIssueNumber(issue.number)
+              : [],
+            typeof fetchUserContentEditsByIssueNumber === 'function'
+              ? fetchUserContentEditsByIssueNumber(issue.number)
               : [],
           );
         } catch {
@@ -674,7 +688,10 @@ function printHelp() {
   configured (env/flag/repo config); with none configured, this check is a
   no-op and makes no extra GitHub API call. Staleness-checked (fail-closed
   toward NOT excluding): the marker only excludes when the rejection
-  comment is at or after the issue's latest substantive (title/body) edit.
+  comment is at or after the issue's latest substantive (title/body) edit
+  -- a title edit is a timeline "renamed" event, and a body edit is a
+  GraphQL "userContentEdits.editedAt" value (#2762); a failed GraphQL read
+  degrades the anchor to unknown rather than falling back to created_at.
 
 Output schema (JSON mode):
   {
@@ -872,6 +889,13 @@ function fetchIssueLabelEvents(port, issueNumber) {
 function buildIssueTimelineLoader(owner, repo) {
   const port = createGithubProviderAdapter(owner, repo);
   return (issueNumber) => port.getWorkItemTimeline(issueNumber);
+}
+/** #2762: GraphQL `userContentEdits.editedAt` values, for
+ * {@link resolveLatestSubstantiveIssueEditAt}'s body-edit source. */
+function buildIssueUserContentEditsLoader(owner, repo) {
+  const port = createGithubProviderAdapter(owner, repo);
+  return (issueNumber) =>
+    port.getWorkItemUserContentEditTimestamps(issueNumber);
 }
 /**
  * #2243: adapts {@link ProviderPort.listWorkItemComments}'s camelCase

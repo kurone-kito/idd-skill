@@ -776,6 +776,46 @@ export function createGithubProviderAdapter(
       }) as ProviderTimelineEvent[];
     },
 
+    getWorkItemUserContentEditTimestamps(number: number): string[] {
+      const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      userContentEdits(last:100){
+        nodes { editedAt }
+      }
+    }
+  }
+}`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
+        data?: {
+          repository?: {
+            issue?: {
+              userContentEdits?: { nodes?: { editedAt?: unknown }[] } | null;
+            } | null;
+          } | null;
+        };
+        errors?: { message?: unknown }[];
+      };
+      assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
+      const nodes = parsed.data?.repository?.issue?.userContentEdits?.nodes;
+      return (nodes ?? [])
+        .map((node) => node?.editedAt)
+        .filter((value): value is string => typeof value === 'string');
+    },
+
     getWorkItemState(number: number): string | null {
       try {
         const state = deps.ghText(

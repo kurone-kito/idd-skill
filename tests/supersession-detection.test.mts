@@ -1271,6 +1271,9 @@ test('resolveLatestSubstantiveIssueEditAt: a later body edit wins over createdAt
   assert.equal(result, '2026-08-10T00:00:00Z');
 });
 
+// This `edited`+`changes.title` shape is defensive/forward-compatible
+// coverage only -- #2762's live investigation found GitHub never actually
+// emits it; a real title edit arrives as the `renamed` event below.
 test('resolveLatestSubstantiveIssueEditAt: a title edit counts too', () => {
   const result = resolveLatestSubstantiveIssueEditAt('2026-08-01T00:00:00Z', [
     {
@@ -1280,6 +1283,49 @@ test('resolveLatestSubstantiveIssueEditAt: a title edit counts too', () => {
     },
   ]);
   assert.equal(result, '2026-08-10T00:00:00Z');
+});
+
+test('resolveLatestSubstantiveIssueEditAt: a renamed event counts as a title edit, no `changes` payload needed (#2762)', () => {
+  const result = resolveLatestSubstantiveIssueEditAt('2026-08-01T00:00:00Z', [
+    { event: 'renamed', created_at: '2026-08-10T00:00:00Z' },
+  ]);
+  assert.equal(result, '2026-08-10T00:00:00Z');
+});
+
+test('resolveLatestSubstantiveIssueEditAt: a later GraphQL userContentEdits timestamp wins over createdAt (#2762)', () => {
+  const result = resolveLatestSubstantiveIssueEditAt(
+    '2026-08-01T00:00:00Z',
+    [],
+    ['2026-09-09T01:08:31Z'],
+  );
+  assert.equal(result, '2026-09-09T01:08:31Z');
+});
+
+test('resolveLatestSubstantiveIssueEditAt: the later of a renamed event and a userContentEdits timestamp wins (#2762)', () => {
+  const result = resolveLatestSubstantiveIssueEditAt(
+    '2026-08-01T00:00:00Z',
+    [{ event: 'renamed', created_at: '2026-08-05T00:00:00Z' }],
+    ['2026-08-12T00:00:00Z'],
+  );
+  assert.equal(result, '2026-08-12T00:00:00Z');
+});
+
+test('resolveLatestSubstantiveIssueEditAt: a malformed (non-array) bodyEditTimestamps argument is ignored, not thrown (#2762)', () => {
+  const result = resolveLatestSubstantiveIssueEditAt(
+    '2026-08-01T00:00:00Z',
+    [],
+    'not-an-array',
+  );
+  assert.equal(result, '2026-08-01T00:00:00Z');
+});
+
+test('resolveLatestSubstantiveIssueEditAt: non-string entries in bodyEditTimestamps are ignored (#2762)', () => {
+  const result = resolveLatestSubstantiveIssueEditAt(
+    '2026-08-01T00:00:00Z',
+    [],
+    [null, 42, {}, '2026-08-15T00:00:00Z'],
+  );
+  assert.equal(result, '2026-08-15T00:00:00Z');
 });
 
 test('resolveLatestSubstantiveIssueEditAt: a non-body/title event (e.g. labeled) is ignored', () => {

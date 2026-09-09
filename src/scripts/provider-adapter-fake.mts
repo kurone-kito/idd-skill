@@ -71,6 +71,9 @@ export interface FakeProviderFixture {
     }
   >;
   timelines?: Record<number, ProviderTimelineEvent[]>;
+  /** Backs {@link ProviderPort.getWorkItemUserContentEditTimestamps}
+   * (#2762): GraphQL `userContentEdits.editedAt` values per issue number. */
+  userContentEditTimestamps?: Record<number, string[]>;
   comments?: Record<number, ProviderComment[]>;
   closingPullRequestPages?: Record<number, ProviderClosingPullRequestsPage[]>;
   connectedPrEventsSingle?: Record<number, ProviderConnectedPrEvent[]>;
@@ -332,6 +335,10 @@ export function createFakeProviderAdapter(
 
     getWorkItemTimeline(number: number): ProviderTimelineEvent[] {
       return fixture.timelines?.[number] ?? [];
+    },
+
+    getWorkItemUserContentEditTimestamps(number: number): string[] {
+      return fixture.userContentEditTimestamps?.[number] ?? [];
     },
 
     getWorkItemState(number: number): string | null {

@@ -1559,3 +1559,79 @@ test('a throwing timeline fetcher fails open: the candidate stays ready (CodeRab
   assert.equal(summary.ready.length, 1);
   assert.equal(summary.filteredOut.length, 0);
 });
+
+// #2762: the anchor also needs to see a `renamed` timeline event and a
+// GraphQL `userContentEdits` body-edit timestamp -- neither of which the
+// pre-#2762 anchor recognized, so a rejection comment predating either
+// stayed wrongly "current" forever.
+
+test('a stale marker (issue renamed after the rejection) leaves the candidate ready (#2762)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-05T00:00:00Z',
+      ),
+    ],
+    // A title rename landed AFTER the rejection comment, with no
+    // `changes` payload -- the real shape GitHub emits for a rename.
+    fetchTimelineByIssueNumber: () => [
+      { event: 'renamed', created_at: '2026-08-12T00:00:00Z' },
+    ],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});
+
+// #2738 fixture reproduction: a REST timeline carrying zero qualifying
+// `edited` events (only `commented`/`cross-referenced`/`labeled`/
+// `referenced`/`unlabeled`, matching #2738's live shape) alongside a
+// GraphQL `userContentEdits` read that reports a later body edit. Before
+// #2762, this anchor collapsed to the issue's own createdAt and the
+// candidate stayed wrongly excluded forever.
+test('a stale marker becomes ready again via userContentEdits when the REST timeline has no edited event (#2738 fixture, #2762)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-05T00:00:00Z',
+      ),
+    ],
+    fetchTimelineByIssueNumber: () => [
+      { event: 'commented', created_at: '2026-08-06T00:00:00Z' },
+      { event: 'labeled', created_at: '2026-08-07T00:00:00Z' },
+    ],
+    fetchUserContentEditsByIssueNumber: () => ['2026-08-12T00:00:00Z'],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});
+
+test('a throwing userContentEdits fetcher fails open: the candidate stays ready, never falling back to createdAt (#2762)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-10T00:00:00Z',
+      ),
+    ],
+    fetchTimelineByIssueNumber: () => [],
+    fetchUserContentEditsByIssueNumber: () => {
+      throw new Error('transient GitHub GraphQL failure');
+    },
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});

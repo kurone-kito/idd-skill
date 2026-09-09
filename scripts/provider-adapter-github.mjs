@@ -580,6 +580,36 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         extraArgs: ['-H', 'Accept: application/vnd.github+json'],
       });
     },
+    getWorkItemUserContentEditTimestamps(number) {
+      const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      userContentEdits(last:100){
+        nodes { editedAt }
+      }
+    }
+  }
+}`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
+      const nodes = parsed.data?.repository?.issue?.userContentEdits?.nodes;
+      return (nodes ?? [])
+        .map((node) => node?.editedAt)
+        .filter((value) => typeof value === 'string');
+    },
     getWorkItemState(number) {
       try {
         const state = deps.ghText(
