@@ -192,6 +192,15 @@ skills/issue-authoring/references/workflow-boundary.md
 
 <!-- /audit:generated -->
 
+<!-- audit:generated id=idd-template-readme-idd-spec-audit-files -->
+
+```text
+skills/idd-spec-audit/SKILL.md
+skills/idd-spec-audit/references/report-template.md
+```
+
+<!-- /audit:generated -->
+
 See `docs/idd-workflow.md` for the distinction between cross-agent
 execution and PR review policy, and
 `docs/idd-review-policy-profiles.md` for the default Copilot-backed

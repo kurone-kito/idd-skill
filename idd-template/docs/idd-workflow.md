@@ -49,9 +49,10 @@ you are reading this guide first, start at step 1.
 | Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                            | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file; see [B1's harness-native worktree tool caveat](../.github/instructions/idd-work.instructions.md#worktree-creation) before using `EnterWorktree` |
 | Antigravity CLI         | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file                                                                                                                                                  |
 
-When the `issue-authoring` companion bundle is installed under
-`.claude/skills/` in a target repository, OpenCode and Grok Build also
-discover it there through `.claude/skills/` compatibility.
+When the `issue-authoring` or `idd-spec-audit` companion bundle is
+installed under `.claude/skills/` in a target repository, OpenCode and
+Grok Build also discover it there through `.claude/skills/`
+compatibility.
 
 During IDD, do not call Grok Build's `enter_plan_mode` (it blocks
 non-plan-file edits). Do not let the bundled `review`, `pr-babysit`, or
