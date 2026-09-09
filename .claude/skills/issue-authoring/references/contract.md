@@ -1211,9 +1211,11 @@ only approval boundary.
 
   `journal` is the durable record location. For an existing set, use the
   verified originating Stage 1 hold; for a standalone set with no existing
-  issue or anchor, use a pre-existing repository-level authoring journal
-  target designated by repository policy. Do not create that journal as part
-  of the same set. If neither location exists or its identity cannot be
+  issue or anchor, use the repository-level authoring journal target
+  configured at `issueAuthoring.journalIssue` in `.github/idd/config.json`
+  (an `owner/repo#number` reference to a pre-existing, durable, comment-only
+  issue). Do not create that journal as part of the same set. If
+  `issueAuthoring.journalIssue` is not configured, or its identity cannot be
   verified, stop with `blocked-by-human` before creating any target. On every
   paginated replay, require `actor` to equal the API author and verify that
   actor is a trusted marker login with the required write-level permission or
