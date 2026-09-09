@@ -23,6 +23,9 @@ repository is `instructions-only`, use the standard work instructions instead.
 
 - The active claim is ambiguous, disputed, or lost.
 - The current directory is not the sibling worktree for the claimed branch.
+  For a harness whose file-read/edit tools stay bound to the launch
+  workspace (Grok Build observed), check those tools' own absolute-path
+  access, not a shell `cd`/`pwd`.
 - The claimed branch is not the current branch.
 - A required helper or validation command is unavailable, invalid, or disagrees
   with live state.
@@ -41,6 +44,9 @@ request, or other GitHub side effect, confirm all of the following:
    confirm it still wins (no later trusted marker for this claim id
    won the tie-break instead).
 3. The current directory is the sibling worktree for the claimed branch.
+   For a harness whose file-read/edit tools stay bound to the launch
+   workspace (Grok Build observed), use the sibling's absolute path for
+   those tools rather than a shell `cd`/`pwd`.
 4. `git branch --show-current` equals the claimed branch.
 5. Acquire the worktree-local claim lock with the profile-selected
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
@@ -120,7 +126,10 @@ worktree removal) behind the
 27. Run `install-deps` on the manual/no-hook path.
 28. Verify the primary worktree's HEAD is still on `main`.
 29. Verify `git worktree list` shows the new path.
-30. Verify the current directory is the new sibling worktree.
+30. Verify the current directory is the new sibling worktree. For a
+    harness whose file-read/edit tools stay bound to the launch
+    workspace (Grok Build observed), use the sibling's absolute path
+    for those tools rather than a shell `cd`/`pwd`.
 31. If any of steps 28-30 fails, the worktree-creation contract is violated:
     stop, post a hold note naming the failed check, and do not continue to
     B2 from the primary worktree.

@@ -348,6 +348,35 @@ as unverified for every later command in the session — confirm it (e.g.
 `pwd`) before trusting a command that depends on the current directory,
 rather than assuming it still matches the last-known worktree.
 
+### B1 self-check — Grok Build file tools bound to launch workspace
+
+A Grok Build session's file-read and file-edit tools resolve relative
+paths against the session's launch workspace — the primary clone,
+whose HEAD B1 keeps on `main` — not the shell's current directory, so
+a `cd` into the sibling worktree does not rebind them. Reproduced by
+creating a sibling worktree, writing a unique marker only into that
+worktree's uncommitted `README.md`, then running Grok's
+workspace-default grep for the marker: it found nothing, while the
+same grep given the sibling's absolute path found it immediately. A
+shell `cd` into the sibling and a `pwd` reporting the sibling path
+both looked like a passing B1 self-check throughout
+(kurone-kito/idd-skill#2819, 2026-09-10).
+
+This is a different failure class from
+kurone-kito/idd-skill#2114's off-convention worktree-creation
+primitives (`grok --worktree`, `isolation: worktree`,
+`x.ai/git/worktree/*`): there, B1 creates the wrong worktree
+altogether; here the worktree is correct and only the file tools'
+workspace binding stays stale. It sits alongside
+kurone-kito/idd-skill#2332's WorkTrunk cwd-tracking caveat above as
+another way a harness's own working-directory signal can drift from
+what B1's self-check actually verifies.
+
+**What to do**: for a harness whose file-read/edit tools stay bound to
+the launch workspace, pass every such tool call the sibling worktree's
+absolute path instead of relying on a shell `cd`; a shell `pwd`
+reporting the sibling path is not evidence those tools moved with it.
+
 ### B2.1 — Premise verification (decision-transcription issues)
 
 Field evidence showed a worker asked to transcribe a maintainer's
