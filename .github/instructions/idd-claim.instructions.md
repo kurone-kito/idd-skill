@@ -635,7 +635,11 @@ chronologically and apply these rules:
      `role_name == write` or `permission == write` so custom write-base
      roles still satisfy the loose policy;
    - `forcedHandoff.mode` is `human-gated` (default `disabled`);
-   - `oldAgentId` / `oldClaimId` / `branch` all match the active claim.
+   - `oldAgentId` / `oldClaimId` / `branch` all match the active claim;
+   - when an open PR backs the active claim, the marker's
+     `contextScope`/`prFirstCommitAt` pair must show `issue-plus-pr`
+     naming that PR via `linkedPr`, or a handoff predating the PR's
+     first commit (issue #1058 Part B); otherwise it is ignored.
 
    When all hold, replace the active claim with the successor
    (`newAgentId` / `newClaimId`, same `branch`, `supersedes =

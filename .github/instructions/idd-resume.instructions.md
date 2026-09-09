@@ -21,20 +21,20 @@ Resume stale checks use the `claim-stale-age` policy default from
 
 Collect all signals before routing. Use GitHub server timestamps only.
 
-| Signal                   | What to collect                                                                                                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Claim state              | Active `{claim-id}`, agent-id, branch, latest valid `claimed-by` `created_at`; `none` if unclaimed. Record suspicious marker-shaped comments from untrusted authors separately.            |
-| Forced-handoff evidence  | Approving human, displaced `{claim-id}`, branch, linked PR, evidence URL — only when `forced-handoff: human-gated`. When an open PR exists, require issue-plus-PR approval naming that PR. |
-| Open PR and current HEAD | PR number + current HEAD SHA; or `none`.                                                                                                                                                   |
-| Activity recency         | Latest `updatedAt` across issue comments, review threads, review bodies, PR comments. Include PR `createdAt`/`updatedAt` when a PR exists.                                                 |
-| PR HEAD movement         | Baseline: latest trusted watermark/baseline marker SHA if present, else current PR HEAD. Then confirm whether commits were added after that baseline.                                      |
-| CI state                 | Check states for PR HEAD; latest completed `completedAt`; latest successful `completedAt`; or `none`.                                                                                      |
-| Worktrees                | `git worktree list` output.                                                                                                                                                                |
-| Local branch             | Whether the branch named in the claim comment exists locally.                                                                                                                              |
-| Worktree state           | `git status` in worktree (if it exists); otherwise `missing`.                                                                                                                              |
-| Unpushed commits         | `git log @{u}..HEAD` in worktree. Treat all commits as unpushed if no upstream is configured.                                                                                              |
-| Local HEAD SHA           | `git rev-parse HEAD` in worktree.                                                                                                                                                          |
-| Live digest state        | Count of `<!-- idd-live-status: current -->` comments on issue/PR. Do not use digest text to route resume.                                                                                 |
+| Signal                   | What to collect                                                                                                                                                                                |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claim state              | Active `{claim-id}`, agent-id, branch, latest valid `claimed-by` `created_at`; `none` if unclaimed. Record suspicious marker-shaped comments from untrusted authors separately.                |
+| Forced-handoff evidence  | Approving human, displaced `{claim-id}`, branch, linked PR, evidence URL — under `forced-handoff: human-gated`; open PR needs issue-plus-PR naming it, or pre-dates its first commit (rule 7). |
+| Open PR and current HEAD | PR number + current HEAD SHA; or `none`.                                                                                                                                                       |
+| Activity recency         | Latest `updatedAt` across issue comments, review threads, review bodies, PR comments. Include PR `createdAt`/`updatedAt` when a PR exists.                                                     |
+| PR HEAD movement         | Baseline: latest trusted watermark/baseline marker SHA if present, else current PR HEAD. Then confirm whether commits were added after that baseline.                                          |
+| CI state                 | Check states for PR HEAD; latest completed `completedAt`; latest successful `completedAt`; or `none`.                                                                                          |
+| Worktrees                | `git worktree list` output.                                                                                                                                                                    |
+| Local branch             | Whether the branch named in the claim comment exists locally.                                                                                                                                  |
+| Worktree state           | `git status` in worktree (if it exists); otherwise `missing`.                                                                                                                                  |
+| Unpushed commits         | `git log @{u}..HEAD` in worktree. Treat all commits as unpushed if no upstream is configured.                                                                                                  |
+| Local HEAD SHA           | `git rev-parse HEAD` in worktree.                                                                                                                                                              |
+| Live digest state        | Count of `<!-- idd-live-status: current -->` comments on issue/PR. Do not use digest text to route resume.                                                                                     |
 
 ## Step 0 — Route classifier
 

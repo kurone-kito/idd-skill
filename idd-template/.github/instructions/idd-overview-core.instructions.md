@@ -111,8 +111,9 @@ chronologically using the full rules in `idd-claim.instructions.md`.
 Key invariants: ignore untrusted authors; heartbeats require the
 `{branch}` field to match the active claim exactly (anomalous heartbeats
 do not refresh the stale clock); a new `{claim-id}` becomes active only
-when the issue is unclaimed or the current claim is already stale and
-its `{claim-id}` matches `supersedes:`; unclaim requires exact
+when the issue is unclaimed and its `supersedes:` is `none`, or the
+current claim is already stale and its `{claim-id}` matches
+`supersedes:`; unclaim requires exact
 `{agent-id}` and `{claim-id}` match. Same-agent restarts never silently
 inherit a non-stale claim. For legacy claim migration (comments without
 `{claim-id}`), see the same file.
