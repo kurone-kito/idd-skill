@@ -225,9 +225,12 @@ const MARKER_HIDE_POLICY_ENTRIES = [
   },
   {
     label: '<!-- activation-nonce:',
-    policy: 'wired',
+    policy: 'f4-only',
     reason:
-      'Claim chain, grouped by supersedes: claim-id lineage (idd-claim.instructions.md).',
+      "No hide-at-post-time wiring yet: idd-claim.instructions.md's takeover " +
+      'minimization only targets claimed-by/unclaimed-by/heartbeat comments, ' +
+      'not activation-nonce -- only the post-merge F4 cleanup batch cleans it ' +
+      'up today (caught by Copilot review on PR #2759).',
   },
   {
     label: '<!-- review-watermark:',
