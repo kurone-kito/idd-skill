@@ -118,7 +118,8 @@ correcting:
   instruction's actual described behavior, do not flag the
   instruction as defective — `docs/idd-autonomy-contract.md` is out of
   scope as a finding target, so note the suspected contract drift
-  outside this skill's normal finding flow instead.
+  outside this skill's normal finding flow instead (preventive; no
+  observed incident yet — #2782).
 
 A mutation with no row in the contract falls back to the contract's own
 default (irreversible); that default governs the contract itself; do
