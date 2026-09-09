@@ -807,17 +807,17 @@ Running this variant safely requires:
 
 ### Discover re-run cadence
 
-The full Discover enumeration this session's own A0/A0-O routing
-selects — `discover-roadmap-graph.mjs --all-roadmaps --with-readiness
---with-claim-state`, and `discover-orphan-filter.mjs --autopilot
---with-claim-state` only when `issue-scope`/`orphan-first-policy`
-actually routes to A0-O (`idd-discover.instructions.md`'s A0/A0-O) —
-is too expensive to re-run after every delegated-worker completion; a
-2026-09-09 hearing decided to document a re-run cadence for it
-(kurone-kito/idd-skill#2706).
+Re-running the full Discover enumeration this session established
+(`discover-roadmap-graph`, and `discover-orphan-filter` when A0/A0-O
+routes there) after every delegated-worker completion is too
+expensive; a 2026-09-09 hearing decided to document a re-run cadence
+instead (kurone-kito/idd-skill#2706). A re-run always repeats the mode
+and routing already in force for this session — A1's single-root or
+cross-roadmap choice, and A0/A0-O's own `issue-scope`/
+`orphan-first-policy` routing — refreshing the same search, never
+widening it to a broader mode this session never selected.
 
-- **Do not re-run** the full enumeration this session's A0/A0-O
-  routing already selected, after every delegated-worker completion.
+- **Do not re-run** Discover after every delegated-worker completion.
   Dispatch the next worker from the previously enumerated graph
   instead, after a fresh target-local A3 readiness check for that
   specific candidate (the configured authoring label, and any
