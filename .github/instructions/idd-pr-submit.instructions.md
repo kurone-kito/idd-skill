@@ -510,8 +510,8 @@ confirmed condition above. Delegate polling mechanics to
   `ciWait.rerunPolicy` rerun only reproduces the same red **unless a
   maintainer has since posted a valid external-check waiver for this
   HEAD** — that case still needs the rerun, to make the check reflect
-  the waiver (a pre-existing F2/F3 concern this branch leaves unchanged;
-  see `idd-pre-merge.instructions.md`'s External-check waivers). A
+  the waiver (see `idd-pre-merge.instructions.md`'s External-check
+  waivers for the F2/F3 handling). A
   waiver is effective only once `deadline.passed` is true or
   `terminal.state` reaches `COPILOT_UNAVAILABLE` (check both fields in
   the same run's output); posted earlier, it is valid but inert —
