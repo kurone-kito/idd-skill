@@ -361,6 +361,202 @@ test('fails autonomous completion when external coordination is required', () =>
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+// --- #2738: autonomous_completion false positives on negated, quoted, or
+// investigative-past-tense phrasing, not a live remaining blocker --------
+
+test('passes autonomous completion when a trigger phrase is negated nearby (#2716 shape)', () => {
+  const result = evaluateA4Viability({
+    number: 30,
+    title:
+      'verify Contents API permission masking with no interactive credential minting',
+    body:
+      'Perform the empirical test with no interactive credential minting: ' +
+      'create a disposable repository and record the observed status code. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test("passes autonomous completion when a trigger phrase is quoted as another artifact's own content (#2711 shape)", () => {
+  const result = evaluateA4Viability({
+    number: 31,
+    title: 'fix quotation masking in checkVerifiability framing-verb scan',
+    body:
+      `An inverted-attribution quotation ("'Maintainer decision (...): ` +
+      `choose A,' reports the referenced tracking issue") is not ` +
+      'recognized as quoted. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes autonomous completion when a trigger phrase describes an already-completed investigation (#2697 shape, applied to autonomous_completion)', () => {
+  const result = evaluateA4Viability({
+    number: 32,
+    title: 'document the Contents API masking finding',
+    body:
+      'A search already found that the external system does not mask ' +
+      'permission denials as 404. Single docs-only change. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when negation is cut off by a hard clause break before a later genuine blocker', () => {
+  // Adversarial case: a negation cue must not extend its reach across a
+  // clause boundary and exclude a genuine blocker that follows it.
+  const result = evaluateA4Viability({
+    number: 33,
+    title: 'wire external approval gate',
+    body:
+      'This has no ambiguity here. Waiting for maintainer sign-off is ' +
+      'required before this can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a quote-like character never closes on the same line', () => {
+  // Adversarial case: a contraction's apostrophe ("customer's") must not
+  // be mistaken for an opening quote and suppress a genuine blocker.
+  const result = evaluateA4Viability({
+    number: 34,
+    title: "wire external approval gate for the customer's workflow",
+    body:
+      "The customer's rollout requires external coordination before this " +
+      'can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when "checked" appears without a past-tense qualifier before a genuine blocker', () => {
+  const result = evaluateA4Viability({
+    number: 35,
+    title: 'add pre-merge external verification step',
+    body:
+      'It must be checked whether production access is required before ' +
+      'this ships. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+// --- Independent critique follow-ups on the exclusions above: a
+// comma/list-boundary guard for negation, paragraph-scoped quote pairing,
+// and a generic-mention exclusion for a trigger word used to describe a
+// pattern rather than assert a requirement -----------------------------
+
+test('passes autonomous completion when a quoted example wraps across a soft line break within the same paragraph (#2711 real-body shape)', () => {
+  const result = evaluateA4Viability({
+    number: 36,
+    title: 'fix quotation masking in checkVerifiability framing-verb scan',
+    body:
+      `An inverted-attribution quotation ("'Maintainer decision\n` +
+      `(...): choose A,' reports the referenced tracking issue") is not ` +
+      'recognized as quoted. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes autonomous completion when an earlier generic-pattern mention and a later negated occurrence of the same trigger word coexist (#2716 real-body shape)', () => {
+  const result = evaluateA4Viability({
+    number: 37,
+    title: 'verify Contents API permission masking',
+    body:
+      'This would be exploitable for an adopter authenticating with a ' +
+      'fine-grained token (an increasingly common least-privilege CI ' +
+      'credential pattern) that has repository access. Perform the test ' +
+      'with no interactive credential minting: create a disposable ' +
+      'repository. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when negation is cut off by a comma-joined contrastive clause', () => {
+  // Adversarial case (Codex-style independent critique finding): an
+  // unrelated leading negation must not reach across a contrastive comma
+  // clause and exclude a genuine blocker that follows it.
+  const result = evaluateA4Viability({
+    number: 38,
+    title: 'wire external approval gate',
+    body:
+      'No obvious risk here, but production access is still required ' +
+      'before this can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when negation is cut off by a list-item boundary', () => {
+  // Adversarial case: a bullet's own negation must not reach into a
+  // sibling bullet's independent claim.
+  const result = evaluateA4Viability({
+    number: 39,
+    title: 'wire external approval gate',
+    body:
+      '- No new dependencies\n' +
+      '- Requires maintainer decision on naming\n' +
+      '- Add tests\n' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when "zero" is part of a hyphenated compound, not a negation cue', () => {
+  const result = evaluateA4Viability({
+    number: 40,
+    title: 'wire external approval gate',
+    body:
+      'Zero-downtime deployment requires production access before this ' +
+      'can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a generic-pattern mention coexists with a distinct genuine blocker', () => {
+  const result = evaluateA4Viability({
+    number: 41,
+    title: 'wire external approval gate',
+    body:
+      'This describes a common credential pattern used elsewhere. ' +
+      'Waiting for maintainer sign-off is still required before this ' +
+      'can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('evaluateDiscoverViability fails closed when a lookup aborts', async () => {
   // A non-404 gh failure (auth / rate-limit / network) propagates out of
   // loadIssue instead of being swallowed into a silent issue_not_found.

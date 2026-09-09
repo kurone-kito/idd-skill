@@ -81,7 +81,81 @@ const OBJECTIVE_VERIFICATION_PATTERN =
 const SUBJECTIVE_VERIFICATION_PATTERN =
   /\b(feels?|looks? good|opinion|judgement?|ux call|maintainer preference|stakeholder preference|subjective)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
-  /\b(external coordination|human decision|maintainer decision|stakeholder sign-?off|manual approval|waiting for (?:maintainer|stakeholder)|external system|third-?party access|credential|production access|cross-repo dependency)\b/i;
+  /\b(external coordination|human decision|maintainer decision|stakeholder sign-?off|manual approval|waiting for (?:maintainer|stakeholder)|external system|third-?party access|credential|production access|cross-repo dependency)\b/gi;
+// A trigger phrase inside a phrase describing something other than a live,
+// remaining completion blocker should not count (#2738), mirroring
+// findUnexcludedBroadScopeMatch's per-occurrence shape above: a negated
+// non-requirement, a quoted/cited example of another artifact's own
+// content, a past-tense description of an investigation the issue author
+// already finished while drafting, or a generic mention of a pattern/
+// concept rather than an asserted requirement.
+//
+// 1. Negation: the match is governed by a negation cue reaching it with no
+//    hard clause break in between ("no interactive credential minting" --
+//    #2716). `zero` excludes a hyphenated compound ("zero-downtime") so it
+//    is never mistaken for a standalone negation word.
+const NEGATION_CUE_PATTERN =
+  /\b(no|not|without|zero(?!-)|never|none|isn'?t|aren'?t|wasn'?t|weren'?t|doesn'?t|don'?t|didn'?t|won'?t|can'?t|cannot)\b/gi;
+const NEGATION_CUE_WINDOW = 40;
+// A backward-looking cue (negation or investigative past tense, below)
+// stops governing a match at a period/semicolon/em-dash (HARD_CLAUSE_BREAK_
+// PATTERN, shared with the broad-scope exclusions above), a blank line, or
+// a following list-item marker -- a bullet's own negation must not reach
+// into a SIBLING bullet's independent claim. A bare mid-paragraph newline
+// (a soft-wrapped line) is deliberately not a break here: #2711's own
+// wrapped quotation shows ordinary prose legitimately continuing a clause
+// across one.
+const CUE_HARD_BREAK_PATTERN =
+  /[.;—]|--|\n[ \t]*(?:[-*]\s|\d+[.)]\s)|\n[ \t]*\n/;
+function isGovernedByBackwardCue(corpus, matchIndex, cuePattern, window) {
+  const windowStart = Math.max(0, matchIndex - window);
+  const windowText = corpus.slice(windowStart, matchIndex);
+  for (const cueMatch of windowText.matchAll(cuePattern)) {
+    const linkText = windowText.slice(cueMatch.index + cueMatch[0].length);
+    if (
+      CUE_HARD_BREAK_PATTERN.test(linkText) ||
+      CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+// 2. Quoted example: the match sits on a Markdown blockquote line, or is
+//    bounded by a matching pair of quote characters within the containing
+//    paragraph (#2711's inverted-attribution quotation shape, which soft-
+//    wraps the quoted marker across a line break -- scoped to the
+//    paragraph, not the physical line, so that wrap doesn't defeat the
+//    pairing). A plain straight single quote also marks a contraction
+//    ("doesn't"), so a candidate quote character counts as an opener only
+//    when the character right before it is not a letter, and as a closer
+//    only when the character right after it is not a letter -- a
+//    contraction's apostrophe always sits directly between two letters and
+//    fails both checks.
+const QUOTE_CHAR_PAIRS = {
+  '"': '"',
+  "'": "'",
+  '‘': '’',
+  '“': '”',
+};
+const LETTER_PATTERN = /[A-Za-z]/;
+const PARAGRAPH_BREAK_PATTERN = /\n[ \t]*\n/g;
+// 3. Investigative past tense: the match describes an investigation the
+//    issue author already performed while drafting, not remaining work
+//    (#2697's shape, applied here to EXTERNAL_COORDINATION_PATTERN).
+const INVESTIGATIVE_PAST_TENSE_PATTERN =
+  /\b(?:already|previously)\s+(?:checked|verified|confirmed|investigated|reviewed|searched)\b|\bi\s+(?:already\s+)?checked\b|\ba\s+search\s+(?:already\s+)?found\b|\bconfirmed\s+via\b/gi;
+const INVESTIGATIVE_PAST_TENSE_WINDOW = 80;
+// 4. Generic mention: the match is followed shortly by a noun naming a
+//    general pattern/example rather than asserting a live requirement of
+//    this issue ("...a least-privilege CI credential pattern..." -- an
+//    incidental background mention in #2716's own real body, distinct
+//    from that same issue's separately negated target phrase).
+const GENERIC_MENTION_NOUN_PATTERN =
+  /^(pattern|example|scenario|convention|practice|concept|term|approach|precedent|case)$/i;
+const GENERIC_MENTION_LOOKAHEAD_CHARS = 40;
+const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -322,12 +396,113 @@ export function evaluateClearVerification(issue) {
     evidence: 'No objective verification signal detected.',
   };
 }
+function isGovernedByNegation(corpus, matchIndex) {
+  return isGovernedByBackwardCue(
+    corpus,
+    matchIndex,
+    NEGATION_CUE_PATTERN,
+    NEGATION_CUE_WINDOW,
+  );
+}
+function isLikelyQuoteOpener(charBefore) {
+  return !LETTER_PATTERN.test(charBefore);
+}
+function isLikelyQuoteCloser(charAfter) {
+  return !LETTER_PATTERN.test(charAfter);
+}
+function findParagraphSpan(corpus, offset) {
+  let start = 0;
+  for (const breakMatch of corpus
+    .slice(0, offset)
+    .matchAll(PARAGRAPH_BREAK_PATTERN)) {
+    start = breakMatch.index + breakMatch[0].length;
+  }
+  const afterBreak = /\n[ \t]*\n/.exec(corpus.slice(offset));
+  const end = afterBreak ? offset + afterBreak.index : corpus.length;
+  return { start, end };
+}
+function isInsideQuotedExample(corpus, matchIndex, matchEnd) {
+  const lineStart = corpus.lastIndexOf('\n', matchIndex - 1) + 1;
+  if (/^[ \t]*>/.test(corpus.slice(lineStart, matchIndex))) {
+    return true;
+  }
+  const { start: paragraphStart, end: paragraphEnd } = findParagraphSpan(
+    corpus,
+    matchIndex,
+  );
+  const before = corpus.slice(paragraphStart, matchIndex);
+  const after = corpus.slice(matchEnd, paragraphEnd);
+  for (const [open, close] of Object.entries(QUOTE_CHAR_PAIRS)) {
+    const openIndex = before.lastIndexOf(open);
+    if (
+      openIndex === -1 ||
+      !isLikelyQuoteOpener(openIndex > 0 ? before[openIndex - 1] : '')
+    ) {
+      continue;
+    }
+    const closeIndex = after.indexOf(close);
+    if (
+      closeIndex === -1 ||
+      !isLikelyQuoteCloser(after[closeIndex + 1] ?? '')
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+function isDescribedByPastInvestigation(corpus, matchIndex) {
+  return isGovernedByBackwardCue(
+    corpus,
+    matchIndex,
+    INVESTIGATIVE_PAST_TENSE_PATTERN,
+    INVESTIGATIVE_PAST_TENSE_WINDOW,
+  );
+}
+function isFollowedByGenericMentionNoun(corpus, matchEnd) {
+  const rawTail = corpus.slice(
+    matchEnd,
+    matchEnd + GENERIC_MENTION_LOOKAHEAD_CHARS,
+  );
+  const breakMatch = HARD_CLAUSE_BREAK_PATTERN.exec(rawTail);
+  const tail = breakMatch ? rawTail.slice(0, breakMatch.index) : rawTail;
+  const tokens = tail.match(WORD_TOKEN_PATTERN) ?? [];
+  return tokens
+    .slice(0, GENERIC_MENTION_LOOKAHEAD_TOKENS)
+    .some((token) => GENERIC_MENTION_NOUN_PATTERN.test(token));
+}
+/**
+ * Finds the first EXTERNAL_COORDINATION_PATTERN occurrence that survives
+ * every exclusion check (#2738): a match inside a code span, governed by a
+ * negation cue, inside a quoted/cited example, described as an
+ * already-completed investigation, or naming a generic pattern rather than
+ * an asserted requirement does not describe this issue's own remaining
+ * completion blocker and is skipped.
+ */
+function findUnexcludedExternalCoordinationMatch(corpus) {
+  for (const match of corpus.matchAll(EXTERNAL_COORDINATION_PATTERN)) {
+    const index = match.index;
+    const end = index + match[0].length;
+    if (
+      isInsideCodeSpan(corpus, index) ||
+      isInsideQuotedExample(corpus, index, end) ||
+      isGovernedByNegation(corpus, index) ||
+      isDescribedByPastInvestigation(corpus, index) ||
+      isFollowedByGenericMentionNoun(corpus, end)
+    ) {
+      continue;
+    }
+    return match[0];
+  }
+  return null;
+}
 export function evaluateAutonomousCompletion(issue) {
   const corpus = `${issue.title}\n${issue.body}`;
-  if (EXTERNAL_COORDINATION_PATTERN.test(corpus)) {
+  const match = findUnexcludedExternalCoordinationMatch(corpus);
+  if (match !== null) {
     return {
       pass: false,
-      evidence: 'External coordination or manual decision signal detected.',
+      evidence: `External coordination or manual decision signal detected: "${match}".`,
     };
   }
   return {
