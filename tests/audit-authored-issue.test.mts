@@ -605,6 +605,76 @@ test('required-headings does not tolerate 4+ leading spaces on an ATX heading', 
   assert.match(finding?.detail ?? '', /Proposed change/);
 });
 
+// --- roadmap-tracks-parse (#2765) ---
+
+test('roadmap-tracks-parse passes when every Tracks checkbox line resolves to a reference', () => {
+  // roadmapBody()'s default Tracks section is `- [ ] #100`, which already
+  // resolves via the leading-form parser.
+  const report = auditAuthoredIssue(roadmapBody(), { shape: 'roadmap' });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.severity, undefined);
+});
+
+test('roadmap-tracks-parse passes on the trailing (#N) shape (#2765)', () => {
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: some description (#100)',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+});
+
+test('roadmap-tracks-parse fails when every Tracks checkbox line carries no issue reference at all (#2765)', () => {
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: no reference here at all',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /no reference here at all/);
+});
+
+test('roadmap-tracks-parse warns (does not fail) when only some Tracks checkbox lines resolve (#2765)', () => {
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    ['- [ ] #100', '- [ ] Track 2: no reference here at all'].join('\n'),
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /no reference here at all/);
+  // A warning-severity finding must never flip the overall report to failed.
+  assert.equal(report.passed, true);
+});
+
+test('roadmap-tracks-parse is not applicable outside the roadmap shape', () => {
+  const report = auditAuthoredIssue(orphanBody(), { shape: 'orphan' });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+});
+
+test('roadmap-tracks-parse is not applicable during a bucket audit', () => {
+  const body = [
+    '<!-- idd-skill-authoring-bucket: needs-decision -->',
+    '## Background',
+    '',
+    'Some background text needing a maintainer decision.',
+  ].join('\n');
+  const report = auditAuthoredIssue(body, {
+    shape: 'roadmap',
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+});
+
 // --- dependency-marker-rule ---
 
 test('dependency-marker-rule fails when a child issue carries a roadmap-id marker', () => {
