@@ -6,7 +6,10 @@
 // the generated .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { parseAuthoringBucketMarker } from './audit-authored-issue.mjs';
+import {
+  normalizeMarkerPrefix,
+  parseAuthoringBucketMarker,
+} from './audit-authored-issue.mjs';
 import { computeBranchName } from './branch-name.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -2000,10 +2003,7 @@ export function evaluateSuitability(issue, options = {}) {
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
-    markerPrefix: normalizeConfiguredLabelName(
-      options.markerPrefix,
-      DEFAULT_MARKER_PREFIX,
-    ),
+    markerPrefix: normalizeMarkerPrefix(options.markerPrefix),
     highConfidenceDuplicate: normalizeHighConfidenceDuplicateInput(
       options.highConfidenceDuplicate,
     ),
@@ -3493,10 +3493,7 @@ export function evaluateSuitabilityLocal(bodyText, options = {}) {
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
-    markerPrefix: normalizeConfiguredLabelName(
-      options.markerPrefix,
-      DEFAULT_MARKER_PREFIX,
-    ),
+    markerPrefix: normalizeMarkerPrefix(options.markerPrefix),
   };
   const checks = CHECKS.map((check) => {
     if (check.id === 'duplicate_or_superseded') {

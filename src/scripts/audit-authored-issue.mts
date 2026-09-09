@@ -2078,7 +2078,7 @@ function extractHeadings(text: string): Set<string> {
   return headings;
 }
 
-function normalizeMarkerPrefix(prefix: unknown): string {
+export function normalizeMarkerPrefix(prefix: unknown): string {
   // Trim first: a config value or CLI input with accidental leading/
   // trailing whitespace (e.g. "idd-skill ") would otherwise become a
   // distinct prefix that never matches any real marker, producing

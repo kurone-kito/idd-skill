@@ -6142,6 +6142,36 @@ test('evaluateSuitabilityLocal reports duplicate_or_superseded as not_evaluated 
   );
 });
 
+test('evaluateSuitabilityLocal trims whitespace from a configured markerPrefix before matching (#2761 review, Copilot)', () => {
+  const draftWithMarker = `# feat: add deterministic helper
+
+<!-- idd-skill-authoring-bucket: blocked-by-human -->
+
+## Purpose
+Add a deterministic helper function.
+
+## Scope
+Implement helper behavior in a single file.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] lint passes
+`;
+
+  // An untrimmed prefix (accidental leading/trailing whitespace in config)
+  // must still resolve to the same "idd-skill" prefix as the trimmed form,
+  // not silently fail to match every real marker.
+  const result = evaluateSuitabilityLocal(draftWithMarker, {
+    markerPrefix: '  idd-skill  ',
+  });
+  const autonomyCheck = result.checks.find((check) => check.id === 'autonomy');
+  assert.equal(autonomyCheck?.result, 'fail');
+  assert.match(
+    autonomyCheck?.evidence ?? '',
+    /authoring-bucket: blocked-by-human/,
+  );
+});
+
 test('evaluateSuitabilityLocal honors configured blocked/needs-decision label names (moot for labels, but exercised for parity)', () => {
   // The synthetic local issue always has an empty labels array, so a
   // configured blockedByHumanLabelName can never match -- this just
