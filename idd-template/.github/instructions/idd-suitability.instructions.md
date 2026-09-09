@@ -159,10 +159,10 @@ Can success be verified independently by the agent?
 
 When an issue fails any suitability check, classify it into one of six
 stable outcomes (table below), and report the failure before continuing.
-A4 discovery paths: drop the candidate from the survivor set and retry
-A4 Step 2 with the next candidate A4 Step 2 ranks first (highest
-suitability score first, per `idd-discover.instructions.md`). A0-T
-explicit-target
+A4 discovery paths: drop the candidate from the survivor set and rerun
+A4 Step 2 over the remaining survivors to pick the next candidate (see
+`idd-discover.instructions.md`'s A4 Step 2 for the ranking, including
+its `autopilotSuitability.enabled: false` fallback). A0-T explicit-target
 runs: the candidate set is only the verified target — stop without
 fallback. Stop when the survivor set is empty, or immediately on an
 `invalid` outcome (trust/safety concerns require human review):
@@ -253,10 +253,10 @@ risk, not a blocker on the gate above.
 ## Decision Flow
 
 ```text
-Candidates = A4 survivor set in A4 Step 2's ranked order
+Candidates = A4 survivor set
   (for A0-T: the single verified explicit target; failure = STOP, no fallback)
   (for A0-T: every "remove from Candidates, loop" branch below means: report and STOP)
-Loop: Pick the first remaining candidate in that order
+Loop: Rerun A4 Step 2 over Candidates to pick the next candidate
   → Run Check 1 (Repository Fit)
     → PASS → Run Check 2
     → FAIL → Classify as out-of-scope → Report, remove from Candidates, loop
