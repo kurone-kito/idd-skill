@@ -2389,33 +2389,31 @@ test('--apply --type review-ack never hides a differing-HEAD-SHA comment created
   }
 });
 
-test('--apply --type review-ack skips the whole hide pass when the live PR HEAD no longer matches the just-posted marker (#2754, delayed-POST race)', () => {
+test('--apply --type review-ack self-minimizes the just-posted marker when the live PR HEAD no longer matches it (#2754, round 5, chatgpt-codex-connector review)', () => {
   // Simulates the branch advancing between --from-pr's own headRefOid read
   // (embedded in the marker body as SHA) and this call reaching the
   // hide-at-post-time step: a live re-read now reports OTHER_SHA. The
   // `id <` ordering restriction alone cannot tell a stale marker from a
-  // fresh one once both are "prior" by id, so the step must bail out
-  // BEFORE ever listing comments, rather than risk minimizing a
-  // genuinely newer, current-HEAD acknowledgement while leaving this
-  // stale one visible. Any `--paginate` comments-listing or `graphql`
-  // call here falls through to the catch-all "unexpected gh invocation"
-  // failure, proving the scan itself never runs.
-  const restore = stubExecutable(
-    'gh',
-    `const fs = require('node:fs');
-const args = process.argv.slice(2);
-function out(s) { fs.writeSync(1, s); process.exit(0); }
-function fail(s) { fs.writeSync(2, s); process.exit(1); }
-if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && args.includes('.headRefOid')) {
-  out('${OTHER_SHA}\\n');
-} else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
-  fs.readFileSync(0, 'utf8');
-  out(JSON.stringify({ id: 9550, html_url: 'https://github.com/o/r/issues/1#issuecomment-9550' }));
-} else {
-  fail('unexpected gh invocation: ' + args.join(' '));
-}
-`,
+  // fresh one once both are "prior" by id, so scanning for OTHER
+  // candidates while stale risks minimizing a genuinely newer, current-
+  // HEAD acknowledgement. Round 5 (this test) asserts the step instead
+  // self-minimizes the marker THIS call itself just posted -- mirroring
+  // sibling #2755's self-minimize behavior for
+  // `idd-local-validation-evidence:` -- rather than abandoning it
+  // expanded forever (rounds 3-4's behavior, now superseded).
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-review-ack-stale-'),
   );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [],
+    probeIndex: {
+      IC_posted_self: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9550,
+    liveHeadSha: OTHER_SHA,
+  });
   try {
     const output = execFileSync(
       process.execPath,
@@ -2443,8 +2441,8 @@ if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && arg
       { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
     );
     // The marker's own POST result is unaffected: it still succeeds and
-    // reports the newly created comment, even though the hide step bailed
-    // out entirely (best-effort, #2754).
+    // reports the newly created comment, even though that same comment is
+    // then self-minimized as stale (best-effort, #2754).
     assert.deepEqual(JSON.parse(output), {
       mode: 'apply',
       type: 'review-ack',
@@ -2453,36 +2451,38 @@ if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && arg
       commentId: 9550,
       url: 'https://github.com/o/r/issues/1#issuecomment-9550',
     });
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), [
+      'IC_posted_self',
+    ]);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
-test('--apply --type copilot-unavailable also skips the whole hide pass when the live PR HEAD no longer matches the just-posted marker (#2754, round 4, chatgpt-codex-connector review)', () => {
-  // Same race as the review-ack test above, but for copilot-unavailable:
-  // a delayed, stale-HEAD same-claim poster (e.g. a stalled pre-handoff
-  // session finally completing its retry) must not treat an earlier,
-  // CURRENT-HEAD same-claim comment as "superseded" purely because
-  // findSupersededCopilotUnavailableSubjects matches on claim: equality
-  // alone, with no HEAD comparison of its own. The live-HEAD gate, now
-  // unconditional for both types, closes that gap by never letting a
-  // stale poster run its scan/hide judgment at all.
-  const restore = stubExecutable(
-    'gh',
-    `const fs = require('node:fs');
-const args = process.argv.slice(2);
-function out(s) { fs.writeSync(1, s); process.exit(0); }
-function fail(s) { fs.writeSync(2, s); process.exit(1); }
-if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && args.includes('.headRefOid')) {
-  out('${OTHER_SHA}\\n');
-} else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
-  fs.readFileSync(0, 'utf8');
-  out(JSON.stringify({ id: 9560, html_url: 'https://github.com/o/r/issues/1#issuecomment-9560' }));
-} else {
-  fail('unexpected gh invocation: ' + args.join(' '));
-}
-`,
+test('--apply --type copilot-unavailable also self-minimizes the just-posted marker when the live PR HEAD no longer matches it (#2754, round 5, chatgpt-codex-connector review)', () => {
+  // Same stale-HEAD race as the review-ack test above, but for
+  // copilot-unavailable: a delayed, stale-HEAD same-claim poster (e.g. a
+  // stalled pre-handoff session finally completing its retry) must not
+  // treat an earlier, CURRENT-HEAD same-claim comment as "superseded"
+  // purely because findSupersededCopilotUnavailableSubjects matches on
+  // claim: equality alone, with no HEAD comparison of its own. The
+  // live-HEAD gate, unconditional for both types, now self-minimizes
+  // THIS call's own just-posted marker instead of scanning for other
+  // candidates while stale.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-copilot-unavailable-stale-'),
   );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [],
+    probeIndex: {
+      IC_posted_self: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9560,
+    liveHeadSha: OTHER_SHA,
+  });
   try {
     const output = execFileSync(
       process.execPath,
@@ -2521,8 +2521,63 @@ if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && arg
       commentId: 9560,
       url: 'https://github.com/o/r/issues/1#issuecomment-9560',
     });
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), [
+      'IC_posted_self',
+    ]);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type review-ack never self-minimizes a stale just-posted marker whose own author is untrusted (#2754, round 5)', () => {
+  // The trust gate on postedComment applies to the self-minimize path
+  // exactly as it already does to the scan-for-others path: an untrusted
+  // poster must not trigger ANY mutation, including of its own comment.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-review-ack-stale-untrusted-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [],
+    probeIndex: {
+      IC_posted_self: { author: 'some-random-bot' },
+    },
+    mutationLogFile,
+    newCommentId: 9551,
+    liveHeadSha: OTHER_SHA,
+    postedAuthorLogin: 'some-random-bot',
+  });
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), []);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -2916,8 +2971,7 @@ test('hideSupersededPostTimeMarkers enforces its remaining budget on the comment
   // mutation pass (which round 2 already covered).
   const restore = stubExecutable(
     'gh',
-    `const { execSync } = require('node:child_process');
-const fs = require('node:fs');
+    `const fs = require('node:fs');
 const args = process.argv.slice(2);
 function fail(s) { fs.writeSync(2, s); process.exit(1); }
 if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && args.includes('.headRefOid')) {
@@ -2925,7 +2979,7 @@ if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && arg
   process.exit(0);
 }
 if (args[0] === 'api' && typeof args[1] === 'string' && args[1].indexOf('/comments') !== -1 && args.indexOf('--paginate') !== -1) {
-  execSync('sleep 1');
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
   process.stdout.write('');
   process.exit(0);
 }

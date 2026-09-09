@@ -732,36 +732,42 @@ const HIDE_STEP_DEADLINE_MS = 45_000;
  * excludes it structurally, independent of what its embedded HEAD SHA or
  * `claim:` value happens to be.
  *
- * For BOTH types, this also re-reads the target PR's LIVE head SHA and
- * bails out (no scan, no mutation) unless it still matches
- * `fields['head-sha']` (caught by chatgpt-codex-connector review on PR
- * #2788, two rounds): `review-ack`'s usual `--from-pr` reads HEAD once
- * before composing and POSTing the marker body, so on a slow POST the
- * branch can advance and a concurrent session can already have posted a
- * genuine, current-HEAD acknowledgement by the time this step runs. The
- * `id <` restriction above only orders candidates by creation time -- it
- * cannot tell a stale marker from a fresh one once both are "prior" by id,
- * so without this check a stale-HEAD post could minimize that valid newer
- * acknowledgement while leaving its own, now-superseded one visible:
- * destroying the correct evidence instead of the stale evidence.
- * `copilot-unavailable` never derives `--head-sha` from `--from-pr` (its
- * supersession key, `claim-id`, always comes from an explicit CLI flag),
- * but that only rules out THIS caller's own embedded value going stale
- * between observation and POST -- it does nothing about a genuinely
- * different, concurrent same-claim poster (e.g. a stalled pre-handoff
- * session finally completing its retry against a claim a handoff already
- * moved on from): `findSupersededCopilotUnavailableSubjects` matches
- * purely on `claim:` equality, with no HEAD comparison of its own, so a
- * STALE same-claim post could still treat an earlier, CURRENT-HEAD
- * same-claim post as "superseded" purely by virtue of posting later
- * (round 2 review, initially missed: the check below was `review-ack`-only
- * until this). Applying the same live-HEAD gate to both types closes that
- * gap without needing a HEAD-aware rewrite of the claim-based finder
- * itself: a poster who is observably stale relative to current HEAD
- * simply never gets to run its own scan/hide judgment at all, regardless
- * of which family it belongs to. A failed re-read (not a PR, `gh` error,
- * anything else) falls through to the outer catch below and skips the
- * whole pass, same as any other best-effort failure.
+ * For BOTH types, this also re-reads the target PR's LIVE head SHA and, when
+ * it no longer matches `fields['head-sha']`, SELF-MINIMIZES the marker this
+ * call itself just posted instead of scanning for prior candidates (caught
+ * by chatgpt-codex-connector review on PR #2788, three rounds -- rounds 3-4
+ * bailed out entirely here; round 5 found that abandoning the just-posted
+ * marker left it expanded forever with no later invocation guaranteed to
+ * sweep it, mirroring the self-minimize sibling #2755 shipped for
+ * `idd-local-validation-evidence:` after the same finding there): `review-
+ * ack`'s usual `--from-pr` reads HEAD once before composing and POSTing the
+ * marker body, so on a slow POST the branch can advance and a concurrent
+ * session can already have posted a genuine, current-HEAD acknowledgement by
+ * the time this step runs. The `id <` restriction above only orders
+ * candidates by creation time -- it cannot tell a stale marker from a fresh
+ * one once both are "prior" by id, so scanning for prior candidates while
+ * stale could minimize that valid newer acknowledgement while leaving this
+ * call's own, now-superseded one visible: destroying the correct evidence
+ * instead of the stale evidence. `copilot-unavailable` never derives
+ * `--head-sha` from `--from-pr` (its supersession key, `claim-id`, always
+ * comes from an explicit CLI flag), but that only rules out THIS caller's
+ * own embedded value going stale between observation and POST -- it does
+ * nothing about a genuinely different, concurrent same-claim poster (e.g. a
+ * stalled pre-handoff session finally completing its retry against a claim a
+ * handoff already moved on from): `findSupersededCopilotUnavailableSubjects`
+ * matches purely on `claim:` equality, with no HEAD comparison of its own,
+ * so a STALE same-claim post could still treat an earlier, CURRENT-HEAD
+ * same-claim post as "superseded" purely by virtue of posting later (round 2
+ * review, initially missed: the check below was `review-ack`-only until
+ * round 4). Applying the same live-HEAD gate to both types closes that gap
+ * without needing a HEAD-aware rewrite of the claim-based finder itself: a
+ * poster who is observably stale relative to current HEAD never scans for
+ * OTHER candidates, regardless of which family it belongs to -- it only ever
+ * minimizes its own just-posted comment. The trust gate below (on
+ * `postedComment` itself) still applies either way, so an untrusted post
+ * never triggers even its own self-minimize. A failed re-read (not a PR,
+ * `gh` error, anything else) falls through to the outer catch below and
+ * skips the whole pass, same as any other best-effort failure.
  *
  * This step ALSO requires `postedCommentId`'s own author to be in the same
  * `trustedSet` `runMinimize` already gates candidates on (caught by
@@ -800,6 +806,16 @@ export function hideSupersededPostTimeMarkers(
   const startedAt = Date.now();
   const remaining = () => deadlineMs - (Date.now() - startedAt);
   try {
+    // #2754, chatgpt-codex-connector review round 5 on PR #2788: a stale
+    // live-HEAD no longer means "abandon this step entirely" -- it means
+    // "the marker this call just posted is ITSELF the superseded one".
+    // `stale` is recorded (no early return) so the trust gate below still
+    // runs on the shared `postedComment` read either way, and the subject
+    // set further down switches to self-minimizing that one comment
+    // instead of scanning for prior candidates. Sibling #2755 shipped this
+    // exact self-minimize behavior for `idd-local-validation-evidence:`
+    // after Codex found the same gap there first.
+    let stale = false;
     {
       const r = remaining();
       // Never pass `timeout: 0` to a `gh` call below -- gh-exec.mts (like
@@ -813,12 +829,9 @@ export function hideSupersededPostTimeMarkers(
         owner,
         repo,
       ).getChangeRequestHeadSha(number, { timeoutMs: r });
-      if (
+      stale =
         liveHeadSha.trim().toLowerCase() !==
-        fields['head-sha'].trim().toLowerCase()
-      ) {
-        return;
-      }
+        fields['head-sha'].trim().toLowerCase();
     }
     const { actors } = resolveTrustedActors({
       flagValue: trustedMarkerLoginsFlag,
@@ -845,7 +858,8 @@ export function hideSupersededPostTimeMarkers(
     ) {
       // The marker this call just posted is itself untrusted (or its own
       // record could not be re-read) -- never let an untrusted post drive
-      // this step to minimize an older, TRUSTED candidate. Downstream
+      // this step to minimize an older, TRUSTED candidate, or to
+      // self-minimize on ITS OWN say-so when stale. Downstream
       // trust-filtered consumers already ignore an untrusted marker as if
       // it never existed; letting it collapse the trusted terminal marker
       // it claims to supersede would erase the only copy those consumers
@@ -853,17 +867,22 @@ export function hideSupersededPostTimeMarkers(
       // #2788).
       return;
     }
-    const comments = allComments.filter(
-      (comment) => comment.id < postedCommentId,
-    );
-    const subjectIds =
-      type === 'review-ack'
-        ? findSupersededReviewAckSubjects(comments, fields['head-sha'])
-        : findSupersededCopilotUnavailableSubjects(
-            comments,
-            fields['claim-id'],
-            Number(fields.attempt),
+    const subjectIds = stale
+      ? postedComment.nodeId
+        ? [postedComment.nodeId]
+        : []
+      : (() => {
+          const comments = allComments.filter(
+            (comment) => comment.id < postedCommentId,
           );
+          return type === 'review-ack'
+            ? findSupersededReviewAckSubjects(comments, fields['head-sha'])
+            : findSupersededCopilotUnavailableSubjects(
+                comments,
+                fields['claim-id'],
+                Number(fields.attempt),
+              );
+        })();
     if (subjectIds.length === 0) {
       return;
     }
