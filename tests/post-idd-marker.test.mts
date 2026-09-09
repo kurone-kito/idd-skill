@@ -2044,6 +2044,22 @@ test('findSupersededCopilotUnavailableSubjects never hides a comment whose claim
   );
 });
 
+test('findSupersededCopilotUnavailableSubjects trims newClaimId before comparing (#2754, Copilot review on PR #2788)', () => {
+  // renderCopilotUnavailableMarker trims claimId before posting, so a
+  // caller passing --claim-id with surrounding whitespace still posts the
+  // trimmed form -- this finder must trim its own newClaimId the same way,
+  // or it would never match the very comment it just posted's own claim.
+  const sameClaim = candidateComment({
+    id: 5,
+    nodeId: 'IC_same_claim_untrimmed',
+    body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:1`,
+  });
+  assert.deepEqual(
+    findSupersededCopilotUnavailableSubjects([sameClaim], `  ${CLAIM_A}  `),
+    ['IC_same_claim_untrimmed'],
+  );
+});
+
 test('findSupersededCopilotUnavailableSubjects ignores a non-copilot-unavailable comment and one with no node id', () => {
   const unrelated = candidateComment({
     id: 7,

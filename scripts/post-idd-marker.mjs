@@ -627,13 +627,25 @@ export function findSupersededReviewAckSubjects(comments, newHeadSha) {
  * comment.
  */
 export function findSupersededCopilotUnavailableSubjects(comments, newClaimId) {
+  // Trim before comparing (caught by Copilot review on PR #2788):
+  // renderCopilotUnavailableMarker normalizes claimId via
+  // normalizeNonWhitespaceToken() (trim + reject internal whitespace)
+  // before posting, so by the time this runs -- strictly after that POST
+  // already succeeded -- newClaimId can only ever carry leading/trailing
+  // whitespace relative to what was actually posted (internal whitespace
+  // would have failed that render-time validation and never reached
+  // here). Comparing the untrimmed CLI flag value against parsed.claimId
+  // (already whitespace-free, matched via `\S+`) would otherwise never
+  // match a same-claim prior comment when the caller passed the flag with
+  // surrounding whitespace, silently leaving it un-hidden.
+  const target = newClaimId.trim();
   const subjects = [];
   for (const comment of comments) {
     if (!comment.nodeId) {
       continue;
     }
     const parsed = parseCopilotUnavailableComment(comment.body, 'none');
-    if (!parsed || parsed.claimId !== newClaimId) {
+    if (!parsed || parsed.claimId !== target) {
       continue;
     }
     subjects.push(comment.nodeId);
