@@ -1051,19 +1051,21 @@ agent; only the mechanism differs.
 For Codex delegation, the parent collects the reviewer result before
 continuing; if delegation fails, use the structured fallback.
 
-For Grok Build, the critique brief must give the subagent the actual
-artifact under review: file references by their sibling-worktree
-absolute paths (never a relative path or a bare `cd`), a diff by an
-absolute-worktree diff command or revision range, or a plan by its
-literal text — plus the issue's stated requirements or acceptance
-criteria, since C1 also checks requirement satisfaction and a
-diff-only scope would not otherwise surface them. Instruct the
-subagent to stay within that scope except for a targeted trace of
-downstream effects on consuming code — `spawn_subagent`'s
-working-directory parameter does not rebind Grok's file tools (that
-rebind gap is kurone-kito/idd-skill#2819). This constrains the pass
-prospectively but does not guarantee compliance — the unsuitable
-fallback above still applies when the subagent wanders past it
+For Grok Build, the critique brief must give the subagent every input
+the calling phase's critique checklist references: the actual
+artifact under review (file references by their sibling-worktree
+absolute paths, never a relative path or a bare `cd`; a diff by an
+absolute-worktree diff command or revision range; or a plan by its
+literal text) plus any other checklist input the calling phase names —
+for example the issue's requirements for C1, or the E9 findings under
+verification for E10 — since a diff-only scope would not otherwise
+surface them. Instruct the subagent to stay within that scope except
+for a targeted trace of downstream effects on consuming code —
+`spawn_subagent`'s working-directory parameter does not rebind Grok's
+file tools (that rebind gap is kurone-kito/idd-skill#2819). This
+constrains the pass prospectively but does not guarantee compliance —
+the unsuitable fallback above still applies when the subagent wanders
+past it
 anyway.
 
 When a phase file says "run a critique pass", apply the row for your
