@@ -806,11 +806,17 @@ Running this variant safely requires:
   carry the
   [wake-up discipline](../.github/instructions/idd-ci.instructions.md#wake-up-discipline)
   topology-safety condition, so a worker never assumes an unconfirmed
-  background wait resumes its own turn. The brief must also state that
-  the worker's B-through-F execution ends at F4-complete: the worker
-  reports its final result back to the orchestrator instead of
-  independently entering F5's Discover step, so Discover/Claim ownership
-  stays with the orchestrator alone.
+  background wait resumes its own turn: the worker must wait
+  synchronously or with a confirmed topology-safe wake for any
+  backgrounded command, and must not end its turn until that wait has
+  a confirmed result (kurone-kito/idd-skill#2221,
+  kurone-kito/idd-skill#2624). When the orchestrating session already
+  has a same-session sibling worker that stalled this way, the brief
+  must cite that sibling failure by name. The brief must also state
+  that the worker's B-through-F execution ends at F4-complete: the
+  worker reports its final result back to the orchestrator instead of
+  independently entering F5's Discover step, so Discover/Claim
+  ownership stays with the orchestrator alone.
 - **The delegation brief carries the claim token verbatim, nonce
   included — and the worker actively revalidates it.** The worker
   adopts the orchestrator's already-verified `{agent-id}` / `{claim-id}`
