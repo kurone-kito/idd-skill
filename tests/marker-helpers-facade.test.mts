@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as direct from '../src/scripts/marker-helpers.mts';
 import * as facade from '../src/scripts/protocol-helpers.mts';
+
+/**
+ * The canonical source (`idd-template/`) for
+ * `docs/idd-comment-minimization.md` -- an exact-mode sync pair
+ * (`audit/sync-manifest.json`'s `idd-comment-minimization-doc` entry),
+ * so reading the `idd-template/` copy here is equivalent to reading the
+ * repo-root mirror but avoids depending on `sync-docs.mjs` having
+ * already run.
+ */
+const COMMENT_MINIMIZATION_DOC = readFileSync(
+  new URL('../idd-template/docs/idd-comment-minimization.md', import.meta.url),
+  'utf8',
+);
 
 // Wave 1 of the protocol-helpers split (#1209) moved every operational-marker
 // render/parse primitive into marker-helpers.mts and made protocol-helpers.mts
@@ -112,6 +126,138 @@ test('MARKER_HIDE_POLICY classifies every OPERATIONAL_MARKERS entry exactly once
       `${marker.label}: hide-policy entry must carry a non-empty reason`,
     );
   }
+});
+
+/**
+ * Extracts the prefix labels of one Markdown bullet list in
+ * `idd-comment-minimization.md`, starting from `anchorPhrase` (the
+ * prose line introducing the list). Scans line-by-line rather than
+ * filtering a pre-known label set, so a stale/renamed/unknown prefix
+ * left in the doc surfaces as an unexpected entry instead of being
+ * invisible (chatgpt-codex-connector review on PR for #2778: filtering
+ * `allLabels` by containment makes a doc entry outside the current
+ * `OPERATIONAL_MARKERS` set undetectable, and collapses duplicate
+ * bullets via `Set`). A line only contributes a label when the
+ * backtick is the line's first non-whitespace token, after an optional
+ * `- ` bullet marker -- this matches a bullet's own subject
+ * (`` - `<!-- claimed-by:` ``) and the second label of a
+ * two-label-per-bullet entry
+ * (`` `<!-- idd-provider-outage-advanced:` `` on its own continuation
+ * line), but never a backtick span embedded mid-sentence in a
+ * continuation line's reason text (e.g. `` `check:` `` inside the
+ * `<!-- idd-external-check-waiver:` bullet's own explanation) --
+ * `audit-code-span-wrap.mjs` guarantees, repo-wide via
+ * `pre-push-validate`, that a code span is never split mid-token
+ * across a line wrap, so a label's backtick-quoted form is always
+ * contiguous on the line where it starts. The scan starts capturing at
+ * the first bullet-start line found after `anchorPhrase` (skipping any
+ * intervening prose or blank lines) and stops at the first blank line
+ * once inside the list, so leading and trailing prose around the list
+ * never contributes entries.
+ */
+function extractBulletListLabels(
+  markdown: string,
+  anchorPhrase: string,
+): string[] {
+  const anchorIndex = markdown.indexOf(anchorPhrase);
+  assert.notStrictEqual(
+    anchorIndex,
+    -1,
+    `idd-comment-minimization.md must contain "${anchorPhrase}"`,
+  );
+  const labels: string[] = [];
+  let inList = false;
+  for (const line of markdown.slice(anchorIndex).split('\n')) {
+    const bulletMatch = /^-\s+`([^`]+)`/.exec(line);
+    if (bulletMatch) {
+      inList = true;
+      labels.push(bulletMatch[1]);
+      continue;
+    }
+    if (!inList) {
+      continue;
+    }
+    if (line.trim() === '') {
+      break;
+    }
+    const continuationMatch = /^\s+`([^`]+)`/.exec(line);
+    if (continuationMatch) {
+      labels.push(continuationMatch[1]);
+    }
+  }
+  return labels;
+}
+
+// #2778: guards the reconciliation between
+// `docs/idd-comment-minimization.md`'s (canonical `idd-template/` source's)
+// "## Candidate Rules" section and `MARKER_HIDE_POLICY`, mirroring the
+// #1705/#2752 `OPERATIONAL_MARKERS` vs `MARKER_HIDE_POLICY` drift guard
+// above. Before #2778, that doc's `OUTDATED` candidate-prefix list had
+// silently fallen behind `MARKER_HIDE_POLICY` (it listed only 6 of 11
+// non-`excluded` prefixes) -- an adopter following only the documented
+// manual/GraphQL fallback (no vendored helper scripts) would miss cleanup
+// for every marker family missing from that list. This reads the real doc
+// file rather than a hand-typed copy of its expected content, so a future
+// doc edit or a future new marker family fails this test instead of
+// drifting quietly again.
+test('idd-comment-minimization.md Candidate Rules list matches MARKER_HIDE_POLICY', () => {
+  const sectionStart = COMMENT_MINIMIZATION_DOC.indexOf('## Candidate Rules');
+  assert.notStrictEqual(
+    sectionStart,
+    -1,
+    'idd-comment-minimization.md must have a "## Candidate Rules" section',
+  );
+  const nextHeadingIndex = COMMENT_MINIMIZATION_DOC.indexOf(
+    '\n## ',
+    sectionStart + 1,
+  );
+  const section = COMMENT_MINIMIZATION_DOC.slice(
+    sectionStart,
+    nextHeadingIndex === -1 ? undefined : nextHeadingIndex,
+  );
+
+  const parsedCandidateLabels = extractBulletListLabels(
+    section,
+    'Candidate prefixes are:',
+  );
+  const parsedExcludedLabels = extractBulletListLabels(
+    section,
+    'Excluded from this list',
+  );
+
+  assert.strictEqual(
+    new Set(parsedCandidateLabels).size,
+    parsedCandidateLabels.length,
+    `idd-comment-minimization.md's "Candidate prefixes are:" list must not contain duplicate prefixes, found: ${parsedCandidateLabels.join(', ')}`,
+  );
+  assert.strictEqual(
+    new Set(parsedExcludedLabels).size,
+    parsedExcludedLabels.length,
+    `idd-comment-minimization.md's "Excluded from this list" note must not contain duplicate prefixes, found: ${parsedExcludedLabels.join(', ')}`,
+  );
+
+  const allLabels = direct.OPERATIONAL_MARKERS.map((marker) => marker.label);
+  const expectedCandidateLabels = new Set(
+    allLabels.filter(
+      (label) => direct.MARKER_HIDE_POLICY.get(label)?.policy !== 'excluded',
+    ),
+  );
+  const expectedExcludedLabels = new Set(
+    allLabels.filter(
+      (label) => direct.MARKER_HIDE_POLICY.get(label)?.policy === 'excluded',
+    ),
+  );
+
+  assert.deepStrictEqual(
+    new Set(parsedCandidateLabels),
+    expectedCandidateLabels,
+    'idd-comment-minimization.md\'s "Candidate prefixes are:" OUTDATED list must list exactly every non-excluded (wired or f4-only) OPERATIONAL_MARKERS prefix -- no missing, no stale, no extra, no unknown entries',
+  );
+  assert.deepStrictEqual(
+    new Set(parsedExcludedLabels),
+    expectedExcludedLabels,
+    'idd-comment-minimization.md\'s "Excluded from this list" note must document exactly every excluded OPERATIONAL_MARKERS prefix -- no missing, no stale, no extra, no unknown entries',
+  );
 });
 
 // #2759 (chatgpt-codex-connector review): a duplicate `label` in the source

@@ -471,17 +471,18 @@ export const OPERATIONAL_MARKERS: readonly OperationalMarker[] = Object.freeze(
  * `audit-pr-cleanup.mts`'s generic `operationalMarkerPrefix` match against
  * comments on the merged PR, which recognizes the full
  * `OPERATIONAL_MARKERS` set directly -- the running code never parses
- * `docs/idd-comment-minimization.md`, so its own dry run is unaffected by
- * that document's "## Candidate Rules" heading being stale (that list
- * predates several `f4-only`-classified families, including the three
- * this pass added). Only the manual GraphQL fallback, which has no code
- * behind it and uses that list as its literal operating procedure, is
- * actually narrowed by the gap (tracked as issue #2778; caught by
- * chatgpt-codex-connector review on PR #2759, a fresh round after this
- * fix's own docs correction introduced the overclaim that both paths
- * were affected); `excluded` families are deliberately kept out of the
- * `wired` pre-merge grouping,
- * each for the reason recorded on its own entry below. This
+ * `docs/idd-comment-minimization.md`, so its own dry run never depended
+ * on that document's "## Candidate Rules" list staying in sync with this
+ * map. Only the manual GraphQL fallback, which has no code behind it and
+ * uses that list as its literal operating procedure, was narrowed when
+ * that list fell behind (caught by chatgpt-codex-connector review on PR
+ * #2759, a fresh round after this fix's own docs correction introduced
+ * the overclaim that both paths were affected); issue #2778 reconciled
+ * the list against this map and added a mechanical drift-guard test
+ * (`tests/marker-helpers-facade.test.mts`) so a future drift fails
+ * closed instead of recurring silently. `excluded` families are
+ * deliberately kept out of the `wired` pre-merge grouping, each for the
+ * reason recorded on its own entry below. This
  * classification alone does not guarantee an F4 cleanup
  * path either: `<!-- forced-handoff:` carries an explicit F4 skip
  * (`evaluateOperationalComment` hardcodes it for that one prefix), and
