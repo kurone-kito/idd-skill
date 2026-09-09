@@ -22,11 +22,16 @@ model.
   installed repository keeps it (`skills/issue-authoring/**/*.md` in
   this source repository; the installed native destination in an
   adopter repository), `CLAUDE.md`, and `.github/copilot-instructions.md`.
-  Audit these files even though `.github/instructions/**` is itself the
-  generated `target` side of an `audit/sync-manifest.json` sync pair
-  (mirrored from `idd-template/`) — this skill audits the corpus a
-  worker session actually reads, not the `idd-template/` source, so
-  being a sync target never exempts a file here.
+  The last two are conditional on the adopter's own setup: the
+  issue-authoring companion is opt-in and `.github/copilot-instructions.md`
+  is created only if the adopter uses Copilot, so skip an audit target
+  that does not exist in the current installation rather than fail the
+  run over it. Audit the targets that do exist even though
+  `.github/instructions/**` is itself the generated `target` side of an
+  `audit/sync-manifest.json` sync pair (mirrored from `idd-template/`)
+  — this skill audits the corpus a worker session actually reads, not
+  the `idd-template/` source, so being a sync target never exempts a
+  file here.
 - **Reference-only inputs** (read for R2/R4, never a finding target):
   `docs/idd-concept-ownership.md` (R2's closed concept-index seed) and
   `docs/idd-autonomy-contract.md` (R4's reversible/irreversible source
@@ -135,9 +140,10 @@ re-derive it.
 
 ## Execution model
 
-- Run **N parallel, independent, read-only** passes over the full
-  scope above. Default `N = 3`; accept a `--passes N`-style argument to
-  adjust it.
+- Run **N parallel, independent, read-only** passes over the scope
+  above, skipping any Audit target absent from this installation (see
+  the Scope section's conditional-target note). Default `N = 3`;
+  accept a `--passes N`-style argument to adjust it.
 - **Aggregate by union**, deduplicating findings that describe the same
   file/section/issue across passes. Annotate each surviving finding
   with `Appeared in: K/N` (how many of the N passes independently
