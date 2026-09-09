@@ -88,8 +88,9 @@ other GitHub side effect, confirm all of the following:
 1. PATH A/PATH B (from `idd-review-triage.instructions.md` E4): PATH A
    is actionable feedback needing a code change or maintainer decision
    (human reviewer threads, regular comments, `CHANGES_REQUESTED`
-   bodies, critique-pass findings); PATH B is advisory bot feedback,
-   included for traceability, that does not require a code change.
+   bodies, critique-pass findings); PATH B is Copilot and CI advisory
+   bot comments included for traceability, even when they do not
+   require a code change.
 2. Fix every Accepted PATH A item from the current ReviewItems_snapshot.
 3. Run `fix-validate`.
 4. Commit fixes atomically — one logical change per commit.
