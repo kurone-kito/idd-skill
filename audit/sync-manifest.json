@@ -23,6 +23,13 @@
   ],
   "fileSets": [
     {
+      "id": "claude-skills-idd-spec-audit-markdown-set",
+      "sourceGlob": "skills/idd-spec-audit/**/*.md",
+      "targetGlob": ".claude/skills/idd-spec-audit/**/*.md",
+      "match": "basename",
+      "requireSyncPairs": true
+    },
+    {
       "id": "claude-skills-issue-authoring-markdown-set",
       "sourceGlob": "skills/issue-authoring/**/*.md",
       "targetGlob": ".claude/skills/issue-authoring/**/*.md",
@@ -407,6 +414,18 @@
     ]
   },
   "syncPairs": [
+    {
+      "id": "claude-skills-idd-spec-audit-report-template",
+      "source": "skills/idd-spec-audit/references/report-template.md",
+      "target": ".claude/skills/idd-spec-audit/references/report-template.md",
+      "mode": "exact"
+    },
+    {
+      "id": "claude-skills-idd-spec-audit-skill",
+      "source": "skills/idd-spec-audit/SKILL.md",
+      "target": ".claude/skills/idd-spec-audit/SKILL.md",
+      "mode": "exact"
+    },
     {
       "id": "claude-skills-issue-authoring-contract",
       "source": "skills/issue-authoring/references/contract.md",

@@ -365,7 +365,9 @@ The canonical issue-authoring skill bundle lives at
 `skills/issue-authoring/`. Edit the canonical bundle, never a
 generated copy: `node scripts/sync-docs.mjs --apply` regenerates
 derived copies and `node scripts/audit-docs.mjs --check` fails on
-drift.
+drift. The `idd-spec-audit` skill bundle at `skills/idd-spec-audit/`
+follows the same rule: `.claude/skills/idd-spec-audit/` is likewise a
+generated mirror and must never be edited directly.
 
 ## Codex issue-authoring route
 
