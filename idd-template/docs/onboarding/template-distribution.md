@@ -67,11 +67,15 @@ commands instead of inlining them.
 
 Each companion's generated block describes canonical source paths relative
 to the idd-skill checkout. Neither is a target installation path: the
-onboarding examples use a separate `SKILL_DEST` value per companion, with
-`.agents/skills/issue-authoring/` and `.agents/skills/idd-spec-audit/` as
-the Codex examples. Record the selected destination in the onboarding
-policy and do not add a second same-named runtime mirror by default
-(preventive; no observed incident yet).
+[Remote fetch examples](#remote-fetch-examples) below use a separate
+`SKILL_DEST` value per companion, with `.agents/skills/issue-authoring/`
+and `.agents/skills/idd-spec-audit/` as the Codex examples.
+[Local-copy installs](#local-copy-installs) currently ships only the
+`issue-authoring` companion's copy recipe; add the equivalent
+`idd-spec-audit` recipe separately if local-copy parity is wanted.
+Record the selected destination in the onboarding policy and do not add
+a second same-named runtime mirror by default (preventive; no observed
+incident yet).
 
 ## Generated file lists
 
@@ -578,4 +582,8 @@ Before merging a distribution-surface change, verify:
 - `node scripts/audit-docs.mjs --check` passes.
 - the policy record names the selected companion destination for each
   optional companion bundle (`issue-authoring`, `idd-spec-audit`) that
-  is installed.
+  is installed. The canonical Step 1B / `idd-onboard --hear` policy
+  templates (`hearing-catalog.json`, `policy-decisions.md`) currently
+  define this field only for `issue-authoring`; until a follow-up
+  extends them for `idd-spec-audit`, record its destination as
+  free-form policy prose instead.

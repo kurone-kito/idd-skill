@@ -866,7 +866,7 @@ Use `gh api` or `curl` to download each file from the raw-content
 endpoint. See
 [Remote fetch examples](docs/onboarding/template-distribution.md#remote-fetch-examples)
 for the exact `gh api` and `curl` loops (core files and the optional
-issue-authoring and `idd-spec-audit` companions), including the Codex
+`issue-authoring` and `idd-spec-audit` companions), including the Codex
 `SKILL_DEST` examples.
 
 ### Option B — Local copy (idd-skill cloned)
@@ -900,8 +900,11 @@ its source from its installed destination:
   `docs/issue-authoring-skill.md`.
 
 The `idd-spec-audit` companion is read-only: it audits the installed
-instruction corpus for semantic drift and routes every finding back
-through the issue-authoring companion for revision. It never edits
+instruction corpus for semantic drift. When the issue-authoring
+companion is also installed, it routes every finding back through
+that flow for revision; otherwise it routes findings through the
+installation's normal manual issue-filing process instead (see
+`skills/idd-spec-audit/SKILL.md`'s Scope section). It never edits
 files or mutates issues on its own.
 
 ### Optional — enable the local worktree guard
