@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kurone-kito.github.io/idd-skill/schemas/token-cost-snapshot.schema.json",
   "title": "Token-cost snapshot",
-  "description": "Committed aggregates the token-cost-report reporter renders into docs/README. Fields beyond the publish gate are always present -- zero-valued and empty when sampleCount is 0. Exception: turnCount and toolCallCount (total and per-stage) are omitted entirely, not zero-valued, whenever no aggregated sample offers a value for that metric -- 'no vendor reported this' and 'vendors reported zero' are different facts this schema does not conflate.",
+  "description": "Committed aggregates the token-cost-report reporter renders into README.md, README.ja.md, and docs/token-cost.md. Fields beyond the publish gate are always present -- zero-valued and empty when sampleCount is 0. Exception: turnCount and toolCallCount (total and per-stage) are omitted entirely, not zero-valued, whenever no aggregated sample offers a value for that metric -- 'no vendor reported this' and 'vendors reported zero' are different facts this schema does not conflate.",
   "type": "object",
   "additionalProperties": false,
   "required": [
