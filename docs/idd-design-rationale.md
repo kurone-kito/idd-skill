@@ -374,6 +374,34 @@ the launch workspace, pass every such tool call the sibling worktree's
 absolute path instead of relying on a shell `cd`; a shell `pwd`
 reporting the sibling path is not evidence those tools moved with it.
 
+### C1/B2 critique pass — Grok `spawn_subagent` needs a bounded fallback
+
+Unlike Codex CLI's critique-pass row, Grok Build's had no fallback
+when `spawn_subagent` is unavailable, unsuitable, or fails — Grok
+_has_ `spawn_subagent`, so a successful-but-unbounded pass never fell
+back to a structured self-critique. Observed 2026-09-09 in the Grok
+Build IDD loop that shipped PR #2814 (issue #2774): B2 plan critique
+ran 387 s across 43 tool calls, C1 diff critique ran 575 s across 40
+tool calls, and a C1 re-critique whose brief named two files plus
+`git diff origin/main...HEAD` and said "keep this short" still ran
+172 s across 25 tool calls and opened extra search rather than staying
+on the named slice. The findings were usable, but one docs-only issue
+spent roughly 19 minutes in critique subagents; Claude Code's `Agent`
+path for the same C1 role is typically a short bounded review, while
+Grok's general-purpose subagent treated the checklist as an
+open-ended explore (#2825).
+
+This is a different Grok gap from #2819's file tools bound to the
+launch workspace (above) and closed #2114's worktree-creation
+primitives: those are B1 worktree/tool-cwd; this is the C1/B2
+critique _mechanism_ row.
+
+**What to do**: give Grok's critique row the same fallback class Codex
+already has (structured self-critique when delegation is unavailable,
+unsuitable, or fails) without inventing a wall-clock or tool-call cap,
+and require the critique brief to name the files or diff under review
+so an unsuitable pass is easier to distinguish from a thorough one.
+
 ### B2.1 — Premise verification (decision-transcription issues)
 
 Field evidence showed a worker asked to transcribe a maintainer's
