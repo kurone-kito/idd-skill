@@ -485,7 +485,7 @@ function postComment({
   repo: string;
   prNumber: number;
   body: string;
-}): { id?: number; html_url?: string; url?: string } {
+}): { id?: number; node_id?: string; html_url?: string; url?: string } {
   const payload = ghText([
     'api',
     `repos/${owner}/${repo}/issues/${prNumber}/comments`,
@@ -574,18 +574,23 @@ export function findSupersededLocalValidationEvidenceSubjects(
  * caller, since the marker it is hiding *for* has already posted
  * successfully by the time this runs.
  *
- * Two safety checks, both added after Codex review on PR #2792 caught the
- * first version's reliance on a pre-POST comment snapshot as insufficient:
+ * Three safety checks, all added after Codex/Copilot review on PR #2792
+ * caught the first version's reliance on a pre-POST comment snapshot as
+ * insufficient:
  *
  * - **Live-HEAD verification.** Re-reads the PR's actual current HEAD SHA
- *   and bails out (no scan, no mutation) unless it still matches
- *   `newHeadSha` -- mirroring `post-idd-marker.mts`'s identical
- *   `review-ack` check (#2754). Without this, a `--record --apply`
- *   invocation for an older HEAD that finishes late (after another,
- *   already-more-current invocation has posted evidence for a newer HEAD)
- *   would see that newer marker as merely "a different HEAD" and hide the
- *   more-current evidence while leaving its own, now-stale one visible --
- *   exactly backwards.
+ *   and, when it no longer matches `newHeadSha`, self-minimizes the
+ *   just-posted marker (`postedCommentNodeId`) instead of scanning prior
+ *   comments -- mirroring `post-idd-marker.mts`'s identical `review-ack`
+ *   check (#2754), extended per a second Codex finding on this same PR:
+ *   a delayed `--record --apply` invocation for an older HEAD can finish
+ *   *after* another, already-more-current invocation has already posted
+ *   and hidden nothing (since this invocation's marker did not exist
+ *   yet), leaving this invocation's own now-stale marker un-hidden with
+ *   no later invocation guaranteed to sweep it. Self-minimizing here
+ *   closes that gap instead of relying on F4 cleanup for it. The
+ *   still-current branch below (`liveHeadSha === target`) is unaffected:
+ *   it never touches the just-posted marker, only genuinely prior ones.
  * - **Post-POST re-fetch with an `id <` filter.** Re-lists the PR's
  *   comments AFTER this call's own POST (never reusing an earlier, pre-POST
  *   snapshot) and restricts candidates to `comment.id < postedCommentId`.
@@ -599,6 +604,10 @@ export function findSupersededLocalValidationEvidenceSubjects(
  *   `postedCommentId`, and treating that genuinely newer marker as "prior"
  *   would hide it -- exactly backwards, since it is this call's own marker
  *   that is older by comparison.
+ * - **Skip an empty trusted set.** An empty trusted set can never minimize
+ *   anything under `allowUntrusted:false`, but `runMinimize` would still
+ *   probe every subject over GraphQL for a guaranteed no-op -- resolved
+ *   once, after computing subjects for either branch above.
  */
 export function hideSupersededLocalValidationEvidenceMarkers({
   owner,
@@ -606,6 +615,7 @@ export function hideSupersededLocalValidationEvidenceMarkers({
   prNumber,
   newHeadSha,
   postedCommentId,
+  postedCommentNodeId,
   trustedMarkerLoginsFlag,
   rawConfig,
   fetchLiveHeadSha = fetchPrHeadSha,
@@ -618,6 +628,7 @@ export function hideSupersededLocalValidationEvidenceMarkers({
   prNumber: number;
   newHeadSha: string;
   postedCommentId: number;
+  postedCommentNodeId: string;
   trustedMarkerLoginsFlag: string;
   rawConfig: unknown;
   fetchLiveHeadSha?: typeof fetchPrHeadSha;
@@ -628,19 +639,22 @@ export function hideSupersededLocalValidationEvidenceMarkers({
   try {
     const target = newHeadSha.trim().toLowerCase();
     const liveHeadSha = fetchLiveHeadSha({ owner, repo, prNumber });
+    let subjectIds: string[];
     if (liveHeadSha !== target) {
-      return;
+      const nodeId = postedCommentNodeId.trim();
+      subjectIds = nodeId ? [nodeId] : [];
+    } else {
+      const comments = fetchPriorComments({ owner, repo, prNumber }).filter(
+        (comment) => {
+          const id = Number(comment.id);
+          return Number.isFinite(id) && id < postedCommentId;
+        },
+      );
+      subjectIds = findSupersededLocalValidationEvidenceSubjects(
+        comments,
+        newHeadSha,
+      );
     }
-    const comments = fetchPriorComments({ owner, repo, prNumber }).filter(
-      (comment) => {
-        const id = Number(comment.id);
-        return Number.isFinite(id) && id < postedCommentId;
-      },
-    );
-    const subjectIds = findSupersededLocalValidationEvidenceSubjects(
-      comments,
-      newHeadSha,
-    );
     if (subjectIds.length === 0) {
       return;
     }
@@ -789,6 +803,7 @@ export async function runLocalValidationEvidence(
       prNumber: args.prNumber,
       newHeadSha: args.headSha,
       postedCommentId,
+      postedCommentNodeId: String(posted.node_id ?? ''),
       trustedMarkerLoginsFlag: args.trustedMarkerLogins,
       rawConfig,
     });

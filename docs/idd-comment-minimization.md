@@ -147,8 +147,10 @@ active E or F gate. Four families ship this today: the claim chain
 `advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
 `idd-advisory-wait.instructions.md`), and
 `<!-- idd-local-validation-evidence:` (grouped by embedded HEAD SHA
-mismatch, mirroring AW3-H, `local-validation-evidence.mts`'s own
-`--record --apply` path). A family classified `f4-only` has
+mismatch, mirroring AW3-H, wired into `idd-local-validation-evidence`'s
+own `--record --apply` path -- see
+[this helper's doc](idd-helper-scripts.md#local-validation-evidence-helper)).
+A family classified `f4-only` has
 no such wiring yet and follows the default F4-only timing above until a
 future track adds it -- concretely, the post-merge F4 batch means
 `audit-pr-cleanup.mts`'s generic marker-prefix match

@@ -449,6 +449,7 @@ function baseHideOptions(
     ...HIDE_TARGET,
     newHeadSha: HEAD,
     postedCommentId: POSTED_ID,
+    postedCommentNodeId: 'IC_posted',
     trustedMarkerLoginsFlag: 'kurone-kito',
     rawConfig: {},
     fetchLiveHeadSha: () => HEAD,
@@ -573,9 +574,9 @@ test('hideSupersededLocalValidationEvidenceMarkers swallows a resolveTrustedActo
   });
 });
 
-test('hideSupersededLocalValidationEvidenceMarkers bails out (no fetch, no mutation) when the live HEAD no longer matches the just-recorded HEAD (#2755, Codex review on PR #2792)', () => {
+test('hideSupersededLocalValidationEvidenceMarkers self-minimizes the just-posted marker (never scanning prior comments) when the live HEAD no longer matches the just-recorded HEAD (#2755, Codex review on PR #2792)', () => {
   let fetchedComments = false;
-  let minimized = false;
+  const calls: unknown[] = [];
   hideSupersededLocalValidationEvidenceMarkers(
     baseHideOptions({
       fetchLiveHeadSha: () => OTHER_HEAD,
@@ -583,14 +584,45 @@ test('hideSupersededLocalValidationEvidenceMarkers bails out (no fetch, no mutat
         fetchedComments = true;
         return [];
       },
-      runMinimizeFn: () => {
-        minimized = true;
-        throw new Error('should never be called');
+      runMinimizeFn: (input) => {
+        calls.push(input);
+        return {
+          mode: 'apply',
+          classifier: 'OUTDATED',
+          counts: {
+            eligible: 1,
+            alreadyMinimized: 0,
+            cannotMinimize: 0,
+            untrusted: 0,
+            unsupportedType: 0,
+            applied: 1,
+            failed: 0,
+          },
+          items: [],
+        };
       },
     }),
   );
   assert.equal(fetchedComments, false);
-  assert.equal(minimized, false);
+  assert.equal(calls.length, 1);
+  assert.deepEqual((calls[0] as { subjectIds: string[] }).subjectIds, [
+    'IC_posted',
+  ]);
+});
+
+test('hideSupersededLocalValidationEvidenceMarkers never calls runMinimizeFn on a live-HEAD mismatch when postedCommentNodeId is empty', () => {
+  let called = false;
+  hideSupersededLocalValidationEvidenceMarkers(
+    baseHideOptions({
+      postedCommentNodeId: '',
+      fetchLiveHeadSha: () => OTHER_HEAD,
+      runMinimizeFn: () => {
+        called = true;
+        throw new Error('should never be called');
+      },
+    }),
+  );
+  assert.equal(called, false);
 });
 
 test('hideSupersededLocalValidationEvidenceMarkers excludes a re-fetched comment whose id is not strictly older than postedCommentId (#2755, Codex review on PR #2792)', () => {
