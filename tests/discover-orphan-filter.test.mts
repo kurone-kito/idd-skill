@@ -1340,6 +1340,83 @@ test('classifyIssue still trips when the citing issue re-adopts the quoted prere
   assert.equal(result.reason, 'runtime_observation_precondition');
 });
 
+test('classifyIssue still detects re-adoption when the quoted excerpt contains a contraction (Copilot review round 3, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 115,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Per issue #42: "it\'s confirmed in production before shipping" ' +
+        'remains required for this change too.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test('classifyIssue still trips when the re-adopted requirement is phrased as "remains blocked" (Codex review round 3, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 116,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Per issue #42: "confirmed in production before shipping" ' +
+        'remains blocked for this change.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test('classifyIssue still trips when a question mark ends the unrelated sentence containing the earlier reference (Codex review round 3, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 117,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Did issue #42 ship? Acceptance gate: "confirmed in production ' +
+        'before shipping, per the runbook."',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test('classifyIssue does not trip when a soft-wrap newline sits between the introducing colon and the quote (Codex review round 3, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 118,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Issue #2743 asserted in its Background:\n"confirmed in ' +
+        'production: the deploy pipeline paused for six hours" -- ' +
+        'describing a specific event.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'orphan');
+});
+
 test('filterOrphanIssues buckets a runtime-observation precondition under filtered.runtime_observation_precondition (#2467)', async () => {
   const issues = [
     {

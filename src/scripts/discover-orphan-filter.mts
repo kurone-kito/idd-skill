@@ -105,11 +105,27 @@ const TRAILING_QUOTE_PUNCTUATION_PATTERN = /^[.,!?;:]*/;
 const CITED_ISSUE_ATTRIBUTION_WINDOW = 80;
 const ISSUE_NUMBER_REFERENCE_PATTERN = /#\d+/g;
 const CITED_ISSUE_ATTRIBUTION_COLON_PATTERN = /:\s*$/;
-const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN = /[.;\n]|--|—/;
+// Every standard English sentence terminator, not just period/semicolon
+// -- a question or exclamation mark ending an unrelated sentence must
+// also stop an earlier reference from attributing a later quote
+// (Codex review round 3, PR #2760).
+const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN = /[.;?!\n]|--|—/;
 const CLOSE_QUOTE_SEARCH_WINDOW = 300;
 const ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW = 40;
+// `blocked`/`blocking`/`pending`/`waiting` join the same vocabulary
+// `discover-viability-gate.mts`'s own requirement-assertion pattern
+// already uses, so a re-adopted prerequisite phrased as "remains
+// blocked" is recognized too, not only "remains required" (Codex review
+// round 3, PR #2760).
 const ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN =
-  /\b(required|require[sd]?|requiring|must|needed|needs?|mandatory|necessary)\b/i;
+  /\b(required|require[sd]?|requiring|must|needed|needs?|mandatory|necessary|blocked|blocking|pending|waiting)\b/i;
+// A straight/curly apostrophe inside the quoted excerpt itself (a
+// contraction or possessive, e.g. "it's") must not be mistaken for the
+// closing quote -- only a candidate NOT immediately followed by a
+// letter or digit is a plausible closer (Copilot review round 3, PR
+// #2760), mirroring `discover-viability-gate.mts`'s own
+// quote-vs-apostrophe adjacency check.
+const WORD_CHAR_PATTERN = /[A-Za-z0-9]/;
 
 /** Reasons that keep an issue out of the orphan candidate list. */
 export type OrphanFilteredReason =
@@ -365,10 +381,14 @@ function isFollowedByRequirementAssertion(
   const region = text.slice(quotedContentStart, searchEnd);
   let closeOffset = -1;
   for (let i = 0; i < region.length; i++) {
-    if (CLOSE_QUOTE_CHARS.has(region[i])) {
-      closeOffset = i;
-      break;
+    if (!CLOSE_QUOTE_CHARS.has(region[i])) {
+      continue;
     }
+    if (WORD_CHAR_PATTERN.test(region[i + 1] ?? '')) {
+      continue;
+    }
+    closeOffset = i;
+    break;
   }
   if (closeOffset === -1) {
     return false;
@@ -398,7 +418,8 @@ function isAttributedLongQuote(text: string, start: number): boolean {
   }
   const windowStart = Math.max(0, start - 1 - CITED_ISSUE_ATTRIBUTION_WINDOW);
   const window = text.slice(windowStart, start - 1);
-  if (!CITED_ISSUE_ATTRIBUTION_COLON_PATTERN.test(window)) {
+  const colonMatch = CITED_ISSUE_ATTRIBUTION_COLON_PATTERN.exec(window);
+  if (!colonMatch) {
     return false;
   }
   const referenceMatches = [...window.matchAll(ISSUE_NUMBER_REFERENCE_PATTERN)];
@@ -406,8 +427,14 @@ function isAttributedLongQuote(text: string, start: number): boolean {
   if (!referenceMatch || referenceMatch.index === undefined) {
     return false;
   }
+  // Stop at the introducing colon itself -- the whitespace AFTER it
+  // (which can include a Markdown soft-wrap newline before the quote,
+  // e.g. "Background:\n\"X\"") is not part of the reference-to-colon
+  // relationship this hard-break scan is meant to police (Codex review
+  // round 3, PR #2760).
   const betweenReferenceAndColon = window.slice(
     referenceMatch.index + referenceMatch[0].length,
+    colonMatch.index,
   );
   return (
     !CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.test(
