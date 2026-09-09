@@ -150,15 +150,15 @@ no such wiring yet and follows the default F4-only timing above until a
 future track adds it -- concretely, the post-merge F4 batch means
 `audit-pr-cleanup.mts`'s generic marker-prefix match
 (`operationalMarkerPrefix`) against comments on the merged PR itself,
-which recognizes the full `OPERATIONAL_MARKERS` set. That is broader than
-the specific prefix list under this document's Candidate Rules section
-below: that list predates several `f4-only`-classified families added
-since, and is stale documentation rather than a deliberately narrower
-second path -- both the vendored helper's own dry run and the manual
-GraphQL fallback read the same Candidate Rules list, so the gap affects
-an adopter following either path, not only the manual fallback (tracked
-as issue #2778). A third `MARKER_HIDE_POLICY` kind, `excluded`, covers markers
-deliberately kept out of both groupings (each for the reason on its own
+which recognizes the full `OPERATIONAL_MARKERS` set directly. The
+running code never parses this document, so the vendored helper's own
+dry run is unaffected by the Candidate Rules section below being stale
+(that list predates several `f4-only`-classified families added since).
+Only the manual GraphQL fallback, which has no code behind it and uses
+that list as its literal operating procedure, is actually narrowed by
+the gap (tracked as issue #2778). A third `MARKER_HIDE_POLICY` kind,
+`excluded`, covers markers deliberately kept out of both groupings
+(each for the reason on its own
 entry in `MARKER_HIDE_POLICY`). Two of those are permanently outside F4's
 reach for different reasons: `<!-- forced-handoff:` carries its own
 explicit F4 exemption (`audit-pr-cleanup.mts` hardcodes a skip for that

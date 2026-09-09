@@ -458,14 +458,17 @@ export const OPERATIONAL_MARKERS: readonly OperationalMarker[] = Object.freeze(
  * batch is their only cleanup path today -- concretely,
  * `audit-pr-cleanup.mts`'s generic `operationalMarkerPrefix` match against
  * comments on the merged PR, which recognizes the full
- * `OPERATIONAL_MARKERS` set. That is broader than the specific prefix
- * list under `docs/idd-comment-minimization.md`'s "## Candidate Rules"
- * heading: that list predates several `f4-only`-classified families
- * (including the three this pass added) and is stale documentation, not
- * a deliberately narrower second path -- both the vendored helper's own
- * dry run and the manual GraphQL fallback read that same list, so the
- * gap is not adopter-fallback-only (tracked as issue #2778); `excluded`
- * families are deliberately kept out of the `wired` pre-merge grouping,
+ * `OPERATIONAL_MARKERS` set directly -- the running code never parses
+ * `docs/idd-comment-minimization.md`, so its own dry run is unaffected by
+ * that document's "## Candidate Rules" heading being stale (that list
+ * predates several `f4-only`-classified families, including the three
+ * this pass added). Only the manual GraphQL fallback, which has no code
+ * behind it and uses that list as its literal operating procedure, is
+ * actually narrowed by the gap (tracked as issue #2778; caught by
+ * chatgpt-codex-connector review on PR #2759, a fresh round after this
+ * fix's own docs correction introduced the overclaim that both paths
+ * were affected); `excluded` families are deliberately kept out of the
+ * `wired` pre-merge grouping,
  * each for the reason recorded on its own entry below. This
  * classification alone does not guarantee an F4 cleanup
  * path either: `<!-- forced-handoff:` carries an explicit F4 skip
@@ -510,7 +513,7 @@ const MARKER_HIDE_POLICY_ENTRIES: readonly MarkerHidePolicyEntry[] = [
       'not activation-nonce (caught by Copilot review on PR #2759). Also ' +
       'issue-scoped, not PR-scoped (posted via `post-idd-marker --type ' +
       'activation-nonce --target issue`), so unlike an ordinary f4-only ' +
-      "family it has no F4 cleanup path either: audit-pr-cleanup.mjs's " +
+      "family it has no F4 cleanup path either: audit-pr-cleanup.mts's " +
       'GraphQL fetch is bound to the merged PR number and never sees a ' +
       'comment on the separate issue (caught by chatgpt-codex-connector ' +
       'review, second round).',
