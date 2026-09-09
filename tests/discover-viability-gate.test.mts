@@ -361,6 +361,508 @@ test('fails autonomous completion when external coordination is required', () =>
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+// --- #2738: autonomous_completion false positives on negated, quoted, or
+// investigative-past-tense phrasing, not a live remaining blocker --------
+
+test('passes autonomous completion when a trigger phrase is negated nearby (#2716 shape)', () => {
+  const result = evaluateA4Viability({
+    number: 30,
+    title:
+      'verify Contents API permission masking with no interactive credential minting',
+    body:
+      'Perform the empirical test with no interactive credential minting: ' +
+      'create a disposable repository and record the observed status code. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test("passes autonomous completion when a trigger phrase is quoted as another artifact's own content (#2711 shape)", () => {
+  const result = evaluateA4Viability({
+    number: 31,
+    title: 'fix quotation masking in checkVerifiability framing-verb scan',
+    body:
+      `An inverted-attribution quotation ("'Maintainer decision (...): ` +
+      `choose A,' reports the referenced tracking issue") is not ` +
+      'recognized as quoted. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes autonomous completion when a trigger phrase describes an already-completed investigation (#2697 shape, applied to autonomous_completion)', () => {
+  const result = evaluateA4Viability({
+    number: 32,
+    title: 'document the Contents API masking finding',
+    body:
+      'A search already found that the external system does not mask ' +
+      'permission denials as 404. Single docs-only change. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when negation is cut off by a hard clause break before a later genuine blocker', () => {
+  // Adversarial case: a negation cue must not extend its reach across a
+  // clause boundary and exclude a genuine blocker that follows it.
+  const result = evaluateA4Viability({
+    number: 33,
+    title: 'wire external approval gate',
+    body:
+      'This has no ambiguity here. Waiting for maintainer sign-off is ' +
+      'required before this can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a quote-like character never closes on the same line', () => {
+  // Adversarial case: a contraction's apostrophe ("customer's") must not
+  // be mistaken for an opening quote and suppress a genuine blocker.
+  const result = evaluateA4Viability({
+    number: 34,
+    title: "wire external approval gate for the customer's workflow",
+    body:
+      "The customer's rollout requires external coordination before this " +
+      'can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when "checked" appears without a past-tense qualifier before a genuine blocker', () => {
+  const result = evaluateA4Viability({
+    number: 35,
+    title: 'add pre-merge external verification step',
+    body:
+      'It must be checked whether production access is required before ' +
+      'this ships. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+// --- Independent critique follow-ups on the exclusions above: a
+// comma/list-boundary guard for negation, paragraph-scoped quote pairing,
+// and a generic-mention exclusion for a trigger word used to describe a
+// pattern rather than assert a requirement -----------------------------
+
+test('passes autonomous completion when a quoted example wraps across a soft line break within the same paragraph (#2711 real-body shape)', () => {
+  const result = evaluateA4Viability({
+    number: 36,
+    title: 'fix quotation masking in checkVerifiability framing-verb scan',
+    body:
+      `An inverted-attribution quotation ("'Maintainer decision\n` +
+      `(...): choose A,' reports the referenced tracking issue") is not ` +
+      'recognized as quoted. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes autonomous completion when an earlier generic-pattern mention and a later negated occurrence of the same trigger word coexist (#2716 real-body shape)', () => {
+  const result = evaluateA4Viability({
+    number: 37,
+    title: 'verify Contents API permission masking',
+    body:
+      'This would be exploitable for an adopter authenticating with a ' +
+      'fine-grained token (an increasingly common least-privilege CI ' +
+      'credential pattern) that has repository access. Perform the test ' +
+      'with no interactive credential minting: create a disposable ' +
+      'repository. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when negation is cut off by a comma-joined contrastive clause', () => {
+  // Adversarial case (Codex-style independent critique finding): an
+  // unrelated leading negation must not reach across a contrastive comma
+  // clause and exclude a genuine blocker that follows it.
+  const result = evaluateA4Viability({
+    number: 38,
+    title: 'wire external approval gate',
+    body:
+      'No obvious risk here, but production access is still required ' +
+      'before this can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when negation is cut off by a list-item boundary', () => {
+  // Adversarial case: a bullet's own negation must not reach into a
+  // sibling bullet's independent claim.
+  const result = evaluateA4Viability({
+    number: 39,
+    title: 'wire external approval gate',
+    body:
+      '- No new dependencies\n' +
+      '- Requires maintainer decision on naming\n' +
+      '- Add tests\n' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when "zero" is part of a hyphenated compound, not a negation cue', () => {
+  const result = evaluateA4Viability({
+    number: 40,
+    title: 'wire external approval gate',
+    body:
+      'Zero-downtime deployment requires production access before this ' +
+      'can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a generic-pattern mention coexists with a distinct genuine blocker', () => {
+  const result = evaluateA4Viability({
+    number: 41,
+    title: 'wire external approval gate',
+    body:
+      'This describes a common credential pattern used elsewhere. ' +
+      'Waiting for maintainer sign-off is still required before this ' +
+      'can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+// --- PR #2757 review follow-ups (Copilot + Codex): a digit-adjacent
+// apostrophe, an "until"-canceled negation, unattributed emphasis-quoting,
+// a past investigation that confirms rather than resolves the blocker, and
+// a generic noun paired with an explicit requirement-assertion word -------
+
+test('still fails autonomous completion when a possessive apostrophe follows a digit (Copilot review, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 42,
+    title: 'wire external approval gate',
+    body:
+      "The 2020's external system rollout requires production access " +
+      'before it can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when "not ... until" makes the following phrase a prerequisite (Codex review, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 43,
+    title: 'wire external approval gate',
+    body:
+      'Do not proceed until production access is granted. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test("still fails autonomous completion when quotes only emphasize this issue's own requirement, with no citation framing (Codex review, PR #2757)", () => {
+  const result = evaluateA4Viability({
+    number: 44,
+    title: 'wire external approval gate',
+    body:
+      'The change requires "production access" before it can ship. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a past investigation confirms the blocker rather than resolving it (Codex review, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 45,
+    title: 'wire external approval gate',
+    body:
+      'We already verified production access is required before this ' +
+      'can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a generic-sounding noun coexists with an explicit requirement-assertion word (Codex review, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 46,
+    title: 'wire external approval gate',
+    body:
+      'A credential approach must be supplied by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+// --- PR #2757 review round 2 (Codex): "cannot ... without" as a
+// requirement (not a double negation), a negation cue crossing the
+// title/body boundary, an unrelated attribution verb elsewhere in the
+// paragraph, and a multi-backtick code span --------------------------
+
+test('still fails autonomous completion when "cannot ... without" makes the following phrase a prerequisite (Codex review round 2, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 47,
+    title: 'wire external approval gate',
+    body:
+      'We cannot complete this without production access. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a negation in the title would otherwise cross into the body (Codex review round 2, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 48,
+    title: 'No credential changes',
+    body:
+      'Production access is required before shipping. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when an unrelated attribution verb sits elsewhere in the paragraph (Codex review round 2, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 49,
+    title: 'wire external approval gate',
+    body:
+      'The docs describe local setup. This change requires ' +
+      '"production access" before it can ship. Verification: add unit ' +
+      'tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when a trigger phrase sits inside a multi-backtick code span (Codex review round 2, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 50,
+    title: 'fix docs example formatting',
+    body:
+      'Use ``production access`` as a diagnostic label in the error ' +
+      'message. Single docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+// --- PR #2757 review round 3 (Copilot/Codex): a colon introducing an
+// independent requirement, "blocked"/"pending" emphasis-quoting with no
+// must/require wording of its own, and a fenced code block whose closer is
+// longer than its opener -------------------------------------------------
+
+test('still fails autonomous completion when a colon introduces an independent requirement after a negation (Codex review round 3, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 51,
+    title: 'wire external approval gate',
+    body:
+      'No workaround: production access is required before shipping. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a quoted requirement is emphasized with "blocked"/"pending" instead of must/require (Codex review round 3, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 52,
+    title: 'wire external approval gate',
+    body:
+      'Shipping remains blocked pending "production access". ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a genuine blocker sits after a fenced code block closed by a longer backtick run (Codex review round 3, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 53,
+    title: 'fix docs example formatting',
+    body:
+      '```\nproduction access\n````\n\n' +
+      'Production access is required before shipping. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when the only trigger phrase sits inside a fenced code block closed by a longer backtick run (Codex review round 3, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 54,
+    title: 'fix docs example formatting',
+    body:
+      '```\nproduction access\n````\n\n' +
+      'Single docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+// --- PR #2757 review round 4 (Codex): a stray unmatched backtick, the
+// "not only" additive idiom, and an unconditional blockquote exclusion
+// with no requirement-assertion safeguard ---------------------------------
+
+test('still fails autonomous completion when a stray unmatched backtick precedes a genuine blocker (Codex review round 4, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 55,
+    title: 'fix malformed input handling',
+    body:
+      'Malformed input contains a stray `. Production access is ' +
+      'required before shipping. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when "not only" additively affirms the requirement instead of negating it (Codex review round 4, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 56,
+    title: 'wire external approval gate',
+    body:
+      'Not only is production access needed for the rollout, the ' +
+      'timeline also slips. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a genuine requirement is stated as a blockquote (Codex review round 4, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 57,
+    title: 'wire external approval gate',
+    body:
+      '> Production access is required before shipping.\n\n' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when a blockquoted example is not a requirement of its own (Codex review round 4, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 58,
+    title: 'fix docs example formatting',
+    body:
+      '> Example: "no production access needed" is the desired end ' +
+      'state.\n\nSingle docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+// --- PR #2757 review round 5 (Copilot/Codex): a fenced-code opener with
+// an info string, and a past-investigation cue unrelated to a later,
+// still-open dependency -----------------------------------------------
+
+test('still fails autonomous completion when a genuine blocker sits after a fenced code block opened with an info string (Copilot/Codex review round 5, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 59,
+    title: 'fix docs example formatting',
+    body:
+      '```ts\nproduction access\n````\n\n' +
+      'Production access is required before shipping. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when the only trigger phrase sits inside a fenced code block opened with an info string (Copilot/Codex review round 5, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 60,
+    title: 'fix docs example formatting',
+    body:
+      '```ts\nproduction access\n````\n\n' +
+      'Single docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when a past-investigation cue is unrelated to a later, still-open dependency (Codex review round 5, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 61,
+    title: 'wire external approval gate',
+    body:
+      'We already checked the reproduction and are now waiting on ' +
+      'production access. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('evaluateDiscoverViability fails closed when a lookup aborts', async () => {
   // A non-404 gh failure (auth / rate-limit / network) propagates out of
   // loadIssue instead of being swallowed into a silent issue_not_found.
