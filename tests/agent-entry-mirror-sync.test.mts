@@ -78,8 +78,8 @@ test('CLAUDE.md carries a Claude-scoped delta and does not name Antigravity', ()
   assert.match(claude, /Claude Code/, 'CLAUDE.md must name Claude Code');
   assert.match(
     claude,
-    /--vendor claude/,
-    'CLAUDE.md must scope its token-cost delta to --vendor claude',
+    /In Claude Code specifically,[^.]*--vendor claude/,
+    'CLAUDE.md must keep --vendor claude explicitly scoped to Claude Code (dual-loading safety), not a bare override',
   );
   assert.match(
     claude,

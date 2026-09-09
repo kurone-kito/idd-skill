@@ -43,7 +43,8 @@ rather than any one tool.
 - `AGENTS.md` is the source of truth. Adapters exist only to get the
   content in front of tools that would otherwise miss it, or to carry
   a genuinely tool-specific delta — do not duplicate guidance into
-  them.
+  them (a duplicated adapter silently drifted out of sync with its
+  source before, observed 2026-07-02, #1214).
 - When a rule needs tool-specific vocabulary (like Copilot's Agent mode
   / Plan mode), keep the neutral wording in `AGENTS.md` and put the
   vocabulary mapping in that tool's own adapter.
