@@ -709,7 +709,7 @@ function parseUpstreamCandidateMarker(text, markerPrefix) {
  * matches regardless of value, so comparing the two counts recovers the
  * distinction.
  */
-function parseAuthoringBucketMarker(text, markerPrefix) {
+export function parseAuthoringBucketMarker(text, markerPrefix) {
   const rawCount = countMarkerOccurrences(
     text,
     markerPrefix,

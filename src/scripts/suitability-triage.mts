@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { parseAuthoringBucketMarker } from './audit-authored-issue.mts';
 import { computeBranchName } from './branch-name.mts';
 import { parseCliArgs } from './cli-args.mts';
 import {
@@ -25,7 +26,9 @@ import {
   getMarkdownCodeRange,
   type MarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
+  stripMarkdownCodeRegions,
 } from './markdown-code.mts';
+import { escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
@@ -92,6 +95,14 @@ interface SuitabilityTriageArgs {
 // marks, so it cannot itself satisfy the scan if the real key is ever
 // renamed -- see #1446's PR description for why that matters.)
 //
+// #2737: the default marker prefix Check 6 (Autonomy) uses to detect an
+// `authoring-bucket: blocked-by-human` marker when the caller does not
+// configure `markerPrefix`. Same TDZ hazard and same fallback value as
+// every other file's own local `DEFAULT_MARKER_PREFIX` constant (see
+// discover-readiness-check.mts, audit-authored-issue.mts, etc.) -- not
+// shared/exported centrally by convention in this codebase.
+const DEFAULT_MARKER_PREFIX = 'idd-skill';
+
 // Declared here, above the import.meta.main trigger below, rather than
 // alongside parseArgs further down: the trigger calls runCli() ->
 // parseArgs() synchronously at module-evaluation time, and a `const`
@@ -144,6 +155,10 @@ interface Context {
   blockedByHumanLabelName?: string;
   /** Configured `labels.needsDecisionLabelName` (#1273). */
   needsDecisionLabelName?: string;
+  /** #2737: configured `markerPrefix`, resolved to `DEFAULT_MARKER_PREFIX`
+   * when absent -- read by Check 6 (Autonomy) to detect an
+   * `authoring-bucket: blocked-by-human` marker. */
+  markerPrefix?: string;
   /** #1484: high-confidence duplicate/superseded mechanical evidence. */
   highConfidenceDuplicate?: HighConfidenceDuplicateInput;
   /**
@@ -186,6 +201,8 @@ interface SuitabilityOptions {
   trustSafetyAmbiguous?: unknown;
   blockedByHumanLabelName?: unknown;
   needsDecisionLabelName?: unknown;
+  /** #2737 */
+  markerPrefix?: unknown;
   /** #1484 */
   highConfidenceDuplicate?: unknown;
   /** #1484 */
@@ -2203,6 +2220,10 @@ export function evaluateSuitability(
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
+    markerPrefix: normalizeConfiguredLabelName(
+      options.markerPrefix,
+      DEFAULT_MARKER_PREFIX,
+    ),
     highConfidenceDuplicate: normalizeHighConfidenceDuplicateInput(
       options.highConfidenceDuplicate,
     ),
@@ -2602,11 +2623,12 @@ export function checkAutonomy(context: Context): CheckOutcome {
   const { issue } = context;
   const labels = new Set(issue.labels);
   const body = issue.body;
+  const blockedByHumanLabelName = normalizeConfiguredLabelName(
+    context.blockedByHumanLabelName,
+    POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+  );
   const blockedLabels = new Set([
-    normalizeConfiguredLabelName(
-      context.blockedByHumanLabelName,
-      POLICY_DEFAULTS.labels.blockedByHumanLabelName,
-    ),
+    blockedByHumanLabelName,
     normalizeConfiguredLabelName(
       context.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
@@ -2620,6 +2642,49 @@ export function checkAutonomy(context: Context): CheckOutcome {
         evidence: `Blocking label present: ${label}`,
       };
     }
+  }
+
+  // #2737: the configured blockedByHumanLabelName label (default
+  // status:blocked-by-human) can be absent even when the issue is
+  // genuinely human-gated -- issue #2657 mechanically passed all seven
+  // A4.5 checks while still carrying a `blocked-by-human:` title prefix
+  // and a hidden authoring-bucket marker, neither of which the label
+  // check above reads. Both are mechanical, pre-label signals the
+  // issue-authoring contract pairs with that label, so this check must
+  // also honor them. The title-prefix stem is derived from the
+  // configured label's own local name (the part after its `status:`-style
+  // namespace) rather than a hardcoded literal, so a repository that
+  // renames the label keeps both signals in sync.
+  const blockedByHumanStem = blockedByHumanLabelName.includes(':')
+    ? blockedByHumanLabelName.slice(
+        blockedByHumanLabelName.lastIndexOf(':') + 1,
+      )
+    : blockedByHumanLabelName;
+  const titlePrefixPattern = new RegExp(
+    `^${escapeRegex(blockedByHumanStem)}:\\s*`,
+    'i',
+  );
+  if (titlePrefixPattern.test(issue.title)) {
+    return {
+      pass: false,
+      evidence: `Title carries the ${blockedByHumanStem}: prefix.`,
+    };
+  }
+
+  const markerPrefix = context.markerPrefix ?? DEFAULT_MARKER_PREFIX;
+  const bucketMarker = parseAuthoringBucketMarker(
+    stripMarkdownCodeRegions(body),
+    markerPrefix,
+  );
+  if (
+    bucketMarker.present &&
+    !bucketMarker.malformed &&
+    bucketMarker.value === 'blocked-by-human'
+  ) {
+    return {
+      pass: false,
+      evidence: `<!-- ${markerPrefix}-authoring-bucket: blocked-by-human --> marker present.`,
+    };
   }
 
   // #2219: an either/or acceptance-criterion shape naming two mutually
@@ -3624,6 +3689,7 @@ function runCli(): void {
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    markerPrefix: resolveMarkerPrefix(policyConfig),
     highConfidenceDuplicate,
     highConfidenceCollectionDegraded: collectionWarnings.length > 0,
   });
@@ -3671,6 +3737,7 @@ interface LocalSuitabilityResult {
 interface LocalSuitabilityOptions {
   blockedByHumanLabelName?: string;
   needsDecisionLabelName?: string;
+  markerPrefix?: string;
 }
 
 /**
@@ -3733,6 +3800,10 @@ export function evaluateSuitabilityLocal(
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
+    markerPrefix: normalizeConfiguredLabelName(
+      options.markerPrefix,
+      DEFAULT_MARKER_PREFIX,
+    ),
   };
 
   const checks: CheckResult[] = CHECKS.map((check) => {
@@ -3768,6 +3839,7 @@ function runLocalCli(args: SuitabilityTriageArgs): void {
   const result = evaluateSuitabilityLocal(bodyText, {
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    markerPrefix: resolveMarkerPrefix(policyConfig),
   });
 
   const output = {
@@ -4155,6 +4227,17 @@ function normalizeConfiguredLabelName(
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : fallback;
+}
+
+// #2737: mirrors discover-readiness-check.mts's `resolveMarkerPrefix` --
+// `normalizePolicyConfig`/`labelsPolicy` has no `markerPrefix` field, so
+// this reads the raw loaded config directly, same as every other
+// consumer of the top-level `markerPrefix` config key.
+function resolveMarkerPrefix(config: unknown): string {
+  const prefix = (config as { markerPrefix?: unknown } | null)?.markerPrefix;
+  return typeof prefix === 'string' && prefix.length > 0
+    ? prefix
+    : DEFAULT_MARKER_PREFIX;
 }
 
 function normalizeRepository(repository: unknown): Repository | null {

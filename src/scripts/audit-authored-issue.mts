@@ -107,7 +107,7 @@ export type AuthoringBucketMarkerValue = 'needs-decision' | 'blocked-by-human';
  * the two recognized tokens (including a value-less marker with no token
  * at all), or it is repeated with a disagreeing value.
  */
-interface AuthoringBucketMarkerDetection {
+export interface AuthoringBucketMarkerDetection {
   present: boolean;
   value: AuthoringBucketMarkerValue | null;
   malformed: boolean;
@@ -943,7 +943,7 @@ function parseUpstreamCandidateMarker(
  * matches regardless of value, so comparing the two counts recovers the
  * distinction.
  */
-function parseAuthoringBucketMarker(
+export function parseAuthoringBucketMarker(
   text: string,
   markerPrefix: string,
 ): AuthoringBucketMarkerDetection {

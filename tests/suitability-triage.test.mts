@@ -4895,6 +4895,128 @@ test('checkAutonomy resolves configured blocked-label names (#1273)', () => {
   );
 });
 
+// --- #2737: title-prefix and authoring-bucket marker signals ---
+
+test('checkAutonomy fails on a blocked-by-human: title prefix even without the configured label', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'blocked-by-human: needs a maintainer decision',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /blocked-by-human: prefix/);
+});
+
+test('checkAutonomy title-prefix match is case-insensitive and tolerates extra whitespace after the colon', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'Blocked-By-Human:    needs a maintainer decision',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('checkAutonomy title-prefix stem follows a reconfigured blockedByHumanLabelName', () => {
+  // Default stem ("blocked-by-human") no longer matches once the label
+  // is reconfigured to a different local name.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: 'blocked-by-human: needs a maintainer decision',
+      },
+      blockedByHumanLabelName: 'triage:human-gate',
+    } as Context).pass,
+    true,
+  );
+
+  // The reconfigured stem ("human-gate") matches instead.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: 'human-gate: needs a maintainer decision',
+      },
+      blockedByHumanLabelName: 'triage:human-gate',
+    } as Context).pass,
+    false,
+  );
+});
+
+test('checkAutonomy does not false-positive on a title merely containing "blocked-by-human" mid-sentence', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'fix: the blocked-by-human label check has a gap',
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy fails on a well-formed authoring-bucket: blocked-by-human marker', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- idd-skill-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /authoring-bucket: blocked-by-human/);
+});
+
+test('checkAutonomy authoring-bucket marker check honors a configured markerPrefix', () => {
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        body: `<!-- custom-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+      },
+    } as Context).pass,
+    true,
+    'the default idd-skill prefix must not match a custom-prefixed marker',
+  );
+
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        body: `<!-- custom-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+      },
+      markerPrefix: 'custom',
+    } as Context).pass,
+    false,
+  );
+});
+
+test('checkAutonomy passes an authoring-bucket: needs-decision marker (Autonomy is blocked-by-human-specific)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- idd-skill-authoring-bucket: needs-decision -->\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy passes a malformed authoring-bucket marker (fail-safe: no bucket, not blocked-by-human)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- idd-skill-authoring-bucket: not-a-real-value -->\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy passes a body/title with none of the three blocked-by-human signals', () => {
+  const result = checkAutonomy({
+    issue: BASE_ISSUE,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('evaluateSuitability threads configured blocked-label options through to Autonomy', () => {
   const result = evaluateSuitability(
     { ...BASE_ISSUE, labels: ['triage:needs-call'] },
