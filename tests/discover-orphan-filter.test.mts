@@ -101,6 +101,49 @@ test('classifyIssue rejects roadmap and blocked marker issues', () => {
   assert.equal(blocked.reason, 'blocked_by_marker');
 });
 
+test('classifyIssue excludes the configured providerOutage.declarationTarget by number (#2800)', () => {
+  const declarationIssue = {
+    number: 42,
+    title: 'Provider outage coordination',
+    state: 'OPEN',
+    labels: [],
+    body: 'No markers, no labels -- a permanent coordination issue.',
+  };
+  const excluded = classifyIssue(declarationIssue, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    providerOutageDeclarationTarget: 42,
+  });
+  assert.equal(excluded.orphan, false);
+  assert.equal(excluded.reason, 'provider_outage_target');
+
+  // A different issue number is unaffected by the same configured target.
+  const other = classifyIssue(
+    { ...declarationIssue, number: 43 },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      providerOutageDeclarationTarget: 42,
+    },
+  );
+  assert.equal(other.reason, 'orphan');
+});
+
+test('classifyIssue leaves the target issue as a normal orphan when providerOutageDeclarationTarget is absent', () => {
+  const declarationIssue = {
+    number: 42,
+    title: 'Provider outage coordination',
+    state: 'OPEN',
+    labels: [],
+    body: 'No markers, no labels -- a permanent coordination issue.',
+  };
+  const result = classifyIssue(declarationIssue, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+  assert.equal(result.reason, 'orphan');
+});
+
 test('classifyIssue accepts marker forms without colon', () => {
   const roadmap = classifyIssue(
     {
@@ -204,6 +247,45 @@ test('filterOrphanIssues excludes blocked labels and open blockers', async () =>
   assert.equal(result.orphans[0].number, 12);
   assert.equal(result.filtered.blocked_by_open_reference.length, 1);
   assert.equal(result.filtered.blocked_label.length, 1);
+});
+
+test('filterOrphanIssues excludes providerOutage.declarationTarget end-to-end (#2800)', async () => {
+  const issues = [
+    {
+      number: 50,
+      title: 'Provider outage coordination',
+      state: 'OPEN',
+      labels: [],
+      body: 'No markers, no labels -- a permanent coordination issue.',
+      url: 'https://example.com/50',
+    },
+    {
+      number: 51,
+      title: 'ordinary orphan',
+      state: 'OPEN',
+      labels: [],
+      body: '',
+      url: 'https://example.com/51',
+    },
+  ];
+
+  const configured = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    providerOutageDeclarationTarget: 50,
+  });
+  assert.equal(configured.orphans.length, 1);
+  assert.equal(configured.orphans[0].number, 51);
+  assert.equal(configured.filtered.provider_outage_target.length, 1);
+  assert.equal(configured.filtered.provider_outage_target[0].number, 50);
+
+  // Absent config: behavior is unchanged from today -- both are orphans.
+  const unconfigured = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+  assert.equal(unconfigured.orphans.length, 2);
+  assert.equal(unconfigured.filtered.provider_outage_target.length, 0);
 });
 
 test('filterOrphanIssues resolves configured blocked-label names (#1273)', async () => {
