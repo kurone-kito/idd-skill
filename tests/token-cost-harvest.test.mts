@@ -15,7 +15,9 @@ import {
   type CompletedIssueWindow,
   computeStageWindows,
   deriveOutcome,
+  extractClaudeCountTimeline,
   extractClaudeUsageTimeline,
+  extractCodexCountTimeline,
   extractCodexUsageTimeline,
   fetchIssueLoopGithubContext,
   type HarvestedSample,
@@ -2155,10 +2157,74 @@ test('extractCodexUsageTimeline falls back to last_token_usage deltas when no re
 });
 
 // ---------------------------------------------------------------------------
+// Per-vendor turn/tool-call count timelines (#2769)
+// ---------------------------------------------------------------------------
+
+test('extractClaudeCountTimeline counts every assistant record as a turn and sums tool_use blocks, sorted by timestamp', () => {
+  const records = [
+    {
+      type: 'assistant',
+      timestamp: '2026-01-01T00:05:00Z',
+      message: { content: [{ type: 'text', text: 'hi' }] },
+    },
+    {
+      type: 'assistant',
+      timestamp: '2026-01-01T00:01:00Z',
+      message: {
+        content: [
+          { type: 'tool_use', id: 't1', name: 'Bash' },
+          { type: 'tool_use', id: 't2', name: 'Read' },
+        ],
+      },
+    },
+    { type: 'user', timestamp: '2026-01-01T00:02:00Z' },
+  ];
+  const timeline = extractClaudeCountTimeline(records);
+  assert.equal(timeline.supportsToolCallCount, true);
+  assert.equal(timeline.points.length, 2);
+  assert.equal(timeline.points[0].atMs, ms('2026-01-01T00:01:00Z'));
+  assert.equal(timeline.points[0].turnCount, 1);
+  assert.equal(timeline.points[0].toolCallCount, 2);
+  assert.equal(timeline.points[1].atMs, ms('2026-01-01T00:05:00Z'));
+  assert.equal(timeline.points[1].turnCount, 1);
+  assert.equal(timeline.points[1].toolCallCount, 0);
+});
+
+test('extractClaudeCountTimeline counts an assistant record even with no usage or a plain-string content', () => {
+  const records = [
+    {
+      type: 'assistant',
+      timestamp: '2026-01-01T00:00:00Z',
+      message: { content: 'plain string' },
+    },
+  ];
+  const timeline = extractClaudeCountTimeline(records);
+  assert.equal(timeline.points.length, 1);
+  assert.equal(timeline.points[0].turnCount, 1);
+  assert.equal(timeline.points[0].toolCallCount, 0);
+});
+
+test('extractCodexCountTimeline counts every turn_context record as a turn; supportsToolCallCount is false', () => {
+  const records = [
+    { type: 'turn_context', timestamp: '2026-01-01T00:05:00Z', payload: {} },
+    { type: 'turn_context', timestamp: '2026-01-01T00:01:00Z', payload: {} },
+    { type: 'token_count', timestamp: '2026-01-01T00:02:00Z', payload: {} },
+  ];
+  const timeline = extractCodexCountTimeline(records);
+  assert.equal(timeline.supportsToolCallCount, false);
+  assert.equal(timeline.points.length, 2);
+  assert.equal(timeline.points[0].atMs, ms('2026-01-01T00:01:00Z'));
+  assert.equal(timeline.points[1].atMs, ms('2026-01-01T00:05:00Z'));
+});
+
+// ---------------------------------------------------------------------------
 // Stage windows
 // ---------------------------------------------------------------------------
 
 const EMPTY_EVENTS = new Map<TokenCostStageId, StageEventWindow>();
+
+/** A count timeline with no points -- used by usage-focused allocateStageUsage tests that don't exercise turn/tool-call allocation. */
+const EMPTY_COUNT_TIMELINE = { points: [], supportsToolCallCount: false };
 
 test('computeStageWindows tiles all seven stages contiguously for a full merged loop', () => {
   const ctx: IssueLoopGithubContext = {
@@ -2532,7 +2598,11 @@ test('allocateStageUsage (delta mode): every stage sums exactly to the session t
     { atMs: ms('2026-01-01T00:50:00Z'), usage: usage(60) }, // merge
     { atMs: ms('2026-01-01T01:05:00Z'), usage: usage(70) }, // cleanup
   ];
-  const stages = allocateStageUsage(windows, { mode: 'delta', points });
+  const stages = allocateStageUsage(
+    windows,
+    { mode: 'delta', points },
+    EMPTY_COUNT_TIMELINE,
+  );
   assert.equal(stages.length, 7);
   const sum = stages.reduce((total, s) => total + usageSum(s.usage), 0);
   assert.equal(sum, usageSum(...points.map((p) => p.usage)));
@@ -2559,7 +2629,11 @@ test('allocateStageUsage (cumulative mode): windows telescope to the final snaps
     { atMs: ms('2026-01-01T00:05:00Z'), usage: usage(40) },
     { atMs: ms('2026-01-01T00:15:00Z'), usage: usage(100) },
   ];
-  const stages = allocateStageUsage(windows, { mode: 'cumulative', points });
+  const stages = allocateStageUsage(
+    windows,
+    { mode: 'cumulative', points },
+    EMPTY_COUNT_TIMELINE,
+  );
   assert.equal(stages.find((s) => s.id === 'claim')?.usage.output, 40);
   assert.equal(stages.find((s) => s.id === 'work')?.usage.output, 60);
   const sum = stages.reduce((total, s) => total + usageSum(s.usage), 0);
@@ -2588,7 +2662,11 @@ test('allocateStageUsage (cumulative mode): a gap between windows excludes that 
     { atMs: ms('2026-01-01T00:12:00Z'), usage: usage(8) },
     { atMs: ms('2026-01-01T00:20:00Z'), usage: usage(12) },
   ];
-  const stages = allocateStageUsage(windows, { mode: 'cumulative', points });
+  const stages = allocateStageUsage(
+    windows,
+    { mode: 'cumulative', points },
+    EMPTY_COUNT_TIMELINE,
+  );
   assert.equal(stages.find((s) => s.id === 'claim')?.usage.output, 5);
   // Not 7 (12 - the running baseline of 5): the +3 that grew during the gap
   // (5 -> 8) is excluded, matching delta mode's gap exclusion.
@@ -2613,7 +2691,11 @@ test("allocateStageUsage (cumulative mode): a point exactly at the first window'
     { atMs: ms('2026-01-01T00:00:00Z'), usage: usage(5) },
     { atMs: ms('2026-01-01T00:10:00Z'), usage: usage(8) },
   ];
-  const stages = allocateStageUsage(windows, { mode: 'cumulative', points });
+  const stages = allocateStageUsage(
+    windows,
+    { mode: 'cumulative', points },
+    EMPTY_COUNT_TIMELINE,
+  );
   assert.equal(stages.find((s) => s.id === 'claim')?.usage.output, 8);
 });
 
@@ -2638,7 +2720,11 @@ test('allocateStageUsage (cumulative mode): a point exactly at a shared boundary
     { atMs: ms('2026-01-01T00:10:00Z'), usage: usage(8) },
     { atMs: ms('2026-01-01T00:20:00Z'), usage: usage(12) },
   ];
-  const stages = allocateStageUsage(windows, { mode: 'cumulative', points });
+  const stages = allocateStageUsage(
+    windows,
+    { mode: 'cumulative', points },
+    EMPTY_COUNT_TIMELINE,
+  );
   assert.equal(stages.find((s) => s.id === 'claim')?.usage.output, 8);
   assert.equal(stages.find((s) => s.id === 'work')?.usage.output, 4);
   const sum = stages.reduce((total, s) => total + usageSum(s.usage), 0);
@@ -2660,14 +2746,116 @@ test('allocateStageUsage omits an all-zero-usage window', () => {
       source: 'marker' as const,
     },
   ];
-  const stages = allocateStageUsage(windows, {
-    mode: 'delta',
-    points: [{ atMs: 1500, usage: usage(5) }],
-  });
+  const stages = allocateStageUsage(
+    windows,
+    {
+      mode: 'delta',
+      points: [{ atMs: 1500, usage: usage(5) }],
+    },
+    EMPTY_COUNT_TIMELINE,
+  );
   assert.deepEqual(
     stages.map((s) => s.id),
     ['claim'],
   );
+});
+
+test('allocateStageUsage keeps a window with real turn activity but zero token usage, instead of dropping it', () => {
+  const windows = [
+    {
+      id: 'discover' as const,
+      startMs: 0,
+      endMs: 1000,
+      source: 'marker' as const,
+    },
+  ];
+  // A turn_context-shaped point with no corresponding token_count reading
+  // in this window -- the exact Codex early-stage shape the critique
+  // flagged: real turn activity, zero token usage.
+  const stages = allocateStageUsage(
+    windows,
+    { mode: 'delta', points: [] },
+    {
+      points: [{ atMs: 500, turnCount: 1, toolCallCount: 0 }],
+      supportsToolCallCount: false,
+    },
+  );
+  assert.equal(stages.length, 1);
+  assert.equal(stages[0].id, 'discover');
+  assert.equal(stages[0].usage.turnCount, 1);
+  assert.equal(Object.hasOwn(stages[0].usage, 'toolCallCount'), false);
+  // Token usage fields are still present and zero -- not fabricated
+  // beyond the schema's own always-present-and-zero usage contract.
+  assert.equal(stages[0].usage.output, 0);
+});
+
+test('allocateStageUsage attaches toolCallCount only when the count timeline declares support, never a fabricated 0', () => {
+  const windows = [
+    {
+      id: 'work' as const,
+      startMs: 0,
+      endMs: 1000,
+      source: 'marker' as const,
+    },
+  ];
+  // Codex-shaped: real turn activity, supportsToolCallCount false.
+  const codexStages = allocateStageUsage(
+    windows,
+    { mode: 'delta', points: [] },
+    {
+      points: [{ atMs: 500, turnCount: 3, toolCallCount: 0 }],
+      supportsToolCallCount: false,
+    },
+  );
+  assert.equal(codexStages[0].usage.turnCount, 3);
+  assert.equal(Object.hasOwn(codexStages[0].usage, 'toolCallCount'), false);
+
+  // Claude-shaped: same turn activity, but supportsToolCallCount true and
+  // a genuine 0 tool calls -- a real, meaningful zero, not a fabrication.
+  const claudeStages = allocateStageUsage(
+    windows,
+    { mode: 'delta', points: [] },
+    {
+      points: [{ atMs: 500, turnCount: 3, toolCallCount: 0 }],
+      supportsToolCallCount: true,
+    },
+  );
+  assert.equal(claudeStages[0].usage.turnCount, 3);
+  assert.equal(claudeStages[0].usage.toolCallCount, 0);
+});
+
+test('allocateStageUsage omits turnCount/toolCallCount on a window with no count activity at all', () => {
+  const windows = [
+    {
+      id: 'discover' as const,
+      startMs: 0,
+      endMs: 1000,
+      source: 'marker' as const,
+    },
+    {
+      id: 'claim' as const,
+      startMs: 1000,
+      endMs: 2000,
+      source: 'marker' as const,
+    },
+  ];
+  const stages = allocateStageUsage(
+    windows,
+    { mode: 'delta', points: [{ atMs: 1500, usage: usage(5) }] },
+    {
+      points: [{ atMs: 1500, turnCount: 1, toolCallCount: 1 }],
+      supportsToolCallCount: true,
+    },
+  );
+  // Only 'claim' has any usage or count activity; 'discover' is dropped
+  // entirely (no usage, no counts), same as the pre-existing all-zero
+  // drop rule.
+  assert.deepEqual(
+    stages.map((s) => s.id),
+    ['claim'],
+  );
+  assert.equal(stages[0].usage.turnCount, 1);
+  assert.equal(stages[0].usage.toolCallCount, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -3607,6 +3795,7 @@ test('buildSample: an adapter session with an unparseable startedAt skips the Gi
       joinHints: { issueNumber: 9001 },
     },
     timeline: { mode: 'delta', points: [] },
+    countTimeline: EMPTY_COUNT_TIMELINE,
   };
   // No stubGh: if buildSample attempted the join anyway, the real `gh`
   // binary (or its absence) would make this test fail or hang, proving no
@@ -3650,6 +3839,14 @@ test('AC1: a fake adapter session joined against fixture GitHub markers produces
           { atMs: ms('2026-01-01T00:25:00Z'), usage: usage(1) }, // review (no submit-pr/work: PR precedes claim cap)
         ],
       },
+      countTimeline: {
+        points: [
+          { atMs: ms('2025-12-31T23:56:00Z'), turnCount: 1, toolCallCount: 2 }, // discover
+          { atMs: ms('2026-01-01T00:05:00Z'), turnCount: 1, toolCallCount: 0 }, // claim
+          { atMs: ms('2026-01-01T00:25:00Z'), turnCount: 2, toolCallCount: 1 }, // review
+        ],
+        supportsToolCallCount: true,
+      },
     };
     const built = buildSample(session, 'acme', 'repo', new Map(), [
       'claude-test',
@@ -3665,6 +3862,43 @@ test('AC1: a fake adapter session joined against fixture GitHub markers produces
     assert.equal(
       stageSum,
       usageSum(...session.timeline.points.map((p) => p.usage)),
+    );
+    // Per-stage turnCount/toolCallCount sum back to the count timeline's
+    // own totals -- the same telescoping invariant already proven for
+    // token usage above (#2769).
+    const turnSum = sample.stages.reduce(
+      (total, s) => total + (s.usage.turnCount ?? 0),
+      0,
+    );
+    const toolCallSum = sample.stages.reduce(
+      (total, s) => total + (s.usage.toolCallCount ?? 0),
+      0,
+    );
+    assert.equal(turnSum, 4);
+    assert.equal(toolCallSum, 3);
+    assert.equal(
+      sample.stages.find((s) => s.id === 'discover')?.usage.turnCount,
+      1,
+    );
+    assert.equal(
+      sample.stages.find((s) => s.id === 'discover')?.usage.toolCallCount,
+      2,
+    );
+    assert.equal(
+      sample.stages.find((s) => s.id === 'claim')?.usage.turnCount,
+      1,
+    );
+    assert.equal(
+      sample.stages.find((s) => s.id === 'claim')?.usage.toolCallCount,
+      0,
+    );
+    assert.equal(
+      sample.stages.find((s) => s.id === 'review')?.usage.turnCount,
+      2,
+    );
+    assert.equal(
+      sample.stages.find((s) => s.id === 'review')?.usage.toolCallCount,
+      1,
     );
   } finally {
     restore();
@@ -3690,6 +3924,7 @@ test('AC3: a session with no joinHints.issueNumber stays kind: session, never re
       },
     },
     timeline: { mode: 'delta', points: [] },
+    countTimeline: EMPTY_COUNT_TIMELINE,
   };
   const built = buildSample(session, 'acme', 'repo', new Map(), [
     'claude-test',

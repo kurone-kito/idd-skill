@@ -199,6 +199,60 @@ export function extractCodexUsageTimeline(records) {
   }
   return { mode: 'delta', points };
 }
+/** Mirrors token-cost-adapter-claude.mts's extractTurnCount/extractToolCallCount per-record source: every assistant record is one turn (regardless of whether it carries usage), with tool_use content blocks summed for toolCallCount. */
+export function extractClaudeCountTimeline(records) {
+  const points = [];
+  for (const record of records) {
+    if (!isPlainObject(record) || record.type !== 'assistant') {
+      continue;
+    }
+    const atMs = toValidTimestampMs(record.timestamp);
+    if (atMs === undefined) {
+      continue;
+    }
+    const message = isPlainObject(record.message) ? record.message : undefined;
+    const content = message?.content;
+    let toolCallCount = 0;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (isPlainObject(block) && block.type === 'tool_use') {
+          toolCallCount += 1;
+        }
+      }
+    }
+    points.push({ atMs, turnCount: 1, toolCallCount });
+  }
+  points.sort((a, b) => a.atMs - b.atMs);
+  return { points, supportsToolCallCount: true };
+}
+/** Mirrors token-cost-adapter-codex.mts's countTurnContexts per-record source: every turn_context record is one turn. Codex has no fixture-provable tool-call signal (see that adapter's own doc comment), so supportsToolCallCount is false and every point's toolCallCount is a placeholder 0, never read by allocateStageUsage below. */
+export function extractCodexCountTimeline(records) {
+  const points = [];
+  for (const record of records) {
+    if (!isPlainObject(record) || record.type !== 'turn_context') {
+      continue;
+    }
+    const atMs = toValidTimestampMs(record.timestamp);
+    if (atMs === undefined) {
+      continue;
+    }
+    points.push({ atMs, turnCount: 1, toolCallCount: 0 });
+  }
+  points.sort((a, b) => a.atMs - b.atMs);
+  return { points, supportsToolCallCount: false };
+}
+/** Sums every count point whose timestamp falls in [startMs, endMs), mirroring sumDeltaInRange below. */
+function sumCountsInRange(points, startMs, endMs) {
+  let turnCount = 0;
+  let toolCallCount = 0;
+  for (const point of points) {
+    if (point.atMs >= startMs && point.atMs < endMs) {
+      turnCount += point.turnCount;
+      toolCallCount += point.toolCallCount;
+    }
+  }
+  return { turnCount, toolCallCount };
+}
 const CLAIM_STAGE_CAP_MS = 15 * 60 * 1000;
 /** Thin cap for the merge stage when no cleanup marker activity is resolvable. */
 const MERGE_STAGE_THIN_CAP_MS = 15 * 60 * 1000;
@@ -392,8 +446,22 @@ function cumulativeSnapshotAt(points, atMs, exclusive = false) {
  * For fully contiguous windows (the common case) this telescopes exactly:
  * every window's delta sums to the timeline's final cumulative snapshot
  * minus zero, matching the adapter's own `usage` total.
+ *
+ * `countTimeline` (#2769) folds turn/tool-call counts into the same
+ * per-window pass and the same inclusion decision: a window is kept when
+ * it has real token usage OR real turn activity, so a window with turn
+ * activity but zero token usage (e.g. a `turn_context` record landing
+ * before Codex's first `token_count` reading) is no longer silently
+ * dropped the way a usage-only inclusion test would drop it. `turnCount`/
+ * `toolCallCount` are attached to the stage entry only when this window
+ * actually had turn activity (`counts.turnCount > 0`) -- an inactive
+ * window gets neither key, matching `TokenCostStageUsage`'s own "absent
+ * means no count activity" contract; `toolCallCount` is attached only
+ * when `countTimeline.supportsToolCallCount` is true (Claude), keeping a
+ * vendor with no tool-call signal (Codex) from ever reporting a
+ * fabricated `0`.
  */
-export function allocateStageUsage(windows, timeline) {
+export function allocateStageUsage(windows, timeline, countTimeline) {
   const out = [];
   let previousEndMs = null;
   let previousEndSnapshot = ZERO_USAGE;
@@ -413,8 +481,21 @@ export function allocateStageUsage(windows, timeline) {
     } else {
       usage = sumDeltaInRange(timeline.points, window.startMs, window.endMs);
     }
-    if (usageTotal(usage) > 0) {
-      out.push({ id: window.id, usage });
+    const counts = sumCountsInRange(
+      countTimeline.points,
+      window.startMs,
+      window.endMs,
+    );
+    const hasCounts = counts.turnCount > 0;
+    if (usageTotal(usage) > 0 || hasCounts) {
+      const stageUsage = { ...usage };
+      if (hasCounts) {
+        stageUsage.turnCount = counts.turnCount;
+        if (countTimeline.supportsToolCallCount) {
+          stageUsage.toolCallCount = counts.toolCallCount;
+        }
+      }
+      out.push({ id: window.id, usage: stageUsage });
     }
   }
   return out;
@@ -1738,6 +1819,7 @@ export function scanClaudeVendorSessions(
         vendor: 'claude',
         adapterResult,
         timeline: extractClaudeUsageTimeline(segment.records),
+        countTimeline: extractClaudeCountTimeline(segment.records),
       };
       const cwdIssueNumber = adapterResult.joinHints?.issueNumber;
       if (cwdIssueNumber === undefined) {
@@ -1942,6 +2024,7 @@ export function scanClaudeVendorSessions(
         vendor: 'claude',
         adapterResult: eventWindowResult,
         timeline: extractClaudeUsageTimeline(mergedRecords),
+        countTimeline: extractClaudeCountTimeline(mergedRecords),
       });
       // #2432: suppress the primary file's own plain cwd-derived sample
       // too, not just contributors' -- a no-op for the pre-#2432,
@@ -2173,6 +2256,7 @@ function scanCodexVendorSessions(sessionsDir) {
         vendor: 'codex',
         adapterResult,
         timeline: extractCodexUsageTimeline(records),
+        countTimeline: extractCodexCountTimeline(records),
       });
     } catch (error) {
       process.stderr.write(
@@ -2194,12 +2278,16 @@ function scanCodexVendorSessions(sessionsDir) {
  * omits every stage for a grok issue-loop sample (the session's own
  * aggregate `usage` total is still present and correct); a follow-up
  * issue can add extractGrokUsageTimeline once that read is worth sharing.
+ * `countTimeline` gets the same empty-points placeholder for the same
+ * reason (#2769) -- Grok's own top-level `toolCallCount`/`turnCount` stay
+ * unaffected, since those come straight from the adapter's own sample.
  */
 function scanGrokVendorSessions(sessionsDir) {
   return scanGrokSessions({ sessionsDir }).map((adapterResult) => ({
     vendor: 'grok',
     adapterResult,
     timeline: { mode: 'delta', points: [] },
+    countTimeline: { points: [], supportsToolCallCount: false },
   }));
 }
 // ---------------------------------------------------------------------------
@@ -2252,7 +2340,11 @@ export function buildSample(
     ctx,
     eventWindows,
   );
-  const stages = allocateStageUsage(windows, session.timeline);
+  const stages = allocateStageUsage(
+    windows,
+    session.timeline,
+    session.countTimeline,
+  );
   const sample = {
     ...base,
     kind: 'issue-loop',
