@@ -48,9 +48,21 @@ export interface TokenCostUsage {
   reasoning: number;
 }
 
+/**
+ * Per-stage usage, plus optional per-stage turn/tool-call counts (#2769)
+ * nested inside `usage` (not siblings of it) -- mirrors the raw schema
+ * shape exactly, and keeps the top-level {@link TokenCostUsage} used by
+ * the sample's own whole-session `usage` field untouched. `null` means
+ * the vendor reports no signal for that metric at all (e.g. Codex's
+ * `toolCallCount`); absent means this stage's window carried no count
+ * activity to report.
+ */
 export interface TokenCostStageUsage {
   id: TokenCostStageId;
-  usage: TokenCostUsage;
+  usage: TokenCostUsage & {
+    turnCount?: number | null;
+    toolCallCount?: number | null;
+  };
 }
 
 interface TokenCostSampleBase {
@@ -124,9 +136,19 @@ export interface TokenCostUsagePercentiles {
   reasoning: TokenCostPercentiles;
 }
 
+/**
+ * Per-stage usage percentiles, plus optional per-stage turn/tool-call
+ * percentiles (#2769) as SIBLINGS of `usage` -- deliberately asymmetric
+ * with {@link TokenCostStageUsage}'s nested raw-sample shape: this is an
+ * aggregate, computed the same way the snapshot's total-level
+ * `turnCount`/`toolCallCount` sit beside `totalUsage` below. Absent when
+ * no sample in this stage's bucket offered a value for that metric.
+ */
 export interface TokenCostStageUsagePercentiles {
   id: TokenCostStageId;
   usage: TokenCostUsagePercentiles;
+  turnCount?: TokenCostPercentiles;
+  toolCallCount?: TokenCostPercentiles;
 }
 
 /** merged/(merged+aborted+unclaimed+humanHandoff), plus the raw counts. */
@@ -150,6 +172,14 @@ export interface TokenCostSnapshot {
   /** UTC calendar date (`YYYY-MM-DD`) the rendered blurb should cite. */
   asOf: string;
   totalUsage: TokenCostUsagePercentiles;
+  /**
+   * Total-level turn/tool-call percentiles (#2769), siblings of
+   * `totalUsage` -- absent when no aggregated sample offers a value for
+   * that metric (never a fabricated zero; see the schema's own
+   * description for the file-level invariant this carves out of).
+   */
+  turnCount?: TokenCostPercentiles;
+  toolCallCount?: TokenCostPercentiles;
   stageUsage: readonly TokenCostStageUsagePercentiles[];
   compactionCount: TokenCostPercentiles;
   /** cacheRead / max(1, cacheRead + cacheCreation + inputUncached), in [0, 1]. */
@@ -362,6 +392,24 @@ function assertUsagePercentileOrder(
   }
 }
 
+/**
+ * turnCount/toolCallCount percentiles are optional at both the total and
+ * per-stage level (#2769) -- absent whenever no aggregated sample offered
+ * a value for that metric, so only validate order when actually present.
+ */
+function assertCountPercentileOrder(
+  label: string,
+  turnCount: TokenCostPercentiles | undefined,
+  toolCallCount: TokenCostPercentiles | undefined,
+): void {
+  if (turnCount !== undefined) {
+    assertPercentileOrder(`${label}.turnCount`, turnCount);
+  }
+  if (toolCallCount !== undefined) {
+    assertPercentileOrder(`${label}.toolCallCount`, toolCallCount);
+  }
+}
+
 function assertRateInUnitInterval(
   label: string,
   rate: TokenCostSuccessRate,
@@ -416,6 +464,11 @@ export function assertTokenCostSnapshot(snapshot: TokenCostSnapshot): void {
   }
   assertUtcCalendarDate(snapshot.asOf);
   assertUsagePercentileOrder('totalUsage', snapshot.totalUsage);
+  assertCountPercentileOrder(
+    'total',
+    snapshot.turnCount,
+    snapshot.toolCallCount,
+  );
   const seenStageIds = new Set<string>();
   for (const stage of snapshot.stageUsage) {
     if (seenStageIds.has(stage.id)) {
@@ -425,6 +478,11 @@ export function assertTokenCostSnapshot(snapshot: TokenCostSnapshot): void {
     }
     seenStageIds.add(stage.id);
     assertUsagePercentileOrder(`stageUsage[${stage.id}].usage`, stage.usage);
+    assertCountPercentileOrder(
+      `stageUsage[${stage.id}]`,
+      stage.turnCount,
+      stage.toolCallCount,
+    );
   }
   assertPercentileOrder('compactionCount', snapshot.compactionCount);
   if (!(snapshot.cacheHitRatio >= 0 && snapshot.cacheHitRatio <= 1)) {

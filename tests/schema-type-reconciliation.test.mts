@@ -515,6 +515,8 @@ export const tokenCostSnapshotKeys = [
   'vendors',
   'asOf',
   'totalUsage',
+  'turnCount',
+  'toolCallCount',
   'stageUsage',
   'compactionCount',
   'cacheHitRatio',
