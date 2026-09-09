@@ -386,6 +386,92 @@ test('renderDocsTableRegion includes per-stage usage and success-rate breakdowns
   assert.match(rendered, /### Success rate by vendor/);
 });
 
+test('aggregateSnapshot omits turnCount/toolCallCount entirely when no sample offers a value, at total and per-stage level', () => {
+  const samples = Array.from({ length: 10 }, (_, i) =>
+    issueLoopSample({
+      issueNumber: 750 + i,
+      vendor: i % 2 === 0 ? 'grok' : 'claude',
+    }),
+  );
+  const snapshot = aggregateSnapshot(samples, NOW);
+  assert.equal(snapshot.publishable, true);
+  assert.equal(snapshot.turnCount, undefined);
+  assert.equal(snapshot.toolCallCount, undefined);
+  for (const stage of snapshot.stageUsage) {
+    assert.equal(stage.turnCount, undefined);
+    assert.equal(stage.toolCallCount, undefined);
+  }
+});
+
+test('aggregateSnapshot aggregates turnCount/toolCallCount percentiles at total and per-stage level, contributing nothing (not 0) from a sample lacking them', () => {
+  const withCounts = Array.from({ length: 9 }, (_, i) =>
+    issueLoopSample({
+      issueNumber: 760 + i,
+      vendor: i % 2 === 0 ? 'grok' : 'claude',
+      turnCount: 10 + i,
+      toolCallCount: 5 + i,
+      stages: [
+        {
+          id: 'work',
+          usage: {
+            inputUncached: 500,
+            cacheRead: 200,
+            cacheCreation: 10,
+            output: 100,
+            reasoning: 5,
+            turnCount: 2 + i,
+            toolCallCount: 1 + i,
+          },
+        },
+      ],
+    }),
+  );
+  // One sample offers neither count -- must contribute nothing, not a 0
+  // that would pull the percentiles down.
+  const withoutCounts = issueLoopSample({ issueNumber: 769, vendor: 'grok' });
+  const snapshot = aggregateSnapshot([...withCounts, withoutCounts], NOW);
+  assert.equal(snapshot.publishable, true);
+  assert.ok(snapshot.turnCount);
+  assert.ok(snapshot.toolCallCount);
+  // Median over [10..18] (9 values), the 10th (no-count) sample excluded.
+  assert.equal(snapshot.turnCount?.p50, 14);
+  assert.equal(snapshot.toolCallCount?.p50, 9);
+  const workStage = snapshot.stageUsage.find((s) => s.id === 'work');
+  assert.ok(workStage);
+  assert.ok(workStage?.turnCount);
+  assert.ok(workStage?.toolCallCount);
+  assert.equal(workStage?.turnCount?.p50, 6);
+  assert.equal(workStage?.toolCallCount?.p50, 5);
+});
+
+test('renderDocsTableRegion adds turnCount/toolCallCount rows only when the snapshot carries them', () => {
+  const withoutCounts = Array.from({ length: 10 }, (_, i) =>
+    issueLoopSample({
+      issueNumber: 780 + i,
+      vendor: i % 2 === 0 ? 'grok' : 'claude',
+    }),
+  );
+  const withoutRendered = renderDocsTableRegion(
+    aggregateSnapshot(withoutCounts, NOW),
+  );
+  assert.doesNotMatch(withoutRendered, /\| turnCount \|/);
+  assert.doesNotMatch(withoutRendered, /\| toolCallCount \|/);
+
+  const withCounts = Array.from({ length: 10 }, (_, i) =>
+    issueLoopSample({
+      issueNumber: 790 + i,
+      vendor: i % 2 === 0 ? 'grok' : 'claude',
+      turnCount: 3,
+      toolCallCount: 2,
+    }),
+  );
+  const withRendered = renderDocsTableRegion(
+    aggregateSnapshot(withCounts, NOW),
+  );
+  assert.match(withRendered, /\| turnCount \| 3 \| 3 \| 3 \|/);
+  assert.match(withRendered, /\| toolCallCount \| 2 \| 2 \| 2 \|/);
+});
+
 test('replaceMarkedRegion searches for the end marker only after the start marker', () => {
   const text = `${README_END}\nnoise\n${README_START}\nold\n${README_END}\nafter`;
   const result = replaceMarkedRegion(text, README_START, README_END, 'new');
