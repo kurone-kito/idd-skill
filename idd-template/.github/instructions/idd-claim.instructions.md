@@ -634,9 +634,9 @@ chronologically and apply these rules:
    - when an open PR backs the active claim, the marker's
      `contextScope` must be `issue-plus-pr` naming that PR via
      `linkedPr`, unless the caller supplies `prFirstCommitAt` (PR
-     context, not marker evidence) and the handoff predates it (issue
-     #1058 Part B) — the merge write-gate opts in, Resume routing never
-     does (see
+     context, not marker evidence) and the handoff predates it — the
+     Part B allowance from issue #1058, which the merge write-gate opts
+     into but Resume routing never does (see
      [Forced-handoff strictness](../../docs/idd-design-rationale.md#forced-handoff-strictness-strict-resume-vs-lenient-relay-merge));
      otherwise the marker is ignored.
 
