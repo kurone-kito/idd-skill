@@ -1223,6 +1223,46 @@ test('classifyIssue does not trip runtime-observation prose negated after the ma
   assert.equal(result.reason, 'orphan');
 });
 
+test('classifyIssue does not trip a trigger phrase opening a longer quote attributed to a different, cited issue by number (#2746)', () => {
+  const result = classifyIssue(
+    {
+      number: 109,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Issue #2743 asserted in its Background: "confirmed in ' +
+        'production: the deploy pipeline paused for six hours" -- ' +
+        'describing a specific event that later turned out to be ' +
+        'unrelated.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'orphan');
+});
+
+test('classifyIssue still trips a quoted precondition with no cited-issue-number attribution nearby (#2746)', () => {
+  const result = classifyIssue(
+    {
+      number: 110,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'The team said: "we need this confirmed in production before ' +
+        'shipping."',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
 test('filterOrphanIssues buckets a runtime-observation precondition under filtered.runtime_observation_precondition (#2467)', async () => {
   const issues = [
     {

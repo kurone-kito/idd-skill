@@ -68,6 +68,19 @@ const NEGATION_HARD_BREAK_PATTERN = /[.;\n]|--|—/g;
 const OPEN_QUOTE_CHARS = new Set(['"', "'", '“', '‘']);
 const CLOSE_QUOTE_CHARS = new Set(['"', "'", '”', '’']);
 const TRAILING_QUOTE_PUNCTUATION_PATTERN = /^[.,!?;:]*/;
+// A match opening a much longer quoted excerpt attributed to a different,
+// cited issue by number ("Issue #2743 asserted in its Background:
+// '<trigger phrase>: ...much more quoted prose...' -- describing a
+// specific event.", #2746) is quoted historical context from another
+// issue, not a live precondition on THIS issue -- even though ordinary
+// sentence punctuation (a colon) continues the quotation right after the
+// match instead of a closing quote character, so `isQuotedMatch` below
+// never recognizes it. Scoped narrowly to the shape this issue found: an
+// open-quote character immediately before the match (the same adjacency
+// `isQuotedMatch` requires), preceded within a bounded window by an
+// issue-number reference and then a colon introducing the quotation.
+const CITED_ISSUE_ATTRIBUTION_WINDOW = 80;
+const ISSUE_NUMBER_REFERENCE_PATTERN = /#\d+/;
 
 /** Reasons that keep an issue out of the orphan candidate list. */
 export type OrphanFilteredReason =
@@ -303,6 +316,29 @@ function isQuotedMatch(text: string, start: number, end: number): boolean {
   );
 }
 
+// A match that opens a longer quoted excerpt attributed to a different,
+// cited issue by number (#2746) -- see the constants above for the
+// motivating shape. Only the open-quote adjacency is required (the close
+// side is deliberately NOT checked here, unlike `isQuotedMatch`: the
+// whole point of this exclusion is the shape where no nearby closing
+// quote follows).
+function isAttributedLongQuote(text: string, start: number): boolean {
+  const before = text[start - 1];
+  if (before === undefined || !OPEN_QUOTE_CHARS.has(before)) {
+    return false;
+  }
+  const windowStart = Math.max(0, start - 1 - CITED_ISSUE_ATTRIBUTION_WINDOW);
+  const window = text.slice(windowStart, start - 1);
+  const referenceMatch = ISSUE_NUMBER_REFERENCE_PATTERN.exec(window);
+  if (!referenceMatch) {
+    return false;
+  }
+  const afterReference = window.slice(
+    referenceMatch.index + referenceMatch[0].length,
+  );
+  return afterReference.includes(':');
+}
+
 /**
  * Detect prose naming a runtime/production-observation precondition
  * (#2467) anywhere in `body`, outside of code regions. Returns `true` on
@@ -318,6 +354,7 @@ export function detectRuntimeObservationPrecondition(body: unknown): boolean {
       const end = match.index + match[0].length;
       if (
         !isQuotedMatch(stripped, match.index, end) &&
+        !isAttributedLongQuote(stripped, match.index) &&
         !hasNegationCueBefore(stripped, match.index) &&
         !hasNegationCueAfter(stripped, end)
       ) {
