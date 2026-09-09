@@ -712,13 +712,18 @@
           "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
           "description": "ISO 8601 duration after which a lingering authoring label triggers a stalled-authoring warning. Optional; defaults to `PT4H`; keep it below `claimTiming.staleAge`."
         },
+        "heartbeatCoalesceWindow": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration within which a heartbeat append may be skipped in favor of reusing the target's most recent trusted acquire, bootstrap, resume, or heartbeat marker for the same owner, set, and session, when its body-sha256 still matches the freshly fetched target body (#2768) -- the replay and ownership-verification steps still run exactly as for a freshly posted marker; only the redundant POST is skipped. This window never applies to acquire, bootstrap, resume, release, release-guard, or release-complete appends themselves -- only a heartbeat append may be skipped. Optional; defaults to `PT2M`; keep it below `authoringStaleAge`."
+        },
         "journalIssue": {
           "type": "string",
           "pattern": "^[\\w.-]+/[\\w.-]+#[1-9][0-9]*$",
           "description": "Pre-existing repository-level authoring journal target (`owner/repo#number`) used as the publication-intent record location for a standalone authoring set with no existing issue or anchor. The issue number must be a positive integer with no leading zero (GitHub issue numbers start at 1). Optional; no default -- when absent, the issue-authoring skill stops with `blocked-by-human` before creating a standalone target rather than guessing a journal."
         }
       },
-      "description": "Container for issue-authoring guard settings: authoring label, staleness window, and clarification-round bound. Optional; omitting any nested key keeps that key's own distributed default."
+      "description": "Container for issue-authoring guard settings: authoring label, staleness window, heartbeat-coalesce window, and clarification-round bound. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "autopilotSuitability": {
       "type": "object",

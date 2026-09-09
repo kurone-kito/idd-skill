@@ -2324,6 +2324,35 @@ test('policy schema rejects issueAuthoring authoringStaleAge non-duration string
   );
 });
 
+test('policy schema accepts issueAuthoring.heartbeatCoalesceWindow (#2768)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    maxClarificationRounds: 3,
+    heartbeatCoalesceWindow: 'PT2M',
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects issueAuthoring heartbeatCoalesceWindow non-duration string (#2768)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    maxClarificationRounds: 3,
+    heartbeatCoalesceWindow: 'not-a-duration',
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('issueAuthoring.heartbeatCoalesceWindow')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema accepts issueAuthoring journalIssue', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(
