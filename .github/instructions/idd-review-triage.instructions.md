@@ -544,19 +544,20 @@ Applies only from the branch-sync check's no-sync-required `clean` /
 (a) the last non-empty `ReviewItems_snapshot` pass this episode had
 zero Accepted PATH A items **and** at least one PATH B item got a
 _completed-review_ disposition (never a notice-only rejection — see
-the E6 non-review-notice rule); or (b) the current HEAD is **AW3-S**
--eligible under its settled-window (non-pending) entry (running
-`advisory-wait-state` reports `staleRequestRecovery: "attempt"` for
-that entry) — D4 and F2 each already consult **AW3-S** independently
-for this same settled-window entry (`#2726`), but a true-virgin empty
-snapshot otherwise never runs E14 through this gate specifically;
-condition (b) is a defense-in-depth backstop that guarantees this
-path also reaches the stale-request recovery cycle (and its route to
-`COPILOT_UNAVAILABLE`), rather than depending solely on D4/F2 revisits
-eventually accumulating enough AW3-S cycles on their own. Otherwise a
-no-op: a true-virgin empty snapshot with no
-AW3-S-eligible settled-window entry (no PATH B ever dispositioned this
-episode, and no stale same-head request either) never fires it; a
+the E6 non-review-notice rule); or (b) the current HEAD is eligible
+for **AW3-S**'s settled-window (non-pending) entry (running
+`advisory-wait-state` reports `staleRequestRecovery.action ==
+"attempt"` for that entry) — D4 and F2 each already consult **AW3-S**
+independently for this same settled-window entry (`#2726`), but a
+true-virgin empty snapshot otherwise never runs E14 through this gate
+specifically; condition (b) is a defense-in-depth backstop that
+guarantees this path also reaches the stale-request recovery cycle
+(and its route to `COPILOT_UNAVAILABLE`), rather than depending
+solely on D4/F2 revisits eventually accumulating enough AW3-S cycles
+on their own. Otherwise a no-op: a true-virgin empty snapshot with no
+entry eligible for AW3-S's settled-window (no PATH B ever
+dispositioned this episode, and no stale same-head request either)
+never fires it; a
 later-pass empty snapshot after a sync loop-back still fires via (a),
 since the lookback still finds the prior non-empty pass. (Rationale
 for the gap condition (a) closes:

@@ -214,15 +214,19 @@ turns an operator-visible failure into a silent stall.
      - **SATISFIED**, `COPILOT_PENDING` `"false"`, `COPILOT_PENDING_COVERS_HEAD`
        `"false"` (settled by elapsed time alone, never proven the
        request reached Copilot — `#2327`): consult **AW3-S**'s
-       `staleRequestRecovery` first, the same way E14 step 4 does.
-       `"attempt"` runs its bounded cycle (non-pending entry: skip
-       **Remove**, start at **Request**; a proven failure-to-register
-       completes the cycle per the entry's inverted step 4/5
-       disposition); `"cap-exhausted"` handles like **CAP_EXHAUSTED**
-       below; `"not-applicable"` falls through unchanged. Either way,
-       continue to the CI check afterward (this accumulates
-       recovery-cycle evidence toward `COPILOT_UNAVAILABLE`; the
-       check's own satisfied status is unaffected).
+       `staleRequestRecovery.action` first, the same way E14 step 4
+       does. `"attempt"` runs its bounded cycle (non-pending entry:
+       skip **Remove**, start at **Request**; a proven
+       failure-to-register completes the cycle per the entry's
+       inverted step 4/5 disposition), **then** continue to the CI
+       check (this accumulates recovery-cycle evidence toward
+       `COPILOT_UNAVAILABLE`; the check's own satisfied status is
+       unaffected). `"cap-exhausted"` handles like **CAP_EXHAUSTED**
+       below instead — post the hold and **stop**; do not continue to
+       the CI check for this action (the mandatory stop from
+       **CAP_EXHAUSTED** below still applies; this recovery-cap
+       exhaustion does not waive it). `"not-applicable"` falls through
+       unchanged and continues to the CI check.
      - **SATISFIED** (otherwise) → this check is **satisfied**;
        continue to the CI check.
      - **HOLD** → post the hold comment from **AW4** and stop.
