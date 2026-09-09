@@ -807,10 +807,15 @@ expensive to re-run after every delegated-worker completion; a
   rules out. Wait for the helper's own process exit before parsing
   its output — never a mid-run stdout read — per
   [A2's helper read timing note](../.github/instructions/idd-discover.instructions.md#a2--enumerate-sub-issues).
-- **On a caller-side tool timeout** during the Discover invocation,
-  retry that same invocation once with a longer time budget before
-  concluding anything failed. Only a second timeout on the retried
-  invocation counts as an A2 enumeration failure.
+- **On a caller-side tool timeout** during the Discover invocation —
+  the orchestrator's own tool-invocation wrapper (for example a
+  bounded Bash-tool or subprocess timeout) elapsing while the helper
+  process may still be running to completion, not the helper itself
+  erroring or exiting non-zero — retry that same invocation once with
+  a longer time budget before concluding anything failed. Only a
+  second timeout on the retried invocation counts as an A2 enumeration
+  failure; a helper that actually errors or exits non-zero is already
+  an A2 enumeration failure on the first occurrence, unchanged.
 - **No caching layer or change-detection pre-check**: this section
   documents a cadence, not a cache.
 
