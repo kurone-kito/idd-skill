@@ -400,6 +400,21 @@ turns an operator-visible failure into a silent stall.
   rollup. The signal never changes `route` itself; any other blocking
   cause makes it `false`, and the gate still routes to E1/E4. Fails
   closed: an unusable check makes this condition unmet.
+- **Closing-set and impact-checklist re-verification** (D3.5/D3.7
+  re-run against current HEAD, #2749): re-run
+  `idd-pr-submit.instructions.md`'s D3.5 steps 6-7 (the
+  `closingIssuesReferences` set comparison and the commit-message
+  closing-keyword scan) and D3.7 (the IDD-impact-checklist
+  re-derivation) against the PR's current HEAD. Skip D3.5 steps 6-7
+  under the same non-default-`{development-branch}` exemption D3.5
+  itself carries. On a mismatch, apply the fix each sub-step already
+  documents (D3.5 steps 4-7 for a closing-set drift, D3.7's own
+  mismatch handling for a checklist drift). If step 7's fix amended or
+  rebased a commit (changing HEAD), return to this list's first
+  condition instead of only repeating this one — the new HEAD
+  invalidates the conditions already checked above. Otherwise, repeat
+  this condition once. If it still fails, post a hold note and stop —
+  do not proceed to F3.
 
 When any F2 condition routes to a hold/stop or back to E1/E14, update
 the digest after recording the blocking evidence and before

@@ -440,8 +440,10 @@ completion.
    **Re-run before merge**: this scan only covers commits present at
    D3.5 time. Later branch commits — accepted review fixes
    (`idd-review-fix.instructions.md` E9-E12) or a `{development-branch}`
-   merge — are not automatically covered; re-run this step against the final HEAD
-   before F3 merges.
+   merge — are not automatically covered; `idd-pre-merge.instructions.md`
+   F2's "Closing-set and impact-checklist re-verification" condition
+   and `idd-merge.instructions.md` F3's Gate checklist both name this
+   step explicitly and re-run it against the final HEAD before merge.
 
 ### D3.7 — Re-verify the IDD impact checklist before merge
 
@@ -469,11 +471,11 @@ condition D3.5 itself skips under, where `closingIssuesReferences`
 never populates and the check would be meaningless) — edited prose can
 otherwise introduce a stray keyword-adjacent reference.
 
-**Known gap**: no phase file currently re-invokes D3.5 or this step by
-name from F1-F3, so this re-check depends on the same implicit trigger
-D3.5 step 7 already relies on rather than an explicit F-phase call —
-out of this step's own scope to close; recommend a follow-up issue to
-wire an explicit F2/F3 trigger if this gap is not already tracked.
+**Wired to F2/F3**: `idd-pre-merge.instructions.md` F2's "Closing-set
+and impact-checklist re-verification" condition and
+`idd-merge.instructions.md` F3's Gate checklist both name this step
+explicitly and re-run it against the final HEAD before merge (#2749)
+— no longer an implicit, name-only cross-reference.
 
 ## D4 — Wait for CI
 
