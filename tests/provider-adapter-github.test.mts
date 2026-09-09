@@ -391,6 +391,108 @@ test('getWorkItemClosingPullRequestsPage throws when the connection itself is nu
   );
 });
 
+// ---------------------------------------------------------------------------
+// getWorkItemUserContentEditTimestamps (#2762). Codex review, PR #2836: the
+// pre-fix implementation defaulted a null/absent `issue`, `userContentEdits`
+// connection, or missing `nodes` to an empty array -- indistinguishable from
+// a genuinely edit-free issue. Every caller of this method treats a throw as
+// "anchor unknown" and degrades accordingly (never falling back to the bare
+// `created_at` anchor #2762 fixes), so silently coercing a real read failure
+// to `[]` here would reintroduce that exact bug one layer down. Mirrors
+// getWorkItemClosingPullRequestsPage's own null-node/null-connection tests
+// above.
+// ---------------------------------------------------------------------------
+
+test('getWorkItemUserContentEditTimestamps returns editedAt values in order', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  nodes: [
+                    { editedAt: '2026-09-08T15:16:28Z' },
+                    { editedAt: '2026-09-09T01:08:31Z' },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.deepEqual(port.getWorkItemUserContentEditTimestamps(2738), [
+    '2026-09-08T15:16:28Z',
+    '2026-09-09T01:08:31Z',
+  ]);
+});
+
+test('getWorkItemUserContentEditTimestamps returns an empty array for a genuinely empty connection', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { repository: { issue: { userContentEdits: { nodes: [] } } } },
+        }),
+    }),
+  );
+  assert.deepEqual(port.getWorkItemUserContentEditTimestamps(2738), []);
+});
+
+test('getWorkItemUserContentEditTimestamps throws when the issue node is null/absent', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => JSON.stringify({ data: { repository: { issue: null } } }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemUserContentEditTimestamps(2738),
+    /connection, or nodes is null\/absent/,
+  );
+});
+
+test('getWorkItemUserContentEditTimestamps throws when the userContentEdits connection itself is null/absent', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { repository: { issue: { userContentEdits: null } } },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemUserContentEditTimestamps(2738),
+    /connection, or nodes is null\/absent/,
+  );
+});
+
+test('getWorkItemUserContentEditTimestamps throws when nodes is missing from an otherwise-present connection', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { repository: { issue: { userContentEdits: {} } } },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemUserContentEditTimestamps(2738),
+    /connection, or nodes is null\/absent/,
+  );
+});
+
 test('getConnectedPullRequestEventsPage returns a normal page', () => {
   const port = createGithubProviderAdapter(
     'kurone-kito',

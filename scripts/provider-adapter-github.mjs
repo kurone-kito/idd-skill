@@ -605,8 +605,23 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       ];
       const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
       assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
-      const nodes = parsed.data?.repository?.issue?.userContentEdits?.nodes;
-      return (nodes ?? [])
+      // Codex review, PR #2836: reject an absent connection/nodes array
+      // instead of defaulting to `[]` -- a null `issue` (deleted/
+      // inaccessible between the earlier REST fetch and this call), a
+      // null `userContentEdits`, or a payload missing `nodes` entirely
+      // are all genuine read failures, indistinguishable from "zero
+      // edits" if silently coerced to an empty array. Every caller of
+      // this method already treats a throw as "anchor unknown" and
+      // degrades accordingly (never falling back to a bare `created_at`
+      // anchor) -- swallowing this case here would silently reintroduce
+      // that exact failure mode one layer down.
+      const connection = parsed.data?.repository?.issue?.userContentEdits;
+      if (!connection || !Array.isArray(connection.nodes)) {
+        throw new Error(
+          'userContentEdits: issue, connection, or nodes is null/absent',
+        );
+      }
+      return connection.nodes
         .map((node) => node?.editedAt)
         .filter((value) => typeof value === 'string');
     },
