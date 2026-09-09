@@ -475,6 +475,66 @@ test('assertTokenCostSnapshot rejects an out-of-order percentile triple', () => 
   );
 });
 
+test('assertTokenCostSnapshot validates turnCount/toolCallCount percentile order at total and per-stage level, when present', () => {
+  const snapshot: TokenCostSnapshot = {
+    schemaVersion: 1,
+    generatedAt: '2026-08-25T00:00:00Z',
+    minPublishableSamples: 10,
+    minPublishableVendors: 2,
+    publishable: false,
+    sampleCount: 3,
+    vendors: ['grok'],
+    ...SNAPSHOT_BASE_FIELDS,
+  };
+  // Absent entirely: never throws (optional, not zero-valued).
+  assert.doesNotThrow(() => assertTokenCostSnapshot(snapshot));
+  // Present and ordered: passes.
+  assert.doesNotThrow(() =>
+    assertTokenCostSnapshot({
+      ...snapshot,
+      turnCount: { p25: 1, p50: 2, p75: 3 },
+      toolCallCount: { p25: 0, p50: 1, p75: 2 },
+      stageUsage: [
+        {
+          id: 'work',
+          usage: ZERO_USAGE_PERCENTILES,
+          turnCount: { p25: 1, p50: 2, p75: 3 },
+        },
+      ],
+    }),
+  );
+  assert.throws(
+    () =>
+      assertTokenCostSnapshot({
+        ...snapshot,
+        turnCount: { p25: 5, p50: 4, p75: 6 },
+      }),
+    /total\.turnCount percentiles must satisfy p25 <= p50 <= p75/,
+  );
+  assert.throws(
+    () =>
+      assertTokenCostSnapshot({
+        ...snapshot,
+        toolCallCount: { p25: 5, p50: 4, p75: 6 },
+      }),
+    /total\.toolCallCount percentiles must satisfy p25 <= p50 <= p75/,
+  );
+  assert.throws(
+    () =>
+      assertTokenCostSnapshot({
+        ...snapshot,
+        stageUsage: [
+          {
+            id: 'work',
+            usage: ZERO_USAGE_PERCENTILES,
+            toolCallCount: { p25: 5, p50: 4, p75: 6 },
+          },
+        ],
+      }),
+    /stageUsage\[work\]\.toolCallCount percentiles must satisfy p25 <= p50 <= p75/,
+  );
+});
+
 test('assertTokenCostSnapshot rejects cacheHitRatio outside [0, 1]', () => {
   const snapshot: TokenCostSnapshot = {
     schemaVersion: 1,

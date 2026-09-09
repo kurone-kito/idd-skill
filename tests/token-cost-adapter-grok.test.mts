@@ -63,6 +63,9 @@ test('a total usage snapshot maps to a schema-valid sample with reasoning, prefe
   );
   assert.equal(sample.compactionCount, 0);
   assert.equal(sample.toolCallCount, 6);
+  // signals.json carries no turn boundary at all -- an explicit null
+  // (#2769), never a counted 0.
+  assert.equal(sample.turnCount, null);
   assert.equal(sample.includesSubagents, false);
   assert.equal(sample.startedAt, '2026-08-20T10:00:00.000Z');
   assert.equal(sample.endedAt, '2026-08-20T10:10:00.000Z');
