@@ -161,9 +161,10 @@ this date rather than accumulate from the earlier history.
 
 ## Turn and tool-call counts
 
-Every sample also carries `turnCount` and `toolCallCount` (#2769):
-cheap signals that distinguish "many short polling turns re-reading a
-large context" from "few turns over an oversized context," which raw
+Every sample's contract also includes `turnCount` and `toolCallCount`
+(#2769): cheap signals that distinguish "many short polling turns
+re-reading a large context" from "few turns over an oversized
+context," which raw
 token totals alone cannot tell apart. Both fields are optional -- a
 sample may omit either key entirely -- and, when present, typed
 `number | null`, never a bare `0` standing in for "unknown." `null`
