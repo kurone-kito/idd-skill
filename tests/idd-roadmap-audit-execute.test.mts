@@ -796,6 +796,37 @@ test('a roadmap whose only edges are non-blocking-reference is childless, not re
   );
 });
 
+test('a roadmap whose only edge is a plain reference (no non-blocking annotation) is NOT childless (#2765 review, Codex)', () => {
+  // A2's own "Allowed traversal sources" name `Refs #NNN` and explicit
+  // sub-issue lines alongside task-list entries as valid child-work
+  // signals; only the `(non-blocking)`-annotated form is purely
+  // informational. A plain `reference` edge (and, by the same logic, a
+  // `sub-issue-reference` edge) must count as explicit child work here.
+  const report = readyReport();
+  report.nodes = [
+    node({ number: ROADMAP, classification: 'roadmap', state: 'CLOSED' }),
+    node({ number: 9999, classification: 'execution', state: 'CLOSED' }),
+  ];
+  report.edges = [
+    {
+      source: ROADMAP,
+      target: 9999,
+      relationship: 'reference',
+      evidence: 'Refs #9999',
+    },
+  ];
+  report.executionCandidates = [];
+  report.provenancePaths = [
+    { target: ROADMAP, path: [ROADMAP] },
+    { target: 9999, path: [ROADMAP, 9999] },
+  ];
+  const blockers = evaluateRoadmapAuditGates(report);
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    [],
+  );
+});
+
 test('a human-gate label on the roadmap root blocks the close', () => {
   const report = readyReport();
   report.nodes = report.nodes.map((entry) =>
