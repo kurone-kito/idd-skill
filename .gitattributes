@@ -79,6 +79,7 @@ scripts/provider-port.mjs linguist-generated=true
 scripts/readline-prompt.mjs linguist-generated=true
 scripts/rerun-advisory-convergence.mjs linguist-generated=true
 scripts/resolve-review-thread.mjs linguist-generated=true
+scripts/resolved-decision.mjs linguist-generated=true
 scripts/resume-claim-routing.mjs linguist-generated=true
 scripts/resume-route-selection.mjs linguist-generated=true
 scripts/review-activity-snapshot.mjs linguist-generated=true
