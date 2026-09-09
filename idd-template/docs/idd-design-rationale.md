@@ -396,14 +396,22 @@ race the round-6 finding raised.
   `discover-shared-file-overlap` — targets _different_-issue
   parallelism, not concurrent claim decisions on the _same_ issue).
 
-**Candidate files (if ever pursued)**:
+**Candidate files (if ever pursued)**, named as they land once imported
+(the `idd-template/` prefix drops from this document's own path, and
+`src/scripts/*.mts` never ships — an adopter's `vendored-node` profile
+gets the generated `.mjs` copy instead; other profiles resolve the
+same logic through the installed package rather than a local file; the
+repository-local `docs/idd-design-rationale.md` mirror keeps the
+source-tree paths, since those genuinely exist there):
 
-- `idd-template/.github/instructions/idd-claim.instructions.md` (Claim-state
+- `.github/instructions/idd-claim.instructions.md` (Claim-state
   parsing rules, marker format)
-- `idd-template/.github/instructions/idd-overview-core.instructions.md`
+- `.github/instructions/idd-overview-core.instructions.md`
   (Claim format / Unclaim format sections)
-- `src/scripts/marker-helpers.mts` (marker regex/parsing)
-- `src/scripts/protocol-helpers.mts` (marker classification)
+- `scripts/marker-helpers.mjs` (marker regex/parsing; `vendored-node`
+  only)
+- `scripts/protocol-helpers.mjs` (marker classification;
+  `vendored-node` only)
 
 Deliberately deferred, not `needs-decision`: there is no currently
 blocking choice, since kurone-kito/idd-skill#1985 already resolved its
