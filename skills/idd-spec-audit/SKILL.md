@@ -1,6 +1,6 @@
 ---
 name: idd-spec-audit
-description: Semantic audit of the IDD instruction corpus for leaked session context, cross-file contradictions, fresh-memory completability gaps, automation blockers, and restatement-discipline drift. Use on request to audit .github/instructions, the issue-authoring skill bundle, CLAUDE.md, or .github/copilot-instructions.md. Read-only — never edits files or mutates issues.
+description: Semantic audit of the IDD instruction corpus for leaked session context, cross-file contradictions, fresh-memory completability gaps, automation blockers, and restatement-discipline drift. Use on request to audit .github/instructions, the issue-authoring skill bundle, and the installed agent entry files (CLAUDE.md, AGENTS.md, GEMINI.md, .github/copilot-instructions.md). Read-only — never edits files or mutates issues.
 ---
 
 # IDD Spec Audit
@@ -19,15 +19,22 @@ model.
 
 - **Audit targets** (findings may cite these): `.github/instructions/**/*.md`
   (including `lite/`), the issue-authoring skill bundle at its
-  installed location, `CLAUDE.md`, and `.github/copilot-instructions.md`.
-  The last two are conditional on the adopter's own setup: the
-  issue-authoring companion is opt-in and `.github/copilot-instructions.md`
-  is created only if the adopter uses Copilot, so skip an audit target
-  that does not exist in the current installation rather than fail the
-  run over it. Audit every target that does exist regardless of
-  whether this installation happens to regenerate it from an upstream
-  source (for example, this source repository regenerates
-  `.github/instructions/**` from `idd-template/` via
+  installed location, and every agent entry file present in this
+  installation (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, and
+  `.github/copilot-instructions.md`). All but the first are
+  conditional on the adopter's own setup: onboarding creates each
+  entry file unless the operator explicitly opted out of it, the
+  issue-authoring companion is opt-in, and
+  `.github/copilot-instructions.md` is touched only if it already
+  existed — skip an audit target that does not exist in the current
+  installation rather than fail the run over it. Cover every present
+  entry file, not just `CLAUDE.md`: onboarding requires `CLAUDE.md`,
+  `AGENTS.md`, and `GEMINI.md` to agree on repository-specific
+  guidance, so a cross-file contradiction (R2) or a restatement-scope
+  drift (R5) can land in any of them. Audit every target that does
+  exist regardless of whether this installation happens to regenerate
+  it from an upstream source (for example, this source repository
+  regenerates `.github/instructions/**` from `idd-template/` via
   `audit/sync-manifest.json`) — this skill audits the corpus a worker
   session actually reads, not any upstream source, so being a
   regenerated target never exempts a file here.
