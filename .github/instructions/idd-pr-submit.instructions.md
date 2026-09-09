@@ -214,6 +214,9 @@ and the side-fix branch's commit messages must not contain a closing
 keyword referencing it — still run D3.5 step 6's exact-set comparison
 and step 7's commit-message scan to confirm both, treating the
 originating issue as outside the side-fix PR's deliberate closing set.
+On a non-default `{development-branch}`, D3.5's own skip rule applies
+unchanged instead: skip all seven steps, since `closingIssuesReferences`
+never populates there regardless of this carve-out.
 
 While a side-fix PR that the claimed issue's PR depends on is in
 flight, periodically re-check the claimed issue's own PR review and CI
