@@ -355,12 +355,14 @@ condition below accounts for this.
   detached/backgrounded mechanism just because of the kill. This
   reissue-on-timeout guidance is scoped to an idempotent, read-only
   remote poll like the watch call above. Never blindly re-issue a
-  heavy, non-idempotent local command (a full build, test, or lint run)
-  that auto-backgrounds past the tool's default timeout — check whether
-  the prior invocation is still running first (e.g. via the calling
-  tool's own background-task listing or equivalent), then await/reap it
-  or reuse its eventual result rather than starting a second concurrent
-  instance. Neither
+  heavy local command (a full build, test, or lint run) that
+  auto-backgrounds past the tool's default timeout — being idempotent
+  does not make it safe to run twice at once; two concurrent instances
+  can still collide on shared output (e.g. a `coverage/` directory).
+  Check whether the prior invocation is still running first (e.g. via
+  the calling tool's own background-task listing or equivalent), then
+  await/reap it or reuse its eventual result rather than starting a
+  second concurrent instance. Neither blocking-watch command
   watches Copilot review state — see
   `idd-advisory-wait.instructions.md`. A bare `sleep` may
   be sandboxed or blocked in some runtimes (preventive; no observed
