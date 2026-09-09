@@ -781,6 +781,18 @@ export function findSupersededCopilotUnavailableSubjects(
  * malformed GraphQL response, anything else) is swallowed here: this step
  * must never retry-loop or throw back into the caller, since the marker it
  * is hiding *for* has already posted successfully by the time this runs.
+ *
+ * Candidates are restricted to comments **older** than `postedCommentId`
+ * (`comment.id < postedCommentId`, REST issue-comment ids are assigned
+ * sequentially at creation) rather than merely excluding an exact id match
+ * (caught by chatgpt-codex-connector review on PR #2788): the comments scan
+ * runs after this marker's own POST, so a concurrent session's marker
+ * created in that window can already appear in the listing with a HIGHER
+ * id. An inequality-only filter would treat that genuinely newer marker as
+ * "prior" and hide it as `OUTDATED` -- exactly backwards, since it is this
+ * call's own marker that is older by comparison. The `<` restriction
+ * excludes it structurally, independent of what its embedded HEAD SHA or
+ * `claim:` value happens to be.
  */
 function hideSupersededPostTimeMarkers(
   type: HideAtPostTimeMarkerType,
@@ -793,7 +805,7 @@ function hideSupersededPostTimeMarkers(
 ): void {
   try {
     const comments = listMarkerCandidateComments(owner, repo, number).filter(
-      (comment) => comment.id !== postedCommentId,
+      (comment) => comment.id < postedCommentId,
     );
     const subjectIds =
       type === 'review-ack'

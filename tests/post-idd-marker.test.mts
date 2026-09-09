@@ -2240,6 +2240,71 @@ test('--apply --type review-ack hides a stale prior review-ack and spares the cu
   }
 });
 
+test('--apply --type review-ack never hides a differing-HEAD-SHA comment created AFTER the marker just posted (#2754, race condition)', () => {
+  // Simulates a concurrent session's review-ack landing in the window
+  // between this call's own POST and its comments-listing fetch: that
+  // comment's REST id is HIGHER than the id this call's own marker just
+  // received, even though it surfaces in the same --paginate response.
+  // An inequality-only "not this exact comment" filter would wrongly treat
+  // it as a prior, superseded candidate purely because its HEAD SHA
+  // differs; the `id < postedCommentId` restriction must exclude it
+  // regardless.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-review-ack-race-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [
+      {
+        id: 9999,
+        node_id: 'IC_newer_review_ack',
+        body: `review-ack: a ${OTHER_SHA} ${TS}`,
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    probeIndex: {
+      IC_newer_review_ack: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9500,
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.equal(JSON.parse(output).commentId, 9500);
+    // The higher-id comment (9999 > 9500) was never mutated, even though
+    // it has a differing HEAD SHA and a probeIndex entry that would
+    // otherwise happily minimize it.
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), []);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('--apply --type copilot-unavailable hides a prior same-claim comment, spares a foreign-claim one, and is idempotent on an already-minimized candidate (#2754)', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-hide-at-post-copilot-unavailable-'),
