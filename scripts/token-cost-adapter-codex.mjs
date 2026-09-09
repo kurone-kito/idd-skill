@@ -223,6 +223,16 @@ function countCompactions(records) {
   }
   return count;
 }
+/** Every `type: "turn_context"` record is one turn. Codex's rollout format has no per-record tool-invocation type this module can name from a real fixture yet, so `toolCallCount` stays `null` (a known signal gap, not a counted zero) -- see the module doc comment. */
+function countTurnContexts(records) {
+  let count = 0;
+  for (const record of records) {
+    if (isRecordOfType(record, 'turn_context')) {
+      count += 1;
+    }
+  }
+  return count;
+}
 function asCodexHarvestInput(input) {
   if (!isPlainObject(input) || !Array.isArray(input.records)) {
     throw new Error(
@@ -267,6 +277,8 @@ export const codexAdapter = {
       startedAt: timestamps.startedAt,
       endedAt: timestamps.endedAt,
       vendorSessionId,
+      turnCount: countTurnContexts(records),
+      toolCallCount: null,
     };
     const redacted = redactTokenCostRecord(sample);
     assertTokenCostSample(redacted);

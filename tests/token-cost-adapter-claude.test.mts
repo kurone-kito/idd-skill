@@ -46,6 +46,8 @@ test('two assistant usages sum into a schema-valid sample', () => {
   });
   assert.equal(sample.compactionCount, 0);
   assert.equal(sample.includesSubagents, false);
+  assert.equal(sample.turnCount, 2);
+  assert.equal(sample.toolCallCount, 0);
   assert.equal(sample.startedAt, '2026-08-20T10:00:00.000Z');
   assert.equal(sample.endedAt, '2026-08-20T10:00:10.000Z');
   // The fixture cwd basename ("idd-skill") carries no issue-<n> suffix.
@@ -86,6 +88,17 @@ test('an ephemeral cache_creation split is summed instead of trusting the stale 
 test('three compact_boundary records yield compactionCount 3', () => {
   const { sample } = harvestFixture('session-three-compactions.jsonl');
   assert.equal(sample.compactionCount, 3);
+});
+
+test('turnCount counts every assistant record; toolCallCount sums tool_use blocks across them', () => {
+  const { sample } = harvestFixture('session-tool-calls.jsonl');
+  // 2 assistant records: the first carries 2 tool_use blocks, the second none.
+  assert.equal(sample.turnCount, 2);
+  assert.equal(sample.toolCallCount, 2);
+  assert.deepEqual(
+    validate(sample, loadJson('schemas/token-cost-sample.schema.json')),
+    [],
+  );
 });
 
 test('a non-system record with a compact-shaped subtype is not counted as a compaction', () => {

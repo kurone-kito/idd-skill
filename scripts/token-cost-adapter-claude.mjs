@@ -337,6 +337,41 @@ function countCompactions(records) {
 function extractIncludesSubagents(records) {
   return records.some((record) => isSidechainRecord(record));
 }
+/** An assistant message's `message.content`, when it is an array of content blocks (tool calls, text, etc.); `[]` for a plain-string `content` or a missing message. */
+function getContentBlocks(record) {
+  const content = getMessage(record)?.content;
+  return Array.isArray(content) ? content : [];
+}
+/** Count of `type: "tool_use"` blocks in one assistant record's `message.content` array. */
+function countToolUseBlocksInRecord(record) {
+  let count = 0;
+  for (const block of getContentBlocks(record)) {
+    if (isPlainObject(block) && block.type === 'tool_use') {
+      count += 1;
+    }
+  }
+  return count;
+}
+/** Every `type: "assistant"` record is one turn, matching {@link extractUsage}'s own inclusive convention (sidechain/subagent turns count too). */
+function extractTurnCount(records) {
+  let count = 0;
+  for (const record of records) {
+    if (isAssistantRecord(record)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+/** Sum of `tool_use` blocks across every assistant record. */
+function extractToolCallCount(records) {
+  let count = 0;
+  for (const record of records) {
+    if (isAssistantRecord(record)) {
+      count += countToolUseBlocksInRecord(record);
+    }
+  }
+  return count;
+}
 function asClaudeHarvestInput(input) {
   if (!isPlainObject(input) || !Array.isArray(input.records)) {
     throw new Error(
@@ -409,6 +444,8 @@ export const claudeAdapter = {
       endedAt: timestamps.endedAt,
       vendorSessionId,
       includesSubagents: extractIncludesSubagents(records),
+      turnCount: extractTurnCount(records),
+      toolCallCount: extractToolCallCount(records),
     };
     const redacted = redactTokenCostRecord(sample);
     assertTokenCostSample(redacted);
