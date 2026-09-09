@@ -5,13 +5,19 @@ workflow — a portable set of `.github/instructions/` files that
 wire up a multi-agent issue-driven pipeline for any GitHub
 project.
 
-**Canonical reference**: The full, authoritative project guidance
-lives in
-[`.github/copilot-instructions.md`](.github/copilot-instructions.md).
-This file contains tool-specific guidance for agents that read the
-agents.md standard — currently Codex CLI, OpenCode, and Grok Build.
-When Copilot-specific workflow names appear, apply the intent using your
-own interaction model rather than following product terms literally.
+This file is the canonical, tool-neutral instruction source for AI
+coding agents in this repository, following the
+[AGENTS.md](https://agents.md) open standard that Codex CLI, OpenCode,
+Grok Build, and GitHub Copilot (CLI, coding agent, and Chat) all
+discover automatically at the repository root. `CLAUDE.md` and
+`GEMINI.md` are thin adapters that import this file for Claude Code and
+Antigravity CLI (formerly Gemini CLI), the two tools in this
+repository's harness mix that read their own dedicated entry file
+instead, and
+[.github/copilot-instructions.md](.github/copilot-instructions.md)
+carries only the small amount of guidance specific to GitHub Copilot's
+own UI terminology. See [docs/ai-strategy.md](docs/ai-strategy.md) for
+the reasoning behind this layout.
 
 ## Minimum requirements
 
@@ -24,8 +30,13 @@ own interaction model rather than following product terms literally.
 - Avoid hard-coded repository file counts in docs unless the
   number is mechanically maintained. If count-based wording is
   necessary, update every mirrored reference in the same commit.
-- If uncertainty, hidden risk, or missing context blocks a safe
-  change, stop and ask a concise question before proceeding.
+- When documentation or instruction text names an anti-pattern or
+  failure mode, cite the observed incident per
+  [docs/idd-design-rationale.md](docs/idd-design-rationale.md#cite-the-observed-incident).
+- Continue autonomously for low-risk work, but pause and ask a
+  concise question when uncertainty or hidden risk makes the next
+  step unsafe. When that pause is needed, provide one or more
+  recommended response options.
 - Keep changes small and reviewable. Follow the project's
   Conventional Commits rules and keep each commit atomic.
 - Do not modify community documents (`CODE_OF_CONDUCT*`,
@@ -67,18 +78,10 @@ own interaction model rather than following product terms literally.
 
 ## Key workflow rules
 
-- **Commits**: Follow
-  [Conventional Commits](https://www.conventionalcommits.org/).
-  A `.gitmessage` template is available at the repository root.
-  Write user-facing, lowercase subjects under 72 characters, and
-  split unrelated changes into separate atomic commits.
-- **Branch strategy**: All changes reach `main` through pull
-  requests (merge commits only). Feature branches may rebase onto
-  `main` before the first PR-branch push; after publication, sync
-  from `main` with a normal merge by default instead of rebasing.
-  See
-  [`.github/copilot-instructions.md`](.github/copilot-instructions.md#branch-strategy)
-  for full rules.
+`## Branch strategy` and `## Commit rules` below cover those two rule
+sets in full. This section records repository-local dogfood policies
+layered on top of the distributed IDD defaults:
+
 - **Merge policy**: This source repository records
   `fully_autonomous_merge` as an explicit local IDD dogfooding opt-in
   against the distributed `human_merge` default
@@ -99,9 +102,16 @@ own interaction model rather than following product terms literally.
   under `ciGate.externalChecks.waivable` as a local IDD dogfooding
   policy (applies only to `kurone-kito/idd-skill`), giving a trusted
   maintainer a human off-ramp when the autonomous advisory-convergence
-  loop cannot converge on its own (Refs #1465). See
-  [`.github/copilot-instructions.md`](.github/copilot-instructions.md#local-external-check-waiver-policy)
-  for the full rationale.
+  loop cannot converge on its own (Refs #1465): once the configured
+  convergence deadline (default 24h) has elapsed since the current PR
+  HEAD's own commit timestamp, a trusted maintainer can post a valid
+  external-check waiver for `idd-advisory-convergence` to unblock the
+  gate. Treat this the same as any other merge-gate bypass — a
+  deliberate, short-lived, maintainer-authorized exception for a
+  genuinely stuck check, not a routine substitute for a fresh Copilot
+  review. See [Customizing IDD](docs/customization.md) and
+  [docs/idd-helper-scripts.md](docs/idd-helper-scripts.md#external-check-waiver-contract)
+  for the general mechanism.
 - **Advisory-convergence deadline**: This source repository also
   records `advisoryWait.convergenceDeadline: "PT9H"` as a local IDD
   dogfooding policy (applies only to `kurone-kito/idd-skill`),
@@ -126,6 +136,190 @@ own interaction model rather than following product terms literally.
   full hour -- a HEAD CodeRabbit has not yet reviewed still waits the
   full configured window unchanged, keeping the wait a fallback for
   genuine secondary-bot degradation rather than a tax on every merge.
+
+## Branch strategy
+
+This project follows
+[GitHub Flow](https://docs.github.com/en/get-started/using-git/github-flow):
+`main` is the only long-lived branch and every change reaches `main`
+through a pull request.
+
+### Rules
+
+- **Never push directly to `main`** — all changes must go through a
+  pull request. Branch protection is enforced on GitHub.
+- **Rebase onto `main` before publication** — before the first D-phase
+  push of a PR branch, rebase onto `main` as needed. Fetch first so the
+  local `main` is not stale, e.g.
+  `git fetch origin && git rebase origin/main`
+  (or `git pull --rebase origin main`). Do not create merge commits
+  inside unpublished feature branches.
+- **Treat pushed PR branches as published review history** — after the
+  first D-phase push, branch-state checks stay read-only until a later
+  phase decides an update is required.
+- **Default post-push sync: merge `main` into the PR branch** — when an
+  already-pushed branch needs synchronization or conflict resolution,
+  merge `main` into the PR branch and send that follow-up through the
+  normal CI and review gates. Do not rebase or force-push merely
+  because the PR is `BEHIND`. This is the active branch-policy
+  contract, enforced end to end by
+  `idd-review-triage.instructions.md`'s E-phase branch-sync check
+  (`Esync`), which uses the `branch-conflict-state` helper when
+  helper runtime is enabled.
+- **Force-push exceptions stay narrow** — use rebase and
+  `--force-with-lease` after publication only when repository policy
+  explicitly permits it and merge-based recovery cannot safely fix the
+  branch, or when an already-started rebase must be completed or
+  aborted during recovery.
+- **Rebase between unpublished feature branches** — if one unpublished
+  feature branch needs changes from another, use rebase, not merge.
+- **Merge commits at PR boundary** — pull requests into `main` are
+  merged with a merge commit (squash-merge and rebase-merge are
+  disabled in the repository settings).
+- **fixup + autosquash for unpublished in-branch fixes** — when a later
+  commit in an unpublished feature branch fixes an earlier one, prefer
+  `git commit --fixup=<sha>` followed by
+  `git rebase -i --autosquash` to fold the fix into its target.
+- **Avoid giant commits** — if squashing would produce an
+  unreasonably large commit, keep the fix commit separate or
+  re-split the history so each commit remains reviewable.
+
+## Commit rules
+
+This project follows
+[Conventional Commits](https://www.conventionalcommits.org/).
+A `.gitmessage` template is available at the repository root for
+guidance when writing commit messages. Git does not use it
+automatically, so contributors who want the template prefilled in
+their editor should opt in once per clone:
+
+```sh
+git config commit.template .gitmessage
+```
+
+### Format
+
+```txt
+<type>[optional scope]: <user-facing description>
+
+<body: address purpose, context, and what changed>
+
+[optional footer(s)]
+```
+
+### Subject line
+
+- Use the format: `<type>[optional scope]: <description>`
+- Write from the **user's perspective** — briefly state what this
+  commit solves or improves for the end user or developer
+- Write in **lowercase**, imperative mood (e.g., "add", not "added")
+- Keep the subject line under **72 characters**
+- Do **not** end with a period
+
+### Types
+
+Common types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`,
+`chore`, `ci`, `build`, `perf`
+
+### Scopes
+
+- Optional, in parentheses: `feat(ci):`, `fix(lint):`, `docs(readme):`
+- Keep scopes **lowercase**, short, and consistent
+- Use the directory or component name that best describes the area
+
+### Body (line 3+)
+
+The body should address three aspects:
+
+- **Why** — the purpose or motivation behind the change
+- **Context** — what was needed, the situation or constraint
+- **What changed** — the concrete action taken
+
+Prefer the **why → context → change** order when practical.
+Write these as **natural prose** — weave the aspects into
+coherent sentences rather than using labeled sections. Labeled
+sections (`Why:` / `Context:` / `Change:`) are acceptable only
+when explicit paragraph separation improves clarity.
+
+Omit any aspect whose information **cannot be reliably inferred**.
+If the subject line is self-explanatory, the body may be omitted
+entirely. **Breaking changes must always include a body.**
+
+Wrap body lines at **72 characters**.
+
+### Breaking changes
+
+- Append `!` after the type/scope: `feat!: remove deprecated endpoint`
+- Add a `BREAKING CHANGE:` trailer in the footer with a detailed
+  explanation of what breaks and migration steps
+
+### Footers / trailers
+
+- `Closes #<issue>` / `Refs #<issue>` — link to issues
+- `Co-authored-by: Name <email>` — credit co-authors
+- `BREAKING CHANGE: <description>` — detail the breaking change
+
+### Atomic commits
+
+Keep each commit as **small and focused** as possible:
+
+- **One logical change per commit** — if the subject line needs "and",
+  consider splitting
+- **Separate refactoring** from behavior changes
+- **Separate formatting/style** changes from logic changes
+- **Separate dependency updates** from code changes
+- When in doubt, prefer smaller commits that are easy to review,
+  revert, and bisect
+
+### Examples
+
+#### Good — single-line (trivial change)
+
+```txt
+fix: correct typo in feature request template
+```
+
+#### Good — prose body
+
+```txt
+feat(ci): add concurrency settings to lint workflow
+
+Parallel lint runs on the same branch waste resources and
+cause race conditions in status checks. GitHub Actions
+supports concurrency groups that automatically cancel
+redundant runs, so add a concurrency group keyed on branch
+name with cancel-in-progress enabled.
+
+Refs #42
+```
+
+#### Good — breaking change
+
+```txt
+feat!: require node 20 as minimum version
+
+Node 18 reached end-of-life in April 2025 and no longer
+receives security updates, while the project now standardizes
+on the active Node 20 LTS baseline. All production
+environments have already been upgraded to node 20+, so
+update the engines field and CI matrix to require node >= 20.
+
+BREAKING CHANGE: drop support for node 16 and 18. Users
+must upgrade to node 20 or later.
+Closes #108
+```
+
+#### Bad — vague, developer-centric
+
+```txt
+fix: update code
+```
+
+#### Bad — too large / non-atomic
+
+```txt
+feat: add auth system and refactor database layer and update docs
+```
 
 ## For IDD work
 
