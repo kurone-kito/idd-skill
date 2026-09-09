@@ -361,9 +361,11 @@ race-safe checks below:
    forced-handoff, where steps 1–4 see nothing to disagree about (both
    `{claim-id}`s genuinely match). No marker posted: treat as passed.
 
-6. Re-fetch labels/paginated owner log; a hold contests this claim. If active and
-   step 5 passed, release/verify `unclaimed-by`, then use `(A0-T)`, not A5(c).
-   If step 5 failed, retain it; never release on nonce mismatch.
+6. Re-fetch labels and the paginated owner-marker log. If an authoring
+   hold is active on this issue, it contests this claim: when step 5
+   passed, post and verify `unclaimed-by`, then take the
+   already-claimed/Discover fallback (A0-T stops) — never A5(c); when
+   step 5 failed, keep the claim and never release on a nonce mismatch.
 
 If any check fails, treat the claim as contested.
 
@@ -407,21 +409,20 @@ rule 7). Adopt **both fields verbatim** as your own `{agent-id}` /
 fresh claim-id or keeping your own native agent-id; no separate
 `claimed-by supersedes: none` post is required for the transfer itself.
 
-**Adopt-verbatim is still an activation**: immediately before every activation
-nonce, including this nonce-only handoff, repeat the label/authoring-state
-guard above.
-Post your own
+**Adopt-verbatim is still an activation**: immediately before this nonce,
+repeat the label/authoring-state guard above. Post your own
 [activation-nonce marker](#activation-nonce-format) for `new-claim-id`
 too (see the
-[rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred)
-for why this path needs its own nonce). Verify it the same way step 5
-above does: wait `claim.verifySettleDelay`, recompute the nonce winner
-for `new-claim-id`, and confirm it is yours — the only nonce check
-that fires here, since posting no `claimed-by` means this path never
-enters _Claim verification_ above. After nonce verification, repeat that
-guard; on mismatch or either hold, re-resolve pair/nonce before fallback. If
-the pair still owns claim and nonce (or none competes), post/verify
-`unclaimed-by`; else leave successor claim.
+[rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred)).
+Verify it the same way step 5 above does: wait `claim.verifySettleDelay`,
+recompute the nonce winner for `new-claim-id`, and confirm it is yours —
+the only nonce check here (this path posts no `claimed-by`). After nonce
+verification, repeat that guard. On nonce mismatch or an incomplete or
+current authoring hold, re-resolve the adopted pair and nonce; if that
+pair still owns claim and nonce (or none competes), post/verify
+`unclaimed-by` for the adopted pair (this session cannot keep that
+activation); else leave the successor claim; then take the
+already-claimed/Discover fallback (A0-T stops).
 
 Always use the assigned pair verbatim: never invent `claimed-by` or reuse the
 displaced `{claim-id}`. A native agent-id that is not the assigned value fails
