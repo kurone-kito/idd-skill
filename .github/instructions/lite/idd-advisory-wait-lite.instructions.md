@@ -48,6 +48,12 @@ excluded) never reaches those call sites. If it somehow does anyway,
 stop and ask for a stronger session or a human to run the full-size
 advisory-wait instructions directly.
 
+**Do not build a substitute wait for a non-primary bot.** Same
+prohibition as the full-size file's Scope section — rely on the
+standard E1/review-watermark/F2/F3 safety net there instead of a
+custom poll on any bot other than the configured
+`advisoryWait.primaryBotLogin`.
+
 ## Stop-and-ask conditions
 
 - A required helper field is missing, the helper exits non-zero,
