@@ -627,6 +627,45 @@ test('roadmap-tracks-parse passes on the trailing (#N) shape (#2765)', () => {
   assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
 });
 
+test('roadmap-tracks-parse passes on an empty Tracks section (no checkbox lines yet, #2765)', () => {
+  // The issue-authoring contract explicitly allows a roadmap shell to
+  // publish with an empty `## Tracks` section until child issue numbers
+  // exist (skills/issue-authoring/references/workflow-boundary.md); this
+  // must never fail as if it were an unresolved checkbox line.
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '_No tracks published yet._',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, undefined);
+});
+
+test('roadmap-tracks-parse still slices the Tracks section when it is the last content in the body, no trailing heading (#2765)', () => {
+  const body = [
+    '## Goal',
+    '',
+    'Ship the initiative.',
+    '',
+    '## Background',
+    '',
+    'Why this exists.',
+    '',
+    '## Tracks',
+    '',
+    '- [ ] Track 1: no reference here at all',
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /no reference here at all/);
+});
+
 test('roadmap-tracks-parse fails when every Tracks checkbox line carries no issue reference at all (#2765)', () => {
   const body = roadmapBody().replace(
     '- [ ] #100',

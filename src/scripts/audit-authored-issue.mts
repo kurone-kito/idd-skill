@@ -10,13 +10,14 @@
 // marker's exactly-one/coherent-value rule, its cross-field agreement with
 // the configured blocked-by-human label, markerPrefix consistency across
 // every authoring marker, the declared shape's required section headings,
-// the roadmap-id/blocked-by dependency-marker rules, visible/hidden line
-// agreement for the suitability and effort footers, and an advisory
-// warning-severity check that flags an issue/PR reference used near
-// coordination language (e.g. "before", "once", "requires") with no
-// corresponding Blocked-by/Depends-on/task-list dependency encoding. The
-// advisory check never fails the report or changes the exit code — see
-// checkProseOnlyDependency.
+// the roadmap shape's `## Tracks` checkbox lines actually resolving to a
+// child issue reference, the roadmap-id/blocked-by dependency-marker
+// rules, visible/hidden line agreement for the suitability and effort
+// footers, and an advisory warning-severity check that flags an issue/PR
+// reference used near coordination language (e.g. "before", "once",
+// "requires") with no corresponding Blocked-by/Depends-on/task-list
+// dependency encoding. The advisory check never fails the report or
+// changes the exit code — see checkProseOnlyDependency.
 //
 // All marker value parsing is delegated to the existing
 // autopilot-suitability.mts / effort.mts / marker-regex.mts /
