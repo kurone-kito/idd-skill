@@ -140,23 +140,35 @@ that family's documented supersession/grouping key -- never for any
 other reason during an active E or F gate. Three families ship this
 today: the claim chain
 (`claimed-by:`/`unclaimed-by:`, grouped by
-`supersedes:` lineage, `idd-claim.instructions.md` -- `activation-nonce:`
-is a related marker in the same claim exchange but is not itself
-minimized by this wiring, so it stays `f4-only`), `review-watermark:`/
+`supersedes:` lineage, `idd-claim.instructions.md`), `review-watermark:`/
 `review-baseline:` (grouped by same claim-id,
 `idd-review-snapshot.instructions.md`), and the `advisory-wait` family
 (`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
 `advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
 `idd-advisory-wait.instructions.md`). A family classified `f4-only` has
 no such wiring yet and follows the default F4-only timing above until a
-future track adds it. A third `MARKER_HIDE_POLICY` kind, `excluded`,
-covers markers deliberately kept out of both groupings (each for the
-reason on its own entry in `MARKER_HIDE_POLICY`) -- one of those,
-`<!-- forced-handoff:`, also carries its own permanent F4 exemption
-(`audit-pr-cleanup.mts` hardcodes a skip for that prefix regardless of
-merge state); the other `excluded` entries have no such exemption and
-are swept by F4's generic stale-marker rule like an ordinary `f4-only`
-family.
+future track adds it -- concretely, the post-merge F4 batch means
+`audit-pr-cleanup.mts`'s generic marker-prefix match
+(`operationalMarkerPrefix`) against comments on the merged PR itself,
+which recognizes the full `OPERATIONAL_MARKERS` set. That is broader than
+the specific prefix list under this document's Candidate Rules section
+below: that list predates several `f4-only`-classified families added
+since, and is stale documentation rather than a deliberately narrower
+second path -- both the vendored helper's own dry run and the manual
+GraphQL fallback read the same Candidate Rules list, so the gap affects
+an adopter following either path, not only the manual fallback (tracked
+as issue #2778). A third `MARKER_HIDE_POLICY` kind, `excluded`, covers markers
+deliberately kept out of both groupings (each for the reason on its own
+entry in `MARKER_HIDE_POLICY`). Two of those are permanently outside F4's
+reach for different reasons: `<!-- forced-handoff:` carries its own
+explicit F4 exemption (`audit-pr-cleanup.mts` hardcodes a skip for that
+prefix regardless of merge state), and `<!-- activation-nonce:` is a
+related marker in the same claim exchange as the wired claim chain above
+but is posted to the claim **issue**, not the PR -- F4's PR-scoped
+`audit-pr-cleanup.mts` structurally never sees it, so it has no F4
+cleanup path even though it is not `wired` either. The remaining
+`excluded` entries carry no such exemption; whether F4's generic rule
+actually reaches each of them depends on where that family is posted.
 
 Do not minimize comments during active E or F gates for any other
 reason. In particular, do not minimize comments that still determine
