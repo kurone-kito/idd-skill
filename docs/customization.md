@@ -1433,7 +1433,11 @@ stops the pass instead, though an already-reported `invalid` (a trusted
 `existingRejection` on this exact candidate, confirmed by a fresh Check 3
 failure) narrows that halt to excluding just that one candidate — see
 [`idd-suitability.instructions.md`](../.github/instructions/idd-suitability.instructions.md#failure-outcomes)'s
-Failure Outcomes table for both cases.
+Failure Outcomes table for both cases. This carve-out responds to a
+concrete incident: a 2026-09-08 false-positive `invalid` verdict
+(kurone-kito/idd-skill#2738) that the unconditional halt would have
+forced every later concurrent session to re-report, resolved by a
+2026-09-09 maintainer hearing (kurone-kito/idd-skill#2747).
 
 The configured ready label from `approvalSignals.readyLabelName`
 (default: `idd:ready`) is an approval signal, not an operational
