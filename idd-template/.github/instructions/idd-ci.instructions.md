@@ -337,11 +337,12 @@ condition below accounts for this.
   with `gh pr checks <pr-number> --watch --required` (works on a
   fine-grained PAT; `gh run watch <run-id> --exit-status` does not) —
   **but only once** [Required-check discovery](#required-check-discovery)
-  has resolved `noRequiredChecksConfigured: false`. When it resolved
-  `true`, `--watch --required` returns immediately, non-blocking,
-  printing a "no required checks reported" message even while real CI
-  is still running — block with the bare
-  `gh pr checks <pr-number> --watch` (no `--required`) instead. Both
+  has resolved `noRequiredChecksConfigured: false`. When
+  `noRequiredChecksConfigured` resolved `true`, `--watch --required`
+  returns immediately, non-blocking, printing a "no required checks
+  reported" message even while real CI is still running — block with
+  the bare `gh pr checks <pr-number> --watch` (no `--required`)
+  instead. Both
   `--watch --required` and `gh run watch` only block, never decide:
   required-only scoping, duplicate-name collapse, the no-required-checks
   route, and the
