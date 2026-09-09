@@ -401,6 +401,10 @@ race the round-6 finding raised.
   parsing rules, marker format)
 - `idd-template/.github/instructions/idd-overview-core.instructions.md`
   (Claim format / Unclaim format sections)
+- `idd-template/.github/instructions/idd-resume.instructions.md`
+  (Operator-present release Step 2 — the actual writer of today's bare
+  `unclaimed-by`; a guarded release marker needs this call site too, or
+  the race it targets would remain unguarded here)
 - `src/scripts/marker-helpers.mts` (marker regex/parsing)
 - `src/scripts/protocol-helpers.mts` (marker classification)
 

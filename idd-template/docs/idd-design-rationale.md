@@ -411,6 +411,10 @@ since those genuinely exist there):
   parsing rules, marker format)
 - `.github/instructions/idd-overview-core.instructions.md`
   (Claim format / Unclaim format sections)
+- `.github/instructions/idd-resume.instructions.md` (Operator-present
+  release Step 2 — the actual writer of today's bare `unclaimed-by`; a
+  guarded release marker needs this call site too, or the race it
+  targets would remain unguarded here)
 - `scripts/marker-helpers.mjs` (marker regex/parsing; `vendored-node`
   only)
 - `scripts/protocol-helpers.mjs` (marker classification;
