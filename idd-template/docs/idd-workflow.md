@@ -1036,15 +1036,16 @@ agent; only the mechanism differs.
 For Codex delegation, the parent collects the reviewer result before
 continuing; if delegation fails, use the structured fallback.
 
-For Grok Build, the critique brief must give the subagent every input
-the calling phase's critique checklist references: the actual
+For Grok Build, the critique brief must give the subagent the actual
 artifact under review (file references by their sibling-worktree
 absolute paths, never a relative path or a bare `cd`; a diff by an
 absolute-worktree diff command or revision range; or a plan by its
-literal text) plus any other checklist input the calling phase names —
-for example the issue's requirements for C1, or the E9 findings under
-verification for E10 — since a diff-only scope would not otherwise
-surface them. Instruct the subagent to stay within that scope except
+literal text), the issue's requirements or acceptance criteria in
+every case — even when the calling phase's own checklist wording
+does not name them explicitly, since a correctness assessment is
+meaningless without them — and any other checklist input the calling
+phase names, such as the E9 findings under verification for E10.
+Instruct the subagent to stay within that scope except
 for a targeted trace of downstream effects on consuming code —
 `spawn_subagent`'s working-directory parameter does not rebind Grok's
 file tools (that rebind gap is kurone-kito/idd-skill#2819). This
