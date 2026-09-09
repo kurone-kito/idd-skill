@@ -75,13 +75,22 @@ export interface ProviderWorkItem {
  * shared shape rather than adding a competing method -- every #2266
  * consumer that ignores it is unaffected. `review-activity-snapshot.mts`
  * and `pre-merge-readiness.mts`'s disposition-evidence comment
- * normalization need it for their most-recent-activity computation. */
+ * normalization need it for their most-recent-activity computation.
+ * `nodeId` (#2754) is additive too, and OPTIONAL unlike `updatedAt`: the
+ * real adapter always populates it (REST also returns `node_id` on every
+ * comment response), but it stays optional on the type itself so the many
+ * existing test fixtures that construct a `ProviderComment` literal
+ * without it keep compiling unchanged. `post-idd-marker.mts`'s
+ * hide-at-post-time step is the one consumer that needs it, to pass a
+ * candidate comment's GraphQL node id to
+ * `minimize-superseded-markers.mts`'s `minimizeComment` mutation. */
 export interface ProviderComment {
   id: number;
   body: string;
   createdAt: string;
   updatedAt: string;
   authorLogin: string;
+  nodeId?: string;
 }
 
 /** Result of {@link ProviderPort.postWorkItemComment}. */

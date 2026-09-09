@@ -19,7 +19,14 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mjs';
+import { loadIddConfig } from './idd-config.mjs';
 import {
+  resolveTrustedActors,
+  runMinimize,
+} from './minimize-superseded-markers.mjs';
+import {
+  parseCopilotUnavailableComment,
+  parseReviewAckComment,
   renderActivationNonceMarker,
   renderAdvisoryRerollMarker,
   renderAdvisoryWaitMarker,
@@ -35,6 +42,24 @@ import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
+/**
+ * Marker types whose prior same-family comments this module automatically
+ * hides (classifier `OUTDATED`) immediately after a fresh instance POSTs
+ * successfully under `--apply` -- the hide-at-post-time exception
+ * documented in `docs/idd-comment-minimization.md`'s "## Timing" section
+ * (#2754). Unlike the other `wired` families there (claim chain,
+ * review-watermark/baseline, advisory-wait), which are agent-followed
+ * instruction steps, this pair's grouping keys are purely mechanical
+ * (embedded HEAD SHA mismatch; same `claim:` value), so the hide step is
+ * code-automated directly inside this CLI's own `--apply` path instead.
+ */
+export const HIDE_AT_POST_TIME_MARKER_TYPES = [
+  'review-ack',
+  'copilot-unavailable',
+];
+export function isHideAtPostTimeMarkerType(type) {
+  return HIDE_AT_POST_TIME_MARKER_TYPES.includes(type);
+}
 export const MARKER_TYPES = [
   'claim',
   'unclaim',
@@ -448,6 +473,17 @@ review-activity-snapshot path.
 --expected-head-sha pins a --type watermark --from-pr to the Step 1 stored
 HEAD and fails closed (no post) on drift instead of silently posting a newer
 HEAD than Step 1 saw.
+
+--apply --type review-ack / --type copilot-unavailable (#2754): after the
+new marker POSTs successfully, this command also hides (classifier
+OUTDATED, via minimize-superseded-markers.mts) prior same-family comments
+it supersedes -- a review-ack: whose embedded HEAD SHA differs from the one
+just posted, or a copilot-unavailable: carrying the same claim: value.
+--trusted-marker-logins gates that hide step's trusted-author check too
+(falls back to IDD_TRUSTED_MARKER_ACTORS / the config trustedMarkerActors
+list, same ladder as minimize-superseded-markers.mjs). Best-effort: a
+permission error or any other failure here is swallowed and never blocks
+or retries the marker post that already succeeded.
 `;
 /**
  * POST the marker body as a JSON document (`{"body": …}`) read from stdin via
@@ -537,6 +573,126 @@ function runReviewActivitySnapshot(
     encoding: 'utf8',
   });
   return JSON.parse(out);
+}
+/**
+ * List every comment on `number` (issue or PR -- same comments endpoint),
+ * shaped for the hide-at-post-time candidate scan. Routed through
+ * {@link createGithubProviderAdapter} (`listWorkItemComments`), like every
+ * other read in this migrated file (#2266) -- `post-idd-marker.mts` must
+ * never construct a `gh` call of its own
+ * (`tests/provider-port-migration-guard.test.mts`). A comment missing a
+ * `nodeId` (defensive: the real adapter always populates it from REST's
+ * `node_id`) normalizes to `''`, which the finder functions below already
+ * skip.
+ */
+function listMarkerCandidateComments(owner, repo, number) {
+  return createGithubProviderAdapter(owner, repo)
+    .listWorkItemComments(number)
+    .map((comment) => ({
+      id: comment.id,
+      nodeId: comment.nodeId ?? '',
+      body: comment.body,
+    }));
+}
+/**
+ * Find prior `review-ack:` comments (among `comments`, already excluding the
+ * marker just posted) whose embedded HEAD SHA differs from `newHeadSha` --
+ * the candidates a fresh `review-ack` post should minimize as `OUTDATED`,
+ * mirroring the shipped `advisory-wait` AW3-H rule. Never returns a
+ * candidate matching `newHeadSha` (current-HEAD protection) or an
+ * unparseable / non-`review-ack:` comment.
+ */
+export function findSupersededReviewAckSubjects(comments, newHeadSha) {
+  const target = newHeadSha.trim().toLowerCase();
+  const subjects = [];
+  for (const comment of comments) {
+    if (!comment.nodeId) {
+      continue;
+    }
+    const parsed = parseReviewAckComment(comment.body, 'none');
+    if (!parsed || parsed.headSha === target) {
+      continue;
+    }
+    subjects.push(comment.nodeId);
+  }
+  return subjects;
+}
+/**
+ * Find prior `copilot-unavailable:` comments (among `comments`, already
+ * excluding the marker just posted) carrying the SAME `claim:` value as
+ * `newClaimId` -- the candidates a fresh `copilot-unavailable` post should
+ * minimize as `OUTDATED`, mirroring the shipped watermark/claim-chain
+ * supersession rule. Never returns a candidate whose `claim:` value differs
+ * (foreign-claim protection) or an unparseable / non-`copilot-unavailable:`
+ * comment.
+ */
+export function findSupersededCopilotUnavailableSubjects(comments, newClaimId) {
+  const subjects = [];
+  for (const comment of comments) {
+    if (!comment.nodeId) {
+      continue;
+    }
+    const parsed = parseCopilotUnavailableComment(comment.body, 'none');
+    if (!parsed || parsed.claimId !== newClaimId) {
+      continue;
+    }
+    subjects.push(comment.nodeId);
+  }
+  return subjects;
+}
+/**
+ * Best-effort hide-at-post-time step for {@link HIDE_AT_POST_TIME_MARKER_TYPES}
+ * (#2754). Runs only after `postedCommentId`'s own POST already succeeded
+ * (the caller invokes this strictly afterward, never before or interleaved),
+ * scans the target's OTHER comments for same-family markers superseded by
+ * the one just posted, and reuses `minimize-superseded-markers.mts`'s
+ * `runMinimize` for the actual mutation -- the same trusted-author gate,
+ * already-`isMinimized` skip, and `viewerCanMinimize` check that helper
+ * already implements, so this call site adds no new mutation logic of its
+ * own. Every failure (an unreadable comment list, a `gh` permission error, a
+ * malformed GraphQL response, anything else) is swallowed here: this step
+ * must never retry-loop or throw back into the caller, since the marker it
+ * is hiding *for* has already posted successfully by the time this runs.
+ */
+function hideSupersededPostTimeMarkers(
+  type,
+  fields,
+  owner,
+  repo,
+  number,
+  postedCommentId,
+  trustedMarkerLoginsFlag,
+) {
+  try {
+    const comments = listMarkerCandidateComments(owner, repo, number).filter(
+      (comment) => comment.id !== postedCommentId,
+    );
+    const subjectIds =
+      type === 'review-ack'
+        ? findSupersededReviewAckSubjects(comments, fields['head-sha'])
+        : findSupersededCopilotUnavailableSubjects(
+            comments,
+            fields['claim-id'],
+          );
+    if (subjectIds.length === 0) {
+      return;
+    }
+    const { actors } = resolveTrustedActors({
+      flagValue: trustedMarkerLoginsFlag,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+      config: loadIddConfig(),
+    });
+    runMinimize({
+      subjectIds,
+      classifier: 'OUTDATED',
+      trustedSet: new Set(actors),
+      apply: true,
+      allowUntrusted: false,
+    });
+  } catch {
+    // Best-effort only (#2754) -- never block or retry-loop the marker post
+    // that already succeeded above.
+  }
 }
 if (import.meta.main) {
   let args;
@@ -733,6 +889,17 @@ if (import.meta.main) {
   const owner = args.owner || applyCurrentRepo?.owner || '';
   const repo = args.repo || applyCurrentRepo?.repo || '';
   const posted = postMarker(owner, repo, number, body);
+  if (isHideAtPostTimeMarkerType(args.type)) {
+    hideSupersededPostTimeMarkers(
+      args.type,
+      args.fields,
+      owner,
+      repo,
+      number,
+      posted.id,
+      args.trustedMarkerLogins,
+    );
+  }
   const result = {
     mode: 'apply',
     type: args.type,

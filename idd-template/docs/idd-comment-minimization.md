@@ -134,18 +134,38 @@ after one of these is true:
 - a maintainer explicitly starts a merged-PR audit
 
 **Exception -- hide-at-post-time for `wired` families** (issue #731,
-issue #733, issue #2751). A `wired` family may be minimized immediately
-after its own new instance's POST+verify succeeds, pre-merge, using
-that family's documented supersession/grouping key -- never for any
-other reason during an active E or F gate. Three families ship this
-today: the claim chain
-(`claimed-by:`/`unclaimed-by:`, grouped by
-`supersedes:` lineage, `idd-claim.instructions.md`), `review-watermark:`/
-`review-baseline:` (grouped by same claim-id,
-`idd-review-snapshot.instructions.md`), and the `advisory-wait` family
-(`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
-`advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
-`idd-advisory-wait.instructions.md`). A family classified `f4-only` has
+issue #733, issue #2751, issue #2754). A `wired` family may be minimized
+immediately after its own new instance's POST+verify succeeds, pre-merge,
+using that family's documented supersession/grouping key -- never for any
+other reason during an active E or F gate. Five families ship this
+today, in two different mechanisms:
+
+- **Agent-followed instruction step** -- the calling phase's own
+  instructions direct the agent to run the minimize step by hand
+  (`node scripts/minimize-superseded-markers.mjs ... --apply`) after
+  posting: the claim chain
+  (`claimed-by:`/`unclaimed-by:`, grouped by
+  `supersedes:` lineage, `idd-claim.instructions.md`), `review-watermark:`/
+  `review-baseline:` (grouped by same claim-id,
+  `idd-review-snapshot.instructions.md`), and the `advisory-wait` family
+  (`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
+  `advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
+  `idd-advisory-wait.instructions.md`).
+- **Code-automated inside `post-idd-marker.mts` itself** (#2754) -- no
+  agent-followed instruction step exists or is needed for these two,
+  since their grouping keys are purely mechanical: `review-ack:`
+  (grouped by embedded HEAD SHA mismatch) and `copilot-unavailable:`
+  (grouped by the same `claim:` value, differing `attempt:` numbers).
+  `post-idd-marker.mts --apply --type review-ack` /
+  `--type copilot-unavailable` scans the target's other comments right
+  after its own new marker POSTs successfully, finds same-family
+  comments the new one supersedes, and reuses
+  `minimize-superseded-markers.mts`'s `runMinimize` for the actual
+  mutation -- best-effort: any failure there (a permission error, an
+  unreadable comment list) is swallowed and never blocks or retries the
+  marker post that already succeeded.
+
+A family classified `f4-only` has
 no such wiring yet and follows the default F4-only timing above until a
 future track adds it -- concretely, the post-merge F4 batch means
 `audit-pr-cleanup.mts`'s generic marker-prefix match

@@ -242,6 +242,18 @@ export interface ParsedAdvisoryRecoveryMarker {
 }
 
 /**
+ * Parsed `review-ack: ...` marker (#2050/#2754). Plain 3-field shape
+ * (agent, HEAD SHA, timestamp) -- same family shape as `advisory-wait:` /
+ * `advisory-reroll:`, no claim/attempt binding.
+ */
+export interface ParsedReviewAckMarker {
+  agentId: string;
+  headSha: string;
+  timestamp: string;
+  createdAt: string;
+}
+
+/**
  * Parsed `copilot-unavailable: ...` terminal marker (#1572). Same bound
  * shape as {@link ParsedAdvisoryRecoveryMarker} (agent, claim, HEAD, attempt
  * number) -- this marker has no legacy unbound form, so every field is
@@ -554,15 +566,15 @@ const MARKER_HIDE_POLICY_ENTRIES: readonly MarkerHidePolicyEntry[] = [
   },
   {
     label: 'review-ack:',
-    policy: 'f4-only',
+    policy: 'wired',
     reason:
-      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 2 (#2754).',
+      'review-ack family, grouped by embedded HEAD SHA mismatch. Hidden at post time by post-idd-marker.mts itself (code-automated, not an agent-followed instruction step, unlike the other wired families above) -- roadmap #2751 Track 2 (#2754).',
   },
   {
     label: 'copilot-unavailable:',
-    policy: 'f4-only',
+    policy: 'wired',
     reason:
-      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 2 (#2754).',
+      'copilot-unavailable family, grouped by same claim: value (differing attempt: numbers). Hidden at post time by post-idd-marker.mts itself (code-automated, not an agent-followed instruction step, unlike the other wired families above) -- roadmap #2751 Track 2 (#2754).',
   },
   {
     label: '<!-- forced-handoff:',
@@ -2228,6 +2240,33 @@ export function renderReviewAckMarker(payload: {
     );
   }
   return `review-ack: ${agentId} ${headSha} ${timestamp}`;
+}
+
+/**
+ * Parse a `review-ack:` marker (#2754). Returns `null` on any structural
+ * mismatch (including a `copilot-unavailable:`-shaped bound body, which this
+ * plain 3-field pattern never matches). Used by `post-idd-marker.mts`'s
+ * hide-at-post-time step to find prior `review-ack:` comments whose
+ * embedded HEAD SHA differs from a freshly posted one.
+ */
+export function parseReviewAckComment(
+  body: string,
+  createdAt: string,
+): ParsedReviewAckMarker | null {
+  const match = body
+    .trimEnd()
+    .match(
+      /^review-ack:\s+(\S+)\s+([0-9a-f]{40})\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/,
+    );
+  if (!match) {
+    return null;
+  }
+  return {
+    agentId: match[1],
+    headSha: match[2].toLowerCase(),
+    timestamp: match[3],
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
 }
 
 // #1905: the grammar's positional claim-id field

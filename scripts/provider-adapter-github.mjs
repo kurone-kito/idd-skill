@@ -775,6 +775,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       });
       return rows.map((row) => ({
         id: Number(row.id),
+        nodeId: String(row.node_id ?? ''),
         body: String(row.body ?? ''),
         createdAt: String(row.created_at ?? ''),
         updatedAt: String(row.updated_at ?? row.created_at ?? ''),
