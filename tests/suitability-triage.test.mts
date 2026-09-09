@@ -4895,6 +4895,221 @@ test('checkAutonomy resolves configured blocked-label names (#1273)', () => {
   );
 });
 
+// --- #2737: title-prefix and authoring-bucket marker signals ---
+
+test('checkAutonomy fails on a blocked-by-human: title prefix even without the configured label', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'blocked-by-human: needs a maintainer decision',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /blocked-by-human: prefix/);
+});
+
+test('checkAutonomy title-prefix match is case-insensitive and tolerates extra whitespace after the colon', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'Blocked-By-Human:    needs a maintainer decision',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('checkAutonomy title-prefix check recognizes both the canonical stem and a reconfigured blockedByHumanLabelName as aliases (#2737 review, Codex)', () => {
+  // The canonical "blocked-by-human:" stem always matches -- it is the
+  // stable authoring-bucket contract value, not the configurable label
+  // name, so a legacy/adopter issue keeps being recognized even after
+  // the label is renamed.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: 'blocked-by-human: needs a maintainer decision',
+      },
+      blockedByHumanLabelName: 'triage:human-gate',
+    } as Context).pass,
+    false,
+  );
+
+  // The reconfigured stem ("human-gate") also matches, as a secondary
+  // alias for a repository that standardized its own title convention
+  // around the renamed label.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: 'human-gate: needs a maintainer decision',
+      },
+      blockedByHumanLabelName: 'triage:human-gate',
+    } as Context).pass,
+    false,
+  );
+
+  // An unrelated title matches neither stem.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: 'feat: add deterministic helper',
+      },
+      blockedByHumanLabelName: 'triage:human-gate',
+    } as Context).pass,
+    true,
+  );
+});
+
+test('checkAutonomy title-prefix check tolerates a misconfigured label ending in ":" (empty alias stem contributes no match, #2737 review, Copilot)', () => {
+  // The empty alias is never added to the stem set, so only the
+  // canonical "blocked-by-human:" stem is checked -- a title that
+  // merely starts with a bare colon must not be flagged.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: ': needs a maintainer decision',
+      },
+      blockedByHumanLabelName: 'status:',
+    } as Context).pass,
+    true,
+  );
+
+  // The canonical stem still fires even under the same misconfiguration.
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        title: 'blocked-by-human: needs a maintainer decision',
+      },
+      blockedByHumanLabelName: 'status:',
+    } as Context).pass,
+    false,
+  );
+});
+
+test('checkAutonomy does not false-positive on a title merely containing "blocked-by-human" mid-sentence', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'fix: the blocked-by-human label check has a gap',
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy fails on a well-formed authoring-bucket: blocked-by-human marker', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- idd-skill-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /authoring-bucket: blocked-by-human/);
+});
+
+test('checkAutonomy authoring-bucket marker check honors a configured markerPrefix', () => {
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        body: `<!-- custom-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+      },
+    } as Context).pass,
+    true,
+    'the default idd-skill prefix must not match a custom-prefixed marker',
+  );
+
+  assert.equal(
+    checkAutonomy({
+      issue: {
+        ...BASE_ISSUE,
+        body: `<!-- custom-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+      },
+      markerPrefix: 'custom',
+    } as Context).pass,
+    false,
+  );
+});
+
+test('checkAutonomy trims a whitespace-padded markerPrefix when called directly with a raw Context (#2761 review, Copilot)', () => {
+  // checkAutonomy is itself exported and directly callable with a raw
+  // Context (as every test here does) -- it must not rely solely on
+  // evaluateSuitability/evaluateSuitabilityLocal's own trimming.
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- idd-skill-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+    },
+    markerPrefix: '  idd-skill  ',
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /authoring-bucket: blocked-by-human/);
+});
+
+test('checkAutonomy passes an authoring-bucket: needs-decision marker (Autonomy is blocked-by-human-specific)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- idd-skill-authoring-bucket: needs-decision -->\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy passes a malformed authoring-bucket marker (fail-safe: no bucket, not blocked-by-human)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `<!-- idd-skill-authoring-bucket: not-a-real-value -->\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy ignores an authoring-bucket marker documented inside an indented code block (#2761 review, Codex)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body:
+        'Document the marker syntax:\n\n' +
+        '    <!-- idd-skill-authoring-bucket: blocked-by-human -->\n\n' +
+        BASE_ISSUE.body,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy ignores a backslash-escaped authoring-bucket marker opener (#2761 review, Codex)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Document the literal syntax: \\<!-- idd-skill-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy still detects a genuine authoring-bucket marker sitting between escaped backticks (#2761 review, Codex)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `\\\`<!-- idd-skill-authoring-bucket: blocked-by-human -->\\\`\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /authoring-bucket: blocked-by-human/);
+});
+
+test('checkAutonomy passes a body/title with none of the three blocked-by-human signals', () => {
+  const result = checkAutonomy({
+    issue: BASE_ISSUE,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('evaluateSuitability threads configured blocked-label options through to Autonomy', () => {
   const result = evaluateSuitability(
     { ...BASE_ISSUE, labels: ['triage:needs-call'] },
@@ -5973,6 +6188,36 @@ test('evaluateSuitabilityLocal reports duplicate_or_superseded as not_evaluated 
   assert.ok(
     result.checks.some((check) => check.result === 'fail'),
     'expected at least one of the six evaluated checks to fail on an empty draft',
+  );
+});
+
+test('evaluateSuitabilityLocal trims whitespace from a configured markerPrefix before matching (#2761 review, Copilot)', () => {
+  const draftWithMarker = `# feat: add deterministic helper
+
+<!-- idd-skill-authoring-bucket: blocked-by-human -->
+
+## Purpose
+Add a deterministic helper function.
+
+## Scope
+Implement helper behavior in a single file.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] lint passes
+`;
+
+  // An untrimmed prefix (accidental leading/trailing whitespace in config)
+  // must still resolve to the same "idd-skill" prefix as the trimmed form,
+  // not silently fail to match every real marker.
+  const result = evaluateSuitabilityLocal(draftWithMarker, {
+    markerPrefix: '  idd-skill  ',
+  });
+  const autonomyCheck = result.checks.find((check) => check.id === 'autonomy');
+  assert.equal(autonomyCheck?.result, 'fail');
+  assert.match(
+    autonomyCheck?.evidence ?? '',
+    /authoring-bucket: blocked-by-human/,
   );
 });
 

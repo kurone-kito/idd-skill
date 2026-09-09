@@ -709,7 +709,7 @@ function parseUpstreamCandidateMarker(text, markerPrefix) {
  * matches regardless of value, so comparing the two counts recovers the
  * distinction.
  */
-function parseAuthoringBucketMarker(text, markerPrefix) {
+export function parseAuthoringBucketMarker(text, markerPrefix) {
   const rawCount = countMarkerOccurrences(
     text,
     markerPrefix,
@@ -1746,7 +1746,7 @@ function extractHeadings(text) {
   }
   return headings;
 }
-function normalizeMarkerPrefix(prefix) {
+export function normalizeMarkerPrefix(prefix) {
   // Trim first: a config value or CLI input with accidental leading/
   // trailing whitespace (e.g. "idd-skill ") would otherwise become a
   // distinct prefix that never matches any real marker, producing

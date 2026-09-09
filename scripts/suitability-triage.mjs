@@ -6,6 +6,10 @@
 // the generated .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import {
+  normalizeMarkerPrefix,
+  parseAuthoringBucketMarker,
+} from './audit-authored-issue.mjs';
 import { computeBranchName } from './branch-name.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -23,6 +27,7 @@ import {
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mjs';
+import { escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 import {
@@ -59,6 +64,13 @@ const MERGED_PR_SCAN_DEADLINE_MS = 2 * 60 * 1000;
 // marks, so it cannot itself satisfy the scan if the real key is ever
 // renamed -- see #1446's PR description for why that matters.)
 //
+// #2737: the default marker prefix Check 6 (Autonomy) uses to detect an
+// `authoring-bucket: blocked-by-human` marker when the caller does not
+// configure `markerPrefix`. Same TDZ hazard and same fallback value as
+// every other file's own local `DEFAULT_MARKER_PREFIX` constant (see
+// discover-readiness-check.mts, audit-authored-issue.mts, etc.) -- not
+// shared/exported centrally by convention in this codebase.
+const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // Declared here, above the import.meta.main trigger below, rather than
 // alongside parseArgs further down: the trigger calls runCli() ->
 // parseArgs() synchronously at module-evaluation time, and a `const`
@@ -1990,6 +2002,7 @@ export function evaluateSuitability(issue, options = {}) {
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
+    markerPrefix: normalizeMarkerPrefix(options.markerPrefix),
     highConfidenceDuplicate: normalizeHighConfidenceDuplicateInput(
       options.highConfidenceDuplicate,
     ),
@@ -2361,11 +2374,12 @@ export function checkAutonomy(context) {
   const { issue } = context;
   const labels = new Set(issue.labels);
   const body = issue.body;
+  const blockedByHumanLabelName = normalizeConfiguredLabelName(
+    context.blockedByHumanLabelName,
+    POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+  );
   const blockedLabels = new Set([
-    normalizeConfiguredLabelName(
-      context.blockedByHumanLabelName,
-      POLICY_DEFAULTS.labels.blockedByHumanLabelName,
-    ),
+    blockedByHumanLabelName,
     normalizeConfiguredLabelName(
       context.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
@@ -2378,6 +2392,90 @@ export function checkAutonomy(context) {
         evidence: `Blocking label present: ${label}`,
       };
     }
+  }
+  // #2737: the configured blockedByHumanLabelName label (default
+  // status:blocked-by-human) can be absent even when the issue is
+  // genuinely human-gated -- issue #2657 mechanically passed all seven
+  // A4.5 checks while still carrying a `blocked-by-human:` title prefix
+  // and a hidden authoring-bucket marker, neither of which the label
+  // check above reads. Both are mechanical, pre-label signals the
+  // issue-authoring contract pairs with that label, so this check must
+  // also honor them.
+  //
+  // The title-prefix convention itself is the same stable
+  // `blocked-by-human` value the authoring-bucket marker below uses
+  // (AuthoringBucketMarkerValue is a fixed enum, never configurable) --
+  // renaming the GitHub label is a repo-local UI concern and must not
+  // silently change which title prefix an issue author is expected to
+  // write, or a legacy/adopter issue titled `blocked-by-human: ...`
+  // would stop being recognized the moment a repository customizes the
+  // label name, reopening the exact pre-label gap this check exists to
+  // close (#2737 review, Codex). So the canonical stem is always
+  // checked; the configured label's own local name (the part after its
+  // `status:`-style namespace) is checked too, as a secondary alias for
+  // a repository that has already standardized its own title
+  // convention around a renamed label. A label misconfigured to end in
+  // `:` (empty local-name stem) contributes no alias rather than
+  // matching every title (#2737 review, Copilot).
+  const CANONICAL_BLOCKED_BY_HUMAN_STEM = 'blocked-by-human';
+  const configuredStem = blockedByHumanLabelName.includes(':')
+    ? blockedByHumanLabelName.slice(
+        blockedByHumanLabelName.lastIndexOf(':') + 1,
+      )
+    : blockedByHumanLabelName;
+  const titlePrefixStems = new Set([CANONICAL_BLOCKED_BY_HUMAN_STEM]);
+  if (configuredStem.length > 0) {
+    titlePrefixStems.add(configuredStem);
+  }
+  for (const stem of titlePrefixStems) {
+    if (new RegExp(`^${escapeRegex(stem)}:\\s*`, 'i').test(issue.title)) {
+      return {
+        pass: false,
+        evidence: `Title carries the ${stem}: prefix.`,
+      };
+    }
+  }
+  // #2737 review, Copilot: checkAutonomy is itself exported and called
+  // directly with a raw Context (including in tests) -- normalize here too
+  // rather than relying solely on the Context-construction call sites.
+  const markerPrefix = normalizeMarkerPrefix(context.markerPrefix);
+  // #2761 review (Codex): a naive fenced/inline-only mask (the earlier
+  // `stripMarkdownCodeRegions(body)`) leaves an indented (4-space) code
+  // block untouched, so a documentation example written that way is
+  // wrongly treated as a real marker. It also has no notion of an HTML
+  // comment boundary at all, so it cannot distinguish a genuine marker from
+  // a backslash-escaped `\<!--` opener (literal text, not a real comment)
+  // or correctly recover a genuine marker sitting between backslash-escaped
+  // backticks (`` \` <!-- ... --> \` ``, which `findInlineCodeRanges`
+  // itself already treats as not forming a real inline code span, unlike
+  // the plain regex behind `stripMarkdownCodeRegions`). Scanning only the
+  // real (non-code-example, non-escaped) HTML comment ranges --
+  // `findHtmlCommentRanges`'s own established fenced/indented/inline
+  // code-example exclusion and escaped-opener handling, already used the
+  // same way elsewhere in this function (the objective-criteria
+  // `fenceMaskedBody` scan below) and in checkVerifiability's
+  // `hasSubjectiveApproval` scan -- gets all three right at once.
+  const codeRangesForAutonomy = findMarkdownCodeRanges(body);
+  const commentRangesForAutonomy = findHtmlCommentRanges(
+    body,
+    codeRangesForAutonomy,
+  );
+  const authoringBucketScanText = commentRangesForAutonomy
+    .map((range) => body.slice(range.start, range.end))
+    .join('\n');
+  const bucketMarker = parseAuthoringBucketMarker(
+    authoringBucketScanText,
+    markerPrefix,
+  );
+  if (
+    bucketMarker.present &&
+    !bucketMarker.malformed &&
+    bucketMarker.value === 'blocked-by-human'
+  ) {
+    return {
+      pass: false,
+      evidence: `<!-- ${markerPrefix}-authoring-bucket: blocked-by-human --> marker present.`,
+    };
   }
   // #2219: an either/or acceptance-criterion shape naming two mutually
   // exclusive implementation paths without saying which one to take.
@@ -3330,6 +3428,7 @@ function runCli() {
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    markerPrefix: resolveMarkerPrefix(policyConfig),
     highConfidenceDuplicate,
     highConfidenceCollectionDegraded: collectionWarnings.length > 0,
   });
@@ -3420,6 +3519,7 @@ export function evaluateSuitabilityLocal(bodyText, options = {}) {
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
+    markerPrefix: normalizeMarkerPrefix(options.markerPrefix),
   };
   const checks = CHECKS.map((check) => {
     if (check.id === 'duplicate_or_superseded') {
@@ -3451,6 +3551,7 @@ function runLocalCli(args) {
   const result = evaluateSuitabilityLocal(bodyText, {
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    markerPrefix: resolveMarkerPrefix(policyConfig),
   });
   const output = {
     mode: result.mode,
@@ -3784,6 +3885,16 @@ function normalizeConfiguredLabelName(labelName, fallback) {
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : fallback;
+}
+// #2737: mirrors discover-readiness-check.mts's `resolveMarkerPrefix` --
+// `normalizePolicyConfig`/`labelsPolicy` has no `markerPrefix` field, so
+// this reads the raw loaded config directly, same as every other
+// consumer of the top-level `markerPrefix` config key.
+function resolveMarkerPrefix(config) {
+  const prefix = config?.markerPrefix;
+  return typeof prefix === 'string' && prefix.length > 0
+    ? prefix
+    : DEFAULT_MARKER_PREFIX;
 }
 function normalizeRepository(repository) {
   if (!repository || typeof repository !== 'object') {
