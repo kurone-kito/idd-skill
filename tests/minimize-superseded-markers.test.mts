@@ -7,11 +7,55 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  applyMinimize,
   computeExitCode,
   isTrustedAuthor,
+  probeSubject,
+  resolveGhHostnameArgs,
   resolveTrustedActors,
+  runMinimize,
 } from '../src/scripts/minimize-superseded-markers.mts';
 import { stubExecutable } from './test-utils.mts';
+
+/**
+ * Save/restore `GH_HOST` and `GITHUB_SERVER_URL` around a test body,
+ * mirroring `tests/gh-exec.test.mts`'s `withGhHostEnv` -- `probeSubject` /
+ * `applyMinimize` read `process.env` implicitly (via
+ * `resolveGhHostnameArgs`'s default parameter), so a test exercising that
+ * default path must mutate and restore the real environment rather than
+ * passing an explicit `env` object. CI itself defines
+ * `GITHUB_SERVER_URL=https://github.com` in the runner environment
+ * (#1962), so both variables are cleared first regardless of overrides.
+ */
+function withGhHostEnv(
+  overrides: { GH_HOST?: string; GITHUB_SERVER_URL?: string },
+  run: () => void,
+): void {
+  const savedGhHost = process.env.GH_HOST;
+  const savedServerUrl = process.env.GITHUB_SERVER_URL;
+  delete process.env.GH_HOST;
+  delete process.env.GITHUB_SERVER_URL;
+  if (overrides.GH_HOST !== undefined) {
+    process.env.GH_HOST = overrides.GH_HOST;
+  }
+  if (overrides.GITHUB_SERVER_URL !== undefined) {
+    process.env.GITHUB_SERVER_URL = overrides.GITHUB_SERVER_URL;
+  }
+  try {
+    run();
+  } finally {
+    if (savedGhHost === undefined) {
+      delete process.env.GH_HOST;
+    } else {
+      process.env.GH_HOST = savedGhHost;
+    }
+    if (savedServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = savedServerUrl;
+    }
+  }
+}
 
 // computeExitCode only reads counts.failed; the partial reports are
 // widened structurally instead of fabricating unused report fields.
@@ -360,3 +404,336 @@ test('a zero / leading-zero --subject-ids value keeps the raw gh passthrough (no
     assert.match(item.reason, /^gh-graphql-error:/);
   }
 });
+
+// --- #2754: GHES-hostname routing (caught by chatgpt-codex-connector
+// review on PR #2788) -----------------------------------------------------
+
+test('resolveGhHostnameArgs returns [] with no GH_HOST / GITHUB_SERVER_URL signal', () => {
+  assert.deepEqual(resolveGhHostnameArgs({}), []);
+});
+
+test('resolveGhHostnameArgs returns [] when GH_HOST is set, even alongside a GHES GITHUB_SERVER_URL', () => {
+  // gh already reads GH_HOST itself; a --hostname override here would be
+  // redundant at best and could disagree with an operator's explicit
+  // choice at worst -- mirrors gh-exec.mts's resolveGhApiHostname (#1962).
+  assert.deepEqual(
+    resolveGhHostnameArgs({
+      GH_HOST: 'ghes.example.com',
+      GITHUB_SERVER_URL: 'https://other-ghes.example.com',
+    }),
+    [],
+  );
+});
+
+test('resolveGhHostnameArgs returns [] for GITHUB_SERVER_URL=https://github.com (no behavior change on github.com)', () => {
+  assert.deepEqual(
+    resolveGhHostnameArgs({ GITHUB_SERVER_URL: 'https://github.com' }),
+    [],
+  );
+});
+
+test('resolveGhHostnameArgs returns [] for an empty GITHUB_SERVER_URL', () => {
+  assert.deepEqual(resolveGhHostnameArgs({ GITHUB_SERVER_URL: '' }), []);
+});
+
+test('resolveGhHostnameArgs strips scheme and trailing slash for a GHES GITHUB_SERVER_URL', () => {
+  assert.deepEqual(
+    resolveGhHostnameArgs({ GITHUB_SERVER_URL: 'https://ghes.example.com/' }),
+    ['--hostname', 'ghes.example.com'],
+  );
+});
+
+test('resolveGhHostnameArgs lowercases a mixed-case GHES host and tolerates http scheme', () => {
+  assert.deepEqual(
+    resolveGhHostnameArgs({ GITHUB_SERVER_URL: 'http://GHES.Example.com' }),
+    ['--hostname', 'ghes.example.com'],
+  );
+});
+
+test('probeSubject passes --hostname through to gh on a GHES GITHUB_SERVER_URL with GH_HOST unset', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+    const restore = stubExecutable(
+      'gh',
+      `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === '--hostname' && args[2] === 'ghes.example.com' && args[3] === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'u', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+    );
+    try {
+      const result = probeSubject('IC_test');
+      assert.deepEqual(result, {
+        ok: true,
+        node: {
+          typename: 'IssueComment',
+          url: 'u',
+          isMinimized: false,
+          viewerCanMinimize: true,
+          author: 'kurone-kito',
+        },
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('probeSubject omits --hostname on plain github.com (GH_HOST and GITHUB_SERVER_URL both unset)', () => {
+  withGhHostEnv({}, () => {
+    const restore = stubExecutable(
+      'gh',
+      `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'u', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+    );
+    try {
+      const result = probeSubject('IC_test');
+      assert.equal(result.ok, true);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('applyMinimize passes --hostname through to gh on a GHES GITHUB_SERVER_URL with GH_HOST unset', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+    const restore = stubExecutable(
+      'gh',
+      `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === '--hostname' && args[2] === 'ghes.example.com' && args[3] === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { minimizeComment: { minimizedComment: { __typename: 'IssueComment', isMinimized: true } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+    );
+    try {
+      const result = applyMinimize('IC_test', 'OUTDATED');
+      assert.deepEqual(result, { ok: true });
+    } finally {
+      restore();
+    }
+  });
+});
+
+// --- #2754: runMinimize's optional overall deadlineMs budget --------------
+// (chatgpt-codex-connector review on PR #2788) -- probeSubject/applyMinimize
+// each bound a SINGLE gh call, but chaining several subjects through
+// runMinimize had no cap on the pass as a whole.
+
+/** Stub `gh` so every `graphql` probe call for any subject id resolves
+ * instantly and eligibly (not minimized, viewer can minimize, trusted
+ * author) -- isolates the deadline bookkeeping in `runMinimize` itself from
+ * probe/mutation timing, which `probeSubject`'s own tests already cover. */
+function withInstantEligibleProbeGhStub(): () => void {
+  return stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const fValues = [];
+for (let i = 0; i < args.length; i += 1) {
+  if (args[i] === '-f') fValues.push(args[i + 1]);
+}
+const idEntry = fValues.find((v) => v.indexOf('id=') === 0);
+const id = idEntry ? idEntry.slice('id='.length) : '';
+if (args[0] === 'api' && args[1] === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-' + id, isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+}
+
+test('runMinimize always finishes the first candidate even when deadlineMs is already 0, then marks the rest deadline-exceeded', () => {
+  const restore = withInstantEligibleProbeGhStub();
+  try {
+    const report = runMinimize({
+      subjectIds: ['IC_a', 'IC_b', 'IC_c'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+      deadlineMs: 0,
+    });
+    // The first candidate is always attempted regardless of the deadline
+    // (probed here, reported eligible/would-apply in dry-run mode) --
+    // never zero candidates processed just because the budget is already
+    // exhausted at entry.
+    assert.deepEqual(
+      report.items.map((item) => ({
+        subjectId: item.subjectId,
+        status: item.status,
+        reason: item.reason,
+      })),
+      [
+        { subjectId: 'IC_a', status: 'would-apply', reason: undefined },
+        {
+          subjectId: 'IC_b',
+          status: 'skipped',
+          reason: 'deadline-exceeded',
+        },
+        {
+          subjectId: 'IC_c',
+          status: 'skipped',
+          reason: 'deadline-exceeded',
+        },
+      ],
+    );
+    assert.equal(report.counts.eligible, 1);
+    assert.equal(report.counts.deadlineSkipped, 2);
+    // No count bucket double-charges a deadline-skipped subject as a
+    // transport failure.
+    assert.equal(report.counts.failed, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('runMinimize processes every subject normally when deadlineMs is omitted (pre-existing unbounded behavior)', () => {
+  const restore = withInstantEligibleProbeGhStub();
+  try {
+    const report = runMinimize({
+      subjectIds: ['IC_a', 'IC_b', 'IC_c'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+    });
+    assert.equal(report.items.length, 3);
+    assert.ok(report.items.every((item) => item.status === 'would-apply'));
+    assert.equal(report.counts.eligible, 3);
+    assert.equal(report.counts.deadlineSkipped, 0);
+  } finally {
+    restore();
+  }
+});
+
+/**
+ * Stub `gh` for an `apply: true` deadline test where the mutation call
+ * itself must never happen (#2754, chatgpt-codex-connector review round 2
+ * on PR #2788): answers a plain probe (`graphql` with no `classifier=`
+ * `-f` value) the same way {@link withInstantEligibleProbeGhStub} does,
+ * but FAILS LOUDLY on any call that carries `classifier=` -- proving a
+ * skipped-before-mutate candidate never reaches `applyMinimize`'s own `gh`
+ * call, not just that the reported status happens to read `skipped`.
+ */
+function withProbeOnlyGhStub(): () => void {
+  return stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const fValues = [];
+for (let i = 0; i < args.length; i += 1) {
+  if (args[i] === '-f') fValues.push(args[i + 1]);
+}
+const idEntry = fValues.find((v) => v.indexOf('id=') === 0);
+const classifierEntry = fValues.find((v) => v.indexOf('classifier=') === 0);
+const id = idEntry ? idEntry.slice('id='.length) : '';
+if (args[0] === 'api' && args[1] === 'graphql' && !classifierEntry) {
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-' + id, isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation (mutation attempted after deadline): ' + args.join(' '));
+process.exit(1);
+`,
+  );
+}
+
+test('runMinimize never reaches applyMinimize for a candidate whose OWN probe already exhausted the deadline (#2754, chatgpt-codex-connector review round 2)', () => {
+  // deadlineMs: 0 means the budget is exhausted the instant ANY wall-clock
+  // time has passed -- true by the time the (real, subprocess-spawning)
+  // probe call for this single candidate returns. The entry check exempts
+  // the very first candidate (so the probe itself is always allowed to
+  // run), but the SEPARATE pre-mutate check must still catch it here,
+  // since without that second check this candidate -- already probed
+  // eligible -- would proceed straight to a real mutation call.
+  const restore = withProbeOnlyGhStub();
+  try {
+    const report = runMinimize({
+      subjectIds: ['IC_a'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: true,
+      allowUntrusted: false,
+      deadlineMs: 0,
+    });
+    assert.deepEqual(
+      report.items.map((item) => ({
+        subjectId: item.subjectId,
+        status: item.status,
+        reason: item.reason,
+      })),
+      [{ subjectId: 'IC_a', status: 'skipped', reason: 'deadline-exceeded' }],
+    );
+    assert.equal(report.counts.eligible, 1);
+    assert.equal(report.counts.deadlineSkipped, 1);
+    assert.equal(report.counts.applied, 0);
+    assert.equal(report.counts.failed, 0);
+  } finally {
+    restore();
+  }
+});
+
+test("runMinimize threads the actual remaining budget into probeSubject's own gh call, not just GH_TIMEOUT_MS (#2754, chatgpt-codex-connector review round 5)", () => {
+  // The stub's probe response sleeps a full real second (via a blocking
+  // Atomics.wait, portable to Windows unlike execSync('sleep 1')) before
+  // answering -- a correctly-threaded ~150ms remainder passed all the way
+  // down to execFileSync's own `timeout` option must kill that call long
+  // before the sleep completes, proving runMinimize no longer leaves each
+  // candidate's own probe bound to the flat 30s GH_TIMEOUT_MS default
+  // regardless of how little of `deadlineMs` is actually left.
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'graphql') {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-1', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+process.exit(1);
+`,
+  );
+  const start = Date.now();
+  try {
+    const report = runMinimize({
+      subjectIds: ['IC_a'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+      deadlineMs: 150,
+    });
+    const elapsed = Date.now() - start;
+    assert.ok(
+      elapsed < 900,
+      `expected the ~150ms timeout to cut off the 1s stub sleep, took ${elapsed}ms`,
+    );
+    // The probe call itself was killed by the timeout, so it surfaces as a
+    // transport failure -- not a clean eligible/would-apply result.
+    assert.equal(report.items[0]?.status, 'failed');
+    assert.equal(report.counts.eligible, 0);
+  } finally {
+    restore();
+  }
+});
+
+// A generous (or omitted) deadlineMs still reaching a real, successful
+// applyMinimize mutation is already covered end-to-end by
+// tests/post-idd-marker.test.mts's hide-step integration tests, which
+// invoke this same runMinimize call site with deadlineMs:
+// HIDE_STEP_DEADLINE_MS (45s, never exhausted in-test) and assert the
+// mutation actually ran via readMutatedSubjectIds.

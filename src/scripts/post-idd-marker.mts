@@ -21,7 +21,15 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
+import { loadIddConfig } from './idd-config.mts';
 import {
+  isTrustedAuthor,
+  resolveTrustedActors,
+  runMinimize,
+} from './minimize-superseded-markers.mts';
+import {
+  parseCopilotUnavailableComment,
+  parseReviewAckComment,
   renderActivationNonceMarker,
   renderAdvisoryRerollMarker,
   renderAdvisoryWaitMarker,
@@ -37,6 +45,31 @@ import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
+
+/**
+ * Marker types whose prior same-family comments this module automatically
+ * hides (classifier `OUTDATED`) immediately after a fresh instance POSTs
+ * successfully under `--apply` -- the hide-at-post-time exception
+ * documented in `docs/idd-comment-minimization.md`'s "## Timing" section
+ * (#2754). Unlike the other `wired` families there (claim chain,
+ * review-watermark/baseline, advisory-wait), which are agent-followed
+ * instruction steps, this pair's grouping keys are purely mechanical
+ * (embedded HEAD SHA mismatch; same `claim:` value), so the hide step is
+ * code-automated directly inside this CLI's own `--apply` path instead.
+ */
+export const HIDE_AT_POST_TIME_MARKER_TYPES = [
+  'review-ack',
+  'copilot-unavailable',
+] as const;
+
+export type HideAtPostTimeMarkerType =
+  (typeof HIDE_AT_POST_TIME_MARKER_TYPES)[number];
+
+export function isHideAtPostTimeMarkerType(
+  type: string,
+): type is HideAtPostTimeMarkerType {
+  return (HIDE_AT_POST_TIME_MARKER_TYPES as readonly string[]).includes(type);
+}
 
 export const MARKER_TYPES = [
   'claim',
@@ -532,6 +565,18 @@ review-activity-snapshot path.
 --expected-head-sha pins a --type watermark --from-pr to the Step 1 stored
 HEAD and fails closed (no post) on drift instead of silently posting a newer
 HEAD than Step 1 saw.
+
+--apply --type review-ack / --type copilot-unavailable (#2754): after the
+new marker POSTs successfully, this command also hides (classifier
+OUTDATED, via minimize-superseded-markers.mjs) prior same-family comments
+it supersedes -- a review-ack: whose embedded HEAD SHA differs from the one
+just posted, or a copilot-unavailable: carrying the same claim: value and a
+STRICTLY LOWER attempt: number (a same-or-higher attempt is left alone).
+--trusted-marker-logins gates that hide step's trusted-author check too
+(falls back to IDD_TRUSTED_MARKER_ACTORS / the config trustedMarkerActors
+list, same ladder as minimize-superseded-markers.mjs). Best-effort: a
+permission error or any other failure here is swallowed and never blocks
+or retries the marker post that already succeeded.
 `;
 
 /**
@@ -629,6 +674,368 @@ function runReviewActivitySnapshot(
     encoding: 'utf8',
   });
   return JSON.parse(out);
+}
+
+// ---------------------------------------------------------------------------
+// Hide-at-post-time (#2754): review-ack / copilot-unavailable
+// ---------------------------------------------------------------------------
+
+/** One comment shaped for the candidate scan below -- REST `id` (read by the
+ * caller's own `comment.id < postedCommentId` ordering filter, never by the
+ * finder functions themselves), the GraphQL `nodeId` `minimizeComment`
+ * needs, and `body` to parse. Narrowed from {@link ProviderComment} (which
+ * carries `nodeId` as an OPTIONAL field, #2754) down to the four fields
+ * this module actually reads -- `findSupersededReviewAckSubjects` /
+ * `findSupersededCopilotUnavailableSubjects` themselves only read `nodeId`
+ * and `body`; `authorLogin` is read by `hideSupersededPostTimeMarkers`
+ * itself, to confirm the just-posted marker's OWN author is trusted before
+ * scanning for anything to hide (#2754, chatgpt-codex-connector review on
+ * PR #2788). */
+export interface MarkerCandidateComment {
+  id: number;
+  nodeId: string;
+  body: string;
+  authorLogin: string;
+}
+
+/**
+ * List every comment on `number` (issue or PR -- same comments endpoint),
+ * shaped for the hide-at-post-time candidate scan. Routed through
+ * {@link createGithubProviderAdapter} (`listWorkItemComments`), like every
+ * other read in this migrated file (#2266) -- `post-idd-marker.mts` must
+ * never construct a `gh` call of its own
+ * (`tests/provider-port-migration-guard.test.mts`). A comment missing a
+ * `nodeId` (defensive: the real adapter always populates it from REST's
+ * `node_id`) normalizes to `''`, which the finder functions below already
+ * skip.
+ */
+function listMarkerCandidateComments(
+  owner: string,
+  repo: string,
+  number: number,
+  timeoutMs?: number,
+): MarkerCandidateComment[] {
+  return createGithubProviderAdapter(owner, repo)
+    .listWorkItemComments(
+      number,
+      timeoutMs !== undefined ? { timeoutMs } : undefined,
+    )
+    .map((comment) => ({
+      id: comment.id,
+      nodeId: comment.nodeId ?? '',
+      body: comment.body,
+      authorLogin: comment.authorLogin ?? '',
+    }));
+}
+
+/**
+ * Find prior `review-ack:` comments (among `comments`, already excluding the
+ * marker just posted) whose embedded HEAD SHA differs from `newHeadSha` --
+ * the candidates a fresh `review-ack` post should minimize as `OUTDATED`,
+ * mirroring the shipped `advisory-wait` AW3-H rule. Never returns a
+ * candidate matching `newHeadSha` (current-HEAD protection) or an
+ * unparseable / non-`review-ack:` comment.
+ */
+export function findSupersededReviewAckSubjects(
+  comments: readonly MarkerCandidateComment[],
+  newHeadSha: string,
+): string[] {
+  const target = newHeadSha.trim().toLowerCase();
+  const subjects: string[] = [];
+  for (const comment of comments) {
+    if (!comment.nodeId) {
+      continue;
+    }
+    const parsed = parseReviewAckComment(comment.body, 'none');
+    if (!parsed || parsed.headSha === target) {
+      continue;
+    }
+    subjects.push(comment.nodeId);
+  }
+  return subjects;
+}
+
+/**
+ * Find prior `copilot-unavailable:` comments (among `comments`, already
+ * excluding the marker just posted) carrying the SAME `claim:` value as
+ * `newClaimId` -- the candidates a fresh `copilot-unavailable` post should
+ * minimize as `OUTDATED`, mirroring the shipped watermark/claim-chain
+ * supersession rule. Never returns a candidate whose `claim:` value differs
+ * (foreign-claim protection) or an unparseable / non-`copilot-unavailable:`
+ * comment.
+ */
+export function findSupersededCopilotUnavailableSubjects(
+  comments: readonly MarkerCandidateComment[],
+  newClaimId: string,
+  newAttempt: number,
+): string[] {
+  // Trim before comparing (caught by Copilot review on PR #2788):
+  // renderCopilotUnavailableMarker normalizes claimId via
+  // normalizeNonWhitespaceToken() (trim + reject internal whitespace)
+  // before posting, so by the time this runs -- strictly after that POST
+  // already succeeded -- newClaimId can only ever carry leading/trailing
+  // whitespace relative to what was actually posted (internal whitespace
+  // would have failed that render-time validation and never reached
+  // here). Comparing the untrimmed CLI flag value against parsed.claimId
+  // (already whitespace-free, matched via `\S+`) would otherwise never
+  // match a same-claim prior comment when the caller passed the flag with
+  // surrounding whitespace, silently leaving it un-hidden.
+  const target = newClaimId.trim();
+  const subjects: string[] = [];
+  for (const comment of comments) {
+    if (!comment.nodeId) {
+      continue;
+    }
+    const parsed = parseCopilotUnavailableComment(comment.body, 'none');
+    if (!parsed || parsed.claimId !== target) {
+      continue;
+    }
+    // Only a STRICTLY LOWER attempt number is ever superseded (caught by
+    // chatgpt-codex-connector review on PR #2788, round 5): claim:
+    // equality alone says nothing about which attempt is actually more
+    // advanced. Two same-claim sessions racing on the SAME HEAD (no HEAD
+    // drift needed -- the live-HEAD gate above cannot catch this) can
+    // still POST out of attempt order -- e.g. attempt 2 lands with a
+    // LOWER REST id while a stalled attempt 1 lands with the next one --
+    // and an attempt-blind filter would let that delayed, regressive
+    // attempt 1 hide the more advanced attempt 2, leaving the regressive
+    // marker as the only one expanded. A same-attempt candidate (a bare
+    // retry of this exact attempt number, e.g. re-POSTing after a failed
+    // hide step) is deliberately left alone rather than guessing whether
+    // it is a true duplicate: current-attempt protection, the same
+    // conservative "when ambiguous, never hide" policy the live-HEAD gate
+    // above already applies to a same-embedded-HEAD review-ack.
+    if (!(parsed.attempt < newAttempt)) {
+      continue;
+    }
+    subjects.push(comment.nodeId);
+  }
+  return subjects;
+}
+
+/**
+ * Overall time budget (#2754, chatgpt-codex-connector review on PR #2788,
+ * three rounds) for the ENTIRE {@link hideSupersededPostTimeMarkers} step,
+ * from its own first line to its return -- not just `runMinimize`'s
+ * mutation pass. Round 2 gave `runMinimize` an internal `deadlineMs`, but
+ * that clock only started at ITS OWN entry, leaving every network call
+ * BEFORE it (the `review-ack` live-HEAD re-check, and the comments listing
+ * every type makes) outside the budget entirely -- the comments listing
+ * alone defaults to `DEFAULT_GH_PAGINATED_TIMEOUT_MS` (120s, gh-exec.mts)
+ * when not told otherwise, already larger than this whole step's intended
+ * budget. `hideSupersededPostTimeMarkers` now starts its own clock first
+ * and re-checks the REMAINING budget before each of its three network
+ * stages (the optional HEAD re-check, the comments listing, and the
+ * `runMinimize` pass), passing that remainder as each stage's own timeout
+ * (or `deadlineMs`, for `runMinimize`) instead of a fixed constant, and
+ * bailing out (never with a `0`/no-op timeout, which `gh-exec.mts` and
+ * `execFileSync` both read as "unbounded") the instant the remainder is
+ * non-positive. The true worst case for the one stage already in flight
+ * when the budget runs out is that stage's own default timeout beyond
+ * `HIDE_STEP_DEADLINE_MS` (up to `DEFAULT_GH_TIMEOUT_MS` for the HEAD
+ * re-check, `DEFAULT_GH_PAGINATED_TIMEOUT_MS` for the comments listing, or
+ * `GH_TIMEOUT_MS` for `runMinimize`'s own in-flight candidate -- see that
+ * function's `deadlineMs` doc comment) -- but no stage can ever START once
+ * the budget is already spent.
+ */
+const HIDE_STEP_DEADLINE_MS = 45_000;
+
+/**
+ * Best-effort hide-at-post-time step for {@link HIDE_AT_POST_TIME_MARKER_TYPES}
+ * (#2754). Runs only after `postedCommentId`'s own POST already succeeded
+ * (the caller invokes this strictly afterward, never before or interleaved),
+ * scans the target's OTHER comments for same-family markers superseded by
+ * the one just posted, and reuses `minimize-superseded-markers.mts`'s
+ * `runMinimize` for the actual mutation -- the same trusted-author gate,
+ * already-`isMinimized` skip, and `viewerCanMinimize` check that helper
+ * already implements, so this call site adds no new mutation logic of its
+ * own. Every failure (an unreadable comment list, a `gh` permission error, a
+ * malformed GraphQL response, anything else) is swallowed here: this step
+ * must never retry-loop or throw back into the caller, since the marker it
+ * is hiding *for* has already posted successfully by the time this runs.
+ *
+ * Candidates are restricted to comments **older** than `postedCommentId`
+ * (`comment.id < postedCommentId`, REST issue-comment ids are assigned
+ * sequentially at creation) rather than merely excluding an exact id match
+ * (caught by chatgpt-codex-connector review on PR #2788): the comments scan
+ * runs after this marker's own POST, so a concurrent session's marker
+ * created in that window can already appear in the listing with a HIGHER
+ * id. An inequality-only filter would treat that genuinely newer marker as
+ * "prior" and hide it as `OUTDATED` -- exactly backwards, since it is this
+ * call's own marker that is older by comparison. The `<` restriction
+ * excludes it structurally, independent of what its embedded HEAD SHA or
+ * `claim:` value happens to be.
+ *
+ * For BOTH types, this also re-reads the target PR's LIVE head SHA and, when
+ * it no longer matches `fields['head-sha']`, SELF-MINIMIZES the marker this
+ * call itself just posted instead of scanning for prior candidates (caught
+ * by chatgpt-codex-connector review on PR #2788, three rounds -- rounds 3-4
+ * bailed out entirely here; round 5 found that abandoning the just-posted
+ * marker left it expanded forever with no later invocation guaranteed to
+ * sweep it, mirroring the self-minimize sibling #2755 shipped for
+ * `idd-local-validation-evidence:` after the same finding there): `review-
+ * ack`'s usual `--from-pr` reads HEAD once before composing and POSTing the
+ * marker body, so on a slow POST the branch can advance and a concurrent
+ * session can already have posted a genuine, current-HEAD acknowledgement by
+ * the time this step runs. The `id <` restriction above only orders
+ * candidates by creation time -- it cannot tell a stale marker from a fresh
+ * one once both are "prior" by id, so scanning for prior candidates while
+ * stale could minimize that valid newer acknowledgement while leaving this
+ * call's own, now-superseded one visible: destroying the correct evidence
+ * instead of the stale evidence. `copilot-unavailable` never derives
+ * `--head-sha` from `--from-pr` (its supersession key, `claim-id`, always
+ * comes from an explicit CLI flag), but that only rules out THIS caller's
+ * own embedded value going stale between observation and POST -- it does
+ * nothing about a genuinely different, concurrent same-claim poster (e.g. a
+ * stalled pre-handoff session finally completing its retry against a claim a
+ * handoff already moved on from): `findSupersededCopilotUnavailableSubjects`
+ * matches purely on `claim:` equality, with no HEAD comparison of its own,
+ * so a STALE same-claim post could still treat an earlier, CURRENT-HEAD
+ * same-claim post as "superseded" purely by virtue of posting later (round 2
+ * review, initially missed: the check below was `review-ack`-only until
+ * round 4). Applying the same live-HEAD gate to both types closes that gap
+ * without needing a HEAD-aware rewrite of the claim-based finder itself: a
+ * poster who is observably stale relative to current HEAD never scans for
+ * OTHER candidates, regardless of which family it belongs to -- it only ever
+ * minimizes its own just-posted comment. The trust gate below (on
+ * `postedComment` itself) still applies either way, so an untrusted post
+ * never triggers even its own self-minimize. A failed re-read (not a PR,
+ * `gh` error, anything else) falls through to the outer catch below and
+ * skips the whole pass, same as any other best-effort failure.
+ *
+ * This step ALSO requires `postedCommentId`'s own author to be in the same
+ * `trustedSet` `runMinimize` already gates candidates on (caught by
+ * chatgpt-codex-connector review on PR #2788): `post-idd-marker.mjs`
+ * performs no author gating of its own -- anyone with `gh` credentials can
+ * invoke `--apply` -- so downstream trust-filtered consumers already
+ * ignore an untrusted marker as if it never existed. Without this check,
+ * that untrusted post's mere presence would still drive this scan, and an
+ * older TRUSTED candidate sharing its supersession key (a same-claim
+ * `copilot-unavailable`, or a same-HEAD `review-ack`) would still get
+ * minimized purely because ITS OWN author is trusted -- collapsing the one
+ * copy of the marker downstream consumers actually rely on, leaving only
+ * the ignored untrusted replacement expanded. Bails out (no scan, no
+ * mutation) when `postedCommentId`'s own comment cannot be re-read at all,
+ * fail-closed the same way an unreadable comment list already fails
+ * closed elsewhere in this function.
+ */
+export function hideSupersededPostTimeMarkers(
+  type: HideAtPostTimeMarkerType,
+  fields: MarkerFields,
+  owner: string,
+  repo: string,
+  number: number,
+  postedCommentId: number,
+  trustedMarkerLoginsFlag: string,
+  deadlineMs: number,
+): void {
+  // Clock starts here, before ANY network call this step makes (#2754,
+  // chatgpt-codex-connector review round 3 on PR #2788) -- round 2's
+  // deadlineMs only bounded runMinimize's OWN pass, timed from ITS entry,
+  // which left every read before that call (the review-ack live-HEAD
+  // re-check, and the comments listing every type makes) outside the
+  // budget entirely. The comments listing in particular defaults to
+  // `DEFAULT_GH_PAGINATED_TIMEOUT_MS` (120s, gh-exec.mts) when not told
+  // otherwise -- alone larger than this whole step's intended budget.
+  const startedAt = Date.now();
+  const remaining = (): number => deadlineMs - (Date.now() - startedAt);
+  try {
+    // #2754, chatgpt-codex-connector review round 5 on PR #2788: a stale
+    // live-HEAD no longer means "abandon this step entirely" -- it means
+    // "the marker this call just posted is ITSELF the superseded one".
+    // `stale` is recorded (no early return) so the trust gate below still
+    // runs on the shared `postedComment` read either way, and the subject
+    // set further down switches to self-minimizing that one comment
+    // instead of scanning for prior candidates. Sibling #2755 shipped this
+    // exact self-minimize behavior for `idd-local-validation-evidence:`
+    // after Codex found the same gap there first.
+    let stale = false;
+    {
+      const r = remaining();
+      // Never pass `timeout: 0` to a `gh` call below -- gh-exec.mts (like
+      // Node's own `execFileSync`) treats that as "no timeout", the exact
+      // opposite of "budget already exhausted". Bailing out here instead
+      // is what makes a non-positive remainder safe.
+      if (r <= 0) {
+        return;
+      }
+      const liveHeadSha = createGithubProviderAdapter(
+        owner,
+        repo,
+      ).getChangeRequestHeadSha(number, { timeoutMs: r });
+      stale =
+        liveHeadSha.trim().toLowerCase() !==
+        fields['head-sha'].trim().toLowerCase();
+    }
+    const { actors } = resolveTrustedActors({
+      flagValue: trustedMarkerLoginsFlag,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+      config: loadIddConfig(),
+    });
+    const trustedSet = new Set(actors);
+    const commentsListR = remaining();
+    if (commentsListR <= 0) {
+      return;
+    }
+    const allComments = listMarkerCandidateComments(
+      owner,
+      repo,
+      number,
+      commentsListR,
+    );
+    const postedComment = allComments.find(
+      (comment) => comment.id === postedCommentId,
+    );
+    if (
+      !postedComment ||
+      !isTrustedAuthor(postedComment.authorLogin, trustedSet)
+    ) {
+      // The marker this call just posted is itself untrusted (or its own
+      // record could not be re-read) -- never let an untrusted post drive
+      // this step to minimize an older, TRUSTED candidate, or to
+      // self-minimize on ITS OWN say-so when stale. Downstream
+      // trust-filtered consumers already ignore an untrusted marker as if
+      // it never existed; letting it collapse the trusted terminal marker
+      // it claims to supersede would erase the only copy those consumers
+      // actually rely on (#2754, chatgpt-codex-connector review on PR
+      // #2788).
+      return;
+    }
+    const subjectIds = stale
+      ? postedComment.nodeId
+        ? [postedComment.nodeId]
+        : []
+      : (() => {
+          const comments = allComments.filter(
+            (comment) => comment.id < postedCommentId,
+          );
+          return type === 'review-ack'
+            ? findSupersededReviewAckSubjects(comments, fields['head-sha'])
+            : findSupersededCopilotUnavailableSubjects(
+                comments,
+                fields['claim-id'],
+                Number(fields.attempt),
+              );
+        })();
+    if (subjectIds.length === 0) {
+      return;
+    }
+    const mutationPassR = remaining();
+    if (mutationPassR <= 0) {
+      return;
+    }
+    runMinimize({
+      subjectIds,
+      classifier: 'OUTDATED',
+      trustedSet,
+      apply: true,
+      allowUntrusted: false,
+      deadlineMs: mutationPassR,
+    });
+  } catch {
+    // Best-effort only (#2754) -- never block or retry-loop the marker post
+    // that already succeeded above.
+  }
 }
 
 if (import.meta.main) {
@@ -833,6 +1240,18 @@ if (import.meta.main) {
   const repo = args.repo || applyCurrentRepo?.repo || '';
 
   const posted = postMarker(owner, repo, number, body);
+  if (isHideAtPostTimeMarkerType(args.type)) {
+    hideSupersededPostTimeMarkers(
+      args.type,
+      args.fields,
+      owner,
+      repo,
+      number,
+      posted.id,
+      args.trustedMarkerLogins,
+      HIDE_STEP_DEADLINE_MS,
+    );
+  }
   const result: PostIddMarkerResult = {
     mode: 'apply',
     type: args.type as MarkerType,

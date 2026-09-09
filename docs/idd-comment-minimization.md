@@ -134,22 +134,55 @@ after one of these is true:
 - a maintainer explicitly starts a merged-PR audit
 
 **Exception -- hide-at-post-time for `wired` families** (issue #731,
-issue #733, issue #2751, issue #2755). A `wired` family may be
-minimized immediately after its own new instance's POST+verify
+issue #733, issue #2751, issue #2754, issue #2755). A `wired` family
+may be minimized immediately after its own new instance's POST+verify
 succeeds, pre-merge, using that family's documented
 supersession/grouping key -- never for any other reason during an
-active E or F gate. Four families ship this today: the claim chain
-(`claimed-by:`/`unclaimed-by:`, grouped by
-`supersedes:` lineage, `idd-claim.instructions.md`), `review-watermark:`/
-`review-baseline:` (grouped by same claim-id,
-`idd-review-snapshot.instructions.md`), the `advisory-wait` family
-(`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
-`advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
-`idd-advisory-wait.instructions.md`), and
-`<!-- idd-local-validation-evidence:` (grouped by embedded HEAD SHA
-mismatch, mirroring AW3-H, wired into `idd-local-validation-evidence`'s
-own `--record --apply` path -- see
-[this helper's doc](idd-helper-scripts.md#local-validation-evidence-helper)).
+active E or F gate. Six families ship this today, in two different
+mechanisms:
+
+- **Agent-followed instruction step** -- the calling phase's own
+  instructions direct the agent to run the minimize step by hand
+  (`node scripts/minimize-superseded-markers.mjs ... --apply`) after
+  posting: the claim chain
+  (`claimed-by:`/`unclaimed-by:`, grouped by
+  `supersedes:` lineage, `idd-claim.instructions.md`), `review-watermark:`/
+  `review-baseline:` (grouped by same claim-id,
+  `idd-review-snapshot.instructions.md`), and the `advisory-wait` family
+  (`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
+  `advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
+  `idd-advisory-wait.instructions.md`).
+- **Code-automated inside the helper itself** (#2754, #2755) -- no
+  agent-followed instruction step exists or is needed for these
+  three, since their grouping keys are purely mechanical:
+  `review-ack:` (grouped by embedded HEAD SHA mismatch) and
+  `copilot-unavailable:` (grouped by the same `claim:` value and a
+  strictly lower `attempt:` number -- a same-or-higher attempt is left
+  alone) are both hidden by
+  `post-idd-marker.mjs` itself right after its own new marker POSTs
+  successfully (`--apply --type review-ack` / `--type
+  copilot-unavailable`); `<!-- idd-local-validation-evidence:`
+  (also grouped by embedded HEAD SHA mismatch, mirroring AW3-H) is
+  hidden by `local-validation-evidence.mjs` itself right after its own
+  `--record --apply` POST succeeds -- see
+  [this helper's doc](idd-helper-scripts.md#local-validation-evidence-helper).
+  All three scan the target's other comments for same-family comments
+  the new one supersedes and reuse
+  `scripts/minimize-superseded-markers.mjs`'s `runMinimize` for the
+  actual mutation -- best-effort: any failure there (a permission
+  error, an unreadable comment list) is swallowed and never blocks or
+  retries the marker post that already succeeded (preventive; no
+  observed incident yet — #2788). This mechanism lives
+  inside the built `.mjs` helpers, so it only runs where a helper
+  runtime is configured (`vendored-node`, `package-manager`, or
+  `ephemeral-npx`); under `instructions-only` (or wherever the helper
+  is otherwise unavailable), an agent posts these markers' plain-text
+  bodies by hand instead, and no equivalent manual minimize step
+  exists yet for them the way the agent-followed instruction step
+  above already gives the claim chain / review-watermark-baseline /
+  advisory-wait families -- these three markers accumulate like an
+  `f4-only` family until a future track adds one.
+
 A family classified `f4-only` has
 no such wiring yet and follows the default F4-only timing above until a
 future track adds it -- concretely, the post-merge F4 batch means

@@ -769,12 +769,16 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       );
       return refs.map((entry) => String(entry.ref ?? ''));
     },
-    listWorkItemComments(number) {
+    listWorkItemComments(number, options) {
       const rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
         paginate: true,
+        ...(options?.timeoutMs !== undefined
+          ? { timeout: options.timeoutMs }
+          : {}),
       });
       return rows.map((row) => ({
         id: Number(row.id),
+        nodeId: String(row.node_id ?? ''),
         body: String(row.body ?? ''),
         createdAt: String(row.created_at ?? ''),
         updatedAt: String(row.updated_at ?? row.created_at ?? ''),
@@ -846,18 +850,21 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         throw error;
       }
     },
-    getChangeRequestHeadSha(number) {
-      return deps.ghText([
-        'pr',
-        'view',
-        String(number),
-        '-R',
-        `${owner}/${repo}`,
-        '--json',
-        'headRefOid',
-        '--jq',
-        '.headRefOid',
-      ]);
+    getChangeRequestHeadSha(number, options) {
+      return deps.ghText(
+        [
+          'pr',
+          'view',
+          String(number),
+          '-R',
+          `${owner}/${repo}`,
+          '--json',
+          'headRefOid',
+          '--jq',
+          '.headRefOid',
+        ],
+        options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {},
+      );
     },
     listRequiredChecks(number) {
       const args = [

@@ -37,6 +37,35 @@ function loadIddConfig(): unknown {
 // discover-readiness-check.mts's / ci-wait-policy.mts's identical note).
 const GH_TIMEOUT_MS = 30_000;
 
+// #2754 (caught by chatgpt-codex-connector review on PR #2788): same
+// self-containment constraint as the two constants above -- cannot import
+// gh-exec.mts's resolveGhApiHostname, so duplicate the same GHES-hostname
+// resolution logic locally. Without this, every `runGh` call below always
+// targets github.com even on a GitHub Enterprise Server host where
+// GITHUB_SERVER_URL names the GHES instance but GH_HOST is unset (`gh`
+// itself never reads GITHUB_SERVER_URL), so a GHES-hosted repository's
+// probe/mutate GraphQL calls would silently fail to resolve any node id --
+// exactly the risk `post-idd-marker.mts`'s new hide-at-post-time step
+// (#2754) introduced by calling `runMinimize` from inside a GitHub Actions
+// job, where GITHUB_SERVER_URL is always set by the runtime but GH_HOST is
+// not set by default.
+export function resolveGhHostnameArgs(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (env.GH_HOST?.trim()) {
+    return [];
+  }
+  const serverUrl = env.GITHUB_SERVER_URL?.trim();
+  if (!serverUrl) {
+    return [];
+  }
+  const host = serverUrl
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+  return host && host !== 'github.com' ? ['--hostname', host] : [];
+}
+
 const ALLOWED_CLASSIFIERS = new Set(['OUTDATED', 'RESOLVED']);
 const ALLOWED_FORMATS = new Set(['json', 'table']);
 const MINIMIZABLE_TYPENAMES = new Set([
@@ -103,6 +132,14 @@ interface MinimizeReport {
     unsupportedType: number;
     applied: number;
     failed: number;
+    /**
+     * Candidates left unprocessed because {@link runMinimize}'s optional
+     * `deadlineMs` budget ran out first (#2754). Optional -- and always
+     * initialized to `0` by `runMinimize` itself -- purely so existing
+     * fixtures elsewhere that widen `MinimizeReport` from a partial object
+     * literal (e.g. `computeExitCode`'s own tests) do not need updating.
+     */
+    deadlineSkipped?: number;
   };
   items: ReportItem[];
   trustedMarkerActors?: string[];
@@ -192,12 +229,44 @@ export function runMinimize({
   trustedSet,
   apply,
   allowUntrusted,
+  deadlineMs,
 }: {
   subjectIds: string[];
   classifier: string;
   trustedSet: Set<string>;
   apply: boolean;
   allowUntrusted: boolean;
+  /**
+   * Optional overall wall-clock budget in milliseconds for this whole pass
+   * (#2754, chatgpt-codex-connector review on PR #2788, three rounds).
+   * `probeSubject` and `applyMinimize` each bound a SINGLE `gh` call to
+   * `GH_TIMEOUT_MS` (30s) by default, but a caller chaining several
+   * subjects through this function has no cap on the pass as a whole: a
+   * transport outage can make every candidate individually time out in
+   * sequence, each costing up to 60s (both calls) before this function
+   * returns. Passing `deadlineMs` checks the budget (measured from this
+   * function's own entry) at TWO points per candidate: before starting a
+   * NEW candidate's own `probeSubject` (skipped for the very first
+   * candidate, so the pass always makes at least one attempt even when
+   * the budget is already exhausted at entry), and again immediately
+   * before `applyMinimize`, for every candidate including the first --
+   * closing the gap the first check alone left. Round 3 (this round)
+   * additionally THREADS the actual remaining budget into both calls'
+   * own `timeoutMs` (rather than leaving each bound to the flat
+   * `GH_TIMEOUT_MS` regardless of how little is actually left): a
+   * non-positive remainder is never passed through (gh-exec.mts and
+   * execFileSync both read `timeout: 0` as "no timeout", the opposite of
+   * "budget already exhausted") -- that one case (the always-exempt
+   * index-0 probe when `deadlineMs` is already exhausted at entry) falls
+   * back to the 30s default instead, which is also why the true worst
+   * case for a single unlucky candidate is still bounded by
+   * `deadlineMs + GH_TIMEOUT_MS`, not `deadlineMs` alone -- but no SECOND
+   * candidate can ever reach its own mutation once the budget is spent,
+   * and every other in-budget call is now capped far tighter than the
+   * flat constant in practice. Omit `deadlineMs` (the CLI entry point
+   * below does) to keep the pre-existing unbounded behavior.
+   */
+  deadlineMs?: number;
 }): MinimizeReport {
   const report: MinimizeReport = {
     mode: apply ? 'apply' : 'dry-run',
@@ -210,12 +279,55 @@ export function runMinimize({
       unsupportedType: 0,
       applied: 0,
       failed: 0,
+      deadlineSkipped: 0,
     },
     items: [],
   };
 
-  for (const subjectId of subjectIds) {
-    const probe = probeSubject(subjectId);
+  const startedAt = Date.now();
+  const remaining = (): number => (deadlineMs ?? 0) - (Date.now() - startedAt);
+  for (const [index, subjectId] of subjectIds.entries()) {
+    // #2754, copilot-pull-request-reviewer review on PR #2788 (round 6):
+    // read `remaining()` exactly ONCE per candidate and reuse that SAME
+    // value for both the skip decision and the timeout passed to
+    // probeSubject -- the entry check and the timeoutMs computation used
+    // to call `remaining()` (i.e. `Date.now()`) separately, a few lines
+    // apart; if the budget expired in that gap, a non-first candidate
+    // could still fall through to probeSubject with `undefined` (the 30s
+    // default) instead of being skipped, silently reopening the exact
+    // "runs for a full untouched GH_TIMEOUT_MS regardless of how little
+    // budget is left" gap round 5 closed for the common case.
+    const enteredRemaining = deadlineMs === undefined ? undefined : remaining();
+    if (
+      deadlineMs !== undefined &&
+      index > 0 &&
+      (enteredRemaining as number) <= 0
+    ) {
+      for (const remainingId of subjectIds.slice(index)) {
+        report.items.push({
+          subjectId: remainingId,
+          status: 'skipped',
+          reason: 'deadline-exceeded',
+        });
+      }
+      report.counts.deadlineSkipped =
+        (report.counts.deadlineSkipped ?? 0) + (subjectIds.length - index);
+      break;
+    }
+    // Past the check above, `enteredRemaining` is guaranteed > 0 for every
+    // index > 0 -- reused as-is, no second `remaining()` read. Index 0 is
+    // exempt from the skip (the pass always attempts at least one
+    // candidate) and can still be non-positive here; falling back to
+    // probeSubject's own default in that one case is deliberate, not a
+    // gap: never pass a non-positive number through (gh-exec.mts and
+    // execFileSync both read `timeout: 0` as "no timeout", the opposite of
+    // "budget already exhausted").
+    const probe = probeSubject(
+      subjectId,
+      enteredRemaining !== undefined && enteredRemaining > 0
+        ? enteredRemaining
+        : undefined,
+    );
     if (!probe.ok) {
       report.items.push({ subjectId, status: 'failed', reason: probe.reason });
       report.counts.failed += 1;
@@ -287,7 +399,47 @@ export function runMinimize({
       continue;
     }
 
-    const mutation = applyMinimize(subjectId, classifier);
+    // Second deadline check, immediately before the mutation call itself
+    // (#2754, chatgpt-codex-connector review on PR #2788): the entry check
+    // above only bounds how many candidates this pass STARTS probing --
+    // once a candidate is already in flight (including the very first,
+    // which the entry check always lets through), its own `probeSubject`
+    // call can still cost up to `GH_TIMEOUT_MS`. Without a check here too,
+    // that candidate would still reach `applyMinimize` and cost up to
+    // ANOTHER full `GH_TIMEOUT_MS`, so a single candidate's own probe+apply
+    // pair -- not just the between-candidates gap -- could blow well past
+    // `deadlineMs` before this pass ever returns. Checked for every index
+    // (including 0): unlike the entry check, this one never needs an
+    // exemption to guarantee forward progress, since the candidate's own
+    // probe has already run either way -- only the MUTATION is skipped.
+    //
+    // #2754, copilot-pull-request-reviewer review on PR #2788 (round 6):
+    // read `remaining()` exactly ONCE here and reuse that SAME value for
+    // both the skip decision and applyMinimize's own timeout -- round 5
+    // read it a second time a few lines below, so a budget that expired in
+    // that gap could still fall through to `undefined` (the 30s default)
+    // instead of being skipped, silently reopening the exact
+    // "applyMinimize costs up to another full GH_TIMEOUT_MS regardless of
+    // budget" gap this check exists to close.
+    const preApplyRemaining =
+      deadlineMs === undefined ? undefined : remaining();
+    if (deadlineMs !== undefined && (preApplyRemaining as number) <= 0) {
+      report.items.push({
+        subjectId,
+        url,
+        typename,
+        status: 'skipped',
+        reason: 'deadline-exceeded',
+      });
+      report.counts.deadlineSkipped = (report.counts.deadlineSkipped ?? 0) + 1;
+      continue;
+    }
+
+    // Past the check above, `preApplyRemaining` is guaranteed > 0 whenever
+    // `deadlineMs` is set (no index exemption here, unlike the probe
+    // check) -- reused as-is, no second `remaining()` read, so this never
+    // risks passing a non-positive timeout.
+    const mutation = applyMinimize(subjectId, classifier, preApplyRemaining);
     if (mutation.ok) {
       report.items.push({
         subjectId,
@@ -344,12 +496,17 @@ function isUnresolvableRestShapedId(
   );
 }
 
-export function probeSubject(subjectId: string): ProbeResult {
-  const result = runGh([
-    'api',
-    'graphql',
-    '-f',
-    `query=query($id:ID!){
+export function probeSubject(
+  subjectId: string,
+  timeoutMs?: number,
+): ProbeResult {
+  const result = runGh(
+    [
+      'api',
+      ...resolveGhHostnameArgs(),
+      'graphql',
+      '-f',
+      `query=query($id:ID!){
         node(id:$id){
           __typename
           ... on IssueComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
@@ -357,9 +514,11 @@ export function probeSubject(subjectId: string): ProbeResult {
           ... on PullRequestReviewComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
         }
       }`,
-    '-f',
-    `id=${subjectId}`,
-  ]);
+      '-f',
+      `id=${subjectId}`,
+    ],
+    timeoutMs,
+  );
   if (!result.ok) {
     if (isUnresolvableRestShapedId(subjectId, result.stderr)) {
       return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
@@ -421,12 +580,15 @@ export function probeSubject(subjectId: string): ProbeResult {
 export function applyMinimize(
   subjectId: string,
   classifier: string,
+  timeoutMs?: number,
 ): MutationResult {
-  const result = runGh([
-    'api',
-    'graphql',
-    '-f',
-    `query=mutation($id:ID!,$classifier:ReportedContentClassifiers!){
+  const result = runGh(
+    [
+      'api',
+      ...resolveGhHostnameArgs(),
+      'graphql',
+      '-f',
+      `query=mutation($id:ID!,$classifier:ReportedContentClassifiers!){
       minimizeComment(input:{subjectId:$id,classifier:$classifier}){
         minimizedComment{
           __typename
@@ -436,11 +598,13 @@ export function applyMinimize(
         }
       }
     }`,
-    '-f',
-    `id=${subjectId}`,
-    '-f',
-    `classifier=${classifier}`,
-  ]);
+      '-f',
+      `id=${subjectId}`,
+      '-f',
+      `classifier=${classifier}`,
+    ],
+    timeoutMs,
+  );
   if (!result.ok) {
     return {
       ok: false,
@@ -561,11 +725,11 @@ function printTable(report: MinimizeReport): void {
   }
 }
 
-function runGh(argv: string[]): GhResult {
+function runGh(argv: string[], timeoutMs: number = GH_TIMEOUT_MS): GhResult {
   try {
     const stdout = execFileSync('gh', argv, {
       encoding: 'utf8',
-      timeout: GH_TIMEOUT_MS,
+      timeout: timeoutMs,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return { ok: true, stdout };
