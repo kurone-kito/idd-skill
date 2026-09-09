@@ -631,14 +631,15 @@ chronologically and apply these rules:
      roles still satisfy the loose policy;
    - `forcedHandoff.mode` is `human-gated` (default `disabled`);
    - `oldAgentId` / `oldClaimId` / `branch` all match the active claim;
-   - when an open PR backs the active claim, the marker's
-     `contextScope` must be `issue-plus-pr` naming that PR via
-     `linkedPr`, unless the caller supplies `prFirstCommitAt` (PR
-     context, not marker evidence) and the handoff predates it — the
-     Part B allowance from issue #1058, which the merge write-gate opts
-     into but Resume routing never does (see
+   - when an open PR backs the active claim: an `issue-plus-pr`
+     marker's `linkedPr` must name that PR; only an `issue-only` marker
+     may instead rely on a caller-supplied `prFirstCommitAt` (PR
+     context, not marker evidence) predating the handoff — the Part B
+     allowance from issue #1058, which the merge write-gate opts into
+     but Resume routing never does (see
      [Forced-handoff strictness](../../docs/idd-design-rationale.md#forced-handoff-strictness-strict-resume-vs-lenient-relay-merge));
-     otherwise the marker is ignored.
+     every other combination, including a mismatched `linkedPr`, leaves
+     the marker ignored.
 
    When all hold, replace the active claim with the successor
    (`newAgentId` / `newClaimId`, same `branch`, `supersedes =
