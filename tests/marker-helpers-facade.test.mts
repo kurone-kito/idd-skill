@@ -128,9 +128,13 @@ test('buildMarkerHidePolicyMap throws on a duplicate label', () => {
 });
 
 // #2759 (chatgpt-codex-connector review): `ReadonlyMap<K, V>` is a
-// compile-time-only guard -- `Object.freeze` on a `Map` instance does not
-// stop `Map#set`/`#delete`/`#clear` at runtime, so this asserts the actual
-// exported object rejects mutation, not just its declared type.
+// compile-time-only guard, so this asserts the actual exported object
+// rejects mutation, not just its declared type. `MARKER_HIDE_POLICY` is a
+// closure-backed plain object exposing only the `ReadonlyMap` surface (see
+// `freezeMap` in marker-helpers.mts), so `set`/`delete`/`clear` are not
+// merely rejected -- they do not exist on it at all, and calling a
+// property that is `undefined` throws `TypeError` for that reason on its
+// own.
 test('MARKER_HIDE_POLICY rejects runtime mutation', () => {
   const mutable = direct.MARKER_HIDE_POLICY as unknown as Map<string, unknown>;
   const sizeBefore = direct.MARKER_HIDE_POLICY.size;
@@ -150,13 +154,14 @@ test('MARKER_HIDE_POLICY rejects runtime mutation', () => {
   );
 });
 
-// #2759 E10 self-critique: `Map#forEach`'s native implementation invokes the
-// callback with its own receiver as the third argument, so naively binding
-// `forEach` to the real underlying `Map` (as every other read method is
-// bound) would hand callers that mutable `Map` as `forEach`'s third
-// argument -- an escape hatch around the freeze above. Asserts the third
-// argument is the frozen lookup itself, not the raw map, and that trying to
-// mutate through it still throws.
+// #2759 E10 self-critique: an earlier `Proxy`-based implementation of
+// `freezeMap` bound `forEach` to the real underlying `Map`, whose native
+// implementation invokes the callback with its own receiver as the third
+// argument -- handing callers that mutable `Map` as `forEach`'s third
+// argument, an escape hatch around the freeze. The current closure-backed
+// implementation substitutes the frozen lookup itself for that argument.
+// Asserts the third argument is the frozen lookup, not a mutable map, and
+// that there is no mutating method to call through it.
 test('MARKER_HIDE_POLICY.forEach never exposes the underlying mutable map', () => {
   let sawThirdArg = false;
   direct.MARKER_HIDE_POLICY.forEach((_value, _key, mapArg) => {
@@ -173,4 +178,74 @@ test('MARKER_HIDE_POLICY.forEach never exposes the underlying mutable map', () =
     );
   });
   assert.ok(sawThirdArg, 'forEach must invoke its callback at least once');
+});
+
+// #2759 (chatgpt-codex-connector review, second round): an earlier
+// `Proxy`-based `freezeMap` forwarded a brand-new own-property assignment
+// straight to its underlying `Map` target (no `defineProperty`/`set` trap
+// intercepted it), so a caller could define
+// `MARKER_HIDE_POLICY.leak = function () { return this; }` and read it back
+// bound to the mutable target. The current closure-backed implementation is
+// a plain frozen object, so `Object.freeze` is fully effective against new
+// own-property definition -- this asserts that path stays closed.
+test('MARKER_HIDE_POLICY refuses reflective property injection', () => {
+  const mutable = direct.MARKER_HIDE_POLICY as unknown as Record<
+    string,
+    unknown
+  >;
+  // This test file is an ES module, which is always strict mode, so the
+  // assignment below throws directly rather than silently no-op'ing the
+  // way it would in a sloppy-mode caller.
+  assert.throws(() => {
+    mutable.leak = function (this: unknown) {
+      return this;
+    };
+  }, TypeError);
+  assert.strictEqual(
+    mutable.leak,
+    undefined,
+    'the injected property must never actually attach to the frozen map',
+  );
+  assert.throws(
+    () =>
+      Object.defineProperty(mutable, 'leak2', {
+        value: function (this: unknown) {
+          return this;
+        },
+        configurable: true,
+      }),
+    TypeError,
+  );
+});
+
+// #2759 (advisor review, third round): an earlier `freezeMap` implementation
+// bound *any* inherited function property read off the underlying `Map` to
+// that same mutable target, not just the methods it intended to expose.
+// `Object.prototype.valueOf` is one such property -- every object inherits
+// it, and it returns `this` -- so `MARKER_HIDE_POLICY.valueOf()` handed back
+// the raw, mutable `Map`, bypassing both the mutator denylist and
+// `Object.preventExtensions` from the two prior rounds. The current
+// closure-backed implementation has no `target` for `valueOf` (inherited
+// from `Object.prototype`) to be bound to: it returns the frozen lookup
+// itself, which is what this asserts, alongside `toString` staying a
+// harmless primitive rather than exposing anything mutable.
+test('MARKER_HIDE_POLICY does not leak the underlying map through inherited Object.prototype methods', () => {
+  const leaked = (
+    direct.MARKER_HIDE_POLICY as unknown as { valueOf(): unknown }
+  ).valueOf();
+  assert.strictEqual(
+    leaked,
+    direct.MARKER_HIDE_POLICY,
+    'valueOf() must return the frozen lookup itself, never a distinct mutable object',
+  );
+  assert.strictEqual(
+    typeof (leaked as unknown as Record<string, unknown>).set,
+    'undefined',
+    'whatever valueOf() returns must not expose a set() method',
+  );
+  assert.strictEqual(
+    typeof direct.MARKER_HIDE_POLICY.toString(),
+    'string',
+    'toString() must stay a harmless primitive, not expose the underlying map',
+  );
 });

@@ -583,48 +583,81 @@ const MARKER_HIDE_POLICY_ENTRIES: readonly MarkerHidePolicyEntry[] = [
 ];
 
 /**
- * Wraps `map` so every mutating call (`set`/`delete`/`clear`) throws instead
- * of silently succeeding. Unlike an array or a plain object, `Object.freeze`
- * on a `Map` instance does not stop `Map#set`/`#delete`/`#clear` -- those
- * mutate internal slots the freeze does not cover, so a `ReadonlyMap<K, V>`
- * type alone is a compile-time-only guard that a JS caller (or a TS call
- * site that casts around the type) can bypass at runtime. Read methods
- * (`get`/`has`/`keys`/`entries`/iteration/etc.) are passed through to the
- * real `Map`, bound to it rather than the proxy, since `Map.prototype`'s own
- * methods require a genuine `Map` internal slot to operate on. `forEach` is
- * special-cased rather than simply bound: `Map#forEach`'s native
- * implementation passes its *own receiver* as the callback's third
- * argument, so a plain bind would hand callers the real, mutable `target`
- * map as `forEach`'s third callback argument -- an escape hatch around the
- * freeze this function exists to enforce -- so this substitutes the
- * returned proxy itself for that argument instead (caught by
- * chatgpt-codex-connector review on PR #2759; the `forEach` escape found
- * during this fix's own E10 self-critique).
+ * Wraps `map` in a brand-new, closure-backed object exposing only the
+ * `ReadonlyMap<K, V>` surface -- no mutating method, and no reference to
+ * `map` ever reaches the returned object's own property graph. This
+ * function went through two narrower attempts first, both a `Proxy` over
+ * the real `Map`, before landing here; both attempts are recorded so the
+ * next reader does not retry them:
+ *
+ * 1. A `Proxy` whose `get` trap rejected `set`/`delete`/`clear` and bound
+ *    every other method to the real underlying `map` (`Map.prototype`'s
+ *    own methods require a genuine `Map` internal slot as `this`, and
+ *    `Object.freeze` on a `Map` instance does not stop `#set`/`#delete`/
+ *    `#clear` -- those mutate the `[[MapData]]` internal slot, not an
+ *    ordinary object property, so freezing the `Map` itself was never a
+ *    workable option). `forEach` needed special-casing even within this
+ *    approach: `Map#forEach`'s native implementation passes its *own
+ *    receiver* as the callback's third argument, so a plain bind would
+ *    hand callers the real, mutable map as that argument (caught by
+ *    chatgpt-codex-connector review on PR #2759; found during this fix's
+ *    own E10 self-critique).
+ * 2. Adding `Object.preventExtensions(map)` to close a further reflective
+ *    escape from attempt 1: a `Proxy` with no `defineProperty`/`set` trap
+ *    still forwards a brand-new own-property assignment straight to
+ *    `target`, so a caller could define `MARKER_HIDE_POLICY.leak =
+ *    function () { return this; }` and read it back through the generic
+ *    function-binding `get` path, which bound it to `target` and handed
+ *    back the raw, mutable map (caught by chatgpt-codex-connector review
+ *    on PR #2759, a second round).
+ *
+ * Both attempts still shared the same flaw: the generic function-binding
+ * path (`typeof value === 'function' ? value.bind(target) : value`) binds
+ * *any* inherited function property to `target`, not just the ones this
+ * function intended to expose. `Object.prototype.valueOf` is one such
+ * property -- it is a function, it is inherited by every `Map`, and it
+ * returns `this` -- so `MARKER_HIDE_POLICY.valueOf()` bound `valueOf` to
+ * `target` and simply handed back the raw, mutable map, and neither
+ * `preventExtensions` nor the `mutators` denylist touched it (caught by
+ * `advisor()` review during this fix's own verification pass, a third
+ * round). A denylist over inherited `Object.prototype` methods would be
+ * a fourth patch on the same mechanism -- every fix so far has been
+ * "enumerate what's dangerous," and each round found something the
+ * previous enumeration missed. This rewrite instead removes the
+ * mechanism the escapes have in common: there is no `target` for any
+ * trap or bind call to leak, because the returned object has no relation
+ * to `map` other than the closures below capturing it by reference. The
+ * eight members below are exactly `ReadonlyMap<K, V>`'s interface --
+ * `get`/`has`/`size`/`keys`/`values`/`entries`/`forEach`/
+ * `[Symbol.iterator]` -- so nothing else is reachable to bind or leak in
+ * the first place. `forEach` still substitutes the returned object for
+ * its own third callback argument, matching `Map#forEach`'s documented
+ * shape without the third-argument leak the earlier `Proxy` attempts had
+ * to special-case. `Object.freeze` on the returned object blocks adding
+ * new properties (the injection escape from attempt 2), since this is now
+ * a plain object, not a `Map` -- `Object.freeze` is fully effective here.
+ * The result deliberately does not satisfy `instanceof Map`; nothing in
+ * this codebase relies on that, and a lookup that only ever exposes
+ * `ReadonlyMap` behavior should not also claim to be a `Map` it isn't.
  */
 function freezeMap<K, V>(map: Map<K, V>): ReadonlyMap<K, V> {
-  const mutators = new Set(['set', 'delete', 'clear']);
-  const proxy: ReadonlyMap<K, V> = new Proxy(map, {
-    get(target, prop, _receiver) {
-      if (typeof prop === 'string' && mutators.has(prop)) {
-        return () => {
-          throw new TypeError(`this frozen map does not allow ${prop}()`);
-        };
-      }
-      if (prop === 'forEach') {
-        return (
-          callbackFn: (value: V, key: K, map: ReadonlyMap<K, V>) => void,
-          thisArg?: unknown,
-        ) => {
-          target.forEach((value, key) => {
-            callbackFn.call(thisArg, value, key, proxy);
-          });
-        };
-      }
-      const value = Reflect.get(target, prop, target);
-      return typeof value === 'function' ? value.bind(target) : value;
+  const readOnlyMap: ReadonlyMap<K, V> = {
+    get: (key) => map.get(key),
+    has: (key) => map.has(key),
+    get size() {
+      return map.size;
     },
-  }) as ReadonlyMap<K, V>;
-  return proxy;
+    keys: () => map.keys(),
+    values: () => map.values(),
+    entries: () => map.entries(),
+    forEach(callbackFn, thisArg) {
+      map.forEach((value, key) => {
+        callbackFn.call(thisArg, value, key, readOnlyMap);
+      });
+    },
+    [Symbol.iterator]: () => map.entries(),
+  };
+  return Object.freeze(readOnlyMap);
 }
 
 /**
@@ -659,7 +692,8 @@ export function buildMarkerHidePolicyMap(
  * matches `OPERATIONAL_MARKERS`' labels, so a future new marker family with
  * no entry here fails that test instead of silently drifting the way issue
  * #1705 did. See {@link buildMarkerHidePolicyMap} for the duplicate-label
- * guard and {@link freezeMap} for why this is a `Proxy`, not a plain `Map`.
+ * guard and {@link freezeMap} for why this is a closure-backed object
+ * exposing only the `ReadonlyMap<K, V>` surface, not a `Map` itself.
  */
 export const MARKER_HIDE_POLICY: ReadonlyMap<string, MarkerHidePolicyEntry> =
   buildMarkerHidePolicyMap(MARKER_HIDE_POLICY_ENTRIES);
