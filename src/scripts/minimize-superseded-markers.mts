@@ -287,10 +287,21 @@ export function runMinimize({
   const startedAt = Date.now();
   const remaining = (): number => (deadlineMs ?? 0) - (Date.now() - startedAt);
   for (const [index, subjectId] of subjectIds.entries()) {
+    // #2754, copilot-pull-request-reviewer review on PR #2788 (round 6):
+    // read `remaining()` exactly ONCE per candidate and reuse that SAME
+    // value for both the skip decision and the timeout passed to
+    // probeSubject -- the entry check and the timeoutMs computation used
+    // to call `remaining()` (i.e. `Date.now()`) separately, a few lines
+    // apart; if the budget expired in that gap, a non-first candidate
+    // could still fall through to probeSubject with `undefined` (the 30s
+    // default) instead of being skipped, silently reopening the exact
+    // "runs for a full untouched GH_TIMEOUT_MS regardless of how little
+    // budget is left" gap round 5 closed for the common case.
+    const enteredRemaining = deadlineMs === undefined ? undefined : remaining();
     if (
       deadlineMs !== undefined &&
       index > 0 &&
-      Date.now() - startedAt >= deadlineMs
+      (enteredRemaining as number) <= 0
     ) {
       for (const remainingId of subjectIds.slice(index)) {
         report.items.push({
@@ -303,21 +314,19 @@ export function runMinimize({
         (report.counts.deadlineSkipped ?? 0) + (subjectIds.length - index);
       break;
     }
-    // #2754, chatgpt-codex-connector review on PR #2788 (round 5): thread
-    // the REMAINING budget into probeSubject itself, not just the entry
-    // check above -- otherwise a candidate let through by the entry check
-    // (including the always-exempt index 0) could still let its own probe
-    // run for a full untouched `GH_TIMEOUT_MS` regardless of how little
-    // budget is actually left. `r > 0` guards the one case that check
-    // cannot rule out (index 0 when `deadlineMs` is already exhausted at
-    // entry): never pass a non-positive number here (gh-exec.mts and
+    // Past the check above, `enteredRemaining` is guaranteed > 0 for every
+    // index > 0 -- reused as-is, no second `remaining()` read. Index 0 is
+    // exempt from the skip (the pass always attempts at least one
+    // candidate) and can still be non-positive here; falling back to
+    // probeSubject's own default in that one case is deliberate, not a
+    // gap: never pass a non-positive number through (gh-exec.mts and
     // execFileSync both read `timeout: 0` as "no timeout", the opposite of
-    // "budget already exhausted") -- fall back to probeSubject's own
-    // default instead.
-    const probeR = deadlineMs === undefined ? undefined : remaining();
+    // "budget already exhausted").
     const probe = probeSubject(
       subjectId,
-      probeR !== undefined && probeR > 0 ? probeR : undefined,
+      enteredRemaining !== undefined && enteredRemaining > 0
+        ? enteredRemaining
+        : undefined,
     );
     if (!probe.ok) {
       report.items.push({ subjectId, status: 'failed', reason: probe.reason });
@@ -403,7 +412,18 @@ export function runMinimize({
     // (including 0): unlike the entry check, this one never needs an
     // exemption to guarantee forward progress, since the candidate's own
     // probe has already run either way -- only the MUTATION is skipped.
-    if (deadlineMs !== undefined && Date.now() - startedAt >= deadlineMs) {
+    //
+    // #2754, copilot-pull-request-reviewer review on PR #2788 (round 6):
+    // read `remaining()` exactly ONCE here and reuse that SAME value for
+    // both the skip decision and applyMinimize's own timeout -- round 5
+    // read it a second time a few lines below, so a budget that expired in
+    // that gap could still fall through to `undefined` (the 30s default)
+    // instead of being skipped, silently reopening the exact
+    // "applyMinimize costs up to another full GH_TIMEOUT_MS regardless of
+    // budget" gap this check exists to close.
+    const preApplyRemaining =
+      deadlineMs === undefined ? undefined : remaining();
+    if (deadlineMs !== undefined && (preApplyRemaining as number) <= 0) {
       report.items.push({
         subjectId,
         url,
@@ -415,16 +435,11 @@ export function runMinimize({
       continue;
     }
 
-    // #2754, chatgpt-codex-connector review on PR #2788 (round 5): thread
-    // the remaining budget into applyMinimize's own `gh` call too -- the
-    // check just above guarantees `remaining() > 0` whenever `deadlineMs`
-    // is set, so this never risks passing a non-positive timeout.
-    const applyR = deadlineMs === undefined ? undefined : remaining();
-    const mutation = applyMinimize(
-      subjectId,
-      classifier,
-      applyR !== undefined && applyR > 0 ? applyR : undefined,
-    );
+    // Past the check above, `preApplyRemaining` is guaranteed > 0 whenever
+    // `deadlineMs` is set (no index exemption here, unlike the probe
+    // check) -- reused as-is, no second `remaining()` read, so this never
+    // risks passing a non-positive timeout.
+    const mutation = applyMinimize(subjectId, classifier, preApplyRemaining);
     if (mutation.ok) {
       report.items.push({
         subjectId,
