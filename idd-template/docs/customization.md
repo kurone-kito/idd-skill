@@ -892,7 +892,9 @@ may apply — do not rely on that as a mitigation.
 
 The idd-skill source repository (`kurone-kito/idd-skill`, distinct from
 your own repository below) guards against this with
-`.github/workflows/strip-untrusted-labels.yml`: a same-event
+`.github/workflows/strip-untrusted-labels.yml`
+(<https://github.com/kurone-kito/idd-skill/blob/main/.github/workflows/strip-untrusted-labels.yml>):
+a same-event
 `issues: labeled` / `pull_request_target: labeled` handler that removes
 a reserved label the instant a configured untrusted actor applies it.
 Two paths produce this file for your own repository, below.
