@@ -208,7 +208,9 @@ Before continuing to B2, verify all of the following:
   `main`.
 - `git worktree list` includes the new sibling worktree path.
 - The agent's current working directory is the new sibling worktree
-  path, not the primary worktree.
+  path, not the primary worktree; a launch-workspace-bound file-tool
+  harness (Grok Build observed) needs this absolute path, not
+  `cd`/`pwd`.
 
 If any check fails, the B1 worktree-creation contract has been
 violated: stop, post a hold note describing which check failed, and do
@@ -220,10 +222,9 @@ The optional local `_idd-worktree-guard.sh` hook (enabled via
 `worktreeGuard.enabled: true`) automates part of this self-check by
 refusing a commit/push from the primary worktree while HEAD matches an
 implementation-branch pattern (default `issue/*`, `roadmap-audit/*`).
-By itself it does **not** catch a session that skips B1 entirely and
-commits directly on the base branch — set the separate
-`worktreeGuard.refuseBaseBranchCommits: true` opt-in (#2801) to also
-refuse that case.
+It does **not** catch skipping B1 and committing on the base
+branch — set `worktreeGuard.refuseBaseBranchCommits: true` (#2801) to
+also refuse that case.
 
 If WorkTrunk reports its `Cannot change directory — shell integration
 installed but not active` diagnostic, re-verify the current working
