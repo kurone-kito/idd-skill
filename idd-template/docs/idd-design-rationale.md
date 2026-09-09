@@ -399,10 +399,13 @@ race the round-6 finding raised.
 **Candidate files (if ever pursued)**, named as they land once imported
 (the `idd-template/` prefix drops from this document's own path, and
 `src/scripts/*.mts` never ships — an adopter's `vendored-node` profile
-gets the generated `.mjs` copy instead; other profiles resolve the
-same logic through the installed package rather than a local file; the
-repository-local `docs/idd-design-rationale.md` mirror keeps the
-source-tree paths, since those genuinely exist there):
+gets the generated `.mjs` copy instead; `package-manager`/`ephemeral-npx`
+resolve the same logic through the installed package rather than a
+local file; `instructions-only` has no helper runtime at all, so this
+deferred work would need direct instruction-level parsing rules there
+instead of a helper file. The repository-local
+`docs/idd-design-rationale.md` mirror keeps the source-tree paths,
+since those genuinely exist there):
 
 - `.github/instructions/idd-claim.instructions.md` (Claim-state
   parsing rules, marker format)
