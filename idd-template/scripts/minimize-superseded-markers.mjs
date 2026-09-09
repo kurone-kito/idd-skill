@@ -253,6 +253,30 @@ export function runMinimize({
       });
       continue;
     }
+    // Second deadline check, immediately before the mutation call itself
+    // (#2754, chatgpt-codex-connector review on PR #2788): the entry check
+    // above only bounds how many candidates this pass STARTS probing --
+    // once a candidate is already in flight (including the very first,
+    // which the entry check always lets through), its own `probeSubject`
+    // call can still cost up to `GH_TIMEOUT_MS`. Without a check here too,
+    // that candidate would still reach `applyMinimize` and cost up to
+    // ANOTHER full `GH_TIMEOUT_MS`, so a single candidate's own probe+apply
+    // pair -- not just the between-candidates gap -- could blow well past
+    // `deadlineMs` before this pass ever returns. Checked for every index
+    // (including 0): unlike the entry check, this one never needs an
+    // exemption to guarantee forward progress, since the candidate's own
+    // probe has already run either way -- only the MUTATION is skipped.
+    if (deadlineMs !== undefined && Date.now() - startedAt >= deadlineMs) {
+      report.items.push({
+        subjectId,
+        url,
+        typename,
+        status: 'skipped',
+        reason: 'deadline-exceeded',
+      });
+      report.counts.deadlineSkipped = (report.counts.deadlineSkipped ?? 0) + 1;
+      continue;
+    }
     const mutation = applyMinimize(subjectId, classifier);
     if (mutation.ok) {
       report.items.push({

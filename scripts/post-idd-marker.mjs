@@ -655,17 +655,20 @@ export function findSupersededCopilotUnavailableSubjects(comments, newClaimId) {
   return subjects;
 }
 /**
- * Overall time budget (#2754, chatgpt-codex-connector review on PR #2788)
- * for {@link hideSupersededPostTimeMarkers}'s best-effort mutation pass.
- * `minimize-superseded-markers.mts`'s `runGh` bounds each individual `gh`
- * call to `GH_TIMEOUT_MS` (30s), but that alone does not bound the PASS: a
- * PR with several superseded markers can chain multiple 30s-timeout probes
- * and mutations back to back with no overall cap, stalling the caller's
- * envelope output for a multiple of 30s after the marker it is hiding *for*
- * has already posted successfully. `runMinimize`'s optional `deadlineMs`
- * stops issuing new `gh` calls once this budget is exhausted (always
- * finishing the first candidate it starts) and marks the remainder
- * `skipped` / `deadline-exceeded` instead of leaving the pass unbounded.
+ * Overall time budget (#2754, chatgpt-codex-connector review on PR #2788,
+ * two rounds) for {@link hideSupersededPostTimeMarkers}'s best-effort
+ * mutation pass. `minimize-superseded-markers.mts`'s `runGh` bounds each
+ * individual `gh` call to `GH_TIMEOUT_MS` (30s), but that alone does not
+ * bound the PASS: a PR with several superseded markers can chain multiple
+ * 30s-timeout probes and mutations back to back with no overall cap,
+ * stalling the caller's envelope output well beyond this budget after the
+ * marker it is hiding *for* has already posted successfully. `runMinimize`'s
+ * optional `deadlineMs` checks this budget at two points per candidate
+ * (before starting a new one, and again before mutating it) so no SECOND
+ * candidate can ever reach its own mutation once the budget is spent --
+ * see `runMinimize`'s own `deadlineMs` doc comment for the exact bound
+ * (`deadlineMs + GH_TIMEOUT_MS` worst case for the one candidate already
+ * in flight when the budget runs out, not `deadlineMs` alone).
  */
 const HIDE_STEP_DEADLINE_MS = 45_000;
 /**

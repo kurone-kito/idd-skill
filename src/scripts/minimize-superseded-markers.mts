@@ -238,18 +238,30 @@ export function runMinimize({
   allowUntrusted: boolean;
   /**
    * Optional overall wall-clock budget in milliseconds for this whole pass
-   * (#2754, chatgpt-codex-connector review on PR #2788). `probeSubject` and
-   * `applyMinimize` each bound a SINGLE `gh` call to `GH_TIMEOUT_MS` (30s),
-   * but a caller chaining several subjects through this function has no
-   * cap on the pass as a whole: a transport outage can make every
-   * candidate individually time out in sequence, each adding another 30s
-   * (or 60s, once a candidate reaches `applyMinimize`) before this function
-   * returns. Passing `deadlineMs` stops issuing new `gh` calls once the
-   * budget (measured from this function's own entry) is exhausted --
-   * always finishing whichever candidate is already in flight -- and marks
-   * every remaining subject `skipped` / `deadline-exceeded` instead of
-   * probing or mutating it. Omit it (the CLI entry point below does) to
-   * keep the pre-existing unbounded behavior.
+   * (#2754, chatgpt-codex-connector review on PR #2788, two rounds).
+   * `probeSubject` and `applyMinimize` each bound a SINGLE `gh` call to
+   * `GH_TIMEOUT_MS` (30s), but a caller chaining several subjects through
+   * this function has no cap on the pass as a whole: a transport outage
+   * can make every candidate individually time out in sequence, each
+   * costing up to 60s (both calls) before this function returns. Passing
+   * `deadlineMs` checks the budget (measured from this function's own
+   * entry) at TWO points per candidate: before starting a NEW candidate's
+   * own `probeSubject` (skipped for the very first candidate, so the pass
+   * always makes at least one attempt even when the budget is already
+   * exhausted at entry), and again immediately before `applyMinimize`,
+   * for every candidate including the first -- closing the gap the first
+   * check alone left (an in-flight candidate's own probe+apply pair could
+   * still cost a full extra `GH_TIMEOUT_MS` beyond the budget, and a
+   * second candidate starting just under the wire could add nearly
+   * another full pair on top of that). Either check failing marks that
+   * subject (and, at the entry check, every remaining one) `skipped` /
+   * `deadline-exceeded` instead of probing or mutating it. The
+   * `applyMinimize` skip cannot undo the probe already spent reaching it,
+   * so the true worst case for a single unlucky candidate is bounded by
+   * `deadlineMs + GH_TIMEOUT_MS`, not `deadlineMs` alone -- but no SECOND
+   * candidate can ever reach its own mutation once the budget is spent.
+   * Omit `deadlineMs` (the CLI entry point below does) to keep the
+   * pre-existing unbounded behavior.
    */
   deadlineMs?: number;
 }): MinimizeReport {
@@ -356,6 +368,31 @@ export function runMinimize({
         status: 'would-apply',
         author,
       });
+      continue;
+    }
+
+    // Second deadline check, immediately before the mutation call itself
+    // (#2754, chatgpt-codex-connector review on PR #2788): the entry check
+    // above only bounds how many candidates this pass STARTS probing --
+    // once a candidate is already in flight (including the very first,
+    // which the entry check always lets through), its own `probeSubject`
+    // call can still cost up to `GH_TIMEOUT_MS`. Without a check here too,
+    // that candidate would still reach `applyMinimize` and cost up to
+    // ANOTHER full `GH_TIMEOUT_MS`, so a single candidate's own probe+apply
+    // pair -- not just the between-candidates gap -- could blow well past
+    // `deadlineMs` before this pass ever returns. Checked for every index
+    // (including 0): unlike the entry check, this one never needs an
+    // exemption to guarantee forward progress, since the candidate's own
+    // probe has already run either way -- only the MUTATION is skipped.
+    if (deadlineMs !== undefined && Date.now() - startedAt >= deadlineMs) {
+      report.items.push({
+        subjectId,
+        url,
+        typename,
+        status: 'skipped',
+        reason: 'deadline-exceeded',
+      });
+      report.counts.deadlineSkipped = (report.counts.deadlineSkipped ?? 0) + 1;
       continue;
     }
 

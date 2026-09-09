@@ -621,3 +621,76 @@ test('runMinimize processes every subject normally when deadlineMs is omitted (p
     restore();
   }
 });
+
+/**
+ * Stub `gh` for an `apply: true` deadline test where the mutation call
+ * itself must never happen (#2754, chatgpt-codex-connector review round 2
+ * on PR #2788): answers a plain probe (`graphql` with no `classifier=`
+ * `-f` value) the same way {@link withInstantEligibleProbeGhStub} does,
+ * but FAILS LOUDLY on any call that carries `classifier=` -- proving a
+ * skipped-before-mutate candidate never reaches `applyMinimize`'s own `gh`
+ * call, not just that the reported status happens to read `skipped`.
+ */
+function withProbeOnlyGhStub(): () => void {
+  return stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const fValues = [];
+for (let i = 0; i < args.length; i += 1) {
+  if (args[i] === '-f') fValues.push(args[i + 1]);
+}
+const idEntry = fValues.find((v) => v.indexOf('id=') === 0);
+const classifierEntry = fValues.find((v) => v.indexOf('classifier=') === 0);
+const id = idEntry ? idEntry.slice('id='.length) : '';
+if (args[0] === 'api' && args[1] === 'graphql' && !classifierEntry) {
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-' + id, isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation (mutation attempted after deadline): ' + args.join(' '));
+process.exit(1);
+`,
+  );
+}
+
+test('runMinimize never reaches applyMinimize for a candidate whose OWN probe already exhausted the deadline (#2754, chatgpt-codex-connector review round 2)', () => {
+  // deadlineMs: 0 means the budget is exhausted the instant ANY wall-clock
+  // time has passed -- true by the time the (real, subprocess-spawning)
+  // probe call for this single candidate returns. The entry check exempts
+  // the very first candidate (so the probe itself is always allowed to
+  // run), but the SEPARATE pre-mutate check must still catch it here,
+  // since without that second check this candidate -- already probed
+  // eligible -- would proceed straight to a real mutation call.
+  const restore = withProbeOnlyGhStub();
+  try {
+    const report = runMinimize({
+      subjectIds: ['IC_a'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: true,
+      allowUntrusted: false,
+      deadlineMs: 0,
+    });
+    assert.deepEqual(
+      report.items.map((item) => ({
+        subjectId: item.subjectId,
+        status: item.status,
+        reason: item.reason,
+      })),
+      [{ subjectId: 'IC_a', status: 'skipped', reason: 'deadline-exceeded' }],
+    );
+    assert.equal(report.counts.eligible, 1);
+    assert.equal(report.counts.deadlineSkipped, 1);
+    assert.equal(report.counts.applied, 0);
+    assert.equal(report.counts.failed, 0);
+  } finally {
+    restore();
+  }
+});
+
+// A generous (or omitted) deadlineMs still reaching a real, successful
+// applyMinimize mutation is already covered end-to-end by
+// tests/post-idd-marker.test.mts's hide-step integration tests, which
+// invoke this same runMinimize call site with deadlineMs:
+// HIDE_STEP_DEADLINE_MS (45s, never exhausted in-test) and assert the
+// mutation actually ran via readMutatedSubjectIds.
