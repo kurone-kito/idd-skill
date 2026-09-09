@@ -476,7 +476,7 @@ HEAD than Step 1 saw.
 
 --apply --type review-ack / --type copilot-unavailable (#2754): after the
 new marker POSTs successfully, this command also hides (classifier
-OUTDATED, via minimize-superseded-markers.mts) prior same-family comments
+OUTDATED, via minimize-superseded-markers.mjs) prior same-family comments
 it supersedes -- a review-ack: whose embedded HEAD SHA differs from the one
 just posted, or a copilot-unavailable: carrying the same claim: value.
 --trusted-marker-logins gates that hide step's trusted-author check too

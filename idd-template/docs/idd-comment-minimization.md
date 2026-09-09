@@ -156,14 +156,14 @@ today, in two different mechanisms:
   since their grouping keys are purely mechanical: `review-ack:`
   (grouped by embedded HEAD SHA mismatch) and `copilot-unavailable:`
   (grouped by the same `claim:` value, differing `attempt:` numbers).
-  `post-idd-marker.mts --apply --type review-ack` /
+  `node scripts/post-idd-marker.mjs --apply --type review-ack` /
   `--type copilot-unavailable` scans the target's other comments right
   after its own new marker POSTs successfully, finds same-family
   comments the new one supersedes, and reuses
-  `minimize-superseded-markers.mts`'s `runMinimize` for the actual
-  mutation -- best-effort: any failure there (a permission error, an
-  unreadable comment list) is swallowed and never blocks or retries the
-  marker post that already succeeded.
+  `scripts/minimize-superseded-markers.mjs`'s `runMinimize` for the
+  actual mutation -- best-effort: any failure there (a permission
+  error, an unreadable comment list) is swallowed and never blocks or
+  retries the marker post that already succeeded.
 
 A family classified `f4-only` has
 no such wiring yet and follows the default F4-only timing above until a

@@ -567,7 +567,7 @@ HEAD than Step 1 saw.
 
 --apply --type review-ack / --type copilot-unavailable (#2754): after the
 new marker POSTs successfully, this command also hides (classifier
-OUTDATED, via minimize-superseded-markers.mts) prior same-family comments
+OUTDATED, via minimize-superseded-markers.mjs) prior same-family comments
 it supersedes -- a review-ack: whose embedded HEAD SHA differs from the one
 just posted, or a copilot-unavailable: carrying the same claim: value.
 --trusted-marker-logins gates that hide step's trusted-author check too
@@ -678,11 +678,14 @@ function runReviewActivitySnapshot(
 // Hide-at-post-time (#2754): review-ack / copilot-unavailable
 // ---------------------------------------------------------------------------
 
-/** One comment shaped for the candidate scan below -- REST `id` (to exclude
- * the marker this call just posted) plus the GraphQL `nodeId`
- * `minimizeComment` needs. Narrowed from {@link ProviderComment} (which
- * carries `nodeId` as an OPTIONAL field, #2754) down to the two fields this
- * module's pure finder functions actually read. */
+/** One comment shaped for the candidate scan below -- REST `id` (read by the
+ * caller's own `comment.id < postedCommentId` ordering filter, never by the
+ * finder functions themselves), the GraphQL `nodeId` `minimizeComment`
+ * needs, and `body` to parse. Narrowed from {@link ProviderComment} (which
+ * carries `nodeId` as an OPTIONAL field, #2754) down to the three fields
+ * this module actually reads -- `findSupersededReviewAckSubjects` /
+ * `findSupersededCopilotUnavailableSubjects` themselves only read `nodeId`
+ * and `body`. */
 export interface MarkerCandidateComment {
   id: number;
   nodeId: string;
