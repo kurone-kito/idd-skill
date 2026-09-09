@@ -903,8 +903,8 @@ The `idd-spec-audit` companion is read-only: it audits the installed
 instruction corpus for semantic drift. When the issue-authoring
 companion is also installed, it routes every finding back through
 that flow for revision; otherwise it routes findings through the
-installation's normal manual issue-filing process instead (see
-`skills/idd-spec-audit/SKILL.md`'s Scope section). It never edits
+installation's normal manual issue-filing process instead (see the
+installed companion's own `SKILL.md`, Scope section). It never edits
 files or mutates issues on its own.
 
 ### Optional — enable the local worktree guard
