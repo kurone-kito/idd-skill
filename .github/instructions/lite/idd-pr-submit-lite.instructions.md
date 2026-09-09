@@ -411,17 +411,20 @@ than the run it supersedes. Once both have completed, the later
      read-only) to classify every instance and print the exact `gh run
      rerun` command for the rerun-eligible one, run that command
      verbatim, then resume step 6's polling for this one check.
-   - If a maintainer has posted a valid external-check waiver for this
-     exact HEAD: rerun the `idd-advisory-convergence` check once (`gh
-     run rerun --failed <run-id>`, using the run id from `checks[]`'s
-     entry for it) so it re-evaluates and reflects the waiver, then
-     resume step 6's normal polling for this one check instead of
-     reading `requiredChecks.status` a single time immediately — a
-     fresh rerun is asynchronous and commonly still `pending` right
-     after it starts. If it settles to `success`, go to step 7. If
-     step 6's own timeout elapses while it is still non-passing, stop
-     per the condition above — do not rerun a second time.
-   - Absent a valid waiver for this HEAD: exit CI-wait now and proceed
-     directly to E1. This never relaxes the
-     merge gate: the check stays required, and F2 re-verifies it
-     independently before merge.
+   - If a maintainer has posted a valid **and effective** external-check
+     waiver for this exact HEAD (effective per
+     `idd-pr-submit.instructions.md` D4: `deadline.passed` is true or
+     `terminal.state` is `COPILOT_UNAVAILABLE`): rerun the
+     `idd-advisory-convergence` check once (`gh run rerun --failed
+     <run-id>`, using the run id from `checks[]`'s entry for it) so it
+     re-evaluates and reflects the waiver, then resume step 6's normal
+     polling for this one check instead of reading
+     `requiredChecks.status` a single time immediately — a fresh rerun
+     is asynchronous and commonly still `pending` right after it
+     starts. If it settles to `success`, go to step 7. If step 6's own
+     timeout elapses while it is still non-passing, stop per the
+     condition above — do not rerun a second time.
+   - Absent an effective waiver for this HEAD: exit CI-wait now and
+     proceed directly to E1. This never relaxes the merge gate: the
+     check stays required, and F2 re-verifies it independently before
+     merge.
