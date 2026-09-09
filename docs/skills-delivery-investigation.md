@@ -75,13 +75,12 @@ were not evaluated by the prior note.
   identical routing-table-plus-on-demand-Read mechanism Claude Code
   already has — this is the single fact that most shapes the
   recommendation below.
-- **Existing skill precedent** — `skills/issue-authoring/` and
-  `skills/idd-spec-audit/` are the native skill bundles this
-  repository ships, each mirrored byte-identically to its own
+- **Existing skill precedent** — the native skill bundles this
+  repository ships include `skills/issue-authoring/` and
+  `skills/idd-spec-audit/`, each mirrored byte-identically to its own
   `.claude/skills/` counterpart by `node scripts/sync-docs.mjs --apply`
   via `mode: "exact"` entries in `audit/sync-manifest.json`'s
-  `syncPairs` (four for `issue-authoring`, two for `idd-spec-audit`),
-  drift-guarded by `node scripts/audit-docs.mjs --check`.
+  `syncPairs`, drift-guarded by `node scripts/audit-docs.mjs --check`.
   `issue-authoring`'s own contract
   ([`docs/issue-authoring-skill.md`](issue-authoring-skill.md)) states
   explicitly that the native bundle and the execution instructions must

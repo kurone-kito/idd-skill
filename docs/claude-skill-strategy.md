@@ -22,12 +22,11 @@ sync-design, and safety analysis this note does not cover.
 
 **Current state**: Claude Code enters the loop through `CLAUDE.md`,
 which routes to `.github/instructions/idd-overview-core.instructions.md`
-and the phase files via the routing table. The repository ships two
-native skill bundles (`skills/issue-authoring/` and
-`skills/idd-spec-audit/`) and, since the dogfooding work for each, a
+and the phase files via the routing table. The repository's native
+skill bundles under `skills/` include `skills/issue-authoring/` and
+`skills/idd-spec-audit/`, and, since the dogfooding work for each, a
 generated mirror of their Markdown files (byte-identical per file)
-under `.claude/skills/issue-authoring/` and
-`.claude/skills/idd-spec-audit/` respectively, kept in sync by
+lives under the matching `.claude/skills/` path, kept in sync by
 `node scripts/sync-docs.mjs --apply` and drift-guarded by
 `node scripts/audit-docs.mjs --check`.
 

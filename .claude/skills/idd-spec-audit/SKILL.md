@@ -158,9 +158,12 @@ re-derive it.
   discard true positives that one pass framed differently from the
   others.
 - **Read-only, always.** This skill never edits an in-scope file and
-  never opens, closes, comments on, or labels a GitHub issue. Every
-  finding routes back through the normal issue-authoring flow (see the
-  `issue-authoring` skill) for a human or a later session to act on.
+  never opens, closes, comments on, or labels a GitHub issue. Route
+  every finding back through the normal issue-authoring flow (see the
+  `issue-authoring` skill) for a human or a later session to act on;
+  when the issue-authoring companion is not installed (Scope's
+  conditional-target note), route findings through this
+  installation's normal manual issue-filing process instead.
 - Write the aggregated result using
   [references/report-template.md](references/report-template.md).
 
