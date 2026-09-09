@@ -2427,6 +2427,74 @@ if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && arg
   }
 });
 
+test('--apply --type copilot-unavailable also skips the whole hide pass when the live PR HEAD no longer matches the just-posted marker (#2754, round 4, chatgpt-codex-connector review)', () => {
+  // Same race as the review-ack test above, but for copilot-unavailable:
+  // a delayed, stale-HEAD same-claim poster (e.g. a stalled pre-handoff
+  // session finally completing its retry) must not treat an earlier,
+  // CURRENT-HEAD same-claim comment as "superseded" purely because
+  // findSupersededCopilotUnavailableSubjects matches on claim: equality
+  // alone, with no HEAD comparison of its own. The live-HEAD gate, now
+  // unconditional for both types, closes that gap by never letting a
+  // stale poster run its scan/hide judgment at all.
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+function out(s) { fs.writeSync(1, s); process.exit(0); }
+function fail(s) { fs.writeSync(2, s); process.exit(1); }
+if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && args.includes('.headRefOid')) {
+  out('${OTHER_SHA}\\n');
+} else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
+  fs.readFileSync(0, 'utf8');
+  out(JSON.stringify({ id: 9560, html_url: 'https://github.com/o/r/issues/1#issuecomment-9560' }));
+} else {
+  fail('unexpected gh invocation: ' + args.join(' '));
+}
+`,
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'copilot-unavailable',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--claim-id',
+        CLAIM_A,
+        '--head-sha',
+        SHA,
+        '--attempt',
+        '1',
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'copilot-unavailable',
+      target: 'pr',
+      number: 1200,
+      commentId: 9560,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9560',
+    });
+  } finally {
+    restore();
+  }
+});
+
 test('--apply --type copilot-unavailable hides a prior same-claim comment, spares a foreign-claim one, and is idempotent on an already-minimized candidate (#2754)', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-hide-at-post-copilot-unavailable-'),
@@ -2735,15 +2803,22 @@ process.exit(1);
 });
 
 test('hideSupersededPostTimeMarkers enforces its remaining budget on the comments listing itself, not just on runMinimize (#2754, round 3)', () => {
-  // The stubbed gh process sleeps a full real second before answering the
-  // --paginate call; a correctly-threaded ~150ms timeoutMs must kill it
-  // long before that, proving the budget bounds this READ, not merely the
-  // later mutation pass (which round 2 already covered).
+  // The stubbed gh process answers the live-HEAD re-check (now unconditional
+  // for both marker types, round 4) instantly with a matching SHA, then
+  // sleeps a full real second before answering the --paginate call; a
+  // correctly-threaded ~150ms remainder must kill the LATTER call long
+  // before that, proving the budget bounds this READ, not merely the later
+  // mutation pass (which round 2 already covered).
   const restore = stubExecutable(
     'gh',
     `const { execSync } = require('node:child_process');
+const fs = require('node:fs');
 const args = process.argv.slice(2);
-function fail(s) { process.stderr.write(s); process.exit(1); }
+function fail(s) { fs.writeSync(2, s); process.exit(1); }
+if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && args.includes('.headRefOid')) {
+  fs.writeSync(1, '${SHA}\\n');
+  process.exit(0);
+}
 if (args[0] === 'api' && typeof args[1] === 'string' && args[1].indexOf('/comments') !== -1 && args.indexOf('--paginate') !== -1) {
   execSync('sleep 1');
   process.stdout.write('');
@@ -2757,7 +2832,7 @@ fail('unexpected gh invocation: ' + args.join(' '));
     assert.doesNotThrow(() => {
       hideSupersededPostTimeMarkers(
         'copilot-unavailable',
-        { 'claim-id': CLAIM_A },
+        { 'claim-id': CLAIM_A, 'head-sha': SHA },
         'o',
         'r',
         1200,
