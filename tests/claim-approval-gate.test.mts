@@ -354,6 +354,138 @@ test('event-freshness label approval fails closed when label events are unavaila
   assert.equal(findCheck(result, 'ambiguity_guard')?.result, 'fail');
 });
 
+// #2762: the same freshness anchor also needs to see a `renamed` timeline
+// event and a GraphQL `userContentEdits` timestamp -- the real shapes
+// GitHub emits for a title/body edit, neither of which the pre-#2762
+// anchor recognized.
+
+test('event-freshness label approval becomes stale after a renamed (title) event (#2762)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'custom:ready' }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: 'custom:ready',
+          labelFreshnessMode: 'event-freshness',
+        },
+      },
+      timeline: [
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T09:00:00Z',
+          label: { name: 'custom:ready' },
+        },
+        // The real shape GitHub emits for a title edit: no `changes`
+        // payload at all.
+        { event: 'renamed', created_at: '2026-05-10T10:00:00Z' },
+      ],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, 'approval-missing');
+  assert.match(
+    findCheck(result, 'ready_label_present')?.evidence ?? '',
+    /last applied at 2026-05-10T09:00:00Z; freshness anchor is 2026-05-10T10:00:00Z/,
+  );
+});
+
+test('event-freshness label approval becomes stale via a GraphQL userContentEdits timestamp when the REST timeline has no edited event (#2762)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'custom:ready' }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: 'custom:ready',
+          labelFreshnessMode: 'event-freshness',
+        },
+      },
+      timeline: [
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T09:00:00Z',
+          label: { name: 'custom:ready' },
+        },
+      ],
+      userContentEdits: ['2026-05-10T10:00:00Z'],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, 'approval-missing');
+  assert.match(
+    findCheck(result, 'ready_label_present')?.evidence ?? '',
+    /last applied at 2026-05-10T09:00:00Z; freshness anchor is 2026-05-10T10:00:00Z/,
+  );
+});
+
+test('a failed userContentEdits read makes freshness undetermined, never falling back to created_at (#2762)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'custom:ready' }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: 'custom:ready',
+          labelFreshnessMode: 'event-freshness',
+        },
+      },
+      timeline: BASE_TIMELINE,
+      // The CLI's explicit failure sentinel for a failed GraphQL read --
+      // not an omitted field, which normalizes to known-empty instead.
+      userContentEdits: null,
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, 'freshness-undetermined');
+  assert.equal(findCheck(result, 'ambiguity_guard')?.result, 'fail');
+});
+
+test('an omitted userContentEdits input is backward-compatible: known-empty, not unknown (#2762)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'custom:ready' }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: 'custom:ready',
+          labelFreshnessMode: 'event-freshness',
+        },
+      },
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T12:00:00Z',
+          label: { name: 'custom:ready' },
+        },
+      ],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+      }),
+    },
+  );
+  assert.equal(result.approved, true);
+  assert.equal(result.reason, 'ready-label-present');
+});
+
 test('ready comment must be exact or standalone line and fresh', () => {
   const result = evaluateClaimApprovalGate(
     {

@@ -1916,3 +1916,70 @@ test('a throwing timeline fetcher fails open: the candidate stays selectable (Co
   assert.equal(result.orphans.length, 1);
   assert.equal(result.filtered.triage_verdict_rejected.length, 0);
 });
+
+// #2762: parity coverage for the same anchor extension already tested in
+// discover-readiness-check.test.mts -- this file's triage-verdict call
+// site takes the identical two-fetcher shape.
+
+test('a stale marker becomes ready again via userContentEdits when the REST timeline has no edited event (#2738 fixture, #2762)', async () => {
+  const issues = [triageVerdictIssue()];
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictRejectionComment('duplicate', '2026-08-05T00:00:00Z'),
+    ],
+    fetchTimelineByIssueNumber: () => [
+      { event: 'commented', created_at: '2026-08-06T00:00:00Z' },
+      { event: 'labeled', created_at: '2026-08-07T00:00:00Z' },
+    ],
+    fetchUserContentEditsByIssueNumber: () => ['2026-08-12T00:00:00Z'],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 0);
+});
+
+// E2 critique (PR #2836): the positive case above only proves a LATER
+// userContentEdits signal clears staleness -- also prove the negative:
+// an EARLIER one must not, end to end through this file's own pipeline.
+
+test('a userContentEdits timestamp before the rejection leaves the marker current (negative case, #2762)', async () => {
+  const issues = [triageVerdictIssue()];
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictRejectionComment('duplicate', '2026-08-10T00:00:00Z'),
+    ],
+    fetchTimelineByIssueNumber: () => [],
+    // The body edit landed BEFORE the rejection -- the marker is still
+    // current.
+    fetchUserContentEditsByIssueNumber: () => ['2026-08-05T00:00:00Z'],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 1);
+  assert.equal(
+    result.filtered.triage_verdict_rejected[0]?.details,
+    'duplicate',
+  );
+});
+
+test('a throwing userContentEdits fetcher fails open: the candidate stays selectable, never falling back to createdAt (#2762)', async () => {
+  const issues = [triageVerdictIssue()];
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictRejectionComment('duplicate', '2026-08-10T00:00:00Z'),
+    ],
+    fetchTimelineByIssueNumber: () => [],
+    fetchUserContentEditsByIssueNumber: () => {
+      throw new Error('transient GitHub GraphQL failure');
+    },
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 0);
+});

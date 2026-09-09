@@ -282,6 +282,17 @@ interface FilterOrphanIssuesOptions {
    * when omitted, which only widens the staleness window (never narrows
    * it), so an absent fetcher cannot itself cause a wrongful skip. */
   fetchTimelineByIssueNumber?: (issueNumber: number) => unknown[];
+  /** #2762: per-candidate GraphQL `userContentEdits.editedAt` fetch for the
+   * same staleness anchor -- the only place GitHub records a body edit (a
+   * REST timeline `edited` event with a `changes.body` payload is never
+   * emitted for a real edit). Defaults to "no timestamps" when omitted,
+   * which only widens the staleness window like
+   * {@link fetchTimelineByIssueNumber} above, never narrows it. Called
+   * inside the same try/catch as the timeline fetch below, so a failure
+   * here degrades the whole anchor to `null` ("unknown") rather than
+   * silently falling back to a partial computation -- never the bare
+   * `created_at` anchor #2762 fixes. */
+  fetchUserContentEditsByIssueNumber?: (issueNumber: number) => unknown[];
   /** #2243: trust-actor allowlist for the triage-verdict marker scan, same
    * semantics as `idd-claim.instructions.md`'s trusted marker actors. */
   trustedMarkerLogins?: string[];
@@ -909,6 +920,10 @@ export async function filterOrphanIssues(
       typeof options.fetchTimelineByIssueNumber === 'function'
         ? options.fetchTimelineByIssueNumber
         : () => [];
+    const fetchUserContentEdits =
+      typeof options.fetchUserContentEditsByIssueNumber === 'function'
+        ? options.fetchUserContentEditsByIssueNumber
+        : () => [];
     const trustedMarkerLogins = options.trustedMarkerLogins;
     const markerPrefix =
       typeof options.markerPrefix === 'string'
@@ -933,10 +948,17 @@ export async function filterOrphanIssues(
       }
       let editedAt: string | null = null;
       if (record?.markerOutcome) {
+        // Both fetches evaluate inside this one try block (#2762): a
+        // failure from EITHER the timeline or the userContentEdits read
+        // degrades the whole anchor to null ("unknown") rather than
+        // computing a partial result from whichever fetch happened to
+        // succeed -- a partial result could still collapse to the bare
+        // `created_at` anchor this issue fixes.
         try {
           editedAt = resolveLatestSubstantiveIssueEditAt(
             issueCreatedAtByNumber.get(orphan.number),
             fetchTimeline(orphan.number),
+            fetchUserContentEdits(orphan.number),
           );
         } catch {
           editedAt = null;
@@ -1082,6 +1104,8 @@ async function runCli() {
       fetchIssueCommentsForTriageVerdict(port, issueNumber),
     fetchTimelineByIssueNumber: (issueNumber) =>
       port.getWorkItemTimeline(issueNumber),
+    fetchUserContentEditsByIssueNumber: (issueNumber) =>
+      port.getWorkItemUserContentEditTimestamps(issueNumber),
     trustedMarkerLogins,
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
@@ -1278,7 +1302,10 @@ configured, this check is a no-op and makes no extra GitHub API call.
 Staleness-checked (fail-closed toward NOT excluding): the marker only
 excludes when the rejection comment is at or after the issue's latest
 substantive (title/body) edit, so an issue legitimately improved after
-being rejected stays selectable.
+being rejected stays selectable -- a title edit is a timeline "renamed"
+event, and a body edit is a GraphQL "userContentEdits.editedAt" value
+(#2762); a failed GraphQL read degrades the anchor to unknown rather than
+falling back to created_at.
 
 --with-claim-state (opt-in) annotates each candidate in "orphans" and
 "routed_to_human" with active-claim eligibility, exactly mirroring

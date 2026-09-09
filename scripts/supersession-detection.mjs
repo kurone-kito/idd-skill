@@ -333,18 +333,26 @@ export function parseSuitabilityTriageVerdictMarker(
 }
 /**
  * Staleness anchor for a suitability-rejection marker (#2243): the latest
- * GitHub `created_at` among the issue's own creation and every timeline
- * `edited` event that changed the title or body. Mirrors
- * `claim-approval-gate.mts`'s private `resolveLatestSubstantiveEditAt` --
- * duplicated rather than imported to keep this module's dependency-light,
- * I/O-free kernel contract intact (see the file header). Returns `null`
- * only when neither `issueCreatedAt` nor any qualifying event yields a
- * parseable timestamp -- callers must treat that as "unknown", never as
- * "always stale" or "never stale".
+ * GitHub `created_at` among the issue's own creation, every timeline
+ * `renamed` event (a title edit -- GitHub emits this event shape for a
+ * title change, never an `edited` event with a `changes.title` payload,
+ * #2762), every timeline `edited` event that changed the title or body
+ * (kept for defensive/forward compatibility; not an observed live shape
+ * as of #2762's investigation, see the worked evidence in that issue), and
+ * every timestamp in `bodyEditTimestamps` (GraphQL `Issue.userContentEdits
+ * { editedAt }` values -- the only place GitHub records a body edit,
+ * #2762). Mirrors `claim-approval-gate.mts`'s private
+ * `resolveLatestSubstantiveEditAt` -- duplicated rather than imported to
+ * keep this module's dependency-light, I/O-free kernel contract intact
+ * (see the file header). Returns `null` only when neither
+ * `issueCreatedAt` nor any qualifying event/timestamp yields a parseable
+ * value -- callers must treat that as "unknown", never as "always stale"
+ * or "never stale".
  */
 export function resolveLatestSubstantiveIssueEditAt(
   issueCreatedAt,
   timelineEvents,
+  bodyEditTimestamps,
 ) {
   const candidates = [];
   if (typeof issueCreatedAt === 'string' && issueCreatedAt) {
@@ -353,14 +361,23 @@ export function resolveLatestSubstantiveIssueEditAt(
   if (Array.isArray(timelineEvents)) {
     for (const raw of timelineEvents) {
       const event = raw ?? {};
-      if (String(event.event ?? '') !== 'edited') {
-        continue;
-      }
-      if (!event.changes?.title && !event.changes?.body) {
+      const eventType = String(event.event ?? '');
+      const isRenamed = eventType === 'renamed';
+      const isEditedTitleOrBody =
+        eventType === 'edited' &&
+        Boolean(event.changes?.title || event.changes?.body);
+      if (!isRenamed && !isEditedTitleOrBody) {
         continue;
       }
       if (typeof event.created_at === 'string' && event.created_at) {
         candidates.push(event.created_at);
+      }
+    }
+  }
+  if (Array.isArray(bodyEditTimestamps)) {
+    for (const raw of bodyEditTimestamps) {
+      if (typeof raw === 'string' && raw) {
+        candidates.push(raw);
       }
     }
   }
