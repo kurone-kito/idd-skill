@@ -31,6 +31,9 @@
   },
   "issueScope": "roadmap-first",
   "orphanFirstPolicy": "none",
+  "issueAuthoring": {
+    "journalIssue": "kurone-kito/idd-skill#2674"
+  },
   "advisoryWait": {
     "convergenceScope": "idd-claimed",
     "convergenceDeadline": "PT9H",

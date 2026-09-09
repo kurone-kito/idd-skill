@@ -2324,6 +2324,33 @@ test('policy schema rejects issueAuthoring authoringStaleAge non-duration string
   );
 });
 
+test('policy schema accepts issueAuthoring journalIssue', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    journalIssue: 'kurone-kito/idd-skill#2674',
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects issueAuthoring journalIssue without an owner/repo#number shape', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    journalIssue: 'not-a-valid-ref',
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('issueAuthoring.journalIssue')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema rejects issueAuthoring unexpected extra keys', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

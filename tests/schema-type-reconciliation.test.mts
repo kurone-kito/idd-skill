@@ -255,6 +255,7 @@ interface PolicyConfigFile {
     maxClarificationRounds?: number;
     authoringLabelName?: string;
     authoringStaleAge?: string;
+    journalIssue?: string;
   };
   autopilotSuitability?: { floor?: 1 | 2 | 3 | 4 | 5; enabled?: boolean };
   worktreeGuard?: { enabled?: boolean; branchPatterns?: readonly string[] };
@@ -1223,6 +1224,7 @@ const policyConfigFixture = {
     maxClarificationRounds: 3,
     authoringLabelName: 'status:authoring',
     authoringStaleAge: 'PT4H',
+    journalIssue: 'kurone-kito/idd-skill#2674',
   },
   autopilotSuitability: { floor: 3, enabled: true },
   worktreeGuard: {
