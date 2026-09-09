@@ -384,7 +384,8 @@ hold.
 
 **`suppressedCount` unvalidated**: `#1511` is `itemCount`-only; reroll
 never zeroed it in `kurone-kito/lints-config` PRs `#243`/`#245`
-(2026-08-10/11). PR #2054 fixes it.
+(2026-08-10/11). The review-ack escape hatch below (PR `#2054`, issue
+`#2050`) covers it; the reroll itself still does not zero the count.
 
 **Already-handled escape hatch**: when the blocking suppressed
 finding(s) have already been read and handled, a reroll is
@@ -450,8 +451,10 @@ still needs a valid waiver), and F2/F3's `advisoryWait.copilotUnavailable`/
 > merging.
 
 **Waived**: rerun the existing `idd-advisory-convergence` run (never
-`workflow_dispatch` — see Rerun mechanics below); both fields recompute
-every call, so an expired/invalid marker reverts automatically.
+`workflow_dispatch` — see
+[rerun mechanics](idd-ci.instructions.md#rerun-mechanics)); both fields
+recompute every call, so an expired/invalid marker reverts
+automatically.
 
 **Sustained outage (`#2320`)**: when `providerOutage.declarationTarget`
 is configured and holds an active declaration for `idd-advisory-convergence`,
