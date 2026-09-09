@@ -863,6 +863,78 @@ test('still fails autonomous completion when a past-investigation cue is unrelat
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+// --- #2763: a Groom-pass-recorded resolved decision must not fail
+// autonomous_completion -- discover-viability-gate.mts's EXTERNAL_
+// COORDINATION_PATTERN previously had no exemption for the exact
+// "Maintainer decision (<provenance>): <resolution>" line
+// docs/idd-workflow.md's Groom section tells an operator to write, and
+// suitability-triage.mts's Check 7 already recognizes -----------------
+
+test('passes autonomous completion on the exact Groom-pass resolved-decision reproduction (#2763)', () => {
+  const result = evaluateA4Viability({
+    number: 62,
+    title: 'apply Groom hearing outcome',
+    body:
+      'Maintainer decision (Groom hearing, 2026-09-09): proceed.\n\n' +
+      '## Acceptance criteria\n\n' +
+      '- [ ] Add the change and a regression test.\n\n' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion on a bare "maintainer decision" mention with no resolved-decision shape (#2763)', () => {
+  const result = evaluateA4Viability({
+    number: 63,
+    title: 'wire external approval gate',
+    body:
+      'This issue needs a maintainer decision before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('a quoted example of the resolved-decision line keeps its current (passing) result (#2763)', () => {
+  // Already passed before #2763 via the existing quoted-example exclusion
+  // (isInsideQuotedExample); this pins that the new resolved-decision
+  // exclusion does not change the outcome for a genuinely cited example.
+  const result = evaluateA4Viability({
+    number: 64,
+    title: 'fix quotation masking in checkVerifiability framing-verb scan',
+    body:
+      'For reference: "Maintainer decision (Groom hearing, 2026-09-05): ' +
+      'choose A" is quoted from another issue. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when a distinct genuine blocker follows a resolved decision (#2763)', () => {
+  // Adversarial case: excluding the resolved-decision occurrence must not
+  // also swallow a SEPARATE, still-live blocker elsewhere in the body.
+  const result = evaluateA4Viability({
+    number: 65,
+    title: 'wire external approval gate',
+    body:
+      'Maintainer decision (Groom hearing, 2026-09-09): proceed with the ' +
+      'first half. Waiting for maintainer sign-off on the second half is ' +
+      'still required before this can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('evaluateDiscoverViability fails closed when a lookup aborts', async () => {
   // A non-404 gh failure (auth / rate-limit / network) propagates out of
   // loadIssue instead of being swallowed into a silent issue_not_found.
