@@ -337,9 +337,10 @@ condition below accounts for this.
   with `gh pr checks <pr-number> --watch --required` (works on a
   fine-grained PAT; `gh run watch <run-id> --exit-status` does not) —
   **but only once** [Required-check discovery](#required-check-discovery)
-  has resolved `noRequiredChecksConfigured: false`. When it has
-  resolved `noRequiredChecksConfigured: true`, `--watch --required`
-  returns immediately, non-blocking, printing a "no required checks
+  has resolved `noRequiredChecksConfigured: false`. When Required-check
+  discovery has instead resolved `noRequiredChecksConfigured: true`,
+  `--watch --required` returns immediately, non-blocking, printing a
+  "no required checks
   reported" message even while real CI is still running — block with
   the bare `gh pr checks <pr-number> --watch` (no `--required`)
   instead. That bare form still returns once every visible check
