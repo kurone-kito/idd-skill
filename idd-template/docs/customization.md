@@ -1407,7 +1407,7 @@ non-ready work as explicit outcomes, not to silently drop it.
 | `blocked-by-human` | `status:blocked-by-human` (if available)           | Keep the issue open with a hold comment, remove it from the current candidate set, and continue scanning autonomous candidates. Applying the recommended label requires the same A4.5 mutation-policy customization as the rows below; the default is the diagnostic comment alone (optionally the transient `triage:blocked-by-human` label).         |
 | `duplicate`        | `duplicate`, optional `triage:duplicate`           | Default is read-only triage (comment/link and continue). Only allow close/extra labels after the repository customizes A4.5 mutation policy.                                                                                                                                                                                                           |
 | `out-of-scope`     | optional `triage:out-of-scope`                     | Default is read-only triage (comment-and-stop for that issue). Close/label mutations require explicit A4.5 mutation-policy customization.                                                                                                                                                                                                              |
-| `invalid`          | optional `triage:invalid`                          | Default is read-only triage and immediate stop for `invalid` outcomes. Close/label mutations require explicit A4.5 mutation-policy updates.                                                                                                                                                                                                            |
+| `invalid`          | optional `triage:invalid`                          | Default is read-only triage and immediate stop for a fresh `invalid` outcome; an already-reported `invalid` (see below) excludes the candidate and continues instead. Close/label mutations require explicit A4.5 mutation-policy updates.                                                                                                             |
 
 Every non-`ready` row shares one default: the diagnostic comment plus
 an optional transient `triage:{outcome}` label is the ceiling; any
@@ -1428,7 +1428,16 @@ default.
 
 When confidence is low, keep the issue open and route via a concise
 comment. "Uncertain means open" is the safe default, and selection
-continues with the next candidate unless the outcome is `invalid`.
+continues with the next candidate; a genuinely fresh `invalid` outcome
+stops the pass instead, though an already-reported `invalid` (a trusted
+`existingRejection` on this exact candidate, confirmed by a fresh Check 3
+failure) narrows that halt to excluding just that one candidate — see
+[`idd-suitability.instructions.md`](../.github/instructions/idd-suitability.instructions.md#failure-outcomes)'s
+Failure Outcomes table for both cases. This carve-out responds to a
+concrete incident: a 2026-09-08 false-positive `invalid` verdict
+(kurone-kito/idd-skill#2738) that the unconditional halt would have
+forced every later concurrent session to re-report, resolved by a
+2026-09-09 maintainer hearing (kurone-kito/idd-skill#2747).
 
 The configured ready label from `approvalSignals.readyLabelName`
 (default: `idd:ready`) is an approval signal, not an operational

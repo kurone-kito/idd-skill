@@ -169,17 +169,19 @@ A4 Step 2 over the remaining survivors to pick the next candidate (see
 `idd-discover.instructions.md`'s A4 Step 2 for the ranking, including
 its `autopilotSuitability.enabled: false` fallback). A0-T explicit-target
 runs: the candidate set is only the verified target — stop without
-fallback. Stop when the survivor set is empty, or immediately on an
-`invalid` outcome (trust/safety concerns require human review):
+fallback. Stop when the survivor set is empty, or on a fresh `invalid`
+outcome (trust/safety concerns require human review):
 
-| Outcome            | Meaning                        | Next Steps (A4: try next; A0-T: stop) |
-| ------------------ | ------------------------------ | ------------------------------------- |
-| `unclear`          | Issue needs clarification      | Report, try next candidate            |
-| `needs-decision`   | Requires maintainer decision   | Report, try next candidate            |
-| `blocked-by-human` | Requires human coordination    | Report, try next candidate            |
-| `duplicate`        | Duplicate or superseded work   | Report, try next candidate            |
-| `out-of-scope`     | Outside repository scope       | Report, try next candidate            |
-| `invalid`          | Trust/safety concern or defect | Report and stop (do not retry)        |
+<!-- dprint-ignore-start -->
+| Outcome | Meaning | Next Steps (A4: try next; A0-T: stop) |
+| --- | --- | --- |
+| `unclear` | Issue needs clarification | Report, try next candidate |
+| `needs-decision` | Requires maintainer decision | Report, try next candidate |
+| `blocked-by-human` | Requires human coordination | Report, try next candidate |
+| `duplicate` | Duplicate or superseded work | Report, try next candidate |
+| `out-of-scope` | Outside repository scope | Report, try next candidate |
+| `invalid` | Trust/safety concern or defect | Fresh: report, stop (do not retry). Reconfirmed (`existingRejection`: `outcome: invalid`): exclude, post nothing, loop |
+<!-- dprint-ignore-end -->
 
 ## Mutation Policy and Coordination Rule
 
@@ -270,7 +272,9 @@ Loop: Rerun A4 Step 2 over Candidates to pick the next candidate
     → FAIL → Classify as unclear → Report, remove from Candidates, loop
   → Run Check 3 (Trust/Safety)
     → PASS → Run Check 4
-    → FAIL → Classify as invalid → Report and STOP (do not retry)
+    → FAIL → Classify as invalid → existingRejection.outcome is
+      invalid, reconfirmed: remove from Candidates, loop; else Report
+      and STOP
   → Run Check 4 (Duplicates)
     → PASS → Run Check 5
     → FAIL → Classify as duplicate → Report, remove from Candidates, loop
