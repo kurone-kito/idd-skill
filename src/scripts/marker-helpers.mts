@@ -449,6 +449,275 @@ export const OPERATIONAL_MARKERS: readonly OperationalMarker[] = Object.freeze(
   OPERATIONAL_MARKER_ENTRIES.map((marker) => Object.freeze(marker)),
 );
 
+/**
+ * Hide-at-post-time classification for one `OPERATIONAL_MARKERS` entry,
+ * keyed by that entry's `label` (#2751/#2752). `wired` marker families
+ * already have a documented pre-merge hide-at-post-time supersession rule
+ * (see `docs/idd-comment-minimization.md`'s "## Timing" section); `f4-only`
+ * families have no such pre-merge wiring, so the post-merge F4 cleanup
+ * batch is their only cleanup path today -- concretely,
+ * `audit-pr-cleanup.mts`'s generic `operationalMarkerPrefix` match against
+ * comments on the merged PR, which recognizes the full
+ * `OPERATIONAL_MARKERS` set directly -- the running code never parses
+ * `docs/idd-comment-minimization.md`, so its own dry run is unaffected by
+ * that document's "## Candidate Rules" heading being stale (that list
+ * predates several `f4-only`-classified families, including the three
+ * this pass added). Only the manual GraphQL fallback, which has no code
+ * behind it and uses that list as its literal operating procedure, is
+ * actually narrowed by the gap (tracked as issue #2778; caught by
+ * chatgpt-codex-connector review on PR #2759, a fresh round after this
+ * fix's own docs correction introduced the overclaim that both paths
+ * were affected); `excluded` families are deliberately kept out of the
+ * `wired` pre-merge grouping,
+ * each for the reason recorded on its own entry below. This
+ * classification alone does not guarantee an F4 cleanup
+ * path either: `<!-- forced-handoff:` carries an explicit F4 skip
+ * (`evaluateOperationalComment` hardcodes it for that one prefix), and
+ * `<!-- activation-nonce:` is issue-scoped, so F4's PR-scoped
+ * `audit-pr-cleanup.mts` structurally never even sees that comment --
+ * both permanently outside F4's reach, for different reasons. The
+ * remaining `excluded` entries carry no explicit exemption; whether F4's
+ * generic rule actually reaches each of them depends on where that family
+ * is posted -- a gap their own reasons argue against, flagged for a
+ * follow-up rather than fully audited or fixed by this classification
+ * pass.
+ */
+export type MarkerHidePolicyKind = 'wired' | 'f4-only' | 'excluded';
+
+/** One {@link MARKER_HIDE_POLICY} row: see {@link MarkerHidePolicyKind}. */
+export interface MarkerHidePolicyEntry {
+  readonly label: string;
+  readonly policy: MarkerHidePolicyKind;
+  readonly reason: string;
+}
+
+const MARKER_HIDE_POLICY_ENTRIES: readonly MarkerHidePolicyEntry[] = [
+  {
+    label: '<!-- claimed-by:',
+    policy: 'wired',
+    reason:
+      'Claim chain, grouped by supersedes: claim-id lineage (idd-claim.instructions.md).',
+  },
+  {
+    label: '<!-- unclaimed-by:',
+    policy: 'wired',
+    reason:
+      'Claim chain, grouped by supersedes: claim-id lineage (idd-claim.instructions.md).',
+  },
+  {
+    label: '<!-- activation-nonce:',
+    policy: 'excluded',
+    reason:
+      "No hide-at-post-time wiring yet: idd-claim.instructions.md's takeover " +
+      'minimization only targets claimed-by/unclaimed-by/heartbeat comments, ' +
+      'not activation-nonce (caught by Copilot review on PR #2759). Also ' +
+      'issue-scoped, not PR-scoped (posted via `post-idd-marker --type ' +
+      'activation-nonce --target issue`), so unlike an ordinary f4-only ' +
+      "family it has no F4 cleanup path either: audit-pr-cleanup.mts's " +
+      'GraphQL fetch is bound to the merged PR number and never sees a ' +
+      'comment on the separate issue (caught by chatgpt-codex-connector ' +
+      'review, second round).',
+  },
+  {
+    label: '<!-- review-watermark:',
+    policy: 'wired',
+    reason: 'Grouped by same claim-id (idd-review-snapshot.instructions.md).',
+  },
+  {
+    label: '<!-- review-baseline:',
+    policy: 'wired',
+    reason: 'Grouped by same claim-id (idd-review-snapshot.instructions.md).',
+  },
+  {
+    label: 'advisory-wait:',
+    policy: 'wired',
+    reason:
+      'Advisory-wait family, grouped by embedded HEAD SHA mismatch, AW3-H (idd-advisory-wait.instructions.md).',
+  },
+  {
+    label: 'advisory-wait-recovery:',
+    policy: 'wired',
+    reason:
+      'Advisory-wait family, grouped by embedded HEAD SHA mismatch, AW3-H (idd-advisory-wait.instructions.md).',
+  },
+  {
+    label: '<!-- advisory-wait:',
+    policy: 'wired',
+    reason:
+      'Advisory-wait family (HTML-comment form), grouped by embedded HEAD SHA mismatch, AW3-H (idd-advisory-wait.instructions.md).',
+  },
+  {
+    label: 'advisory-reroll:',
+    policy: 'wired',
+    reason:
+      'Advisory-wait family, grouped by embedded HEAD SHA mismatch, AW3-H (idd-advisory-wait.instructions.md).',
+  },
+  {
+    label: 'review-ack:',
+    policy: 'f4-only',
+    reason:
+      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 2 (#2754).',
+  },
+  {
+    label: 'copilot-unavailable:',
+    policy: 'f4-only',
+    reason:
+      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 2 (#2754).',
+  },
+  {
+    label: '<!-- forced-handoff:',
+    policy: 'excluded',
+    reason:
+      'Permanent maintainer-authority audit record of a claim transfer. The only excluded family with a matching F4 exemption today: audit-pr-cleanup.mts hardcodes a skip for this prefix.',
+  },
+  {
+    label: '<!-- idd-external-check-waiver:',
+    policy: 'excluded',
+    reason:
+      'Maintainer-authority marker; a correct grouping key needs the embedded check: selector, and hiding a still-relevant waiver for a different check would hide live authorization (roadmap #2751 Background).',
+  },
+  {
+    label: '<!-- idd-provider-outage-declaration:',
+    policy: 'excluded',
+    reason:
+      'Issue-scoped, cross-PR declare/advance protocol with no clean single-PR grouping key (roadmap #2751 Background).',
+  },
+  {
+    label: '<!-- idd-provider-outage-advanced:',
+    policy: 'excluded',
+    reason:
+      'Issue-scoped, cross-PR declare/advance protocol with no clean single-PR grouping key (roadmap #2751 Background).',
+  },
+  {
+    label: '<!-- idd-provider-outage-park:',
+    policy: 'excluded',
+    reason:
+      'Supersession would need to track claim lineage the way the claim chain does, but the marker carries no supersedes: reference back to it -- a same-claim-only rule risks leaving a park marker for an already-superseded claim visible, while a lineage-aware rule risks the reverse; needs its own design pass (roadmap #2751 Background).',
+  },
+  {
+    label: '<!-- idd-local-validation-evidence:',
+    policy: 'f4-only',
+    reason:
+      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 3 (#2755).',
+  },
+];
+
+/**
+ * Wraps `map` in a brand-new, closure-backed object exposing only the
+ * `ReadonlyMap<K, V>` surface -- no mutating method, and no reference to
+ * `map` ever reaches the returned object's own property graph. This
+ * function went through two narrower attempts first, both a `Proxy` over
+ * the real `Map`, before landing here; both attempts are recorded so the
+ * next reader does not retry them:
+ *
+ * 1. A `Proxy` whose `get` trap rejected `set`/`delete`/`clear` and bound
+ *    every other method to the real underlying `map` (`Map.prototype`'s
+ *    own methods require a genuine `Map` internal slot as `this`, and
+ *    `Object.freeze` on a `Map` instance does not stop `#set`/`#delete`/
+ *    `#clear` -- those mutate the `[[MapData]]` internal slot, not an
+ *    ordinary object property, so freezing the `Map` itself was never a
+ *    workable option). `forEach` needed special-casing even within this
+ *    approach: `Map#forEach`'s native implementation passes its *own
+ *    receiver* as the callback's third argument, so a plain bind would
+ *    hand callers the real, mutable map as that argument (caught by
+ *    chatgpt-codex-connector review on PR #2759; found during this fix's
+ *    own E10 self-critique).
+ * 2. Adding `Object.preventExtensions(map)` to close a further reflective
+ *    escape from attempt 1: a `Proxy` with no `defineProperty`/`set` trap
+ *    still forwards a brand-new own-property assignment straight to
+ *    `target`, so a caller could define `MARKER_HIDE_POLICY.leak =
+ *    function () { return this; }` and read it back through the generic
+ *    function-binding `get` path, which bound it to `target` and handed
+ *    back the raw, mutable map (caught by chatgpt-codex-connector review
+ *    on PR #2759, a second round).
+ *
+ * Both attempts still shared the same flaw: the generic function-binding
+ * path (`typeof value === 'function' ? value.bind(target) : value`) binds
+ * *any* inherited function property to `target`, not just the ones this
+ * function intended to expose. `Object.prototype.valueOf` is one such
+ * property -- it is a function, it is inherited by every `Map`, and it
+ * returns `this` -- so `MARKER_HIDE_POLICY.valueOf()` bound `valueOf` to
+ * `target` and simply handed back the raw, mutable map, and neither
+ * `preventExtensions` nor the `mutators` denylist touched it (caught by
+ * `advisor()` review during this fix's own verification pass, a third
+ * round). A denylist over inherited `Object.prototype` methods would be
+ * a fourth patch on the same mechanism -- every fix so far has been
+ * "enumerate what's dangerous," and each round found something the
+ * previous enumeration missed. This rewrite instead removes the
+ * mechanism the escapes have in common: there is no `target` for any
+ * trap or bind call to leak, because the returned object has no relation
+ * to `map` other than the closures below capturing it by reference. The
+ * eight members below are exactly `ReadonlyMap<K, V>`'s interface --
+ * `get`/`has`/`size`/`keys`/`values`/`entries`/`forEach`/
+ * `[Symbol.iterator]` -- so nothing else is reachable to bind or leak in
+ * the first place. `forEach` still substitutes the returned object for
+ * its own third callback argument, matching `Map#forEach`'s documented
+ * shape without the third-argument leak the earlier `Proxy` attempts had
+ * to special-case. `Object.freeze` on the returned object blocks adding
+ * new properties (the injection escape from attempt 2), since this is now
+ * a plain object, not a `Map` -- `Object.freeze` is fully effective here.
+ * The result deliberately does not satisfy `instanceof Map`; nothing in
+ * this codebase relies on that, and a lookup that only ever exposes
+ * `ReadonlyMap` behavior should not also claim to be a `Map` it isn't.
+ */
+function freezeMap<K, V>(map: Map<K, V>): ReadonlyMap<K, V> {
+  const readOnlyMap: ReadonlyMap<K, V> = {
+    get: (key) => map.get(key),
+    has: (key) => map.has(key),
+    get size() {
+      return map.size;
+    },
+    keys: () => map.keys(),
+    values: () => map.values(),
+    entries: () => map.entries(),
+    forEach(callbackFn, thisArg) {
+      map.forEach((value, key) => {
+        callbackFn.call(thisArg, value, key, readOnlyMap);
+      });
+    },
+    [Symbol.iterator]: () => map.entries(),
+  };
+  return Object.freeze(readOnlyMap);
+}
+
+/**
+ * Builds the frozen {@link MARKER_HIDE_POLICY} lookup from `entries`,
+ * throwing if two entries share a `label` -- plain `new Map(...)`
+ * construction would otherwise let the later entry silently win, hiding a
+ * copy-paste mistake (a duplicate row that still names every required
+ * label passes the "exactly one classification per marker" coverage test
+ * in `tests/marker-helpers-facade.test.mts`, since that test only checks
+ * label-set membership, not per-label uniqueness in the source array).
+ * Exported so that test can also exercise the duplicate-detection path
+ * directly, without needing to corrupt the real production entries (caught
+ * by chatgpt-codex-connector review on PR #2759).
+ */
+export function buildMarkerHidePolicyMap(
+  entries: readonly MarkerHidePolicyEntry[],
+): ReadonlyMap<string, MarkerHidePolicyEntry> {
+  const map = new Map<string, MarkerHidePolicyEntry>();
+  for (const entry of entries) {
+    if (map.has(entry.label)) {
+      throw new Error(`duplicate hide-policy label: ${entry.label}`);
+    }
+    map.set(entry.label, Object.freeze(entry));
+  }
+  return freezeMap(map);
+}
+
+/**
+ * Frozen, exported lookup from an `OPERATIONAL_MARKERS` entry's `label` to
+ * its hide-at-post-time classification (#2751/#2752).
+ * `tests/marker-helpers-facade.test.mts` asserts this map's key set exactly
+ * matches `OPERATIONAL_MARKERS`' labels, so a future new marker family with
+ * no entry here fails that test instead of silently drifting the way issue
+ * #1705 did. See {@link buildMarkerHidePolicyMap} for the duplicate-label
+ * guard and {@link freezeMap} for why this is a closure-backed object
+ * exposing only the `ReadonlyMap<K, V>` surface, not a `Map` itself.
+ */
+export const MARKER_HIDE_POLICY: ReadonlyMap<string, MarkerHidePolicyEntry> =
+  buildMarkerHidePolicyMap(MARKER_HIDE_POLICY_ENTRIES);
+
 export const IDD_AGENT_DERIVED_MARKERS: ReadonlySet<string> = new Set([
   '<!-- claimed-by:',
   '<!-- unclaimed-by:',

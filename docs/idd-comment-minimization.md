@@ -125,15 +125,57 @@ The JSON report includes these fields:
 
 ## Timing
 
-Run minimization only after one of these is true:
+F4 (merge-gated) cleanup is the default timing for every marker or
+comment kind not explicitly classified `wired` in `MARKER_HIDE_POLICY`
+(`src/scripts/marker-helpers.mts`). For those, run minimization only
+after one of these is true:
 
 - the PR has already merged
 - a maintainer explicitly starts a merged-PR audit
 
-Do not minimize comments during active E or F gates. In particular, do
-not minimize comments that still determine review currency, advisory
-wait state, unresolved-thread state, unreplied-comment state, hold
-state, or a pending maintainer decision.
+**Exception -- hide-at-post-time for `wired` families** (issue #731,
+issue #733, issue #2751). A `wired` family may be minimized immediately
+after its own new instance's POST+verify succeeds, pre-merge, using
+that family's documented supersession/grouping key -- never for any
+other reason during an active E or F gate. Three families ship this
+today: the claim chain
+(`claimed-by:`/`unclaimed-by:`, grouped by
+`supersedes:` lineage, `idd-claim.instructions.md`), `review-watermark:`/
+`review-baseline:` (grouped by same claim-id,
+`idd-review-snapshot.instructions.md`), and the `advisory-wait` family
+(`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
+`advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
+`idd-advisory-wait.instructions.md`). A family classified `f4-only` has
+no such wiring yet and follows the default F4-only timing above until a
+future track adds it -- concretely, the post-merge F4 batch means
+`audit-pr-cleanup.mts`'s generic marker-prefix match
+(`operationalMarkerPrefix`) against comments on the merged PR itself,
+which recognizes the full `OPERATIONAL_MARKERS` set directly. The
+running code never parses this document, so the vendored helper's own
+dry run is unaffected by the Candidate Rules section below being stale
+(that list predates several `f4-only`-classified families added since).
+Only the manual GraphQL fallback, which has no code behind it and uses
+that list as its literal operating procedure, is actually narrowed by
+the gap (tracked as issue #2778). A third `MARKER_HIDE_POLICY` kind,
+`excluded`, covers markers deliberately kept out of both groupings
+(each for the reason on its own
+entry in `MARKER_HIDE_POLICY`). Two of those are permanently outside F4's
+reach for different reasons: `<!-- forced-handoff:` carries its own
+explicit F4 exemption (`audit-pr-cleanup.mts` hardcodes a skip for that
+prefix regardless of merge state), and `<!-- activation-nonce:` is a
+related marker in the same claim exchange as the wired claim chain above
+but is posted to the claim **issue**, not the PR -- F4's PR-scoped
+`audit-pr-cleanup.mts` structurally never sees it, so it has no F4
+cleanup path even though it is not `wired` either. The remaining
+`excluded` entries carry no such exemption; whether F4's generic rule
+actually reaches each of them depends on where that family is posted.
+
+Do not minimize comments during active E or F gates for any other
+reason. In particular, do not minimize comments that still determine
+review currency, advisory wait state, unresolved-thread state,
+unreplied-comment state, hold state, or a pending maintainer decision --
+including a `wired` family's own comment outside the narrow
+POST+verify-triggered exception above.
 
 ### Server-side fallback (optional)
 
