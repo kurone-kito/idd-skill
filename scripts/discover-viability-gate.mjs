@@ -4,12 +4,21 @@
 // The scripts/discover-viability-gate.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { existsSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
+import { collaboratorPermission } from './collaborator-permission.mjs';
+import { loadPolicyConfig } from './idd-config.mjs';
+import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
 import { findInlineResolvedDecisionSpans } from './resolved-decision.mjs';
+import {
+  buildTrustedLoginPredicate,
+  evaluateStructuralEvidence,
+  hasAllStructuralSignals,
+} from './triage-structural-evidence.mjs';
 
 const CRITERIA = [
   {
@@ -250,8 +259,11 @@ if (import.meta.main) {
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
   const summary = await evaluateDiscoverViability(args.issueNumbers, {
     loadIssue: buildIssueLoader(owner, repo),
+    computeStructuralEvidence: (issue) =>
+      computeLiveStructuralEvidence(port, owner, repo, issue),
   });
   if (args.csv) {
     process.stdout.write(renderCsv(summary));
@@ -260,7 +272,7 @@ if (import.meta.main) {
   }
 }
 export async function evaluateDiscoverViability(issueNumbers, options = {}) {
-  const { loadIssue } = options;
+  const { loadIssue, computeStructuralEvidence } = options;
   if (typeof loadIssue !== 'function') {
     throw new Error(
       'evaluateDiscoverViability requires loadIssue(issueNumber)',
@@ -286,11 +298,30 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
       });
       continue;
     }
-    const result = evaluateA4Viability(issue);
+    // #2767: evaluate without structural evidence first, and only fetch it
+    // (an extra network round trip in the live CLI) when the issue would
+    // otherwise fail -- an issue that already passes on wording alone never
+    // needs the demotion path, so this keeps the common case byte- and
+    // network-identical to before this hook existed.
+    let result = evaluateA4Viability(issue);
+    if (!result.passed && computeStructuralEvidence) {
+      const structuralEvidence = await computeStructuralEvidence(issue);
+      if (structuralEvidence) {
+        result = evaluateA4Viability(issue, structuralEvidence);
+      }
+    }
     if (result.passed) {
+      // #2767: surface any demoted (`warn`) criterion even on an
+      // otherwise-fully-passed issue, so a human reviewer still sees
+      // what matched -- omitted when every criterion is an ordinary
+      // pass, keeping the exact pre-#2767 shape for the common case.
+      const hasWarning = result.criteria.some(
+        (criterion) => criterion.result === 'warn',
+      );
       viable.push({
         number: Number(issue.number ?? issueNumber),
         title: String(issue.title ?? ''),
+        ...(hasWarning ? { criteria: result.criteria } : {}),
       });
       continue;
     }
@@ -312,16 +343,19 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
     },
   };
 }
-export function evaluateA4Viability(issue) {
+export function evaluateA4Viability(issue, structuralEvidence) {
   const normalizedIssue = normalizeIssue(issue);
   const criteria = [];
   const failedCriteria = [];
   for (const criterion of CRITERIA) {
-    const result = criterion.evaluate(normalizedIssue);
+    const result = criterion.evaluate(normalizedIssue, structuralEvidence);
     criteria.push({
       id: criterion.id,
       name: criterion.name,
-      result: result.pass ? 'pass' : 'fail',
+      // #2767: a demoted result already carries `pass: true` from the
+      // criterion itself, so `passed`/`failedCriteria` below need no
+      // separate handling -- `result: 'warn'` is presentational only.
+      result: result.pass ? (result.demoted ? 'warn' : 'pass') : 'fail',
       evidence: result.evidence,
     });
     if (!result.pass) {
@@ -486,7 +520,7 @@ function findUnexcludedBroadScopeMatch(corpus) {
   }
   return null;
 }
-export function evaluateLimitedScope(issue) {
+export function evaluateLimitedScope(issue, structuralEvidence) {
   const corpus = `${issue.title}\n${issue.body}`;
   // Test the broad-scope signal first: a broad/A4-fail cue must fail the
   // gate even when a narrow cue is also present (e.g. "single module change
@@ -494,6 +528,18 @@ export function evaluateLimitedScope(issue) {
   // let that wording bypass the gate.
   const broadScopeMatch = findUnexcludedBroadScopeMatch(corpus);
   if (broadScopeMatch !== null) {
+    // #2767: a false-positive broad-scope match is exactly the shape this
+    // demotion targets -- demote to a warned pass only when every
+    // structural signal (a runnable verification command, an existing
+    // candidate file, a fully trusted author+editor set) holds; otherwise
+    // behave exactly as before.
+    if (hasAllStructuralSignals(structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence: `Broad or cross-cutting scope signal detected: "${broadScopeMatch}" (demoted: structural evidence present).`,
+      };
+    }
     return {
       pass: false,
       evidence: `Broad or cross-cutting scope signal detected: "${broadScopeMatch}".`,
@@ -695,7 +741,7 @@ function findUnexcludedExternalCoordinationMatch(corpus) {
   }
   return null;
 }
-export function evaluateAutonomousCompletion(issue) {
+export function evaluateAutonomousCompletion(issue, structuralEvidence) {
   // A blank line (not a bare "\n") between title and body, unlike the
   // other two evaluate* functions' corpus join: CUE_HARD_BREAK_PATTERN
   // treats "\n[ \t]*\n" as a hard break, so a negation or past-investigation
@@ -712,6 +758,14 @@ export function evaluateAutonomousCompletion(issue) {
   const corpus = `${issue.title}\n\n${issue.body}`.replace(/\r\n/g, '\n');
   const match = findUnexcludedExternalCoordinationMatch(corpus);
   if (match !== null) {
+    // #2767: same demotion contract as evaluateLimitedScope above.
+    if (hasAllStructuralSignals(structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence: `External coordination or manual decision signal detected: "${match}" (demoted: structural evidence present).`,
+      };
+    }
     return {
       pass: false,
       evidence: `External coordination or manual decision signal detected: "${match}".`,
@@ -792,6 +846,15 @@ Output schema (JSON mode):
       "discardedByCriterion": { "limited_scope": 1 }
     }
   }
+
+A "discarded" item (and a "viable" item that carries at least one demoted
+criterion, #2767) also includes "criteria": [{ "id", "name", "result",
+"evidence" }], where "result" is "pass" | "warn" | "fail" -- "warn" means
+a lexical-pattern fail was demoted to a passed, annotated result because
+every structural-evidence signal (triage-structural-evidence.mts) held;
+it counts as a pass for "passed"/"failedCriteria" but is worth a human's
+attention. CSV mode's "warnings" column lists any such demoted criterion
+ids, pipe-joined.
 `);
 }
 function normalizeIssueNumbers(values) {
@@ -818,14 +881,25 @@ function countDiscardedCriteria(discarded) {
   }
   return counts;
 }
+/** #2767: pipe-joined ids of any `result: 'warn'` (demoted) criteria on
+ * `item`, or `''` when `item` carries no `criteria` array (the common
+ * case -- see `ViableItem.criteria`'s doc comment) or none were demoted. */
+function warnCriteriaIds(item) {
+  return (item.criteria ?? [])
+    .filter((criterion) => criterion.result === 'warn')
+    .map((criterion) => criterion.id)
+    .join('|');
+}
 export function renderCsv(summary) {
-  const lines = ['kind,number,title,criteria'];
+  const lines = ['kind,number,title,criteria,warnings'];
   for (const item of summary.viable) {
-    lines.push(`viable,${item.number},${escapeCsv(item.title)},`);
+    lines.push(
+      `viable,${item.number},${escapeCsv(item.title)},,${escapeCsv(warnCriteriaIds(item))}`,
+    );
   }
   for (const item of summary.discarded) {
     lines.push(
-      `discarded,${item.number},${escapeCsv(item.title)},${escapeCsv((item.failedCriteria ?? []).join('|'))}`,
+      `discarded,${item.number},${escapeCsv(item.title)},${escapeCsv((item.failedCriteria ?? []).join('|'))},${escapeCsv(warnCriteriaIds(item))}`,
     );
   }
   return `${lines.join('\n')}\n`;
@@ -845,4 +919,45 @@ function buildIssueLoader(owner, repo) {
   return function loadIssue(issueNumber) {
     return port.getWorkItem(issueNumber);
   };
+}
+/**
+ * #2767 live CLI wiring for `computeStructuralEvidence`: fetches the one
+ * extra piece of live data the pure `triage-structural-evidence.mts`
+ * helper needs beyond the already-loaded issue -- the edit history's
+ * editor logins -- then builds the trust predicate from this repository's
+ * configured `trustedMarkerActors` plus a live collaborator-permission
+ * check, and the file-existence predicate from the real filesystem.
+ */
+function computeLiveStructuralEvidence(port, owner, repo, issue) {
+  const issueNumber = Number(issue.number);
+  if (!Number.isInteger(issueNumber)) {
+    return undefined;
+  }
+  const { config } = loadPolicyConfig();
+  const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: config,
+  });
+  const collaboratorCache = new Map();
+  const isTrustedLogin = buildTrustedLoginPredicate(
+    trustedMarkerLogins,
+    (login) => {
+      const { permission } = collaboratorPermission(
+        owner,
+        repo,
+        login,
+        collaboratorCache,
+      );
+      return permission === 'admin' || permission === 'write';
+    },
+  );
+  const author = issue.user?.login;
+  const edits = port.getWorkItemUserContentEdits(issueNumber);
+  return evaluateStructuralEvidence({
+    body: String(issue.body ?? ''),
+    author: typeof author === 'string' ? author : '',
+    editorLogins: edits.map((edit) => edit.editorLogin),
+    isTrustedLogin,
+    existsAt: existsSync,
+  });
 }

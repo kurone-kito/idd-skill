@@ -7,6 +7,15 @@ import {
   parseArgs,
   renderCsv,
 } from '../src/scripts/discover-viability-gate.mts';
+import type { StructuralEvidence } from '../src/scripts/triage-structural-evidence.mts';
+
+// --- #2767: structural-evidence demotion ------------------------------------
+
+const ALL_STRUCTURAL_SIGNALS: StructuralEvidence = {
+  verificationCommand: true,
+  candidateFilesExist: true,
+  trustedEditor: true,
+};
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
@@ -121,6 +130,48 @@ test('fails limited scope for broad cross-cutting work', () => {
 
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
+test('#2767: demotes a broad-scope limited_scope fail to warn when all structural signals hold', () => {
+  const issue = {
+    number: 2,
+    title: 'redesign architecture across multiple subsystems',
+    body: 'Broad update across many modules with public interface changes. Tests included.',
+    state: 'OPEN',
+  };
+
+  // Without structural evidence: unchanged fail.
+  const withoutEvidence = evaluateA4Viability(issue);
+  assert.equal(withoutEvidence.passed, false);
+  assert.ok(withoutEvidence.failedCriteria.includes('limited_scope'));
+
+  const withEvidence = evaluateA4Viability(issue, ALL_STRUCTURAL_SIGNALS);
+  assert.equal(withEvidence.passed, true);
+  assert.deepEqual(withEvidence.failedCriteria, []);
+  const limitedScope = withEvidence.criteria.find(
+    (c) => c.id === 'limited_scope',
+  );
+  assert.equal(limitedScope?.result, 'warn');
+});
+
+test('#2767: any single structural signal false keeps limited_scope failing (identical to today)', () => {
+  const issue = {
+    number: 2,
+    title: 'redesign architecture across multiple subsystems',
+    body: 'Broad update across many modules with public interface changes. Tests included.',
+    state: 'OPEN',
+  };
+  for (const key of Object.keys(
+    ALL_STRUCTURAL_SIGNALS,
+  ) as (keyof StructuralEvidence)[]) {
+    const partial: StructuralEvidence = {
+      ...ALL_STRUCTURAL_SIGNALS,
+      [key]: false,
+    };
+    const result = evaluateA4Viability(issue, partial);
+    assert.equal(result.passed, false, `expected fail with ${key}: false`);
+    assert.ok(result.failedCriteria.includes('limited_scope'));
+  }
 });
 
 test('fails limited scope when a broad cue accompanies a narrow cue', () => {
@@ -328,13 +379,48 @@ test('renderCsv quotes titles containing commas and quotes', () => {
   });
 
   const rows = csv.trimEnd().split('\n');
-  assert.equal(rows[0], 'kind,number,title,criteria');
-  assert.equal(rows[1], 'viable,10,"fix parser, escape ""quotes"" too",');
-  assert.equal(rows[2], 'discarded,11,"redesign, broadly",limited_scope');
-  // Each data row keeps exactly four fields when parsed as RFC 4180 CSV.
+  assert.equal(rows[0], 'kind,number,title,criteria,warnings');
+  assert.equal(rows[1], 'viable,10,"fix parser, escape ""quotes"" too",,');
+  assert.equal(rows[2], 'discarded,11,"redesign, broadly",limited_scope,');
+  // Each data row keeps exactly five fields when parsed as RFC 4180 CSV.
   for (const row of rows.slice(1)) {
-    assert.equal(parseCsvRow(row).length, 4);
+    assert.equal(parseCsvRow(row).length, 5);
   }
+});
+
+test('renderCsv: a demoted (warn) criterion appears in the warnings column', () => {
+  const csv = renderCsv({
+    viable: [
+      {
+        number: 20,
+        title: 'demoted issue',
+        criteria: [
+          {
+            id: 'limited_scope',
+            name: 'Limited scope',
+            result: 'warn',
+            evidence: 'x',
+          },
+          {
+            id: 'clear_verification',
+            name: 'Clear verification',
+            result: 'pass',
+            evidence: 'y',
+          },
+        ],
+      },
+    ],
+    discarded: [],
+    summary: {
+      total: 1,
+      viableCount: 1,
+      discardedCount: 0,
+      discardedByCriterion: {},
+    },
+  });
+
+  const rows = csv.trimEnd().split('\n');
+  assert.equal(rows[1], 'viable,20,demoted issue,,limited_scope');
 });
 
 test('fails clear verification when only subjective checks are present', () => {
@@ -359,6 +445,59 @@ test('fails autonomous completion when external coordination is required', () =>
 
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('#2767: demotes an external-coordination autonomous_completion fail to warn when all structural signals hold', () => {
+  const issue = {
+    number: 4,
+    title: 'wire external approval gate',
+    body: 'Requires external coordination and maintainer decision before completion. Add unit tests and keep CI green.',
+    state: 'OPEN',
+  };
+
+  const withoutEvidence = evaluateA4Viability(issue);
+  assert.equal(withoutEvidence.passed, false);
+
+  const withEvidence = evaluateA4Viability(issue, ALL_STRUCTURAL_SIGNALS);
+  assert.equal(withEvidence.passed, true);
+  const autonomy = withEvidence.criteria.find(
+    (c) => c.id === 'autonomous_completion',
+  );
+  assert.equal(autonomy?.result, 'warn');
+});
+
+test('#2767: any single structural signal false keeps autonomous_completion failing (identical to today)', () => {
+  const issue = {
+    number: 4,
+    title: 'wire external approval gate',
+    body: 'Requires external coordination and maintainer decision before completion.',
+    state: 'OPEN',
+  };
+  for (const key of Object.keys(
+    ALL_STRUCTURAL_SIGNALS,
+  ) as (keyof StructuralEvidence)[]) {
+    const partial: StructuralEvidence = {
+      ...ALL_STRUCTURAL_SIGNALS,
+      [key]: false,
+    };
+    const result = evaluateA4Viability(issue, partial);
+    assert.equal(result.passed, false, `expected fail with ${key}: false`);
+    assert.ok(result.failedCriteria.includes('autonomous_completion'));
+  }
+});
+
+test('#2767: clear_verification is never demoted (not in scope of this issue)', () => {
+  const result = evaluateA4Viability(
+    {
+      number: 3,
+      title: 'tune UX copy',
+      body: 'Success is when it looks good and passes maintainer preference review.',
+      state: 'OPEN',
+    },
+    ALL_STRUCTURAL_SIGNALS,
+  );
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('clear_verification'));
 });
 
 // --- #2738: autonomous_completion false positives on negated, quoted, or
@@ -993,4 +1132,31 @@ test('evaluateDiscoverViability groups viable and discarded candidates', async (
   assert.equal(summary.summary.discardedByCriterion.issue_not_found, 1);
   assert.equal(summary.summary.discardedByCriterion.issue_not_open, 1);
   assert.equal(summary.summary.discardedByCriterion.limited_scope, 1);
+});
+
+test('#2767: evaluateDiscoverViability demotes a candidate via computeStructuralEvidence and surfaces the warn on the viable item', async () => {
+  const issues = new Map([
+    [
+      11,
+      {
+        number: 11,
+        title: 'cross-cutting redesign',
+        state: 'OPEN',
+        body: 'across multiple subsystems and architecture overhaul, with unit tests and ci verification',
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverViability([11], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    computeStructuralEvidence: () => ALL_STRUCTURAL_SIGNALS,
+  });
+
+  assert.equal(summary.viable.length, 1);
+  assert.equal(summary.discarded.length, 0);
+  const [viableItem] = summary.viable;
+  const limitedScope = viableItem.criteria?.find(
+    (c) => c.id === 'limited_scope',
+  );
+  assert.equal(limitedScope?.result, 'warn');
 });
