@@ -185,23 +185,40 @@ an immediate fix for a blocking bug unrelated to the claimed work, the
 session may proceed with that fix under the operator's live authority
 instead of routing it through the `issue-authoring` skill first.
 Minimum provenance: the side-fix PR body must cross-reference the
-originating claimed issue using a **non-closing** keyword (for
-example, `Refs #<claimed-issue-number>` — never
-`Closes`/`Fixes`/`Resolves`, which would auto-close the originating
+originating claimed issue using a **non-closing cross-reference** (for
+example, `Refs #<claimed-issue-number>` — never a closing keyword such
+as `Closes`/`Fixes`/`Resolves`, which would auto-close the originating
 issue on the side-fix's own merge). Formal `issue-authoring` tracking
 is still preferred when time allows, but it is not a start blocker for
 this carve-out.
+
+The side-fix has no claimed issue of its own to route through A5/B1,
+so create it on a fresh sibling worktree on a branch that does **not**
+match the `issue/<number>-*` pattern (cut from
+`origin/{development-branch}`, named for example
+`side-fix/<short-slug>`) — never on the originating claim's own
+worktree/branch, and never through the normal A5 claim flow. Because
+the branch does not match `issue/*`, it falls outside both the shared
+claim revalidation gate's cwd-vs-claim check
+(`idd-overview-core.instructions.md`) and A5 pre-check (e)'s
+orphaned-branch hold, so no second claim is needed or possible for it;
+the shared claim revalidation gate and D2 step 1 above keep applying,
+unchanged, to mutations for the originating claim from its own
+worktree. If the side-fix instead deserves its own tracked issue, file
+it through the `issue-authoring` skill and follow the normal A5/B1
+claim and worktree flow for that issue instead of this carve-out.
 
 D3's closing-keyword requirement and D3.5's presence-detection and
 auto-injection (steps 1-5, including step 4) apply only to the
 side-fix PR's own deliberate closing set — its own linked issue, if
 any, or none otherwise — never to the originating claimed issue named
 above; do not let them treat the non-closing cross-reference above as
-missing, or rewrite it into a closing keyword. Still run D3.5 step 6's
-exact-set comparison and step 7's commit-message scan against the
-originating claimed issue's number too, treating it as outside the
-side-fix PR's deliberate closing set — the same stray-keyword safety
-nets D3.5 already applies to every issue outside that set.
+missing, or rewrite it into a closing keyword. The originating claimed
+issue must not appear in the side-fix PR's `closingIssuesReferences`,
+and the side-fix branch's commit messages must not contain a closing
+keyword referencing it — still run D3.5 step 6's exact-set comparison
+and step 7's commit-message scan to confirm both, treating the
+originating issue as outside the side-fix PR's deliberate closing set.
 
 While a side-fix PR that the claimed issue's PR depends on is in
 flight, periodically re-check the claimed issue's own PR review and CI
