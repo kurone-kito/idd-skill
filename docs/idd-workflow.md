@@ -818,11 +818,16 @@ expensive to re-run after every delegated-worker completion; a
   every delegated-worker completion. Dispatch the next worker from
   the previously enumerated graph instead.
 - **Do re-run** when either condition holds: a worker reports
-  exhaustion or no startable candidate, or the previously enumerated
-  graph predates a merge or issue closure one of this session's own
-  workers has landed since that graph was built. Wait for the
-  helper's own process exit before parsing its output — never a
-  mid-run stdout read — per
+  exhaustion or no startable candidate remains in the graph already
+  in hand, or that graph is stale enough that the orchestrator no
+  longer trusts it for the next dispatch — for example when a
+  completed issue may have unblocked a dependent still listed as
+  not-ready. A worker merely finishing the issue it was dispatched
+  for is not by itself a reason to re-run: that happens on every
+  successful dispatch, so treating it as a trigger would collapse
+  straight back into the every-completion cadence the first bullet
+  rules out. Wait for the helper's own process exit before parsing
+  its output — never a mid-run stdout read — per
   [A2's helper read timing note](../.github/instructions/idd-discover.instructions.md#a2--enumerate-sub-issues).
 - **On a caller-side tool timeout** during the Discover invocation,
   retry that same invocation once with a longer time budget before
