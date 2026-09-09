@@ -206,9 +206,9 @@ approval boundary that hands off to IDD execution.
   fresh acquisition of the child, not to the releasing set's own
   rechecks or to a resume of the exact interrupted set, which stays
   the established recovery path when `release-complete` is missing;
-  the current winner is unchanged by any of them until the anchor's
-  reconciled `release-complete` closes the generation. Only after a
-  fresh re-read verifies every target's release
+  the releasing set's own rechecks never change the current winner,
+  unlike a valid resume marker for that exact set, which does. Only
+  after a fresh re-read verifies every target's release
   marker and label removal and the anchor's `release-complete` marker does
   the set-level release close all target generations, after which a later
   `acquire` starts a new generation. The
