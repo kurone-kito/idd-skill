@@ -1063,8 +1063,8 @@ downstream effects on consuming code — `spawn_subagent`'s
 working-directory parameter does not rebind Grok's file tools (that
 rebind gap is kurone-kito/idd-skill#2819). This constrains the pass
 prospectively but does not guarantee compliance — the unsuitable
-fallback above still applies when the subagent wanders
-past it anyway.
+fallback above still applies when the subagent wanders past it
+anyway.
 
 When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
