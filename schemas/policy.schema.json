@@ -754,6 +754,10 @@
             "description": "Each entry must contain a non-whitespace character. This mirrors the runtime, which trims each glob and ignores blank entries (falling back to the defaults), so a whitespace-only pattern is rejected at validation time instead of silently never matching."
           },
           "description": "Branch globs the guard treats as implementation branches that must not live in the primary worktree (default [\"issue/*\", \"roadmap-audit/*\"] when absent)."
+        },
+        "refuseBaseBranchCommits": {
+          "type": "boolean",
+          "description": "Opt-in stricter mode (default false; absent means false; #2801): also refuses a commit/push made from the primary worktree while HEAD is on the configured `developmentBranch` itself, catching a session that skips B1 entirely and commits directly on the base branch -- a gap the `branchPatterns` check above does not cover, since the base branch never matches an implementation-branch glob. Compares against `developmentBranch` only; the pure-POSIX-sh hook has no network access to resolve the live GitHub default branch, so an absent `developmentBranch` leaves this check a no-op even when enabled. A direct base-branch commit from the primary worktree is also legitimate routine action for a human maintainer working outside an IDD session, so this stays opt-in rather than becoming the default."
         }
       },
       "description": "Container for the disposable-worktree guard's enablement and protected branch-name patterns. Optional; omitting it keeps the guard's historical advisory-only behavior."

@@ -205,6 +205,14 @@ not continue to B2 from the primary worktree. Repair by removing the
 misplaced branch (after confirming no work is lost) and recreating the
 sibling worktree through the Worktree creation steps above.
 
+The optional local `_idd-worktree-guard.sh` hook (`worktreeGuard.enabled:
+true`) automates part of this self-check by refusing a commit/push from
+the primary worktree while HEAD matches an implementation-branch pattern
+(default `issue/*`, `roadmap-audit/*`). By itself it does **not** catch a
+session that skips B1 entirely and commits directly on the base branch —
+set the separate `worktreeGuard.refuseBaseBranchCommits: true` opt-in
+(#2801) to also refuse that case.
+
 If WorkTrunk reports its `Cannot change directory — shell integration
 installed but not active` diagnostic, re-verify the current working
 directory on every later command — see
