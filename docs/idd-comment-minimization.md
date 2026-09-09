@@ -139,15 +139,24 @@ after its own new instance's POST+verify succeeds, pre-merge, using
 that family's documented supersession/grouping key -- never for any
 other reason during an active E or F gate. Three families ship this
 today: the claim chain
-(`claimed-by:`/`unclaimed-by:`/`activation-nonce:`, grouped by
-`supersedes:` lineage, `idd-claim.instructions.md`), `review-watermark:`/
+(`claimed-by:`/`unclaimed-by:`, grouped by
+`supersedes:` lineage, `idd-claim.instructions.md` -- `activation-nonce:`
+is a related marker in the same claim exchange but is not itself
+minimized by this wiring, so it stays `f4-only`), `review-watermark:`/
 `review-baseline:` (grouped by same claim-id,
 `idd-review-snapshot.instructions.md`), and the `advisory-wait` family
 (`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
 `advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
 `idd-advisory-wait.instructions.md`). A family classified `f4-only` has
 no such wiring yet and follows the default F4-only timing above until a
-future track adds it.
+future track adds it. A third `MARKER_HIDE_POLICY` kind, `excluded`,
+covers markers deliberately kept out of both groupings (each for the
+reason on its own entry in `MARKER_HIDE_POLICY`) -- one of those,
+`<!-- forced-handoff:`, also carries its own permanent F4 exemption
+(`audit-pr-cleanup.mts` hardcodes a skip for that prefix regardless of
+merge state); the other `excluded` entries have no such exemption and
+are swept by F4's generic stale-marker rule like an ordinary `f4-only`
+family.
 
 Do not minimize comments during active E or F gates for any other
 reason. In particular, do not minimize comments that still determine
