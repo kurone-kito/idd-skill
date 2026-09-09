@@ -807,37 +807,48 @@ Running this variant safely requires:
 
 ### Discover re-run cadence
 
-The full `discover-roadmap-graph.mjs --all-roadmaps --with-readiness
---with-claim-state` traversal paired with
-`discover-orphan-filter.mjs --autopilot --with-claim-state` is too
-expensive to re-run after every delegated-worker completion; a
+The full Discover enumeration this session's own A0/A0-O routing
+selects — `discover-roadmap-graph.mjs --all-roadmaps --with-readiness
+--with-claim-state`, and `discover-orphan-filter.mjs --autopilot
+--with-claim-state` only when `issue-scope`/`orphan-first-policy`
+actually routes to A0-O (`idd-discover.instructions.md`'s A0/A0-O) —
+is too expensive to re-run after every delegated-worker completion; a
 2026-09-09 hearing decided to document a re-run cadence for it
 (kurone-kito/idd-skill#2706).
 
-- **Do not re-run** the full all-roadmaps + orphan-filter pair after
-  every delegated-worker completion. Dispatch the next worker from
-  the previously enumerated graph instead.
-- **Do re-run** when either condition holds: a worker reports
-  exhaustion or no startable candidate remains in the graph already
-  in hand, or that graph is stale enough that the orchestrator no
-  longer trusts it for the next dispatch — for example when a
-  completed issue may have unblocked a dependent still listed as
-  not-ready. A worker merely finishing the issue it was dispatched
-  for is not by itself a reason to re-run: that happens on every
-  successful dispatch, so treating it as a trigger would collapse
-  straight back into the every-completion cadence the first bullet
-  rules out. Wait for the helper's own process exit before parsing
-  its output — never a mid-run stdout read — per
+- **Do not re-run** the full enumeration this session's A0/A0-O
+  routing already selected, after every delegated-worker completion.
+  Dispatch the next worker from the previously enumerated graph
+  instead, after a fresh target-local A3 readiness check for that
+  specific candidate (the configured authoring label, and any
+  newly-added open dependency) — the per-delegation A4/A4.5/A5 gates
+  above do not repeat A3's own exclusions, so a candidate that became
+  blocked only after the graph was built would otherwise slip through
+  uncaught.
+- **Do re-run** on any of the following: a worker reports exhaustion
+  or no startable candidate remains in the graph already in hand, or
+  that graph is stale enough that the orchestrator no longer trusts it
+  for the next dispatch — for example when a completed issue may have
+  unblocked a dependent still listed as not-ready. A worker merely
+  finishing the issue it was dispatched for is not by itself a reason
+  to re-run: that happens on every successful dispatch, so treating it
+  as a trigger would collapse straight back into the every-completion
+  cadence the first bullet rules out. Wait for the helper's own
+  process exit before parsing its output — never a mid-run stdout
+  read — per
   [A2's helper read timing note](../.github/instructions/idd-discover.instructions.md#a2--enumerate-sub-issues).
 - **On a caller-side tool timeout** during the Discover invocation —
   the orchestrator's own tool-invocation wrapper (for example a
   bounded Bash-tool or subprocess timeout) elapsing while the helper
   process may still be running to completion, not the helper itself
-  erroring or exiting non-zero — retry that same invocation once with
-  a longer time budget before concluding anything failed. Only a
-  second timeout on the retried invocation counts as an A2 enumeration
-  failure; a helper that actually errors or exits non-zero is already
-  an A2 enumeration failure on the first occurrence, unchanged.
+  erroring or exiting non-zero — give that same invocation one more
+  attempt with a longer time budget (re-attach to the still-running
+  process when the tool only stopped waiting rather than killing it;
+  otherwise reissue the command) before concluding anything failed.
+  Only a second timeout under the longer budget counts as an A2
+  enumeration failure, unchanged from today's A2 rule; a helper that
+  actually errors or exits non-zero is already an A2 enumeration
+  failure on the first occurrence.
 - **No caching layer or change-detection pre-check**: this section
   documents a cadence, not a cache.
 
