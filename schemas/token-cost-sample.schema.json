@@ -172,14 +172,14 @@
                 "description": "Reasoning tokens."
               },
               "turnCount": {
-                "type": ["integer", "null"],
+                "type": "integer",
                 "minimum": 0,
-                "description": "Turn count for this stage when the vendor reports one."
+                "description": "Turn count for this stage when the vendor reports one. Omitted (never null) when this stage has no count activity to report."
               },
               "toolCallCount": {
-                "type": ["integer", "null"],
+                "type": "integer",
                 "minimum": 0,
-                "description": "Tool-call count for this stage when the vendor reports one."
+                "description": "Tool-call count for this stage when the vendor reports one. Omitted (never null) when this stage has no count activity to report or the vendor does not track tool calls."
               }
             }
           }

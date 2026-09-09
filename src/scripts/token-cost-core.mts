@@ -54,20 +54,20 @@ export interface TokenCostUsage {
  * shape exactly, and keeps the top-level {@link TokenCostUsage} used by
  * the sample's own whole-session `usage` field untouched. At this
  * per-stage level, a field is always either a real count or entirely
- * absent -- never a literal `null` -- since `allocateStageUsage` only
- * ever spreads a key in when it has a value to report (e.g. Codex's
- * per-stage `toolCallCount` is omitted, not set to `null`, because that
- * vendor's `CountTimeline` never supports it). `null` as a value is
+ * absent -- the type enforces this directly, unlike `null`, which is
  * reserved for the top-level sample fields (see
  * {@link TokenCostIssueLoopSample.toolCallCount} below), where it means
  * the vendor reports no signal for that metric at all across the whole
- * sample.
+ * sample. `allocateStageUsage` only ever spreads a key in when it has a
+ * value to report (e.g. Codex's per-stage `toolCallCount` is omitted,
+ * not set to any value, because that vendor's `CountTimeline` never
+ * supports it).
  */
 export interface TokenCostStageUsage {
   id: TokenCostStageId;
   usage: TokenCostUsage & {
-    turnCount?: number | null;
-    toolCallCount?: number | null;
+    turnCount?: number;
+    toolCallCount?: number;
   };
 }
 

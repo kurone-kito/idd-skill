@@ -192,7 +192,10 @@ overstate how much "chattier" one vendor is relative to the other.
 
 **Per-stage allocation**: `kind: "issue-loop"` samples additionally
 carry `turnCount`/`toolCallCount` nested inside each `stages[].usage`
-entry, allocated the same way per-stage token usage already is (see
+entry -- at this nested level a field is a real integer or entirely
+absent, never `null` (unlike the top-level fields above; the type and
+schema enforce this directly) -- allocated the same way per-stage token
+usage already is (see
 `allocateStageUsage` in `token-cost-harvest.mts`) -- a stage window is
 included whenever it has real token usage **or** real turn activity, so
 a window with turns but no token usage in that exact slice is never
