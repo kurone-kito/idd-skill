@@ -249,6 +249,60 @@ test('filterOrphanIssues excludes blocked labels and open blockers', async () =>
   assert.equal(result.filtered.blocked_label.length, 1);
 });
 
+test('#2767: filterOrphanIssues demotes a runtime-observation-precondition candidate via fetchUserContentEditorsByIssueNumber and warns', async () => {
+  const issues = [
+    {
+      number: 30,
+      title: 'demoted candidate',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`',
+      url: 'https://example.com/30',
+      user: { login: 'alice' },
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => ['alice'],
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+  });
+
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.orphans[0].number, 30);
+  assert.equal(result.filtered.runtime_observation_precondition.length, 0);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(
+    (result.warnings[0] as { reason: string }).reason,
+    'runtime_observation_precondition_demoted',
+  );
+});
+
+test('#2767: filterOrphanIssues never demotes when fetchUserContentEditorsByIssueNumber is not supplied (byte-stable default)', async () => {
+  const issues = [
+    {
+      number: 31,
+      title: 'still filtered',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.',
+      url: 'https://example.com/31',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.runtime_observation_precondition.length, 1);
+  assert.equal(result.warnings.length, 0);
+});
+
 test('filterOrphanIssues excludes providerOutage.declarationTarget end-to-end (#2800)', async () => {
   const issues = [
     {
@@ -353,7 +407,10 @@ test('filterOrphanIssues excludes custom authoring label and warns when stale', 
   assert.equal(result.orphans.length, 0);
   assert.equal(result.filtered.authoring_label.length, 1);
   assert.equal(result.filtered.authoring_label[0].details, 'status:drafting');
-  assert.equal(result.warnings[0].status, 'stale');
+  // #2767: `warnings[]` is now a union with `StructuralEvidenceDemotionWarning`
+  // (which carries no `status` field); this fixture only ever produces the
+  // authoring-label warning shape.
+  assert.equal((result.warnings[0] as { status: string }).status, 'stale');
   assert.match(
     result.warnings[0].message,
     /Issue #21 has carried the authoring label for 5h/,
@@ -1178,6 +1235,67 @@ test('classifyIssue routes runtime/production-observation prose to runtime_obser
       },
     );
     assert.equal(result.reason, 'runtime_observation_precondition', body);
+  }
+});
+
+// --- #2767: structural-evidence demotion ------------------------------------
+
+const ALL_STRUCTURAL_SIGNALS = {
+  verificationCommand: true,
+  candidateFilesExist: true,
+  trustedEditor: true,
+};
+
+test('#2767: classifyIssue demotes a runtime-observation-precondition hit to a warned orphan when all structural signals hold', () => {
+  const issue = {
+    number: 100,
+    title: 't',
+    state: 'OPEN',
+    labels: [],
+    body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.',
+  };
+  const baseOptions = {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  };
+
+  const withoutEvidence = classifyIssue(issue, baseOptions);
+  assert.equal(withoutEvidence.orphan, false);
+  assert.equal(withoutEvidence.reason, 'runtime_observation_precondition');
+
+  const withEvidence = classifyIssue(issue, {
+    ...baseOptions,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  });
+  assert.equal(withEvidence.orphan, true);
+  assert.equal(withEvidence.reason, 'orphan');
+  assert.equal(
+    withEvidence.warning,
+    'runtime_observation_precondition_demoted',
+  );
+});
+
+test('#2767: classifyIssue keeps filtering when any one structural signal is false', () => {
+  const issue = {
+    number: 100,
+    title: 't',
+    state: 'OPEN',
+    labels: [],
+    body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.',
+  };
+  const baseOptions = {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  };
+  for (const key of Object.keys(
+    ALL_STRUCTURAL_SIGNALS,
+  ) as (keyof typeof ALL_STRUCTURAL_SIGNALS)[]) {
+    const result = classifyIssue(issue, {
+      ...baseOptions,
+      structuralEvidence: { ...ALL_STRUCTURAL_SIGNALS, [key]: false },
+    });
+    assert.equal(result.orphan, false, `expected filter with ${key}: false`);
+    assert.equal(result.reason, 'runtime_observation_precondition');
   }
 });
 

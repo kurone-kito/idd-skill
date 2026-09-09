@@ -4,6 +4,7 @@
 // The scripts/discover-orphan-filter.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { existsSync } from 'node:fs';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -15,6 +16,7 @@ import {
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
+import { collaboratorPermission } from './collaborator-permission.mjs';
 import {
   extractBlockedByIssueNumbers,
   extractDependencyIssueNumbers,
@@ -39,6 +41,11 @@ import {
   isSuitabilityTriageVerdictCurrent,
   resolveLatestSubstantiveIssueEditAt,
 } from './supersession-detection.mjs';
+import {
+  buildTrustedLoginPredicate,
+  evaluateStructuralEvidence,
+  hasAllStructuralSignals,
+} from './triage-structural-evidence.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // A runtime/production-observation precondition (#2467) carries no
@@ -433,9 +440,21 @@ export function classifyIssue(issue, options) {
   // production-observation precondition has no issue-number reference to
   // resolve, so it must still hold even when every numbered reference below
   // is absent or already closed.
+  //
+  // #2767: a hit demotes to a warned orphan (fall through, don't return)
+  // only when every structural-evidence signal holds; otherwise this
+  // remains a hard filter exactly as before.
+  let runtimeObservationDemoted = false;
   if (detectRuntimeObservationPrecondition(body, Number(issue.number))) {
-    return { orphan: false, reason: 'runtime_observation_precondition' };
+    if (hasAllStructuralSignals(options.structuralEvidence)) {
+      runtimeObservationDemoted = true;
+    } else {
+      return { orphan: false, reason: 'runtime_observation_precondition' };
+    }
   }
+  const demotionWarning = runtimeObservationDemoted
+    ? { warning: 'runtime_observation_precondition_demoted' }
+    : {};
   // Two independent reference families, matching A3's own dependency check
   // in `discover-readiness-check.mts` (#1536): visible `Blocked by #NNN`
   // lines (a hard sequential dependency, no exemption) and `Depends on
@@ -451,7 +470,7 @@ export function classifyIssue(issue, options) {
   const blockedRefs = extractBlockedByReferences(body);
   const dependencyRefs = extractDependencyIssueNumbers(body);
   if (blockedRefs.length === 0 && dependencyRefs.length === 0) {
-    return { orphan: true, reason: 'orphan' };
+    return { orphan: true, reason: 'orphan', ...demotionWarning };
   }
   const unresolved = [];
   for (const ref of blockedRefs) {
@@ -502,7 +521,11 @@ export function classifyIssue(issue, options) {
   // earlier both-empty check already returned `orphan`) and every ref
   // resolved to a non-open, non-unresolvable state (closed, or an
   // exempt open parent epic) -- never "no refs at all" again.
-  return { orphan: true, reason: 'blocked_references_closed' };
+  return {
+    orphan: true,
+    reason: 'blocked_references_closed',
+    ...demotionWarning,
+  };
 }
 /**
  * Resolve whether an **open** dependency reference is exempt as a parent
@@ -565,8 +588,15 @@ export async function filterOrphanIssues(issues, options = {}) {
   const issueCreatedAtByNumber = new Map(
     issues.map((candidate) => [candidate.number, candidate.createdAt]),
   );
+  // #2767: built once for the whole batch (not per-candidate) -- the
+  // static trustedMarkerLogins check is cheap, and isTrustedCollaborator
+  // (when supplied) already caches its own live lookups.
+  const isTrustedLogin = buildTrustedLoginPredicate(
+    options.trustedMarkerLogins ?? [],
+    options.isTrustedCollaborator ?? (() => false),
+  );
   for (const issue of issues) {
-    const result = classifyIssue(issue, {
+    const classifyOptions = {
       issueStateByNumber,
       fetchIssueStateByNumber,
       markerPrefix: options.markerPrefix,
@@ -576,7 +606,34 @@ export async function filterOrphanIssues(issues, options = {}) {
       roadmapLabelName: options.roadmapLabelName,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       openIssueDetailsByNumber,
-    });
+    };
+    let result = classifyIssue(issue, classifyOptions);
+    // #2767: only a `runtime_observation_precondition` filter can ever be
+    // demoted, and computing structural evidence costs a network fetch
+    // (editor logins plus a live collaborator-permission check) -- pay it
+    // only for a candidate that plain classification already filtered on
+    // exactly this reason, and only when the caller actually wired the
+    // editor-login fetch (absent means "never demotes", the prior
+    // byte-stable behavior).
+    if (
+      result.reason === 'runtime_observation_precondition' &&
+      typeof options.fetchUserContentEditorsByIssueNumber === 'function'
+    ) {
+      const authorLogin = issue.user?.login;
+      const structuralEvidence = evaluateStructuralEvidence({
+        body: String(issue.body ?? ''),
+        author: typeof authorLogin === 'string' ? authorLogin : '',
+        editorLogins: options.fetchUserContentEditorsByIssueNumber(
+          issue.number,
+        ),
+        isTrustedLogin,
+        existsAt: options.existsAt ?? existsSync,
+      });
+      result = classifyIssue(issue, {
+        ...classifyOptions,
+        structuralEvidence,
+      });
+    }
     if (result.reason === 'unresolvable_reference') {
       for (const number of result.details ?? []) {
         unresolvable.push({
@@ -602,6 +659,15 @@ export async function filterOrphanIssues(issues, options = {}) {
       }
     }
     if (result.orphan) {
+      if (result.warning === 'runtime_observation_precondition_demoted') {
+        warnings.push({
+          issueNumber: issue.number,
+          reason: result.warning,
+          message:
+            `Warning: Issue #${issue.number} names a runtime/production-observation ` +
+            'precondition, but every structural-evidence signal held, so it stays listed as an orphan.',
+        });
+      }
       orphans.push({
         number: issue.number,
         title: issue.title,
@@ -817,6 +883,9 @@ async function runCli() {
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
     config: { trustedMarkerActors: policy.trustedMarkerActors },
   });
+  // #2767: shared across every isTrustedCollaborator call below, so a
+  // repeated editor login across candidates costs one live lookup.
+  const collaboratorPermissionCache = new Map();
   const result = await filterOrphanIssues(openIssues, {
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) =>
@@ -829,6 +898,22 @@ async function runCli() {
       port.getWorkItemTimeline(issueNumber),
     fetchUserContentEditsByIssueNumber: (issueNumber) =>
       port.getWorkItemUserContentEditTimestamps(issueNumber),
+    // #2767: only ever called for a candidate plain classification already
+    // filtered as runtime_observation_precondition -- see
+    // filterOrphanIssues's own lazy-retry comment.
+    fetchUserContentEditorsByIssueNumber: (issueNumber) =>
+      port
+        .getWorkItemUserContentEdits(issueNumber)
+        .map((edit) => edit.editorLogin),
+    isTrustedCollaborator: (login) => {
+      const { permission } = collaboratorPermission(
+        owner,
+        repo,
+        login,
+        collaboratorPermissionCache,
+      );
+      return permission === 'admin' || permission === 'write';
+    },
     trustedMarkerLogins,
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
@@ -985,6 +1070,17 @@ body names a runtime/production-observation precondition in prose --
 "confirmed in production", "observed live", "runtime-observation" -- with no
 issue-number reference to resolve, so it stays excluded even once every
 numbered "Blocked by"/"Depends on" reference is closed.
+
+A "runtime_observation_precondition" hit demotes to a warned orphan
+(#2767) instead -- kept in "orphans" with "reason": "orphan" and a
+"warnings[]" entry carrying "reason":
+"runtime_observation_precondition_demoted" -- only when every
+structural-evidence signal (triage-structural-evidence.mts: a runnable
+verification command, an existing candidate file, a fully trusted
+author+editor set) holds for that issue. Requires
+"fetchUserContentEditorsByIssueNumber" to be wired (the live CLI always
+wires it); absent, this never demotes, matching the pre-#2767 behavior
+exactly.
 
 "filtered.open_dependency_reference" (#1536) mirrors A3's own dependency
 check in discover-readiness-check.mjs: a candidate whose body contains an
