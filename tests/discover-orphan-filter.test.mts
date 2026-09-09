@@ -1301,6 +1301,45 @@ test('classifyIssue still trips when an unrelated colon follows the cited issue 
   assert.equal(result.reason, 'runtime_observation_precondition');
 });
 
+test('classifyIssue does not trip when the genuine attribution is the LAST reference before an unrelated earlier one (Copilot/Codex review round 2, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 113,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'See #1. Issue #2 asserted: "confirmed in production: the ' +
+        'deploy pipeline paused for six hours" -- describing an ' +
+        'unrelated event.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'orphan');
+});
+
+test('classifyIssue still trips when the citing issue re-adopts the quoted prerequisite as its own requirement (Codex review round 2, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 114,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Per issue #42: "confirmed in production before shipping" ' +
+        'remains required for this change too.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
 test('filterOrphanIssues buckets a runtime-observation precondition under filtered.runtime_observation_precondition (#2467)', async () => {
   const issues = [
     {

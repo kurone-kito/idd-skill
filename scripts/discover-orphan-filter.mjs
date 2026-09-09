@@ -83,11 +83,27 @@ const TRAILING_QUOTE_PUNCTUATION_PATTERN = /^[.,!?;:]*/;
 // reference from that colon -- "See #42 for rollout details. Acceptance
 // gate: 'X'" has an unrelated label's colon after a sentence break and
 // must NOT match either, even though a colon does directly precede the
-// quote.
+// quote. When more than one issue reference sits in the window ("See #1.
+// Issue #2 asserted: 'X'"), bind to the LAST one, not the first -- an
+// earlier, unrelated reference must not make a genuine attribution look
+// hard-broken (round-2 Copilot/Codex review, PR #2760).
+//
+// Attribution alone does not prove the quoted text is inert history: an
+// issue can cite another issue's prerequisite and explicitly RE-ADOPT it
+// ("Per issue #42: 'confirmed in production before shipping' remains
+// required" -- Codex review, PR #2760). A requirement-assertion word
+// shortly after the quote closes, with no hard break in between, cancels
+// this exclusion the same way `discover-viability-gate.mts`'s
+// requirement-assertion cancellation already does for its own quote
+// exclusion.
 const CITED_ISSUE_ATTRIBUTION_WINDOW = 80;
-const ISSUE_NUMBER_REFERENCE_PATTERN = /#\d+/;
+const ISSUE_NUMBER_REFERENCE_PATTERN = /#\d+/g;
 const CITED_ISSUE_ATTRIBUTION_COLON_PATTERN = /:\s*$/;
 const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN = /[.;\n]|--|—/;
+const CLOSE_QUOTE_SEARCH_WINDOW = 300;
+const ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW = 40;
+const ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN =
+  /\b(required|require[sd]?|requiring|must|needed|needs?|mandatory|necessary)\b/i;
 if (import.meta.main) {
   await runCli();
 }
@@ -148,12 +164,48 @@ function isQuotedMatch(text, start, end) {
     CLOSE_QUOTE_CHARS.has(after)
   );
 }
+// A requirement-assertion word shortly after the quote closes, with no
+// hard break in between, means the citing issue RE-ADOPTS the quoted
+// prerequisite as its own live requirement rather than merely reporting
+// inert history (Codex review, PR #2760). The close side searches a
+// generous bounded window for the first close-quote character -- this
+// exclusion exists precisely for "much longer" quotes, so the closer can
+// be far from the match -- without requiring it to pair with any
+// specific open-quote character (mirrors this file's existing loose
+// open/close-quote membership checks elsewhere).
+function isFollowedByRequirementAssertion(text, quotedContentStart) {
+  const searchEnd = Math.min(
+    text.length,
+    quotedContentStart + CLOSE_QUOTE_SEARCH_WINDOW,
+  );
+  const region = text.slice(quotedContentStart, searchEnd);
+  let closeOffset = -1;
+  for (let i = 0; i < region.length; i++) {
+    if (CLOSE_QUOTE_CHARS.has(region[i])) {
+      closeOffset = i;
+      break;
+    }
+  }
+  if (closeOffset === -1) {
+    return false;
+  }
+  const afterClose = quotedContentStart + closeOffset + 1;
+  const lookahead = text.slice(
+    afterClose,
+    Math.min(
+      text.length,
+      afterClose + ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW,
+    ),
+  );
+  const hardBreak = CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.exec(lookahead);
+  const scoped = hardBreak ? lookahead.slice(0, hardBreak.index) : lookahead;
+  return ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN.test(scoped);
+}
 // A match that opens a longer quoted excerpt attributed to a different,
 // cited issue by number (#2746) -- see the constants above for the
-// motivating shape. Only the open-quote adjacency is required (the close
-// side is deliberately NOT checked here, unlike `isQuotedMatch`: the
-// whole point of this exclusion is the shape where no nearby closing
-// quote follows).
+// motivating shape. Only the open-quote adjacency is required on the
+// open side (unlike `isQuotedMatch`: the whole point of this exclusion
+// is the shape where no nearby closing quote follows the match itself).
 function isAttributedLongQuote(text, start) {
   const before = text[start - 1];
   if (before === undefined || !OPEN_QUOTE_CHARS.has(before)) {
@@ -164,15 +216,18 @@ function isAttributedLongQuote(text, start) {
   if (!CITED_ISSUE_ATTRIBUTION_COLON_PATTERN.test(window)) {
     return false;
   }
-  const referenceMatch = ISSUE_NUMBER_REFERENCE_PATTERN.exec(window);
-  if (!referenceMatch) {
+  const referenceMatches = [...window.matchAll(ISSUE_NUMBER_REFERENCE_PATTERN)];
+  const referenceMatch = referenceMatches.at(-1);
+  if (!referenceMatch || referenceMatch.index === undefined) {
     return false;
   }
   const betweenReferenceAndColon = window.slice(
     referenceMatch.index + referenceMatch[0].length,
   );
-  return !CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.test(
-    betweenReferenceAndColon,
+  return (
+    !CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.test(
+      betweenReferenceAndColon,
+    ) && !isFollowedByRequirementAssertion(text, start)
   );
 }
 /**
