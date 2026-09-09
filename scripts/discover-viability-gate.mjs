@@ -93,15 +93,19 @@ const EXTERNAL_COORDINATION_PATTERN =
 // 1. Negation: the match is governed by a negation cue reaching it with no
 //    hard clause break in between ("no interactive credential minting" --
 //    #2716). `zero` excludes a hyphenated compound ("zero-downtime") so it
-//    is never mistaken for a standalone negation word. A canceling
+//    is never mistaken for a standalone negation word. `without` is a
+//    canceling word, not a cue of its own: "cannot complete this WITHOUT
+//    production access" asserts the access is required, the mirror image
+//    of "no access needed" (Codex review round 2, PR #2757) -- as a
+//    standalone cue it wrongly negated exactly that shape. A canceling
 //    conjunction ("do not proceed UNTIL production access is granted" --
 //    Codex review, PR #2757) flips the negation back to an affirmative
 //    prerequisite: the cue negates the verb before the conjunction, not
 //    the requirement named after it.
 const NEGATION_CUE_PATTERN =
-  /\b(no|not|without|zero(?!-)|never|none|isn'?t|aren'?t|wasn'?t|weren'?t|doesn'?t|don'?t|didn'?t|won'?t|can'?t|cannot)\b/gi;
+  /\b(no|not|zero(?!-)|never|none|isn'?t|aren'?t|wasn'?t|weren'?t|doesn'?t|don'?t|didn'?t|won'?t|can'?t|cannot)\b/gi;
 const NEGATION_CUE_WINDOW = 40;
-const NEGATION_CANCELING_CONJUNCTION_PATTERN = /\b(until|unless)\b/i;
+const NEGATION_CANCELING_CONJUNCTION_PATTERN = /\b(until|unless|without)\b/i;
 // A backward-looking cue (negation or investigative past tense, below)
 // stops governing a match at a period/semicolon/em-dash (HARD_CLAUSE_BREAK_
 // PATTERN, shared with the broad-scope exclusions above), a blank line, or
@@ -136,23 +140,28 @@ function isGovernedByBackwardCue(
 }
 // 2. Quoted example: the match sits on a Markdown blockquote line (an
 //    unambiguous citation on its own), or is bounded by a matching pair of
-//    quote characters within the containing paragraph AND that paragraph
-//    also carries a framing/attribution verb (#2711's inverted-attribution
-//    quotation shape, which soft-wraps the quoted marker across a line
-//    break -- scoped to the paragraph, not the physical line, so that wrap
-//    doesn't defeat the pairing). The framing-verb requirement distinguishes
-//    a genuine cited example from ordinary emphasis-quoting of this issue's
-//    own requirement (`The change requires "production access" before it
-//    can ship` -- Codex review, PR #2757): quote characters alone, with no
-//    reporting/citation cue anywhere in the paragraph, do not exclude. A
-//    plain straight single quote also marks a contraction ("doesn't") or a
-//    possessive after a digit ("2020's"), so a candidate quote character
-//    counts as an opener only when the character right before it is
-//    neither a letter nor a digit, and as a closer only when the character
-//    right after it is neither a letter nor a digit -- a contraction's or
-//    digit-possessive's apostrophe always sits directly adjacent to a
-//    letter or digit on at least one side and fails one of those checks
-//    (Copilot review, PR #2757).
+//    quote characters within the containing paragraph (#2711's
+//    inverted-attribution quotation shape, which soft-wraps the quoted
+//    marker across a line break -- scoped to the paragraph, not the
+//    physical line, so that wrap doesn't defeat the pairing) AND no nearby
+//    requirement-assertion word (4, below) overrides it -- a paired quote
+//    alone does not distinguish a genuine cited example from ordinary
+//    emphasis-quoting of this issue's own requirement (`The change
+//    requires "production access" before it can ship` -- Codex review,
+//    PR #2757); a framing/attribution-verb requirement was tried first but
+//    over-scoped to a whole paragraph (wrongly attributing an unrelated
+//    sentence's own reporting verb) or under-scoped to one sentence
+//    (missing a genuine citation with no reporting verb of its own, as in
+//    #2711's own real body -- Codex review round 2, PR #2757); reusing the
+//    requirement-assertion check already built for generic mentions (4)
+//    avoids both failure modes. A plain straight single quote also marks a
+//    contraction ("doesn't") or a possessive after a digit ("2020's"), so a
+//    candidate quote character counts as an opener only when the character
+//    right before it is neither a letter nor a digit, and as a closer only
+//    when the character right after it is neither a letter nor a digit --
+//    a contraction's or digit-possessive's apostrophe always sits directly
+//    adjacent to a letter or digit on at least one side and fails one of
+//    those checks (Copilot review, PR #2757).
 const QUOTE_CHAR_PAIRS = {
   '"': '"',
   "'": "'",
@@ -160,8 +169,6 @@ const QUOTE_CHAR_PAIRS = {
   '“': '”',
 };
 const QUOTE_ADJACENT_WORD_CHAR_PATTERN = /[A-Za-z0-9]/;
-const QUOTED_EXAMPLE_FRAMING_VERB_PATTERN =
-  /\b(documents?|describes?|says?|states?|explains?|reports?|quotes?|quoted|cites?|cited)\b/i;
 const PARAGRAPH_BREAK_PATTERN = /\n[ \t]*\n/g;
 // 3. Investigative past tense: the match describes an investigation the
 //    issue author already performed while drafting, not remaining work
@@ -305,14 +312,28 @@ export function evaluateA4Viability(issue) {
     criteria,
   };
 }
+// CommonMark code spans open and close on a run of backticks of the SAME
+// length (a multi-backtick delimiter, e.g. ``` `` ```, lets literal single
+// backticks appear inside), not on individual-backtick parity -- a run of a
+// different length while a span is open is literal content, not a closer
+// (#2738 Codex review round 2, PR #2757). A fresh regex literal per call
+// (rather than a shared module-level one) sidesteps both the CLI-entry TDZ
+// ordering rule this file's helpers must follow (see the flag-spec comment
+// below) and any `lastIndex` state leaking across calls.
 function isInsideCodeSpan(corpus, index) {
-  let backtickCount = 0;
-  for (let i = 0; i < index; i += 1) {
-    if (corpus[i] === '`') {
-      backtickCount += 1;
+  const runPattern = /`+/g;
+  let openRunLength = null;
+  let match = runPattern.exec(corpus);
+  while (match !== null && match.index < index) {
+    const runLength = match[0].length;
+    if (openRunLength === null) {
+      openRunLength = runLength;
+    } else if (runLength === openRunLength) {
+      openRunLength = null;
     }
+    match = runPattern.exec(corpus);
   }
-  return backtickCount % 2 === 1;
+  return openRunLength !== null;
 }
 function isGovernedByAvoidanceCue(corpus, matchIndex) {
   const windowStart = Math.max(0, matchIndex - AVOIDANCE_CUE_WINDOW);
@@ -460,10 +481,6 @@ function isInsideQuotedExample(corpus, matchIndex, matchEnd) {
     corpus,
     matchIndex,
   );
-  const paragraph = corpus.slice(paragraphStart, paragraphEnd);
-  if (!QUOTED_EXAMPLE_FRAMING_VERB_PATTERN.test(paragraph)) {
-    return false;
-  }
   const before = corpus.slice(paragraphStart, matchIndex);
   const after = corpus.slice(matchEnd, paragraphEnd);
   for (const [open, close] of Object.entries(QUOTE_CHAR_PAIRS)) {
@@ -481,7 +498,12 @@ function isInsideQuotedExample(corpus, matchIndex, matchEnd) {
     ) {
       continue;
     }
-    return true;
+    // A paired quote alone is not proof of external citation -- a nearby
+    // requirement-assertion word means the quotes are just emphasizing
+    // THIS issue's own live requirement ("The change requires 'production
+    // access' before it can ship" -- Codex review round 2, PR #2757),
+    // regardless of unrelated framing prose elsewhere in the paragraph.
+    return !isNearRequirementAssertion(corpus, matchIndex, matchEnd);
   }
   return false;
 }
@@ -568,7 +590,15 @@ function findUnexcludedExternalCoordinationMatch(corpus) {
   return null;
 }
 export function evaluateAutonomousCompletion(issue) {
-  const corpus = `${issue.title}\n${issue.body}`;
+  // A blank line (not a bare "\n") between title and body, unlike the
+  // other two evaluate* functions' corpus join: CUE_HARD_BREAK_PATTERN
+  // treats "\n[ \t]*\n" as a hard break, so a negation or past-investigation
+  // cue in the title can never govern a match in the body (a short title
+  // like "No credential changes" must not suppress a genuine body blocker
+  // -- Codex review round 2, PR #2757). An ordinary soft-wrapped line
+  // inside the body is still a single "\n" and remains ungoverned by this
+  // rule, per #2711's own wrapped-quotation requirement.
+  const corpus = `${issue.title}\n\n${issue.body}`;
   const match = findUnexcludedExternalCoordinationMatch(corpus);
   if (match !== null) {
     return {

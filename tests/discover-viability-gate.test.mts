@@ -632,6 +632,68 @@ test('still fails autonomous completion when a generic-sounding noun coexists wi
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+// --- PR #2757 review round 2 (Codex): "cannot ... without" as a
+// requirement (not a double negation), a negation cue crossing the
+// title/body boundary, an unrelated attribution verb elsewhere in the
+// paragraph, and a multi-backtick code span --------------------------
+
+test('still fails autonomous completion when "cannot ... without" makes the following phrase a prerequisite (Codex review round 2, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 47,
+    title: 'wire external approval gate',
+    body:
+      'We cannot complete this without production access. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a negation in the title would otherwise cross into the body (Codex review round 2, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 48,
+    title: 'No credential changes',
+    body:
+      'Production access is required before shipping. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when an unrelated attribution verb sits elsewhere in the paragraph (Codex review round 2, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 49,
+    title: 'wire external approval gate',
+    body:
+      'The docs describe local setup. This change requires ' +
+      '"production access" before it can ship. Verification: add unit ' +
+      'tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when a trigger phrase sits inside a multi-backtick code span (Codex review round 2, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 50,
+    title: 'fix docs example formatting',
+    body:
+      'Use ``production access`` as a diagnostic label in the error ' +
+      'message. Single docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('evaluateDiscoverViability fails closed when a lookup aborts', async () => {
   // A non-404 gh failure (auth / rate-limit / network) propagates out of
   // loadIssue instead of being swallowed into a silent issue_not_found.
