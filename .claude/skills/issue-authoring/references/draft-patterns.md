@@ -145,7 +145,7 @@ that a suitability score of `1` carries the configured
 `blocked-by-human` label (default `status:blocked-by-human`), unless an
 `authoring-bucket: needs-decision` marker substitutes the configured
 needs-decision label instead (see
-[Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker));
+[Authoring-bucket marker](contract.md#authoring-bucket-marker));
 use `--config <path>` to point at a policy that overrides the label
 name — this check is also one-directional, it does not flag the
 reverse, a non-`1` score paired with the label. Fix every reported
