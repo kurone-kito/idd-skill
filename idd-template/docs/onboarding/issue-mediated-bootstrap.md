@@ -369,12 +369,13 @@ placeholder in
 that value is derived. The suitability score of `1` reflects that
 Discover structurally cannot route this issue pre-import, not a quality
 judgment about the change itself; per the issue-authoring skill's
-contract, a score of `1` carries the `status:blocked-by-human` label
-unless an `authoring-bucket: needs-decision` marker exempts it
-(`skills/issue-authoring/references/contract.md`, "Authoring-bucket
-marker") — here the label applies, correctly signaling that this issue
-needs a human or a narrowly-scoped, pre-authorized agent rather than
-the ordinary autonomous loop. Use the operator-confirmed `labels.blockedByHumanLabelName`
+contract, a score of `1` carries the `status:blocked-by-human` label,
+unless an `authoring-bucket: needs-decision` marker substitutes the
+configured needs-decision label instead (see
+[Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
+— here the label applies, correctly signaling that this issue needs a
+human or a narrowly-scoped, pre-authorized agent rather than the
+ordinary autonomous loop. Use the operator-confirmed `labels.blockedByHumanLabelName`
 value from Step 1B for both issue publication and label creation below —
 default to `status:blocked-by-human` only when that default was actually
 selected, never unconditionally. A pre-import repository may not have

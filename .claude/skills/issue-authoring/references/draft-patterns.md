@@ -142,8 +142,9 @@ Use `--shape roadmap` or `--shape child` for those shapes, `--stdin`
 instead of `--body-file` when the draft is not yet on disk, and
 `--label <name>` (repeatable) to pass proposed labels for the check
 that a suitability score of `1` carries the configured
-`blocked-by-human` label (default `status:blocked-by-human`) unless an
-`authoring-bucket: needs-decision` marker exempts it (see
+`blocked-by-human` label (default `status:blocked-by-human`), unless an
+`authoring-bucket: needs-decision` marker substitutes the configured
+needs-decision label instead (see
 [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker));
 use `--config <path>` to point at a policy that overrides the label
 name — this check is also one-directional, it does not flag the

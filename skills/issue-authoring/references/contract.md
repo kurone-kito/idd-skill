@@ -697,8 +697,9 @@ Validation expectations:
 - the issue stays discoverable under the target repository's
   `issue-scope` setting
 - exactly one autopilot-suitability footer with an integer 1-5
-  marker; a score of `1` carries `status:blocked-by-human` unless an
-  `authoring-bucket: needs-decision` marker exempts it (see
+  marker; a score of `1` carries `status:blocked-by-human`, unless an
+  `authoring-bucket: needs-decision` marker substitutes the configured
+  needs-decision label instead (see
   [Authoring-bucket marker](#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `orphan` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
@@ -728,8 +729,9 @@ Validation expectations:
 - nested roadmap entries stay identifiable as coordination/audit nodes
   instead of normal execution leaves
 - exactly one autopilot-suitability footer with an integer 1-5
-  marker; a score of `1` carries `status:blocked-by-human` unless an
-  `authoring-bucket: needs-decision` marker exempts it (see
+  marker; a score of `1` carries `status:blocked-by-human`, unless an
+  `authoring-bucket: needs-decision` marker substitutes the configured
+  needs-decision label instead (see
   [Authoring-bucket marker](#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `roadmap` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
@@ -762,8 +764,9 @@ Validation expectations:
   justified
 - the issue can be claimed independently without absorbing sibling work
 - exactly one autopilot-suitability footer with an integer 1-5
-  marker; a score of `1` carries `status:blocked-by-human` unless an
-  `authoring-bucket: needs-decision` marker exempts it (see
+  marker; a score of `1` carries `status:blocked-by-human`, unless an
+  `authoring-bucket: needs-decision` marker substitutes the configured
+  needs-decision label instead (see
   [Authoring-bucket marker](#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `child` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))

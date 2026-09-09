@@ -1452,8 +1452,9 @@ Validation expectations:
   the draft includes a post-publication maintainer approval step after
   the final title, body, and generated plan are stable
 - exactly one autopilot-suitability footer with an integer 1-5 marker; a
-  score of `1` carries `status:blocked-by-human` unless an
-  `authoring-bucket: needs-decision` marker exempts it (see
+  score of `1` carries `status:blocked-by-human`, unless an
+  `authoring-bucket: needs-decision` marker substitutes the configured
+  needs-decision label instead (see
   [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `orphan` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
@@ -1498,8 +1499,9 @@ Validation expectations:
 - the roadmap can survive multi-session handoffs without relying on
   private session memory
 - exactly one autopilot-suitability footer with an integer 1-5 marker; a
-  score of `1` carries `status:blocked-by-human` unless an
-  `authoring-bucket: needs-decision` marker exempts it (see
+  score of `1` carries `status:blocked-by-human`, unless an
+  `authoring-bucket: needs-decision` marker substitutes the configured
+  needs-decision label instead (see
   [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `roadmap` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
@@ -1538,8 +1540,9 @@ Validation expectations:
   justified
 - the issue can be claimed independently without absorbing sibling work
 - exactly one autopilot-suitability footer with an integer 1-5 marker; a
-  score of `1` carries `status:blocked-by-human` unless an
-  `authoring-bucket: needs-decision` marker exempts it (see
+  score of `1` carries `status:blocked-by-human`, unless an
+  `authoring-bucket: needs-decision` marker substitutes the configured
+  needs-decision label instead (see
   [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
 - passes the `audit-authored-issue` mechanical pre-publish gate using
   `--shape child` (the linter's shape enum names this schema `child`,
