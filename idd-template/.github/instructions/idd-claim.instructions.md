@@ -632,9 +632,13 @@ chronologically and apply these rules:
    - `forcedHandoff.mode` is `human-gated` (default `disabled`);
    - `oldAgentId` / `oldClaimId` / `branch` all match the active claim;
    - when an open PR backs the active claim, the marker's
-     `contextScope`/`prFirstCommitAt` pair must show `issue-plus-pr`
-     naming that PR via `linkedPr`, or a handoff predating the PR's
-     first commit (issue #1058 Part B); otherwise it is ignored.
+     `contextScope` must be `issue-plus-pr` naming that PR via
+     `linkedPr`, unless the caller supplies `prFirstCommitAt` (PR
+     context, not marker evidence) and the handoff predates it (issue
+     #1058 Part B) — the merge write-gate opts in, Resume routing never
+     does (see
+     [Forced-handoff strictness](../../docs/idd-design-rationale.md#forced-handoff-strictness-strict-resume-vs-lenient-relay-merge));
+     otherwise the marker is ignored.
 
    When all hold, replace the active claim with the successor
    (`newAgentId` / `newClaimId`, same `branch`, `supersedes =
