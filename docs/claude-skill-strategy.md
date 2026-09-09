@@ -102,13 +102,13 @@ Two observations follow:
 
 ## Strategy Fit (Go / No-Go)
 
-The Copilot-first policy in [AI tooling strategy](ai-strategy.md)
-prefers preserving existing Copilot behavior over abstracting early and
-allows extraction "only after benchmarks show that the Copilot-first
-workflow does not regress"; `.github/copilot-instructions.md` keeps the
-canonical layout "unless benchmark results justify" a change. Applying
-that bar, **all** of the following would have to hold before shipping an
-execution-loop skill:
+The single-source-plus-adapters policy in
+[AI tooling strategy](ai-strategy.md) treats `AGENTS.md` as the one
+canonical guide and keeps `CLAUDE.md`, `GEMINI.md`, and
+`.github/copilot-instructions.md` as thin adapters that import or point
+to it rather than duplicating guidance. Applying that bar, **all** of
+the following would have to hold before shipping an execution-loop
+skill:
 
 1. **Observed routing failures**: recorded Claude Code sessions that
    failed to route from `CLAUDE.md` into the correct phase file, at a
@@ -118,9 +118,10 @@ execution-loop skill:
 2. **A shim measurably fixes them**: the same scenarios succeed with the
    shim installed, attributable to the skill surface rather than to
    prompt changes.
-3. **No Copilot-first regression**: benchmarks show the Copilot
-   workflow is unaffected (the shim touches no shared instruction
-   files, so this should hold by construction and must be confirmed).
+3. **No canonical-layout regression**: the shim does not duplicate or
+   fork any guidance `AGENTS.md` and its adapters already carry (the
+   shim touches no shared instruction files, so this should hold by
+   construction and must be confirmed).
 4. **Approval boundary preserved**: the shim demonstrably does not
    start the loop on auto-trigger without the operator's explicit
    request.

@@ -80,7 +80,7 @@ distinct from the phase rules in `.github/instructions/`:
 | reference | [Frontend and Quality Hardening Log Segment](workshop/log-segments/05-frontend-quality.md) | Captures the timestamped frontend-and-quality-hardening log segment of the VRChat Event Calendar IDD workshop session. |
 | reference | [VRChat Event Calendar IDD Workshop Log](workshop/workshop-log.md) | Is the complete timestamped record of the IDD session that built the VRChat Event Calendar from an empty repository to a working MVP. |
 | workflow | [IDD workflow guide](idd-workflow.md) | Routes each agent to its entry file and the phase file matching its current state. |
-| design | [AI tooling strategy](ai-strategy.md) | Explains why this repository prioritizes GitHub Copilot and how the other agent compatibility entry files should stay in sync with it. |
+| design | [AI tooling strategy](ai-strategy.md) | Explains why AGENTS.md is this repository's canonical AI guide and how the adapter entry files stay in sync with it. |
 | design | [Claude Code Skill Strategy for the IDD Execution Loop](claude-skill-strategy.md) | Records the design evaluation and no-go decision for packaging the IDD execution loop as a Claude Code skill. |
 | design | [IDD — Design Rationale and Maintainer Notes](idd-design-rationale.md) | Collects maintainer-facing rationale for why IDD phase rules exist as they do, organized by phase file. |
 | design | [IDD Helper Script Evaluation](idd-helper-scripts.md) | Records the current adoption decision and trade-offs for IDD's optional helper scripts so future reviews do not re-evaluate them from scratch. |
