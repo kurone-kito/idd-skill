@@ -225,6 +225,23 @@ section of the contract for the binding rules.
   onto issues published before this marker existed, or on an edit to
   one).
 
+### Upstream-candidate marker
+
+A locally authored issue may carry a hidden **upstream-candidate
+marker** (`<!-- {marker-prefix}-upstream-candidate: true -->`)
+alongside the GitHub label `status:upstream-candidate`, recording that
+its root cause was judged to be a defect in an `idd-template`-sourced
+instruction, doc, or helper itself, not in the current repository.
+Only produced when `upstreamEscalation.enabled` is `true` in
+`.github/idd/config.json`. See
+[Upstream-candidate escalation](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/.github/instructions/idd-overview-appendix.instructions.md#upstream-candidate-escalation)
+in the reference appendix for the qualifying criteria, and the
+[Upstream-candidate marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#upstream-candidate-marker)
+section of the contract for the binding rules.
+
+- Never a cross-repository write: the marker and label exist entirely
+  within the current repository.
+
 ## Specificity target
 
 Issue drafting should aim for a level of specificity where a

@@ -509,6 +509,13 @@ this way must never cite the triage tooling itself as a completion
 dependency: its acceptance criteria stay implementable by any agent,
 including one lacking that specific integration.
 
+A sibling entry path exists for a signal whose *root cause* lives in a
+different repository (the `idd-skill` distribution itself) rather than
+in this one: see
+[Upstream-candidate escalation](../.github/instructions/idd-overview-appendix.instructions.md#upstream-candidate-escalation)
+in the reference appendix for the qualifying criteria and the local
+marker/label convention it produces.
+
 ## Issue-author approval contract
 
 Repositories may also keep a secure-by-default issue-author approval

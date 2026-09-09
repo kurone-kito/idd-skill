@@ -1173,6 +1173,37 @@ Binding rules:
 Backfill is opportunistic and follows the same claim-state precondition
 as the suitability footer.
 
+## Upstream-candidate marker
+
+A locally authored issue may additionally carry a hidden
+**upstream-candidate marker** recording that its root cause was judged
+to be a defect in an `idd-template`-sourced instruction, doc, or
+helper itself, not in the current repository. See
+[Upstream-candidate escalation](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/.github/instructions/idd-overview-appendix.instructions.md#upstream-candidate-escalation)
+for the qualifying criteria; this section documents only the
+marker/label pair.
+
+```text
+<!-- {marker-prefix}-upstream-candidate: true -->
+```
+
+Binding rules:
+
+- **Opt-in, gated.** Produced only when `upstreamEscalation.enabled`
+  is `true` in `.github/idd/config.json`; absent or `false` means
+  this marker and label are never applied.
+- **Paired with a label.** Carries the GitHub label
+  `status:upstream-candidate` alongside the marker;
+  `audit-authored-issue.mts`'s `upstream-candidate-marker-label` check
+  enforces the two agree, gated on the same
+  `upstreamEscalation.enabled` toggle.
+- **Authoring marker, not operational marker.** Like
+  `autopilot-suitability`, it is body content and must never be added
+  to `OPERATIONAL_MARKERS` or subjected to F4 minimization.
+- **Local-only.** Never a cross-repository write. The marker and label
+  exist entirely within the current repository; nothing is ever
+  posted upstream by this workflow.
+
 ## Authoring hold and release
 
 Issue authoring uses a two-stage contract: drafting and publishing
