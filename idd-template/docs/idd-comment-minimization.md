@@ -126,19 +126,20 @@ The JSON report includes these fields:
 ## Timing
 
 F4 (merge-gated) cleanup is the default timing for every marker or
-comment kind not explicitly classified `wired` in the hide-policy table
-below. For those, run minimization only after one of these is true:
+comment kind not explicitly classified `wired` in `MARKER_HIDE_POLICY`
+(`src/scripts/marker-helpers.mts`). For those, run minimization only
+after one of these is true:
 
 - the PR has already merged
 - a maintainer explicitly starts a merged-PR audit
 
 **Exception -- hide-at-post-time for `wired` families** (issue #731,
-issue #733, issue #2751). A marker family classified `wired` in `MARKER_HIDE_POLICY`
-(`src/scripts/marker-helpers.mts`) may be minimized immediately after its
-own new instance's POST+verify succeeds, pre-merge, using that family's
-documented supersession/grouping key -- never for any other reason
-during an active E or F gate. Three families ship this today: the claim
-chain (`claimed-by:`/`unclaimed-by:`/`activation-nonce:`, grouped by
+issue #733, issue #2751). A `wired` family may be minimized immediately
+after its own new instance's POST+verify succeeds, pre-merge, using
+that family's documented supersession/grouping key -- never for any
+other reason during an active E or F gate. Three families ship this
+today: the claim chain
+(`claimed-by:`/`unclaimed-by:`/`activation-nonce:`, grouped by
 `supersedes:` lineage, `idd-claim.instructions.md`), `review-watermark:`/
 `review-baseline:` (grouped by same claim-id,
 `idd-review-snapshot.instructions.md`), and the `advisory-wait` family
