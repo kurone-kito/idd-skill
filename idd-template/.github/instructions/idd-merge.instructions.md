@@ -164,13 +164,22 @@ Before any mutating action in F3, apply the
    - D3.5 steps 6-7 and D3.7 (`idd-pr-submit.instructions.md`) have
      been re-run against `${PR_HEAD_SHA_F3}` (#2749) — covers commits
      that landed between F2 and this final gate, for example a
-     required `{development-branch}` sync. Skip D3.5 steps 6-7 under
-     the same non-default-`{development-branch}` exemption D3.5 itself
+     required `{development-branch}` sync. Before running them,
+     confirm the local worktree is checked out at `${PR_HEAD_SHA_F3}`
+     exactly (`git fetch` plus `git checkout`/`git reset --hard` if a
+     resumed or external-push session left it stale) — D3.5 step 7's
+     `git log` and D3.7's inherited `git diff` both read local git
+     state, not the remote PR directly. Skip D3.5 steps 6-7 under the
+     same non-default-`{development-branch}` exemption D3.5 itself
      carries. On a mismatch, fix it per D3.5/D3.7's own documented
-     handling. If step 7's fix amended or rebased a commit (changing
-     HEAD), return to E1 instead of continuing this gate — F2's own
-     snapshot is invalidated by a new HEAD. Otherwise repeat this
-     field once; if it still fails, stop and do not merge.
+     handling. Any fix here — whether or not it changes HEAD, since a
+     PR-body edit alone (D3.7's remediation, or D3.5 step 6's) still
+     counts — invalidates this step's own claim re-validation and
+     advisory state revalidation above; re-run both before merging. If
+     the fix additionally amended or rebased a commit (changing HEAD),
+     return to E1 instead of just re-validating in place — F2's own
+     snapshot is invalidated by a new HEAD. Otherwise repeat this field
+     once; if it still fails, stop and do not merge.
 
    For the head-SHA field, use this **copy-paste-safe, fail-closed**
    check — both operands fully quoted, no glob, abort on mismatch —
