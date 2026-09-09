@@ -1263,6 +1263,44 @@ test('classifyIssue still trips a quoted precondition with no cited-issue-number
   assert.equal(result.reason, 'runtime_observation_precondition');
 });
 
+test('classifyIssue still trips when the colon does not directly introduce the quote (CodeRabbit review, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 111,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Issue #2743: prior history. The requirement is "confirmed in ' +
+        'production before shipping, per the runbook."',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test('classifyIssue still trips when an unrelated colon follows the cited issue reference across a sentence break (Copilot/Codex review, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 112,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'See #42 for rollout details. Acceptance gate: "confirmed in ' +
+        'production before shipping, per the runbook."',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
 test('filterOrphanIssues buckets a runtime-observation precondition under filtered.runtime_observation_precondition (#2467)', async () => {
   const issues = [
     {

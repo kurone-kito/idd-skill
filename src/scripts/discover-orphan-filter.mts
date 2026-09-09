@@ -79,8 +79,21 @@ const TRAILING_QUOTE_PUNCTUATION_PATTERN = /^[.,!?;:]*/;
 // open-quote character immediately before the match (the same adjacency
 // `isQuotedMatch` requires), preceded within a bounded window by an
 // issue-number reference and then a colon introducing the quotation.
+//
+// Two conditions bound the colon to that same attribution, not just any
+// nearby colon (Copilot/Codex/CodeRabbit review, PR #2760): the colon
+// must directly introduce the quote (only whitespace between the colon
+// and the opening quote character -- "Issue #42: prior history. The
+// requirement is 'X'" has no such colon and must NOT match), and no hard
+// clause break (period/semicolon/em-dash) may separate the issue-number
+// reference from that colon -- "See #42 for rollout details. Acceptance
+// gate: 'X'" has an unrelated label's colon after a sentence break and
+// must NOT match either, even though a colon does directly precede the
+// quote.
 const CITED_ISSUE_ATTRIBUTION_WINDOW = 80;
 const ISSUE_NUMBER_REFERENCE_PATTERN = /#\d+/;
+const CITED_ISSUE_ATTRIBUTION_COLON_PATTERN = /:\s*$/;
+const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN = /[.;\n]|--|—/;
 
 /** Reasons that keep an issue out of the orphan candidate list. */
 export type OrphanFilteredReason =
@@ -329,14 +342,19 @@ function isAttributedLongQuote(text: string, start: number): boolean {
   }
   const windowStart = Math.max(0, start - 1 - CITED_ISSUE_ATTRIBUTION_WINDOW);
   const window = text.slice(windowStart, start - 1);
+  if (!CITED_ISSUE_ATTRIBUTION_COLON_PATTERN.test(window)) {
+    return false;
+  }
   const referenceMatch = ISSUE_NUMBER_REFERENCE_PATTERN.exec(window);
   if (!referenceMatch) {
     return false;
   }
-  const afterReference = window.slice(
+  const betweenReferenceAndColon = window.slice(
     referenceMatch.index + referenceMatch[0].length,
   );
-  return afterReference.includes(':');
+  return !CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.test(
+    betweenReferenceAndColon,
+  );
 }
 
 /**
