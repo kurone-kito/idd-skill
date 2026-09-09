@@ -697,7 +697,8 @@ Validation expectations:
 - the issue stays discoverable under the target repository's
   `issue-scope` setting
 - exactly one autopilot-suitability footer with an integer 1-5
-  marker; a score of `1` carries `status:blocked-by-human`, unless an
+  marker; a score of `1` carries the configured `blocked-by-human` label
+  (default `status:blocked-by-human`), unless an
   `authoring-bucket: needs-decision` marker substitutes the configured
   needs-decision label instead (see
   [Authoring-bucket marker](#authoring-bucket-marker))
@@ -729,7 +730,8 @@ Validation expectations:
 - nested roadmap entries stay identifiable as coordination/audit nodes
   instead of normal execution leaves
 - exactly one autopilot-suitability footer with an integer 1-5
-  marker; a score of `1` carries `status:blocked-by-human`, unless an
+  marker; a score of `1` carries the configured `blocked-by-human` label
+  (default `status:blocked-by-human`), unless an
   `authoring-bucket: needs-decision` marker substitutes the configured
   needs-decision label instead (see
   [Authoring-bucket marker](#authoring-bucket-marker))
@@ -764,7 +766,8 @@ Validation expectations:
   justified
 - the issue can be claimed independently without absorbing sibling work
 - exactly one autopilot-suitability footer with an integer 1-5
-  marker; a score of `1` carries `status:blocked-by-human`, unless an
+  marker; a score of `1` carries the configured `blocked-by-human` label
+  (default `status:blocked-by-human`), unless an
   `authoring-bucket: needs-decision` marker substitutes the configured
   needs-decision label instead (see
   [Authoring-bucket marker](#authoring-bucket-marker))

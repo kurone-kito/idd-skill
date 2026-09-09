@@ -369,8 +369,9 @@ placeholder in
 that value is derived. The suitability score of `1` reflects that
 Discover structurally cannot route this issue pre-import, not a quality
 judgment about the change itself; per the issue-authoring skill's
-contract, a score of `1` carries the `status:blocked-by-human` label,
-unless an `authoring-bucket: needs-decision` marker substitutes the
+contract, a score of `1` carries the configured `blocked-by-human` label
+(default `status:blocked-by-human`), unless an
+`authoring-bucket: needs-decision` marker substitutes the
 configured needs-decision label instead (see
 [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
 — here the label applies, correctly signaling that this issue needs a
