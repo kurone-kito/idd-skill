@@ -190,11 +190,13 @@ future track adds it -- concretely, the post-merge F4 batch means
 (`operationalMarkerPrefix`) against comments on the merged PR itself,
 which recognizes the full `OPERATIONAL_MARKERS` set directly. The
 running code never parses this document, so the vendored helper's own
-dry run is unaffected by the Candidate Rules section below being stale
-(that list predates several `f4-only`-classified families added since).
-Only the manual GraphQL fallback, which has no code behind it and uses
-that list as its literal operating procedure, is actually narrowed by
-the gap (tracked as issue #2778). A third `MARKER_HIDE_POLICY` kind,
+dry run never depends on the Candidate Rules section below staying in
+sync with `MARKER_HIDE_POLICY`. Only the manual GraphQL fallback, which
+has no code behind it and uses that list as its literal operating
+procedure, was narrowed when that list fell behind (issue #2778
+reconciled the two and added a mechanical drift-guard test,
+`tests/marker-helpers-facade.test.mts`, so a future drift fails closed
+instead of recurring silently). A third `MARKER_HIDE_POLICY` kind,
 `excluded`, covers markers deliberately kept out of both groupings
 (each for the reason on its own
 entry in `MARKER_HIDE_POLICY`). Two of those are permanently outside F4's
@@ -353,12 +355,39 @@ IDD operational marker comments may be minimized as `OUTDATED` only when
 the PR is merged and the marker is no longer needed for resume, advisory
 wait, or review-currency checks. Candidate prefixes are:
 
+- `<!-- claimed-by:`
+- `<!-- unclaimed-by:`
 - `<!-- review-watermark:`
 - `<!-- review-baseline:`
 - `advisory-wait:`
 - `advisory-wait-recovery:`
 - `<!-- advisory-wait:`
 - `advisory-reroll:`
+- `review-ack:`
+- `copilot-unavailable:`
+- `<!-- idd-local-validation-evidence:`
+
+This list tracks every `OPERATIONAL_MARKERS` prefix
+(`src/scripts/marker-helpers.mts`) classified `wired` or `f4-only` in
+`MARKER_HIDE_POLICY` -- i.e. everything except the `excluded` prefixes
+below (issue #2778). **Excluded from this list** -- these are also
+`OPERATIONAL_MARKERS` prefixes, but deliberately never candidates for
+this manual `OUTDATED` fallback (full reasoning in each entry's own
+`MARKER_HIDE_POLICY` record; see also "## Timing" above):
+
+- `<!-- activation-nonce:` -- issue-scoped (posted to the claim issue,
+  not the PR) and has no hide-at-post-time wiring yet.
+- `<!-- forced-handoff:` -- permanent maintainer-authority audit record
+  of a claim transfer; never minimize it.
+- `<!-- idd-external-check-waiver:` -- maintainer-authority marker; a
+  correct grouping key needs the embedded `check:` selector, and hiding
+  a still-relevant waiver for a different check would hide live
+  authorization.
+- `<!-- idd-provider-outage-declaration:` and
+  `<!-- idd-provider-outage-advanced:` -- issue-scoped, cross-PR
+  declare/advance protocol with no clean single-PR grouping key.
+- `<!-- idd-provider-outage-park:` -- needs claim-lineage-aware
+  supersession the marker carries no reference for.
 
 Always skip candidates when any of these are true:
 
