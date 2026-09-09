@@ -352,7 +352,15 @@ condition below accounts for this.
   tool-timeout kill of the watch call is not a CI verdict — re-issue
   the same blocking watch, keep accumulating elapsed time against the
   bound above, and do not fall back to `run_in_background` or another
-  detached/backgrounded mechanism just because of the kill. Neither
+  detached/backgrounded mechanism just because of the kill. This
+  reissue-on-timeout guidance is scoped to an idempotent, read-only
+  remote poll like the watch call above. Never blindly re-issue a
+  heavy, non-idempotent local command (a full build, test, or lint run)
+  that auto-backgrounds past the tool's default timeout — check whether
+  the prior invocation is still running first (e.g. via the calling
+  tool's own background-task listing or equivalent), then await/reap it
+  or reuse its eventual result rather than starting a second concurrent
+  instance. Neither
   watches Copilot review state — see
   `idd-advisory-wait.instructions.md`. A bare `sleep` may
   be sandboxed or blocked in some runtimes (preventive; no observed
