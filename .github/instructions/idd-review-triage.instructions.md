@@ -546,8 +546,8 @@ zero Accepted PATH A items **and** at least one PATH B item got a
 _completed-review_ disposition (never a notice-only rejection — see
 the E6 non-review-notice rule); or (b) the current HEAD is eligible
 for **AW3-S**'s settled-window (non-pending) entry (running
-`advisory-wait-state` reports `staleRequestRecovery.action ==
-"attempt"` for that entry) — D4 and F2 each already consult **AW3-S**
+`advisory-wait-state` reports `staleRequestRecovery.action` as
+`"attempt"` for that entry) — D4 and F2 each already consult **AW3-S**
 independently for this same settled-window entry (`#2726`), but a
 true-virgin empty snapshot otherwise never runs E14 through this gate
 specifically; condition (b) is a defense-in-depth backstop that
