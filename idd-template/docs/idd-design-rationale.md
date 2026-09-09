@@ -379,7 +379,7 @@ reporting the sibling path is not evidence those tools moved with it.
 
 ### C1/B2 critique pass — Grok `spawn_subagent` needs a bounded fallback
 
-Unlike Codex CLI's critique-pass row, Grok Build's had no fallback
+Grok Build's critique-pass row, unlike Codex CLI's, had no fallback
 when `spawn_subagent` is unavailable, unsuitable, or fails — Grok
 _has_ `spawn_subagent`, so a successful-but-unbounded pass never fell
 back to a structured self-critique. Observed 2026-09-09 in the Grok
