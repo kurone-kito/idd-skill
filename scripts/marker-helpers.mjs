@@ -279,7 +279,7 @@ const MARKER_HIDE_POLICY_ENTRIES = [
     label: '<!-- forced-handoff:',
     policy: 'excluded',
     reason:
-      'Permanent maintainer-authority audit record of a claim transfer; never listed in any documented F4 minimization candidate-prefix list and never minimized.',
+      'Permanent maintainer-authority audit record of a claim transfer. The only excluded family with a matching F4 exemption today: audit-pr-cleanup.mts hardcodes a skip for this prefix.',
   },
   {
     label: '<!-- idd-external-check-waiver:',

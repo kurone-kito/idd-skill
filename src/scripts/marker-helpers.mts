@@ -456,8 +456,16 @@ export const OPERATIONAL_MARKERS: readonly OperationalMarker[] = Object.freeze(
  * (see `docs/idd-comment-minimization.md`'s "## Timing" section); `f4-only`
  * families have no hide-at-post-time wiring yet, so the post-merge F4
  * cleanup batch (`docs/idd-comment-minimization.md`'s Candidate Rules) is
- * their only cleanup path today; `excluded` families are deliberately never
- * minimized, each for the reason recorded on its own entry below.
+ * their only cleanup path today; `excluded` families are deliberately kept
+ * out of the `wired` pre-merge grouping, each for the reason recorded on
+ * its own entry below. This classification alone does not guarantee F4
+ * protection too: only `<!-- forced-handoff:` also carries a matching F4
+ * exemption today (`audit-pr-cleanup.mts`'s `evaluateOperationalComment`
+ * hardcodes a skip for that one prefix). The other four `excluded` entries
+ * have no equivalent exemption yet and are swept by F4's generic
+ * stale-marker rule exactly like an ordinary `f4-only` family -- a real
+ * gap their own reasons argue against, flagged for a follow-up rather than
+ * fixed by this classification pass.
  */
 export type MarkerHidePolicyKind = 'wired' | 'f4-only' | 'excluded';
 
@@ -537,7 +545,7 @@ const MARKER_HIDE_POLICY_ENTRIES: readonly MarkerHidePolicyEntry[] = [
     label: '<!-- forced-handoff:',
     policy: 'excluded',
     reason:
-      'Permanent maintainer-authority audit record of a claim transfer; never listed in any documented F4 minimization candidate-prefix list and never minimized.',
+      'Permanent maintainer-authority audit record of a claim transfer. The only excluded family with a matching F4 exemption today: audit-pr-cleanup.mts hardcodes a skip for this prefix.',
   },
   {
     label: '<!-- idd-external-check-waiver:',

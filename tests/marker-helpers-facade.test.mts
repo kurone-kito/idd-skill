@@ -1,10 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as direct from '../src/scripts/marker-helpers.mts';
-import {
-  MARKER_HIDE_POLICY,
-  OPERATIONAL_MARKERS,
-} from '../src/scripts/marker-helpers.mts';
 import * as facade from '../src/scripts/protocol-helpers.mts';
 
 // Wave 1 of the protocol-helpers split (#1209) moved every operational-marker
@@ -77,23 +73,24 @@ test('protocol-helpers re-exports every sampled marker-helpers name by identity'
 // so F4 cleanup silently missed it. This asserts every OPERATIONAL_MARKERS
 // entry has exactly one MARKER_HIDE_POLICY classification: a future new
 // entry with no classification fails this test instead of drifting quietly.
+// (A `policyLabels.length === new Set(policyLabels).size` duplicate check
+// was considered here and dropped: `MARKER_HIDE_POLICY.keys()` can never
+// contain a duplicate -- Map key sets are unique by construction -- so
+// that comparison could never fail. A source-array label collision instead
+// shrinks the map below OPERATIONAL_MARKERS' label count, which the
+// deepStrictEqual set-equality check below already catches.)
 test('MARKER_HIDE_POLICY classifies every OPERATIONAL_MARKERS entry exactly once', () => {
-  const markerLabels = OPERATIONAL_MARKERS.map((marker) => marker.label);
-  const policyLabels = [...MARKER_HIDE_POLICY.keys()];
+  const markerLabels = direct.OPERATIONAL_MARKERS.map((marker) => marker.label);
+  const policyLabels = [...direct.MARKER_HIDE_POLICY.keys()];
 
-  assert.strictEqual(
-    policyLabels.length,
-    new Set(policyLabels).size,
-    'MARKER_HIDE_POLICY must not carry duplicate labels',
-  );
   assert.deepStrictEqual(
     new Set(policyLabels),
     new Set(markerLabels),
     'MARKER_HIDE_POLICY must classify exactly the OPERATIONAL_MARKERS label set (no missing, no stale, no extra entries)',
   );
 
-  for (const marker of OPERATIONAL_MARKERS) {
-    const entry = MARKER_HIDE_POLICY.get(marker.label);
+  for (const marker of direct.OPERATIONAL_MARKERS) {
+    const entry = direct.MARKER_HIDE_POLICY.get(marker.label);
     assert.ok(
       entry,
       `MARKER_HIDE_POLICY is missing a classification for ${marker.label}`,
