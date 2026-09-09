@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as direct from '../src/scripts/marker-helpers.mts';
 import * as facade from '../src/scripts/protocol-helpers.mts';
+
+/**
+ * The canonical source (`idd-template/`) for
+ * `docs/idd-comment-minimization.md` -- an exact-mode sync pair
+ * (`audit/sync-manifest.json`'s `idd-comment-minimization-doc` entry),
+ * so reading the `idd-template/` copy here is equivalent to reading the
+ * repo-root mirror but avoids depending on `sync-docs.mjs` having
+ * already run.
+ */
+const COMMENT_MINIMIZATION_DOC = readFileSync(
+  new URL('../idd-template/docs/idd-comment-minimization.md', import.meta.url),
+  'utf8',
+);
 
 // Wave 1 of the protocol-helpers split (#1209) moved every operational-marker
 // render/parse primitive into marker-helpers.mts and made protocol-helpers.mts
@@ -112,6 +126,96 @@ test('MARKER_HIDE_POLICY classifies every OPERATIONAL_MARKERS entry exactly once
       `${marker.label}: hide-policy entry must carry a non-empty reason`,
     );
   }
+});
+
+// #2778: guards the reconciliation between
+// `docs/idd-comment-minimization.md`'s (canonical `idd-template/` source's)
+// "## Candidate Rules" section and `MARKER_HIDE_POLICY`, mirroring the
+// #1705/#2752 `OPERATIONAL_MARKERS` vs `MARKER_HIDE_POLICY` drift guard
+// above. Before #2778, that doc's `OUTDATED` candidate-prefix list had
+// silently fallen behind `MARKER_HIDE_POLICY` (it listed only 6 of 11
+// non-`excluded` prefixes) -- an adopter following only the documented
+// manual/GraphQL fallback (no vendored helper scripts) would miss cleanup
+// for every marker family missing from that list. This reads the real doc
+// file rather than a hand-typed copy of its expected content, so a future
+// doc edit or a future new marker family fails this test instead of
+// drifting quietly again. Extraction uses plain substring containment on
+// each known `OPERATIONAL_MARKERS` label (`` `${label}` ``) rather than a
+// line-based bullet parser, since `audit-code-span-wrap.mjs` already
+// guarantees, repo-wide via `pre-push-validate`, that a code span is never
+// split mid-token across a line wrap -- so a label's backtick-quoted form
+// is always contiguous text regardless of how the surrounding prose
+// wraps, including the doc's own two-label-per-bullet entries (e.g. the
+// `idd-provider-outage-declaration:`/`idd-provider-outage-advanced:`
+// pair).
+test('idd-comment-minimization.md Candidate Rules list matches MARKER_HIDE_POLICY', () => {
+  const sectionStart = COMMENT_MINIMIZATION_DOC.indexOf('## Candidate Rules');
+  assert.notStrictEqual(
+    sectionStart,
+    -1,
+    'idd-comment-minimization.md must have a "## Candidate Rules" section',
+  );
+  const nextHeadingIndex = COMMENT_MINIMIZATION_DOC.indexOf(
+    '\n## ',
+    sectionStart + 1,
+  );
+  const section = COMMENT_MINIMIZATION_DOC.slice(
+    sectionStart,
+    nextHeadingIndex === -1 ? undefined : nextHeadingIndex,
+  );
+
+  const candidatePrefixesIndex = section.indexOf('Candidate prefixes are:');
+  assert.notStrictEqual(
+    candidatePrefixesIndex,
+    -1,
+    'idd-comment-minimization.md must have a "Candidate prefixes are:" OUTDATED list',
+  );
+  const excludedNoteIndex = section.indexOf('Excluded from this list');
+  assert.notStrictEqual(
+    excludedNoteIndex,
+    -1,
+    'idd-comment-minimization.md\'s Candidate Rules section must document its exclusions ("Excluded from this list")',
+  );
+  assert.ok(
+    excludedNoteIndex > candidatePrefixesIndex,
+    '"Excluded from this list" must follow "Candidate prefixes are:" so the two blocks below do not overlap',
+  );
+
+  const candidateBlock = section.slice(
+    candidatePrefixesIndex,
+    excludedNoteIndex,
+  );
+  const excludedBlock = section.slice(excludedNoteIndex);
+  const allLabels = direct.OPERATIONAL_MARKERS.map((marker) => marker.label);
+
+  const parsedCandidateLabels = new Set(
+    allLabels.filter((label) => candidateBlock.includes(`\`${label}\``)),
+  );
+  const parsedExcludedLabels = new Set(
+    allLabels.filter((label) => excludedBlock.includes(`\`${label}\``)),
+  );
+
+  const expectedCandidateLabels = new Set(
+    allLabels.filter(
+      (label) => direct.MARKER_HIDE_POLICY.get(label)?.policy !== 'excluded',
+    ),
+  );
+  const expectedExcludedLabels = new Set(
+    allLabels.filter(
+      (label) => direct.MARKER_HIDE_POLICY.get(label)?.policy === 'excluded',
+    ),
+  );
+
+  assert.deepStrictEqual(
+    parsedCandidateLabels,
+    expectedCandidateLabels,
+    'idd-comment-minimization.md\'s "Candidate prefixes are:" OUTDATED list must list exactly every non-excluded (wired or f4-only) OPERATIONAL_MARKERS prefix -- no missing, no stale, no extra entries',
+  );
+  assert.deepStrictEqual(
+    parsedExcludedLabels,
+    expectedExcludedLabels,
+    'idd-comment-minimization.md\'s "Excluded from this list" note must document exactly every excluded OPERATIONAL_MARKERS prefix -- no missing, no stale, no extra entries',
+  );
 });
 
 // #2759 (chatgpt-codex-connector review): a duplicate `label` in the source
