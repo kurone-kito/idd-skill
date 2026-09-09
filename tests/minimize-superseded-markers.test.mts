@@ -688,6 +688,49 @@ test('runMinimize never reaches applyMinimize for a candidate whose OWN probe al
   }
 });
 
+test("runMinimize threads the actual remaining budget into probeSubject's own gh call, not just GH_TIMEOUT_MS (#2754, chatgpt-codex-connector review round 5)", () => {
+  // The stub's probe response sleeps a full real second (via a blocking
+  // Atomics.wait, portable to Windows unlike execSync('sleep 1')) before
+  // answering -- a correctly-threaded ~150ms remainder passed all the way
+  // down to execFileSync's own `timeout` option must kill that call long
+  // before the sleep completes, proving runMinimize no longer leaves each
+  // candidate's own probe bound to the flat 30s GH_TIMEOUT_MS default
+  // regardless of how little of `deadlineMs` is actually left.
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'graphql') {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-1', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+process.exit(1);
+`,
+  );
+  const start = Date.now();
+  try {
+    const report = runMinimize({
+      subjectIds: ['IC_a'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+      deadlineMs: 150,
+    });
+    const elapsed = Date.now() - start;
+    assert.ok(
+      elapsed < 900,
+      `expected the ~150ms timeout to cut off the 1s stub sleep, took ${elapsed}ms`,
+    );
+    // The probe call itself was killed by the timeout, so it surfaces as a
+    // transport failure -- not a clean eligible/would-apply result.
+    assert.equal(report.items[0]?.status, 'failed');
+    assert.equal(report.counts.eligible, 0);
+  } finally {
+    restore();
+  }
+});
+
 // A generous (or omitted) deadlineMs still reaching a real, successful
 // applyMinimize mutation is already covered end-to-end by
 // tests/post-idd-marker.test.mts's hide-step integration tests, which

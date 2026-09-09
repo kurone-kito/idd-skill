@@ -238,30 +238,33 @@ export function runMinimize({
   allowUntrusted: boolean;
   /**
    * Optional overall wall-clock budget in milliseconds for this whole pass
-   * (#2754, chatgpt-codex-connector review on PR #2788, two rounds).
+   * (#2754, chatgpt-codex-connector review on PR #2788, three rounds).
    * `probeSubject` and `applyMinimize` each bound a SINGLE `gh` call to
-   * `GH_TIMEOUT_MS` (30s), but a caller chaining several subjects through
-   * this function has no cap on the pass as a whole: a transport outage
-   * can make every candidate individually time out in sequence, each
-   * costing up to 60s (both calls) before this function returns. Passing
-   * `deadlineMs` checks the budget (measured from this function's own
-   * entry) at TWO points per candidate: before starting a NEW candidate's
-   * own `probeSubject` (skipped for the very first candidate, so the pass
-   * always makes at least one attempt even when the budget is already
-   * exhausted at entry), and again immediately before `applyMinimize`,
-   * for every candidate including the first -- closing the gap the first
-   * check alone left (an in-flight candidate's own probe+apply pair could
-   * still cost a full extra `GH_TIMEOUT_MS` beyond the budget, and a
-   * second candidate starting just under the wire could add nearly
-   * another full pair on top of that). Either check failing marks that
-   * subject (and, at the entry check, every remaining one) `skipped` /
-   * `deadline-exceeded` instead of probing or mutating it. The
-   * `applyMinimize` skip cannot undo the probe already spent reaching it,
-   * so the true worst case for a single unlucky candidate is bounded by
+   * `GH_TIMEOUT_MS` (30s) by default, but a caller chaining several
+   * subjects through this function has no cap on the pass as a whole: a
+   * transport outage can make every candidate individually time out in
+   * sequence, each costing up to 60s (both calls) before this function
+   * returns. Passing `deadlineMs` checks the budget (measured from this
+   * function's own entry) at TWO points per candidate: before starting a
+   * NEW candidate's own `probeSubject` (skipped for the very first
+   * candidate, so the pass always makes at least one attempt even when
+   * the budget is already exhausted at entry), and again immediately
+   * before `applyMinimize`, for every candidate including the first --
+   * closing the gap the first check alone left. Round 3 (this round)
+   * additionally THREADS the actual remaining budget into both calls'
+   * own `timeoutMs` (rather than leaving each bound to the flat
+   * `GH_TIMEOUT_MS` regardless of how little is actually left): a
+   * non-positive remainder is never passed through (gh-exec.mts and
+   * execFileSync both read `timeout: 0` as "no timeout", the opposite of
+   * "budget already exhausted") -- that one case (the always-exempt
+   * index-0 probe when `deadlineMs` is already exhausted at entry) falls
+   * back to the 30s default instead, which is also why the true worst
+   * case for a single unlucky candidate is still bounded by
    * `deadlineMs + GH_TIMEOUT_MS`, not `deadlineMs` alone -- but no SECOND
-   * candidate can ever reach its own mutation once the budget is spent.
-   * Omit `deadlineMs` (the CLI entry point below does) to keep the
-   * pre-existing unbounded behavior.
+   * candidate can ever reach its own mutation once the budget is spent,
+   * and every other in-budget call is now capped far tighter than the
+   * flat constant in practice. Omit `deadlineMs` (the CLI entry point
+   * below does) to keep the pre-existing unbounded behavior.
    */
   deadlineMs?: number;
 }): MinimizeReport {
@@ -282,6 +285,7 @@ export function runMinimize({
   };
 
   const startedAt = Date.now();
+  const remaining = (): number => (deadlineMs ?? 0) - (Date.now() - startedAt);
   for (const [index, subjectId] of subjectIds.entries()) {
     if (
       deadlineMs !== undefined &&
@@ -299,7 +303,22 @@ export function runMinimize({
         (report.counts.deadlineSkipped ?? 0) + (subjectIds.length - index);
       break;
     }
-    const probe = probeSubject(subjectId);
+    // #2754, chatgpt-codex-connector review on PR #2788 (round 5): thread
+    // the REMAINING budget into probeSubject itself, not just the entry
+    // check above -- otherwise a candidate let through by the entry check
+    // (including the always-exempt index 0) could still let its own probe
+    // run for a full untouched `GH_TIMEOUT_MS` regardless of how little
+    // budget is actually left. `r > 0` guards the one case that check
+    // cannot rule out (index 0 when `deadlineMs` is already exhausted at
+    // entry): never pass a non-positive number here (gh-exec.mts and
+    // execFileSync both read `timeout: 0` as "no timeout", the opposite of
+    // "budget already exhausted") -- fall back to probeSubject's own
+    // default instead.
+    const probeR = deadlineMs === undefined ? undefined : remaining();
+    const probe = probeSubject(
+      subjectId,
+      probeR !== undefined && probeR > 0 ? probeR : undefined,
+    );
     if (!probe.ok) {
       report.items.push({ subjectId, status: 'failed', reason: probe.reason });
       report.counts.failed += 1;
@@ -396,7 +415,16 @@ export function runMinimize({
       continue;
     }
 
-    const mutation = applyMinimize(subjectId, classifier);
+    // #2754, chatgpt-codex-connector review on PR #2788 (round 5): thread
+    // the remaining budget into applyMinimize's own `gh` call too -- the
+    // check just above guarantees `remaining() > 0` whenever `deadlineMs`
+    // is set, so this never risks passing a non-positive timeout.
+    const applyR = deadlineMs === undefined ? undefined : remaining();
+    const mutation = applyMinimize(
+      subjectId,
+      classifier,
+      applyR !== undefined && applyR > 0 ? applyR : undefined,
+    );
     if (mutation.ok) {
       report.items.push({
         subjectId,
@@ -453,13 +481,17 @@ function isUnresolvableRestShapedId(
   );
 }
 
-export function probeSubject(subjectId: string): ProbeResult {
-  const result = runGh([
-    'api',
-    ...resolveGhHostnameArgs(),
-    'graphql',
-    '-f',
-    `query=query($id:ID!){
+export function probeSubject(
+  subjectId: string,
+  timeoutMs?: number,
+): ProbeResult {
+  const result = runGh(
+    [
+      'api',
+      ...resolveGhHostnameArgs(),
+      'graphql',
+      '-f',
+      `query=query($id:ID!){
         node(id:$id){
           __typename
           ... on IssueComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
@@ -467,9 +499,11 @@ export function probeSubject(subjectId: string): ProbeResult {
           ... on PullRequestReviewComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
         }
       }`,
-    '-f',
-    `id=${subjectId}`,
-  ]);
+      '-f',
+      `id=${subjectId}`,
+    ],
+    timeoutMs,
+  );
   if (!result.ok) {
     if (isUnresolvableRestShapedId(subjectId, result.stderr)) {
       return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
@@ -531,13 +565,15 @@ export function probeSubject(subjectId: string): ProbeResult {
 export function applyMinimize(
   subjectId: string,
   classifier: string,
+  timeoutMs?: number,
 ): MutationResult {
-  const result = runGh([
-    'api',
-    ...resolveGhHostnameArgs(),
-    'graphql',
-    '-f',
-    `query=mutation($id:ID!,$classifier:ReportedContentClassifiers!){
+  const result = runGh(
+    [
+      'api',
+      ...resolveGhHostnameArgs(),
+      'graphql',
+      '-f',
+      `query=mutation($id:ID!,$classifier:ReportedContentClassifiers!){
       minimizeComment(input:{subjectId:$id,classifier:$classifier}){
         minimizedComment{
           __typename
@@ -547,11 +583,13 @@ export function applyMinimize(
         }
       }
     }`,
-    '-f',
-    `id=${subjectId}`,
-    '-f',
-    `classifier=${classifier}`,
-  ]);
+      '-f',
+      `id=${subjectId}`,
+      '-f',
+      `classifier=${classifier}`,
+    ],
+    timeoutMs,
+  );
   if (!result.ok) {
     return {
       ok: false,
@@ -672,11 +710,11 @@ function printTable(report: MinimizeReport): void {
   }
 }
 
-function runGh(argv: string[]): GhResult {
+function runGh(argv: string[], timeoutMs: number = GH_TIMEOUT_MS): GhResult {
   try {
     const stdout = execFileSync('gh', argv, {
       encoding: 'utf8',
-      timeout: GH_TIMEOUT_MS,
+      timeout: timeoutMs,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return { ok: true, stdout };

@@ -172,6 +172,7 @@ export function runMinimize({
     items: [],
   };
   const startedAt = Date.now();
+  const remaining = () => (deadlineMs ?? 0) - (Date.now() - startedAt);
   for (const [index, subjectId] of subjectIds.entries()) {
     if (
       deadlineMs !== undefined &&
@@ -189,7 +190,22 @@ export function runMinimize({
         (report.counts.deadlineSkipped ?? 0) + (subjectIds.length - index);
       break;
     }
-    const probe = probeSubject(subjectId);
+    // #2754, chatgpt-codex-connector review on PR #2788 (round 5): thread
+    // the REMAINING budget into probeSubject itself, not just the entry
+    // check above -- otherwise a candidate let through by the entry check
+    // (including the always-exempt index 0) could still let its own probe
+    // run for a full untouched `GH_TIMEOUT_MS` regardless of how little
+    // budget is actually left. `r > 0` guards the one case that check
+    // cannot rule out (index 0 when `deadlineMs` is already exhausted at
+    // entry): never pass a non-positive number here (gh-exec.mts and
+    // execFileSync both read `timeout: 0` as "no timeout", the opposite of
+    // "budget already exhausted") -- fall back to probeSubject's own
+    // default instead.
+    const probeR = deadlineMs === undefined ? undefined : remaining();
+    const probe = probeSubject(
+      subjectId,
+      probeR !== undefined && probeR > 0 ? probeR : undefined,
+    );
     if (!probe.ok) {
       report.items.push({ subjectId, status: 'failed', reason: probe.reason });
       report.counts.failed += 1;
@@ -277,7 +293,16 @@ export function runMinimize({
       report.counts.deadlineSkipped = (report.counts.deadlineSkipped ?? 0) + 1;
       continue;
     }
-    const mutation = applyMinimize(subjectId, classifier);
+    // #2754, chatgpt-codex-connector review on PR #2788 (round 5): thread
+    // the remaining budget into applyMinimize's own `gh` call too -- the
+    // check just above guarantees `remaining() > 0` whenever `deadlineMs`
+    // is set, so this never risks passing a non-positive timeout.
+    const applyR = deadlineMs === undefined ? undefined : remaining();
+    const mutation = applyMinimize(
+      subjectId,
+      classifier,
+      applyR !== undefined && applyR > 0 ? applyR : undefined,
+    );
     if (mutation.ok) {
       report.items.push({
         subjectId,
@@ -327,13 +352,14 @@ function isUnresolvableRestShapedId(subjectId, errorText) {
     UNRESOLVABLE_NODE_ID_PATTERN.test(errorText)
   );
 }
-export function probeSubject(subjectId) {
-  const result = runGh([
-    'api',
-    ...resolveGhHostnameArgs(),
-    'graphql',
-    '-f',
-    `query=query($id:ID!){
+export function probeSubject(subjectId, timeoutMs) {
+  const result = runGh(
+    [
+      'api',
+      ...resolveGhHostnameArgs(),
+      'graphql',
+      '-f',
+      `query=query($id:ID!){
         node(id:$id){
           __typename
           ... on IssueComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
@@ -341,9 +367,11 @@ export function probeSubject(subjectId) {
           ... on PullRequestReviewComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
         }
       }`,
-    '-f',
-    `id=${subjectId}`,
-  ]);
+      '-f',
+      `id=${subjectId}`,
+    ],
+    timeoutMs,
+  );
   if (!result.ok) {
     if (isUnresolvableRestShapedId(subjectId, result.stderr)) {
       return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
@@ -390,13 +418,14 @@ export function probeSubject(subjectId) {
     },
   };
 }
-export function applyMinimize(subjectId, classifier) {
-  const result = runGh([
-    'api',
-    ...resolveGhHostnameArgs(),
-    'graphql',
-    '-f',
-    `query=mutation($id:ID!,$classifier:ReportedContentClassifiers!){
+export function applyMinimize(subjectId, classifier, timeoutMs) {
+  const result = runGh(
+    [
+      'api',
+      ...resolveGhHostnameArgs(),
+      'graphql',
+      '-f',
+      `query=mutation($id:ID!,$classifier:ReportedContentClassifiers!){
       minimizeComment(input:{subjectId:$id,classifier:$classifier}){
         minimizedComment{
           __typename
@@ -406,11 +435,13 @@ export function applyMinimize(subjectId, classifier) {
         }
       }
     }`,
-    '-f',
-    `id=${subjectId}`,
-    '-f',
-    `classifier=${classifier}`,
-  ]);
+      '-f',
+      `id=${subjectId}`,
+      '-f',
+      `classifier=${classifier}`,
+    ],
+    timeoutMs,
+  );
   if (!result.ok) {
     return {
       ok: false,
@@ -511,11 +542,11 @@ function printTable(report) {
     console.log(`  [${item.status}] ${item.subjectId}  ${url}  ${reason}`);
   }
 }
-function runGh(argv) {
+function runGh(argv, timeoutMs = GH_TIMEOUT_MS) {
   try {
     const stdout = execFileSync('gh', argv, {
       encoding: 'utf8',
-      timeout: GH_TIMEOUT_MS,
+      timeout: timeoutMs,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return { ok: true, stdout };
