@@ -151,7 +151,7 @@ today, in two different mechanisms:
   (`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
   `advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
   `idd-advisory-wait.instructions.md`).
-- **Code-automated inside `post-idd-marker.mts` itself** (#2754) -- no
+- **Code-automated inside `post-idd-marker.mjs` itself** (#2754) -- no
   agent-followed instruction step exists or is needed for these two,
   since their grouping keys are purely mechanical: `review-ack:`
   (grouped by embedded HEAD SHA mismatch) and `copilot-unavailable:`
@@ -163,7 +163,16 @@ today, in two different mechanisms:
   `scripts/minimize-superseded-markers.mjs`'s `runMinimize` for the
   actual mutation -- best-effort: any failure there (a permission
   error, an unreadable comment list) is swallowed and never blocks or
-  retries the marker post that already succeeded.
+  retries the marker post that already succeeded. This mechanism lives
+  inside the built `.mjs` helper, so it only runs where a helper
+  runtime is configured (`vendored-node`, `package-manager`, or
+  `ephemeral-npx`); under `instructions-only` (or wherever the helper
+  is otherwise unavailable), an agent posts this pair's plain-text
+  marker body by hand instead, and no equivalent manual minimize step
+  exists yet for them the way the agent-followed instruction step
+  above already gives the claim chain / review-watermark-baseline /
+  advisory-wait families -- these two markers accumulate like an
+  `f4-only` family until a future track adds one.
 
 A family classified `f4-only` has
 no such wiring yet and follows the default F4-only timing above until a

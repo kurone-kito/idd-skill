@@ -568,13 +568,13 @@ const MARKER_HIDE_POLICY_ENTRIES: readonly MarkerHidePolicyEntry[] = [
     label: 'review-ack:',
     policy: 'wired',
     reason:
-      'review-ack family, grouped by embedded HEAD SHA mismatch. Hidden at post time by post-idd-marker.mts itself (code-automated, not an agent-followed instruction step, unlike the other wired families above) -- roadmap #2751 Track 2 (#2754).',
+      'review-ack family, grouped by embedded HEAD SHA mismatch. Hidden at post time by post-idd-marker.mjs itself (code-automated, not an agent-followed instruction step, unlike the other wired families above); requires a helper runtime, so an instructions-only manual post gets no equivalent hide step yet -- roadmap #2751 Track 2 (#2754).',
   },
   {
     label: 'copilot-unavailable:',
     policy: 'wired',
     reason:
-      'copilot-unavailable family, grouped by same claim: value (differing attempt: numbers). Hidden at post time by post-idd-marker.mts itself (code-automated, not an agent-followed instruction step, unlike the other wired families above) -- roadmap #2751 Track 2 (#2754).',
+      'copilot-unavailable family, grouped by same claim: value (differing attempt: numbers). Hidden at post time by post-idd-marker.mjs itself (code-automated, not an agent-followed instruction step, unlike the other wired families above); requires a helper runtime, so an instructions-only manual post gets no equivalent hide step yet -- roadmap #2751 Track 2 (#2754).',
   },
   {
     label: '<!-- forced-handoff:',
