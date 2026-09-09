@@ -342,15 +342,17 @@ condition below accounts for this.
   with `gh pr checks <pr-number> --watch --required` (works on a
   fine-grained PAT; `gh run watch <run-id> --exit-status` does not) —
   **but only once** [Required-check discovery](#required-check-discovery)
-  has resolved `noRequiredChecksConfigured: false`. When
-  `noRequiredChecksConfigured` resolved `true`, `--watch --required`
+  has resolved `noRequiredChecksConfigured: false`. When it has
+  resolved `noRequiredChecksConfigured: true`, `--watch --required`
   returns immediately, non-blocking, printing a "no required checks
   reported" message even while real CI is still running — block with
   the bare `gh pr checks <pr-number> --watch` (no `--required`)
-  instead. Both
-  `--watch --required` and `gh run watch` only block, never decide:
-  required-only scoping, duplicate-name collapse, the no-required-checks
-  route, and the
+  instead. That bare form still returns once every visible check
+  reaches a terminal GitHub state, which is not the same as "safe to
+  proceed" — a lone `CANCELLED` check with no same-producer successor
+  is one such terminal-but-`pending` case (#2714). All three watch
+  forms above only block, never decide: required-only scoping,
+  duplicate-name collapse, the no-required-checks route, and the
   `ciWait.runningTimeout`/`generationTimeout` bound all stay with the
   algorithm above — track elapsed time and apply its rerun-or-hold
   decision if a watch outlasts it. Issue that blocking call with an
@@ -360,9 +362,8 @@ condition below accounts for this.
   tool-timeout kill of the watch call is not a CI verdict — re-issue
   the same blocking watch, keep accumulating elapsed time against the
   bound above, and do not fall back to `run_in_background` or another
-  detached/backgrounded mechanism just because of the kill. Neither
-  `--watch --required` nor `gh run watch` watches Copilot review state —
-  see
+  detached/backgrounded mechanism just because of the kill. None of the
+  three watch forms above watches Copilot review state — see
   `idd-advisory-wait.instructions.md`. A bare `sleep` may
   be sandboxed or blocked in some runtimes (preventive; no observed
   incident yet); a `run_in_background` Bash task or other
