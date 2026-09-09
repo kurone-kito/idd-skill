@@ -2351,6 +2351,36 @@ test('policy schema rejects issueAuthoring journalIssue without an owner/repo#nu
   );
 });
 
+test('policy schema rejects issueAuthoring journalIssue with a zero-valued issue number', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    journalIssue: 'kurone-kito/idd-skill#0',
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('issueAuthoring.journalIssue')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects issueAuthoring journalIssue with a leading-zero issue number', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    journalIssue: 'kurone-kito/idd-skill#0042',
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('issueAuthoring.journalIssue')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema rejects issueAuthoring unexpected extra keys', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

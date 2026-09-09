@@ -531,9 +531,12 @@ const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
   'cleanup',
   'abandoned',
 ]);
-// A real issue reference has the shape `owner/repo#number`. An opaque
-// bootstrap placeholder (e.g. `target-<hex>`, `anchor-<hex>`) never
-// contains both a `/` and a trailing `#<digits>`, so this shape test
+// A real issue reference has the shape `owner/repo#number` -- the same
+// shape the issueAuthoring.journalIssue schema pattern requires, kept
+// in sync with it deliberately (word/dot/hyphen segments either side
+// of exactly one `/`, a `#`, then a non-zero-leading number; #2681
+// review, Copilot). An opaque bootstrap placeholder (e.g.
+// `target-<hex>`, `anchor-<hex>`) never matches this shape, so it
 // distinguishes "this publication marker named an already-known real
 // anchor" from "this publication marker was minted before any anchor
 // existed" without depending on the two opaque IDs being textually
@@ -543,7 +546,7 @@ const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
 // import.meta.main trigger, not next to
 // ownerMarkerAnchorMatchesPublication()/checkAuthoringOwnerMarkerTrail()
 // further down.
-const REAL_ISSUE_REFERENCE_PATTERN = /^\S+\/\S+#\d+$/;
+const REAL_ISSUE_REFERENCE_PATTERN = /^[\w.-]+\/[\w.-]+#[1-9]\d*$/;
 
 if (import.meta.main) {
   main();
