@@ -76,9 +76,13 @@ test('protocol-helpers re-exports every sampled marker-helpers name by identity'
 // (A `policyLabels.length === new Set(policyLabels).size` duplicate check
 // was considered here and dropped: `MARKER_HIDE_POLICY.keys()` can never
 // contain a duplicate -- Map key sets are unique by construction -- so
-// that comparison could never fail. A source-array label collision instead
-// shrinks the map below OPERATIONAL_MARKERS' label count, which the
-// deepStrictEqual set-equality check below already catches.)
+// that comparison could never fail here. A duplicate label in the *source*
+// array is instead caught at construction time by
+// `buildMarkerHidePolicyMap` throwing, exercised directly below -- a
+// duplicate that still names every required label would otherwise pass
+// this coverage check silently, since it only verifies label-set
+// membership, not per-label uniqueness in the source array. Caught by
+// chatgpt-codex-connector review on PR #2759.)
 test('MARKER_HIDE_POLICY classifies every OPERATIONAL_MARKERS entry exactly once', () => {
   const markerLabels = direct.OPERATIONAL_MARKERS.map((marker) => marker.label);
   const policyLabels = [...direct.MARKER_HIDE_POLICY.keys()];
@@ -105,4 +109,68 @@ test('MARKER_HIDE_POLICY classifies every OPERATIONAL_MARKERS entry exactly once
       `${marker.label}: hide-policy entry must carry a non-empty reason`,
     );
   }
+});
+
+// #2759 (chatgpt-codex-connector review): a duplicate `label` in the source
+// entries must fail loudly at construction time, not silently let the later
+// row win. Exercises `buildMarkerHidePolicyMap` directly with a synthetic
+// duplicate so this does not require corrupting the real production entries.
+test('buildMarkerHidePolicyMap throws on a duplicate label', () => {
+  assert.throws(
+    () =>
+      direct.buildMarkerHidePolicyMap([
+        { label: '<!-- dup:', policy: 'f4-only', reason: 'first' },
+        { label: '<!-- dup:', policy: 'wired', reason: 'second' },
+      ]),
+    /duplicate.*label/i,
+    'buildMarkerHidePolicyMap must reject two entries sharing the same label',
+  );
+});
+
+// #2759 (chatgpt-codex-connector review): `ReadonlyMap<K, V>` is a
+// compile-time-only guard -- `Object.freeze` on a `Map` instance does not
+// stop `Map#set`/`#delete`/`#clear` at runtime, so this asserts the actual
+// exported object rejects mutation, not just its declared type.
+test('MARKER_HIDE_POLICY rejects runtime mutation', () => {
+  const mutable = direct.MARKER_HIDE_POLICY as unknown as Map<string, unknown>;
+  const sizeBefore = direct.MARKER_HIDE_POLICY.size;
+
+  assert.throws(() => mutable.set('<!-- injected:', {}), TypeError);
+  assert.throws(() => mutable.delete('<!-- claimed-by:'), TypeError);
+  assert.throws(() => mutable.clear(), TypeError);
+  assert.strictEqual(
+    direct.MARKER_HIDE_POLICY.size,
+    sizeBefore,
+    'a failed mutation attempt must not change the map contents',
+  );
+  assert.strictEqual(
+    direct.MARKER_HIDE_POLICY.get('<!-- claimed-by:')?.policy,
+    'wired',
+    'read access must keep working after rejected mutation attempts',
+  );
+});
+
+// #2759 E10 self-critique: `Map#forEach`'s native implementation invokes the
+// callback with its own receiver as the third argument, so naively binding
+// `forEach` to the real underlying `Map` (as every other read method is
+// bound) would hand callers that mutable `Map` as `forEach`'s third
+// argument -- an escape hatch around the freeze above. Asserts the third
+// argument is the frozen lookup itself, not the raw map, and that trying to
+// mutate through it still throws.
+test('MARKER_HIDE_POLICY.forEach never exposes the underlying mutable map', () => {
+  let sawThirdArg = false;
+  direct.MARKER_HIDE_POLICY.forEach((_value, _key, mapArg) => {
+    sawThirdArg = true;
+    assert.strictEqual(
+      mapArg,
+      direct.MARKER_HIDE_POLICY,
+      "forEach's third argument must be the frozen lookup, not the raw map",
+    );
+    const mutableArg = mapArg as unknown as Map<string, unknown>;
+    assert.throws(
+      () => mutableArg.set('<!-- injected-via-forEach:', {}),
+      TypeError,
+    );
+  });
+  assert.ok(sawThirdArg, 'forEach must invoke its callback at least once');
 });

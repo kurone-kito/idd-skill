@@ -316,18 +316,79 @@ const MARKER_HIDE_POLICY_ENTRIES = [
   },
 ];
 /**
+ * Wraps `map` so every mutating call (`set`/`delete`/`clear`) throws instead
+ * of silently succeeding. Unlike an array or a plain object, `Object.freeze`
+ * on a `Map` instance does not stop `Map#set`/`#delete`/`#clear` -- those
+ * mutate internal slots the freeze does not cover, so a `ReadonlyMap<K, V>`
+ * type alone is a compile-time-only guard that a JS caller (or a TS call
+ * site that casts around the type) can bypass at runtime. Read methods
+ * (`get`/`has`/`keys`/`entries`/iteration/etc.) are passed through to the
+ * real `Map`, bound to it rather than the proxy, since `Map.prototype`'s own
+ * methods require a genuine `Map` internal slot to operate on. `forEach` is
+ * special-cased rather than simply bound: `Map#forEach`'s native
+ * implementation passes its *own receiver* as the callback's third
+ * argument, so a plain bind would hand callers the real, mutable `target`
+ * map as `forEach`'s third callback argument -- an escape hatch around the
+ * freeze this function exists to enforce -- so this substitutes the
+ * returned proxy itself for that argument instead (caught by
+ * chatgpt-codex-connector review on PR #2759; the `forEach` escape found
+ * during this fix's own E10 self-critique).
+ */
+function freezeMap(map) {
+  const mutators = new Set(['set', 'delete', 'clear']);
+  const proxy = new Proxy(map, {
+    get(target, prop, _receiver) {
+      if (typeof prop === 'string' && mutators.has(prop)) {
+        return () => {
+          throw new TypeError(`this frozen map does not allow ${prop}()`);
+        };
+      }
+      if (prop === 'forEach') {
+        return (callbackFn, thisArg) => {
+          target.forEach((value, key) => {
+            callbackFn.call(thisArg, value, key, proxy);
+          });
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return proxy;
+}
+/**
+ * Builds the frozen {@link MARKER_HIDE_POLICY} lookup from `entries`,
+ * throwing if two entries share a `label` -- plain `new Map(...)`
+ * construction would otherwise let the later entry silently win, hiding a
+ * copy-paste mistake (a duplicate row that still names every required
+ * label passes the "exactly one classification per marker" coverage test
+ * in `tests/marker-helpers-facade.test.mts`, since that test only checks
+ * label-set membership, not per-label uniqueness in the source array).
+ * Exported so that test can also exercise the duplicate-detection path
+ * directly, without needing to corrupt the real production entries (caught
+ * by chatgpt-codex-connector review on PR #2759).
+ */
+export function buildMarkerHidePolicyMap(entries) {
+  const map = new Map();
+  for (const entry of entries) {
+    if (map.has(entry.label)) {
+      throw new Error(`duplicate hide-policy label: ${entry.label}`);
+    }
+    map.set(entry.label, Object.freeze(entry));
+  }
+  return freezeMap(map);
+}
+/**
  * Frozen, exported lookup from an `OPERATIONAL_MARKERS` entry's `label` to
  * its hide-at-post-time classification (#2751/#2752).
  * `tests/marker-helpers-facade.test.mts` asserts this map's key set exactly
  * matches `OPERATIONAL_MARKERS`' labels, so a future new marker family with
  * no entry here fails that test instead of silently drifting the way issue
- * #1705 did.
+ * #1705 did. See {@link buildMarkerHidePolicyMap} for the duplicate-label
+ * guard and {@link freezeMap} for why this is a `Proxy`, not a plain `Map`.
  */
-export const MARKER_HIDE_POLICY = new Map(
-  MARKER_HIDE_POLICY_ENTRIES.map((entry) => [
-    entry.label,
-    Object.freeze(entry),
-  ]),
+export const MARKER_HIDE_POLICY = buildMarkerHidePolicyMap(
+  MARKER_HIDE_POLICY_ENTRIES,
 );
 export const IDD_AGENT_DERIVED_MARKERS = new Set([
   '<!-- claimed-by:',
