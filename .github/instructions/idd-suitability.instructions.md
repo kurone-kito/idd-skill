@@ -180,7 +180,7 @@ outcome (trust/safety concerns require human review):
 | `blocked-by-human` | Requires human coordination | Report, try next candidate |
 | `duplicate` | Duplicate or superseded work | Report, try next candidate |
 | `out-of-scope` | Outside repository scope | Report, try next candidate |
-| `invalid` | Trust/safety concern or defect | Fresh: report, stop. Already reported (`existingRejection`: `outcome: invalid`), confirmed today: exclude, post nothing, loop |
+| `invalid` | Trust/safety concern or defect | Fresh: report, stop (do not retry). Reconfirmed (`existingRejection`: `outcome: invalid`): exclude, post nothing, loop |
 <!-- dprint-ignore-end -->
 
 ## Mutation Policy and Coordination Rule
