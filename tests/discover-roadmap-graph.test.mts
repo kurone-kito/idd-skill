@@ -706,6 +706,24 @@ test('extractTaskListReferences ignores a trailing-reference checkbox item quote
   assert.deepEqual(extractTaskListReferences(fenced), []);
 });
 
+test('extractTaskListReferences requires whitespace (or end-of-line) after the checkbox marker, not just "- [ ]" (#2765 review, Copilot)', () => {
+  // "- [ ]foo" (no space after "]") is not valid GFM task-list syntax --
+  // GitHub renders it as plain list-item text, not a checkbox. Before the
+  // whitespace requirement, the trailing-reference fallback could still
+  // misclassify a line shaped this way as a real task-list item merely
+  // because it starts with the exact "- [ ]" character sequence.
+  const line = '- [ ]foo bar (#2752)';
+  assert.deepEqual(extractTaskListReferences(line), []);
+  // The equivalent line WITH the required space still resolves normally.
+  const validLine = '- [ ] foo bar (#2752)';
+  assert.deepEqual(extractTaskListReferences(validLine), [
+    { target: 2752, relationship: 'task-list', evidence: validLine },
+  ]);
+  // A checkbox marker at the very end of the line (empty item text) is
+  // still a valid checkbox line under this bound (end-of-line counts).
+  assert.deepEqual(extractTaskListReferences('- [ ]'), []);
+});
+
 test('extractTaskListReferences trailing-reference form respects the current-repo scope for owner/repo#N (#2765)', () => {
   const line = '- [ ] Track 1: text kurone-kito/idd-skill#2752';
   assert.deepEqual(

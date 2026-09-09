@@ -1393,10 +1393,17 @@ export function isTaskListBlockBoundary(line) {
 }
 /**
  * True when `line` opens a task-list checkbox item (`- [ ]` / `- [x]`).
- * Exported for the same reuse reason as {@link isTaskListBlockBoundary}.
+ * Requires whitespace (or end-of-line) immediately after the closing
+ * `]` -- GFM's own task-list syntax requires it, and `- [ ]foo` (no
+ * space) is not a real checkbox item, just list-item text that happens
+ * to start with `[ ]`. Without this bound, the trailing-reference
+ * fallback below (idd-skill#2765 review, Copilot) could misclassify an
+ * ordinary bulleted line as a task-list item merely because it opens
+ * with that exact character sequence. Exported for the same reuse
+ * reason as {@link isTaskListBlockBoundary}.
  */
 export function isTaskListCheckboxLine(line) {
-  return /^\s*-\s*\[(?: |x|X)\]/u.test(line);
+  return /^\s*-\s*\[(?: |x|X)\](?:\s|$)/u.test(line);
 }
 export function extractTaskListReferences(body, options = {}) {
   // Match against a code-masked copy so a checkbox merely quoted inside inline
