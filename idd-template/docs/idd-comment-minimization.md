@@ -134,11 +134,12 @@ after one of these is true:
 - a maintainer explicitly starts a merged-PR audit
 
 **Exception -- hide-at-post-time for `wired` families** (issue #731,
-issue #733, issue #2751, issue #2754). A `wired` family may be minimized
-immediately after its own new instance's POST+verify succeeds, pre-merge,
-using that family's documented supersession/grouping key -- never for any
-other reason during an active E or F gate. Five families ship this
-today, in two different mechanisms:
+issue #733, issue #2751, issue #2754, issue #2755). A `wired` family
+may be minimized immediately after its own new instance's POST+verify
+succeeds, pre-merge, using that family's documented
+supersession/grouping key -- never for any other reason during an
+active E or F gate. Six families ship this today, in two different
+mechanisms:
 
 - **Agent-followed instruction step** -- the calling phase's own
   instructions direct the agent to run the minimize step by hand
@@ -151,27 +152,33 @@ today, in two different mechanisms:
   (`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
   `advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
   `idd-advisory-wait.instructions.md`).
-- **Code-automated inside `post-idd-marker.mjs` itself** (#2754) -- no
-  agent-followed instruction step exists or is needed for these two,
-  since their grouping keys are purely mechanical: `review-ack:`
-  (grouped by embedded HEAD SHA mismatch) and `copilot-unavailable:`
-  (grouped by the same `claim:` value, differing `attempt:` numbers).
-  `node scripts/post-idd-marker.mjs --apply --type review-ack` /
-  `--type copilot-unavailable` scans the target's other comments right
-  after its own new marker POSTs successfully, finds same-family
-  comments the new one supersedes, and reuses
+- **Code-automated inside the helper itself** (#2754, #2755) -- no
+  agent-followed instruction step exists or is needed for these
+  three, since their grouping keys are purely mechanical:
+  `review-ack:` (grouped by embedded HEAD SHA mismatch) and
+  `copilot-unavailable:` (grouped by the same `claim:` value,
+  differing `attempt:` numbers) are both hidden by
+  `post-idd-marker.mjs` itself right after its own new marker POSTs
+  successfully (`--apply --type review-ack` / `--type
+  copilot-unavailable`); `<!-- idd-local-validation-evidence:`
+  (also grouped by embedded HEAD SHA mismatch, mirroring AW3-H) is
+  hidden by `local-validation-evidence.mjs` itself right after its own
+  `--record --apply` POST succeeds -- see
+  [this helper's doc](idd-helper-scripts.md#local-validation-evidence-helper).
+  All three scan the target's other comments for same-family comments
+  the new one supersedes and reuse
   `scripts/minimize-superseded-markers.mjs`'s `runMinimize` for the
   actual mutation -- best-effort: any failure there (a permission
   error, an unreadable comment list) is swallowed and never blocks or
   retries the marker post that already succeeded. This mechanism lives
-  inside the built `.mjs` helper, so it only runs where a helper
+  inside the built `.mjs` helpers, so it only runs where a helper
   runtime is configured (`vendored-node`, `package-manager`, or
   `ephemeral-npx`); under `instructions-only` (or wherever the helper
-  is otherwise unavailable), an agent posts this pair's plain-text
-  marker body by hand instead, and no equivalent manual minimize step
+  is otherwise unavailable), an agent posts these markers' plain-text
+  bodies by hand instead, and no equivalent manual minimize step
   exists yet for them the way the agent-followed instruction step
   above already gives the claim chain / review-watermark-baseline /
-  advisory-wait families -- these two markers accumulate like an
+  advisory-wait families -- these three markers accumulate like an
   `f4-only` family until a future track adds one.
 
 A family classified `f4-only` has

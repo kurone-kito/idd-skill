@@ -2618,12 +2618,6 @@ const REVIEW_TRIAGE_ALLOWED_MAIN_LINES = new Set([
   '[design rationale](../../docs/idd-design-rationale.md#merge-main-livelock-under-fast-moving-main)).',
 ]);
 
-const MERGE_ALLOWED_MAIN_LINES = new Set([
-  // A historical, repository-specific ruleset-name reference, not a
-  // synchronization/target instruction.
-  'current `main` ruleset (`require_code_owner_review: false`), the',
-]);
-
 const B1_TRUSTED_CHECKOUT_MAIN_LINES = new Set([
   '1. Ensure the local `main` branch is up to date and has no local',
   'commits. Run this from the primary worktree while on `main`:',
@@ -2664,11 +2658,11 @@ test('idd-review-triage.instructions.md confines its bare `main` mention to the 
   );
 });
 
-test('idd-merge.instructions.md confines its bare `main` mention to the known historical ruleset-name reference (#2274)', () => {
+test('idd-merge.instructions.md carries zero bare `main` branch mentions (#2274, #2775)', () => {
   const text = readText(
     'idd-template/.github/instructions/idd-merge.instructions.md',
   );
-  assert.deepEqual(findUnallowedMainLines(text, MERGE_ALLOWED_MAIN_LINES), []);
+  assert.deepEqual(findUnallowedMainLines(text, NO_MAIN_MENTIONS_ALLOWED), []);
 });
 
 test('idd-work.instructions.md confines every bare `main` mention to the B1 trusted-checkout contract (#2274)', () => {

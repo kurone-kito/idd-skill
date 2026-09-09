@@ -315,9 +315,9 @@ const MARKER_HIDE_POLICY_ENTRIES = [
   },
   {
     label: '<!-- idd-local-validation-evidence:',
-    policy: 'f4-only',
+    policy: 'wired',
     reason:
-      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 3 (#2755).',
+      'idd-local-validation-evidence family, grouped by embedded HEAD SHA mismatch (mirroring the shipped advisory-wait AW3-H rule). Hidden at post time by local-validation-evidence.mts itself (code-automated, right after its own --record --apply POST succeeds) -- roadmap #2751 Track 3 (#2755).',
   },
 ];
 /**
