@@ -5069,6 +5069,40 @@ test('checkAutonomy passes a malformed authoring-bucket marker (fail-safe: no bu
   assert.equal(result.pass, true);
 });
 
+test('checkAutonomy ignores an authoring-bucket marker documented inside an indented code block (#2761 review, Codex)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body:
+        'Document the marker syntax:\n\n' +
+        '    <!-- idd-skill-authoring-bucket: blocked-by-human -->\n\n' +
+        BASE_ISSUE.body,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy ignores a backslash-escaped authoring-bucket marker opener (#2761 review, Codex)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Document the literal syntax: \\<!-- idd-skill-authoring-bucket: blocked-by-human -->\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkAutonomy still detects a genuine authoring-bucket marker sitting between escaped backticks (#2761 review, Codex)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `\\\`<!-- idd-skill-authoring-bucket: blocked-by-human -->\\\`\n\n${BASE_ISSUE.body}`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /authoring-bucket: blocked-by-human/);
+});
+
 test('checkAutonomy passes a body/title with none of the three blocked-by-human signals', () => {
   const result = checkAutonomy({
     issue: BASE_ISSUE,

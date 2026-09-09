@@ -26,7 +26,6 @@ import {
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
-  stripMarkdownCodeRegions,
 } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
@@ -2440,8 +2439,32 @@ export function checkAutonomy(context) {
   // directly with a raw Context (including in tests) -- normalize here too
   // rather than relying solely on the Context-construction call sites.
   const markerPrefix = normalizeMarkerPrefix(context.markerPrefix);
+  // #2761 review (Codex): a naive fenced/inline-only mask (the earlier
+  // `stripMarkdownCodeRegions(body)`) leaves an indented (4-space) code
+  // block untouched, so a documentation example written that way is
+  // wrongly treated as a real marker. It also has no notion of an HTML
+  // comment boundary at all, so it cannot distinguish a genuine marker from
+  // a backslash-escaped `\<!--` opener (literal text, not a real comment)
+  // or correctly recover a genuine marker sitting between backslash-escaped
+  // backticks (`` \` <!-- ... --> \` ``, which `findInlineCodeRanges`
+  // itself already treats as not forming a real inline code span, unlike
+  // the plain regex behind `stripMarkdownCodeRegions`). Scanning only the
+  // real (non-code-example, non-escaped) HTML comment ranges --
+  // `findHtmlCommentRanges`'s own established fenced/indented/inline
+  // code-example exclusion and escaped-opener handling, already used the
+  // same way elsewhere in this function (the objective-criteria
+  // `fenceMaskedBody` scan below) and in checkVerifiability's
+  // `hasSubjectiveApproval` scan -- gets all three right at once.
+  const codeRangesForAutonomy = findMarkdownCodeRanges(body);
+  const commentRangesForAutonomy = findHtmlCommentRanges(
+    body,
+    codeRangesForAutonomy,
+  );
+  const authoringBucketScanText = commentRangesForAutonomy
+    .map((range) => body.slice(range.start, range.end))
+    .join('\n');
   const bucketMarker = parseAuthoringBucketMarker(
-    stripMarkdownCodeRegions(body),
+    authoringBucketScanText,
     markerPrefix,
   );
   if (
