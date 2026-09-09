@@ -672,6 +672,148 @@ test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)
   ]);
 });
 
+test('extractTaskListReferences accepts a trailing (#N) reference on the checkbox line itself (#2765)', () => {
+  const line = '- [ ] Track 1: text (#2752)';
+  assert.deepEqual(extractTaskListReferences(line), [
+    { target: 2752, relationship: 'task-list', evidence: line },
+  ]);
+});
+
+test('extractTaskListReferences accepts a trailing (#N) reference soft-wrapped onto an indented continuation line (#2765)', () => {
+  const body = [
+    '- [ ] Track 1: operational-marker hide-policy enumeration guard +',
+    '      minimization timing doc fix (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(body), [
+    {
+      target: 2752,
+      relationship: 'task-list',
+      evidence:
+        '- [ ] Track 1: operational-marker hide-policy enumeration guard +',
+    },
+  ]);
+});
+
+test('extractTaskListReferences accepts a bare trailing #N reference with no parens (#2765)', () => {
+  const line = '- [ ] text #2752';
+  assert.deepEqual(extractTaskListReferences(line), [
+    { target: 2752, relationship: 'task-list', evidence: line },
+  ]);
+});
+
+test('extractTaskListReferences ignores a trailing-reference checkbox item quoted inside a fence (#2765)', () => {
+  const fenced = ['```md', '- [ ] Track 1: text (#2752)', '```'].join('\n');
+  assert.deepEqual(extractTaskListReferences(fenced), []);
+});
+
+test('extractTaskListReferences requires whitespace (or end-of-line) after the checkbox marker, not just "- [ ]" (#2765 review, Copilot)', () => {
+  // "- [ ]foo" (no space after "]") is not valid GFM task-list syntax --
+  // GitHub renders it as plain list-item text, not a checkbox. Before the
+  // whitespace requirement, the trailing-reference fallback could still
+  // misclassify a line shaped this way as a real task-list item merely
+  // because it starts with the exact "- [ ]" character sequence.
+  const line = '- [ ]foo bar (#2752)';
+  assert.deepEqual(extractTaskListReferences(line), []);
+  // The equivalent line WITH the required space still resolves normally.
+  const validLine = '- [ ] foo bar (#2752)';
+  assert.deepEqual(extractTaskListReferences(validLine), [
+    { target: 2752, relationship: 'task-list', evidence: validLine },
+  ]);
+  // A checkbox marker at the very end of the line (empty item text) is
+  // still a valid checkbox line under this bound (end-of-line counts).
+  assert.deepEqual(extractTaskListReferences('- [ ]'), []);
+});
+
+test('extractTaskListReferences requires whitespace between the bullet and the checkbox, not just "-[ ]" (#2765 review, Codex)', () => {
+  // "-[ ] text (#2752)" (no space between "-" and "[") is not a real
+  // CommonMark list item at all -- a list marker requires at least one
+  // following space to open a list item. Without this bound, the
+  // trailing-reference fallback could attach an unrelated "(#N)" to a
+  // mistyped bullet line.
+  const line = '-[ ] Track 1: text (#2752)';
+  assert.deepEqual(extractTaskListReferences(line), []);
+  // The equivalent, correctly-spaced line still resolves normally.
+  const validLine = '- [ ] Track 1: text (#2752)';
+  assert.deepEqual(extractTaskListReferences(validLine), [
+    { target: 2752, relationship: 'task-list', evidence: validLine },
+  ]);
+});
+
+test('extractTaskListReferences trailing-reference form stops the continuation span at an EMPTY list item or heading marker too (#2765 review, Codex)', () => {
+  // A bare "-" (or "1.", or "#") with no trailing whitespace is still a
+  // valid CommonMark empty list item / heading and must still terminate
+  // the continuation span -- otherwise the scan absorbs it and any
+  // following text, including an unrelated trailing "(#N)", into the
+  // preceding checkbox item.
+  const emptyBullet = [
+    '- [ ] Track 1: no reference here',
+    '-',
+    'Unrelated prose mentioning (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(emptyBullet), []);
+
+  const emptyOrdered = [
+    '- [ ] Track 1: no reference here',
+    '1.',
+    'Unrelated prose mentioning (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(emptyOrdered), []);
+
+  const emptyHeading = [
+    '- [ ] Track 1: no reference here',
+    '#',
+    'Unrelated prose mentioning (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(emptyHeading), []);
+});
+
+test('extractTaskListReferences trailing-reference form respects the current-repo scope for owner/repo#N (#2765)', () => {
+  const line = '- [ ] Track 1: text kurone-kito/idd-skill#2752';
+  assert.deepEqual(
+    extractTaskListReferences(line, {
+      currentRepoRef: 'kurone-kito/idd-skill',
+    }),
+    [{ target: 2752, relationship: 'task-list', evidence: line }],
+  );
+  // A cross-repo trailing reference is never counted as a local edge.
+  assert.deepEqual(
+    extractTaskListReferences(line, { currentRepoRef: 'other/repo' }),
+    [],
+  );
+});
+
+test('extractTaskListReferences trailing-reference form stops the continuation span at the next list item, blank line, or heading (#2765)', () => {
+  // The next checkbox item is a separate list item and must not be
+  // absorbed into the first item's continuation span, nor treated as a
+  // reference source for the first (unresolved) item.
+  const twoItems = [
+    '- [ ] Track 1: no reference here',
+    '- [ ] Track 2 (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(twoItems), [
+    {
+      target: 2752,
+      relationship: 'task-list',
+      evidence: '- [ ] Track 2 (#2752)',
+    },
+  ]);
+
+  // A blank line also stops the continuation span.
+  const blankSeparated = [
+    '- [ ] Track 1: no reference here',
+    '',
+    'Track 1 continues in prose (#2752), unrelated to the checkbox item.',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(blankSeparated), []);
+
+  // A heading also stops the continuation span.
+  const headingSeparated = [
+    '- [ ] Track 1: no reference here',
+    '## Next section (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(headingSeparated), []);
+});
+
 test('graph traversal creates no phantom edges from code-quoted refs in a child body (#1204)', async () => {
   // Reproduces the #1142/#1143 audit false-positive at the graph level: a
   // completed child that documents the dependency parser quotes example

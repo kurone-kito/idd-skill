@@ -56,6 +56,21 @@ const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 // drift out of sync.
 const COMPLETION_AUDIT_HEADING = '**IDD roadmap completion audit**';
 
+// `RoadmapGraphReference.relationship` kinds that are PURELY
+// informational and must never, by themselves, satisfy the
+// childless-blocker check below (idd-skill#2765): a `Refs #N
+// (non-blocking)` breadcrumb. Every other kind counts as explicit
+// child work, matching A2's own "Allowed traversal sources"
+// (`idd-discover.instructions.md`) -- which names `Refs #NNN` and
+// "explicit sub-issue lines" (the `reference` / `sub-issue-reference`
+// kinds) alongside task-list entries and GitHub sub-issue
+// relationships as sources A1.5 must fetch descendants through
+// (`idd-roadmap-audit.instructions.md`'s "Use the same outbound
+// traversal sources as A2") -- so only the `(non-blocking)`-annotated
+// form is excluded here, not the plain `reference`/`sub-issue-reference`
+// kinds (idd-skill#2765 review, Codex).
+const NON_CHILD_RELATIONSHIP_KINDS = new Set(['non-blocking-reference']);
+
 // Scope caveat (A1.5): this helper gates only the MECHANICAL completion
 // preconditions. It deliberately does NOT verify the roadmap's free-form
 // success criteria or autonomy-gap items — that is agent judgment "where
@@ -219,8 +234,20 @@ export function evaluateRoadmapAuditGates(
   }
 
   // No explicit child work → childless / malformed. Do not infer completion
-  // from the absence of candidates.
-  if (report.edges.length === 0) {
+  // from the absence of candidates. An edge counts as child work unless its
+  // relationship is purely informational (idd-skill#2765): only a
+  // `non-blocking-reference` (`Refs #N (non-blocking)`) is excluded here --
+  // `task-list`, `closing-keyword`, `sub-issue`, the plain `reference`
+  // (`Refs #N`, no annotation), and `sub-issue-reference` (prose
+  // "Sub-issue #N" text) all count, matching A2's own allowed traversal
+  // sources. `dependency` (Blocked by / Depends on) is a precondition
+  // pointing away from this roadmap's own descendants, not a child, but is
+  // left counting here unchanged from this check's pre-existing behavior
+  // (`report.edges.length === 0`) since no known repro needs it excluded.
+  const childRelationshipEdgeCount = report.edges.filter(
+    (edge) => !NON_CHILD_RELATIONSHIP_KINDS.has(edge.relationship),
+  ).length;
+  if (childRelationshipEdgeCount === 0) {
     blockers.push({
       kind: 'childless',
       detail: `roadmap #${rootNumber} has no explicit child references (task-list, closing-keyword, or GitHub sub-issue); childless or malformed, not complete`,

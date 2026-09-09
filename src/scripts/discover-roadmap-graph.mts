@@ -1070,7 +1070,7 @@ export async function enumerateRoadmapGraph(
         ? []
         : normalizeSubIssueReferences(await loadSubIssues(issue.number));
     const references = [
-      ...extractTaskListReferences(issue.body),
+      ...extractTaskListReferences(issue.body, { currentRepoRef }),
       ...extractKeywordReferences(issue.body, { currentRepoRef }),
       ...nativeSubIssues,
     ];
@@ -2010,8 +2010,54 @@ export function classifyIssue(
   };
 }
 
+/**
+ * True when `line` opens a new Markdown block that must terminate a
+ * task-list item's continuation span: a blank line, a new list item
+ * (bulleted or ordered), or an ATX heading. Shared between the item-
+ * grouping loop below and any external caller that needs to slice the
+ * same continuation span (e.g. `audit-authored-issue.mts`'s per-line
+ * Tracks-parse check, #2765). Each marker alternative also accepts
+ * end-of-line, not only trailing whitespace (idd-skill#2765 review,
+ * Codex): CommonMark allows an EMPTY list item or ATX heading (a bare
+ * `-`, `1.`, or `#` with nothing after it), and without the end-of-line
+ * alternative such a line failed to read as a boundary, letting the
+ * continuation span absorb it (and anything after it, including a
+ * later unrelated `(#N)`) into the preceding checkbox item.
+ */
+export function isTaskListBlockBoundary(line: string): boolean {
+  return (
+    line.trim() === '' ||
+    /^\s*(?:[-*+](?:\s|$)|\d+[.)](?:\s|$)|#{1,6}(?:\s|$))/u.test(line)
+  );
+}
+
+/**
+ * True when `line` opens a task-list checkbox item (`- [ ]` / `- [x]`).
+ * Requires whitespace (or end-of-line) immediately after the closing
+ * `]` -- GFM's own task-list syntax requires it, and `- [ ]foo` (no
+ * space) is not a real checkbox item, just list-item text that happens
+ * to start with `[ ]`. Without this bound, the trailing-reference
+ * fallback below (idd-skill#2765 review, Copilot) could misclassify an
+ * ordinary bulleted line as a task-list item merely because it opens
+ * with that exact character sequence. Also requires at least one
+ * whitespace character between the bullet marker and the opening `[`
+ * (idd-skill#2765 review, Codex): CommonMark requires whitespace after
+ * a list marker for it to open a list item at all, so `-[ ] text` (no
+ * space) is not a real checkbox either -- a pre-existing laxness the
+ * two leading-form regexes below also share, but one this new
+ * trailing-reference fallback measurably widens the blast radius of
+ * (from "immediately followed by `#N`" to "an arbitrary trailing
+ * reference anywhere in the item's text"), so it is bounded at this
+ * shared gate rather than left unaddressed. Exported for the same
+ * reuse reason as {@link isTaskListBlockBoundary}.
+ */
+export function isTaskListCheckboxLine(line: string): boolean {
+  return /^\s*-\s+\[(?: |x|X)\](?:\s|$)/u.test(line);
+}
+
 export function extractTaskListReferences(
   body: unknown,
+  options: { currentRepoRef?: string; owner?: string; repo?: string } = {},
 ): RoadmapGraphReference[] {
   // Match against a code-masked copy so a checkbox merely quoted inside inline
   // code or a fenced block is not walked as a real task-list edge — consistent
@@ -2020,40 +2066,104 @@ export function extractTaskListReferences(
   // lines share an index and evidence stays the raw line for any surviving edge
   // (e.g. one that shares a line with unrelated inline code).
   //
-  // Two forms recognized, tried in order (idd-skill#2476): a bare `#123`
-  // or a markdown link whose TEXT is `#123` (e.g. `- [ ] [#123](url)`,
-  // the `[`/`]`/`(...)` around the number all optional); falling back to
-  // a markdown link with arbitrary link text whose URL targets
+  // Three forms recognized (idd-skill#2476, idd-skill#2765), tried in order
+  // per item: a bare `#123` or a markdown link whose TEXT is `#123` (e.g.
+  // `- [ ] [#123](url)`, the `[`/`]`/`(...)` around the number all
+  // optional) directly after the checkbox marker; falling back to a
+  // markdown link with arbitrary link text whose URL targets
   // `.../issues/123` or `.../pull/123` (e.g.
-  // `- [ ] [some text](https://.../issues/123)`) -- inlined per-call
-  // (not hoisted to a module-level const) because this file's CLI entry
-  // point (`if (import.meta.main)`) sits near the top of the file and
-  // can reach this function during synchronous module evaluation, before
-  // a later top-level const would have initialized (TDZ).
+  // `- [ ] [some text](https://.../issues/123)`); falling back further to
+  // a TRAILING local issue reference -- `(#N)`, bare `#N`, or
+  // `owner/repo#N` naming the current repository -- as the last token of
+  // the checkbox item, gathered across the checkbox line and any
+  // continuation lines a soft wrap moved onto the item's own paragraph
+  // (up to the next line that starts a new list item, is blank, or is a
+  // heading -- the exact stop condition idd-skill#2765 specifies; no
+  // additional indentation check, since the stop condition alone already
+  // disambiguates the item's extent). A bare trailing `#N` accepts the
+  // same zero-disambiguation trust the leading bare-`#N` form already
+  // carries -- e.g. "...seen in run #4521" would also match -- a
+  // deliberate tradeoff (see idd-skill#2765's review discussion) rather
+  // than an unreliable keyword denylist. Regex construction is inlined
+  // per-call (not hoisted to a module-level const) because this file's
+  // CLI entry point (`if (import.meta.main)`) sits near the top of the
+  // file and can reach this function during synchronous module
+  // evaluation, before a later top-level const would have initialized
+  // (TDZ).
   const bareOrLinkTextRe =
     /^\s*-\s*\[(?: |x|X)\]\s+\[?#(\d+)\b\]?(?:\([^)\n]*\))?/u;
   const linkUrlRe =
     /^\s*-\s*\[(?: |x|X)\]\s+\[[^\]\n]*\]\([^)\n]*\/(?:issues|pull)\/(\d+)(?:[/?#][^)\n]*)?\)/u;
+  const trailingReferenceRe =
+    /(?:^|\s)\(?(?:([\w.-]+\/[\w.-]+)#(\d+)|#(\d+))\)?[.,;:]*\s*$/u;
+  const currentRepoRef = normalizeRepoRef(
+    options.currentRepoRef
+      ? options.currentRepoRef.split('/')[0]
+      : options.owner,
+    options.currentRepoRef
+      ? options.currentRepoRef.split('/')[1]
+      : options.repo,
+  );
   const rawBody = String(body ?? '');
   const rawLines = rawBody.split(/\r?\n/u);
   const maskedLines = stripMarkdownCodeRegions(rawBody).split(/\r?\n/u);
-  return maskedLines.flatMap((maskedLine, index) => {
-    const match =
-      maskedLine.match(bareOrLinkTextRe) ?? maskedLine.match(linkUrlRe);
-    if (!match) {
-      return [];
+  const references: RoadmapGraphReference[] = [];
+  for (let index = 0; index < maskedLines.length; index += 1) {
+    const maskedLine = maskedLines[index];
+    if (!isTaskListCheckboxLine(maskedLine)) {
+      continue;
     }
-    const target = Number.parseInt(match[1], 10);
-    return Number.isInteger(target) && target > 0
-      ? [
-          {
-            target,
-            relationship: 'task-list',
-            evidence: (rawLines[index] ?? maskedLine).trim(),
-          },
-        ]
-      : [];
-  });
+    const leadingMatch =
+      maskedLine.match(bareOrLinkTextRe) ?? maskedLine.match(linkUrlRe);
+    if (leadingMatch) {
+      const target = Number.parseInt(leadingMatch[1], 10);
+      if (Number.isInteger(target) && target > 0) {
+        references.push({
+          target,
+          relationship: 'task-list',
+          evidence: (rawLines[index] ?? maskedLine).trim(),
+        });
+      }
+      continue;
+    }
+    // No leading-form match: gather this item's continuation lines (soft-
+    // wrapped text belonging to the same checkbox item) and retry against
+    // the joined item text, looking for a trailing local issue reference.
+    let end = index;
+    while (
+      end + 1 < maskedLines.length &&
+      !isTaskListBlockBoundary(maskedLines[end + 1])
+    ) {
+      end += 1;
+    }
+    const itemText = maskedLines
+      .slice(index, end + 1)
+      .map((line) => line.trim())
+      .join(' ');
+    const trailingMatch = itemText.match(trailingReferenceRe);
+    if (trailingMatch) {
+      const qualifiedRepoRef = trailingMatch[1]
+        ? normalizeRepoRef(...(trailingMatch[1].split('/') as [string, string]))
+        : '';
+      const target = Number.parseInt(
+        trailingMatch[2] ?? trailingMatch[3] ?? '',
+        10,
+      );
+      if (
+        (!qualifiedRepoRef || qualifiedRepoRef === currentRepoRef) &&
+        Number.isInteger(target) &&
+        target > 0
+      ) {
+        references.push({
+          target,
+          relationship: 'task-list',
+          evidence: (rawLines[index] ?? maskedLine).trim(),
+        });
+      }
+    }
+    index = end;
+  }
+  return references;
 }
 
 export function extractKeywordReferences(

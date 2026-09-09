@@ -10,13 +10,14 @@
 // marker's exactly-one/coherent-value rule, its cross-field agreement with
 // the configured blocked-by-human label, markerPrefix consistency across
 // every authoring marker, the declared shape's required section headings,
-// the roadmap-id/blocked-by dependency-marker rules, visible/hidden line
-// agreement for the suitability and effort footers, and an advisory
-// warning-severity check that flags an issue/PR reference used near
-// coordination language (e.g. "before", "once", "requires") with no
-// corresponding Blocked-by/Depends-on/task-list dependency encoding. The
-// advisory check never fails the report or changes the exit code — see
-// checkProseOnlyDependency.
+// the roadmap shape's `## Tracks` checkbox lines actually resolving to a
+// child issue reference, the roadmap-id/blocked-by dependency-marker
+// rules, visible/hidden line agreement for the suitability and effort
+// footers, and an advisory warning-severity check that flags an issue/PR
+// reference used near coordination language (e.g. "before", "once",
+// "requires") with no corresponding Blocked-by/Depends-on/task-list
+// dependency encoding. The advisory check never fails the report or
+// changes the exit code — see checkProseOnlyDependency.
 //
 // All marker value parsing is delegated to the existing
 // autopilot-suitability.mts / effort.mts / marker-regex.mts /
@@ -34,7 +35,12 @@ import {
   extractBlockedByRoadmapMarkers,
   extractDependencyIssueNumbers,
 } from './discover-readiness-check.mts';
-import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
+import {
+  extractRoadmapMarkerId,
+  extractTaskListReferences,
+  isTaskListBlockBoundary,
+  isTaskListCheckboxLine,
+} from './discover-roadmap-graph.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
 import {
@@ -628,6 +634,12 @@ export function auditAuthoredIssue(
       options.upstreamEscalationEnabled === true,
     ),
     checkRequiredHeadings(text, shape, isBucketAudit),
+    checkRoadmapTracksParse(
+      text,
+      shape,
+      isBucketAudit,
+      normalizeCurrentRepo(options.currentRepo),
+    ),
     checkDependencyMarkerRule(text, markerPrefix, shape),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
@@ -1068,6 +1080,151 @@ function checkRequiredHeadings(
     );
   }
   return pass(id, name, 'all required headings are present');
+}
+
+/**
+ * Slices the `## Tracks` section's own lines out of `text` (already
+ * code-masked by the caller): from the line after the `## Tracks` heading
+ * up to (but excluding) the next `##` heading, or the end of the text
+ * when none follows. Empty when no `## Tracks` heading is present.
+ */
+function extractTracksSectionLines(text: string): string[] {
+  const lines = text.split(/\r?\n/u);
+  const headingRe = /^ {0,3}##\s+(.+?)\s*$/u;
+  let start = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(headingRe);
+    if (match && match[1].trim() === 'Tracks') {
+      start = index + 1;
+      break;
+    }
+  }
+  if (start === -1) {
+    return [];
+  }
+  let end = lines.length;
+  for (let index = start; index < lines.length; index += 1) {
+    if (headingRe.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start, end);
+}
+
+/**
+ * Roadmap-shape only (idd-skill#2765): fails when the `## Tracks` section
+ * has at least one checkbox line but NONE of them resolve to a child
+ * issue reference via `extractTaskListReferences` -- the same parser
+ * `discover-roadmap-graph.mts`'s traversal and
+ * `idd-roadmap-audit-execute.mts`'s childless gate rely on, reused here
+ * rather than a second reference-matching regex. When at least one line
+ * resolves but at least one other does not, this is a `severity:
+ * 'warning'` pass (not a hard fail) naming the unresolved line(s), so a
+ * roadmap with a genuinely mixed Tracks section still publishes with a
+ * visible signal instead of being blocked outright.
+ *
+ * Each checkbox line is evaluated with its own continuation span (the
+ * same stop rule `extractTaskListReferences` uses internally) rather
+ * than diffing the parser's returned `evidence` strings against the raw
+ * checkbox lines, so two textually-identical checkbox lines are scored
+ * independently instead of colliding on a shared evidence string.
+ */
+function checkRoadmapTracksParse(
+  text: string,
+  shape: IssueShape,
+  isBucketAudit: boolean,
+  currentRepo: string | undefined,
+): AuditFinding {
+  const id = 'roadmap-tracks-parse';
+  const name = 'Roadmap Tracks checkbox lines resolve to a child reference';
+  if (isBucketAudit) {
+    return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+  }
+  if (shape !== 'roadmap') {
+    return pass(
+      id,
+      name,
+      'not applicable: only the roadmap shape has a ## Tracks section',
+    );
+  }
+  const sectionLines = extractTracksSectionLines(text);
+  const checkboxLineIndexes = sectionLines
+    .map((line, index) => (isTaskListCheckboxLine(line) ? index : -1))
+    .filter((index) => index >= 0);
+  if (checkboxLineIndexes.length === 0) {
+    return pass(id, name, 'no ## Tracks checkbox lines to validate');
+  }
+  // Detects a trailing qualified `owner/repo#N` reference -- `(#N)`
+  // optionally wrapped in parens, with an `owner/repo` prefix -- at the
+  // end of a task-list item's text, mirroring
+  // `extractTaskListReferences`'s own trailing-reference shape
+  // (`discover-roadmap-graph.mts`) but without requiring a
+  // `currentRepoRef` match. Used only to distinguish "no reference at
+  // all" from "a qualified reference exists but this run has no repo
+  // context to verify it names the current repository" (idd-skill#2765
+  // review, Codex) -- detection only, never itself trusted as a resolved
+  // child reference. Declared inside the function (not module-level, per
+  // this file's own CLI-entry-order convention -- see
+  // `extractTaskListReferences`'s matching per-call regex construction in
+  // `discover-roadmap-graph.mts`) so it carries no TDZ risk relative to
+  // this file's `if (import.meta.main)` CLI entry block.
+  const qualifiedTrailingReferenceRe =
+    /(?:^|\s)\(?[\w.-]+\/[\w.-]+#\d+\)?[.,;:]*\s*$/u;
+  const unparsedLines: string[] = [];
+  let parsedCount = 0;
+  for (const startIndex of checkboxLineIndexes) {
+    let end = startIndex;
+    while (
+      end + 1 < sectionLines.length &&
+      !isTaskListBlockBoundary(sectionLines[end + 1])
+    ) {
+      end += 1;
+    }
+    const itemText = sectionLines.slice(startIndex, end + 1).join('\n');
+    const itemReferences = extractTaskListReferences(itemText, {
+      currentRepoRef: currentRepo,
+    });
+    if (
+      itemReferences.length > 0 ||
+      // No repo context to verify a qualified `owner/repo#N` reference
+      // against (idd-skill#2765 review, Codex): the documented local
+      // invocation of this linter never passes `--current-repo`, and
+      // `$GITHUB_REPOSITORY` is only set by GitHub Actions, so this is
+      // the common case outside CI. `extractTaskListReferences` then
+      // rejects every qualified reference because it can never equal an
+      // empty current-repository value -- treat a trailing qualified
+      // reference as unverifiable rather than malformed here, so a
+      // well-formed roadmap using that form doesn't hard-fail merely
+      // because this run lacks repo context.
+      (currentRepo === undefined && qualifiedTrailingReferenceRe.test(itemText))
+    ) {
+      parsedCount += 1;
+    } else {
+      unparsedLines.push(sectionLines[startIndex].trim());
+    }
+  }
+  if (parsedCount === 0) {
+    return fail(
+      id,
+      name,
+      `## Tracks has ${checkboxLineIndexes.length} checkbox line(s) but none resolve to a child issue reference (checked: ${unparsedLines.join(' | ')})`,
+    );
+  }
+  if (unparsedLines.length > 0) {
+    return {
+      id,
+      name,
+      result: 'pass',
+      severity: 'warning',
+      detail: `## Tracks checkbox line(s) did not resolve to a child issue reference: ${unparsedLines.join(' | ')}`,
+    };
+  }
+  return pass(
+    id,
+    name,
+    'every ## Tracks checkbox line resolves to a child issue reference',
+  );
 }
 
 function checkDependencyMarkerRule(
