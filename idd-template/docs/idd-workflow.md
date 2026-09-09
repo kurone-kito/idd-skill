@@ -1025,17 +1025,35 @@ produces a list of issues with severity, correctness, and coverage
 assessment. The goal and expected output are the same regardless of
 agent; only the mechanism differs.
 
-| Agent           | How to run a critique pass                                                                                                                                                                                                 |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                                                                                                  |
-| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                                                                                                       |
-| Codex CLI       | Use one bounded read-only native subagent review when supported and suitable; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, disabled, unsuitable, or fails. |
-| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism                                                                                 |
-| Grok Build      | Independent `spawn_subagent` with the calling phase's critique checklist                                                                                                                                                   |
-| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                           |
+| Agent           | How to run a critique pass                                                                                                                                                                                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                                                                                                                                                                                                                        |
+| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                                                                                                                                                                                                                             |
+| Codex CLI       | Use one bounded read-only native subagent review when supported and suitable; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, disabled, unsuitable, or fails.                                                                                                                       |
+| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism                                                                                                                                                                                                       |
+| Grok Build      | Independent `spawn_subagent` with the calling phase's critique checklist. Fallback: structured self-critique when delegation is unavailable, unsuitable, or fails (unsuitable: the subagent returns no findings list, or its search beyond the named scope is open-ended rather than a targeted trace of code the change depends on or affects). |
+| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                                                                                                                                                 |
 
 For Codex delegation, the parent collects the reviewer result before
 continuing; if delegation fails, use the structured fallback.
+
+For Grok Build, the critique brief must give the subagent the actual
+artifact under review (file references by their sibling-worktree
+absolute paths, never a relative path or a bare `cd`; a diff by an
+absolute-worktree diff command or revision range; or a plan by its
+literal text), the issue's requirements or acceptance criteria in
+every case — even when the calling phase's own checklist wording
+does not name them explicitly, since a correctness assessment is
+meaningless without them — and any other checklist input the calling
+phase names, such as the E9 findings under verification for E10.
+Instruct the subagent to stay within that scope except for a targeted
+trace of code the change depends on or affects — `spawn_subagent`'s
+working-directory parameter does not rebind Grok's
+file tools (that rebind gap is kurone-kito/idd-skill#2819). This
+constrains the pass prospectively but does not guarantee compliance —
+the unsuitable fallback above still applies when the subagent wanders
+past it
+anyway.
 
 When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
