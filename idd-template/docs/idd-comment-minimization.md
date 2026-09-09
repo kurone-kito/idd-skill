@@ -171,7 +171,8 @@ mechanisms:
   `scripts/minimize-superseded-markers.mjs`'s `runMinimize` for the
   actual mutation -- best-effort: any failure there (a permission
   error, an unreadable comment list) is swallowed and never blocks or
-  retries the marker post that already succeeded. This mechanism lives
+  retries the marker post that already succeeded (preventive; no
+  observed incident yet — #2788). This mechanism lives
   inside the built `.mjs` helpers, so it only runs where a helper
   runtime is configured (`vendored-node`, `package-manager`, or
   `ephemeral-npx`); under `instructions-only` (or wherever the helper
