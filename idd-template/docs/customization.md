@@ -866,7 +866,7 @@ Example downstream usage:
 ```yaml
 jobs:
   pnpm-boundary:
-    uses: owner/repo/.github/workflows/pnpm-boundary.yml@main
+    uses: kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@main
     with:
       node-version: "24.x"
       boundary-command: node scripts/check-pnpm-boundary.mjs
