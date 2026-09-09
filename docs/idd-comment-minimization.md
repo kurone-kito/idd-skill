@@ -134,18 +134,23 @@ after one of these is true:
 - a maintainer explicitly starts a merged-PR audit
 
 **Exception -- hide-at-post-time for `wired` families** (issue #731,
-issue #733, issue #2751). A `wired` family may be minimized immediately
-after its own new instance's POST+verify succeeds, pre-merge, using
-that family's documented supersession/grouping key -- never for any
-other reason during an active E or F gate. Three families ship this
-today: the claim chain
+issue #733, issue #2751, issue #2755). A `wired` family may be
+minimized immediately after its own new instance's POST+verify
+succeeds, pre-merge, using that family's documented
+supersession/grouping key -- never for any other reason during an
+active E or F gate. Four families ship this today: the claim chain
 (`claimed-by:`/`unclaimed-by:`, grouped by
 `supersedes:` lineage, `idd-claim.instructions.md`), `review-watermark:`/
 `review-baseline:` (grouped by same claim-id,
-`idd-review-snapshot.instructions.md`), and the `advisory-wait` family
+`idd-review-snapshot.instructions.md`), the `advisory-wait` family
 (`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
 `advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
-`idd-advisory-wait.instructions.md`). A family classified `f4-only` has
+`idd-advisory-wait.instructions.md`), and
+`<!-- idd-local-validation-evidence:` (grouped by embedded HEAD SHA
+mismatch, mirroring AW3-H, wired into `idd-local-validation-evidence`'s
+own `--record --apply` path -- see
+[this helper's doc](idd-helper-scripts.md#local-validation-evidence-helper)).
+A family classified `f4-only` has
 no such wiring yet and follows the default F4-only timing above until a
 future track adds it -- concretely, the post-merge F4 batch means
 `audit-pr-cleanup.mts`'s generic marker-prefix match

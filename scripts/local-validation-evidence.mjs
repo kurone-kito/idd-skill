@@ -33,6 +33,10 @@ import {
   safeGhText,
 } from './gh-exec.mjs';
 import {
+  resolveTrustedActors,
+  runMinimize,
+} from './minimize-superseded-markers.mjs';
+import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
@@ -248,6 +252,7 @@ const LOCAL_VALIDATION_EVIDENCE_FLAG_SPEC = {
   '--owner': { type: 'string', default: '' },
   '--apply': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
   '--help': { type: 'boolean', short: 'h' },
 };
 function parsePositiveIntegerFlag(value, flag) {
@@ -298,6 +303,7 @@ export function parseArgs(argv) {
     owner: values.owner.trim(),
     apply: values.apply,
     format,
+    trustedMarkerLogins: values['trusted-marker-logins'].trim(),
     help,
   };
   if (!parsed.help) {
@@ -369,6 +375,164 @@ function postComment({ owner, repo, prNumber, body }) {
     return JSON.parse(payload || '{}');
   } catch {
     return {};
+  }
+}
+/**
+ * Read the PR's LIVE current HEAD SHA (#2755, Codex review on PR #2792) --
+ * used by {@link hideSupersededLocalValidationEvidenceMarkers} to refuse to
+ * hide anything when the just-recorded `newHeadSha` no longer matches the
+ * PR's actual current HEAD, mirroring `post-idd-marker.mts`'s identical
+ * `review-ack` live-HEAD check (#2754).
+ */
+function fetchPrHeadSha({ owner, repo, prNumber }) {
+  return String(
+    ghText([
+      'api',
+      `repos/${owner}/${repo}/pulls/${prNumber}`,
+      '--jq',
+      '.head.sha',
+    ]),
+  )
+    .trim()
+    .toLowerCase();
+}
+/**
+ * Find prior `idd-local-validation-evidence:` comments (among `comments`)
+ * whose embedded HEAD SHA differs from `newHeadSha` -- the candidates a
+ * fresh `--record --apply` post should hide as `OUTDATED` (#2755),
+ * mirroring the shipped `advisory-wait` AW3-H rule and `post-idd-marker.mts`'s
+ * `review-ack` hide-at-post-time step (#2754). Never returns a candidate
+ * matching `newHeadSha` (current-HEAD protection, since
+ * `resolveLocalValidationEvidence` resolves current evidence by HEAD match)
+ * or an unparseable / non-`idd-local-validation-evidence:` comment.
+ */
+export function findSupersededLocalValidationEvidenceSubjects(
+  comments,
+  newHeadSha,
+) {
+  const target = newHeadSha.trim().toLowerCase();
+  const subjects = [];
+  for (const comment of comments) {
+    const nodeId = String(comment.node_id ?? '').trim();
+    if (!nodeId) {
+      continue;
+    }
+    const parsed = parseLocalValidationEvidenceComment(
+      String(comment.body ?? ''),
+      String(comment.created_at ?? ''),
+    );
+    if (!parsed || parsed.headSha === target) {
+      continue;
+    }
+    subjects.push(nodeId);
+  }
+  return subjects;
+}
+/**
+ * Best-effort hide-at-post-time step (#2755) for a freshly recorded
+ * `idd-local-validation-evidence:` marker. Runs only after `poster(...)`'s
+ * own POST already succeeded, and reuses `minimize-superseded-markers.mts`'s
+ * `runMinimize` for the actual mutation -- the same trusted-author gate,
+ * already-`isMinimized` skip, and `viewerCanMinimize` check that helper
+ * already implements. Every failure (an unreadable comment list, a `gh`
+ * permission error, a malformed GraphQL response, anything else) is
+ * swallowed here: this step must never retry-loop or throw back into the
+ * caller, since the marker it is hiding *for* has already posted
+ * successfully by the time this runs.
+ *
+ * Three safety checks, all added after Codex/Copilot review on PR #2792
+ * caught the first version's reliance on a pre-POST comment snapshot as
+ * insufficient:
+ *
+ * - **Live-HEAD verification.** Re-reads the PR's actual current HEAD SHA
+ *   and, when it no longer matches `newHeadSha`, self-minimizes the
+ *   just-posted marker (`postedCommentNodeId`) instead of scanning prior
+ *   comments -- mirroring `post-idd-marker.mts`'s identical `review-ack`
+ *   check (#2754), extended per a second Codex finding on this same PR:
+ *   a delayed `--record --apply` invocation for an older HEAD can finish
+ *   *after* another, already-more-current invocation has already posted
+ *   and hidden nothing (since this invocation's marker did not exist
+ *   yet), leaving this invocation's own now-stale marker un-hidden with
+ *   no later invocation guaranteed to sweep it. Self-minimizing here
+ *   closes that gap instead of relying on F4 cleanup for it. The
+ *   still-current branch below (`liveHeadSha === target`) is unaffected:
+ *   it never touches the just-posted marker, only genuinely prior ones.
+ * - **Post-POST re-fetch with an `id <` filter.** Re-lists the PR's
+ *   comments AFTER this call's own POST (never reusing an earlier, pre-POST
+ *   snapshot) and restricts candidates to `comment.id < postedCommentId`.
+ *   A pre-POST snapshot can only ever miss a genuinely concurrent
+ *   `--record --apply` invocation's own marker (posted in the gap between
+ *   this call's own comment fetch and its POST), leaving that marker
+ *   un-hidden forever since no later invocation would necessarily rescan
+ *   it. The `id <` restriction, not a bare exclude-this-one-id check,
+ *   guards the re-fetch itself: a concurrent session's marker created
+ *   during THIS scan can already appear with a HIGHER id than
+ *   `postedCommentId`, and treating that genuinely newer marker as "prior"
+ *   would hide it -- exactly backwards, since it is this call's own marker
+ *   that is older by comparison.
+ * - **Skip an empty trusted set.** An empty trusted set can never minimize
+ *   anything under `allowUntrusted:false`, but `runMinimize` would still
+ *   probe every subject over GraphQL for a guaranteed no-op -- resolved
+ *   once, after computing subjects for either branch above.
+ */
+export function hideSupersededLocalValidationEvidenceMarkers({
+  owner,
+  repo,
+  prNumber,
+  newHeadSha,
+  postedCommentId,
+  postedCommentNodeId,
+  trustedMarkerLoginsFlag,
+  rawConfig,
+  fetchLiveHeadSha = fetchPrHeadSha,
+  fetchPriorComments = fetchPrComments,
+  resolveTrustedActorsFn = resolveTrustedActors,
+  runMinimizeFn = runMinimize,
+}) {
+  try {
+    const target = newHeadSha.trim().toLowerCase();
+    const liveHeadSha = fetchLiveHeadSha({ owner, repo, prNumber });
+    let subjectIds;
+    if (liveHeadSha !== target) {
+      const nodeId = postedCommentNodeId.trim();
+      subjectIds = nodeId ? [nodeId] : [];
+    } else {
+      const comments = fetchPriorComments({ owner, repo, prNumber }).filter(
+        (comment) => {
+          const id = Number(comment.id);
+          return Number.isFinite(id) && id < postedCommentId;
+        },
+      );
+      subjectIds = findSupersededLocalValidationEvidenceSubjects(
+        comments,
+        newHeadSha,
+      );
+    }
+    if (subjectIds.length === 0) {
+      return;
+    }
+    const { actors } = resolveTrustedActorsFn({
+      flagValue: trustedMarkerLoginsFlag,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+      config: rawConfig,
+    });
+    // #2755, Copilot review on PR #2792: an empty trusted set can never
+    // minimize anything under allowUntrusted:false -- runMinimize would
+    // still probe every subject over GraphQL for nothing. Skip the call
+    // entirely rather than pay that cost for a guaranteed no-op.
+    if (actors.length === 0) {
+      return;
+    }
+    runMinimizeFn({
+      subjectIds,
+      classifier: 'OUTDATED',
+      trustedSet: new Set(actors),
+      apply: true,
+      allowUntrusted: false,
+    });
+  } catch {
+    // Best-effort only (#2755) -- never block or retry-loop the marker
+    // post that already succeeded above.
   }
 }
 export async function runLocalValidationEvidence(options = {}) {
@@ -468,6 +632,19 @@ export async function runLocalValidationEvidence(options = {}) {
   }
   const poster = options.postComment ?? postComment;
   const posted = poster({ owner, repo: name, prNumber: args.prNumber, body });
+  const postedCommentId = Number(posted.id);
+  if (Number.isFinite(postedCommentId)) {
+    hideSupersededLocalValidationEvidenceMarkers({
+      owner,
+      repo: name,
+      prNumber: args.prNumber,
+      newHeadSha: args.headSha,
+      postedCommentId,
+      postedCommentNodeId: String(posted.node_id ?? ''),
+      trustedMarkerLoginsFlag: args.trustedMarkerLogins,
+      rawConfig,
+    });
+  }
   const result = {
     mode: args.mode,
     apply: true,
@@ -520,6 +697,9 @@ Options:
                                      repository name -- not both --owner
                                      and a combined --repo together)
   --apply                           post the canonical marker comment after validation (--record)
+  --trusted-marker-logins a,b        gate --record --apply's hide-at-post-time
+                                      step (falls back to
+                                      IDD_TRUSTED_MARKER_ACTORS / config)
   --format <json|text>              output format (default: json)
   --help                            show this message
 `);
