@@ -378,6 +378,25 @@ function postComment({ owner, repo, prNumber, body }) {
   }
 }
 /**
+ * Read the PR's LIVE current HEAD SHA (#2755, Codex review on PR #2792) --
+ * used by {@link hideSupersededLocalValidationEvidenceMarkers} to refuse to
+ * hide anything when the just-recorded `newHeadSha` no longer matches the
+ * PR's actual current HEAD, mirroring `post-idd-marker.mts`'s identical
+ * `review-ack` live-HEAD check (#2754).
+ */
+function fetchPrHeadSha({ owner, repo, prNumber }) {
+  return String(
+    ghText([
+      'api',
+      `repos/${owner}/${repo}/pulls/${prNumber}`,
+      '--jq',
+      '.head.sha',
+    ]),
+  )
+    .trim()
+    .toLowerCase();
+}
+/**
  * Find prior `idd-local-validation-evidence:` comments (among `comments`)
  * whose embedded HEAD SHA differs from `newHeadSha` -- the candidates a
  * fresh `--record --apply` post should hide as `OUTDATED` (#2755),
@@ -412,32 +431,68 @@ export function findSupersededLocalValidationEvidenceSubjects(
 /**
  * Best-effort hide-at-post-time step (#2755) for a freshly recorded
  * `idd-local-validation-evidence:` marker. Runs only after `poster(...)`'s
- * own POST already succeeded, reuses `priorComments` (the same PR comment
- * listing already fetched earlier in {@link runLocalValidationEvidence},
- * necessarily gathered *before* this post -- unlike `post-idd-marker.mts`'s
- * equivalent step, which re-lists comments *after* its own POST and must
- * therefore exclude a same-window concurrent marker by `id`, a pre-post
- * snapshot can by construction never contain this post or anything newer,
- * so no id-ordering filter is needed here), and reuses
- * `minimize-superseded-markers.mts`'s `runMinimize` for the actual
- * mutation -- the same trusted-author gate, already-`isMinimized` skip, and
- * `viewerCanMinimize` check that helper already implements. Every failure
- * (an unreadable comment list, a `gh` permission error, a malformed
- * GraphQL response, anything else) is swallowed here: this step must never
- * retry-loop or throw back into the caller, since the marker it is hiding
- * *for* has already posted successfully by the time this runs.
+ * own POST already succeeded, and reuses `minimize-superseded-markers.mts`'s
+ * `runMinimize` for the actual mutation -- the same trusted-author gate,
+ * already-`isMinimized` skip, and `viewerCanMinimize` check that helper
+ * already implements. Every failure (an unreadable comment list, a `gh`
+ * permission error, a malformed GraphQL response, anything else) is
+ * swallowed here: this step must never retry-loop or throw back into the
+ * caller, since the marker it is hiding *for* has already posted
+ * successfully by the time this runs.
+ *
+ * Two safety checks, both added after Codex review on PR #2792 caught the
+ * first version's reliance on a pre-POST comment snapshot as insufficient:
+ *
+ * - **Live-HEAD verification.** Re-reads the PR's actual current HEAD SHA
+ *   and bails out (no scan, no mutation) unless it still matches
+ *   `newHeadSha` -- mirroring `post-idd-marker.mts`'s identical
+ *   `review-ack` check (#2754). Without this, a `--record --apply`
+ *   invocation for an older HEAD that finishes late (after another,
+ *   already-more-current invocation has posted evidence for a newer HEAD)
+ *   would see that newer marker as merely "a different HEAD" and hide the
+ *   more-current evidence while leaving its own, now-stale one visible --
+ *   exactly backwards.
+ * - **Post-POST re-fetch with an `id <` filter.** Re-lists the PR's
+ *   comments AFTER this call's own POST (never reusing an earlier, pre-POST
+ *   snapshot) and restricts candidates to `comment.id < postedCommentId`.
+ *   A pre-POST snapshot can only ever miss a genuinely concurrent
+ *   `--record --apply` invocation's own marker (posted in the gap between
+ *   this call's own comment fetch and its POST), leaving that marker
+ *   un-hidden forever since no later invocation would necessarily rescan
+ *   it. The `id <` restriction, not a bare exclude-this-one-id check,
+ *   guards the re-fetch itself: a concurrent session's marker created
+ *   during THIS scan can already appear with a HIGHER id than
+ *   `postedCommentId`, and treating that genuinely newer marker as "prior"
+ *   would hide it -- exactly backwards, since it is this call's own marker
+ *   that is older by comparison.
  */
 export function hideSupersededLocalValidationEvidenceMarkers({
-  priorComments,
+  owner,
+  repo,
+  prNumber,
   newHeadSha,
+  postedCommentId,
   trustedMarkerLoginsFlag,
   rawConfig,
+  fetchLiveHeadSha = fetchPrHeadSha,
+  fetchPriorComments = fetchPrComments,
   resolveTrustedActorsFn = resolveTrustedActors,
   runMinimizeFn = runMinimize,
 }) {
   try {
+    const target = newHeadSha.trim().toLowerCase();
+    const liveHeadSha = fetchLiveHeadSha({ owner, repo, prNumber });
+    if (liveHeadSha !== target) {
+      return;
+    }
+    const comments = fetchPriorComments({ owner, repo, prNumber }).filter(
+      (comment) => {
+        const id = Number(comment.id);
+        return Number.isFinite(id) && id < postedCommentId;
+      },
+    );
     const subjectIds = findSupersededLocalValidationEvidenceSubjects(
-      priorComments,
+      comments,
       newHeadSha,
     );
     if (subjectIds.length === 0) {
@@ -448,6 +503,13 @@ export function hideSupersededLocalValidationEvidenceMarkers({
       envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
       config: rawConfig,
     });
+    // #2755, Copilot review on PR #2792: an empty trusted set can never
+    // minimize anything under allowUntrusted:false -- runMinimize would
+    // still probe every subject over GraphQL for nothing. Skip the call
+    // entirely rather than pay that cost for a guaranteed no-op.
+    if (actors.length === 0) {
+      return;
+    }
     runMinimizeFn({
       subjectIds,
       classifier: 'OUTDATED',
@@ -457,9 +519,7 @@ export function hideSupersededLocalValidationEvidenceMarkers({
     });
   } catch {
     // Best-effort only (#2755) -- never block or retry-loop the marker
-    // post that already succeeded above. Covers both a thrown failure from
-    // runMinimizeFn itself (e.g. a gh permission error) and one from
-    // resolveTrustedActorsFn.
+    // post that already succeeded above.
   }
 }
 export async function runLocalValidationEvidence(options = {}) {
@@ -559,12 +619,18 @@ export async function runLocalValidationEvidence(options = {}) {
   }
   const poster = options.postComment ?? postComment;
   const posted = poster({ owner, repo: name, prNumber: args.prNumber, body });
-  hideSupersededLocalValidationEvidenceMarkers({
-    priorComments: comments,
-    newHeadSha: args.headSha,
-    trustedMarkerLoginsFlag: args.trustedMarkerLogins,
-    rawConfig,
-  });
+  const postedCommentId = Number(posted.id);
+  if (Number.isFinite(postedCommentId)) {
+    hideSupersededLocalValidationEvidenceMarkers({
+      owner,
+      repo: name,
+      prNumber: args.prNumber,
+      newHeadSha: args.headSha,
+      postedCommentId,
+      trustedMarkerLoginsFlag: args.trustedMarkerLogins,
+      rawConfig,
+    });
+  }
   const result = {
     mode: args.mode,
     apply: true,
