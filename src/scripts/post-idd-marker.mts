@@ -766,6 +766,7 @@ export function findSupersededReviewAckSubjects(
 export function findSupersededCopilotUnavailableSubjects(
   comments: readonly MarkerCandidateComment[],
   newClaimId: string,
+  newAttempt: number,
 ): string[] {
   // Trim before comparing (caught by Copilot review on PR #2788):
   // renderCopilotUnavailableMarker normalizes claimId via
@@ -786,6 +787,24 @@ export function findSupersededCopilotUnavailableSubjects(
     }
     const parsed = parseCopilotUnavailableComment(comment.body, 'none');
     if (!parsed || parsed.claimId !== target) {
+      continue;
+    }
+    // Only a STRICTLY LOWER attempt number is ever superseded (caught by
+    // chatgpt-codex-connector review on PR #2788, round 5): claim:
+    // equality alone says nothing about which attempt is actually more
+    // advanced. Two same-claim sessions racing on the SAME HEAD (no HEAD
+    // drift needed -- the live-HEAD gate above cannot catch this) can
+    // still POST out of attempt order -- e.g. attempt 2 lands with a
+    // LOWER REST id while a stalled attempt 1 lands with the next one --
+    // and an attempt-blind filter would let that delayed, regressive
+    // attempt 1 hide the more advanced attempt 2, leaving the regressive
+    // marker as the only one expanded. A same-attempt candidate (a bare
+    // retry of this exact attempt number, e.g. re-POSTing after a failed
+    // hide step) is deliberately left alone rather than guessing whether
+    // it is a true duplicate: current-attempt protection, the same
+    // conservative "when ambiguous, never hide" policy the live-HEAD gate
+    // above already applies to a same-embedded-HEAD review-ack.
+    if (!(parsed.attempt < newAttempt)) {
       continue;
     }
     subjects.push(comment.nodeId);
@@ -976,6 +995,7 @@ export function hideSupersededPostTimeMarkers(
         : findSupersededCopilotUnavailableSubjects(
             comments,
             fields['claim-id'],
+            Number(fields.attempt),
           );
     if (subjectIds.length === 0) {
       return;

@@ -2018,7 +2018,7 @@ test('findSupersededReviewAckSubjects ignores a non-review-ack comment and one w
 const CLAIM_A = 'claim-aaaa';
 const CLAIM_B = 'claim-bbbb';
 
-test('findSupersededCopilotUnavailableSubjects hides a prior comment carrying the SAME claim: value (differing attempt)', () => {
+test('findSupersededCopilotUnavailableSubjects hides a prior comment carrying the SAME claim: value and a LOWER attempt', () => {
   const sameClaimEarlierAttempt = candidateComment({
     id: 5,
     nodeId: 'IC_same_claim',
@@ -2028,6 +2028,7 @@ test('findSupersededCopilotUnavailableSubjects hides a prior comment carrying th
     findSupersededCopilotUnavailableSubjects(
       [sameClaimEarlierAttempt],
       CLAIM_A,
+      2,
     ),
     ['IC_same_claim'],
   );
@@ -2040,7 +2041,37 @@ test('findSupersededCopilotUnavailableSubjects never hides a comment whose claim
     body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_B} attempt:1`,
   });
   assert.deepEqual(
-    findSupersededCopilotUnavailableSubjects([foreignClaim], CLAIM_A),
+    findSupersededCopilotUnavailableSubjects([foreignClaim], CLAIM_A, 2),
+    [],
+  );
+});
+
+test('findSupersededCopilotUnavailableSubjects never hides a same-claim comment whose attempt is >= the new one (#2754, round 5: attempt-ordering protection)', () => {
+  // Two same-claim sessions racing on the SAME HEAD (no HEAD drift needed)
+  // can still POST out of attempt order -- e.g. attempt 2 lands with a
+  // LOWER REST id while a stalled attempt 1 lands with the next one. An
+  // attempt-blind filter would let that delayed, regressive attempt 1
+  // hide the more advanced attempt 2. A same-attempt candidate (a bare
+  // retry of this exact attempt number) is also left alone rather than
+  // guessing whether it is a true duplicate -- current-attempt protection,
+  // mirroring the live-HEAD gate's own "when ambiguous, never hide" policy
+  // for a same-embedded-HEAD review-ack.
+  const higherAttempt = candidateComment({
+    id: 9,
+    nodeId: 'IC_higher_attempt',
+    body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:3`,
+  });
+  const sameAttempt = candidateComment({
+    id: 10,
+    nodeId: 'IC_same_attempt',
+    body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:2`,
+  });
+  assert.deepEqual(
+    findSupersededCopilotUnavailableSubjects(
+      [higherAttempt, sameAttempt],
+      CLAIM_A,
+      2,
+    ),
     [],
   );
 });
@@ -2056,7 +2087,7 @@ test('findSupersededCopilotUnavailableSubjects trims newClaimId before comparing
     body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:1`,
   });
   assert.deepEqual(
-    findSupersededCopilotUnavailableSubjects([sameClaim], `  ${CLAIM_A}  `),
+    findSupersededCopilotUnavailableSubjects([sameClaim], `  ${CLAIM_A}  `, 2),
     ['IC_same_claim_untrimmed'],
   );
 });
@@ -2073,7 +2104,7 @@ test('findSupersededCopilotUnavailableSubjects ignores a non-copilot-unavailable
     body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:1`,
   });
   assert.deepEqual(
-    findSupersededCopilotUnavailableSubjects([unrelated, noNodeId], CLAIM_A),
+    findSupersededCopilotUnavailableSubjects([unrelated, noNodeId], CLAIM_A, 2),
     [],
   );
 });
@@ -2578,6 +2609,80 @@ test('--apply --type copilot-unavailable hides a prior same-claim comment, spare
     assert.deepEqual(readMutatedSubjectIds(mutationLogFile), [
       'IC_same_claim_attempt1',
     ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type copilot-unavailable never hides a same-claim comment carrying a HIGHER attempt than the one just posted (#2754, round 5, chatgpt-codex-connector review)', () => {
+  // Simulates attempt 2 landing FIRST (lower REST id) while a stalled
+  // attempt 1 finally lands second (higher id): the `id <` ordering
+  // restriction alone would treat attempt 2 as "prior" and, without an
+  // attempt-aware filter, this delayed attempt-1 post would hide the more
+  // advanced attempt 2, leaving the regressive attempt 1 as the only
+  // marker expanded.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-copilot-unavailable-attempt-order-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [
+      {
+        id: 300,
+        node_id: 'IC_higher_attempt_earlier_post',
+        body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:2`,
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    probeIndex: {
+      IC_higher_attempt_earlier_post: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9650,
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'copilot-unavailable',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--claim-id',
+        CLAIM_A,
+        '--head-sha',
+        SHA,
+        '--attempt',
+        '1',
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'copilot-unavailable',
+      target: 'pr',
+      number: 1200,
+      commentId: 9650,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9650',
+    });
+    // The higher-attempt candidate was never mutated, even though it has
+    // a lower id (so it passes the ordering filter) and a probeIndex
+    // entry that would otherwise happily minimize it.
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), []);
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
