@@ -1429,6 +1429,61 @@ only approval boundary.
   winner by deterministic comment order; an immediate local read never
   authorizes edits. Apply the same settle delay and full paginated replay after
   every heartbeat before it authorizes an edit or label removal.
+- **Hide superseded owner/publication-intent markers.** Once a fresh
+  `authoring-owner` marker (any `mode`, including the first,
+  generation-opening `acquire`/`bootstrap`) or `authoring-publication-intent`
+  record (any `state`) has been posted and its own POST and re-fetch/verify
+  above have both succeeded -- never before, and never interleaved with
+  posting -- scan that same target's prior comments (the target issue for
+  `authoring-owner`; the journal issue named in the record's own `journal`
+  field for `authoring-publication-intent`, which naturally also hides other
+  authoring sets' already superseded journal records on that shared journal
+  -- intentional, since the journal read path is the same paginated scan and
+  is unaffected either way) and minimize (classifier `OUTDATED`) every prior
+  comment from a trusted marker actor whose body is a byte-exact match of the
+  canonical rendered template for the same marker family.
+  `matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`, re-exported by
+  `protocol-helpers.mts`) implements that check: it parses the candidate,
+  re-renders the parsed fields with `renderAuthoringOwnerMarker` /
+  `renderAuthoringPublicationIntentMarker`, and requires the result to equal
+  the candidate's body exactly. A candidate that deviates from the template
+  in any way -- reordered or extra fields, altered spacing, trailing
+  content, a different visible note -- is never minimized; leave it visible
+  rather than guessing. Skip the just-posted comment itself and any
+  candidate whose `isMinimized` is already `true` (idempotent; the minimize
+  helper's own probe already enforces this).
+
+  Convert each eligible candidate's REST comment id to its GraphQL node id
+  and call the existing minimize helper -- reuse it rather than
+  reimplementing the mutation:
+
+  ```sh
+  node scripts/minimize-superseded-markers.mjs --subject-ids <id1,id2,...> \
+    --classifier OUTDATED --trusted-marker-logins <trusted-login-1,...> \
+    --apply
+  ```
+
+  Or, for npx/package-manager profiles, the equivalent
+  `idd-minimize-superseded-markers` command.
+
+  **Best-effort, never blocking.** A permission error, an unreadable
+  comment list, or an unavailable helper runtime (`instructions-only`
+  profile, or Node.js absent) skips this step silently and continues the
+  normal marker-posting flow unmodified -- this must never retry-loop or
+  fail the authoring flow. Mirrors `docs/idd-comment-minimization.md`'s
+  framing: this is UI cleanup only and never replaces the append-only
+  audit trail.
+
+  **Scope.** In scope: `authoring-owner` and `authoring-publication-intent`
+  only. Out of scope: `authoring-publication` -- a body-line token embedded
+  in the newly created issue's own body at creation time, not a comment, so
+  there is nothing to minimize -- and every marker family already covered
+  by the post-merge F4 cleanup driver (for example `claimed-by`,
+  `review-watermark`, `advisory-wait`; see `docs/idd-comment-minimization.md`).
+  Do not add `authoring-owner`, `authoring-publication-intent`, or
+  `authoring-publication` to `OPERATIONAL_MARKERS`, and do not fold this
+  step into the F4 driver: it is a separate, earlier-lifecycle,
+  hide-at-post-time behavior.
 - **Conflict check before every edit.** Immediately before each body or
   roadmap relationship update, re-fetch both the target and the set anchor
   (the same fresh snapshot serves both roles when the target is the anchor).
