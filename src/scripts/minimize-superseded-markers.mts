@@ -37,6 +37,35 @@ function loadIddConfig(): unknown {
 // discover-readiness-check.mts's / ci-wait-policy.mts's identical note).
 const GH_TIMEOUT_MS = 30_000;
 
+// #2754 (caught by chatgpt-codex-connector review on PR #2788): same
+// self-containment constraint as the two constants above -- cannot import
+// gh-exec.mts's resolveGhApiHostname, so duplicate the same GHES-hostname
+// resolution logic locally. Without this, every `runGh` call below always
+// targets github.com even on a GitHub Enterprise Server host where
+// GITHUB_SERVER_URL names the GHES instance but GH_HOST is unset (`gh`
+// itself never reads GITHUB_SERVER_URL), so a GHES-hosted repository's
+// probe/mutate GraphQL calls would silently fail to resolve any node id --
+// exactly the risk `post-idd-marker.mts`'s new hide-at-post-time step
+// (#2754) introduced by calling `runMinimize` from inside a GitHub Actions
+// job, where GITHUB_SERVER_URL is always set by the runtime but GH_HOST is
+// not set by default.
+export function resolveGhHostnameArgs(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (env.GH_HOST?.trim()) {
+    return [];
+  }
+  const serverUrl = env.GITHUB_SERVER_URL?.trim();
+  if (!serverUrl) {
+    return [];
+  }
+  const host = serverUrl
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+  return host && host !== 'github.com' ? ['--hostname', host] : [];
+}
+
 const ALLOWED_CLASSIFIERS = new Set(['OUTDATED', 'RESOLVED']);
 const ALLOWED_FORMATS = new Set(['json', 'table']);
 const MINIMIZABLE_TYPENAMES = new Set([
@@ -347,6 +376,7 @@ function isUnresolvableRestShapedId(
 export function probeSubject(subjectId: string): ProbeResult {
   const result = runGh([
     'api',
+    ...resolveGhHostnameArgs(),
     'graphql',
     '-f',
     `query=query($id:ID!){
@@ -424,6 +454,7 @@ export function applyMinimize(
 ): MutationResult {
   const result = runGh([
     'api',
+    ...resolveGhHostnameArgs(),
     'graphql',
     '-f',
     `query=mutation($id:ID!,$classifier:ReportedContentClassifiers!){

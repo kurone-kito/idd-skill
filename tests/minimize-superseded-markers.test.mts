@@ -7,11 +7,54 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  applyMinimize,
   computeExitCode,
   isTrustedAuthor,
+  probeSubject,
+  resolveGhHostnameArgs,
   resolveTrustedActors,
 } from '../src/scripts/minimize-superseded-markers.mts';
 import { stubExecutable } from './test-utils.mts';
+
+/**
+ * Save/restore `GH_HOST` and `GITHUB_SERVER_URL` around a test body,
+ * mirroring `tests/gh-exec.test.mts`'s `withGhHostEnv` -- `probeSubject` /
+ * `applyMinimize` read `process.env` implicitly (via
+ * `resolveGhHostnameArgs`'s default parameter), so a test exercising that
+ * default path must mutate and restore the real environment rather than
+ * passing an explicit `env` object. CI itself defines
+ * `GITHUB_SERVER_URL=https://github.com` in the runner environment
+ * (#1962), so both variables are cleared first regardless of overrides.
+ */
+function withGhHostEnv(
+  overrides: { GH_HOST?: string; GITHUB_SERVER_URL?: string },
+  run: () => void,
+): void {
+  const savedGhHost = process.env.GH_HOST;
+  const savedServerUrl = process.env.GITHUB_SERVER_URL;
+  delete process.env.GH_HOST;
+  delete process.env.GITHUB_SERVER_URL;
+  if (overrides.GH_HOST !== undefined) {
+    process.env.GH_HOST = overrides.GH_HOST;
+  }
+  if (overrides.GITHUB_SERVER_URL !== undefined) {
+    process.env.GITHUB_SERVER_URL = overrides.GITHUB_SERVER_URL;
+  }
+  try {
+    run();
+  } finally {
+    if (savedGhHost === undefined) {
+      delete process.env.GH_HOST;
+    } else {
+      process.env.GH_HOST = savedGhHost;
+    }
+    if (savedServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = savedServerUrl;
+    }
+  }
+}
 
 // computeExitCode only reads counts.failed; the partial reports are
 // widened structurally instead of fabricating unused report fields.
@@ -359,4 +402,127 @@ test('a zero / leading-zero --subject-ids value keeps the raw gh passthrough (no
     assert.equal(item.status, 'failed');
     assert.match(item.reason, /^gh-graphql-error:/);
   }
+});
+
+// --- #2754: GHES-hostname routing (caught by chatgpt-codex-connector
+// review on PR #2788) -----------------------------------------------------
+
+test('resolveGhHostnameArgs returns [] with no GH_HOST / GITHUB_SERVER_URL signal', () => {
+  assert.deepEqual(resolveGhHostnameArgs({}), []);
+});
+
+test('resolveGhHostnameArgs returns [] when GH_HOST is set, even alongside a GHES GITHUB_SERVER_URL', () => {
+  // gh already reads GH_HOST itself; a --hostname override here would be
+  // redundant at best and could disagree with an operator's explicit
+  // choice at worst -- mirrors gh-exec.mts's resolveGhApiHostname (#1962).
+  assert.deepEqual(
+    resolveGhHostnameArgs({
+      GH_HOST: 'ghes.example.com',
+      GITHUB_SERVER_URL: 'https://other-ghes.example.com',
+    }),
+    [],
+  );
+});
+
+test('resolveGhHostnameArgs returns [] for GITHUB_SERVER_URL=https://github.com (no behavior change on github.com)', () => {
+  assert.deepEqual(
+    resolveGhHostnameArgs({ GITHUB_SERVER_URL: 'https://github.com' }),
+    [],
+  );
+});
+
+test('resolveGhHostnameArgs returns [] for an empty GITHUB_SERVER_URL', () => {
+  assert.deepEqual(resolveGhHostnameArgs({ GITHUB_SERVER_URL: '' }), []);
+});
+
+test('resolveGhHostnameArgs strips scheme and trailing slash for a GHES GITHUB_SERVER_URL', () => {
+  assert.deepEqual(
+    resolveGhHostnameArgs({ GITHUB_SERVER_URL: 'https://ghes.example.com/' }),
+    ['--hostname', 'ghes.example.com'],
+  );
+});
+
+test('resolveGhHostnameArgs lowercases a mixed-case GHES host and tolerates http scheme', () => {
+  assert.deepEqual(
+    resolveGhHostnameArgs({ GITHUB_SERVER_URL: 'http://GHES.Example.com' }),
+    ['--hostname', 'ghes.example.com'],
+  );
+});
+
+test('probeSubject passes --hostname through to gh on a GHES GITHUB_SERVER_URL with GH_HOST unset', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+    const restore = stubExecutable(
+      'gh',
+      `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === '--hostname' && args[2] === 'ghes.example.com' && args[3] === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'u', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+    );
+    try {
+      const result = probeSubject('IC_test');
+      assert.deepEqual(result, {
+        ok: true,
+        node: {
+          typename: 'IssueComment',
+          url: 'u',
+          isMinimized: false,
+          viewerCanMinimize: true,
+          author: 'kurone-kito',
+        },
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('probeSubject omits --hostname on plain github.com (GH_HOST and GITHUB_SERVER_URL both unset)', () => {
+  withGhHostEnv({}, () => {
+    const restore = stubExecutable(
+      'gh',
+      `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'u', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+    );
+    try {
+      const result = probeSubject('IC_test');
+      assert.equal(result.ok, true);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('applyMinimize passes --hostname through to gh on a GHES GITHUB_SERVER_URL with GH_HOST unset', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+    const restore = stubExecutable(
+      'gh',
+      `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === '--hostname' && args[2] === 'ghes.example.com' && args[3] === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { minimizeComment: { minimizedComment: { __typename: 'IssueComment', isMinimized: true } } } }));
+  process.exit(0);
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+    );
+    try {
+      const result = applyMinimize('IC_test', 'OUTDATED');
+      assert.deepEqual(result, { ok: true });
+    } finally {
+      restore();
+    }
+  });
 });
