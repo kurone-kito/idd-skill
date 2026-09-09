@@ -111,12 +111,16 @@ const CITED_ISSUE_ATTRIBUTION_COLON_PATTERN = /:\s*$/;
 // -- a question or exclamation mark ending an unrelated sentence must
 // also stop an earlier reference from attributing a later quote (Codex
 // review round 3, PR #2760). A bare newline is a Markdown SOFT wrap, not
-// a clause break -- only a blank line (a real paragraph/list boundary)
-// counts, matching `discover-viability-gate.mts`'s own soft-wrap-vs-
-// hard-break distinction; a genuine attribution can wrap between the
-// reference and its colon just as easily as between the colon and the
-// quote (Codex review round 5, PR #2760).
-const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN = /[.;?!]|--|—|\n[ \t]*\n/;
+// a clause break -- only a blank line OR a following list-item marker
+// (a real paragraph/list boundary) counts, matching
+// `discover-viability-gate.mts`'s own CUE_HARD_BREAK_PATTERN exactly: a
+// genuine attribution can wrap between the reference and its colon just
+// as easily as between the colon and the quote (Codex review round 5,
+// PR #2760), but separate bullets written without a blank line ("-
+// Related issue #42\n- Acceptance gate: 'X'") must not connect through
+// each other either (Codex review round 6, PR #2760).
+const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN =
+  /[.;?!]|--|—|\n[ \t]*(?:[-*]\s|\d+[.)]\s)|\n[ \t]*\n/;
 // The requirement-assertion lookahead/lookbehind windows stay bounded
 // (40 chars); only the CLOSE-QUOTE search itself is unbounded, since
 // this exclusion exists specifically for quotes that copy a "much
@@ -392,13 +396,18 @@ function isQuotedMatch(text: string, start: number, end: number): boolean {
 // hard break in between, means the citing issue RE-ADOPTS the quoted
 // prerequisite as its own live requirement rather than merely reporting
 // inert history (Codex review, PR #2760). The close side searches the
-// rest of the corpus for the first character that PAIRS with `opener`
-// -- this exclusion exists precisely for "much longer" quotes, so the
-// closer can be arbitrarily far from the match (Codex review round 4,
-// PR #2760) -- rather than any member of CLOSE_QUOTE_CHARS, so an
-// apostrophe of a different quote family inside the excerpt (a plural
-// possessive like "operators'") is never mistaken for the real closer
-// (Codex review round 5, PR #2760).
+// rest of the corpus for a character that PAIRS with `opener` -- this
+// exclusion exists precisely for "much longer" quotes, so the closer can
+// be arbitrarily far from the match (Codex review round 4, PR #2760) --
+// rather than any member of CLOSE_QUOTE_CHARS, so an apostrophe of a
+// DIFFERENT quote family inside the excerpt (a plural possessive like
+// "operators'" inside a double-quoted excerpt) is never mistaken for
+// the real closer (Codex review round 5, PR #2760). Pairing alone still
+// isn't enough for a SINGLE-quoted excerpt: an internal plural
+// possessive apostrophe is the SAME family as the real closer, so every
+// plausible candidate is tried in order (not just the first) until one
+// is followed by a requirement assertion, or none are left (Copilot/
+// Codex review round 6, PR #2760).
 function isFollowedByRequirementAssertion(
   text: string,
   quotedContentStart: number,
@@ -409,31 +418,39 @@ function isFollowedByRequirementAssertion(
     return false;
   }
   const region = text.slice(quotedContentStart);
-  let closeOffset = -1;
-  for (let i = 0; i < region.length; i++) {
-    if (region[i] !== closer) {
-      continue;
+  let searchFrom = 0;
+  while (searchFrom < region.length) {
+    let closeOffset = -1;
+    for (let i = searchFrom; i < region.length; i++) {
+      if (region[i] !== closer) {
+        continue;
+      }
+      if (WORD_CHAR_PATTERN.test(region[i + 1] ?? '')) {
+        continue;
+      }
+      closeOffset = i;
+      break;
     }
-    if (WORD_CHAR_PATTERN.test(region[i + 1] ?? '')) {
-      continue;
+    if (closeOffset === -1) {
+      return false;
     }
-    closeOffset = i;
-    break;
+    const afterClose = quotedContentStart + closeOffset + 1;
+    const lookahead = text.slice(
+      afterClose,
+      Math.min(
+        text.length,
+        afterClose + ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW,
+      ),
+    );
+    const hardBreak =
+      CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.exec(lookahead);
+    const scoped = hardBreak ? lookahead.slice(0, hardBreak.index) : lookahead;
+    if (ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN.test(scoped)) {
+      return true;
+    }
+    searchFrom = closeOffset + 1;
   }
-  if (closeOffset === -1) {
-    return false;
-  }
-  const afterClose = quotedContentStart + closeOffset + 1;
-  const lookahead = text.slice(
-    afterClose,
-    Math.min(
-      text.length,
-      afterClose + ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW,
-    ),
-  );
-  const hardBreak = CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.exec(lookahead);
-  const scoped = hardBreak ? lookahead.slice(0, hardBreak.index) : lookahead;
-  return ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN.test(scoped);
+  return false;
 }
 
 // The mirror image of {@link isFollowedByRequirementAssertion}: a

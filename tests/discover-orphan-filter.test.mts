@@ -1551,6 +1551,45 @@ test('classifyIssue still trips when a blank line (a real paragraph break) separ
   assert.equal(result.reason, 'runtime_observation_precondition');
 });
 
+test('classifyIssue still trips when an internal plural possessive in a single-quoted excerpt sits before the real closer (Copilot/Codex review round 6, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 126,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        "Per issue #42: 'confirmed in production according to the " +
+        "operators' detailed report describing the incident timeline " +
+        "in full' remains required.",
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test('classifyIssue still trips when separate Markdown bullets without a blank line connect an unrelated reference to a live gate (Codex review round 6, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 127,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        '- Related issue #42\n- Acceptance gate: "confirmed in ' +
+        'production before shipping"',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
 test('filterOrphanIssues buckets a runtime-observation precondition under filtered.runtime_observation_precondition (#2467)', async () => {
   const issues = [
     {
