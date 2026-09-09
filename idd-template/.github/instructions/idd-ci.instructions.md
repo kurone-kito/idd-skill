@@ -372,8 +372,9 @@ condition below accounts for this.
   await/reap it or reuse its eventual result rather than starting a
   second concurrent instance. No watch form above watches Copilot
   review state either — see
-  `idd-advisory-wait.instructions.md`. A bare `sleep` may
-  be sandboxed or blocked in some runtimes (preventive; no observed
+  `idd-advisory-wait.instructions.md`, whose Scope section also covers
+  why a non-primary bot's review must not gate a custom wait either. A
+  bare `sleep` may be sandboxed or blocked in some runtimes (preventive; no observed
   incident yet); a `run_in_background` Bash task or other
   detached/backgrounded mechanism must not be used for this wait
   unless the topology-safety condition above is confirmed. Never
