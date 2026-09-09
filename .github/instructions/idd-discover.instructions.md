@@ -30,9 +30,10 @@ drafts and suppresses claims, so skip labeled issues. Unlabeled issues follow
 anchor/set/session `release-complete` gates release/guard; an absent label is
 not proof; release clears it.
 
-For `instructions-only`, use the
-[portable owner resolver](../../docs/idd-autonomy-contract.md#portable-authoring-owner-protocol);
-never infer membership from the label.
+The
+[portable owner resolver](../../docs/idd-autonomy-contract.md#portable-authoring-owner-protocol)
+defines these owner-protocol terms for every helper profile. For
+`instructions-only`, never infer membership from the label.
 
 A0-T, A0-O, and A3 must treat a matching label as not startable. A0-T
 reports `Issue #N is currently being authored` and stops before claim;
@@ -133,11 +134,8 @@ ran and must not be re-entered (no A1 ↔ A0-O or A4 ↔ A0-O loop).
 Search all open issues in the repository. Collect every issue that does
 NOT contain an `idd-skill-roadmap-id` marker (not itself
 a roadmap) or an `idd-skill-blocked-by` marker, AND
-otherwise passes A3's own readiness bullets (no configured
-blocked-by-human/needs-decision label, no configured authoring label,
-no open blocking dependent issue via either visible `Blocked by #NNN`
-or hidden marker form, same fail-safe treatment on an unresolvable
-reference).
+otherwise passes A3's own readiness bullets (the same five criteria A3
+lists; do not re-derive them here).
 
 Apply the configured policy before passing A0-O candidates to A3.5:
 
