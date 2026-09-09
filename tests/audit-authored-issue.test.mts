@@ -2763,3 +2763,83 @@ test('authoring-owner-marker-trail rejects an owner marker with a mismatched anc
   );
   assert.equal(finding?.result, 'fail');
 });
+
+// --- self-anchor owner-marker bootstrap exemption (#2681) ---
+
+test('authoring-owner-marker-trail accepts a self-anchored owner marker whose publication anchor is an opaque placeholder equal to its target', () => {
+  const body = `<!-- idd-skill-authoring-publication: target=target-abc123; anchor=target-abc123; set=set-xyz789; session=sess-1; token=pub-token1 -->\n\n${orphanBody()}`;
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [
+      {
+        body: '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9001; anchor=kurone-kito/idd-skill#9001; mode=acquire; owner=owner-tok1; set=set-xyz789; session=sess-1; body-sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; snapshot-sha256=none; supersedes=none -->',
+      },
+    ],
+    journalComments: [
+      {
+        body: '<!-- idd-skill-authoring-publication-intent: target=target-abc123; anchor=target-abc123; set=set-xyz789; session=sess-1; token=pub-token1; journal=kurone-kito/idd-skill#9001; issue=kurone-kito/idd-skill#9001; actor=kurone-kito; state=member -->',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+});
+
+test('authoring-owner-marker-trail accepts a self-anchored owner marker whose publication anchor is a distinct opaque placeholder from its target (real-world pattern, #2695-#2697)', () => {
+  const body = `<!-- idd-skill-authoring-publication: target=target-8ceaec1ca0d8ed8a; anchor=anchor-02ec8894e3c623fc; set=set-db08cd57f8debd0d; session=sess-1; token=pub-token1 -->\n\n${orphanBody()}`;
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    newIssue: true,
+    comments: [
+      {
+        body: '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9001; anchor=kurone-kito/idd-skill#9001; mode=acquire; owner=owner-tok1; set=set-db08cd57f8debd0d; session=sess-1; body-sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; snapshot-sha256=none; supersedes=none -->',
+      },
+    ],
+    journalComments: [
+      {
+        body: '<!-- idd-skill-authoring-publication-intent: target=target-8ceaec1ca0d8ed8a; anchor=anchor-02ec8894e3c623fc; set=set-db08cd57f8debd0d; session=sess-1; token=pub-token1; journal=kurone-kito/idd-skill#9001; issue=kurone-kito/idd-skill#9001; actor=kurone-kito; state=member -->',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'pass');
+});
+
+test('authoring-owner-marker-trail still rejects a non-self-anchored (child) owner marker whose anchor does not match the publication marker', () => {
+  const body = `<!-- idd-skill-authoring-publication: target=target-abc123; anchor=kurone-kito/idd-skill#2673; set=set-xyz789; session=sess-1; token=pub-token1 -->\n\n${orphanBody()}`;
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9002,
+    newIssue: true,
+    comments: [
+      {
+        // Child issue: target is its own real ref, anchor is a real but
+        // *different* (wrong) parent ref -- not self-anchored, so the
+        // #2681 exemption must not apply here.
+        body: '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#9002; anchor=kurone-kito/idd-skill#9999; mode=acquire; owner=owner-tok1; set=set-xyz789; session=sess-1; body-sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; snapshot-sha256=none; supersedes=none -->',
+      },
+    ],
+    journalComments: [
+      {
+        body: '<!-- idd-skill-authoring-publication-intent: target=target-abc123; anchor=kurone-kito/idd-skill#2673; set=set-xyz789; session=sess-1; token=pub-token1; journal=kurone-kito/idd-skill#2674; issue=kurone-kito/idd-skill#9002; actor=kurone-kito; state=member -->',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-owner-marker-trail',
+  );
+  assert.equal(finding?.result, 'fail');
+});

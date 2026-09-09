@@ -322,6 +322,19 @@ const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
   'cleanup',
   'abandoned',
 ]);
+// A real issue reference has the shape `owner/repo#number`. An opaque
+// bootstrap placeholder (e.g. `target-<hex>`, `anchor-<hex>`) never
+// contains both a `/` and a trailing `#<digits>`, so this shape test
+// distinguishes "this publication marker named an already-known real
+// anchor" from "this publication marker was minted before any anchor
+// existed" without depending on the two opaque IDs being textually
+// identical (#2681: real authoring sessions mint distinct opaque
+// `target`/`anchor` values even for a genuinely self-anchored issue).
+// Same TDZ hazard as the two sets above -- declared here, ahead of the
+// import.meta.main trigger, not next to
+// ownerMarkerAnchorMatchesPublication()/checkAuthoringOwnerMarkerTrail()
+// further down.
+const REAL_ISSUE_REFERENCE_PATTERN = /^\S+\/\S+#\d+$/;
 if (import.meta.main) {
   main();
 }
@@ -992,6 +1005,31 @@ function checkEffortVisibleLineAgreement(text, markerPrefix) {
  * `comments` (this module stays network-free; a caller not opting into
  * comment-aware checking must not see a false failure).
  */
+// #2681 (sub-gap 2): a self-anchored owner marker's `anchor` is the
+// issue's own real ref, but its publication marker's `anchor` was
+// minted before creation, when no real anchor number existed yet -- an
+// opaque placeholder that can never be made to literally equal the
+// owner marker's real anchor by construction. Detect that bootstrap
+// case by the publication marker's anchor *shape* instead of requiring
+// textual equality to the owner marker's anchor: when the owner marker
+// is self-anchored and the publication marker's anchor is not itself a
+// real issue reference, accept the anchor half unconditionally. A
+// publication marker that named a real (but different) anchor while its
+// owner marker is self-anchored is a genuine mismatch, and a
+// non-self-anchored owner marker (child issue under a real,
+// already-numbered anchor) always keeps the strict literal-equality
+// requirement below.
+function ownerMarkerAnchorMatchesPublication(ownerMarker, publicationMarker) {
+  const ownerIsSelfAnchored =
+    ownerMarker.target.toLowerCase() === ownerMarker.anchor.toLowerCase();
+  if (
+    ownerIsSelfAnchored &&
+    !REAL_ISSUE_REFERENCE_PATTERN.test(publicationMarker.anchor)
+  ) {
+    return true;
+  }
+  return ownerMarker.anchor === publicationMarker.anchor;
+}
 function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
   const id = 'authoring-owner-marker-trail';
   const name =
@@ -1070,7 +1108,7 @@ function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
       (currentIssueRef === undefined ||
         marker.target.toLowerCase() === currentIssueRef) &&
       (publicationMarker === null ||
-        (marker.anchor === publicationMarker.anchor &&
+        (ownerMarkerAnchorMatchesPublication(marker, publicationMarker) &&
           marker.set === publicationMarker.set &&
           marker.session === publicationMarker.session)),
   );
