@@ -630,7 +630,16 @@ chronologically and apply these rules:
      `role_name == write` or `permission == write` so custom write-base
      roles still satisfy the loose policy;
    - `forcedHandoff.mode` is `human-gated` (default `disabled`);
-   - `oldAgentId` / `oldClaimId` / `branch` all match the active claim.
+   - `oldAgentId` / `oldClaimId` / `branch` all match the active claim;
+   - when an open PR backs the active claim: an `issue-plus-pr`
+     marker's `linkedPr` must name that PR; only an `issue-only` marker
+     may instead rely on a caller-supplied `prFirstCommitAt` (PR
+     context, not marker evidence), honored when the handoff predates
+     it — the Part B allowance from issue #1058, which the merge
+     write-gate opts into but Resume routing never does (see
+     [Forced-handoff strictness](../../docs/idd-design-rationale.md#forced-handoff-strictness-strict-resume-vs-lenient-relay-merge));
+     every other combination, including a mismatched `linkedPr`, leaves
+     the marker ignored.
 
    When all hold, replace the active claim with the successor
    (`newAgentId` / `newClaimId`, same `branch`, `supersedes =
