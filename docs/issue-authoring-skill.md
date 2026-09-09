@@ -797,10 +797,16 @@ and `cleanup` remain recovery holds.
 
 `journal` is the durable record location. For an existing set, use the
 verified originating Stage 1 hold; for a standalone set with no existing issue
-or anchor, use a pre-existing repository-level authoring journal target
-designated by repository policy. Do not create that journal as part of the
-same set. If neither location exists or its identity cannot be verified, stop
-with `blocked-by-human` before creating any target. On every paginated replay,
+or anchor, use the repository-level authoring journal target configured at
+`issueAuthoring.journalIssue` in `.github/idd/config.json` (an
+`owner/repo#number` reference to a pre-existing, durable, comment-only issue)
+-- an unset `issueAuthoring.journalIssue` only blocks a standalone set; an
+existing set with a verified Stage 1 hold needs no journal configuration at
+all. Do not create that journal as part of the same set. If the applicable
+location cannot be resolved -- no verified Stage 1 hold for an existing set,
+or `issueAuthoring.journalIssue` unset or unverifiable for a standalone set --
+stop with `blocked-by-human` before creating any target. On every paginated
+replay,
 require `actor` to equal the API author and verify that actor is a trusted
 marker login with the required write-level permission or configured bot/app
 trust. An untrusted, malformed, or conflicting exact-token record is not valid

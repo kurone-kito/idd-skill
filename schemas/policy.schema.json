@@ -711,6 +711,11 @@
           "type": "string",
           "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
           "description": "ISO 8601 duration after which a lingering authoring label triggers a stalled-authoring warning. Optional; defaults to `PT4H`; keep it below `claimTiming.staleAge`."
+        },
+        "journalIssue": {
+          "type": "string",
+          "pattern": "^[\\w.-]+/[\\w.-]+#[1-9][0-9]*$",
+          "description": "Pre-existing repository-level authoring journal target (`owner/repo#number`) used as the publication-intent record location for a standalone authoring set with no existing issue or anchor. The issue number must be a positive integer with no leading zero (GitHub issue numbers start at 1). Optional; no default -- when absent, the issue-authoring skill stops with `blocked-by-human` before creating a standalone target rather than guessing a journal."
         }
       },
       "description": "Container for issue-authoring guard settings: authoring label, staleness window, and clarification-round bound. Optional; omitting any nested key keeps that key's own distributed default."

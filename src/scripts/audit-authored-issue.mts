@@ -43,6 +43,10 @@ import {
   loadPolicyConfig,
 } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
+import type {
+  ParsedAuthoringOwnerMarker,
+  ParsedAuthoringPublicationMarker,
+} from './marker-helpers.mts';
 import {
   parseAuthoringOwnerComment,
   parseAuthoringPublicationComment,
@@ -527,6 +531,28 @@ const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
   'cleanup',
   'abandoned',
 ]);
+// A real issue reference has the shape `owner/repo#number` -- the same
+// shape the issueAuthoring.journalIssue schema pattern requires, kept
+// in sync with it deliberately (word/dot/hyphen segments either side
+// of exactly one `/`, a `#`, then a non-zero-leading number; #2681
+// review, Copilot). An opaque bootstrap placeholder (e.g.
+// `target-<hex>`, `anchor-<hex>`) never matches this shape, so it
+// distinguishes "this publication marker named an already-known real
+// anchor" from "this publication marker was minted before any anchor
+// existed" without depending on the two opaque IDs being textually
+// identical (#2681: real authoring sessions mint distinct opaque
+// `target`/`anchor` values even for a genuinely self-anchored issue).
+// Same TDZ hazard as the two sets above -- declared here, ahead of the
+// import.meta.main trigger, not next to
+// ownerMarkerAnchorMatchesPublication()/checkAuthoringOwnerMarkerTrail()
+// further down.
+// Exported so tests/schema-type-reconciliation.test.mts can assert this
+// stays textually in sync with schemas/policy.schema.json's
+// issueAuthoring.journalIssue pattern (#2681 review, CodeRabbit) --
+// deliberately using `[0-9]` rather than `\d` so the only normalization
+// needed against the JSON schema string is the regex literal's escaped
+// `/`.
+export const REAL_ISSUE_REFERENCE_PATTERN = /^[\w.-]+\/[\w.-]+#[1-9][0-9]*$/;
 
 if (import.meta.main) {
   main();
@@ -1254,6 +1280,47 @@ function checkEffortVisibleLineAgreement(
  * `comments` (this module stays network-free; a caller not opting into
  * comment-aware checking must not see a false failure).
  */
+// #2681 (sub-gap 2): a self-anchored owner marker's `anchor` is the
+// issue's own real ref, but its publication marker's `anchor` was
+// minted before creation, when no real anchor number existed yet -- an
+// opaque placeholder that can never be made to literally equal the
+// owner marker's real anchor by construction. Detect that bootstrap
+// case by the publication marker's anchor *shape* instead of requiring
+// textual equality to the owner marker's anchor: when the owner marker
+// is self-anchored and the publication marker's anchor is not itself a
+// real issue reference, accept the anchor half unconditionally. A
+// publication marker that named a real (but different) anchor while its
+// owner marker is self-anchored is a genuine mismatch, and a
+// non-self-anchored owner marker (child issue under a real,
+// already-numbered anchor) always keeps the strict literal-equality
+// requirement below.
+function ownerMarkerAnchorMatchesPublication(
+  ownerMarker: Pick<ParsedAuthoringOwnerMarker, 'target' | 'anchor'>,
+  publicationMarker: Pick<ParsedAuthoringPublicationMarker, 'anchor'>,
+  shape: IssueShape,
+): boolean {
+  // A `child` issue is anchored to an already-numbered real parent by
+  // definition -- it can never legitimately bootstrap a standalone
+  // anchor, so the exemption below must never apply to it, regardless of
+  // what an owner marker (forged, malformed, or otherwise) claims about
+  // its own target/anchor equality (#2681 review, Codex: restricting the
+  // bootstrap exemption to non-child shapes so a child audit can't use a
+  // falsely self-anchored owner marker to bypass the real-anchor binding
+  // the check exists to enforce). `orphan` and `roadmap` are the only
+  // shapes that can be the first, self-anchored issue of a standalone
+  // set.
+  const ownerIsSelfAnchored =
+    shape !== 'child' &&
+    ownerMarker.target.toLowerCase() === ownerMarker.anchor.toLowerCase();
+  if (
+    ownerIsSelfAnchored &&
+    !REAL_ISSUE_REFERENCE_PATTERN.test(publicationMarker.anchor)
+  ) {
+    return true;
+  }
+  return ownerMarker.anchor === publicationMarker.anchor;
+}
+
 function checkAuthoringOwnerMarkerTrail(
   text: string,
   markerPrefix: string,
@@ -1342,7 +1409,11 @@ function checkAuthoringOwnerMarkerTrail(
       (currentIssueRef === undefined ||
         marker.target.toLowerCase() === currentIssueRef) &&
       (publicationMarker === null ||
-        (marker.anchor === publicationMarker.anchor &&
+        (ownerMarkerAnchorMatchesPublication(
+          marker,
+          publicationMarker,
+          options.shape,
+        ) &&
           marker.set === publicationMarker.set &&
           marker.session === publicationMarker.session)),
   );

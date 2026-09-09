@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { AdvisoryConvergenceVerdict } from '../src/scripts/advisory-convergence.mts';
 import type { AdvisoryWaitStateReport } from '../src/scripts/advisory-wait-state.mts';
+import { REAL_ISSUE_REFERENCE_PATTERN } from '../src/scripts/audit-authored-issue.mts';
 import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.mts';
 import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
 import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
@@ -255,6 +256,7 @@ interface PolicyConfigFile {
     maxClarificationRounds?: number;
     authoringLabelName?: string;
     authoringStaleAge?: string;
+    journalIssue?: string;
   };
   autopilotSuitability?: { floor?: 1 | 2 | 3 | 4 | 5; enabled?: boolean };
   worktreeGuard?: { enabled?: boolean; branchPatterns?: readonly string[] };
@@ -1223,6 +1225,7 @@ const policyConfigFixture = {
     maxClarificationRounds: 3,
     authoringLabelName: 'status:authoring',
     authoringStaleAge: 'PT4H',
+    journalIssue: 'kurone-kito/idd-skill#2674',
   },
   autopilotSuitability: { floor: 3, enabled: true },
   worktreeGuard: {
@@ -1848,4 +1851,28 @@ test('compile-time key-exhaustiveness witnesses hold', () => {
   for (const [name, witness] of Object.entries(exhaustivenessWitnesses)) {
     assert.equal(witness, true, `${name}: exhaustiveness witness must hold`);
   }
+});
+
+test('audit-authored-issue.mts REAL_ISSUE_REFERENCE_PATTERN stays in sync with the issueAuthoring.journalIssue schema pattern (#2681 review, CodeRabbit)', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      issueAuthoring: {
+        properties: { journalIssue: { pattern: string } };
+      };
+    };
+  };
+  const schemaPattern =
+    schema.properties.issueAuthoring.properties.journalIssue.pattern;
+  // A regex literal's `.source` escapes the `/` that a JSON string pattern
+  // never needs to -- normalize before comparing so the two only drift when
+  // their actual matching behavior does.
+  const normalizedRegexSource = REAL_ISSUE_REFERENCE_PATTERN.source.replace(
+    /\\\//g,
+    '/',
+  );
+  assert.equal(
+    normalizedRegexSource,
+    schemaPattern,
+    'audit-authored-issue.mts REAL_ISSUE_REFERENCE_PATTERN and schemas/policy.schema.json issueAuthoring.journalIssue.pattern drifted -- update both together',
+  );
 });
