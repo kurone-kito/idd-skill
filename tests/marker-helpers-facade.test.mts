@@ -49,6 +49,9 @@ const SAMPLE_NAMES = [
   'hasReviewReplyStamp',
   'appendReviewReplyStamp',
   'isIddOriginatedReply',
+  'renderAuthoringOwnerMarker',
+  'renderAuthoringPublicationIntentMarker',
+  'matchCanonicalAuthoringMarkerFamily',
 ] as const;
 
 test('protocol-helpers re-exports every sampled marker-helpers name by identity', () => {
@@ -247,5 +250,228 @@ test('MARKER_HIDE_POLICY does not leak the underlying map through inherited Obje
     typeof direct.MARKER_HIDE_POLICY.toString(),
     'string',
     'toString() must stay a harmless primitive, not expose the underlying map',
+  );
+});
+
+// #2750: renderAuthoringOwnerMarker / renderAuthoringPublicationIntentMarker
+// exist so a candidate comment's canonical rendering can be compared
+// byte-for-byte against its live body (matchCanonicalAuthoringMarkerFamily,
+// tested further below) -- these renderers themselves round-trip through
+// the existing parseAuthoringOwnerComment / parseAuthoringPublicationIntentComment
+// functions, and reject a payload missing/invalid fields the same way every
+// other renderer in this module does.
+
+const AUTHORING_OWNER_PAYLOAD = {
+  markerPrefix: 'idd-skill',
+  target: 'kurone-kito/idd-skill#2750',
+  anchor: 'kurone-kito/idd-skill#2750',
+  mode: 'acquire',
+  owner: 'owner-9ffa338d8a416b86',
+  set: 'set-1e23beadb3e60e42',
+  session: 'claude-idd3-5201e45ac16c',
+  bodySha256:
+    'f370d4b220dd04d2d896a6c1d7841ecb261a7825bed8e68f07452073972fe389',
+  snapshotSha256: 'none',
+  supersedes: 'none',
+} as const;
+
+const AUTHORING_PUBLICATION_INTENT_PAYLOAD = {
+  markerPrefix: 'idd-skill',
+  target: 'target-720705e9015f0dda',
+  anchor: 'target-720705e9015f0dda',
+  set: 'set-74bec4d0d29e21ae',
+  session: 'claude-idd1-9f3a2b7c1e4d',
+  token: 'pub-7e1361eb1b96bc36',
+  journal: 'kurone-kito/idd-skill#2674',
+  issue: 'none',
+  actor: 'kurone-kito',
+  state: 'pending',
+} as const;
+
+test('renderAuthoringOwnerMarker matches the live-posted canonical shape and round-trips through the parser', () => {
+  const body = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  assert.strictEqual(
+    body,
+    '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#2750; anchor=kurone-kito/idd-skill#2750; mode=acquire; owner=owner-9ffa338d8a416b86; set=set-1e23beadb3e60e42; session=claude-idd3-5201e45ac16c; body-sha256=f370d4b220dd04d2d896a6c1d7841ecb261a7825bed8e68f07452073972fe389; snapshot-sha256=none; supersedes=none -->\n' +
+      '_Issue-authoring ownership marker. Do not edit or delete._',
+  );
+  const parsed = direct.parseAuthoringOwnerComment(body, 'idd-skill');
+  assert.deepStrictEqual(parsed, {
+    target: AUTHORING_OWNER_PAYLOAD.target,
+    anchor: AUTHORING_OWNER_PAYLOAD.anchor,
+    mode: AUTHORING_OWNER_PAYLOAD.mode,
+    owner: AUTHORING_OWNER_PAYLOAD.owner,
+    set: AUTHORING_OWNER_PAYLOAD.set,
+    session: AUTHORING_OWNER_PAYLOAD.session,
+    bodySha256: AUTHORING_OWNER_PAYLOAD.bodySha256,
+    snapshotSha256: AUTHORING_OWNER_PAYLOAD.snapshotSha256,
+    supersedes: AUTHORING_OWNER_PAYLOAD.supersedes,
+  });
+});
+
+test('renderAuthoringOwnerMarker throws on a missing/invalid field', () => {
+  assert.throws(
+    () =>
+      direct.renderAuthoringOwnerMarker({
+        ...AUTHORING_OWNER_PAYLOAD,
+        mode: 'not-a-real-mode',
+      }),
+    /invalid authoring-owner marker payload.*invalid "mode"/s,
+  );
+  assert.throws(
+    () =>
+      direct.renderAuthoringOwnerMarker({
+        ...AUTHORING_OWNER_PAYLOAD,
+        target: undefined,
+      }),
+    /invalid authoring-owner marker payload.*missing "target"/s,
+  );
+});
+
+test('renderAuthoringPublicationIntentMarker matches the live-posted canonical shape and round-trips through the parser', () => {
+  const body = direct.renderAuthoringPublicationIntentMarker(
+    AUTHORING_PUBLICATION_INTENT_PAYLOAD,
+  );
+  assert.strictEqual(
+    body,
+    '<!-- idd-skill-authoring-publication-intent: target=target-720705e9015f0dda; anchor=target-720705e9015f0dda; set=set-74bec4d0d29e21ae; session=claude-idd1-9f3a2b7c1e4d; token=pub-7e1361eb1b96bc36; journal=kurone-kito/idd-skill#2674; issue=none; actor=kurone-kito; state=pending -->\n' +
+      '_Issue-authoring publication-intent record. Do not edit or delete._',
+  );
+  const parsed = direct.parseAuthoringPublicationIntentComment(
+    body,
+    'idd-skill',
+  );
+  assert.deepStrictEqual(parsed, {
+    target: AUTHORING_PUBLICATION_INTENT_PAYLOAD.target,
+    anchor: AUTHORING_PUBLICATION_INTENT_PAYLOAD.anchor,
+    set: AUTHORING_PUBLICATION_INTENT_PAYLOAD.set,
+    session: AUTHORING_PUBLICATION_INTENT_PAYLOAD.session,
+    token: AUTHORING_PUBLICATION_INTENT_PAYLOAD.token,
+    journal: AUTHORING_PUBLICATION_INTENT_PAYLOAD.journal,
+    issue: AUTHORING_PUBLICATION_INTENT_PAYLOAD.issue,
+    actor: AUTHORING_PUBLICATION_INTENT_PAYLOAD.actor,
+    state: AUTHORING_PUBLICATION_INTENT_PAYLOAD.state,
+  });
+});
+
+test('renderAuthoringPublicationIntentMarker throws on a missing/invalid field', () => {
+  assert.throws(
+    () =>
+      direct.renderAuthoringPublicationIntentMarker({
+        ...AUTHORING_PUBLICATION_INTENT_PAYLOAD,
+        state: 'not-a-real-state',
+      }),
+    /invalid authoring-publication-intent marker payload.*invalid "state"/s,
+  );
+});
+
+// #2750: matchCanonicalAuthoringMarkerFamily is the exact-template-match
+// primitive the issue-authoring contract's hide-on-supersede step relies
+// on -- a byte-exact canonical marker body is a positive match; the same
+// body with one appended or altered character is a negative match (never
+// minimized).
+test('matchCanonicalAuthoringMarkerFamily: byte-exact canonical bodies match their own family', () => {
+  const ownerBody = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(ownerBody, 'idd-skill'),
+    'authoring-owner',
+  );
+
+  const intentBody = direct.renderAuthoringPublicationIntentMarker(
+    AUTHORING_PUBLICATION_INTENT_PAYLOAD,
+  );
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(intentBody, 'idd-skill'),
+    'authoring-publication-intent',
+  );
+});
+
+test('matchCanonicalAuthoringMarkerFamily: an appended character is a negative match', () => {
+  const ownerBody = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(`${ownerBody}x`, 'idd-skill'),
+    null,
+  );
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(`${ownerBody}\n`, 'idd-skill'),
+    null,
+    'a trailing newline is still an appended character, not a match',
+  );
+});
+
+test('matchCanonicalAuthoringMarkerFamily: an altered field value is a negative match', () => {
+  const ownerBody = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  const altered = ownerBody.replace('mode=acquire', 'mode=acquire ');
+  assert.notStrictEqual(altered, ownerBody);
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(altered, 'idd-skill'),
+    null,
+  );
+});
+
+// #2750 (independent critique pass, PR #2821): the separator/note-text
+// pairing genuinely drifted across past posting sessions before this issue
+// pinned a canonical shape -- a live blank-line-separated authoring-owner
+// comment (kurone-kito/idd-skill#2706, comment id 5580125588, fetched
+// verbatim) predates the pin and never byte-exact-matches the newly-pinned
+// single-newline template. This is the fail-closed behavior the contract
+// documents (skills/issue-authoring/references/contract.md), not a defect:
+// a historical comment in the old shape is correctly left visible rather
+// than guessed at.
+test('matchCanonicalAuthoringMarkerFamily: a real pre-pin blank-line-separated comment is a negative match (fail-closed, not retroactive cleanup)', () => {
+  const legacyBlankLineBody =
+    '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#2706; anchor=kurone-kito/idd-skill#2706; mode=acquire; owner=owner-7f0bdd05cfcb6f75; set=set-5f974e50cf506b08; session=claude-idd1-35ad1f618a3a; body-sha256=2633e24463dbbabf260232d64f267cfd35b452d59c57df0955f24d5c6d60af69; snapshot-sha256=none; supersedes=none -->\n' +
+    '\n' +
+    '_Issue-authoring ownership marker. Do not edit or delete._';
+  assert.ok(
+    direct.parseAuthoringOwnerComment(legacyBlankLineBody, 'idd-skill'),
+    'the legacy body must still parse (sanity check for this test itself)',
+  );
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(
+      legacyBlankLineBody,
+      'idd-skill',
+    ),
+    null,
+  );
+});
+
+test('matchCanonicalAuthoringMarkerFamily: a different marker prefix is a negative match', () => {
+  const ownerBody = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(ownerBody, 'other-prefix'),
+    null,
+  );
+});
+
+test('matchCanonicalAuthoringMarkerFamily: non-marker prose is a negative match', () => {
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(
+      'Just a regular comment.',
+      'idd-skill',
+    ),
+    null,
+  );
+});
+
+// A field value carrying an embedded space parses successfully (the
+// semicolon/equals splitter only trims leading/trailing whitespace) but
+// fails renderAuthoringOwnerMarker's own stricter no-internal-whitespace
+// validation -- matchCanonicalAuthoringMarkerFamily must treat that thrown
+// render error as a non-match (fail closed) rather than propagating it.
+test('matchCanonicalAuthoringMarkerFamily: a parsed field that cannot be re-rendered is a negative match, not a thrown error', () => {
+  const body =
+    '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#2750 extra; anchor=kurone-kito/idd-skill#2750; mode=acquire; owner=owner-9ffa338d8a416b86; set=set-1e23beadb3e60e42; session=claude-idd3-5201e45ac16c; body-sha256=f370d4b220dd04d2d896a6c1d7841ecb261a7825bed8e68f07452073972fe389; snapshot-sha256=none; supersedes=none -->\n' +
+    '_Issue-authoring ownership marker. Do not edit or delete._';
+  assert.ok(
+    direct.parseAuthoringOwnerComment(body, 'idd-skill'),
+    'the malformed target value must still parse (sanity check for this test itself)',
+  );
+  assert.doesNotThrow(() =>
+    direct.matchCanonicalAuthoringMarkerFamily(body, 'idd-skill'),
+  );
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(body, 'idd-skill'),
+    null,
   );
 });
