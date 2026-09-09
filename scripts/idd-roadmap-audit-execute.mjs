@@ -49,6 +49,19 @@ const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 // detector (`hasTrustedCompletionEvidenceComment`, #1299) so the two never
 // drift out of sync.
 const COMPLETION_AUDIT_HEADING = '**IDD roadmap completion audit**';
+// `RoadmapGraphReference.relationship` kinds that name real child work for
+// the childless-blocker check below (idd-skill#2765): a task-list line, a
+// closing keyword (Closes/Fixes/Resolves), or a native GitHub sub-issue
+// relationship. Every other kind `discover-roadmap-graph.mts` emits --
+// `dependency` (Blocked by / Depends on), `reference` /
+// `non-blocking-reference` (Refs), and `sub-issue-reference` (prose
+// "Sub-issue #N" text) -- is informational or a precondition, never a
+// child, and must not suppress the `childless` blocker on its own.
+const CHILD_RELATIONSHIP_KINDS = new Set([
+  'task-list',
+  'closing-keyword',
+  'sub-issue',
+]);
 // Scope caveat (A1.5): this helper gates only the MECHANICAL completion
 // preconditions. It deliberately does NOT verify the roadmap's free-form
 // success criteria or autonomy-gap items — that is agent judgment "where
@@ -108,8 +121,20 @@ export function evaluateRoadmapAuditGates(report, options = {}) {
     });
   }
   // No explicit child work → childless / malformed. Do not infer completion
-  // from the absence of candidates.
-  if (report.edges.length === 0) {
+  // from the absence of candidates. Only edges that actually name a CHILD
+  // relationship count here (idd-skill#2765): `task-list` (a `- [ ] #N`
+  // line), `closing-keyword` (Closes/Fixes/Resolves), and `sub-issue` (a
+  // native GitHub sub-issue relationship). An edge list containing only
+  // `non-blocking-reference` (a `Refs #N (non-blocking)` breadcrumb),
+  // `dependency` (Blocked by / Depends on -- a precondition, not a
+  // child), `reference` (a plain `Refs #N` mention), or
+  // `sub-issue-reference` (prose "Sub-issue #N" text, distinct from the
+  // native `sub-issue` relationship) is still childless -- none of those
+  // kinds name work this roadmap is tracking as its own.
+  const childRelationshipEdgeCount = report.edges.filter((edge) =>
+    CHILD_RELATIONSHIP_KINDS.has(edge.relationship),
+  ).length;
+  if (childRelationshipEdgeCount === 0) {
     blockers.push({
       kind: 'childless',
       detail: `roadmap #${rootNumber} has no explicit child references (task-list, closing-keyword, or GitHub sub-issue); childless or malformed, not complete`,

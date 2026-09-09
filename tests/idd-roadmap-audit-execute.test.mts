@@ -771,6 +771,31 @@ test('a childless roadmap (no edges) is reported, never closed', () => {
   );
 });
 
+test('a roadmap whose only edges are non-blocking-reference is childless, not ready (#2765)', () => {
+  // A `Refs #N (non-blocking)` breadcrumb is informational, never a child —
+  // an edge list containing only that relationship kind must still report
+  // `childless`, the same as an empty edge list.
+  const report = readyReport();
+  report.nodes = [
+    node({ number: ROADMAP, classification: 'roadmap', state: 'OPEN' }),
+  ];
+  report.edges = [
+    {
+      source: ROADMAP,
+      target: 9999,
+      relationship: 'non-blocking-reference',
+      evidence: 'Refs #9999 (non-blocking)',
+    },
+  ];
+  report.executionCandidates = [];
+  report.provenancePaths = [{ target: ROADMAP, path: [ROADMAP] }];
+  const blockers = evaluateRoadmapAuditGates(report);
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['childless'],
+  );
+});
+
 test('a human-gate label on the roadmap root blocks the close', () => {
   const report = readyReport();
   report.nodes = report.nodes.map((entry) =>
