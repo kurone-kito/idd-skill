@@ -318,9 +318,10 @@ claim-marker protocol has no atomic compare-and-swap for releasing a
 claim: `idd-claim.instructions.md`'s Claim-state parsing rule 5 releases
 a claim via `unclaimed-by` on an exact `{agent-id}`/`{claim-id}` match
 alone, with no check on whether the releasing session's belief ("no
-later claimant activity") is still true at write time. The maintainer
-accepted this as a documented, bounded residual risk for
-kurone-kito/idd-skill#1985 specifically — blast radius already limited
+later claimant activity") is still true at write time (preventive; no
+observed incident yet). The maintainer accepted this as a documented,
+bounded residual risk for kurone-kito/idd-skill#1985 specifically —
+blast radius already limited
 by the pre-existing claim revalidation gate, since a session that loses
 its claim mid-window detects it on its own next required pre-mutation
 check and stops, making this a detectable lost-claim event rather than
