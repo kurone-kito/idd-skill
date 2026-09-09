@@ -164,4 +164,6 @@ to this turn; otherwise wait synchronously. Batch every post-wait
 action (disposition, replies, marker, next gate) into one turn. Do not
 insert "is it done yet?" turns. Never end a turn on a future-tense wait
 promise ("I will wait...") with no wait mechanism actually armed — arm
-one of the mechanisms above first.
+one of the mechanisms above first. No wait mechanism here may poll a
+non-primary bot's review state either — see
+`idd-advisory-wait-lite.instructions.md`'s Scope boundary section.
