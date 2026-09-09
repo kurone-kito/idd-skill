@@ -173,9 +173,9 @@ different-claim watermark here.
 
 Do not create or edit the PR live status digest after posting this
 watermark unless the next route is back to E1, an F3 blocked reroute
-that returns to F2's restart path, a hold/stop, or post-merge cleanup —
-a digest edit after the watermark counts as new activity and forces a
-fresh E1 snapshot before F2 can pass.
+that leaves the F2 restart path (F1/D4), a hold/stop, or post-merge
+cleanup — a digest edit after the watermark counts as new activity and
+forces a fresh E1 snapshot before F2 can pass.
 
 ### Step 3 — Filter into ReviewItems_snapshot
 
