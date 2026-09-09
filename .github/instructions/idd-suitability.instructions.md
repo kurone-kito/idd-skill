@@ -180,7 +180,7 @@ outcome (trust/safety concerns require human review):
 | `blocked-by-human` | Requires human coordination | Report, try next candidate |
 | `duplicate` | Duplicate or superseded work | Report, try next candidate |
 | `out-of-scope` | Outside repository scope | Report, try next candidate |
-| `invalid` | Trust/safety concern or defect | Fresh: report and stop (do not retry). Already reported (`existingRejection`: `outcome: invalid`), confirmed today: exclude, post nothing, loop |
+| `invalid` | Trust/safety concern or defect | Fresh: report, stop. Already reported (`existingRejection`: `outcome: invalid`), confirmed today: exclude, post nothing, loop |
 <!-- dprint-ignore-end -->
 
 ## Mutation Policy and Coordination Rule
@@ -272,8 +272,9 @@ Loop: Rerun A4 Step 2 over Candidates to pick the next candidate
     → FAIL → Classify as unclear → Report, remove from Candidates, loop
   → Run Check 3 (Trust/Safety)
     → PASS → Run Check 4
-    → FAIL → Classify as invalid → existingRejection.outcome is invalid:
-      remove from Candidates, loop; else Report and STOP
+    → FAIL → Classify as invalid → existingRejection.outcome is
+      invalid, reconfirmed: remove from Candidates, loop; else Report
+      and STOP
   → Run Check 4 (Duplicates)
     → PASS → Run Check 5
     → FAIL → Classify as duplicate → Report, remove from Candidates, loop
