@@ -103,21 +103,43 @@ const ISSUE_NUMBER_REFERENCE_PATTERN = /#\d+/g;
 const CITED_ISSUE_ATTRIBUTION_COLON_PATTERN = /:\s*$/;
 // Every standard English sentence terminator, not just period/semicolon
 // -- a question or exclamation mark ending an unrelated sentence must
-// also stop an earlier reference from attributing a later quote
-// (Codex review round 3, PR #2760).
-const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN = /[.;?!\n]|--|—/;
-// No cap: this exclusion exists specifically for quotes that copy a
-// "much longer" excerpt verbatim, so an artificial bound left a real
-// closer -- and any re-adoption cue past it -- unreached (Codex review
-// round 4, PR #2760). The scan is still bounded by the corpus length.
+// also stop an earlier reference from attributing a later quote (Codex
+// review round 3, PR #2760). A bare newline is a Markdown SOFT wrap, not
+// a clause break -- only a blank line (a real paragraph/list boundary)
+// counts, matching `discover-viability-gate.mts`'s own soft-wrap-vs-
+// hard-break distinction; a genuine attribution can wrap between the
+// reference and its colon just as easily as between the colon and the
+// quote (Codex review round 5, PR #2760).
+const CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN = /[.;?!]|--|—|\n[ \t]*\n/;
+// The requirement-assertion lookahead/lookbehind windows stay bounded
+// (40 chars); only the CLOSE-QUOTE search itself is unbounded, since
+// this exclusion exists specifically for quotes that copy a "much
+// longer" excerpt verbatim -- an artificial bound there left a real
+// closer, and any re-adoption cue past it, unreached (Codex review
+// round 4, PR #2760; comment corrected per Copilot review round 5).
 const ATTRIBUTION_REQUIREMENT_LOOKAHEAD_WINDOW = 40;
-// `blocked`/`blocking`/`pending`/`waiting` join the same vocabulary
-// `discover-viability-gate.mts`'s own requirement-assertion pattern
-// already uses, so a re-adopted prerequisite phrased as "remains
-// blocked" is recognized too, not only "remains required" (Codex review
-// round 3, PR #2760).
+// `blocked`/`blocking`/`pending`/`waiting`/`shall`/`essential` join the
+// same vocabulary `discover-viability-gate.mts`'s own requirement-
+// assertion pattern already uses, so a re-adopted prerequisite phrased
+// as "remains blocked" or "shall remain the acceptance gate" is
+// recognized too, not only "remains required" (Codex review rounds 3
+// and 5, PR #2760).
 const ATTRIBUTION_REQUIREMENT_ASSERTION_PATTERN =
-  /\b(required|require[sd]?|requiring|must|needed|needs?|mandatory|necessary|blocked|blocking|pending|waiting)\b/i;
+  /\b(required|require[sd]?|requiring|must|needed|needs?|mandatory|necessary|blocked|blocking|pending|waiting|shall|essential)\b/i;
+// A quoted excerpt's closer must PAIR with its actual opener, not match
+// any member of the flat CLOSE_QUOTE_CHARS set -- otherwise an unrelated
+// apostrophe of a DIFFERENT quote family inside the excerpt (a plural
+// possessive like "operators'", not merely a contraction already
+// guarded above) can still be mistaken for the closer, making the real
+// closer and any re-adoption cue past it unreachable (Codex review
+// round 5, PR #2760). Mirrors `discover-viability-gate.mts`'s own
+// `QUOTE_CHAR_PAIRS`.
+const QUOTE_CHAR_PAIRS = {
+  '"': '"',
+  "'": "'",
+  '‘': '’',
+  '“': '”',
+};
 // A straight/curly apostrophe inside the quoted excerpt itself (a
 // contraction or possessive, e.g. "it's") must not be mistaken for the
 // closing quote -- only a candidate NOT immediately followed by a
@@ -189,17 +211,22 @@ function isQuotedMatch(text, start, end) {
 // hard break in between, means the citing issue RE-ADOPTS the quoted
 // prerequisite as its own live requirement rather than merely reporting
 // inert history (Codex review, PR #2760). The close side searches the
-// rest of the corpus for the first close-quote character -- this
-// exclusion exists precisely for "much longer" quotes, so the closer can
-// be arbitrarily far from the match (Codex review round 4, PR #2760) --
-// without requiring it to pair with any specific open-quote character
-// (mirrors this file's existing loose open/close-quote membership
-// checks elsewhere).
-function isFollowedByRequirementAssertion(text, quotedContentStart) {
+// rest of the corpus for the first character that PAIRS with `opener`
+// -- this exclusion exists precisely for "much longer" quotes, so the
+// closer can be arbitrarily far from the match (Codex review round 4,
+// PR #2760) -- rather than any member of CLOSE_QUOTE_CHARS, so an
+// apostrophe of a different quote family inside the excerpt (a plural
+// possessive like "operators'") is never mistaken for the real closer
+// (Codex review round 5, PR #2760).
+function isFollowedByRequirementAssertion(text, quotedContentStart, opener) {
+  const closer = QUOTE_CHAR_PAIRS[opener];
+  if (closer === undefined) {
+    return false;
+  }
   const region = text.slice(quotedContentStart);
   let closeOffset = -1;
   for (let i = 0; i < region.length; i++) {
-    if (!CLOSE_QUOTE_CHARS.has(region[i])) {
+    if (region[i] !== closer) {
       continue;
     }
     if (WORD_CHAR_PATTERN.test(region[i + 1] ?? '')) {
@@ -250,7 +277,11 @@ function isPrecededByRequirementAssertion(text, referenceStart) {
 // motivating shape. Only the open-quote adjacency is required on the
 // open side (unlike `isQuotedMatch`: the whole point of this exclusion
 // is the shape where no nearby closing quote follows the match itself).
-function isAttributedLongQuote(text, start) {
+// `selfIssueNumber`, when given, prevents an issue from attributing a
+// quote to ITSELF: "Issue #122 acceptance criterion: 'X'" inside issue
+// #122's own body is not an external citation, so the cited number must
+// differ from the candidate's own (Codex review round 5, PR #2760).
+function isAttributedLongQuote(text, start, selfIssueNumber) {
   const before = text[start - 1];
   if (before === undefined || !OPEN_QUOTE_CHARS.has(before)) {
     return false;
@@ -266,6 +297,12 @@ function isAttributedLongQuote(text, start) {
   if (!referenceMatch || referenceMatch.index === undefined) {
     return false;
   }
+  if (
+    selfIssueNumber !== undefined &&
+    Number(referenceMatch[0].slice(1)) === selfIssueNumber
+  ) {
+    return false;
+  }
   // Stop at the introducing colon itself -- the whitespace AFTER it
   // (which can include a Markdown soft-wrap newline before the quote,
   // e.g. "Background:\n\"X\"") is not part of the reference-to-colon
@@ -279,7 +316,7 @@ function isAttributedLongQuote(text, start) {
     !CITED_ISSUE_ATTRIBUTION_HARD_BREAK_PATTERN.test(
       betweenReferenceAndColon,
     ) &&
-    !isFollowedByRequirementAssertion(text, start) &&
+    !isFollowedByRequirementAssertion(text, start, before) &&
     !isPrecededByRequirementAssertion(text, windowStart + referenceMatch.index)
   );
 }
@@ -287,9 +324,12 @@ function isAttributedLongQuote(text, start) {
  * Detect prose naming a runtime/production-observation precondition
  * (#2467) anywhere in `body`, outside of code regions. Returns `true` on
  * the first match that is neither quoted nor negated -- callers only need a
- * boolean gate, not the matched span.
+ * boolean gate, not the matched span. `selfIssueNumber`, when given, stops
+ * the candidate's own issue number from being treated as an external
+ * citation by {@link isAttributedLongQuote} (Codex review round 5, PR
+ * #2760).
  */
-export function detectRuntimeObservationPrecondition(body) {
+export function detectRuntimeObservationPrecondition(body, selfIssueNumber) {
   const stripped = stripMarkdownCodeRegions(String(body ?? ''));
   for (const pattern of RUNTIME_OBSERVATION_PATTERNS) {
     pattern.lastIndex = 0;
@@ -298,7 +338,7 @@ export function detectRuntimeObservationPrecondition(body) {
       const end = match.index + match[0].length;
       if (
         !isQuotedMatch(stripped, match.index, end) &&
-        !isAttributedLongQuote(stripped, match.index) &&
+        !isAttributedLongQuote(stripped, match.index, selfIssueNumber) &&
         !hasNegationCueBefore(stripped, match.index) &&
         !hasNegationCueAfter(stripped, end)
       ) {
@@ -367,7 +407,7 @@ export function classifyIssue(issue, options) {
   // production-observation precondition has no issue-number reference to
   // resolve, so it must still hold even when every numbered reference below
   // is absent or already closed.
-  if (detectRuntimeObservationPrecondition(body)) {
+  if (detectRuntimeObservationPrecondition(body, Number(issue.number))) {
     return { orphan: false, reason: 'runtime_observation_precondition' };
   }
   // Two independent reference families, matching A3's own dependency check

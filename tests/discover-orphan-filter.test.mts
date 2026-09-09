@@ -1454,6 +1454,103 @@ test('classifyIssue still trips a re-adoption cue past a quote longer than the o
   assert.equal(result.reason, 'runtime_observation_precondition');
 });
 
+test('classifyIssue still trips when an unrelated apostrophe of a different quote family sits inside the excerpt (Codex review round 5, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 121,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Per issue #42: "confirmed in production according to the ' +
+        "operators' long excerpt describing the outage window in " +
+        'detail here" remains required.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test('classifyIssue still trips when the candidate cites its own issue number (Codex review round 5, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 122,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Issue #122 acceptance criterion: "confirmed in production ' +
+        'before shipping"',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test('classifyIssue still trips when the re-adoption cue is "shall" (Codex review round 5, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 123,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Per issue #42: "confirmed in production before shipping" ' +
+        'shall remain the acceptance gate.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test('classifyIssue does not trip when a soft-wrap newline sits between the cited reference and its colon (Codex review round 5, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 124,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Issue #42 asserted in its\nBackground: "confirmed in ' +
+        'production: the deploy pipeline paused for six hours" -- ' +
+        'describing a specific event.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'orphan');
+});
+
+test('classifyIssue still trips when a blank line (a real paragraph break) separates an unrelated reference from the quote (Codex review round 5, PR #2760)', () => {
+  const result = classifyIssue(
+    {
+      number: 125,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'See #42.\n\nAcceptance gate: "confirmed in production before ' +
+        'shipping, per the runbook."',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
 test('filterOrphanIssues buckets a runtime-observation precondition under filtered.runtime_observation_precondition (#2467)', async () => {
   const issues = [
     {
