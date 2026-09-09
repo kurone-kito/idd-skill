@@ -557,6 +557,81 @@ test('still fails autonomous completion when a generic-pattern mention coexists 
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+// --- PR #2757 review follow-ups (Copilot + Codex): a digit-adjacent
+// apostrophe, an "until"-canceled negation, unattributed emphasis-quoting,
+// a past investigation that confirms rather than resolves the blocker, and
+// a generic noun paired with an explicit requirement-assertion word -------
+
+test('still fails autonomous completion when a possessive apostrophe follows a digit (Copilot review, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 42,
+    title: 'wire external approval gate',
+    body:
+      "The 2020's external system rollout requires production access " +
+      'before it can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when "not ... until" makes the following phrase a prerequisite (Codex review, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 43,
+    title: 'wire external approval gate',
+    body:
+      'Do not proceed until production access is granted. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test("still fails autonomous completion when quotes only emphasize this issue's own requirement, with no citation framing (Codex review, PR #2757)", () => {
+  const result = evaluateA4Viability({
+    number: 44,
+    title: 'wire external approval gate',
+    body:
+      'The change requires "production access" before it can ship. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a past investigation confirms the blocker rather than resolving it (Codex review, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 45,
+    title: 'wire external approval gate',
+    body:
+      'We already verified production access is required before this ' +
+      'can ship. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a generic-sounding noun coexists with an explicit requirement-assertion word (Codex review, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 46,
+    title: 'wire external approval gate',
+    body:
+      'A credential approach must be supplied by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('evaluateDiscoverViability fails closed when a lookup aborts', async () => {
   // A non-404 gh failure (auth / rate-limit / network) propagates out of
   // loadIssue instead of being swallowed into a silent issue_not_found.

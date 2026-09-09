@@ -152,10 +152,15 @@ const EXTERNAL_COORDINATION_PATTERN =
 // 1. Negation: the match is governed by a negation cue reaching it with no
 //    hard clause break in between ("no interactive credential minting" --
 //    #2716). `zero` excludes a hyphenated compound ("zero-downtime") so it
-//    is never mistaken for a standalone negation word.
+//    is never mistaken for a standalone negation word. A canceling
+//    conjunction ("do not proceed UNTIL production access is granted" --
+//    Codex review, PR #2757) flips the negation back to an affirmative
+//    prerequisite: the cue negates the verb before the conjunction, not
+//    the requirement named after it.
 const NEGATION_CUE_PATTERN =
   /\b(no|not|without|zero(?!-)|never|none|isn'?t|aren'?t|wasn'?t|weren'?t|doesn'?t|don'?t|didn'?t|won'?t|can'?t|cannot)\b/gi;
 const NEGATION_CUE_WINDOW = 40;
+const NEGATION_CANCELING_CONJUNCTION_PATTERN = /\b(until|unless)\b/i;
 // A backward-looking cue (negation or investigative past tense, below)
 // stops governing a match at a period/semicolon/em-dash (HARD_CLAUSE_BREAK_
 // PATTERN, shared with the broad-scope exclusions above), a blank line, or
@@ -171,6 +176,7 @@ function isGovernedByBackwardCue(
   matchIndex: number,
   cuePattern: RegExp,
   window: number,
+  cancelPattern?: RegExp,
 ): boolean {
   const windowStart = Math.max(0, matchIndex - window);
   const windowText = corpus.slice(windowStart, matchIndex);
@@ -178,7 +184,8 @@ function isGovernedByBackwardCue(
     const linkText = windowText.slice(cueMatch.index + cueMatch[0].length);
     if (
       CUE_HARD_BREAK_PATTERN.test(linkText) ||
-      CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText)
+      CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText) ||
+      (cancelPattern && cancelPattern.test(linkText))
     ) {
       continue;
     }
@@ -186,24 +193,34 @@ function isGovernedByBackwardCue(
   }
   return false;
 }
-// 2. Quoted example: the match sits on a Markdown blockquote line, or is
-//    bounded by a matching pair of quote characters within the containing
-//    paragraph (#2711's inverted-attribution quotation shape, which soft-
-//    wraps the quoted marker across a line break -- scoped to the
-//    paragraph, not the physical line, so that wrap doesn't defeat the
-//    pairing). A plain straight single quote also marks a contraction
-//    ("doesn't"), so a candidate quote character counts as an opener only
-//    when the character right before it is not a letter, and as a closer
-//    only when the character right after it is not a letter -- a
-//    contraction's apostrophe always sits directly between two letters and
-//    fails both checks.
+// 2. Quoted example: the match sits on a Markdown blockquote line (an
+//    unambiguous citation on its own), or is bounded by a matching pair of
+//    quote characters within the containing paragraph AND that paragraph
+//    also carries a framing/attribution verb (#2711's inverted-attribution
+//    quotation shape, which soft-wraps the quoted marker across a line
+//    break -- scoped to the paragraph, not the physical line, so that wrap
+//    doesn't defeat the pairing). The framing-verb requirement distinguishes
+//    a genuine cited example from ordinary emphasis-quoting of this issue's
+//    own requirement (`The change requires "production access" before it
+//    can ship` -- Codex review, PR #2757): quote characters alone, with no
+//    reporting/citation cue anywhere in the paragraph, do not exclude. A
+//    plain straight single quote also marks a contraction ("doesn't") or a
+//    possessive after a digit ("2020's"), so a candidate quote character
+//    counts as an opener only when the character right before it is
+//    neither a letter nor a digit, and as a closer only when the character
+//    right after it is neither a letter nor a digit -- a contraction's or
+//    digit-possessive's apostrophe always sits directly adjacent to a
+//    letter or digit on at least one side and fails one of those checks
+//    (Copilot review, PR #2757).
 const QUOTE_CHAR_PAIRS: Record<string, string> = {
   '"': '"',
   "'": "'",
   '‘': '’',
   '“': '”',
 };
-const LETTER_PATTERN = /[A-Za-z]/;
+const QUOTE_ADJACENT_WORD_CHAR_PATTERN = /[A-Za-z0-9]/;
+const QUOTED_EXAMPLE_FRAMING_VERB_PATTERN =
+  /\b(documents?|describes?|says?|states?|explains?|reports?|quotes?|quoted|cites?|cited)\b/i;
 const PARAGRAPH_BREAK_PATTERN = /\n[ \t]*\n/g;
 // 3. Investigative past tense: the match describes an investigation the
 //    issue author already performed while drafting, not remaining work
@@ -215,11 +232,18 @@ const INVESTIGATIVE_PAST_TENSE_WINDOW = 80;
 //    general pattern/example rather than asserting a live requirement of
 //    this issue ("...a least-privilege CI credential pattern..." -- an
 //    incidental background mention in #2716's own real body, distinct
-//    from that same issue's separately negated target phrase).
+//    from that same issue's separately negated target phrase), UNLESS a
+//    requirement-assertion cue (must/require/need/shall/...) sits in the
+//    same clause -- `A credential approach MUST be supplied by the
+//    maintainer before implementation` (Codex review, PR #2757) still
+//    imposes a live requirement despite the generic-sounding noun.
 const GENERIC_MENTION_NOUN_PATTERN =
   /^(pattern|example|scenario|convention|practice|concept|term|approach|precedent|case)$/i;
 const GENERIC_MENTION_LOOKAHEAD_CHARS = 40;
 const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
+const REQUIREMENT_ASSERTION_PATTERN =
+  /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential)\b/i;
+const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -496,15 +520,16 @@ function isGovernedByNegation(corpus: string, matchIndex: number): boolean {
     matchIndex,
     NEGATION_CUE_PATTERN,
     NEGATION_CUE_WINDOW,
+    NEGATION_CANCELING_CONJUNCTION_PATTERN,
   );
 }
 
 function isLikelyQuoteOpener(charBefore: string): boolean {
-  return !LETTER_PATTERN.test(charBefore);
+  return !QUOTE_ADJACENT_WORD_CHAR_PATTERN.test(charBefore);
 }
 
 function isLikelyQuoteCloser(charAfter: string): boolean {
-  return !LETTER_PATTERN.test(charAfter);
+  return !QUOTE_ADJACENT_WORD_CHAR_PATTERN.test(charAfter);
 }
 
 function findParagraphSpan(
@@ -535,6 +560,10 @@ function isInsideQuotedExample(
     corpus,
     matchIndex,
   );
+  const paragraph = corpus.slice(paragraphStart, paragraphEnd);
+  if (!QUOTED_EXAMPLE_FRAMING_VERB_PATTERN.test(paragraph)) {
+    return false;
+  }
   const before = corpus.slice(paragraphStart, matchIndex);
   const after = corpus.slice(matchEnd, paragraphEnd);
   for (const [open, close] of Object.entries(QUOTE_CHAR_PAIRS)) {
@@ -560,17 +589,57 @@ function isInsideQuotedExample(
 function isDescribedByPastInvestigation(
   corpus: string,
   matchIndex: number,
+  matchEnd: number,
 ): boolean {
-  return isGovernedByBackwardCue(
-    corpus,
-    matchIndex,
-    INVESTIGATIVE_PAST_TENSE_PATTERN,
-    INVESTIGATIVE_PAST_TENSE_WINDOW,
+  // The investigation may have CONFIRMED the blocker still holds rather
+  // than resolved it away ("We already verified production access IS
+  // REQUIRED before this can ship" -- Codex review, PR #2757): a nearby
+  // requirement-assertion word means the cited investigation's own
+  // conclusion is that the prerequisite remains live.
+  return (
+    isGovernedByBackwardCue(
+      corpus,
+      matchIndex,
+      INVESTIGATIVE_PAST_TENSE_PATTERN,
+      INVESTIGATIVE_PAST_TENSE_WINDOW,
+    ) && !isNearRequirementAssertion(corpus, matchIndex, matchEnd)
   );
+}
+
+function isNearRequirementAssertion(
+  corpus: string,
+  matchIndex: number,
+  matchEnd: number,
+): boolean {
+  const forwardRaw = corpus.slice(
+    matchEnd,
+    matchEnd + REQUIREMENT_ASSERTION_WINDOW_CHARS,
+  );
+  const forwardBreak = HARD_CLAUSE_BREAK_PATTERN.exec(forwardRaw);
+  const forwardText = forwardBreak
+    ? forwardRaw.slice(0, forwardBreak.index)
+    : forwardRaw;
+  if (REQUIREMENT_ASSERTION_PATTERN.test(forwardText)) {
+    return true;
+  }
+  const backwardStart = Math.max(
+    0,
+    matchIndex - REQUIREMENT_ASSERTION_WINDOW_CHARS,
+  );
+  const backwardRaw = corpus.slice(backwardStart, matchIndex);
+  const priorBreaks = [
+    ...backwardRaw.matchAll(new RegExp(HARD_CLAUSE_BREAK_PATTERN, 'g')),
+  ];
+  const lastBreak = priorBreaks.at(-1);
+  const backwardText = lastBreak
+    ? backwardRaw.slice(lastBreak.index + lastBreak[0].length)
+    : backwardRaw;
+  return REQUIREMENT_ASSERTION_PATTERN.test(backwardText);
 }
 
 function isFollowedByGenericMentionNoun(
   corpus: string,
+  matchIndex: number,
   matchEnd: number,
 ): boolean {
   const rawTail = corpus.slice(
@@ -580,9 +649,13 @@ function isFollowedByGenericMentionNoun(
   const breakMatch = HARD_CLAUSE_BREAK_PATTERN.exec(rawTail);
   const tail = breakMatch ? rawTail.slice(0, breakMatch.index) : rawTail;
   const tokens = tail.match(WORD_TOKEN_PATTERN) ?? [];
-  return tokens
+  const namesGenericPattern = tokens
     .slice(0, GENERIC_MENTION_LOOKAHEAD_TOKENS)
     .some((token) => GENERIC_MENTION_NOUN_PATTERN.test(token));
+  return (
+    namesGenericPattern &&
+    !isNearRequirementAssertion(corpus, matchIndex, matchEnd)
+  );
 }
 
 /**
@@ -603,8 +676,8 @@ function findUnexcludedExternalCoordinationMatch(
       isInsideCodeSpan(corpus, index) ||
       isInsideQuotedExample(corpus, index, end) ||
       isGovernedByNegation(corpus, index) ||
-      isDescribedByPastInvestigation(corpus, index) ||
-      isFollowedByGenericMentionNoun(corpus, end)
+      isDescribedByPastInvestigation(corpus, index, end) ||
+      isFollowedByGenericMentionNoun(corpus, index, end)
     ) {
       continue;
     }
