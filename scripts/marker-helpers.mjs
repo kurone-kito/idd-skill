@@ -225,12 +225,17 @@ const MARKER_HIDE_POLICY_ENTRIES = [
   },
   {
     label: '<!-- activation-nonce:',
-    policy: 'f4-only',
+    policy: 'excluded',
     reason:
       "No hide-at-post-time wiring yet: idd-claim.instructions.md's takeover " +
       'minimization only targets claimed-by/unclaimed-by/heartbeat comments, ' +
-      'not activation-nonce -- only the post-merge F4 cleanup batch cleans it ' +
-      'up today (caught by Copilot review on PR #2759).',
+      'not activation-nonce (caught by Copilot review on PR #2759). Also ' +
+      'issue-scoped, not PR-scoped (posted via `post-idd-marker --type ' +
+      'activation-nonce --target issue`), so unlike an ordinary f4-only ' +
+      "family it has no F4 cleanup path either: audit-pr-cleanup.mjs's " +
+      'GraphQL fetch is bound to the merged PR number and never sees a ' +
+      'comment on the separate issue (caught by chatgpt-codex-connector ' +
+      'review, second round).',
   },
   {
     label: '<!-- review-watermark:',

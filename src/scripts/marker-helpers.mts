@@ -454,18 +454,30 @@ export const OPERATIONAL_MARKERS: readonly OperationalMarker[] = Object.freeze(
  * keyed by that entry's `label` (#2751/#2752). `wired` marker families
  * already have a documented pre-merge hide-at-post-time supersession rule
  * (see `docs/idd-comment-minimization.md`'s "## Timing" section); `f4-only`
- * families have no hide-at-post-time wiring yet, so the post-merge F4
- * cleanup batch (`docs/idd-comment-minimization.md`'s Candidate Rules) is
- * their only cleanup path today; `excluded` families are deliberately kept
- * out of the `wired` pre-merge grouping, each for the reason recorded on
- * its own entry below. This classification alone does not guarantee F4
- * protection too: only `<!-- forced-handoff:` also carries a matching F4
- * exemption today (`audit-pr-cleanup.mts`'s `evaluateOperationalComment`
- * hardcodes a skip for that one prefix). The other four `excluded` entries
- * have no equivalent exemption yet and are swept by F4's generic
- * stale-marker rule exactly like an ordinary `f4-only` family -- a real
- * gap their own reasons argue against, flagged for a follow-up rather than
- * fixed by this classification pass.
+ * families have no such pre-merge wiring, so the post-merge F4 cleanup
+ * batch is their only cleanup path today -- concretely,
+ * `audit-pr-cleanup.mts`'s generic `operationalMarkerPrefix` match against
+ * comments on the merged PR, which recognizes the full
+ * `OPERATIONAL_MARKERS` set. That is broader than the specific prefix
+ * list under `docs/idd-comment-minimization.md`'s "## Candidate Rules"
+ * heading: that list predates several `f4-only`-classified families
+ * (including the three this pass added) and is stale documentation, not
+ * a deliberately narrower second path -- both the vendored helper's own
+ * dry run and the manual GraphQL fallback read that same list, so the
+ * gap is not adopter-fallback-only (tracked as issue #2778); `excluded`
+ * families are deliberately kept out of the `wired` pre-merge grouping,
+ * each for the reason recorded on its own entry below. This
+ * classification alone does not guarantee an F4 cleanup
+ * path either: `<!-- forced-handoff:` carries an explicit F4 skip
+ * (`evaluateOperationalComment` hardcodes it for that one prefix), and
+ * `<!-- activation-nonce:` is issue-scoped, so F4's PR-scoped
+ * `audit-pr-cleanup.mts` structurally never even sees that comment --
+ * both permanently outside F4's reach, for different reasons. The
+ * remaining `excluded` entries carry no explicit exemption; whether F4's
+ * generic rule actually reaches each of them depends on where that family
+ * is posted -- a gap their own reasons argue against, flagged for a
+ * follow-up rather than fully audited or fixed by this classification
+ * pass.
  */
 export type MarkerHidePolicyKind = 'wired' | 'f4-only' | 'excluded';
 
@@ -491,12 +503,17 @@ const MARKER_HIDE_POLICY_ENTRIES: readonly MarkerHidePolicyEntry[] = [
   },
   {
     label: '<!-- activation-nonce:',
-    policy: 'f4-only',
+    policy: 'excluded',
     reason:
       "No hide-at-post-time wiring yet: idd-claim.instructions.md's takeover " +
       'minimization only targets claimed-by/unclaimed-by/heartbeat comments, ' +
-      'not activation-nonce -- only the post-merge F4 cleanup batch cleans it ' +
-      'up today (caught by Copilot review on PR #2759).',
+      'not activation-nonce (caught by Copilot review on PR #2759). Also ' +
+      'issue-scoped, not PR-scoped (posted via `post-idd-marker --type ' +
+      'activation-nonce --target issue`), so unlike an ordinary f4-only ' +
+      "family it has no F4 cleanup path either: audit-pr-cleanup.mjs's " +
+      'GraphQL fetch is bound to the merged PR number and never sees a ' +
+      'comment on the separate issue (caught by chatgpt-codex-connector ' +
+      'review, second round).',
   },
   {
     label: '<!-- review-watermark:',
