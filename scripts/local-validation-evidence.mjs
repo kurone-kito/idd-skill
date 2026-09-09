@@ -33,6 +33,10 @@ import {
   safeGhText,
 } from './gh-exec.mjs';
 import {
+  resolveTrustedActors,
+  runMinimize,
+} from './minimize-superseded-markers.mjs';
+import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
@@ -248,6 +252,7 @@ const LOCAL_VALIDATION_EVIDENCE_FLAG_SPEC = {
   '--owner': { type: 'string', default: '' },
   '--apply': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
   '--help': { type: 'boolean', short: 'h' },
 };
 function parsePositiveIntegerFlag(value, flag) {
@@ -298,6 +303,7 @@ export function parseArgs(argv) {
     owner: values.owner.trim(),
     apply: values.apply,
     format,
+    trustedMarkerLogins: values['trusted-marker-logins'].trim(),
     help,
   };
   if (!parsed.help) {
@@ -369,6 +375,91 @@ function postComment({ owner, repo, prNumber, body }) {
     return JSON.parse(payload || '{}');
   } catch {
     return {};
+  }
+}
+/**
+ * Find prior `idd-local-validation-evidence:` comments (among `comments`)
+ * whose embedded HEAD SHA differs from `newHeadSha` -- the candidates a
+ * fresh `--record --apply` post should hide as `OUTDATED` (#2755),
+ * mirroring the shipped `advisory-wait` AW3-H rule and `post-idd-marker.mts`'s
+ * `review-ack` hide-at-post-time step (#2754). Never returns a candidate
+ * matching `newHeadSha` (current-HEAD protection, since
+ * `resolveLocalValidationEvidence` resolves current evidence by HEAD match)
+ * or an unparseable / non-`idd-local-validation-evidence:` comment.
+ */
+export function findSupersededLocalValidationEvidenceSubjects(
+  comments,
+  newHeadSha,
+) {
+  const target = newHeadSha.trim().toLowerCase();
+  const subjects = [];
+  for (const comment of comments) {
+    const nodeId = String(comment.node_id ?? '').trim();
+    if (!nodeId) {
+      continue;
+    }
+    const parsed = parseLocalValidationEvidenceComment(
+      String(comment.body ?? ''),
+      String(comment.created_at ?? ''),
+    );
+    if (!parsed || parsed.headSha === target) {
+      continue;
+    }
+    subjects.push(nodeId);
+  }
+  return subjects;
+}
+/**
+ * Best-effort hide-at-post-time step (#2755) for a freshly recorded
+ * `idd-local-validation-evidence:` marker. Runs only after `poster(...)`'s
+ * own POST already succeeded, reuses `priorComments` (the same PR comment
+ * listing already fetched earlier in {@link runLocalValidationEvidence},
+ * necessarily gathered *before* this post -- unlike `post-idd-marker.mts`'s
+ * equivalent step, which re-lists comments *after* its own POST and must
+ * therefore exclude a same-window concurrent marker by `id`, a pre-post
+ * snapshot can by construction never contain this post or anything newer,
+ * so no id-ordering filter is needed here), and reuses
+ * `minimize-superseded-markers.mts`'s `runMinimize` for the actual
+ * mutation -- the same trusted-author gate, already-`isMinimized` skip, and
+ * `viewerCanMinimize` check that helper already implements. Every failure
+ * (an unreadable comment list, a `gh` permission error, a malformed
+ * GraphQL response, anything else) is swallowed here: this step must never
+ * retry-loop or throw back into the caller, since the marker it is hiding
+ * *for* has already posted successfully by the time this runs.
+ */
+export function hideSupersededLocalValidationEvidenceMarkers({
+  priorComments,
+  newHeadSha,
+  trustedMarkerLoginsFlag,
+  rawConfig,
+  resolveTrustedActorsFn = resolveTrustedActors,
+  runMinimizeFn = runMinimize,
+}) {
+  try {
+    const subjectIds = findSupersededLocalValidationEvidenceSubjects(
+      priorComments,
+      newHeadSha,
+    );
+    if (subjectIds.length === 0) {
+      return;
+    }
+    const { actors } = resolveTrustedActorsFn({
+      flagValue: trustedMarkerLoginsFlag,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+      config: rawConfig,
+    });
+    runMinimizeFn({
+      subjectIds,
+      classifier: 'OUTDATED',
+      trustedSet: new Set(actors),
+      apply: true,
+      allowUntrusted: false,
+    });
+  } catch {
+    // Best-effort only (#2755) -- never block or retry-loop the marker
+    // post that already succeeded above. Covers both a thrown failure from
+    // runMinimizeFn itself (e.g. a gh permission error) and one from
+    // resolveTrustedActorsFn.
   }
 }
 export async function runLocalValidationEvidence(options = {}) {
@@ -468,6 +559,12 @@ export async function runLocalValidationEvidence(options = {}) {
   }
   const poster = options.postComment ?? postComment;
   const posted = poster({ owner, repo: name, prNumber: args.prNumber, body });
+  hideSupersededLocalValidationEvidenceMarkers({
+    priorComments: comments,
+    newHeadSha: args.headSha,
+    trustedMarkerLoginsFlag: args.trustedMarkerLogins,
+    rawConfig,
+  });
   const result = {
     mode: args.mode,
     apply: true,
@@ -520,6 +617,9 @@ Options:
                                      repository name -- not both --owner
                                      and a combined --repo together)
   --apply                           post the canonical marker comment after validation (--record)
+  --trusted-marker-logins a,b        gate --record --apply's hide-at-post-time
+                                      step (falls back to
+                                      IDD_TRUSTED_MARKER_ACTORS / config)
   --format <json|text>              output format (default: json)
   --help                            show this message
 `);
