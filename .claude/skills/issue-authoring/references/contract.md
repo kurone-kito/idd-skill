@@ -1438,20 +1438,38 @@ only approval boundary.
   the designated lead target as the anchor. The anchor winner serializes
   acquisition for the whole set; no session may publish or acquire children
   independently. Before each child acquisition or resume, append and verify
-  a same-owner heartbeat on the anchor, re-fetch the anchor's paginated log,
-  and require its current owner token, set, anchor, and session. Append the
-  child marker only after that validation, then immediately re-fetch both
-  anchor and child and require the same anchor ownership; if either read
-  changes, leave the child hold in place and stop rather than forming a split
-  set. If any target cannot be acquired under that anchor, stop all body and
-  relationship edits, leave labels and append-only markers in place, and
-  require an exact verified resume of that set rather than allowing a split
-  ownership set.
+  a same-owner heartbeat on the anchor (or reuse one per the coalesce rule
+  below), re-fetch the anchor's paginated log, and require its current owner
+  token, set, anchor, and session. Append the child marker only after that
+  validation, then immediately re-fetch both anchor and child and require the
+  same anchor ownership; if either read changes, leave the child hold in
+  place and stop rather than forming a split set. If any target cannot be
+  acquired under that anchor, stop all body and relationship edits, leave
+  labels and append-only markers in place, and require an exact verified
+  resume of that set rather than allowing a split ownership set.
   After each `acquire`/`resume`/`bootstrap` marker POST, wait the configured
   `claim.verifySettleDelay`, replay the full paginated log, and choose the
   winner by deterministic comment order; an immediate local read never
   authorizes edits. Apply the same settle delay and full paginated replay after
   every heartbeat before it authorizes an edit or label removal.
+- **Heartbeat coalescing (`issueAuthoring.heartbeatCoalesceWindow`,
+  default `PT2M`, #2768).** Before appending any heartbeat at the three
+  sites in this section (the anchor heartbeat above, "Renew before every
+  edit" below, and Stage 2's pre-label-removal heartbeat below), first
+  replay the target's paginated owner-marker log. Reuse the latest
+  trusted marker instead of appending a new one when **all four** hold:
+  it is for the same owner, set, and session; its `mode` is `acquire`,
+  `bootstrap`, `resume`, or `heartbeat`; its GitHub `created_at` is
+  younger than the configured window; and its `body-sha256` equals the
+  digest of the body just fetched. Re-fetch and verify the reused marker
+  exactly as a freshly posted one would be — only the redundant POST is
+  skipped, never the replay or ownership verification. Any other case —
+  an older marker, a different owner/set/session, a mode outside that
+  list, a changed body digest, or the marker cannot be found
+  conclusively — keeps today's append-and-verify path. This window never
+  applies to `acquire`, `bootstrap`, `resume`, `release`,
+  `release-guard`, or `release-complete` markers; only a `heartbeat`
+  append may be skipped.
 - **Hide superseded owner/publication-intent markers.** Once a fresh
   `authoring-owner` marker (any `mode`, including the first,
   generation-opening `acquire`/`bootstrap`) or `authoring-publication-intent`
@@ -1524,14 +1542,16 @@ only approval boundary.
   `instructions-only` installs.
 - **Renew before every edit.** After that conflict check and immediately
   before the body or relationship mutation, append and verify a trusted
-  `mode=heartbeat` marker for the set anchor first, then re-fetch and verify
-  its current owner, set, anchor, and session. Only after the anchor renewal
+  `mode=heartbeat` marker for the set anchor first (or reuse one per the
+  heartbeat-coalescing rule above), then re-fetch and verify its current
+  owner, set, anchor, and session. Only after the anchor renewal
   succeeds, append and verify the edited target's heartbeat when it is a
-  distinct target, then re-fetch both and require each target's expected owner
-  token independently, plus the same set, anchor, owning session, and expected
-  target snapshot. If either heartbeat cannot be posted or verified, or a
-  newer owner appears, stop without editing. A heartbeat never starts a new
-  generation and never authorizes release.
+  distinct target (reuse applies here too), then re-fetch both and require
+  each target's expected owner token independently, plus the same set,
+  anchor, owning session, and expected target snapshot. If either
+  heartbeat cannot be posted/reused or verified, or a newer owner appears,
+  stop without editing. A heartbeat never starts a new generation and
+  never authorizes release.
 - A target already held by another set is unavailable. A later session may
   resume only when the invocation identifies the exact interrupted set and
   the hold is past `issueAuthoring.authoringStaleAge`; append a
@@ -1567,12 +1587,14 @@ only approval boundary.
   stop. The guard suppresses Discover for the whole set during the provisional
   label-removal window; it does not close the set. Then,
   immediately before each label removal, append and verify the set anchor's
-  `mode=heartbeat` first, re-fetching it and requiring its current owner, set,
-  anchor, and session. Only after that succeeds, append and verify the target
+  `mode=heartbeat` first (or reuse one per the heartbeat-coalescing rule
+  above), re-fetching it and requiring its current owner, set, anchor, and
+  session. Only after that succeeds, append and verify the target
   heartbeat when it is distinct (one marker serves both roles when they
-  coincide), then re-fetch both and require each target's expected owner token
-  independently, plus the shared set/anchor/session, recorded release-marker
-  comment, and expected label/body snapshot. Remove non-anchor labels one
+  coincide; reuse applies here too), then re-fetch both and require each
+  target's expected owner token independently, plus the shared
+  set/anchor/session, recorded release-marker comment, and expected
+  label/body snapshot. Remove non-anchor labels one
   target at a time and re-fetch each result. After the final anchor label
   removal is verified, re-fetch every target and verify its current release
   marker, absent label, and expected body snapshot; any drift leaves the set
