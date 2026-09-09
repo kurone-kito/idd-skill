@@ -187,21 +187,16 @@ issue on the side-fix's own merge). Formal `issue-authoring` tracking
 is still preferred when time allows, but it is not a start blocker for
 this carve-out.
 
-The side-fix has no claimed issue of its own to route through A5/B1,
-so create it on a fresh sibling worktree on a branch that does **not**
-match the `issue/<number>-*` pattern (cut from
-`origin/{development-branch}`, named for example
-`side-fix/<short-slug>`) — never on the originating claim's own
-worktree/branch, and never through the normal A5 claim flow. Because
-the branch does not match `issue/*`, it falls outside both the shared
-claim revalidation gate's cwd-vs-claim check
-(`idd-overview-core.instructions.md`) and A5 pre-check (e)'s
-orphaned-branch hold, so no second claim is needed or possible for it;
-the shared claim revalidation gate and D2 step 1 above keep applying,
-unchanged, to mutations for the originating claim from its own
-worktree. If the side-fix instead deserves its own tracked issue, file
-it through the `issue-authoring` skill and follow the normal A5/B1
-claim and worktree flow for that issue instead of this carve-out.
+How the executing session obtains a branch, worktree, and claim for
+the side-fix while the originating claim stays active — and how the
+side-fix's own merge and cleanup avoid releasing that originating
+claim — is not yet defined. The shared claim revalidation gate
+(`idd-overview-core.instructions.md`) scopes its cwd-vs-claim check off
+the active claim's recorded `branch:` field, not the mutation's target
+branch, so no branch-naming convention alone exempts a same-session
+side-fix from it. Treat this as an open gap: this carve-out authorizes
+the _decision_ to proceed under live authority; the operator directing
+it owns the mechanics until a follow-up defines them.
 
 D3's closing-keyword requirement and D3.5's presence-detection and
 auto-injection (steps 1-5, including step 4) apply only to the
