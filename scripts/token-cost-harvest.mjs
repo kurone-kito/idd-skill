@@ -486,6 +486,13 @@ export function allocateStageUsage(windows, timeline, countTimeline) {
       window.startMs,
       window.endMs,
     );
+    // Checking turnCount alone (not the fuller
+    // `turnCount > 0 || (supportsToolCallCount && toolCallCount > 0)`) relies
+    // on an invariant both current extractors uphold: every CountPoint that
+    // contributes a toolCallCount also sets turnCount: 1 in the same point,
+    // so toolCallCount > 0 can never occur without turnCount > 0 alongside
+    // it. Revisit this if a future extractor can report a tool call without
+    // an accompanying turn.
     const hasCounts = counts.turnCount > 0;
     if (usageTotal(usage) > 0 || hasCounts) {
       const stageUsage = { ...usage };

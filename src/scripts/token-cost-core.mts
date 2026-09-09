@@ -52,10 +52,16 @@ export interface TokenCostUsage {
  * Per-stage usage, plus optional per-stage turn/tool-call counts (#2769)
  * nested inside `usage` (not siblings of it) -- mirrors the raw schema
  * shape exactly, and keeps the top-level {@link TokenCostUsage} used by
- * the sample's own whole-session `usage` field untouched. `null` means
- * the vendor reports no signal for that metric at all (e.g. Codex's
- * `toolCallCount`); absent means this stage's window carried no count
- * activity to report.
+ * the sample's own whole-session `usage` field untouched. At this
+ * per-stage level, a field is always either a real count or entirely
+ * absent -- never a literal `null` -- since `allocateStageUsage` only
+ * ever spreads a key in when it has a value to report (e.g. Codex's
+ * per-stage `toolCallCount` is omitted, not set to `null`, because that
+ * vendor's `CountTimeline` never supports it). `null` as a value is
+ * reserved for the top-level sample fields (see
+ * {@link TokenCostIssueLoopSample.toolCallCount} below), where it means
+ * the vendor reports no signal for that metric at all across the whole
+ * sample.
  */
 export interface TokenCostStageUsage {
   id: TokenCostStageId;

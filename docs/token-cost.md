@@ -196,7 +196,12 @@ entry, allocated the same way per-stage token usage already is (see
 `allocateStageUsage` in `token-cost-harvest.mts`) -- a stage window is
 included whenever it has real token usage **or** real turn activity, so
 a window with turns but no token usage in that exact slice is never
-silently dropped. `toolCallCount` is attached to a stage entry only for
+silently dropped (preventive; no observed incident yet -- a plausible
+Codex case, a `turn_context` record landing before Codex's own first
+`token_count` reading in the whole session, was caught by this
+addition's own B2 critique pass before shipping, not by an observed
+gap in harvested data).
+`toolCallCount` is attached to a stage entry only for
 a vendor that actually tracks it (Claude); Codex's per-stage entries
 carry `turnCount` alone, never a fabricated per-stage `0`. Grok issue-loop
 samples currently report no stage breakdown at all (a pre-existing,
