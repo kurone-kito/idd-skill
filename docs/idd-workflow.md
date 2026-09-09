@@ -599,9 +599,11 @@ inline prose in the issue body: `Maintainer decision (<provenance>,
 Groom hearing, <date>): <resolution text>` -- the shape
 `suitability-triage.mjs`'s Check 7 recognizes as a resolved
 decision (`#2661`); a comment may additionally note the decision, but the body
-itself is what re-triage reads. The next ordinary Discover pass then
-picks the issue up normally -- grooming itself never claims or works
-the issue (see
+itself is what re-triage reads. This exact line is also exempt from A4's
+own `autonomous_completion` gate (`discover-viability-gate.mjs`, `#2763`),
+so a re-groomed issue is not discarded before Check 7 ever sees it. The
+next ordinary Discover pass then picks the issue up normally -- grooming
+itself never claims or works the issue (see
 [Mutation Policy and Coordination Rule](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)).
 
 **Worked example.** An issue was rejected `needs-decision` at score

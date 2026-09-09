@@ -583,7 +583,12 @@ Groom hearing, <date>): <resolution text>` -- the shape
 decision
 ([kurone-kito/idd-skill#2661](https://github.com/kurone-kito/idd-skill/issues/2661)
 in the source repository); a comment may additionally note the
-decision, but the body itself is what re-triage reads. The next
+decision, but the body itself is what re-triage reads. This exact line
+is also exempt from A4's own `autonomous_completion` gate
+(`discover-viability-gate.mjs`,
+[kurone-kito/idd-skill#2763](https://github.com/kurone-kito/idd-skill/issues/2763)
+in the source repository), so a re-groomed issue is not discarded
+before Check 7 ever sees it. The next
 ordinary Discover pass then
 picks the issue up normally -- grooming itself never claims or works
 the issue (see
