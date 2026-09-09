@@ -436,7 +436,12 @@ export interface ProviderPort {
   getWorkItemTimeline(number: number): ProviderTimelineEvent[];
 
   /**
-   * work-items. The GraphQL `Issue.userContentEdits { editedAt }`
+   * work-items (issues only -- see the file header's `getWorkItem*` vs
+   * `*ChangeRequest*` split; a pull request's own body-edit history is a
+   * separate, unimplemented surface, even though GraphQL's
+   * `userContentEdits` field is not itself issue-exclusive -- both
+   * `Issue` and `PullRequest` implement the underlying `UpdatableComment`
+   * interface). The GraphQL `Issue.userContentEdits { editedAt }`
    * read (#2762) -- the only place GitHub records a body edit; a REST
    * timeline `edited` event with a `changes.body` payload is never emitted
    * for a real edit. Bounded to the most recent 100 edits (`last: 100`,

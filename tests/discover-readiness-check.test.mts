@@ -1615,6 +1615,58 @@ test('a stale marker becomes ready again via userContentEdits when the REST time
   assert.equal(summary.filteredOut.length, 0);
 });
 
+// E2 critique (PR #2836): the positive cases above only prove a LATER
+// renamed/userContentEdits signal clears staleness -- also prove the
+// negative: an EARLIER one must not, end to end through the same
+// pipeline, not just at the pure resolveLatestSubstantiveIssueEditAt
+// level (already covered in supersession-detection.test.mts).
+
+test('a renamed event before the rejection leaves the marker current (negative case, #2762)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-10T00:00:00Z',
+      ),
+    ],
+    // The rename landed BEFORE the rejection -- the marker is still current.
+    fetchTimelineByIssueNumber: () => [
+      { event: 'renamed', created_at: '2026-08-05T00:00:00Z' },
+    ],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut[0]?.reasons, [
+    'triage_verdict:duplicate',
+  ]);
+});
+
+test('a userContentEdits timestamp before the rejection leaves the marker current (negative case, #2762)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-10T00:00:00Z',
+      ),
+    ],
+    fetchTimelineByIssueNumber: () => [],
+    // The body edit landed BEFORE the rejection -- the marker is still
+    // current.
+    fetchUserContentEditsByIssueNumber: () => ['2026-08-05T00:00:00Z'],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut[0]?.reasons, [
+    'triage_verdict:duplicate',
+  ]);
+});
+
 test('a throwing userContentEdits fetcher fails open: the candidate stays ready, never falling back to createdAt (#2762)', async () => {
   const issue = triageVerdictReadinessIssue();
   const summary = await evaluateDiscoverReadiness([1901], {
