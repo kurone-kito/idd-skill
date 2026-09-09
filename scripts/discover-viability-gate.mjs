@@ -200,13 +200,18 @@ const INVESTIGATIVE_PAST_TENSE_WINDOW = 80;
 //    #2757) still imposes a live requirement despite the generic-sounding
 //    noun. `blocked`/`pending` cover emphasis-quoting with no must/require
 //    wording of its own ("Shipping remains BLOCKED PENDING 'production
-//    access'" -- Codex review round 3, PR #2757).
+//    access'" -- Codex review round 3, PR #2757). `waiting` covers an
+//    ongoing dependency the past-investigation exclusion would otherwise
+//    wrongly suppress ("We already checked the reproduction and are now
+//    WAITING ON production access" -- Codex review round 5, PR #2757):
+//    the investigation cue is unrelated to the still-open dependency
+//    named right after it.
 const GENERIC_MENTION_NOUN_PATTERN =
   /^(pattern|example|scenario|convention|practice|concept|term|approach|precedent|case)$/i;
 const GENERIC_MENTION_LOOKAHEAD_CHARS = 40;
 const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
 const REQUIREMENT_ASSERTION_PATTERN =
-  /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending)\b/i;
+  /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -333,31 +338,33 @@ export function evaluateA4Viability(issue) {
 // single backticks appear inside), not on individual-backtick parity -- a
 // run of a different length while a span is open is literal content, not a
 // closer (#2738 Codex review round 2, PR #2757). A FENCED code block is
-// different: its opening run sits alone on a line (only leading
-// whitespace before it) and has length >= 3, and CommonMark lets the
+// different: its opening run needs only LEADING whitespace on its line
+// (trailing content is a valid info string, e.g. ```ts -- Copilot/Codex
+// review round 5, PR #2757) and has length >= 3, and CommonMark lets the
 // closing fence be LONGER than the opener, not just equal (a fence opened
 // with ``` and closed with ```` is still a valid, closed block -- Codex
 // review round 3, PR #2757); an exact-length-only rule leaves such a block
-// wrongly "open" for the rest of the corpus. A run only counts as a fence
-// marker when it sits alone on its line; an inline run of 3+ backticks
-// (e.g. all on one line) still requires an exact-length closer. Finally, a
-// run with NO valid closer anywhere in the corpus (a stray unmatched
-// backtick, e.g. "contains a stray `. Production access is required" --
-// Codex review round 4, PR #2757) never forms a code span at all per
-// CommonMark and must not be treated as an opener -- it is ordinary
-// literal text, and scanning continues past it looking for the next
-// potential opener. A fresh regex literal per call (rather than a shared
-// module-level one) sidesteps both the CLI-entry TDZ ordering rule this
-// file's helpers must follow (see the flag-spec comment below) and any
-// `lastIndex` state leaking across calls.
-function isAloneOnLine(corpus, runStart, runEnd) {
+// wrongly "open" for the rest of the corpus. A CLOSING fence, unlike the
+// opener, allows no info string: it needs both leading AND trailing
+// whitespace only. An inline run of 3+ backticks (e.g. all on one line,
+// with non-whitespace before it) still requires an exact-length closer.
+// Finally, a run with NO valid closer anywhere in the corpus (a stray
+// unmatched backtick, e.g. "contains a stray `. Production access is
+// required" -- Codex review round 4, PR #2757) never forms a code span at
+// all per CommonMark and must not be treated as an opener -- it is
+// ordinary literal text, and scanning continues past it looking for the
+// next potential opener. A fresh regex literal per call (rather than a
+// shared module-level one) sidesteps both the CLI-entry TDZ ordering rule
+// this file's helpers must follow (see the flag-spec comment below) and
+// any `lastIndex` state leaking across calls.
+function hasOnlyLeadingWhitespace(corpus, runStart) {
   let before = runStart - 1;
   while (before >= 0 && (corpus[before] === ' ' || corpus[before] === '\t')) {
     before--;
   }
-  if (before >= 0 && corpus[before] !== '\n') {
-    return false;
-  }
+  return before < 0 || corpus[before] === '\n';
+}
+function hasOnlyTrailingWhitespace(corpus, runEnd) {
   let after = runEnd;
   while (
     after < corpus.length &&
@@ -368,8 +375,8 @@ function isAloneOnLine(corpus, runStart, runEnd) {
   return after >= corpus.length || corpus[after] === '\n';
 }
 function closesRun(candidate, open) {
-  return open.isFenceCandidate
-    ? candidate.length >= open.length && candidate.isFenceCandidate
+  return open.isFenceOpenerCandidate
+    ? candidate.length >= open.length && candidate.isFenceCloserCandidate
     : candidate.length === open.length;
 }
 function isInsideCodeSpan(corpus, index) {
@@ -379,12 +386,16 @@ function isInsideCodeSpan(corpus, index) {
   while (match !== null) {
     const runIndex = match.index;
     const runEnd = runIndex + match[0].length;
+    const leadingOk = hasOnlyLeadingWhitespace(corpus, runIndex);
     runs.push({
       index: runIndex,
       end: runEnd,
       length: match[0].length,
-      isFenceCandidate:
-        match[0].length >= 3 && isAloneOnLine(corpus, runIndex, runEnd),
+      isFenceOpenerCandidate: match[0].length >= 3 && leadingOk,
+      isFenceCloserCandidate:
+        match[0].length >= 3 &&
+        leadingOk &&
+        hasOnlyTrailingWhitespace(corpus, runEnd),
     });
     match = runPattern.exec(corpus);
   }

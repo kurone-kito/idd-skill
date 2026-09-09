@@ -816,6 +816,53 @@ test('passes autonomous completion when a blockquoted example is not a requireme
   assert.deepEqual(result.failedCriteria, []);
 });
 
+// --- PR #2757 review round 5 (Copilot/Codex): a fenced-code opener with
+// an info string, and a past-investigation cue unrelated to a later,
+// still-open dependency -----------------------------------------------
+
+test('still fails autonomous completion when a genuine blocker sits after a fenced code block opened with an info string (Copilot/Codex review round 5, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 59,
+    title: 'fix docs example formatting',
+    body:
+      '```ts\nproduction access\n````\n\n' +
+      'Production access is required before shipping. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when the only trigger phrase sits inside a fenced code block opened with an info string (Copilot/Codex review round 5, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 60,
+    title: 'fix docs example formatting',
+    body:
+      '```ts\nproduction access\n````\n\n' +
+      'Single docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when a past-investigation cue is unrelated to a later, still-open dependency (Codex review round 5, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 61,
+    title: 'wire external approval gate',
+    body:
+      'We already checked the reproduction and are now waiting on ' +
+      'production access. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('evaluateDiscoverViability fails closed when a lookup aborts', async () => {
   // A non-404 gh failure (auth / rate-limit / network) propagates out of
   // loadIssue instead of being swallowed into a silent issue_not_found.
