@@ -179,9 +179,12 @@ Before any mutating action in F3, apply the
      carries. On a mismatch, fix it per D3.5/D3.7's own documented
      handling. Any fix here — whether or not it changes HEAD, since a
      PR-body edit alone (D3.7's remediation, or D3.5 step 6's) still
-     counts — invalidates this step's own claim re-validation and
-     advisory state revalidation above; re-run both before merging. If
-     the fix additionally amended or rebased a commit (changing HEAD),
+     counts — invalidates step 3's own **Re-validate claim** ("confirm
+     the active claim still uses your current `{claim-id}`") and
+     **Advisory state revalidation** (re-run AW1, escalating through
+     AW2/AW3 as needed) checks above; re-run both of those before
+     merging. If the fix additionally amended or rebased a commit
+     (changing HEAD),
      return to E1 instead of just re-validating in place — F2's own
      snapshot is invalidated by a new HEAD. Otherwise repeat this field
      once; if it still fails, stop and do not merge.

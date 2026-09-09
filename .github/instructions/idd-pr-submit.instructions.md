@@ -447,8 +447,10 @@ completion.
    (`idd-review-fix.instructions.md` E9-E12) or a `{development-branch}`
    merge — are not automatically covered; `idd-pre-merge.instructions.md`
    F2's "Closing-set and impact-checklist re-verification" condition
-   and `idd-merge.instructions.md` F3's Gate checklist both name this
-   step explicitly and re-run it against the final HEAD before merge.
+   names this step explicitly and re-runs it against the then-current
+   HEAD, and `idd-merge.instructions.md` F3's Gate checklist re-runs it
+   again immediately before merging — F2 can run before further HEAD
+   changes land, which is exactly why the F3 re-run also exists.
 
 ### D3.7 — Re-verify the IDD impact checklist before merge
 
@@ -477,10 +479,12 @@ never populates and the check would be meaningless) — edited prose can
 otherwise introduce a stray keyword-adjacent reference.
 
 **Wired to F2/F3**: `idd-pre-merge.instructions.md` F2's "Closing-set
-and impact-checklist re-verification" condition and
-`idd-merge.instructions.md` F3's Gate checklist both name this step
-explicitly and re-run it against the final HEAD before merge (#2749)
-— no longer an implicit, name-only cross-reference.
+and impact-checklist re-verification" condition names this step
+explicitly and re-runs it against the then-current HEAD, and
+`idd-merge.instructions.md` F3's Gate checklist re-runs it again
+immediately before merging (#2749) — F2 can run before further HEAD
+changes land, which is exactly why the F3 re-run also exists; no
+longer an implicit, name-only cross-reference.
 
 ## D4 — Wait for CI
 
