@@ -756,6 +756,66 @@ test('passes autonomous completion when the only trigger phrase sits inside a fe
   assert.deepEqual(result.failedCriteria, []);
 });
 
+// --- PR #2757 review round 4 (Codex): a stray unmatched backtick, the
+// "not only" additive idiom, and an unconditional blockquote exclusion
+// with no requirement-assertion safeguard ---------------------------------
+
+test('still fails autonomous completion when a stray unmatched backtick precedes a genuine blocker (Codex review round 4, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 55,
+    title: 'fix malformed input handling',
+    body:
+      'Malformed input contains a stray `. Production access is ' +
+      'required before shipping. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when "not only" additively affirms the requirement instead of negating it (Codex review round 4, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 56,
+    title: 'wire external approval gate',
+    body:
+      'Not only is production access needed for the rollout, the ' +
+      'timeline also slips. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a genuine requirement is stated as a blockquote (Codex review round 4, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 57,
+    title: 'wire external approval gate',
+    body:
+      '> Production access is required before shipping.\n\n' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when a blockquoted example is not a requirement of its own (Codex review round 4, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 58,
+    title: 'fix docs example formatting',
+    body:
+      '> Example: "no production access needed" is the desired end ' +
+      'state.\n\nSingle docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('evaluateDiscoverViability fails closed when a lookup aborts', async () => {
   // A non-404 gh failure (auth / rate-limit / network) propagates out of
   // loadIssue instead of being swallowed into a silent issue_not_found.

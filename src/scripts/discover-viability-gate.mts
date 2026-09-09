@@ -165,6 +165,13 @@ const NEGATION_CUE_PATTERN =
   /\b(no|not|zero(?!-)|never|none|isn'?t|aren'?t|wasn'?t|weren'?t|doesn'?t|don'?t|didn'?t|won'?t|can'?t|cannot)\b/gi;
 const NEGATION_CUE_WINDOW = 40;
 const NEGATION_CANCELING_CONJUNCTION_PATTERN = /\b(until|unless|without)\b/i;
+// "not only X" is an additive idiom that affirms X, not a negation of it
+// ("Not only is production access needed for the rollout" -- Codex review
+// round 4, PR #2757); scoped to an immediately-following "only" right
+// after "not" specifically, not a general requirement-assertion
+// cancellation (which would also wrongly cancel a genuine double negative
+// like "No credential changes are needed").
+const NOT_ONLY_IDIOM_PATTERN = /^\s*only\b/i;
 // A backward-looking cue (negation or investigative past tense, below)
 // stops governing a match at a period/semicolon/colon/em-dash, a blank
 // line, or a following list-item marker -- a bullet's own negation must
@@ -193,7 +200,9 @@ function isGovernedByBackwardCue(
     if (
       CUE_HARD_BREAK_PATTERN.test(linkText) ||
       CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText) ||
-      (cancelPattern && cancelPattern.test(linkText))
+      (cancelPattern && cancelPattern.test(linkText)) ||
+      (cueMatch[0].toLowerCase() === 'not' &&
+        NOT_ONLY_IDIOM_PATTERN.test(linkText))
     ) {
       continue;
     }
@@ -410,11 +419,16 @@ export function evaluateA4Viability(issue: unknown): {
 // review round 3, PR #2757); an exact-length-only rule leaves such a block
 // wrongly "open" for the rest of the corpus. A run only counts as a fence
 // marker when it sits alone on its line; an inline run of 3+ backticks
-// (e.g. all on one line) still requires an exact-length closer. A fresh
-// regex literal per call (rather than a shared module-level one)
-// sidesteps both the CLI-entry TDZ ordering rule this file's helpers must
-// follow (see the flag-spec comment below) and any `lastIndex` state
-// leaking across calls.
+// (e.g. all on one line) still requires an exact-length closer. Finally, a
+// run with NO valid closer anywhere in the corpus (a stray unmatched
+// backtick, e.g. "contains a stray `. Production access is required" --
+// Codex review round 4, PR #2757) never forms a code span at all per
+// CommonMark and must not be treated as an opener -- it is ordinary
+// literal text, and scanning continues past it looking for the next
+// potential opener. A fresh regex literal per call (rather than a shared
+// module-level one) sidesteps both the CLI-entry TDZ ordering rule this
+// file's helpers must follow (see the flag-spec comment below) and any
+// `lastIndex` state leaking across calls.
 function isAloneOnLine(
   corpus: string,
   runStart: number,
@@ -436,29 +450,48 @@ function isAloneOnLine(
   }
   return after >= corpus.length || corpus[after] === '\n';
 }
+interface BacktickRun {
+  index: number;
+  end: number;
+  length: number;
+  isFenceCandidate: boolean;
+}
+function closesRun(candidate: BacktickRun, open: BacktickRun): boolean {
+  return open.isFenceCandidate
+    ? candidate.length >= open.length && candidate.isFenceCandidate
+    : candidate.length === open.length;
+}
 function isInsideCodeSpan(corpus: string, index: number): boolean {
   const runPattern = /`+/g;
-  let open: { length: number; isFence: boolean } | null = null;
+  const runs: BacktickRun[] = [];
   let match: RegExpExecArray | null = runPattern.exec(corpus);
-  while (match !== null && match.index < index) {
-    const runLength = match[0].length;
-    const runEnd = match.index + runLength;
+  while (match !== null) {
+    const runIndex = match.index;
+    const runEnd = runIndex + match[0].length;
+    runs.push({
+      index: runIndex,
+      end: runEnd,
+      length: match[0].length,
+      isFenceCandidate:
+        match[0].length >= 3 && isAloneOnLine(corpus, runIndex, runEnd),
+    });
+    match = runPattern.exec(corpus);
+  }
+  let open: BacktickRun | null = null;
+  for (const run of runs) {
+    if (run.index >= index) {
+      break;
+    }
     if (open === null) {
-      open = {
-        length: runLength,
-        isFence: runLength >= 3 && isAloneOnLine(corpus, match.index, runEnd),
-      };
-    } else if (open.isFence) {
-      if (
-        runLength >= open.length &&
-        isAloneOnLine(corpus, match.index, runEnd)
-      ) {
-        open = null;
+      const hasCloser = runs.some(
+        (candidate) => candidate.index > run.index && closesRun(candidate, run),
+      );
+      if (hasCloser) {
+        open = run;
       }
-    } else if (runLength === open.length) {
+    } else if (closesRun(run, open)) {
       open = null;
     }
-    match = runPattern.exec(corpus);
   }
   return open !== null;
 }
@@ -623,7 +656,11 @@ function isInsideQuotedExample(
 ): boolean {
   const lineStart = corpus.lastIndexOf('\n', matchIndex - 1) + 1;
   if (/^[ \t]*>/.test(corpus.slice(lineStart, matchIndex))) {
-    return true;
+    // Blockquote syntax alone does not establish the cited content is
+    // non-blocking -- the same requirement-assertion safeguard used for a
+    // paired quote below must also apply here ("> Production access is
+    // required before shipping" -- Codex review round 4, PR #2757).
+    return !isNearRequirementAssertion(corpus, matchIndex, matchEnd);
   }
   const { start: paragraphStart, end: paragraphEnd } = findParagraphSpan(
     corpus,
