@@ -694,6 +694,68 @@ test('passes autonomous completion when a trigger phrase sits inside a multi-bac
   assert.deepEqual(result.failedCriteria, []);
 });
 
+// --- PR #2757 review round 3 (Copilot/Codex): a colon introducing an
+// independent requirement, "blocked"/"pending" emphasis-quoting with no
+// must/require wording of its own, and a fenced code block whose closer is
+// longer than its opener -------------------------------------------------
+
+test('still fails autonomous completion when a colon introduces an independent requirement after a negation (Codex review round 3, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 51,
+    title: 'wire external approval gate',
+    body:
+      'No workaround: production access is required before shipping. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a quoted requirement is emphasized with "blocked"/"pending" instead of must/require (Codex review round 3, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 52,
+    title: 'wire external approval gate',
+    body:
+      'Shipping remains blocked pending "production access". ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a genuine blocker sits after a fenced code block closed by a longer backtick run (Codex review round 3, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 53,
+    title: 'fix docs example formatting',
+    body:
+      '```\nproduction access\n````\n\n' +
+      'Production access is required before shipping. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when the only trigger phrase sits inside a fenced code block closed by a longer backtick run (Codex review round 3, PR #2757)', () => {
+  const result = evaluateA4Viability({
+    number: 54,
+    title: 'fix docs example formatting',
+    body:
+      '```\nproduction access\n````\n\n' +
+      'Single docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('evaluateDiscoverViability fails closed when a lookup aborts', async () => {
   // A non-404 gh failure (auth / rate-limit / network) propagates out of
   // loadIssue instead of being swallowed into a silent issue_not_found.

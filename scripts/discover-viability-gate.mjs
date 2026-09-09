@@ -107,15 +107,19 @@ const NEGATION_CUE_PATTERN =
 const NEGATION_CUE_WINDOW = 40;
 const NEGATION_CANCELING_CONJUNCTION_PATTERN = /\b(until|unless|without)\b/i;
 // A backward-looking cue (negation or investigative past tense, below)
-// stops governing a match at a period/semicolon/em-dash (HARD_CLAUSE_BREAK_
-// PATTERN, shared with the broad-scope exclusions above), a blank line, or
-// a following list-item marker -- a bullet's own negation must not reach
-// into a SIBLING bullet's independent claim. A bare mid-paragraph newline
-// (a soft-wrapped line) is deliberately not a break here: #2711's own
-// wrapped quotation shows ordinary prose legitimately continuing a clause
-// across one.
+// stops governing a match at a period/semicolon/colon/em-dash, a blank
+// line, or a following list-item marker -- a bullet's own negation must
+// not reach into a SIBLING bullet's independent claim, and a colon
+// introducing an independent requirement ("No workaround: production
+// access is required before shipping" -- Codex review round 3, PR #2757)
+// must not let the preceding negation cross into it. The pattern below
+// (CUE_HARD_BREAK_PATTERN) is a superset of HARD_CLAUSE_BREAK_PATTERN
+// (period/semicolon/em-dash only), which the broad-scope exclusions
+// above use. A bare mid-paragraph newline (a soft-wrapped line) is
+// deliberately not a break here: #2711's own wrapped quotation shows
+// ordinary prose legitimately continuing a clause across one.
 const CUE_HARD_BREAK_PATTERN =
-  /[.;—]|--|\n[ \t]*(?:[-*]\s|\d+[.)]\s)|\n[ \t]*\n/;
+  /[.;:—]|--|\n[ \t]*(?:[-*]\s|\d+[.)]\s)|\n[ \t]*\n/;
 function isGovernedByBackwardCue(
   corpus,
   matchIndex,
@@ -181,16 +185,19 @@ const INVESTIGATIVE_PAST_TENSE_WINDOW = 80;
 //    this issue ("...a least-privilege CI credential pattern..." -- an
 //    incidental background mention in #2716's own real body, distinct
 //    from that same issue's separately negated target phrase), UNLESS a
-//    requirement-assertion cue (must/require/need/shall/...) sits in the
-//    same clause -- `A credential approach MUST be supplied by the
-//    maintainer before implementation` (Codex review, PR #2757) still
-//    imposes a live requirement despite the generic-sounding noun.
+//    requirement-assertion cue (must/require/need/shall/blocked/pending/
+//    ...) sits in the same clause -- `A credential approach MUST be
+//    supplied by the maintainer before implementation` (Codex review, PR
+//    #2757) still imposes a live requirement despite the generic-sounding
+//    noun. `blocked`/`pending` cover emphasis-quoting with no must/require
+//    wording of its own ("Shipping remains BLOCKED PENDING 'production
+//    access'" -- Codex review round 3, PR #2757).
 const GENERIC_MENTION_NOUN_PATTERN =
   /^(pattern|example|scenario|convention|practice|concept|term|approach|precedent|case)$/i;
 const GENERIC_MENTION_LOOKAHEAD_CHARS = 40;
 const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
 const REQUIREMENT_ASSERTION_PATTERN =
-  /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential)\b/i;
+  /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending)\b/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -312,28 +319,65 @@ export function evaluateA4Viability(issue) {
     criteria,
   };
 }
-// CommonMark code spans open and close on a run of backticks of the SAME
-// length (a multi-backtick delimiter, e.g. ``` `` ```, lets literal single
-// backticks appear inside), not on individual-backtick parity -- a run of a
-// different length while a span is open is literal content, not a closer
-// (#2738 Codex review round 2, PR #2757). A fresh regex literal per call
-// (rather than a shared module-level one) sidesteps both the CLI-entry TDZ
-// ordering rule this file's helpers must follow (see the flag-spec comment
-// below) and any `lastIndex` state leaking across calls.
+// CommonMark inline code spans open and close on a run of backticks of the
+// SAME length (a multi-backtick delimiter, e.g. ``` `` ```, lets literal
+// single backticks appear inside), not on individual-backtick parity -- a
+// run of a different length while a span is open is literal content, not a
+// closer (#2738 Codex review round 2, PR #2757). A FENCED code block is
+// different: its opening run sits alone on a line (only leading
+// whitespace before it) and has length >= 3, and CommonMark lets the
+// closing fence be LONGER than the opener, not just equal (a fence opened
+// with ``` and closed with ```` is still a valid, closed block -- Codex
+// review round 3, PR #2757); an exact-length-only rule leaves such a block
+// wrongly "open" for the rest of the corpus. A run only counts as a fence
+// marker when it sits alone on its line; an inline run of 3+ backticks
+// (e.g. all on one line) still requires an exact-length closer. A fresh
+// regex literal per call (rather than a shared module-level one)
+// sidesteps both the CLI-entry TDZ ordering rule this file's helpers must
+// follow (see the flag-spec comment below) and any `lastIndex` state
+// leaking across calls.
+function isAloneOnLine(corpus, runStart, runEnd) {
+  let before = runStart - 1;
+  while (before >= 0 && (corpus[before] === ' ' || corpus[before] === '\t')) {
+    before--;
+  }
+  if (before >= 0 && corpus[before] !== '\n') {
+    return false;
+  }
+  let after = runEnd;
+  while (
+    after < corpus.length &&
+    (corpus[after] === ' ' || corpus[after] === '\t')
+  ) {
+    after++;
+  }
+  return after >= corpus.length || corpus[after] === '\n';
+}
 function isInsideCodeSpan(corpus, index) {
   const runPattern = /`+/g;
-  let openRunLength = null;
+  let open = null;
   let match = runPattern.exec(corpus);
   while (match !== null && match.index < index) {
     const runLength = match[0].length;
-    if (openRunLength === null) {
-      openRunLength = runLength;
-    } else if (runLength === openRunLength) {
-      openRunLength = null;
+    const runEnd = match.index + runLength;
+    if (open === null) {
+      open = {
+        length: runLength,
+        isFence: runLength >= 3 && isAloneOnLine(corpus, match.index, runEnd),
+      };
+    } else if (open.isFence) {
+      if (
+        runLength >= open.length &&
+        isAloneOnLine(corpus, match.index, runEnd)
+      ) {
+        open = null;
+      }
+    } else if (runLength === open.length) {
+      open = null;
     }
     match = runPattern.exec(corpus);
   }
-  return openRunLength !== null;
+  return open !== null;
 }
 function isGovernedByAvoidanceCue(corpus, matchIndex) {
   const windowStart = Math.max(0, matchIndex - AVOIDANCE_CUE_WINDOW);
