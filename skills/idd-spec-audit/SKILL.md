@@ -18,37 +18,34 @@ model.
 ## Scope
 
 - **Audit targets** (findings may cite these): `.github/instructions/**/*.md`
-  (including `lite/`), the issue-authoring skill bundle where the
-  installed repository keeps it (`skills/issue-authoring/**/*.md` in
-  this source repository; the installed native destination in an
-  adopter repository), `CLAUDE.md`, and `.github/copilot-instructions.md`.
+  (including `lite/`), the issue-authoring skill bundle at its
+  installed location, `CLAUDE.md`, and `.github/copilot-instructions.md`.
   The last two are conditional on the adopter's own setup: the
   issue-authoring companion is opt-in and `.github/copilot-instructions.md`
   is created only if the adopter uses Copilot, so skip an audit target
   that does not exist in the current installation rather than fail the
-  run over it. Audit the targets that do exist even though
-  `.github/instructions/**` is itself the generated `target` side of an
-  `audit/sync-manifest.json` sync pair (mirrored from `idd-template/`)
-  — this skill audits the corpus a worker session actually reads, not
-  the `idd-template/` source, so being a sync target never exempts a
-  file here.
+  run over it. Audit every target that does exist regardless of
+  whether this installation happens to regenerate it from an upstream
+  source (for example, this source repository regenerates
+  `.github/instructions/**` from `idd-template/` via
+  `audit/sync-manifest.json`) — this skill audits the corpus a worker
+  session actually reads, not any upstream source, so being a
+  regenerated target never exempts a file here.
 - **Reference-only inputs** (read for R2/R4, never a finding target):
   `docs/idd-concept-ownership.md` (R2's closed concept-index seed) and
   `docs/idd-autonomy-contract.md` (R4's reversible/irreversible source
-  of truth); both ship in `idd-template/docs/`, so an adopter
-  repository has them at `docs/`. Both are read in full every pass.
+  of truth), both at `docs/` in an installed repository. Both are read
+  in full every pass.
 - **Out of scope as an audit target / finding source**: this skill's
-  own bundle wherever it is installed (`skills/idd-spec-audit/**` and
-  `.claude/skills/idd-spec-audit/**` in this source repository — the
+  own bundle wherever it is installed (`skills/idd-spec-audit/**` — the
   skill necessarily reads its own bundle, this `SKILL.md` and
   `references/report-template.md`, to run at all, but no finding ever
-  cites a file there) plus, in this source repository, all of
-  `.claude/**` because every file there is a generated mirror; and
+  cites a file there); any generated mirror tree in this installation,
+  if one exists (for example, in this source repository, `.claude/**`,
+  since every file there mirrors a canonical source elsewhere); and
   every other file under `docs/**` besides the two reference-only
   inputs above (summary docs rely on the files they cite by design, so
-  they are not audited as if they were the primary spec; a
-  `docs/idd-*.md` mirror's own drift is `audit-docs.mjs`'s job, checked
-  against its `idd-template/docs/` source, not this skill's).
+  they are not audited as if they were the primary spec).
 
 ## Rule sets
 
