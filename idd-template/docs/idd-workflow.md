@@ -783,6 +783,32 @@ Running this variant safely requires:
   claim before dispatching further workers, rather than assuming success
   or failure either way.
 
+### Discover re-run cadence
+
+The full `discover-roadmap-graph.mjs --all-roadmaps --with-readiness
+--with-claim-state` traversal paired with
+`discover-orphan-filter.mjs --autopilot --with-claim-state` is too
+expensive to re-run after every delegated-worker completion; a
+2026-09-09 hearing decided to document a re-run cadence for it
+(kurone-kito/idd-skill#2706).
+
+- **Do not re-run** the full all-roadmaps + orphan-filter pair after
+  every delegated-worker completion. Dispatch the next worker from
+  the previously enumerated graph instead.
+- **Do re-run** when either condition holds: a worker reports
+  exhaustion or no startable candidate, or the previously enumerated
+  graph predates a merge or issue closure one of this session's own
+  workers has landed since that graph was built. Wait for the
+  helper's own process exit before parsing its output — never a
+  mid-run stdout read — per
+  [A2's helper read timing note](../.github/instructions/idd-discover.instructions.md#a2--enumerate-sub-issues).
+- **On a caller-side tool timeout** during the Discover invocation,
+  retry that same invocation once with a longer time budget before
+  concluding anything failed. Only a second timeout on the retried
+  invocation counts as an A2 enumeration failure.
+- **No caching layer or change-detection pre-check**: this section
+  documents a cadence, not a cache.
+
 ## Live Status Digests
 
 Use the live status digest contract in
