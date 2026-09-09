@@ -376,18 +376,21 @@ this manual `OUTDATED` fallback (full reasoning in each entry's own
 `MARKER_HIDE_POLICY` record; see also "## Timing" above):
 
 - `<!-- activation-nonce:` -- issue-scoped (posted to the claim issue,
-  not the PR) and has no hide-at-post-time wiring yet.
+  not the PR) and has no hide-at-post-time wiring yet (caught by
+  Copilot review on PR #2759).
 - `<!-- forced-handoff:` -- permanent maintainer-authority audit record
   of a claim transfer; never minimize it.
 - `<!-- idd-external-check-waiver:` -- maintainer-authority marker; a
   correct grouping key needs the embedded `check:` selector, and hiding
   a still-relevant waiver for a different check would hide live
-  authorization.
+  authorization (roadmap #2751 Background).
 - `<!-- idd-provider-outage-declaration:` and
   `<!-- idd-provider-outage-advanced:` -- issue-scoped, cross-PR
-  declare/advance protocol with no clean single-PR grouping key.
+  declare/advance protocol with no clean single-PR grouping key
+  (roadmap #2751 Background).
 - `<!-- idd-provider-outage-park:` -- needs claim-lineage-aware
-  supersession the marker carries no reference for.
+  supersession the marker carries no reference for (roadmap #2751
+  Background).
 
 Always skip candidates when any of these are true:
 
