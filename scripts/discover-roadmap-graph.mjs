@@ -436,8 +436,12 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     visitedIssuePaths.add(visitKey);
     recordNode(issue, path);
     const references = await getReferences(issue);
-    const seenSourceTargets = new Set();
-    const seenSourceEdgeKeys = new Set();
+    // Per visit, not graph-global: the same issue can be visited again on
+    // another provenance path. A later same-triple mention in this body
+    // (prose + standalone `Blocked by #N`, or two identical task-list
+    // lines) collapses to the first edge (#2799). A remaining
+    // same-source different-relationship pair is still a duplicate.
+    const seenSourceTriples = new Set();
     const firstReferenceBySourceTarget = new Map();
     for (const reference of references) {
       const edge = {
@@ -446,23 +450,16 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
         relationship: reference.relationship,
         evidence: reference.evidence,
       };
-      const edgeKey = buildEdgeKey(edge);
-      if (seenSourceEdgeKeys.has(edgeKey)) {
-        recordDuplicateReference(edge, edge);
+      const tripleKey = `${edge.source}:${edge.target}:${edge.relationship}`;
+      if (seenSourceTriples.has(tripleKey)) {
         continue;
       }
-      seenSourceEdgeKeys.add(edgeKey);
+      seenSourceTriples.add(tripleKey);
+      const edgeKey = buildEdgeKey(edge);
       if (!edgeKeys.has(edgeKey)) {
         edgeKeys.add(edgeKey);
         edges.push(edge);
         const sourceTargetKey = `${edge.source}:${edge.target}`;
-        if (seenSourceTargets.has(sourceTargetKey)) {
-          recordDuplicateReference(
-            edge,
-            firstReferenceBySourceTarget.get(sourceTargetKey) ?? edge,
-          );
-        }
-        seenSourceTargets.add(sourceTargetKey);
         const firstReference =
           firstReferenceBySourceTarget.get(sourceTargetKey);
         if (firstReference) {
