@@ -3269,6 +3269,7 @@ test('self-referential-bootstrap-auto: a pull_request-triggered run is rejected 
       autoWaiverRunLookups: {
         [RUN_ID]: { ...acceptedRunLookup(), event: 'pull_request' },
       },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT,
@@ -3298,6 +3299,7 @@ test('self-referential-bootstrap-auto: a run whose own workflow path does not ma
           path: '.github/workflows/lint.yml',
         },
       },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT,
@@ -3324,6 +3326,7 @@ test('self-referential-bootstrap-auto: a run bound to a different head SHA is re
       autoWaiverRunLookups: {
         [RUN_ID]: { ...acceptedRunLookup(), headSha: OTHER_SHA },
       },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT,
@@ -3353,6 +3356,7 @@ test('self-referential-bootstrap-auto: a run hosted by a different repository is
           repositoryFullName: 'someone-else/fork',
         },
       },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT,
@@ -3377,6 +3381,7 @@ test('self-referential-bootstrap-auto: a marker missing run-id: never resolves t
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT,
@@ -3401,6 +3406,7 @@ test('self-referential-bootstrap-auto: a run-id lookup error (unresolvable run) 
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: { error: 'HTTP 404' } },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT,
@@ -3425,6 +3431,7 @@ test('self-referential-bootstrap-auto: a different reason token never counts as 
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT,
@@ -3449,6 +3456,7 @@ test('self-referential-bootstrap-auto: a human-authored marker with the same rea
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT,
@@ -3473,6 +3481,7 @@ test('self-referential-bootstrap-auto: waiverMode disabled means no automated wa
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT,
