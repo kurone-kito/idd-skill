@@ -724,6 +724,252 @@ test('classifyThreadAckOnlyPostDisposition rejects a non-CodeRabbit bot reply th
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+// #2858: the "I couldn't resolve..." fallback closure shape (added in
+// #2649 alongside "✅ Review thread resolved.") had no positive regression
+// test of its own -- only a comment referenced it. Pin it directly.
+test('classifyThreadAckOnlyPostDisposition recognizes the "I couldn\'t resolve" fallback closure shape (#2649, regression added #2858)', () => {
+  const thread = {
+    id: 'thread-resolve-attempt-failed',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'RF-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'RF-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed. Thanks for the fix.\n\n' +
+            "I couldn't resolve this review thread on the repository platform. " +
+            'Please resolve it manually.\n\n' +
+            '<!-- This is an auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+// #2858: a third ack shape with no closure trailer at all -- observed
+// verbatim on kurone-kito/idd-skill#2853's review thread on the
+// issue-reference template link (fetched via GraphQL for byte-exact
+// fixtures, boilerplate included: the 🐇 sign-off, the "Learnings used"
+// details block, the AI-system disclaimer, and the auto-generated-reply
+// marker at the END of the body rather than the start). CodeRabbit
+// reports no thread-resolve attempt because the thread was already
+// resolved independently before it replied.
+test('classifyThreadAckOnlyPostDisposition recognizes the "addresses the ... concern" closure shape with a trailing sign-off (kurone-kito/idd-skill#2853, #2858)', () => {
+  const thread = {
+    id: 'thread-addresses-concern-with-signoff',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'AC-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'AC-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, confirmed. The repository-qualified reference addresses the template link-resolution concern.\n\n🐇 ✓\n\n---\n\n<details>\n<summary>🧠 Learnings used</summary>\n\n```\nLearnt from: kurone-kito\nRepo: kurone-kito/idd-skill PR: 1738\nFile: idd-template/docs/idd-design-rationale.md:137-139\nTimestamp: 2026-07-31T13:33:10.518Z\nLearning: In idd-template/docs/, markdown files (particularly idd-design-rationale.md) use structure-mode synchronization via audit/sync-manifest.json, which validates heading signatures only while allowing intentional prose differences. When documenting in template files, use fully qualified issue references (kurone-kito/idd-skill#<number>) to ensure links resolve correctly in adopter repositories. Source repository documentation (docs/) can use bare references (#<number>). Structure-mode validation ensures heading structures match across template and source versions while permitting different reference styles and prose content.\n```\n\n</details>\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-09-10T05:01:11Z',
+          updatedAt: '2026-09-10T05:01:11Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+test('classifyThreadAckOnlyPostDisposition recognizes the "addresses the ... finding" closure shape with no sign-off at all (kurone-kito/idd-skill#2853, #2858)', () => {
+  const thread = {
+    id: 'thread-addresses-finding-no-signoff',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'AF-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'AF-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, confirmed. Commit `80c936a7` addresses the template issue-reference finding.\n\n---\n\n<details>\n<summary>🧠 Learnings used</summary>\n\n```\nLearnt from: kurone-kito\nRepo: kurone-kito/idd-skill PR: 1738\nFile: idd-template/docs/idd-design-rationale.md:137-139\nTimestamp: 2026-07-31T13:33:10.518Z\nLearning: In idd-template/docs/, markdown files (particularly idd-design-rationale.md) use structure-mode synchronization via audit/sync-manifest.json, which validates heading signatures only while allowing intentional prose differences. When documenting in template files, use fully qualified issue references (kurone-kito/idd-skill#<number>) to ensure links resolve correctly in adopter repositories. Source repository documentation (docs/) can use bare references (#<number>). Structure-mode validation ensures heading structures match across template and source versions while permitting different reference styles and prose content.\n```\n\n</details>\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-09-10T05:27:25Z',
+          updatedAt: '2026-09-10T05:27:25Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects the "addresses the ... concern" shape when the closure phrase is more than 80 characters from a distant, unrelated "finding" mention (#2858)', () => {
+  // Locality guard: the third closure shape is bounded (`{0,80}`) so an
+  // incidental "finding"/"concern" mention deep in a reply's boilerplate
+  // (e.g. a Learnings-used block) does not retroactively turn an
+  // unrelated "addresses the" phrase into a false closure signal.
+  const farAway = 'x'.repeat(200);
+  const thread = {
+    id: 'thread-addresses-far-from-concern',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'FA-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'FA-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            `\`@kurone-kito\`, confirmed. This addresses the retry path. ${farAway} ` +
+            'Unrelated closing remark about a finding elsewhere.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern" opening that goes on to raise a new, unrelated concern in the same sentence span (#2858)', () => {
+  // AC3 (issue #2858): "A CodeRabbit reply that is *not* a pure
+  // acknowledgment (contains substantive new content) still does not
+  // match." The closure sentence must end in a period immediately
+  // followed by known CodeRabbit reply boilerplate (or end of body) --
+  // a genuinely new concern appended after a comma, rather than a
+  // period, never reaches that tail check, even though it is well
+  // within the 80-character locality bound the sibling test above
+  // exercises.
+  const thread = {
+    id: 'thread-addresses-concern-but-new-issue',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'CN-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'CN-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed. This partially addresses the ' +
+            'concern, but the retry path still dereferences null.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern" opening followed by a genuinely new sentence, even with a period boundary (#2858)', () => {
+  // A stricter adversarial variant than the comma-joined case above: the
+  // closure sentence properly ends in a period, but is followed by a new
+  // sentence of ordinary prose ("However, ...") rather than CodeRabbit's
+  // own reply boilerplate. The tail anchor requires known boilerplate (or
+  // end of body) immediately after that period, so this still does not
+  // match -- pinning the doc comment's claim that the tail anchor closes
+  // this shape too, not only the comma-joined one.
+  const thread = {
+    id: 'thread-addresses-concern-new-sentence',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'CS-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'CS-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed. This addresses the retry-path ' +
+            'concern. However, the null-check issue in the fallback ' +
+            'branch is still unresolved.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 

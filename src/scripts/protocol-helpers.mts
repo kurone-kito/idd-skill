@@ -2063,8 +2063,54 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 // "I couldn't resolve this review thread on the repository platform..."
 // fallback trailer (the same API call failed, so CodeRabbit reports the
 // attempt instead).
+//
+// #2858: a THIRD, weaker-in-kind shape -- observed on
+// kurone-kito/idd-skill#2853's review thread on the issue-reference
+// template link (2 samples from that one already-agent-resolved thread,
+// not the 18/18 sample above): "...addresses the template
+// link-resolution concern." /
+// "...addresses the template issue-reference finding." Unlike the two
+// forms above, this is prose describing an outcome, not CodeRabbit's own
+// resolve-attempt decision: CodeRabbit never attempted (or reported
+// failing) to resolve this thread, because it was already resolved
+// independently (e.g. by the IDD agent's own resolve-review-thread.mjs)
+// before CodeRabbit replied, so it had no attempt of its own to report.
+// Bounded to a short gap (`{0,80}`) so it matches only the same
+// single-clause shape actually observed, not an incidental "concern" or
+// "finding" mention far away in the same reply's trailing
+// Learnings-used block.
+//
+// Sentence-boundary tail anchor: an enumerated negation/new-concern
+// blocklist was tried here and reverted (see above) precisely because it
+// cannot keep up with natural language, so this shape is instead
+// recognized the same way as the other two -- a structural fingerprint of
+// CodeRabbit's own reply template, not a semantic read of the prose.
+// Requiring the closure sentence to end in a period immediately followed
+// by known CodeRabbit reply boilerplate (the 🐇 sign-off, the `---` +
+// Learnings-used separator, the auto-generated-reply marker, or the
+// "You are interacting with an AI system" disclaimer) or the end of the
+// body rejects a reply that goes on to raise a new, unrelated concern in
+// the next sentence (e.g. "...addresses the concern, but also X" has no
+// period before "but", so it never reaches the tail check) while still
+// matching both real observed replies, where the closure sentence is
+// immediately followed by that same boilerplate.
+//
+// Residual risk, stated rather than papered over -- NOT the same class as
+// the two forms above: those report CodeRabbit's own resolve-attempt
+// DECISION, which by this file's own reasoning cannot co-occur with a new
+// substantive concern in the same reply. This third form reads prose with
+// no such structural barrier, so it is strictly weaker: a reply that
+// raises a new concern and ends that exact sentence with a period
+// immediately before CodeRabbit's own boilerplate (e.g. "...addresses the
+// concern. However, X is still unresolved.<!-- auto-generated reply -->")
+// would still misclassify. No sampled reply has done this, and the tail
+// anchor above already closes the two adversarial shapes actually tried
+// against it (a trailing clause joined by a comma, and a genuinely new
+// concern anywhere within the 80-character locality bound) -- only the
+// narrower period-immediately-before-boilerplate combination remains
+// open.
 const CODERABBIT_ACK_CLOSURE_RE =
-  /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
+  /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform|\baddresses\s+the\b[\s\S]{0,80}?\b(?:concern|finding)\b\.\s*(?:🐇|---|<details|<!--|_You are interacting|$)/i;
 
 // Explicit `isCodeRabbitLogin` author check (Copilot review, #2649,
 // round 4): the closure phrase is CodeRabbit's own resolution decision in
