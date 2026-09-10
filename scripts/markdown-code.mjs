@@ -1167,6 +1167,17 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
   // this `true` for exactly that reason.
   let noOpenParagraph = true;
   let fencedRangeIndex = 0;
+  // #2865: mirrors blankFencedCodeBlocks's/findFencedCodeRanges's own
+  // inherited-list-content-indent tracker (see
+  // {@link createListContentIndentTrackerState}) so a block opener line
+  // with no list marker of its own (a continuation line of an
+  // already-open list item, e.g. an indented `<pre>` two lines below a
+  // `- Example:` bullet) still inherits that list's content indent
+  // instead of always reading `null` -- see {@link
+  // isHtmlBlockContainerEnded}'s call sites below for why an unfixed
+  // `null` here let an unclosed block's forward scan run past the list's
+  // real end, masking later genuine content.
+  const listTracker = createListContentIndentTrackerState();
   while (lineStart <= text.length) {
     const newlineIndex = text.indexOf('\n', lineStart);
     const lineEnd =
@@ -1177,7 +1188,12 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
           : newlineIndex;
     const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const line = text.slice(lineStart, lineEnd);
-    const isBlank = line.trim() === '';
+    // Content-based (blockquote-marker-stripped), matching
+    // blankFencedCodeBlocks's own `isBlank` derivation -- a lone `>` line
+    // (no content after the marker) is blank for list/blank-line-counting
+    // purposes even though the raw line itself is not whitespace-only.
+    const containerLine = parseContainerLine(line);
+    const isBlank = containerLine.content.trim() === '';
     while (
       fencedRangeIndex < fencedRanges.length &&
       lineStart >= (fencedRanges[fencedRangeIndex]?.end ?? text.length)
@@ -1194,6 +1210,9 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
       // review, PR #2840, round 16 -- corrects this round's own earlier
       // `false`): `gh api /markdown` confirms a type-7 tag right after a
       // closed fence, with no blank line between, still freely opens.
+      // The list-content-indent tracker is deliberately left untouched
+      // for opaque fence content, the same "frozen while inside a fence"
+      // choice blankFencedCodeBlocks itself makes for its own local fence.
       noOpenParagraph = true;
       lineStart = lineAfter;
       if (newlineIndex === -1) {
@@ -1201,6 +1220,16 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
       }
       continue;
     }
+    // Runs for every non-opaque line (blank or not) ahead of the
+    // per-branch dispatch below, so all four of that dispatch's own exits
+    // (raw-text/special/generic block open, and the plain fallthrough)
+    // see a tracker already advanced for *this* line -- reset (drop stale
+    // state) before reading, then adopt (record this line's own opener,
+    // if any) after, mirroring blankFencedCodeBlocks's identical
+    // ordering.
+    resetListContentIndentTrackerForLine(listTracker, containerLine, isBlank);
+    const trackedListContentIndent = listTracker.contentIndent;
+    adoptListContentIndentForLine(listTracker, containerLine);
     // Codex review, PR #2840 (round 20, widened round 22): does this
     // non-blank line, on its own, complete a one-line block that leaves
     // no paragraph open behind it -- an ATX heading or a thematic break
@@ -1233,7 +1262,7 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
     // comment for the masking bug this closes.
     let endsOwnBlock = false;
     if (!isBlank) {
-      const openerLine = parseContainerLine(line);
+      const openerLine = containerLine;
       const containerContent = openerLine.content;
       endsOwnBlock =
         (MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(containerContent) &&
@@ -1255,7 +1284,12 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
       // comment for why deriving it directly from this line (rather than
       // a cross-line tracker) is sufficient here.
       const openerContainerDepth = openerLine.containerDepth;
-      const openerListContentIndent = openerLine.listContentIndent;
+      // #2865: this opener line's own marker wins when present (no
+      // regression to the pre-fix behavior); otherwise inherit the
+      // tracker's carried indent from an earlier, still-open list item's
+      // own opener -- the continuation-line case this fix adds.
+      const openerListContentIndent =
+        openerLine.listContentIndent ?? trackedListContentIndent;
       const rawTag = rawTextOpenTag(content);
       const closeToken = specialHtmlBlockCloseToken(content);
       const opensGeneric =

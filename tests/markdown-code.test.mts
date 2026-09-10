@@ -1170,3 +1170,33 @@ test('findHtmlBlockRanges returns [] for a body with no HTML blocks', () => {
   const body = '## Acceptance criteria\n\n- [ ] one\n- [ ] two\n';
   assert.deepEqual(findHtmlBlockRanges(body), []);
 });
+
+// --- #2865: inherit an HTML block's list content indent on a
+// continuation-line opener (no marker of its own).
+
+test('findHtmlBlockRanges stops an unclosed raw-text block at an inherited list-item container end with no marker on the opener line itself (#2865)', () => {
+  // Same failure class as the existing round-15 `- <pre>` test above, but
+  // the `<pre>` opener line itself carries no list marker -- it is a
+  // continuation line of the `- Example:` item two lines above, separated
+  // only by one blank line (still within the list's own content zone).
+  // `gh api /markdown` confirms the rendered `<pre>` stays scoped inside
+  // the list item (`<li><p>Example:</p><pre>still open</pre></li>`) and
+  // the heading below renders as real structure, never swallowed.
+  const body = [
+    '- Example:',
+    '',
+    '  <pre>',
+    '  still open',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('still open'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+  assert.equal(masked.includes('[ ] one'), true);
+});
