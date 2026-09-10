@@ -214,9 +214,16 @@ interface ExternalCheckWaiverPlanInput {
    * authorize here); the deadline-hatch precondition check is bypassed
    * the same way `allowClosedPrecondition` bypasses it (this waiver kind
    * is evaluated independent of that hatch by design); and `reason` must
-   * equal {@link SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON} exactly. Never
-   * combined with `claimless`: this waiver kind always binds to the
-   * linked issue's real active claim, same as the default path.
+   * equal {@link SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON} exactly. Rejects
+   * the literal `claimless: true` input outright (redundant with this
+   * flag, so treated as caller error) -- but when no linked issue resolves
+   * a claim at all (a fully claimless allowlisted PR under
+   * `advisoryWait.convergenceScope: "all-prs"`, Codex review, PR #2895),
+   * this falls back to the SAME `none`-claim-id binding `claimless` would
+   * produce, rather than blocking: the auto-bootstrap trust chain never
+   * relies on a claim, so there is nothing unsafe about binding claimless
+   * when that is the only option. Binds to the linked issue's real active
+   * claim exactly like the default path whenever one does resolve.
    */
   autoBootstrap?: boolean;
   /**
@@ -496,6 +503,26 @@ export function planExternalCheckWaiver(
     headRefName: String(pr.headRefName ?? '').trim(),
   });
   const claimless = Boolean(input?.claimless);
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): when an adopter
+  // keeps the template's default `advisoryWait.convergenceScope: "all-prs"`,
+  // a human-authored PR that merely edits an allowlisted checker file can be
+  // fully claimless -- no linked issue, no IDD claim at all. `--auto-bootstrap`
+  // never invokes `--issue`/`--claim-id`/`--claimless` (the workflow's fixed
+  // command line), so without this, `!linkedIssue.ok` below would block the
+  // post outright, permanently defeating the bootstrap for exactly the PRs
+  // this scope setting is meant to cover. The trust chain that authorizes an
+  // auto-bootstrap marker (`verifySelfReferentialBootstrapWaiverRun`'s run-id
+  // verification) is already independent of any claim, so falling back to
+  // the same `none`-claim-id binding `--claimless` uses is safe: the
+  // consumer's `claimBindingSatisfied` check only accepts the `none` sentinel
+  // when it independently finds no active claim either (protocol-helpers.mts),
+  // so this can never paper over a genuine claim mismatch. Left `false` when
+  // `linkedIssue.ok` (a resolvable claim exists -- bind to it normally, same
+  // as before this change) or the caller already passed the literal
+  // `--claimless` flag (that combination is rejected explicitly below,
+  // unaffected by this auto-fallback).
+  const autoBootstrapImplicitClaimless =
+    autoBootstrap && !claimless && !linkedIssue.ok;
 
   const blockingReasons: string[] = [];
   if (String(pr.state ?? 'OPEN').toUpperCase() !== 'OPEN') {
@@ -513,11 +540,17 @@ export function planExternalCheckWaiver(
         'PR has a resolvable active IDD claim on a linked issue; a claimless (none) waiver only applies when no claim resolves -- use --issue/--claim-id instead',
       );
     }
+  }
+  if (claimless || autoBootstrapImplicitClaimless) {
     // The normal path's agentId comes from the resolved claim, independent
-    // of `actor`; --claimless has no claim to fall back on, so an empty
-    // actor must surface here as a blocking reason like every other invalid
-    // input in this function, rather than reaching
+    // of `actor`; a claimless binding (explicit --claimless, or the implicit
+    // auto-bootstrap fallback above) has no claim to fall back on, so an
+    // empty actor must surface here as a blocking reason like every other
+    // invalid input in this function, rather than reaching
     // renderExternalCheckWaiverComment's own throw-on-empty-agentId guard.
+    // Unreachable in practice for auto-bootstrap, whose caller always sets
+    // `actor = 'github-actions[bot]'` -- kept for direct callers of this
+    // function (e.g. tests) that construct the autoBootstrap input by hand.
     if (!actor) {
       blockingReasons.push('actor is empty');
     }
@@ -658,17 +691,19 @@ export function planExternalCheckWaiver(
   // the acting maintainer's own identity as agentId (there is no
   // issue-claim agentId to reuse when the PR carries no active claim by
   // design); the normal path binds to the linked issue's active claim, same
-  // as before this change.
-  const claimBinding = claimless
-    ? actor
-      ? { agentId: actor, claimId: 'none' }
-      : null
-    : linkedIssue.ok
-      ? {
-          agentId: linkedIssue.issue.activeClaim.agentId,
-          claimId: linkedIssue.issue.activeClaim.claimId,
-        }
-      : null;
+  // as before this change. `autoBootstrapImplicitClaimless` (#2657) reuses
+  // this exact same `none` binding for the auto-bootstrap fallback case.
+  const claimBinding =
+    claimless || autoBootstrapImplicitClaimless
+      ? actor
+        ? { agentId: actor, claimId: 'none' }
+        : null
+      : linkedIssue.ok
+        ? {
+            agentId: linkedIssue.issue.activeClaim.agentId,
+            claimId: linkedIssue.issue.activeClaim.claimId,
+          }
+        : null;
   const body =
     claimBinding &&
     requestedSelector &&

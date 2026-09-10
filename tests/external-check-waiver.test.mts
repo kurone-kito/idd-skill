@@ -880,7 +880,40 @@ test('planExternalCheckWaiver: --auto-bootstrap cannot be combined with --claiml
   );
 });
 
-test('planExternalCheckWaiver: --auto-bootstrap still requires a resolvable linked-issue claim', () => {
+test('planExternalCheckWaiver: --auto-bootstrap falls back to a claimless (none) binding when no linked issue resolves (Codex review, PR #2895)', () => {
+  // A fully claimless allowlisted PR under the template default
+  // `advisoryWait.convergenceScope: "all-prs"` -- no closing issue at all,
+  // so `issueCandidates` resolves nothing. The real workflow invocation
+  // always sets `actor = 'github-actions[bot]'` for --auto-bootstrap
+  // (runExternalCheckWaiver), unlike buildAutoBootstrapInput()'s simplified
+  // empty actor used by the authority-skip tests above.
+  const input = buildAutoBootstrapInput();
+  input.issueCandidates = [];
+  input.actor = 'github-actions[bot]';
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.equal(report.linkedIssue, null);
+  const parsed = parseExternalCheckWaiverComment(
+    report.body,
+    '2026-08-31T03:13:24Z',
+  );
+  assert.equal(parsed?.claimId, 'none');
+  assert.equal(parsed?.agentId, 'github-actions[bot]');
+  assert.equal(parsed?.reason, SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON);
+  assert.equal(parsed?.runId, '123456789');
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap still blocks on an empty actor when no linked issue resolves (Codex review, PR #2895)', () => {
+  // buildAutoBootstrapInput()'s own default actor (''), simulating a direct
+  // caller (e.g. a test or a future integration) that constructs the
+  // autoBootstrap input by hand without also supplying an actor -- the
+  // real CLI path always supplies 'github-actions[bot]' (see above), but
+  // the claimless fallback must not silently produce an unbindable marker.
   const input = buildAutoBootstrapInput();
   input.issueCandidates = [];
 
@@ -890,10 +923,37 @@ test('planExternalCheckWaiver: --auto-bootstrap still requires a resolvable link
   });
 
   assert.equal(report.canApply, false);
-  assert.match(
-    report.blockingReasons.join(' | '),
-    /could not resolve a single active linked issue claim/,
+  assert.match(report.blockingReasons.join(' | '), /actor is empty/);
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap still blocks an ambiguous multi-issue PR (Codex review, PR #2895)', () => {
+  // Two candidates instead of zero -- the OTHER selectLinkedIssueCandidate
+  // failure reason. The auto-bootstrap fallback binds claimless whenever no
+  // SINGLE claim resolves, ambiguous or absent alike; the consumer-side
+  // `none`-sentinel match only ever succeeds on a genuinely claimless PR
+  // (protocol-helpers.mts), so this stays safe even though it is a
+  // different `selectLinkedIssueCandidate` reason than the fully-absent
+  // case above.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  const [issue] = input.issueCandidates;
+  input.issueCandidates = [
+    issue,
+    { ...issue, number: Number(issue.number) + 1 },
+  ];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.equal(report.linkedIssue, null);
+  const parsed = parseExternalCheckWaiverComment(
+    report.body,
+    '2026-08-31T03:13:24Z',
   );
+  assert.equal(parsed?.claimId, 'none');
 });
 
 test('planExternalCheckWaiver: --auto-bootstrap renders the run-id field into the marker body', () => {
