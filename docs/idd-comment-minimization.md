@@ -301,18 +301,37 @@ gh pr checks <pr-number> --json workflow,bucket,link,startedAt --jq \
    | if length == 0 then empty
      elif any(.bucket == "pending") then (map(select(.bucket == "pending")) | .[0])
      else max_by(.startedAt) end
-   | [.bucket, (.link | sub(".*/runs/"; "") | sub("/job/.*"; ""))] | @tsv'
+   | [.bucket, (.link | capture("/runs/(?<id>[0-9]+)").id)] | @tsv'
 ```
+
+The `id` capture stops at the first non-digit character, so it stays
+correct whether the `link` continues with a `/job/<job-id>` segment or
+a bare query string such as `?check_suite_focus=true` — the same
+tolerant boundary `parseRunIdFromUrl`
+(`src/scripts/rerun-advisory-convergence.mts`) already uses for this
+exact URL shape.
 
 - **No output, or the lookup itself fails** (old `gh`, no network, a
   GitHub Enterprise Server version without this data): no visible run
   for this PR. Continue to the duplicate-success-record skip rule
   unchanged.
-- **First field is `pending`**: the run is in flight. Skip the agent's
-  own evidence-comment post entirely — let that run own it. No need to
-  run step 2 below.
-- **Any other first field** (a completed run): run step 2 below with
-  the second field as `<run-id>`.
+- **First field is `pending`**: the run is in flight. Do **not** skip
+  on this alone — an in-flight run can still finish without ever
+  running its posting step (see the `instructions-only` case below),
+  which would leave neither side posting. Wait for it to finish first
+  (`gh run watch <run-id>`), bounded by the same
+  `ciWait.runningTimeout` (default `PT30M`, once started) /
+  `ciWait.generationTimeout` (default `PT10M`, while still queued)
+  windows `idd-ci.instructions.md`'s CI polling algorithm already
+  uses. Past that bound with the run still incomplete, treat it the
+  same as "no visible run" and continue to the duplicate-success-record
+  skip rule unchanged — a resulting duplicate comment is this check's
+  accepted fail-open default, the same one the other two "not found"
+  cases here already accept. Once the run finishes (immediately, or
+  after the wait above), evaluate it exactly like a completed run:
+  continue to step 2.
+- **Any other first field** (already completed): continue to step 2
+  with the second field as `<run-id>`.
 
 ```sh
 # 2. that run's posting-step conclusion

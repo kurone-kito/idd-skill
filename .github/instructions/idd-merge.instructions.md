@@ -351,11 +351,12 @@ Before any mutating action in F3, apply the
    ```
 
    **Workflow-run pre-post check (#2846)**: before this rule (here and
-   below), check this PR's `post-merge-cleanup.yml` run — see
+   below), check this PR's `post-merge-cleanup.yml` run, waiting
+   (bounded) for it to finish if still in flight — see
    `docs/idd-comment-minimization.md`'s Workflow-run ownership check.
-   In flight, or completed with its posting step's conclusion exactly
-   `success`: skip the agent's own post entirely — that run owns it.
-   Otherwise continue to the rule below unchanged.
+   Its posting step's conclusion exactly `success`: skip the agent's
+   own post entirely — that run owns it. Otherwise (no run found, or
+   any other conclusion): continue to the rule below unchanged.
 
    **Duplicate-success-record skip rule**: before posting any evidence
    comment below, skip it if the PR already carries a
