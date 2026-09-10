@@ -67,6 +67,28 @@ const STDIN_READ_TIMEOUT_MS = 2_000;
  */
 const PAYLOAD_DELIVERY_TIMEOUT_MS = 1_000;
 
+/**
+ * Bound on how long `--invoke` separately waits for
+ * {@link InvokeCritiqueTelemetryHookOptions.onWatchdogArmed}'s spawn
+ * confirmation before exiting anyway (kurone-kito/idd-skill#2892, #2897
+ * CI follow-up). Deliberately **not** the same bound as
+ * {@link PAYLOAD_DELIVERY_TIMEOUT_MS}: that one times a stdin write
+ * (normally near-instant, no new OS process involved), while this one
+ * times an actual *process spawn* completing -- on Windows in particular,
+ * a fresh `powershell.exe` launch can be measurably slower than a
+ * pipe write under real-time antivirus/Defender scanning of each new
+ * process image, a well-documented source of Windows CI latency
+ * unrelated to this file's own logic. An earlier fix reused
+ * `PAYLOAD_DELIVERY_TIMEOUT_MS`'s 1s bound for both waits and made no
+ * observable difference on a real `windows-latest` CI run (the watchdog
+ * still never got a chance to run) -- consistent with that shared 1s
+ * ceiling elapsing before the watchdog's own spawn ever confirmed either
+ * way, silently reducing to the pre-fix behavior every time. A separate,
+ * more generous bound closes that gap without slowing the common case,
+ * where a spawn confirms in low single-digit milliseconds.
+ */
+const WATCHDOG_ARMED_TIMEOUT_MS = 3_000;
+
 if (import.meta.main) {
   runCli();
 }
@@ -952,12 +974,13 @@ function runCli(): void {
 /**
  * Fire off {@link invokeCritiqueTelemetryHook} and resolve once BOTH the
  * payload has reached the child's stdin (via
- * {@link InvokeCritiqueTelemetryHookOptions.onPayloadDelivered}) AND the
- * backup watchdog's own OS process creation has been confirmed one way or
- * the other (via
- * {@link InvokeCritiqueTelemetryHookOptions.onWatchdogArmed}) -- or after
- * {@link PAYLOAD_DELIVERY_TIMEOUT_MS} elapses regardless, whichever comes
- * first. The watchdog half closes a real `windows-latest` CI finding
+ * {@link InvokeCritiqueTelemetryHookOptions.onPayloadDelivered}, bounded
+ * by {@link PAYLOAD_DELIVERY_TIMEOUT_MS}) AND the backup watchdog's own OS
+ * process creation has been confirmed one way or the other (via
+ * {@link InvokeCritiqueTelemetryHookOptions.onWatchdogArmed}, bounded
+ * separately by {@link WATCHDOG_ARMED_TIMEOUT_MS} -- see that constant's
+ * own doc comment for why it is not the same bound as the payload-delivery
+ * one). The watchdog half closes a real `windows-latest` CI finding
  * (kurone-kito/idd-skill#2892, PR #2897): without it, `runInvoke`'s
  * near-immediate `process.exit()` could race ahead of the watchdog's own
  * spawn, discarding it before its underlying OS process ever finished
@@ -984,17 +1007,20 @@ function invokeAndWaitForDelivery(
         return;
       }
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(payloadTimer);
+      clearTimeout(watchdogTimer);
       resolve();
     };
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve();
+    const payloadTimer = setTimeout(() => {
+      payloadDelivered = true;
+      maybeSettle();
     }, PAYLOAD_DELIVERY_TIMEOUT_MS);
-    timer.unref?.();
+    payloadTimer.unref?.();
+    const watchdogTimer = setTimeout(() => {
+      watchdogArmed = true;
+      maybeSettle();
+    }, WATCHDOG_ARMED_TIMEOUT_MS);
+    watchdogTimer.unref?.();
     invokeCritiqueTelemetryHook(command, payload, {
       onPayloadDelivered: () => {
         payloadDelivered = true;

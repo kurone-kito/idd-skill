@@ -1304,8 +1304,13 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
     );
     const elapsedMs = Date.now() - startedAt;
     assert.equal(stdout, '');
+    // Generous vs. WATCHDOG_ARMED_TIMEOUT_MS's 3s bound (kurone-kito/idd-
+    // skill#2892, #2897 CI follow-up): --invoke now also waits, separately
+    // from payload delivery, for the backup watchdog's own spawn to be
+    // confirmed one way or the other before exiting -- still comfortably
+    // under the hook's own much longer 5s default timeout.
     assert.ok(
-      elapsedMs < 3_000,
+      elapsedMs < 6_000,
       `expected --invoke to return well under the hook's 5s default timeout even though it hangs, took ${elapsedMs}ms`,
     );
 
