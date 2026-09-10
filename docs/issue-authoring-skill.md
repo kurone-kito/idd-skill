@@ -1334,7 +1334,7 @@ untrusted-authored matches the sweep was never going to touch.
 (#2896 review, Codex): the paginated GitHub REST/GraphQL response this
 section already fetches exposes a comment's author nested as
 `user.login` (REST) or `author.login` (GraphQL), never as a flat
-`author` string -- write each entry's `--comments-file`/
+`author` string -- write each entry's `--comments-file` /
 `--journal-comments-file` JSON with `author` set to that nested login,
 not passed through unmapped. Skipping this normalization does not
 error: every comment silently loses its author, the trust filter above
