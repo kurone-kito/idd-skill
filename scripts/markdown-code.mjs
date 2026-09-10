@@ -1794,6 +1794,18 @@ const INLINE_LINK_TITLE_AND_CLOSE_PATTERN = new RegExp(
   'u',
 );
 /**
+ * Bound on how far {@link scanBareLinkDestinationEnd} and
+ * {@link hasPlausibleLinkOpener} scan before giving up, so a long run of
+ * unresolved link-like prefixes in untrusted issue-body text (adversarial
+ * or merely malformed, e.g. many `[x](` occurrences with no closing paren
+ * or whitespace) cannot make `findMarkdownCodeRanges` quadratic in body
+ * length (Codex review, PR #2869 round 2, databaseId 3978373746: ~2.7s for
+ * a single 64 KB instance without this bound, and discovery/triage
+ * processes untrusted issue bodies routinely). Far beyond any legitimate
+ * CommonMark link destination or link-text length in practice.
+ */
+const MAX_LINK_SCAN_LENGTH = 2000;
+/**
  * The end offset of a bare (non-angle-bracket) link destination starting at
  * `start`, honoring CommonMark's rule that parens are allowed there only
  * when backslash-escaped or part of an arbitrarily-nested balanced pair
@@ -1801,14 +1813,18 @@ const INLINE_LINK_TITLE_AND_CLOSE_PATTERN = new RegExp(
  * destination with two nesting levels) -- manual scanning, rather than a
  * fixed-depth regex alternative, generalizes to any nesting depth. Stops
  * at the first whitespace or unbalanced (closing) `)`, which belongs to
- * the enclosing link syntax, not the destination.
+ * the enclosing link syntax, not the destination. Returns `null` instead
+ * of a position when the scan reaches {@link MAX_LINK_SCAN_LENGTH} without
+ * finding either terminator -- the caller treats that the same as no valid
+ * destination.
  */
 function scanBareLinkDestinationEnd(text, start, end) {
+  const bound = Math.min(end, start + MAX_LINK_SCAN_LENGTH);
   let cursor = start;
   let depth = 0;
-  while (cursor < end) {
+  while (cursor < bound) {
     const character = text[cursor];
-    if (character === '\\' && cursor + 1 < end) {
+    if (character === '\\' && cursor + 1 < bound) {
       cursor += 2;
       continue;
     }
@@ -1819,7 +1835,7 @@ function scanBareLinkDestinationEnd(text, start, end) {
     }
     if (character === ')') {
       if (depth === 0) {
-        break;
+        return cursor;
       }
       depth -= 1;
       cursor += 1;
@@ -1831,25 +1847,31 @@ function scanBareLinkDestinationEnd(text, start, end) {
       character === '\r' ||
       character === '\n'
     ) {
-      break;
+      return cursor;
     }
     cursor += 1;
   }
-  return cursor;
+  // Reached the scan bound (the {@link MAX_LINK_SCAN_LENGTH} cap or the
+  // caller's own `end`) without finding a real terminator -- never a valid
+  // destination; the caller's own title/close match would fail on this
+  // position anyway, but returning `null` here makes that fail-closed
+  // outcome explicit rather than incidental.
+  return null;
 }
 /**
- * True when the nearest earlier unescaped `[` or `]` before
- * `closeBracketIndex` -- bounded by the start of the current paragraph,
- * since a link's own `[...]` text can never cross a blank line -- is a
- * `[`, a plausible open link/image bracket for the `]` at
- * `closeBracketIndex`. A bounded heuristic (nearest-bracket, not full
- * CommonMark link-text balance/precedence parsing), but it resolves the
- * two shapes Codex review round 1 (databaseId 3978211256) flagged: `gh api
- * /markdown` confirms `foo](/url "`x`")` (no `[` at all) and
- * `\[test](/url "`x`")` (the `[` itself escaped) both render their
- * backticks as a genuine code span, never a link -- this must return
- * `false` for both so {@link matchInlineLinkDestTitleEnd} never excludes
- * them.
+ * True when `closeBracketIndex` (which must hold `]`) is the properly
+ * balanced close of an earlier unescaped `[` -- a plausible open link/image
+ * bracket -- within the current paragraph (a link's own `[...]` text can
+ * never cross a blank line) and within {@link MAX_LINK_SCAN_LENGTH}.
+ * Tracks nested-bracket depth while scanning backward, rather than
+ * accepting or rejecting on the nearest bracket alone (Codex review, PR
+ * #2869 round 2, databaseId 3978373742): `gh api /markdown` confirms a
+ * nested label such as `[foo [bar] baz](/url "..)")` is a real link, whose
+ * inner `[bar]` must not be mistaken for -- or block reaching -- the real
+ * outer opener. Also still resolves round 1's two shapes (databaseId
+ * 3978211256): `foo](/url "`x`")` (no `[` at all) and `\[test](/url
+ * "`x`")` (the `[` itself escaped) both render their backticks as a
+ * genuine code span, never a link, so this must return `false` for both.
  */
 function hasPlausibleLinkOpener(text, closeBracketIndex) {
   let paragraphStart = 0;
@@ -1860,17 +1882,22 @@ function hasPlausibleLinkOpener(text, closeBracketIndex) {
     }
     paragraphStart = matchEnd;
   }
-  for (
-    let cursor = closeBracketIndex - 1;
-    cursor >= paragraphStart;
-    cursor -= 1
-  ) {
+  const lowerBound = Math.max(
+    paragraphStart,
+    closeBracketIndex - MAX_LINK_SCAN_LENGTH,
+  );
+  let depth = 0;
+  for (let cursor = closeBracketIndex - 1; cursor >= lowerBound; cursor -= 1) {
     const character = text[cursor];
-    if (
-      (character === '[' || character === ']') &&
-      !isEscapedBacktick(text, cursor)
-    ) {
-      return character === '[';
+    if (character === ']' && !isEscapedBacktick(text, cursor)) {
+      depth += 1;
+      continue;
+    }
+    if (character === '[' && !isEscapedBacktick(text, cursor)) {
+      if (depth === 0) {
+        return true;
+      }
+      depth -= 1;
     }
   }
   return false;
@@ -1896,10 +1923,15 @@ function matchInlineLinkDestTitleEnd(text, start, end) {
   const angleMatch = INLINE_LINK_ANGLE_DESTINATION_PATTERN.exec(
     text.slice(cursor, end),
   );
-  cursor =
-    angleMatch !== null
-      ? cursor + angleMatch[0].length
-      : scanBareLinkDestinationEnd(text, cursor, end);
+  if (angleMatch !== null) {
+    cursor += angleMatch[0].length;
+  } else {
+    const destinationEnd = scanBareLinkDestinationEnd(text, cursor, end);
+    if (destinationEnd === null) {
+      return null;
+    }
+    cursor = destinationEnd;
+  }
   const rest = INLINE_LINK_TITLE_AND_CLOSE_PATTERN.exec(
     text.slice(cursor, end),
   );

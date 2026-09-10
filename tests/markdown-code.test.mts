@@ -1308,3 +1308,32 @@ test('findMarkdownCodeRanges: an escaped `<` leaves its backtick pair a real spa
   assert.equal(ranges.length, 1);
   assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
 });
+
+// --- #2865 review-fix (Codex review, round 2): balanced-bracket link
+// opener and a bounded scan against quadratic behavior on malformed input.
+
+test('findMarkdownCodeRanges: a nested balanced-bracket link label still masks the title backticks (databaseId 3978373742)', () => {
+  // `gh api /markdown` confirms `[foo [bar] baz](/url "`node --test`")` is
+  // a real link (nested balanced brackets are valid link-text content) --
+  // the nearest-bracket heuristic this replaces wrongly rejected the real
+  // outer `[` because it hit the inner `]` first.
+  const body = '[foo [bar] baz](/url "`node --test`")\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: many unresolved link-like prefixes stay linear, not quadratic (databaseId 3978373746)', () => {
+  // A pathological run of `[x](` with no closing paren or whitespace
+  // anywhere -- each occurrence previously invoked an unbounded forward
+  // scan over the entire remaining text. 20000 repetitions (80 KB) must
+  // complete well within a normal test timeout; a quadratic regression
+  // here would make this hang or take seconds, not milliseconds.
+  const body = '[x]('.repeat(20000);
+  const start = Date.now();
+  const ranges = findMarkdownCodeRanges(body);
+  const elapsedMs = Date.now() - start;
+  assert.deepEqual(ranges, []);
+  assert.ok(
+    elapsedMs < 2000,
+    `expected a bounded scan to stay well under 2s, took ${elapsedMs}ms`,
+  );
+});
