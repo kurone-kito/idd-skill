@@ -110,16 +110,14 @@ Merge Wrapper; never permanently rewrite signing config. `--no-gpg-sign`
 on `git commit`/`git merge` is the last resort.
 
 Record material progress, decisions, and hold reasons as issue or PR
-comments as they happen. That includes a non-default signing outcome
-(including a `--no-gpg-sign` fallback). This ensures that any agent
-resuming without session context can understand the current state and
-continue correctly. Do not rely on session memory alone for
-information that another agent may need.
+comments as they happen -- including any non-default signing outcome
+(e.g. `--no-gpg-sign`) -- so a resuming agent needs no session memory
+to continue correctly.
 
 Operational restore markers (`review-watermark` and `review-baseline`)
 must include the current `{claim-id}` and must never be restored across
 a claim change. A takeover starts a new restore scope. These markers
-must also be authored by a trusted marker actor and include a visible
+must be authored by a trusted marker actor with a visible
 human-readable note (see `idd-review-snapshot.instructions.md`).
 
 ## Review item classes

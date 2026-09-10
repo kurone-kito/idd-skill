@@ -208,6 +208,9 @@ When in scope, run:
    helper-free fallback in `idd-work.instructions.md`, which uses the
    same `idd-claim.lock` namespace. A `collision` is fail-closed: stop
    unless the active claim revalidation authorizes an explicit takeover.
+   Also confirm `--read-tokens` finds this `{claim-id}` recorded
+   (`idd-claim.instructions.md`); absent or malformed fails closed the
+   same way.
 
 **Recovery if a commit already landed on the wrong branch.** If this gate
 or `idd-doctor` finds a commit on the wrong branch, cherry-pick it onto
