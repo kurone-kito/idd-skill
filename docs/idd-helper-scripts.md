@@ -267,33 +267,30 @@ in this preamble, since the fallback differs per helper.
   auto-release exception's provenance check
   (`skills/issue-authoring/references/contract.md`): computes the sha256
   of a live issue body's exact UTF-8 content and compares it against that
-  same issue's own trusted winning ownership-generation `authoring-owner`
-  marker's recorded `body-sha256`, reporting a machine-readable
+  same issue's own Stage 1 `mode=acquire` `authoring-owner` marker's
+  recorded `body-sha256`, reporting a machine-readable
   `pass`/`mismatch`/`not-found` verdict — `not-found` is never treated as
   a pass. Read-only: never posts, labels, or mutates anything (referenced
   in
   [kurone-kito/idd-skill#2891](https://github.com/kurone-kito/idd-skill/issues/2891)).
-  Replays the target's own marker log to pick the `acquire`, `bootstrap`,
-  or `resume` marker that won its last generation — contract.md: "the
-  first valid acquisition, bootstrap, or resume marker by GitHub comment
-  order wins" — rather than always taking the globally-last `acquire`
-  comment or ignoring `bootstrap`/`resume` entirely (PR #2901 review,
-  chatgpt-codex-connector across three rounds: the earlier forms could
+  Anchors on the target's own trusted marker log's _first_ marker in
+  comment order (`target` comparisons fold case, since GitHub owner/repo
+  names are case-insensitive — PR #2901 review, Copilot), which must
+  itself be `mode=acquire`: only that first marker is guaranteed to have
+  hashed the body as published, since a same-generation racer, a
+  `bootstrap`/`resume` recovery, or a legitimate re-acquisition after a
+  full release cycle all hash whatever body is live at their own posting
+  time, not the originally published one — comparing against any of
+  those instead of the Stage 1 acquire would make the check pass
+  trivially for a body edited before that later marker (PR #2901 review,
+  chatgpt-codex-connector across four rounds: earlier forms could
   authorize the auto-release exception against a losing racer's
-  edited-body digest, against an unrelated or incomplete stale
-  completion, or displace a legitimate `bootstrap`/`resume` winner with a
-  later competing `acquire`). A generation closes only on a
-  `mode=release-complete` that is itself anchor-scoped (its `target`
-  names the same issue as its own `anchor`), carries a real snapshot
-  digest (not the release-guard sentinel `none`), and retains that
-  generation's exact owner/set/session while naming the same `anchor`
-  and superseding that same owner token. `target`/`anchor` comparisons
-  fold case, since GitHub owner/repo names are case-insensitive (PR
-  #2901 review, Copilot). `mode=release-complete` is anchor-only, so for
-  a non-anchor child in a multi-target set this replay cannot see the
-  child's true generation boundary and fails closed (`mismatch`, never a
-  false `pass`) instead — an accepted limitation, since this helper's
-  own single-target orphan use case never hits it
+  edited-body digest, or against a later legitimate re-acquisition's
+  refreshed digest that silently absorbed an intervening edit). A target
+  whose trusted marker log opens with some other mode (`bootstrap`,
+  `resume`, `heartbeat`, `release`, ...) reports `not-found` rather than
+  accepting that non-acquire first marker's own digest, since every one
+  of those modes presupposes a prior acquire
 
 **Review & Merge Phase Helpers:**
 

@@ -174,7 +174,7 @@ test('an untrusted actor acquire marker is ignored, falling through to not-found
   assert.equal(result.verdict, 'not-found');
 });
 
-test('a later heartbeat marker never shadows the acquire marker digest', () => {
+test('a later heartbeat marker never shadows the Stage 1 acquire marker digest', () => {
   // The realistic drift shape from this issue's own comment thread:
   // acquire -> release -> release-guard -> heartbeat -> release-complete,
   // all sharing one owner token. A heartbeat carries its own body-sha256
@@ -203,21 +203,70 @@ test('a later heartbeat marker never shadows the acquire marker digest', () => {
     trustedMarkerLogins: TRUSTED_LOGINS,
   });
   // The heartbeat's digest (matching laterBody) must not be used -- only
-  // the acquire marker's digest counts, so this must report mismatch
-  // rather than pass.
+  // the Stage 1 acquire marker's digest counts, so this must report
+  // mismatch rather than pass.
   assert.equal(result.verdict, 'mismatch');
   assert.equal(result.recordedBodySha256, sha256(acquireTimeBody));
   assert.equal(result.marker?.session, 'session-1');
 });
 
-test('a legitimate re-acquisition after a full release cycle picks the new generation', () => {
-  // A genuine second generation: the first generation is fully closed with
-  // release -> release-guard -> release-complete before the second acquire
-  // opens a new one (#2891 review, chatgpt-codex-connector: the prior
-  // implementation picked the globally-last acquire regardless of whether
-  // any generation ever closed in between).
-  const firstGenerationBody = '# Draft\n\nFirst generation.\n';
-  const secondGenerationBody = '# Draft\n\nSecond generation, re-acquired.\n';
+test('a same-generation acquire race resolves to the first acquire, never the last', () => {
+  // The exact scenario chatgpt-codex-connector's PR #2901 review flagged:
+  // two competing acquire markers post with no release-complete between
+  // them, and the issue body is edited between the two acquisitions so
+  // the SECOND (losing) acquire's digest happens to match the live body.
+  // Picking "most recent" here would incorrectly report pass and could
+  // authorize the auto-release exception against the losing racer's
+  // edited-body snapshot; the protocol's own tie-break (deterministic
+  // comment order) says the first acquire wins, so this must report
+  // mismatch against the FIRST acquire's digest instead.
+  const winningGenerationBody = '# Draft\n\nOriginal, before the edit.\n';
+  const editedLiveBody = '# Draft\n\nEdited between the two acquisitions.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody: editedLiveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(winningGenerationBody), {
+          owner: 'owner-token-1',
+        }),
+        createdAt: '2026-09-10T16:48:44Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(editedLiveBody), {
+          owner: 'owner-token-2',
+        }),
+        createdAt: '2026-09-10T16:49:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'mismatch');
+  assert.equal(result.marker?.owner, 'owner-token-1');
+  assert.equal(result.recordedBodySha256, sha256(winningGenerationBody));
+});
+
+test('a re-acquisition after a full release cycle still compares against the Stage 1 acquire, not the new one', () => {
+  // The exact scenario kurone-kito/idd-skill#2901 review's fourth round
+  // (chatgpt-codex-connector) flagged: acquire(A) -> release-complete ->
+  // body edit -> acquire(B). B's own body-sha256 was hashed from the
+  // EDITED body at B's own posting time, so comparing against B would
+  // report pass regardless of the edit -- exactly the silent bypass the
+  // provenance check exists to catch. contract.md's own wording ("that
+  // same target's own mode=acquire owner marker's body-sha256 ...
+  // already reflects the published body") and this issue's own
+  // acceptance criteria name a single acquire marker, not "whichever
+  // generation currently owns the target" -- so this must always
+  // anchor on the target's first trusted acquire and report mismatch
+  // here, never pass.
+  const firstGenerationBody = '# Draft\n\nFirst generation, as published.\n';
+  const secondGenerationBody =
+    '# Draft\n\nEdited, then re-acquired as a new generation.\n';
   const result = evaluateAuthoringOwnerProvenance({
     target: TARGET,
     liveBody: secondGenerationBody,
@@ -271,154 +320,22 @@ test('a legitimate re-acquisition after a full release cycle picks the new gener
     markerPrefix: MARKER_PREFIX,
     trustedMarkerLogins: TRUSTED_LOGINS,
   });
-  assert.equal(result.verdict, 'pass');
-  assert.equal(result.marker?.owner, 'owner-token-2');
-});
-
-test('a same-generation acquire race resolves to the first acquire, never the last', () => {
-  // The exact scenario chatgpt-codex-connector's PR #2901 review flagged:
-  // two competing acquire markers post with no release-complete between
-  // them (no generation ever closed), and the issue body is edited between
-  // the two acquisitions so the SECOND (losing) acquire's digest happens to
-  // match the live body. Picking "most recent" here would incorrectly
-  // report pass and could authorize the auto-release exception against the
-  // losing racer's edited-body snapshot; the protocol's own tie-break
-  // (deterministic comment order) says the first acquire in an open
-  // generation keeps ownership, so this must report mismatch against the
-  // FIRST acquire's digest instead.
-  const winningGenerationBody = '# Draft\n\nOriginal, before the edit.\n';
-  const editedLiveBody = '# Draft\n\nEdited between the two acquisitions.\n';
-  const result = evaluateAuthoringOwnerProvenance({
-    target: TARGET,
-    liveBody: editedLiveBody,
-    comments: [
-      {
-        id: 1,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(winningGenerationBody), {
-          owner: 'owner-token-1',
-        }),
-        createdAt: '2026-09-10T16:48:44Z',
-      },
-      {
-        id: 2,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(editedLiveBody), {
-          owner: 'owner-token-2',
-        }),
-        createdAt: '2026-09-10T16:49:00Z',
-      },
-    ],
-    markerPrefix: MARKER_PREFIX,
-    trustedMarkerLogins: TRUSTED_LOGINS,
-  });
   assert.equal(result.verdict, 'mismatch');
   assert.equal(result.marker?.owner, 'owner-token-1');
-  assert.equal(result.recordedBodySha256, sha256(winningGenerationBody));
+  assert.equal(result.recordedBodySha256, sha256(firstGenerationBody));
 });
 
-test('a stale or malformed release-complete for another owner never closes the current generation', () => {
-  // The exact scenario chatgpt-codex-connector's second-round PR #2901
-  // review flagged: acquire A -> a release-complete for a DIFFERENT
-  // owner/set (stale, or from an unrelated malformed generation) ->
-  // competing acquire B. The stray release-complete must not close A's
-  // generation, so B is still a same-generation race, not a fresh
-  // generation -- A must remain the winner.
-  const winningBody = '# Draft\n\nOwned by A.\n';
-  const losingRacerBody = '# Draft\n\nEdited to match B, but B never wins.\n';
-  const result = evaluateAuthoringOwnerProvenance({
-    target: TARGET,
-    liveBody: losingRacerBody,
-    comments: [
-      {
-        id: 1,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(winningBody), {
-          owner: 'owner-token-a',
-        }),
-        createdAt: '2026-09-10T16:48:44Z',
-      },
-      {
-        id: 2,
-        authorLogin: 'kurone-kito',
-        // A stale/malformed completion for a DIFFERENT owner/set -- must
-        // be ignored, not treated as closing owner-token-a's generation.
-        body: ownerMarkerBody('release-complete', {
-          owner: 'owner-token-other',
-          snapshotSha256: sha256('unrelated-snapshot'),
-          supersedes: 'owner-token-other',
-        }),
-        createdAt: '2026-09-10T16:49:00Z',
-      },
-      {
-        id: 3,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(losingRacerBody), {
-          owner: 'owner-token-b',
-        }),
-        createdAt: '2026-09-10T16:50:00Z',
-      },
-    ],
-    markerPrefix: MARKER_PREFIX,
-    trustedMarkerLogins: TRUSTED_LOGINS,
-  });
-  assert.equal(result.verdict, 'mismatch');
-  assert.equal(result.marker?.owner, 'owner-token-a');
-  assert.equal(result.recordedBodySha256, sha256(winningBody));
-});
-
-test('a matching release-complete does close the generation, allowing the next acquire to win', () => {
-  // The positive counterpart: a release-complete that DOES retain the
-  // winning acquire's exact owner/set/session/anchor (and supersedes
-  // that owner) legitimately closes the generation, so the following
-  // acquire is a genuine new generation and wins outright.
-  const firstBody = '# Draft\n\nFirst.\n';
-  const secondBody = '# Draft\n\nSecond, legitimately re-acquired.\n';
-  const result = evaluateAuthoringOwnerProvenance({
-    target: TARGET,
-    liveBody: secondBody,
-    comments: [
-      {
-        id: 1,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(firstBody), { owner: 'owner-token-1' }),
-        createdAt: '2026-09-10T16:48:44Z',
-      },
-      {
-        id: 2,
-        authorLogin: 'kurone-kito',
-        body: ownerMarkerBody('release-complete', {
-          owner: 'owner-token-1',
-          snapshotSha256: sha256('closed-set-snapshot'),
-          supersedes: 'owner-token-1',
-        }),
-        createdAt: '2026-09-10T16:49:00Z',
-      },
-      {
-        id: 3,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(secondBody), { owner: 'owner-token-2' }),
-        createdAt: '2026-09-10T16:50:00Z',
-      },
-    ],
-    markerPrefix: MARKER_PREFIX,
-    trustedMarkerLogins: TRUSTED_LOGINS,
-  });
-  assert.equal(result.verdict, 'pass');
-  assert.equal(result.marker?.owner, 'owner-token-2');
-});
-
-test('a bootstrap marker opens a generation a later competing acquire cannot displace', () => {
-  // The exact scenario chatgpt-codex-connector's third-round PR #2901
-  // review flagged: a stale orphan is recovered with a trusted bootstrap,
-  // then a competing acquire follows in the same still-open generation.
-  // contract.md: "The first valid bootstrap marker wins" -- the replay
-  // must recognize bootstrap as a generation opener, not just acquire.
+test('a target whose trusted marker log opens with bootstrap, not acquire, reports not-found', () => {
+  // Every mode other than acquire presupposes a prior acquire (bootstrap
+  // recovers a stale hold, resume recovers an interrupted set, heartbeat
+  // and release/release-complete all operate on an already-open
+  // generation) -- a well-formed history never opens with one of them.
+  // Fail closed (not-found) rather than accepting a non-acquire first
+  // marker's own digest as if it were the Stage 1 acquire.
   const bootstrapBody = '# Draft\n\nRecovered via bootstrap.\n';
-  const editedLiveBody = '# Draft\n\nEdited to match the losing acquire.\n';
   const result = evaluateAuthoringOwnerProvenance({
     target: TARGET,
-    liveBody: editedLiveBody,
+    liveBody: bootstrapBody,
     comments: [
       {
         id: 1,
@@ -428,33 +345,21 @@ test('a bootstrap marker opens a generation a later competing acquire cannot dis
         }),
         createdAt: '2026-09-10T16:48:44Z',
       },
-      {
-        id: 2,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(editedLiveBody), {
-          owner: 'owner-token-losing-acquire',
-        }),
-        createdAt: '2026-09-10T16:49:00Z',
-      },
     ],
     markerPrefix: MARKER_PREFIX,
     trustedMarkerLogins: TRUSTED_LOGINS,
   });
-  assert.equal(result.verdict, 'mismatch');
-  assert.equal(result.marker?.mode, 'bootstrap');
-  assert.equal(result.marker?.owner, 'owner-token-bootstrap');
-  assert.equal(result.recordedBodySha256, sha256(bootstrapBody));
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.equal(result.recordedBodySha256, null);
 });
 
-test('a resume marker opens a generation a later competing acquire cannot displace', () => {
-  // Same shape as the bootstrap case, for an interrupted-set recovery:
-  // contract.md: "A resume marker opens a new generation only for the
-  // exact interrupted set and matching prior owner token."
+test('a target whose trusted marker log opens with resume, not acquire, reports not-found', () => {
+  // Same reasoning as the bootstrap case, for an interrupted-set recovery.
   const resumeBody = '# Draft\n\nRecovered via resume.\n';
-  const editedLiveBody = '# Draft\n\nEdited to match the losing acquire.\n';
   const result = evaluateAuthoringOwnerProvenance({
     target: TARGET,
-    liveBody: editedLiveBody,
+    liveBody: resumeBody,
     comments: [
       {
         id: 1,
@@ -464,22 +369,13 @@ test('a resume marker opens a generation a later competing acquire cannot displa
         }),
         createdAt: '2026-09-10T16:48:44Z',
       },
-      {
-        id: 2,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(editedLiveBody), {
-          owner: 'owner-token-losing-acquire',
-        }),
-        createdAt: '2026-09-10T16:49:00Z',
-      },
     ],
     markerPrefix: MARKER_PREFIX,
     trustedMarkerLogins: TRUSTED_LOGINS,
   });
-  assert.equal(result.verdict, 'mismatch');
-  assert.equal(result.marker?.mode, 'resume');
-  assert.equal(result.marker?.owner, 'owner-token-resume');
-  assert.equal(result.recordedBodySha256, sha256(resumeBody));
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.equal(result.recordedBodySha256, null);
 });
 
 test('an acquire marker whose target differs only by capitalization still wins', () => {
@@ -512,49 +408,4 @@ test('an acquire marker whose target differs only by capitalization still wins',
   assert.equal(result.verdict, 'pass');
   assert.ok(result.marker);
   assert.equal(result.recordedBodySha256, sha256(liveBody));
-});
-
-test('a release-complete whose anchor differs only by capitalization still closes the generation', () => {
-  // Same case-folding requirement applies to `isValidReleaseComplete`'s
-  // own target === anchor and anchor === winner.anchor checks: a
-  // release-complete legitimately closing a generation must not be
-  // rejected merely because its anchor field's capitalization differs
-  // from the winning acquire's anchor (PR #2901 review, Copilot round 4).
-  const firstBody = '# Draft\n\nFirst.\n';
-  const secondBody = '# Draft\n\nSecond, legitimately re-acquired.\n';
-  const differentlyCasedTarget = 'Kurone-Kito/IDD-Skill#2891';
-  const result = evaluateAuthoringOwnerProvenance({
-    target: TARGET,
-    liveBody: secondBody,
-    comments: [
-      {
-        id: 1,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(firstBody), { owner: 'owner-token-1' }),
-        createdAt: '2026-09-10T16:48:44Z',
-      },
-      {
-        id: 2,
-        authorLogin: 'kurone-kito',
-        body: ownerMarkerBody('release-complete', {
-          owner: 'owner-token-1',
-          snapshotSha256: sha256('closed-set-snapshot'),
-          supersedes: 'owner-token-1',
-          target: differentlyCasedTarget,
-          anchor: differentlyCasedTarget,
-        }),
-        createdAt: '2026-09-10T16:49:00Z',
-      },
-      {
-        id: 3,
-        authorLogin: 'kurone-kito',
-        body: acquireMarkerBody(sha256(secondBody), { owner: 'owner-token-2' }),
-        createdAt: '2026-09-10T16:50:00Z',
-      },
-    ],
-    markerPrefix: MARKER_PREFIX,
-    trustedMarkerLogins: TRUSTED_LOGINS,
-  });
-  assert.equal(result.verdict, 'pass');
-  assert.equal(result.marker?.owner, 'owner-token-2');
 });
