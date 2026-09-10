@@ -273,43 +273,45 @@ in this preamble, since the fallback differs per helper.
   a pass. Read-only: never posts, labels, or mutates anything (referenced
   in
   [kurone-kito/idd-skill#2891](https://github.com/kurone-kito/idd-skill/issues/2891)).
-  Anchors on the target's own trusted marker log's _first_ marker in
-  comment order (`target` comparisons fold case, since GitHub owner/repo
-  names are case-insensitive — PR #2901 review, Copilot), which must
-  itself be `mode=acquire`: only that first marker is guaranteed to have
-  hashed the body as published, since a same-generation racer, a
-  `bootstrap`/`resume` recovery, or a legitimate re-acquisition after a
-  full release cycle all hash whatever body is live at their own posting
-  time, not the originally published one — comparing against any of
-  those instead of the Stage 1 acquire would make the check pass
+  Anchors on the target's own trusted, owner-marker-shaped comments
+  (every one still containing the case-insensitive
+  `<marker-prefix>-authoring-owner:` token, whether or not it parses),
+  taken in deterministic comment order. If ANY of those comments was
+  edited after posting (`updatedAt` differs from `createdAt`), the whole
+  log is rejected up front, before a first candidate is even chosen — an
+  editor cannot make the true Stage 1 acquire vanish from consideration
+  by editing it into something unparseable or retargeting it, letting a
+  later acquire silently win instead (PR #2901 review round 6, Copilot;
+  contract.md: owner comments are append-only). Past that check, the
+  _first_ candidate in comment order is scrutinized whatever its shape —
+  not merely the first one that happens to parse and match this target —
+  and must itself parse, name this issue as its target, and be a valid
+  Stage 1 `mode=acquire` marker, or this reports `not-found` rather than
+  silently skipping it for a later, validly-parsing marker (PR #2901
+  review round 7, Copilot). "Valid" means every condition contract.md
+  attaches to a genuine acquire: `mode=acquire` itself (every other mode
+  — `bootstrap`, `resume`, `heartbeat`, `release`, ... — presupposes a
+  prior acquire, so a well-formed history never opens with one);
+  `supersedes=none` (contract.md requires this specifically for
+  `acquire`); a real 64-hex `body-sha256`, never the sentinel `none`; and
+  its own `anchor` names the same issue as its own `target` (a mismatch
+  means the marker declares itself a multi-target set's non-anchor
+  child, out of scope for this single-target-orphan helper) (PR #2901
+  review round 5, chatgpt-codex-connector and Copilot). Only it, not any
+  later marker, is guaranteed to have hashed the body as published: a
+  same-generation racer, a `bootstrap`/`resume` recovery, or a legitimate
+  re-acquisition after a full release cycle all hash whatever body is
+  live at their own posting time, not the originally published one —
+  comparing against any of those instead would make the check pass
   trivially for a body edited before that later marker (PR #2901 review,
-  chatgpt-codex-connector across four rounds: earlier forms could
-  authorize the auto-release exception against a losing racer's
-  edited-body digest, or against a later legitimate re-acquisition's
-  refreshed digest that silently absorbed an intervening edit). A target
-  whose trusted marker log opens with some other mode (`bootstrap`,
-  `resume`, `heartbeat`, `release`, ...) reports `not-found` rather than
-  accepting that non-acquire first marker's own digest, since every one
-  of those modes presupposes a prior acquire. Also validates every other
-  condition contract.md attaches to a genuine Stage 1 acquire, failing
-  closed to `not-found` (with the specific reason surfaced in
-  `--verbose` evidence) rather than accepting an invalid marker: its own
-  `supersedes` field is `none` (contract.md requires this for `acquire`);
-  its `body-sha256` is a real 64-hex digest, never the sentinel `none`;
-  and its own `anchor` names the same issue as its own `target` (a
-  mismatch means the marker declares itself a multi-target set's
-  non-anchor child, out of scope for this single-target-orphan helper)
-  (PR #2901 review round 5, chatgpt-codex-connector and Copilot). Before
-  selecting a marker at all, also rejects the whole log if ANY trusted,
-  owner-marker-shaped comment was edited after posting (`updatedAt`
-  differs from `createdAt`) — not just the one that would otherwise be
-  selected, so editing the true Stage 1 acquire into something
-  unparseable or retargeting it cannot make it silently vanish and let a
-  later acquire win instead (contract.md: owner comments are append-only
-  and must not be edited or deleted). A trusted actor who deletes the
-  true Stage 1 acquire outright, rather than editing it, is an accepted
-  limitation instead: a deleted comment leaves no trace in any API
-  response this helper can read (PR #2901 review round 6,
+  chatgpt-codex-connector across four rounds). `target` comparisons fold
+  case, since GitHub owner/repo names are case-insensitive. Two accepted
+  limitations, both fail-closed (never a false `pass`): a marker whose
+  own `anchor` differs from its own `target` (a multi-target set's
+  non-anchor child, out of scope here); and tampering with the true
+  Stage 1 acquire that leaves no authoring-owner token at all — deleting
+  it outright, or editing it into ordinary prose — which cannot be
+  detected by a live comment-log reader (PR #2901 review rounds 5-7,
   chatgpt-codex-connector and Copilot)
 
 **Review & Merge Phase Helpers:**

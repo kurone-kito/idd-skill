@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -25,12 +27,21 @@ function stubGh(scriptBody: string): () => void {
   return stubExecutable('gh', scriptBody);
 }
 
-/** Build a stub `gh` script answering both calls `runCli` makes, in the
- * order it now makes them (comments first, then the issue body): `gh api
+/** Build a stub `gh` script answering both calls `runCli` makes: `gh api
  * repos/<owner>/<repo>/issues/<n>/comments --paginate --jq .[]` (NDJSON,
  * one comment object per line) and `gh api repos/<owner>/<repo>/issues/<n>`
  * (a single JSON issue object). `process.argv.slice(2)` inside the stub is
- * `['api', <path>, ...]` (`stubExecutable`'s own documented contract). */
+ * `['api', <path>, ...]` (`stubExecutable`'s own documented contract).
+ *
+ * When `callLogPath` is given, each invocation appends its own `<path>`
+ * argument as one line -- since the two calls are separate `gh` child
+ * processes with no state shared between them (kurone-kito/idd-skill#2901
+ * review, Copilot round 7: a stub that only branches on the current
+ * call's own path proves nothing about which call the CLI made *first*,
+ * so it cannot actually catch a regression that swaps the documented
+ * comments-before-body fetch order). Reading this file back is what lets
+ * a test assert the real call order the CLI made, not just that both
+ * calls eventually happened. */
 function ghStubScriptForIssue(
   issueBody: string,
   comments: readonly {
@@ -40,9 +51,15 @@ function ghStubScriptForIssue(
     created_at: string;
     updated_at: string;
   }[],
+  callLogPath?: string,
 ): string {
   return `
 const path = process.argv[3];
+${
+  callLogPath
+    ? `require('node:fs').appendFileSync(${JSON.stringify(callLogPath)}, path + '\\n');`
+    : ''
+}
 if (path && path.endsWith('/comments')) {
   const comments = ${JSON.stringify(comments)};
   process.stdout.write(comments.map((c) => JSON.stringify(c)).join('\\n') + '\\n');
@@ -694,18 +711,24 @@ test('a Stage 1 acquire retargeted by an edit fails closed, not the next acquire
   );
 });
 
-test('CLI: pass -- an unchanged body reports pass end to end', () => {
+test('CLI: pass -- an unchanged body reports pass end to end, comments fetched before the body', () => {
   const liveBody = '# Draft\n\nSome content.\n';
+  const callLogDir = mkdtempSync(join(tmpdir(), 'idd-authoring-owner-cli-'));
+  const callLogPath = join(callLogDir, 'calls.log');
   const restore = stubGh(
-    ghStubScriptForIssue(liveBody, [
-      {
-        id: 1,
-        user: { login: 'kurone-kito' },
-        body: acquireMarkerBody(sha256(liveBody)),
-        created_at: '2026-09-10T16:48:44Z',
-        updated_at: '2026-09-10T16:48:44Z',
-      },
-    ]),
+    ghStubScriptForIssue(
+      liveBody,
+      [
+        {
+          id: 1,
+          user: { login: 'kurone-kito' },
+          body: acquireMarkerBody(sha256(liveBody)),
+          created_at: '2026-09-10T16:48:44Z',
+          updated_at: '2026-09-10T16:48:44Z',
+        },
+      ],
+      callLogPath,
+    ),
   );
   try {
     const output = JSON.parse(
@@ -728,8 +751,19 @@ test('CLI: pass -- an unchanged body reports pass end to end', () => {
     assert.equal(output.verdict, 'pass');
     assert.equal(output.target, TARGET);
     assert.equal(output.recordedBodySha256, sha256(liveBody));
+    // The actual regression this proves: the comments call happens
+    // before the issue-body call (kurone-kito/idd-skill#2901 review,
+    // Copilot round 7 -- the prior stub had no memory across the two
+    // separate `gh` child processes, so it could not tell which call
+    // came first and this ordering was never really exercised).
+    const calls = readFileSync(callLogPath, 'utf8').trim().split('\n');
+    assert.deepEqual(calls, [
+      'repos/kurone-kito/idd-skill/issues/2891/comments',
+      'repos/kurone-kito/idd-skill/issues/2891',
+    ]);
   } finally {
     restore();
+    rmSync(callLogDir, { recursive: true, force: true });
   }
 });
 
@@ -823,4 +857,125 @@ test('CLI: --issue rejects a token with trailing garbage instead of truncating i
   } finally {
     restore();
   }
+});
+
+test('an edited marker with a differently cased prefix token still fails closed', () => {
+  // Copilot round 7: parseAuthoringOwnerComment matches the marker
+  // prefix/suffix case-insensitively, so looksLikeOwnerMarker's own
+  // token check must too -- an edit that broke the <!-- opener while
+  // also changing the prefix's casing must not evade the edit-detection
+  // pre-pass.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: 'IDD-SKILL-authoring-owner: broken, no opener',
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T17:00:00Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
+        createdAt: '2026-09-10T16:50:00Z',
+        updatedAt: '2026-09-10T16:50:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /edited after posting/,
+  );
+});
+
+test('an unedited but unparseable first owner-marker-shaped comment fails closed, not the next acquire', () => {
+  // Copilot round 7: the earlier form filtered the candidate pool down
+  // to parsing, target-matching comments BEFORE picking the first one,
+  // so a first comment that carried the owner-marker token but never
+  // parsed at all (a genuine posting error, not tampering -- its own
+  // updatedAt equals its createdAt) silently vanished from
+  // consideration, letting a later, validly-parsing acquire win. The
+  // log's first candidate must itself be the valid marker, not merely
+  // whichever later comment happens to parse.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        // Never edited (updatedAt === createdAt) -- just malformed from
+        // the start, e.g. a botched initial post.
+        body: 'idd-skill-authoring-owner: this was never a well-formed marker',
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
+        createdAt: '2026-09-10T16:50:00Z',
+        updatedAt: '2026-09-10T16:50:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /does not parse/,
+  );
+});
+
+test('an unedited first marker for a different target fails closed, not the next acquire', () => {
+  // Same restructuring, via the target-mismatch branch: an unedited
+  // first owner-marker-shaped comment whose own target names a
+  // different issue is now a reject, not a silent skip in favor of a
+  // later, matching acquire.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), {
+          target: 'kurone-kito/idd-skill#1',
+          anchor: 'kurone-kito/idd-skill#1',
+        }),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
+        createdAt: '2026-09-10T16:50:00Z',
+        updatedAt: '2026-09-10T16:50:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /different target/,
+  );
 });

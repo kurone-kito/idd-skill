@@ -41,13 +41,17 @@
 // defects: (1) a marker whose own `anchor` differs from its own `target`
 // declares itself a multi-target set's non-anchor child, out of scope
 // for this single-target-orphan helper (kurone-kito/idd-skill#2901
-// review, Copilot round 5). (2) a trusted actor who *deletes* the true
-// Stage 1 acquire comment outright (rather than editing it) leaves no
-// trace in any API response this helper can read -- detectable tampering
-// (an edit) fails closed (`findStageOneAcquire`'s pre-pass), but
-// undetectable tampering (a deletion) cannot be caught by a live
-// comment-log reader at all (kurone-kito/idd-skill#2901 review round 6,
-// chatgpt-codex-connector). contract.md's own remedy for that case is a
+// review, Copilot round 5). (2) tampering with the true Stage 1 acquire
+// comment that leaves no `<marker-prefix>-authoring-owner:` trace at
+// all -- deleting it outright, or editing it into ordinary prose that
+// no longer contains the token -- cannot be detected by a live
+// comment-log reader: a deleted comment is absent from every API
+// response, and a fully rewritten one is indistinguishable from a
+// comment that was always unrelated (kurone-kito/idd-skill#2901 review
+// rounds 6-7, chatgpt-codex-connector). Detectable tampering -- an edit
+// that leaves the token recognizable, even if it breaks parsing or
+// changes the target -- does fail closed (`findStageOneAcquire`'s
+// pre-pass). contract.md's remedy for the undetectable case is a
 // durable record the *authoring session itself* persists in its hold
 // state, not an artifact this read-only helper can independently fetch;
 // kurone-kito/idd-skill#2891's acceptance criteria scope this helper to
@@ -138,19 +142,26 @@ function invalidStageOneAcquireReason(event, target) {
   return null;
 }
 /**
- * True when `comment.body` looks like it once was (or currently attempts
- * to be) an `authoring-owner` marker -- either it still opens with the
- * canonical `<!--` HTML-comment-first byte, or it at least still contains
- * the `<marker-prefix>-authoring-owner:` token somewhere (an edit that
- * broke the opener but left the token recognizable). Used only to decide
- * whether an *edited* comment is suspicious enough to fail closed, not to
- * parse it -- a comment failing this check is confidently unrelated to
- * ownership (kurone-kito/idd-skill#2901 review, Copilot round 6).
+ * True when `comment.body` still contains the `<marker-prefix>
+ * -authoring-owner:` token somewhere, case-insensitively (matching
+ * `parseAuthoringOwnerComment`'s own case-insensitive marker regex --
+ * kurone-kito/idd-skill#2901 review, Copilot round 7: an edit that
+ * changed the token's casing while breaking its `<!--` opener must still
+ * be recognized). Deliberately narrower than "starts with `<!--`":
+ * every IDD marker family (claim, activation-nonce, watermark,
+ * review-baseline, ...) opens with that same byte, and a review-fix-
+ * loop-cutoff issue's own comment log routinely carries several of them
+ * before the owner acquire -- matching on the opener alone would treat
+ * every one of those as owner-marker-shaped and misfire whenever any of
+ * them was legitimately edited (kurone-kito/idd-skill#2901 review round
+ * 7). Used only to decide whether a comment is suspicious enough to
+ * scrutinize, not to parse it -- a comment failing this check carries no
+ * detectable trace of ever being an owner marker at all.
  */
 function looksLikeOwnerMarker(body, markerPrefix) {
-  return (
-    body.startsWith('<!--') || body.includes(`${markerPrefix}-authoring-owner:`)
-  );
+  return body
+    .toLowerCase()
+    .includes(`${markerPrefix.toLowerCase()}-authoring-owner:`);
 }
 /**
  * Find `target`'s own first trusted `authoring-owner` marker in
@@ -178,35 +189,57 @@ function looksLikeOwnerMarker(body, markerPrefix) {
  *   general "first valid marker by GitHub comment order wins" rule and
  *   this helper's own round-1/round-3 regression tests.
  *
- * Before selecting a first marker at all, a pre-pass rejects the whole
- * log if ANY trusted, owner-marker-shaped comment (`looksLikeOwnerMarker`)
- * was edited (`updatedAt !== createdAt`) -- not just the comment that
- * would otherwise be selected. An editor who edits the true Stage 1
- * acquire into something that no longer parses, or retargets it to a
- * different issue, would otherwise make it silently vanish from the
- * target-matching candidates below, letting a later (legitimate-looking)
- * acquire become `events[0]` unchallenged (kurone-kito/idd-skill#2901
- * review, Copilot round 6: the round-5 `updatedAt` check only inspected
- * the marker this function was about to select, which the edited marker
- * itself is no longer once tampering breaks its parse or its target).
- * This is deliberately over-broad in one direction: an edited `heartbeat`
- * (or any other owner-marker-shaped comment, for any target) also trips
- * it, even though only the eventual Stage 1 acquire matters semantically
- * -- accepted, since contract.md's append-only rule covers "owner
- * comments" generically, and failing closed on any detected edit is the
- * safe direction.
+ * The candidate pool is every trusted, owner-marker-shaped comment
+ * (`looksLikeOwnerMarker`) -- not just the ones that happen to parse and
+ * match `target` -- sorted into the same deterministic comment order,
+ * with the *first* one in that order scrutinized as the Stage 1
+ * candidate, whatever its shape:
  *
- * Undetectable tampering -- a trusted actor deleting the true Stage 1
- * acquire outright, rather than editing it -- is out of scope: a deleted
- * comment is absent from every API response, so no comment-log reader
- * can see it happened (kurone-kito/idd-skill#2901 review round 6,
- * chatgpt-codex-connector; accepted limitation, same footing as the
- * non-anchor-child limitation above -- see this file's header comment).
+ * - If ANY owner-marker-shaped comment in the whole pool was edited
+ *   (`updatedAt !== createdAt`), the whole log is rejected up front,
+ *   before a first candidate is even chosen -- not only when the edited
+ *   comment would otherwise have been selected. An editor who edits the
+ *   true Stage 1 acquire into something that still carries the marker
+ *   token but no longer parses, or retargets it to a different issue,
+ *   cannot make it silently drop out of consideration and let a later
+ *   (legitimate-looking) acquire win instead (kurone-kito/idd-skill#2901
+ *   review, Copilot round 6). This is deliberately over-broad in one
+ *   direction: an edited `heartbeat` (or any other owner-marker-shaped
+ *   comment, for any target) also trips it, even though only the
+ *   eventual Stage 1 acquire matters semantically -- accepted, since
+ *   contract.md's append-only rule covers "owner comments" generically
+ *   and failing closed on any detected edit is the safe direction.
+ * - The pool's first comment, once past the edit check, must itself
+ *   parse as an `authoring-owner` marker and name `target` -- an
+ *   unedited-but-malformed first attempt (a genuine posting error, not
+ *   tampering) is rejected rather than silently skipped in favor of a
+ *   later, validly-parsing marker, matching "the target's own
+ *   `mode=acquire` owner marker" read literally: the log's first
+ *   candidate either is that marker or the log is unusable, never a
+ *   later marker standing in for it (kurone-kito/idd-skill#2901 review
+ *   round 7, Copilot: the earlier form filtered the pool down to
+ *   parsing, target-matching comments *before* taking the first one,
+ *   so a first comment that failed either check simply vanished from
+ *   consideration instead of blocking selection).
+ * - Once the first candidate parses and matches `target`, every other
+ *   Stage 1 validity condition still applies (see
+ *   `invalidStageOneAcquireReason`).
+ *
+ * Undetectable tampering is out of scope, on two related fronts,
+ * documented as accepted limitations in this file's header comment: a
+ * trusted actor who deletes the true Stage 1 acquire outright (rather
+ * than editing it), and one who edits it into ordinary prose that no
+ * longer contains the owner-marker token at all. Both leave no trace
+ * `looksLikeOwnerMarker` (or any comment-log reader) can detect --
+ * indistinguishable from a comment that was always unrelated
+ * (kurone-kito/idd-skill#2901 review round 6 and round 7,
+ * chatgpt-codex-connector).
  *
  * Returns `{ event: null, rejectReason }` (never a false `pass`) when
- * the log is rejected by the pre-pass or the first marker fails
- * validation, `{ event: null, rejectReason: null }` when no trusted
- * marker exists at all, or `{ event, rejectReason: null }` on success.
+ * the pool is rejected by the edit check or the first candidate fails
+ * parsing, target-matching, or validation; `{ event: null, rejectReason:
+ * null }` when the pool is empty; or `{ event, rejectReason: null }` on
+ * success.
  */
 function findStageOneAcquire(
   comments,
@@ -217,14 +250,19 @@ function findStageOneAcquire(
   const trusted = new Set(
     trustedMarkerLogins.map((login) => login.toLowerCase()),
   );
-  const trustedComments = comments.filter((comment) =>
-    trusted.has(String(comment.authorLogin ?? '').toLowerCase()),
-  );
-  for (const comment of trustedComments) {
-    if (
-      comment.updatedAt !== comment.createdAt &&
-      looksLikeOwnerMarker(comment.body, markerPrefix)
-    ) {
+  const shaped = comments
+    .filter((comment) =>
+      trusted.has(String(comment.authorLogin ?? '').toLowerCase()),
+    )
+    .filter((comment) => looksLikeOwnerMarker(comment.body, markerPrefix));
+  shaped.sort((a, b) => {
+    if (a.createdAt !== b.createdAt) {
+      return a.createdAt < b.createdAt ? -1 : 1;
+    }
+    return a.id - b.id;
+  });
+  for (const comment of shaped) {
+    if (comment.updatedAt !== comment.createdAt) {
       return {
         event: null,
         rejectReason:
@@ -234,29 +272,29 @@ function findStageOneAcquire(
       };
     }
   }
-  const events = [];
-  for (const comment of trustedComments) {
-    const parsed = parseAuthoringOwnerComment(comment.body, markerPrefix);
-    if (!parsed || !sameIssueRef(parsed.target, target)) {
-      continue;
-    }
-    events.push({ comment, parsed });
-  }
-  events.sort((a, b) => {
-    if (a.comment.createdAt !== b.comment.createdAt) {
-      return a.comment.createdAt < b.comment.createdAt ? -1 : 1;
-    }
-    return a.comment.id - b.comment.id;
-  });
-  const first = events[0];
+  const first = shaped[0];
   if (!first) {
     return { event: null, rejectReason: null };
   }
-  const rejectReason = invalidStageOneAcquireReason(first, target);
+  const parsed = parseAuthoringOwnerComment(first.body, markerPrefix);
+  if (!parsed) {
+    return {
+      event: null,
+      rejectReason: `trusted comment #${first.id} looks like an authoring-owner marker but does not parse as one`,
+    };
+  }
+  if (!sameIssueRef(parsed.target, target)) {
+    return {
+      event: null,
+      rejectReason: `trusted comment #${first.id}'s marker names a different target (${parsed.target})`,
+    };
+  }
+  const event = { comment: first, parsed };
+  const rejectReason = invalidStageOneAcquireReason(event, target);
   if (rejectReason) {
     return { event: null, rejectReason };
   }
-  return { event: first, rejectReason: null };
+  return { event, rejectReason: null };
 }
 /**
  * Compute the sha256 of `input.liveBody` (exact UTF-8 content, matching how
@@ -402,47 +440,53 @@ own Stage 1 mode=acquire authoring-owner marker's recorded body-sha256
 (kurone-kito/idd-skill#2891). Read-only: never posts, labels, or mutates
 anything. --owner and --repo must be given together or not at all.
 
-The comparison anchors on this issue's own trusted authoring-owner marker
-log's *first* marker, in deterministic comment order (createdAt, ties
-broken by comment id ascending) -- contract.md and this issue's own
-acceptance criteria both name "a named target's mode=acquire owner
-marker", singular, tied to Stage 1 publication. That first marker must
-itself be mode=acquire: only it is guaranteed to have hashed the body as
-published, since every later marker (a same-generation racer, a
-bootstrap/resume recovery, or a legitimate re-acquisition after a full
-release cycle) hashes whatever body is live at its own posting time, not
-the originally published one -- comparing against a later acquire would
-make this check pass trivially for a body edited before that later
-marker (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector round
-4). target comparisons fold case, since GitHub owner/repo names are
-case-insensitive.
+The comparison anchors on this issue's own trusted, owner-marker-shaped
+comments -- every one still containing the case-insensitive
+"<marker-prefix>-authoring-owner:" token, whether or not it actually
+parses -- taken in deterministic comment order (createdAt, ties broken
+by comment id ascending). If ANY of those comments was edited after
+posting (its updatedAt differs from its createdAt), the whole log is
+rejected up front, before a first candidate is even chosen: an editor
+cannot make the true Stage 1 acquire vanish from consideration by
+editing it into something unparseable or retargeting it, letting a
+later acquire silently win instead (kurone-kito/idd-skill#2901 review
+round 6, Copilot). This is deliberately over-broad in one direction (an
+edited heartbeat, for example, also trips it) since contract.md's
+append-only rule covers owner comments generically.
 
-The first marker must also pass every validity condition contract.md
-attaches to a genuine Stage 1 acquire, or this reports not-found rather
-than accepting an invalid marker's own digest (kurone-kito/idd-skill#2901
-review round 5): mode=acquire itself (every other mode -- bootstrap,
-resume, heartbeat, release, ... -- presupposes a prior acquire, so a
-well-formed history never opens with one); supersedes=none (contract.md
-requires this specifically for acquire); a real 64-hex body-sha256, never
-the shape-valid sentinel "none"; and its own anchor names the same issue
-as its own target (a mismatch declares the marker a multi-target set's
+Past that check, the *first* candidate in comment order is scrutinized,
+whatever its shape -- not merely the first one that happens to parse and
+match this target. It must parse as an authoring-owner marker at all,
+name this issue as its own target, and itself be a valid Stage 1
+mode=acquire marker, or this reports not-found rather than silently
+skipping it in favor of a later, validly-parsing marker
+(kurone-kito/idd-skill#2901 review round 7, Copilot). "Valid" means
+every condition contract.md attaches to a genuine Stage 1 acquire:
+mode=acquire itself (every other mode -- bootstrap, resume, heartbeat,
+release, ... -- presupposes a prior acquire, so a well-formed history
+never opens with one); supersedes=none (contract.md requires this
+specifically for acquire); a real 64-hex body-sha256, never the
+shape-valid sentinel "none"; and its own anchor names the same issue as
+its own target (a mismatch declares the marker a multi-target set's
 non-anchor child, out of scope for this single-target-orphan helper).
---verbose surfaces which condition failed in the acquire_marker_found
-check's evidence.
+Only it, not any later marker, is guaranteed to have hashed the body as
+published: a same-generation racer, a bootstrap/resume recovery, or a
+legitimate re-acquisition after a full release cycle all hash whatever
+body is live at their own posting time, not the originally published
+one -- comparing against any of those instead would make this check
+pass trivially for a body edited before that later marker
+(kurone-kito/idd-skill#2901 review, chatgpt-codex-connector round 4).
+target comparisons fold case, since GitHub owner/repo names are
+case-insensitive. --verbose surfaces which condition failed in the
+acquire_marker_found check's evidence.
 
-Before selecting a marker at all, this also rejects the whole log (with
-not-found) if ANY trusted, owner-marker-shaped comment was edited after
-posting (its updatedAt differs from its createdAt) -- not just the one
-that would otherwise be selected, so an editor cannot make the true
-Stage 1 acquire vanish from consideration by editing it into something
-unparseable or retargeting it, letting a later acquire silently win
-instead (kurone-kito/idd-skill#2901 review round 6, Copilot). This is
-deliberately over-broad in one direction (an edited heartbeat, for
-example, also trips it) since contract.md's append-only rule covers
-owner comments generically. A trusted actor who deletes the true Stage 1
-acquire outright, rather than editing it, is an accepted limitation: a
-deleted comment leaves no trace in any API response this helper can read
-(kurone-kito/idd-skill#2901 review round 6, chatgpt-codex-connector).
+Two accepted limitations, both fail-closed (never a false pass): a
+marker whose own anchor differs from its own target (a multi-target
+set's non-anchor child, out of scope here); and tampering with the true
+Stage 1 acquire that leaves no authoring-owner token at all -- deleting
+it outright, or editing it into ordinary prose -- which cannot be
+detected by a live comment-log reader (kurone-kito/idd-skill#2901
+review rounds 5-7, chatgpt-codex-connector and Copilot).
 
 Output schema:
 {
