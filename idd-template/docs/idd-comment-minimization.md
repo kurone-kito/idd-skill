@@ -271,45 +271,32 @@ fresh evidence (preventive; no observed incident yet — #2043). The
 workflow's PR-keyed `concurrency` group only serializes workflow runs
 against each other; it does not gate the agent's local F4.
 
-**Workflow-run ownership check (#2846).** Before either side
-decides whether to post its own evidence comment (the
-duplicate-success-record rule above), also check whether this PR's own
-`post-merge-cleanup.yml` check run has already started posting or has
-finished doing so — closing the residual race the marker-comment check
-alone cannot: a run that has started but not yet posted its comment
-leaves no marker for that rule to find, so without this earlier check
-both sides can still post within the same few-second window after
-merge (observed 2026-09-09 on `kurone-kito/dotfiles#396`: a live
-CodeRabbit review caught exactly this duplicate `idd-cleanup-evidence`
-comment on an adopter's PR).
+**In-flight cleanup-run wait (#2846).** Before either side decides
+whether to post its own evidence comment (the duplicate-success-record
+rule above), also check whether this PR's own `post-merge-cleanup.yml`
+check run is still in flight — narrowing the residual race the
+marker-comment check alone cannot fully close: a run that has started
+but not yet posted its comment leaves no marker for that rule to find,
+so without this earlier wait both sides can still post within the same
+few-second window after merge (observed 2026-09-09 on
+`kurone-kito/dotfiles#396`: a live CodeRabbit review caught exactly
+this duplicate `idd-cleanup-evidence` comment on an adopter's PR). This
+wait only narrows the window, it does not close it: GitHub registers
+the check run asynchronously after the triggering webhook fires, so a
+run that has not yet been created has no entry here to find yet; that
+residual sliver is an accepted fail-open gap, not something this check
+claims to close.
 
 `gh pr checks` surfaces this `pull_request_target`-triggered run as a
 normal PR check even though it fires after merge — verified on PR
 `#2855`, 2026-09-10. Filter on whatever `name:` the adopter's own copy
 of the workflow actually declares; this repository's dogfooded copy
-and the template both currently say `Post-merge cleanup`. A
-`workflow_dispatch` rerun can add a second entry for the same
-workflow, so pick a single winning entry first: `pending` always wins
-outright (a still-running run always takes priority over an
-already-completed one); otherwise take the entry with the latest
-`startedAt`.
+and the template both currently say `Post-merge cleanup`.
 
 ```sh
-# 1. the winning entry's bucket and run id (from its own `link` URL)
-gh pr checks <pr-number> --json workflow,bucket,link,startedAt --jq \
-  'map(select(.workflow == "Post-merge cleanup"))
-   | if length == 0 then empty
-     elif any(.bucket == "pending") then (map(select(.bucket == "pending")) | .[0])
-     else max_by(.startedAt) end
-   | [.bucket, (.link | capture("/runs/(?<id>[0-9]+)").id)] | @tsv'
+gh pr checks <pr-number> --json workflow,bucket --jq \
+  'map(select(.workflow == "Post-merge cleanup")) | any(.bucket == "pending")'
 ```
-
-The `id` capture stops at the first non-digit character, so it stays
-correct whether the `link` continues with a `/job/<job-id>` segment or
-a bare query string such as `?check_suite_focus=true` — the same
-tolerant boundary `parseRunIdFromUrl`
-(`src/scripts/rerun-advisory-convergence.mts`) already uses for this
-exact URL shape.
 
 - **A nonzero exit alone is not failure.** `gh pr checks` exits `8`
   whenever _any_ check on the PR is still pending (its own documented
@@ -317,63 +304,25 @@ exact URL shape.
   stdout is valid; a script that aborts under `set -e` on that exit
   code, or that treats any nonzero status as "lookup failed", falls
   through and skips the wait below entirely, leaving the race this
-  check exists to close. Capture and parse stdout regardless of exit
+  check exists to narrow. Capture and parse stdout regardless of exit
   status; only _no parseable output at all_ counts as a lookup
   failure.
-- **No output, or the lookup itself fails** (old `gh`, no network, a
-  GitHub Enterprise Server version without this data): no visible run
-  for this PR. Continue to the duplicate-success-record skip rule
-  unchanged.
-- **First field is `pending`**: the run is in flight. Do **not** skip
-  on this alone — an in-flight run can still finish without ever
-  running its posting step (see the `instructions-only` case below),
-  which would leave neither side posting. Wait for it to finish first
-  (`gh run watch <run-id>`), bounded by the same
+- **`false`, or no parseable output at all** (old `gh`, no network, a
+  GitHub Enterprise Server version without this data, or no run found
+  for this PR): not in flight. Continue to the duplicate-success-record
+  skip rule unchanged — it reads whatever that run may have posted (if
+  any) and adjudicates on the marker's own recorded status, regardless
+  of how the run itself concluded.
+- **`true`**: the run is in flight. Poll the same query at a reasonable
+  interval until it returns `false`, bounded by the same
   `ciWait.runningTimeout` (default `PT30M`, once started) /
   `ciWait.generationTimeout` (default `PT10M`, while still queued)
-  windows `idd-ci.instructions.md`'s CI polling algorithm already
-  uses. Past that bound with the run still incomplete, treat it the
-  same as "no visible run" and continue to the duplicate-success-record
-  skip rule unchanged — a resulting duplicate comment is this check's
-  accepted fail-open default, the same one the other two "not found"
-  cases here already accept. Once the run finishes (immediately, or
-  after the wait above), evaluate it exactly like a completed run:
-  continue to step 2.
-- **Any other first field** (already completed): continue to step 2
-  with the second field as `<run-id>`.
-
-```sh
-# 2. that run's posting-step conclusion
-gh api "repos/{owner}/{repo}/actions/runs/<run-id>/jobs" --jq \
-  '.jobs[].steps[] | select(.name == "Post cleanup evidence comment") | .conclusion'
-```
-
-The posting step's own conclusion decides ownership for a completed
-run, not the check's overall `bucket` — two distinct failure modes
-would otherwise misclassify a run that never actually posted anything
-as one that did:
-
-- The template workflow skips its cleanup and evidence steps entirely
-  under an `instructions-only` (or ambiguous package-manager)
-  `helperRuntime.profile` — a job whose meaningful steps were all
-  skipped still reports a passing check.
-- The evidence-posting step itself runs under the default GitHub
-  Actions `bash -e`; its `COMMENTS_TSV=$(gh api --paginate ...)` read
-  is a plain assignment with no `set +e` guard, so a transient `gh
-  api` failure there (rate limit, network) aborts the step — and the
-  check run — before `gh pr comment` is ever reached.
-
-Only an exact `success` conclusion means the step actually ran to
-completion (whether it posted fresh evidence, or intentionally
-no-op'd because a success record already existed):
-
-- **`success`**: skip the agent's own post entirely — let that run own
-  it.
-- **Anything else** (`skipped`, `failure`, `cancelled`, no such step at
-  all — an older workflow copy, or an adopter's copy that renamed the
-  step, ...): that run did not reliably take ownership of posting.
-  Treat it the same as "no visible run" and continue to the
-  duplicate-success-record skip rule unchanged.
+  windows `idd-ci.instructions.md`'s CI polling algorithm already uses.
+  Past that bound with the run still in flight, treat it the same as
+  "not in flight" and continue to the duplicate-success-record skip
+  rule unchanged — a resulting duplicate comment is this check's
+  accepted fail-open default, the same one the "not in flight" case
+  above already accepts.
 
 ## GitHub mechanism
 
@@ -606,9 +555,11 @@ Post this comment to the PR after a successful or partial apply. The
 HTML comment token on the first line acts as a stable machine-readable
 marker so a resuming agent — or a concurrent `post-merge-cleanup`
 workflow run — can detect that evidence was already posted. The
-[Workflow-run ownership check](#server-side-fallback-optional) above
-runs first, even earlier than this marker-based rule; reaching this
-rule at all already means that check found no run to defer to. Both
+[In-flight cleanup-run wait](#server-side-fallback-optional) above
+runs first, delaying only until any in-flight `post-merge-cleanup.yml`
+run finishes (or the wait bound elapses) — this marker-based rule is
+what actually adjudicates ownership once that run, if any, has had its
+chance to post. Both
 the **agent-side** F4 step and the `post-merge-cleanup` workflow then
 key on the prior **success** record: **skip the post when the latest
 trusted
