@@ -565,6 +565,22 @@ as a blocker has since closed or merged -- a cached readiness snapshot
 can be stale, and a closed blocker is a "free" suitability lever that
 costs nothing to re-apply.
 
+**Verify feasibility before drafting a question.** Before drafting a
+decision-blocked question, confirm every option it offers is actually
+buildable against the codebase's current architecture, with no
+undisclosed scope expansion -- a new persistence layer, a new
+dependency, or a change to an unrelated component's contract. A
+competing-options question can read as complete because every option
+sounds coherent in English, while only an implementing session's actual
+codebase familiarity reveals that one option needs a capability the
+architecture does not have. If an option fails this check, either drop
+it from the question or disclose the scope expansion it would require
+as part of the question itself, so the operator chooses with the same
+information an implementing session would need (field evidence observed
+2026-09-10,
+[kurone-kito/idd-skill#2805](https://github.com/kurone-kito/idd-skill/issues/2805)
+in the source repository).
+
 **Never override a deliberate decision.** When the original rejection
 recorded a genuinely deliberate empirical or product decision (not
 merely an unanswered question), grooming must never resolve it
@@ -594,6 +610,24 @@ ordinary Discover pass then
 picks the issue up normally -- grooming itself never claims or works
 the issue (see
 [Mutation Policy and Coordination Rule](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)).
+
+**Hold when a recorded resolution proves infeasible.** The feasibility
+check above narrows this gap but does not close it -- the same field
+evidence (2026-09-10,
+[kurone-kito/idd-skill#2805](https://github.com/kurone-kito/idd-skill/issues/2805)
+in the source repository) shows infeasibility that only became visible
+once an implementing session was deep enough into the codebase to see
+it. When a session reaches implementation and finds the Groom-recorded
+resolution cannot be built as specified, it must hold and return the
+candidate to its pre-Groom decision-blocked state, rather than silently
+reinterpreting, downscoping, or unilaterally picking a different
+resolution: apply the configured needs-decision label and release the
+claim, the same general hold mechanism the shared Hold / suspend rules
+in `idd-overview-appendix.instructions.md` already document -- not a
+literal restoration of the Grooming pass's own `triage:{outcome}`
+label. Record exactly what made the recorded option infeasible in the
+hold comment, so the next Groom pass has the information a corrected
+question needs.
 
 **Worked example.** An issue was rejected `needs-decision` at score
 `2/5` because its acceptance criteria read "add caching, or document
