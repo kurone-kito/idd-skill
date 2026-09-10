@@ -1169,7 +1169,10 @@ checklist passes — every child issue is referenced from its parent roadmap's
 `## Tracks` list, no unsubstituted placeholder remains in any published
 body, and the `audit-authored-issue` linter (or its manual fallback) is green
 on every published body in the set — and the user explicitly requests
-release from the authoring hold. Keep the set anchor held until every other
+release from the authoring hold (see the
+[Narrow auto-release exception](#narrow-auto-release-exception-review-fix-loop-cutoff)
+below for the one marker-scoped exception to this precondition). Keep the
+set anchor held until every other
 target's label removal is verified, and remove the anchor label last. First
 re-fetch owner comments during release-marker preflight. If a valid
 current-owner/set `mode=release` marker already exists, reuse the earliest
@@ -1217,12 +1220,38 @@ labels while the current owner/set still match, and verify the restored set
 state; leave every target generation open and stop. If restoration cannot be
 completed or a newer owner has appeared, record a set-level recovery hold and
 never claim a partial release. This release checklist plus the user's
-explicit request together form the single approval boundary in this contract.
+explicit request together form the single approval boundary in this
+contract, except for the narrow, marker-scoped exception below.
 
 Removing the authoring label releases the Discover guard and
 authorizes IDD execution for the released issues. Do it only as part
-of that explicit release request; nothing in this contract removes the
-label or starts Discover, Claim, and Work on its own.
+of that explicit release request, or the narrow auto-release exception
+below; nothing else removes the label or starts Discover, Claim, and
+Work on its own.
+
+### Narrow auto-release exception (review-fix-loop-cutoff)
+
+A follow-up issue whose body carried the exact marker
+`<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->` at
+Stage 1 publication time — part of the initial `authoring-publication` body
+write, never added by a later edit — may complete the full release
+checklist and label-removal sequence above without the "user explicitly
+requests release" precondition, immediately after Stage 1 publication
+completes for that issue. Every other precondition and mechanical gate
+above (green checklist, release-marker preflight, release-guard,
+heartbeat renewal, verified label removal for every target,
+release-complete reconciliation) still applies in full — this exception
+replaces only the human-request precondition, and only for the single
+target carrying the marker, never a roadmap anchor or a sibling target
+in the same authoring set that lacks it.
+
+This exists because `idd-review-triage.instructions.md`'s round-count
+cutoff files this exact marker on a follow-up issue during unattended
+autonomous execution, where no human is present to issue a release
+request. Left under the ordinary human-gated boundary above, that
+deferred work would sit under the authoring label indefinitely on a
+fully autonomous repository, silently defeating the point of deferring
+it at all (preventive; no observed incident yet).
 
 ## Reuse-first issue policy
 

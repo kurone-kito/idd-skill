@@ -234,7 +234,11 @@ needs-decision, blocked-by-human, and out-of-scope.
    - read every target and anchor owner-marker log with paginated retrieval and
      deterministic comment order; never rely on a single API page
    - after the release checklist passes and the user explicitly requests
-     release, preflight and verify or reuse a matching `mode=release` marker
+     release — or, for a single target whose body carried the
+     review-fix-loop-cutoff marker at Stage 1 publication time (never a
+     marker added later), the narrow auto-release exception in
+     [Authoring hold and release](references/contract.md#authoring-hold-and-release)
+     — preflight and verify or reuse a matching `mode=release` marker
      for every target (with `supersedes` equal to the current owner token)
      before removing any label; record its GitHub comment ID, never append a
      duplicate on retry, append and reconcile an anchor-only
@@ -267,7 +271,9 @@ needs-decision, blocked-by-human, and out-of-scope.
      leave every target generation open
 8. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
-   only the user's explicit release request does.
+   only the user's explicit release request does, except the narrow
+   review-fix-loop-cutoff auto-release exception in
+   [Authoring hold and release](references/contract.md#authoring-hold-and-release).
 
 ## Reference Routing
 
