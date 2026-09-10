@@ -223,8 +223,8 @@ convention:
 
 Never emit this marker for `needs-decision` or `blocked-by-human`: those
 two already carry a stable label (applied while holding the claim, per
-`idd-overview-appendix.instructions.md`'s Hold / suspend section above)
-and need no second signal. Discover's own
+`idd-overview-appendix.instructions.md`'s Hold / suspend section) and
+need no second signal. Discover's own
 candidate-selection pass (`idd-discover.instructions.md`) reads this
 marker to skip a previously-rejected candidate without a full manual
 comment-history read, applying the same staleness rule as every other
