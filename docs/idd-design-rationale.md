@@ -824,7 +824,7 @@ was deferred from actually lands, yet nothing stopped Discover from
 picking up the follow-up immediately. Rather than changing `Refs`'s
 general semantics, `discover-readiness-check.mts` adds a narrow,
 marker-scoped rule: when a candidate's body carries the
-`<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
+`<!-- <marker-prefix>-authoring-defer-source: review-fix-loop-cutoff -->`
 marker, its `Refs #<N>` reference is resolved the same way an ordinary
 `Blocked by #<N>` line is — excluded from Discover while `#<N>` stays
 open. An unmarked issue's `Refs` lines are completely unaffected.
