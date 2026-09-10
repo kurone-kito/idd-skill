@@ -183,6 +183,13 @@ outcome (trust/safety concerns require human review):
 | `invalid` | Trust/safety concern or defect | Fresh: report, stop (do not retry). Reconfirmed (`existingRejection`: `outcome: invalid`): exclude, post nothing, loop |
 <!-- dprint-ignore-end -->
 
+Neither label is applied directly by A4.5. The holding session
+applies the configured needs-decision label
+(`labels.needsDecisionLabelName`) per the **Needs-decision claim
+release** rule (Hold / suspend,
+`idd-overview-appendix.instructions.md`); that rule never covers
+`labels.blockedByHumanLabelName`.
+
 ## Mutation Policy and Coordination Rule
 
 **A4.5 is a triage gate, not an execution claim.** The gate determines
@@ -217,7 +224,8 @@ convention:
 ```
 
 Never emit this marker for `needs-decision` or `blocked-by-human`: those
-two already carry a stable label and need no second signal. Discover's own
+two already carry a stable label (see above) and need no second
+signal. Discover's own
 candidate-selection pass (`idd-discover.instructions.md`) reads this
 marker to skip a previously-rejected candidate without a full manual
 comment-history read, applying the same staleness rule as every other
@@ -337,11 +345,6 @@ candidates follow the Failure Outcomes section above.
 
 ## Optional: grooming a rejected/below-floor backlog
 
-A4.5 decides only at claim time; it never revisits a past rejection.
-An optional, human-initiated Groom phase for periodically
-batch-reviewing the rejected/below-floor backlog -- classifying each
-candidate execution-blocked / decision-blocked / fact-blocked,
-re-checking whether a cited blocker has since closed, and applying the
-operator's answers back onto the issue rather than resolving a
-deliberate decision unilaterally -- is documented in
+A4.5 decides only at claim time. An optional Groom phase for that
+backlog is documented in
 [the IDD workflow guide](../../docs/idd-workflow.md#grooming-pass-for-rejected-and-below-floor-issues-optional).
