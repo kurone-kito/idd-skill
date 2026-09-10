@@ -20,12 +20,14 @@ function ownerMarkerBody(
     bodySha256?: string;
     snapshotSha256?: string;
     supersedes?: string;
+    target?: string;
+    anchor?: string;
   },
 ): string {
   return renderAuthoringOwnerMarker({
     markerPrefix: MARKER_PREFIX,
-    target: TARGET,
-    anchor: TARGET,
+    target: fields.target ?? TARGET,
+    anchor: fields.anchor ?? TARGET,
     mode,
     owner: fields.owner,
     set: 'set-1',
@@ -38,12 +40,14 @@ function ownerMarkerBody(
 
 function acquireMarkerBody(
   bodySha256: string,
-  overrides: { owner?: string } = {},
+  overrides: { owner?: string; target?: string; anchor?: string } = {},
 ): string {
   return ownerMarkerBody('acquire', {
     owner: overrides.owner ?? 'owner-token-1',
     bodySha256,
     supersedes: 'none',
+    target: overrides.target,
+    anchor: overrides.anchor,
   });
 }
 
@@ -476,4 +480,81 @@ test('a resume marker opens a generation a later competing acquire cannot displa
   assert.equal(result.marker?.mode, 'resume');
   assert.equal(result.marker?.owner, 'owner-token-resume');
   assert.equal(result.recordedBodySha256, sha256(resumeBody));
+});
+
+test('an acquire marker whose target differs only by capitalization still wins', () => {
+  // GitHub owner/repo names are case-insensitive (PR #2901 review,
+  // Copilot round 4): a marker's own `target` field may preserve
+  // whatever casing an actor or URL happened to use, so the filter that
+  // matches a marker's `target` against the CLI's own `owner/repo#n`
+  // string must fold case rather than compare bytes -- a byte
+  // comparison would drop this marker and fall through to `not-found`
+  // even though it names the same issue.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const differentlyCasedTarget = 'Kurone-Kito/IDD-Skill#2891';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), {
+          target: differentlyCasedTarget,
+          anchor: differentlyCasedTarget,
+        }),
+        createdAt: '2026-09-10T16:48:44Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'pass');
+  assert.ok(result.marker);
+  assert.equal(result.recordedBodySha256, sha256(liveBody));
+});
+
+test('a release-complete whose anchor differs only by capitalization still closes the generation', () => {
+  // Same case-folding requirement applies to `isValidReleaseComplete`'s
+  // own target === anchor and anchor === winner.anchor checks: a
+  // release-complete legitimately closing a generation must not be
+  // rejected merely because its anchor field's capitalization differs
+  // from the winning acquire's anchor (PR #2901 review, Copilot round 4).
+  const firstBody = '# Draft\n\nFirst.\n';
+  const secondBody = '# Draft\n\nSecond, legitimately re-acquired.\n';
+  const differentlyCasedTarget = 'Kurone-Kito/IDD-Skill#2891';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody: secondBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(firstBody), { owner: 'owner-token-1' }),
+        createdAt: '2026-09-10T16:48:44Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: ownerMarkerBody('release-complete', {
+          owner: 'owner-token-1',
+          snapshotSha256: sha256('closed-set-snapshot'),
+          supersedes: 'owner-token-1',
+          target: differentlyCasedTarget,
+          anchor: differentlyCasedTarget,
+        }),
+        createdAt: '2026-09-10T16:49:00Z',
+      },
+      {
+        id: 3,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(secondBody), { owner: 'owner-token-2' }),
+        createdAt: '2026-09-10T16:50:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'pass');
+  assert.equal(result.marker?.owner, 'owner-token-2');
 });

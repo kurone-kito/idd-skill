@@ -283,15 +283,17 @@ in this preamble, since the fallback differs per helper.
   edited-body digest, against an unrelated or incomplete stale
   completion, or displace a legitimate `bootstrap`/`resume` winner with a
   later competing `acquire`). A generation closes only on a
-  `mode=release-complete` that is itself anchor-scoped
-  (`target === anchor`), carries a real snapshot digest (not the
-  release-guard sentinel `none`), and retains that generation's exact
-  owner/set/session/anchor while superseding that same owner token.
-  `mode=release-complete` is anchor-only, so for a non-anchor child in a
-  multi-target set this replay cannot see the child's true generation
-  boundary and fails closed (`mismatch`, never a false `pass`) instead —
-  an accepted limitation, since this helper's own single-target orphan
-  use case never hits it
+  `mode=release-complete` that is itself anchor-scoped (its `target`
+  names the same issue as its own `anchor`), carries a real snapshot
+  digest (not the release-guard sentinel `none`), and retains that
+  generation's exact owner/set/session while naming the same `anchor`
+  and superseding that same owner token. `target`/`anchor` comparisons
+  fold case, since GitHub owner/repo names are case-insensitive (PR
+  #2901 review, Copilot). `mode=release-complete` is anchor-only, so for
+  a non-anchor child in a multi-target set this replay cannot see the
+  child's true generation boundary and fails closed (`mismatch`, never a
+  false `pass`) instead — an accepted limitation, since this helper's
+  own single-target orphan use case never hits it
 
 **Review & Merge Phase Helpers:**
 

@@ -110,6 +110,20 @@ function normalizeMarkerPrefix(prefix: unknown): string {
 }
 
 /**
+ * True when two `owner/repo#number` issue-reference strings name the same
+ * issue. GitHub owner and repository names are case-insensitive (the
+ * canonical casing an API response reports need not match the casing a
+ * marker author typed or a URL preserved), so every comparison against a
+ * `target` or `anchor` field in this replay must fold case rather than
+ * compare bytes -- a byte comparison would let a marker that differs only
+ * by capitalization fall through to `not-found` even though it names the
+ * same issue (kurone-kito/idd-skill#2901 review, Copilot round 4).
+ */
+function sameIssueRef(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
  * Replay `target`'s own trusted `authoring-owner` marker log in
  * chronological order (ties broken by comment `id`, ascending — the
  * deterministic order contract.md's replay rule requires) and return the
@@ -160,7 +174,7 @@ function findWinningAcquire(
       continue;
     }
     const parsed = parseAuthoringOwnerComment(comment.body, markerPrefix);
-    if (!parsed || parsed.target !== target) {
+    if (!parsed || !sameIssueRef(parsed.target, target)) {
       continue;
     }
     events.push({ comment, parsed });
@@ -197,18 +211,24 @@ function findWinningAcquire(
  * True when `completion` (a `mode=release-complete` event) is a valid
  * closure of the generation `winner` opened. contract.md requires all of:
  * - **anchor-only** ("release-complete is valid only on the set
- *   anchor"): `completion.target === completion.anchor` -- a
- *   release-complete recorded on a non-anchor child's own comment
- *   thread (this replay only ever reads the named target's own log, so
- *   `completion.target` is always this issue) can never legitimately
- *   close a generation here.
+ *   anchor"): `completion.target` names the same issue as
+ *   `completion.anchor` -- a release-complete recorded on a non-anchor
+ *   child's own comment thread (this replay only ever reads the named
+ *   target's own log, so `completion.target` is always this issue) can
+ *   never legitimately close a generation here.
  * - **required snapshot digest** ("carries the required canonical set
  *   snapshot digest"): `completion.snapshotSha256 !== 'none'` --
  *   `'none'` is release-guard's own sentinel, not a valid completion.
  * - **retains the winning generation's identity** ("retains the
  *   anchor's current owner, set, anchor, and session, and sets
- *   supersedes to that owner token"): owner/set/session/anchor match
- *   `winner`'s, and `supersedes` equals `winner`'s own owner token.
+ *   supersedes to that owner token"): owner/set/session match `winner`'s
+ *   exactly, `completion.anchor` names the same issue as `winner.anchor`,
+ *   and `supersedes` equals `winner`'s own owner token.
+ *
+ * `target`/`anchor` comparisons fold case (`sameIssueRef`): GitHub
+ * owner/repo names are case-insensitive, so a completion typed or quoted
+ * with different capitalization than the winner's own `anchor` still
+ * names the same issue (#2901 review, Copilot round 4).
  *
  * A release-complete failing any of these is stale, malformed, or for
  * an unrelated generation, and is ignored rather than closing the
@@ -219,12 +239,12 @@ function isValidReleaseComplete(
   winner: ParsedAuthoringOwnerMarker,
 ): boolean {
   return (
-    completion.target === completion.anchor &&
+    sameIssueRef(completion.target, completion.anchor) &&
     completion.snapshotSha256 !== 'none' &&
     completion.owner === winner.owner &&
     completion.set === winner.set &&
     completion.session === winner.session &&
-    completion.anchor === winner.anchor &&
+    sameIssueRef(completion.anchor, winner.anchor) &&
     completion.supersedes === winner.owner
   );
 }
@@ -388,9 +408,11 @@ same-generation race between two competing generation-opening markers
 resolves to the first one -- contract.md: choose the winner by
 deterministic comment order); a generation closes only on a
 mode=release-complete that retains that generation's exact
-owner/set/session/anchor, supersedes that same owner token, is itself
-anchor-scoped (target === anchor), and carries a real snapshot digest (not
-the release-guard sentinel "none"). Caveat: release-complete is
+owner/set/session, names the same anchor, supersedes that same owner
+token, is itself anchor-scoped (its target names the same issue as its
+own anchor), and carries a real snapshot digest (not the release-guard
+sentinel "none"). target/anchor comparisons fold case, since GitHub
+owner/repo names are case-insensitive. Caveat: release-complete is
 anchor-only, so for a non-anchor child target in a multi-target set this
 replay cannot see the child's true generation boundary and treats every
 generation-opening marker on it as one still-open generation -- fail-closed
