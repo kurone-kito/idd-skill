@@ -1351,13 +1351,25 @@ checker files, regardless of its own configured `helperRuntime.profile`
 (`package-manager`, chosen for its own IDD dependency, unrelated to this
 workflow's own file layout). For every other repository, both the
 distributed `idd-template/` posting step and `resolveSelfReferentialTriggerFiles`
-independently derive a profile-appropriate set instead: compiled
-`scripts/*.mjs` paths for `vendored-node`, the dependency manifest and
-lockfiles for `package-manager`, `.github/idd/config.json` for
-`ephemeral-npx` (that profile selects its checker version through
-`helperRuntime.packageSpec`, configured there -- see
-[Customizing IDD](customization.md)), and only the two workflow paths
-for any other profile -- since a `vendored-node`/`package-manager`
+independently derive a profile-appropriate set instead, on a
+profile-invariant base of the two workflow paths plus
+`.github/idd/config.json`, adding: compiled `scripts/*.mjs` paths for
+`vendored-node`; the dependency manifest and lockfiles for
+`package-manager`; nothing further for `ephemeral-npx` (whose own
+checker version pin already lives in the base set's config file, via
+`helperRuntime.packageSpec` -- see
+[Customizing IDD](customization.md)); or nothing further for any other
+profile. The config file is included for every profile, not only
+`ephemeral-npx` (kurone-kito/idd-skill#2657, Codex review round 8):
+both this posting job and the verdict job check out the trusted default
+branch, never the PR head, so a PR that fixes a broken checker by
+migrating `helperRuntime.profile` itself (e.g. `package-manager` to
+`ephemeral-npx`, to work around a broken lockfile/manager detection)
+resolves the OLD, still-broken profile on both sides -- scoping the
+config file to only the profile a PR happens to migrate TO would leave
+every other profile's own migration-via-config-only fix unable to
+trigger this bypass, the exact trap this mechanism exists to escape.
+Since a `vendored-node`/`package-manager`
 adopter never ships this source repository's own `src/scripts/*.mts`
 files, an
 unconditional match against them left the mechanism both non-functional

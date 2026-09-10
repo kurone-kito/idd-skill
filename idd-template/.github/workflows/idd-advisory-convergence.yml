@@ -552,10 +552,26 @@ jobs:
           # for its intended adopters (a genuine checker upgrade could
           # never match) and gameable (a PR could touch a path that does
           # not exist at all in the adopter's own checkout purely to
-          # satisfy the string match). The two workflow paths are
-          # profile-invariant: every profile's own checker version pin
-          # lives in one of them or in the profile-specific paths below.
+          # satisfy the string match). The two workflow paths and the
+          # runtime config are profile-invariant: every profile's own
+          # checker version pin lives in one of these three or in the
+          # profile-specific paths below.
+          #
+          # kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 8):
+          # .github/idd/config.json is in the base set for EVERY profile,
+          # not only ephemeral-npx (whose own checker-version pin lives
+          # there via helperRuntime.packageSpec). Both this job and the
+          # verdict job check out the trusted default branch, never the
+          # PR head, so a PR that fixes a broken checker by migrating
+          # helperRuntime.profile itself (e.g. package-manager to
+          # ephemeral-npx, to work around a broken lockfile/manager
+          # detection) resolves the OLD, still-broken profile here too --
+          # scoping the config file to only the profile it migrates TO
+          # would leave every other profile's own migration-via-config
+          # fix unable to trigger this bypass, the exact trap this
+          # mechanism exists to escape.
           ALLOWLIST=(
+            ".github/idd/config.json"
             ".github/workflows/idd-advisory-convergence.yml"
             ".github/workflows/idd-advisory-convergence-comment.yml"
           )
@@ -578,15 +594,6 @@ jobs:
                 "package-lock.json"
                 "pnpm-lock.yaml"
                 "yarn.lock"
-              )
-              ;;
-            ephemeral-npx)
-              # kurone-kito/idd-skill#2657 (Codex review, PR #2895, round
-              # 6): this profile pins its checker version via
-              # helperRuntime.packageSpec in .github/idd/config.json, not
-              # a vendored file or dependency manifest.
-              ALLOWLIST+=(
-                ".github/idd/config.json"
               )
               ;;
           esac

@@ -3768,6 +3768,7 @@ test('resolveSelfReferentialTriggerFiles: a vendored-node adopter resolves the c
     'scripts/marker-helpers.mjs',
     'scripts/protocol-helpers.mjs',
     'scripts/provider-adapter-github.mjs',
+    '.github/idd/config.json',
     ADVISORY_CONVERGENCE_WORKFLOW_PATH,
     '.github/workflows/idd-advisory-convergence-comment.yml',
   ]);
@@ -3790,16 +3791,37 @@ test('resolveSelfReferentialTriggerFiles: a package-manager adopter resolves its
     'package-lock.json',
     'pnpm-lock.yaml',
     'yarn.lock',
+    '.github/idd/config.json',
     ADVISORY_CONVERGENCE_WORKFLOW_PATH,
     '.github/workflows/idd-advisory-convergence-comment.yml',
   ]);
 });
 
-test('resolveSelfReferentialTriggerFiles: an unrecognized or absent profile resolves only the profile-invariant workflow paths', () => {
+test('resolveSelfReferentialTriggerFiles: every profile includes the runtime config, not only ephemeral-npx (Codex review, PR #2895, round 8)', () => {
+  // Both the posting job and the verdict job check out the trusted
+  // default branch, never the PR head, so a PR that fixes a broken
+  // checker by migrating helperRuntime.profile itself (e.g.
+  // package-manager to ephemeral-npx, to work around a broken
+  // lockfile/manager detection) resolves the OLD, still-broken profile
+  // on both sides -- scoping the config file to only the profile a PR
+  // happens to migrate TO would leave every other profile's own
+  // migration-via-config-only fix unable to trigger this bypass.
+  for (const profile of ['vendored-node', 'package-manager']) {
+    assert.ok(
+      resolveSelfReferentialTriggerFiles(
+        profile,
+        'someone-else/adopter-repo',
+      ).includes('.github/idd/config.json'),
+    );
+  }
+});
+
+test('resolveSelfReferentialTriggerFiles: an unrecognized or absent profile resolves only the profile-invariant paths', () => {
   for (const profile of [undefined, 'instructions-only']) {
     assert.deepEqual(
       resolveSelfReferentialTriggerFiles(profile, 'someone-else/adopter-repo'),
       [
+        '.github/idd/config.json',
         ADVISORY_CONVERGENCE_WORKFLOW_PATH,
         '.github/workflows/idd-advisory-convergence-comment.yml',
       ],

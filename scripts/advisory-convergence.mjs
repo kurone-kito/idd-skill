@@ -241,13 +241,31 @@ const SELF_REFERENTIAL_ALLOWLIST_ORIGIN_REPOSITORY = 'kurone-kito/idd-skill';
  * own posting-side bash step performs (kept in sync by hand across the
  * two languages/files, the same convention already used for
  * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} itself). The two
- * workflow paths are profile-invariant -- every profile's own checker
- * version pin lives in one of them or in the profile-specific paths
- * below. Granularity is deliberately whole-file, matching this
- * repository's own `.mts`-based allowlist: a `package.json` touch for
- * any reason (not only an `idd-skill` dependency bump) satisfies the
- * `package-manager` case, exactly as an unrelated `.mts` edit already
- * satisfies this repository's own case today. */
+ * workflow paths and the runtime config are both profile-invariant --
+ * every profile's own checker version pin lives in one of the four base
+ * paths or in the profile-specific paths below. Granularity is
+ * deliberately whole-file, matching this repository's own
+ * `.mts`-based allowlist: a `package.json` touch for any reason (not
+ * only an `idd-skill` dependency bump) satisfies the `package-manager`
+ * case, exactly as an unrelated `.mts` edit already satisfies this
+ * repository's own case today.
+ *
+ * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 8):
+ * `.github/idd/config.json` is included for EVERY profile, not only
+ * `ephemeral-npx` (whose own checker-version pin lives there via
+ * `helperRuntime.packageSpec`) -- both the posting job and this
+ * verdict job check out the repository's trusted default branch, never
+ * the PR head, so a PR that fixes a broken checker by migrating
+ * `helperRuntime.profile` itself (e.g. `package-manager` to
+ * `ephemeral-npx`, to work around a broken lockfile/manager
+ * detection) resolves the OLD, still-broken profile on both sides.
+ * Scoping the config file to only the profile it happens to migrate
+ * TO would leave every other profile's own migration-via-config-only
+ * fix permanently unable to trigger this bypass -- the same trap this
+ * mechanism exists to escape. The config file is itself one of this
+ * check's own policy inputs (`ciGate`, `advisoryWait`, `helperRuntime`
+ * all live there) regardless of profile, so this is a generalization
+ * of an existing category, not a scope-widening exception. */
 export function resolveSelfReferentialTriggerFiles(
   helperRuntimeProfile,
   repositoryFullName,
@@ -258,7 +276,8 @@ export function resolveSelfReferentialTriggerFiles(
   ) {
     return SELF_REFERENTIAL_WAIVER_TRIGGER_FILES;
   }
-  const workflowPaths = [
+  const basePaths = [
+    '.github/idd/config.json',
     '.github/workflows/idd-advisory-convergence.yml',
     '.github/workflows/idd-advisory-convergence-comment.yml',
   ];
@@ -273,7 +292,7 @@ export function resolveSelfReferentialTriggerFiles(
         'scripts/marker-helpers.mjs',
         'scripts/protocol-helpers.mjs',
         'scripts/provider-adapter-github.mjs',
-        ...workflowPaths,
+        ...basePaths,
       ];
     case 'package-manager':
       return [
@@ -281,20 +300,15 @@ export function resolveSelfReferentialTriggerFiles(
         'package-lock.json',
         'pnpm-lock.yaml',
         'yarn.lock',
-        ...workflowPaths,
+        ...basePaths,
       ];
-    case 'ephemeral-npx':
-      // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 6): an
-      // ephemeral-npx adopter selects its checker version via
-      // `helperRuntime.packageSpec` in `.github/idd/config.json` (see
-      // idd-helper-scripts.md), not a vendored file or a dependency
-      // manifest -- a PR that repoints that pin at a fixed checker
-      // without also touching a workflow file must still be able to
-      // trigger this bypass, or it stays blocked by the very checker
-      // bug this mechanism exists to work around.
-      return ['.github/idd/config.json', ...workflowPaths];
+    // ephemeral-npx (which pins its checker version via
+    // helperRuntime.packageSpec in the config file above) and every
+    // other/unresolved profile have no additional profile-specific path
+    // of their own, so both resolve to the profile-invariant base set
+    // via this default.
     default:
-      return workflowPaths;
+      return basePaths;
   }
 }
 /** kurone-kito/idd-skill#2657: this gate's own workflow file path, as
