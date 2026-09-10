@@ -582,6 +582,23 @@ test('hasVerificationCommandSignal: an indented explanation between two ordered 
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: an unindented lazy continuation between two ordered checkboxes does not end the list (Codex review, PR #2840, round 24)', () => {
+  // CommonMark's lazy-continuation rule lets a paragraph (list-item
+  // content included) continue on a following non-blank line regardless
+  // of that line's own indentation -- `gh api /markdown` confirms both
+  // items render as real checkboxes even though "lazy continuation"
+  // carries zero indentation.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '1. [ ] first',
+    'lazy continuation',
+    '2. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: a mixed multi-line double-backtick span with real headings inside is real structure, not smuggled content (Codex review, PR #2840 round 9 -- rejected)', () => {
   // Considered a P1 smuggling finding, then rejected after verification
   // against GitHub's own renderer (`gh api /markdown`, mode: gfm): an ATX
