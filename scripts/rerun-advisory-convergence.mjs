@@ -631,6 +631,7 @@ export function computeRefreshLatestPlan(input, options) {
   // refresh.
   const unresolvableReasons = [];
   const nonFamilyEvents = new Set();
+  const botGatedCheckRunIds = [];
   // Keyed by runId, not deduplicated away (Copilot, PR #2855 review,
   // round 6): two check-run instances can briefly resolve to the same
   // underlying workflow run (e.g. one instance's `gh api` lookup racing
@@ -669,6 +670,32 @@ export function computeRefreshLatestPlan(input, options) {
       nonFamilyEvents.add(resolvedRunEvent || '(unknown)');
       continue;
     }
+    const status = String(instance.status ?? '')
+      .trim()
+      .toLowerCase();
+    const conclusion = instance.conclusion
+      ? String(instance.conclusion).trim().toLowerCase()
+      : null;
+    // Mirrors classifyInstance step 3's `bot-gated-skip` (Codex P1, PR
+    // #2855 review): `idd-ci.instructions.md` §Rerun mechanics documents
+    // that rerunning an `action_required`-conclusion instance preserves
+    // the original bot actor's privileges and simply re-enters
+    // `action_required` -- never clearing it, only spending this loop's
+    // sequential budget (and, via `pendingCommands`, the deferred-wait
+    // budget too) on a rerun that cannot help. Unlike
+    // `computeRerunPlan`/`--apply`'s classification, `--refresh-latest`
+    // otherwise bypasses pass/budget on purpose (see this function's own
+    // doc comment above) -- but bot-gating is not a policy choice this
+    // mode exists to override, the same distinction already drawn for
+    // `ciWait.rerunPolicy: "hold"`. A separate non-bot family instance
+    // for this same HEAD (if one exists) still gets its own entry here
+    // and can clear the rollup per that same doc's recovery guidance;
+    // this exclusion only withholds the gated instance itself.
+    if (conclusion === 'action_required') {
+      botGatedCheckRunIds.push(instance.checkRunId);
+      continue;
+    }
+    const pending = !conclusion && PENDING_STATUSES.has(status);
     const existing = commandsByRunId.get(instance.runId);
     if (existing) {
       existing.command.checkRunIds.push(instance.checkRunId);
@@ -680,14 +707,23 @@ export function computeRefreshLatestPlan(input, options) {
       ) {
         existing.command.startedAt = instanceStartedAt;
       }
+      // Any pending row wins (Codex P1, PR #2855 review): two check-run
+      // rows sharing a runId are NOT guaranteed to report the identical
+      // status -- this file's own #1381 precedent already establishes
+      // that GitHub's check-runs-for-ref response can carry a stale row
+      // alongside a fresher one for the same underlying run. Rerunning a
+      // duplicate this function mistakenly classified as terminal (from
+      // an earlier-seen COMPLETED row) while a later-seen row for the
+      // identical runId is still IN_PROGRESS would cancel that live run
+      // instead of refreshing it -- the exact hazard `pendingCommands`
+      // exists to prevent. Once true, never flips back to false: a
+      // still-pending sibling row is reason enough to wait, regardless
+      // of processing order.
+      if (pending) {
+        existing.pending = true;
+      }
       continue;
     }
-    const status = String(instance.status ?? '')
-      .trim()
-      .toLowerCase();
-    const conclusion = instance.conclusion
-      ? String(instance.conclusion).trim().toLowerCase()
-      : null;
     const resolvedCommand = {
       runId: instance.runId,
       command: `gh run rerun ${instance.runId}${repoFlag}`,
@@ -703,13 +739,10 @@ export function computeRefreshLatestPlan(input, options) {
     // review landed, and nothing else is guaranteed to trigger a fresh
     // evaluation afterward. `pendingCommands` carries the same resolved
     // command for the caller to rerun ONCE this run reaches a terminal
-    // state, rather than declining to act on it at all. Classified once,
-    // from the FIRST instance seen for this runId -- a duplicate sharing
-    // the identical runId shares the identical underlying workflow run,
-    // so its own status/conclusion cannot meaningfully disagree.
+    // state, rather than declining to act on it at all.
     commandsByRunId.set(instance.runId, {
       command: resolvedCommand,
-      pending: !conclusion && PENDING_STATUSES.has(status),
+      pending,
     });
   }
   const resolvedCommands = [];
@@ -736,23 +769,27 @@ export function computeRefreshLatestPlan(input, options) {
   resolvedCommands.sort(byStartedAtDesc);
   pendingResolvedCommands.sort(byStartedAtDesc);
   if (resolvedCommands.length === 0 && pendingResolvedCommands.length === 0) {
-    // Two genuinely different "nothing to rerun" causes (Copilot, PR
-    // #2855 review): an unresolvable instance MIGHT be a family one we
-    // simply couldn't verify (actionable -- inspect manually), whereas
+    // Three genuinely different "nothing to rerun" causes (Copilot +
+    // Codex P1, PR #2855 review), in priority order: an unresolvable
+    // instance MIGHT be a family one we simply couldn't verify
+    // (actionable -- inspect manually, the most urgent); a bot-gated
+    // (`action_required`) instance IS a family one, but rerunning it
+    // cannot clear the rollup (idd-ci.instructions.md §Rerun mechanics
+    // -- a non-bot instance is needed instead, and none exists here);
     // every instance resolving to a confirmed non-family event is the
     // ordinary "this HEAD just hasn't had a pull_request-family trigger
-    // yet" case the original message described. Prefer the unresolvable
-    // reason whenever both are present: an operator investigating a
-    // stuck rollup needs to know verification failed, not just that no
-    // family instance was found.
+    // yet" case the original message described.
+    const reason =
+      unresolvableReasons.length > 0
+        ? `no resolvable pull_request-family instance for this HEAD -- ${unresolvableReasons.join('; ')}; inspect manually`
+        : botGatedCheckRunIds.length > 0
+          ? `every pull_request-family instance for this HEAD is bot-gated (action_required: check-run(s) ${botGatedCheckRunIds.join(', ')}) -- rerunning re-enters action_required per idd-ci.instructions.md §Rerun mechanics; a non-bot pull_request-family instance is needed to clear the rollup, and none currently exists for this HEAD`
+          : `no pull_request-family check-run instance exists yet for this HEAD (found: ${[...nonFamilyEvents].join(', ')}); nothing to refresh -- a future pull_request/pull_request_target trigger will create the first instance`;
     return {
       ...header,
       commands: [],
       pendingCommands: [],
-      reason:
-        unresolvableReasons.length > 0
-          ? `no resolvable pull_request-family instance for this HEAD -- ${unresolvableReasons.join('; ')}; inspect manually`
-          : `no pull_request-family check-run instance exists yet for this HEAD (found: ${[...nonFamilyEvents].join(', ')}); nothing to refresh -- a future pull_request/pull_request_target trigger will create the first instance`,
+      reason,
       unresolvedInstanceCount: unresolvableReasons.length,
     };
   }
@@ -760,14 +797,18 @@ export function computeRefreshLatestPlan(input, options) {
     unresolvableReasons.length > 0
       ? ` (skipped ${unresolvableReasons.length} unresolvable instance(s): ${unresolvableReasons.join('; ')})`
       : '';
+  const botGatedSuffix =
+    botGatedCheckRunIds.length > 0
+      ? ` (also skipped ${botGatedCheckRunIds.length} bot-gated action_required instance(s): ${botGatedCheckRunIds.join(', ')} -- rerunning them cannot clear action_required, per idd-ci.instructions.md §Rerun mechanics)`
+      : '';
   return {
     ...header,
     commands: resolvedCommands,
     pendingCommands: pendingResolvedCommands,
     reason:
       pendingResolvedCommands.length > 0
-        ? `${pendingResolvedCommands.length} pull_request-family instance(s) for this HEAD are still running; rerunning a live run now would cancel it instead of refreshing it -- wait for each to reach a terminal state, then rerun it (see pendingCommands)${unresolvableSuffix}`
-        : unresolvableSuffix.trim(),
+        ? `${pendingResolvedCommands.length} pull_request-family instance(s) for this HEAD are still running; rerunning a live run now would cancel it instead of refreshing it -- wait for each to reach a terminal state, then rerun it (see pendingCommands)${unresolvableSuffix}${botGatedSuffix}`
+        : `${unresolvableSuffix}${botGatedSuffix}`.trim(),
     unresolvedInstanceCount: unresolvableReasons.length,
   };
 }
@@ -2304,7 +2345,7 @@ function waitForNewAttempt(owner, repo, runId, priorAttempt) {
  * mechanism): GitHub kills the job outright at its own timeout
  * regardless of what step is running, so a caller whose own timeout is
  * shorter than this wait would never actually issue the deferred rerun
- * -- see `idd-advisory-convergence-comment.yml`'s `timeout-minutes: 35`
+ * -- see `idd-advisory-convergence-comment.yml`'s `timeout-minutes: 55`
  * (and its `idd-template/` copy) for the derivation. */
 const PENDING_RUN_POLL_TIMEOUT_MS = APPLY_POLL_TIMEOUT_MS;
 /**

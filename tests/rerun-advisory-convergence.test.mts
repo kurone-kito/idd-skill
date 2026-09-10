@@ -3056,6 +3056,113 @@ test('computeRefreshLatestPlan: two instances sharing a runId merge into one com
   assert.equal(plan.commands[0]?.startedAt, '2026-07-16T10:00:00Z');
 });
 
+// Codex P1 review, PR #2855, round 8: two check-run rows sharing a runId
+// are not guaranteed to report the identical status -- this file's own
+// #1381 precedent establishes a stale row can coexist with a fresher one
+// for the same underlying run. If the first-seen row happened to be
+// COMPLETED while a later-seen row for the identical runId is still
+// IN_PROGRESS, classifying by the first row alone would rerun a live run
+// instead of waiting for it.
+test('computeRefreshLatestPlan: a pending row wins when it shares a runId with an already-seen terminal row', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          status: 'completed',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5001',
+          status: 'in_progress',
+          conclusion: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.equal(plan.pendingCommands.length, 1);
+  assert.deepEqual(plan.pendingCommands[0]?.checkRunIds, ['1001', '1002']);
+});
+
+test('computeRefreshLatestPlan: a pending row wins regardless of which order the two rows are seen in', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          status: 'in_progress',
+          conclusion: null,
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5001',
+          status: 'completed',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.equal(plan.pendingCommands.length, 1);
+});
+
+// Codex P1 review, PR #2855, round 8: idd-ci.instructions.md documents
+// that rerunning an action_required-conclusion instance preserves the
+// original bot actor's privileges and simply re-enters action_required --
+// classifyInstance already excludes it as bot-gated-skip, but
+// --refresh-latest's "rerun everything" bypass had not been narrowed to
+// exclude it too.
+test('computeRefreshLatestPlan: excludes a bot-gated action_required instance from both commands and pendingCommands', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'action_required',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
+  assert.match(plan.reason, /bot-gated \(action_required/);
+  assert.match(plan.reason, /check-run\(s\) 1001/);
+  // Bot-gating is a known, documented case -- not an unresolvable one.
+  assert.equal(plan.unresolvedInstanceCount, 0);
+});
+
+test('computeRefreshLatestPlan: a bot-gated instance does not block a resolvable sibling', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runEvent: 'pull_request_target',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5002');
+  assert.match(plan.reason, /bot-gated action_required instance/);
+});
+
 // Copilot review (PR #2855, round 5, "previously missed"): an instance
 // whose run id is unresolvable (or whose run lookup failed) carries
 // `runEvent: null` in production (see `collectFromGitHub`'s enrichment --

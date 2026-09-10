@@ -171,25 +171,30 @@ permissions:
 jobs:
   refresh-if-idd-originated:
     runs-on: ubuntu-slim
-    # 35, not the required gate's own 10 (Codex P1, PR #2855 review): a
+    # 55, not the required gate's own 10 (Codex P1, PR #2855 review): a
     # `pull_request_review` submission can land while the required gate's
     # own run is still mid-flight, and `--refresh-latest --apply` then
-    # blocks inside `waitForRunCompletion` for up to that run's own
-    # remaining lifetime (bounded by ITS `timeout-minutes: 10` in
-    # idd-advisory-convergence.yml) before issuing its own sequential
-    # reruns (`rerun-advisory-convergence.mts` reruns EVERY resolvable
-    # pull_request-family instance for this HEAD, not a fixed count --
-    # typically `pull_request` plus `pull_request_target` under Phase 1,
-    # #1381). GitHub kills the job outright at this timeout regardless of
-    # what step is running, so a shorter bound here would silently drop
-    # a deferred rerun before it ever fires -- exactly the scenario
-    # `--refresh-latest` exists to prevent. 35 = 10 (waiting out the
-    # original run) + 2x10 (the typical Phase 1 case of two sequential
-    # reruns, `rerunAndWait`'s own poll bounded by the same 10-minute
-    # gate timeout each -- not a hard upper bound; more concurrent
-    # family instances for one HEAD would need more) + 5 headroom for
-    # setup/checkout and the steps preceding this wait.
-    timeout-minutes: 35
+    # blocks inside `waitForRunCompletion` and (per rerun)
+    # `rerunAndWait`'s own `waitForNewAttempt`, each bounded by
+    # `rerun-advisory-convergence.mts`'s OWN internal 15-minute safety
+    # bound (`APPLY_POLL_TIMEOUT_MS`/`PENDING_RUN_POLL_TIMEOUT_MS`) --
+    # not the gate's shorter 10-minute job timeout that internal bound
+    # deliberately exceeds as its own margin (Codex P1, PR #2855 review,
+    # round 8, correcting this comment's own prior 10-minute-per-wait
+    # arithmetic). GitHub kills THIS job outright at ITS OWN timeout
+    # regardless of what step is running, so a bound smaller than the sum
+    # of the internal waits it wraps would silently drop a deferred rerun
+    # before those internal waits ever gave up gracefully -- exactly the
+    # scenario `--refresh-latest` exists to prevent. 55 = 15 (waiting out
+    # the original run, if still pending) + 2x15 (the typical Phase 1
+    # case of two sequential reruns, `rerunAndWait`'s own poll bounded by
+    # the same 15-minute internal safety margin each -- not a hard upper
+    # bound; more concurrent family instances for one HEAD would need
+    # more, since `rerun-advisory-convergence.mts` reruns EVERY resolvable
+    # pull_request-family instance for this HEAD, not a fixed count,
+    # #1381) + 10 headroom for setup/checkout and the steps preceding
+    # this wait.
+    timeout-minutes: 55
     if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
