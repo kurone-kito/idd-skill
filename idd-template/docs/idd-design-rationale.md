@@ -580,9 +580,9 @@ decision-transcription, and the fabricated field appeared in an
 illustrative example, not a rationale claim, so nothing in the written
 instructions caught it during that issue's own implementation, PR
 kurone-kito/idd-skill#2875; a Codex review caught it instead, after
-the text had already shipped once. A maintainer hearing on 2026-09-10
-added this narrow, adjacent check rather than broadening B2.1's own
-condition (kurone-kito/idd-skill#2878).
+the text had already shipped once. A maintainer hearing recorded on
+kurone-kito/idd-skill#2878 added this narrow, adjacent check rather
+than broadening B2.1's own condition.
 
 ### B3 — De-duplication refactor: check for behavior parity, not just body equivalence
 
