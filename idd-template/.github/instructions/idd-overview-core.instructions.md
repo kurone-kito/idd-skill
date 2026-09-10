@@ -53,9 +53,8 @@ but never create new hidden-only claim comments.
   session-record checks. Generate a fresh value on every fresh claim or
   stale takeover. Reuse the same `{claim-id}` only for heartbeats of
   that already-verified claim. Reading an existing `{claim-id}` from
-  issue comments does not by itself prove ownership; the current
-  session must have recorded that token before the
-  revalidation step.
+  issue comments does not prove ownership; the current session must
+  have recorded that token on disk first (`idd-claim.instructions.md`).
 - `{prior-claim-id}` is `none` for a fresh claim on an unclaimed issue.
   For a stale-claim takeover, set it to the currently active claim's
   `{claim-id}`.
@@ -204,6 +203,9 @@ When in scope, run:
    helper-free fallback in `idd-work.instructions.md`, which uses the
    same `idd-claim.lock` namespace. A `collision` is fail-closed: stop
    unless the active claim revalidation authorizes an explicit takeover.
+   Also confirm `--read-tokens` finds this `{claim-id}` recorded
+   (`idd-claim.instructions.md`); absent or malformed fails closed the
+   same way.
 
 **Recovery if a commit already landed on the wrong branch.** If this gate
 or `idd-doctor` finds a commit on the wrong branch, cherry-pick it onto

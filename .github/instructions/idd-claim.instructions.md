@@ -278,8 +278,9 @@ incomplete/current authoring hold blocks; only exact anchor/set/session
 `release-complete` allows a completed generation.
 Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
-Post the claim comment using the exact format and posting mechanics
-already defined in
+First record `{agent-id}`/`{claim-id}` via `--record-tokens`; then post
+the claim comment using the exact format and posting mechanics already
+defined in
 [Claim format](idd-overview-core.instructions.md#claim-format) — do not
 re-derive them here. `emit-marker` (`--type claimed-by`, emit-only) also
 renders the body without posting.
@@ -316,9 +317,10 @@ verification_ below); never skip it for any activation path:
 _{agent-id}: claim activation nonce — IDD automation marker. Do not edit._
 ```
 
-`{nonce}` is fresh; record it with `{agent-id}` / `{claim-id}`. For multiple
-trusted markers sharing a claim, the lexicographically earliest nonce wins;
-no marker means no comparison. With helper runtime, post it using
+`{nonce}` is fresh; record it via `--record-tokens` before posting. For
+multiple trusted markers sharing a claim, the lexicographically earliest
+nonce wins; no marker means no comparison. With helper runtime, post it
+using
 `post-idd-marker --type activation-nonce --target issue <number> --apply`
 with the four fields defined in `docs/idd-helper-scripts.md`.
 
@@ -575,8 +577,10 @@ for the full algorithm.
 ### Worktree-local lock file (same-machine collision)
 
 A same-machine fast path complementing the cross-machine claim check
-above. Acquire once the B1 worktree exists (before the first mutation),
-then re-run alongside every later pre-mutation check:
+above. Acquire once the B1 worktree exists (before the first mutation;
+also re-run `--record-tokens` there (with `--nonce`)), then re-run
+alongside every later
+pre-mutation check:
 `node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id
 {agent-id} --claim-id {claim-id}`.
 
@@ -593,6 +597,10 @@ remove` at F4 deletes the lock with the worktree, so a crashed
 session's leftover lock resolves the same way. See
 `docs/idd-helper-scripts.md`'s Worktree-local claim lock entry for
 mechanical detail.
+
+**Generated-tokens record.** Re-check with `--read-tokens` alongside
+`--acquire` before trusting a recalled `{claim-id}`. See
+`docs/idd-helper-scripts.md`.
 
 Then continue to `idd-work.instructions.md`.
 

@@ -1658,6 +1658,114 @@ Interpretation rules:
   namespace, so a helper-runtime session and an instructions-only
   session see the same lock.
 
+### Worktree-local generated-tokens record
+
+- A sibling artifact to the worktree-local claim lock above, in the same
+  admin directory, answering a narrower question (#2719): not "does
+  anyone else hold this worktree" but "did _this_ session actually
+  generate the `{agent-id}`/`{claim-id}` it is about to trust, on disk,
+  independent of possibly-compacted conversation memory." Referenced by
+  the "Generated-tokens record" paragraph in
+  [`idd-claim.instructions.md`'s Worktree-local lock file section](../.github/instructions/idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision).
+- Source repo / vendored-node commands:
+  `node scripts/claim-lock.mjs --record-tokens --worktree <path>
+  --agent-id <id> --claim-id <id> [--nonce <nonce>]`
+  and `node scripts/claim-lock.mjs --read-tokens --worktree <path>
+  --claim-id <id>`
+- Package-manager / ephemeral-npx command: use the same profile-selected
+  `idd:claim-lock` command as the lock above; the literal invocations are:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-claim-lock --record-tokens --worktree <path> --agent-id <id> \
+    --claim-id <id> [--nonce <nonce>]
+
+  npx --yes --package <helper-package-spec> \
+    idd-claim-lock --read-tokens --worktree <path> --claim-id <id>
+  ```
+
+- **When to call `--record-tokens`**: once at A5 claim time, right after
+  generating `{agent-id}`/`{claim-id}`, before posting the `claimed-by`
+  marker (the B1 worktree does not exist yet, so `<path>` is then the
+  _primary_ worktree); again with `--nonce` right before posting the
+  activation-nonce marker; a third time at B1 once the sibling worktree
+  exists, again with `--nonce` carried over from the A5 write --
+  mirroring the lock's own `--acquire` step, but into a distinct file in
+  the new worktree's own admin directory, so the earlier primary-worktree
+  write's `nonce` field must be copied forward rather than omitted (the
+  B1 write is not a re-read-then-rewrite of the same file). Keyed by
+  `--claim-id` (a content-hash-suffixed, sanitized filename), so two
+  sessions generating two different claim-ids resolve to different paths
+  (an astronomically unlikely, not provably impossible, chance of
+  collision from the truncated hash suffix) even while sharing the
+  primary worktree's admin directory. No collision or `--takeover`
+  concept: this is per-claim-id evidence, not a mutual-exclusion
+  primitive, so re-invoking for the same `--claim-id` is always a safe,
+  idempotent overwrite. Exits `0` unless a filesystem error occurs.
+  **Scope**: a `--read-tokens` hit against the **shared primary**
+  worktree path is bootstrap evidence only, not proof of current-session
+  ownership by itself — see `claim-lock.mts`'s own "Scope of the
+  ownership proof" header comment (#2879 review). Always resolve
+  `--read-tokens`/`--acquire` against the caller's own current cwd, never
+  an explicit different worktree's path.
+- **When to call `--read-tokens`**: alongside every later `--acquire`
+  re-run, before trusting a `{claim-id}` recalled only from context.
+  Reports `{ path, present, malformed?, record? }` read-only, mirroring
+  `--check`'s own shape: `present: true` with `record` means a
+  well-formed record for exactly this `--claim-id` exists; `present:
+  true, malformed: true` means a file exists at the resolved path but
+  cannot be trusted as this claim-id's record (corrupt content, or an
+  internal `claimId` field that disagrees with the path it was found
+  at); `present: false` means this claim-id was never recorded. Treat
+  `malformed` the same as absent for an ownership check — never trust a
+  claim-id this record does not affirmatively confirm.
+- No explicit release verb, no cleanup across takeovers: like the lock
+  file, the record lives inside the worktree's own private git-admin
+  directory, so `git worktree remove` at F4 deletes it together with the
+  worktree. The _primary_-worktree copy written at A5 (before the B1
+  worktree exists) is not cleaned up by that removal — an accepted
+  residual, since giving this record cross-worktree, pre-acquisition
+  visibility is explicitly out of scope (see the lock file's own
+  cross-worktree-visibility note above).
+- **`instructions-only` helper-free fallback, write side** (no helper
+  runtime available — `instructions-only` is the distributed default
+  profile, see
+  [Helper Runtime Profile](customization.md#helper-runtime-profile) —
+  so this path is the common case, not an edge case): resolve the
+  private admin directory the same way as the lock file above, then
+  atomically create-or-replace a file there matching this pattern
+  (kept in a fenced block, not a prose code span, so a Markdown
+  reflow can't break the filename across a line -- #2879 review,
+  Codex P1):
+
+  ```text
+  idd-generated-tokens-<sanitized-claim-id>-<8-hex-char sha256 prefix>.json
+  ```
+
+  `<sanitized-claim-id>`: non-`[A-Za-z0-9._-]` characters replaced with
+  `_`, then truncated to 64 characters, so a long claim-id can't push
+  the filename past the filesystem's `NAME_MAX` -- #2879 review, Codex
+  P1. `<8-hex-char sha256 prefix>`: the first 8 hex characters of the
+  SHA-256 digest of the **original, pre-sanitize, pre-truncate**
+  `{claim-id}`, UTF-8-encoded -- not the sanitized or truncated form,
+  so a fallback and the CLI (or two fallback implementations) agree on
+  the same path for the same claim-id (#2879 review, Codex P2). Write
+  `{ agentId, claimId, nonce?, recordedAt }`. No
+  exclusive-create semantics needed (unlike the lock): a plain atomic
+  replace is correct since this is idempotent evidence, not a
+  mutual-exclusion primitive.
+- **`instructions-only` helper-free fallback, read side** (#2879 review,
+  Codex P1 -- the mandatory `--read-tokens` check in the Claim
+  revalidation gate has no helper-free path without this): resolve the
+  same filename for the queried `{claim-id}`, using the same sanitize-
+  then-truncate rule as the write side, then reproduce the same three
+  outcomes as the CLI's own `--read-tokens` above: a missing file is
+  `present: false`; a file that exists but is unparseable JSON, or whose
+  parsed `claimId` field disagrees with the queried `{claim-id}`, is
+  `present: true, malformed: true`; only a well-formed record whose
+  `claimId` field matches is plain `present: true`. Treat `malformed`
+  the same as absent for the ownership check -- fail closed on both.
+
 ### Clone-scoped lock
 
 - Source repo / vendored-node commands:
