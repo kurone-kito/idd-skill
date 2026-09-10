@@ -141,11 +141,14 @@ turns an operator-visible failure into a silent stall.
   [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
   to collect this evidence (the fields listed at that anchor). Helpers
   remain read-only evidence collectors. Distinguish two failure shapes
-  before deciding whether to retry. On an **infrastructure/transport-
-  layer failure** — the invocation itself fails with no well-formed
-  gate result at all (a bare network/transport error, or a non-2xx
-  HTTP status with no substantive JSON body), **or returns well-formed
-  JSON whose sole content is a collection/transport-failure placeholder
+  before deciding whether to retry. On an
+  **infrastructure/transport failure** — the invocation itself fails
+  with no well-formed gate result at all (a bare network/transport
+  error such as a connection failure, timeout, or DNS failure, or a
+  retryable `5xx`/`429` HTTP status with no substantive JSON body —
+  never a non-retryable `4xx` such as `401`/`403`/`404`, which is
+  code-/auth-caused, not transient), **or returns well-formed JSON
+  whose sole content is a collection/transport-failure placeholder
   rather than a real gate criterion** (for example a non-empty
   `blockers` array whose only entry describes the collection failure
   itself, not any actual merge-readiness criterion) — retry the
@@ -156,10 +159,10 @@ turns an operator-visible failure into a silent stall.
   path below unchanged — a single bounded attempt, not a loop. A
   **substantive non-passing gate result** — the helper ran to
   completion and returned well-formed JSON with real gate fields backed
-  by an actual merge-readiness criterion (for example `claimValid:
-  false`), not a collection-failure placeholder — is never retried;
-  continue trusting it at face value, unchanged from today. For every
-  other case —
+  by an actual merge-readiness criterion (for example
+  `claim.matchesExpectedClaim: false`), not a collection-failure
+  placeholder — is never retried; continue trusting it at face value,
+  unchanged from today. For every other case —
   output is invalid JSON, required sections are missing, or live GitHub
   state disagrees with it — discard helper output and fetch the
   activity universe snapshot (same scope as E1 Step 1) plus current CI
