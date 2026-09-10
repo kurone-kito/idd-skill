@@ -808,7 +808,7 @@ function parsePositiveInt(value: string | undefined, flag: string): number {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/discover-shared-file-overlap.mjs --candidate <number> [--candidate <number> ...] [--candidates <n1,n2>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--check-overlap] [--now <ISO8601>] [--help]
+  node scripts/discover-shared-file-overlap.mjs --candidate <number> [--candidate <number> ...] [--candidates <n1,n2>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2,...>] [--check-overlap] [--now <ISO8601>] [--help]
 
 Reports, per candidate, the high-contention shared files it would touch (from
 its '## Candidate files' section) and — with --check-overlap — whether any

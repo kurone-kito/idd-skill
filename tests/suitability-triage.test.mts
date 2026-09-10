@@ -5543,7 +5543,7 @@ test('runCli: non-verbose output mapping still spreads tier when present', () =>
 // bundle (the phase-specific bundle that #2789's bundle-core split
 // produced from `bundle-discovery`, alongside the new shared `bundle-core`)
 // whose file set is disjoint enough from DEFAULT_BUNDLE_IDS
-// (bundle-review-triage-phase/bundle-review-fix-phase/bundle-merge, #2694)
+// (bundle-review-triage-phase, bundle-review-fix-phase, bundle-merge; #2694)
 // to prove the override genuinely changes the resolved exclusion set, not
 // just accepts the flag syntactically.
 
