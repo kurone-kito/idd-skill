@@ -37,15 +37,20 @@ export const DEFAULT_MANIFEST_PATH = 'audit/sync-manifest.json';
  * edits. `bundle-review-triage-phase` + `bundle-review-fix-phase` replace
  * the former single `bundle-review` id (#2694: split into E1-E8 assessment
  * and E9-E15 remediation phase bundles, reusing #2789's shared `bundle-core`
- * instead of a second overlapping core bundle) -- together with
- * `bundle-merge` they resolve to the same 10-file union as before, since
- * `idd-overview-core` / `idd-overview-appendix` remain directly listed in
- * `bundle-merge` (bundle-merge itself is out of this split's scope).
+ * instead of a second overlapping core bundle); `bundle-merge-phase`
+ * likewise replaces the former single `bundle-merge` id (#2851: split into
+ * a phase-specific bundle, also reusing `bundle-core` instead of listing
+ * `idd-overview-core` / `idd-overview-appendix` directly). Because neither
+ * successor bundle carries the two core files directly any more,
+ * `bundle-core` is listed explicitly here so the resolved union stays the
+ * same 10 files as before the #2851 split, instead of silently shrinking
+ * by the two core files.
  */
 export const DEFAULT_BUNDLE_IDS = [
+  'bundle-core',
   'bundle-review-triage-phase',
   'bundle-review-fix-phase',
-  'bundle-merge',
+  'bundle-merge-phase',
 ];
 /** Append-mostly shared surfaces that are not bundle members. */
 export const DEFAULT_EXTRA_FILES = [DEFAULT_MANIFEST_PATH];
