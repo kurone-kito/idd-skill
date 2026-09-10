@@ -1382,7 +1382,7 @@ idd-external-check-waiver --pr 123 \
   --apply --yes
 ```
 
-`--auto-bootstrap` differs from ordinary usage in exactly three ways:
+`--auto-bootstrap` differs from ordinary usage in exactly four ways:
 
 - it skips the collaborator-authority check entirely (there is no human
   actor to authorize -- the trust model below replaces it);
