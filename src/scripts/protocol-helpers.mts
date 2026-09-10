@@ -2221,23 +2221,58 @@ const CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE =
   'partial|temporary|interim|provisional|tentative|preliminary|stopgap|incomplete';
 
 // A THIRD, semantically distinct closed enumeration (Codex review, PR
-// #2868, round 10): hedge words (adverb and adjective forms above) say
-// something was done to a DEGREE; negation words say it was NOT done at
-// all -- a strictly stronger, more severe inversion, not a variant of
-// hedging. "The fix never addresses the security concern.\n\n🐇 ✓"
-// matched: "never" sits immediately before "addresses" the same way a
-// hedge adverb would, but neither hedge enumeration includes it (hedging
-// and negating are different speech acts), so the lookbehind below
-// passed it through untouched. English negation adverbs occurring
-// directly before a verb are a small, well-known closed class -- the
-// same narrow-enumeration standard as the two hedge lists above, not the
-// open-ended contrastive-adjective problem (residual gap (a)): negation
-// is a grammatical function word category, not free descriptive
-// vocabulary. `no\s+longer` is included as a two-word negation idiom;
-// `barely` is deliberately NOT duplicated here since it is already in
-// the hedge-adverb list above (a "small degree," not "zero," semantic).
+// #2868, round 10; widened round 12): hedge words (adverb and adjective
+// forms above) say something was done to a DEGREE; negation words say
+// it was NOT done at all -- a strictly stronger, more severe inversion,
+// not a variant of hedging. "The fix never addresses the security
+// concern.\n\n🐇 ✓" matched: "never" sits immediately before "addresses"
+// the same way a hedge adverb would, but neither hedge enumeration
+// includes it (hedging and negating are different speech acts), so the
+// lookbehind below passed it through untouched. English negation
+// adverbs occurring directly before a verb are a small, well-known
+// closed class -- the same narrow-enumeration standard as the two hedge
+// lists above, not the open-ended contrastive-adjective problem
+// (residual gap (a)): negation is a grammatical function word category,
+// not free descriptive vocabulary. `no\s+longer` is included as a
+// two-word negation idiom; `barely` is deliberately NOT duplicated here
+// since it is already in the hedge-adverb list above (a "small degree,"
+// not "zero," semantic). Round 12 (Codex) found the initial enumeration
+// still omitted `seldom` (a negative-frequency adverb, the same class as
+// `rarely`/`hardly`); widened the same pass to also cover the two
+// negation IDIOMS `in\s+no\s+way` and `by\s+no\s+means`, completing the
+// small set of common English negation function words/idioms rather
+// than waiting for each to surface as its own review round -- see the
+// closing statement below `CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE` for
+// where further membership widening of this closed class belongs.
 const CODERABBIT_ACK_NEGATION_WORDS_SOURCE =
-  'never|not|nor|hardly|scarcely|rarely|no\\s+longer';
+  'never|not|nor|hardly|scarcely|rarely|seldom|no\\s+longer|in\\s+no\\s+way|by\\s+no\\s+means';
+
+// A FOURTH closed enumeration, added proactively in the same pass as the
+// round-12 negation widening above rather than waiting for its own
+// review round: EPISTEMIC adverbs, which cast doubt on whether a claimed
+// action genuinely happened at all, distinct from both hedging (a
+// partial degree) and negation (an outright denial). "`@user`,
+// confirmed. This supposedly addresses the concern.\n\n🐇 ✓" reads as
+// the acknowledgment itself casting doubt on its own claim -- CodeRabbit
+// (or a reply mimicking its template) questioning whether the fix
+// really works, not confirming that it does. A small, well-known closed
+// class of English evidentiality adverbs, the same bounded standard as
+// the three enumerations above.
+//
+// **Closing statement for this whole family of enumerations**: degree
+// (hedge), adjectival-degree, negation, and epistemic are the closed
+// function-word classes this guard enumerates, each independently
+// motivated by a distinct semantic relationship to the acknowledgment
+// ("to what degree," "was it done at all," "should the claim itself be
+// trusted"). A further member surfacing within one of these four
+// existing classes (a synonym for an adverb already covered, an
+// idiomatic variant) is a bounded widening, fixed in place the same way
+// this pass fixed `seldom`. A genuinely NEW semantic class (distinct
+// from all four) is a design question for issue #2858, the same
+// escalation path residual gap (a) already used -- not something to
+// keep discovering ad hoc inside this PR's review-fix loop.
+const CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE =
+  'supposedly|allegedly|ostensibly|nominally|purportedly|seemingly|apparently';
 
 // CodeRabbit review, PR #2868, round 4: two mechanical bypasses in the
 // pattern below, both closed by widening two sub-patterns from singular-
@@ -2387,9 +2422,9 @@ const CODERABBIT_ACK_CLOSURE_TAIL_SOURCE =
 // and is raised as a design question on issue #2858 rather than chased
 // with an open-ended list here.
 const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
-  `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE})\\s+)` +
+  `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\s+)` +
     '\\baddresses\\s+the\\b' +
-    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE})\\b)[\\w-]+){0,3}` +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\b)[\\w-]+){0,3}` +
     '\\s+\\b(?:concerns?|findings?)\\b\\.\\s*' +
     CODERABBIT_ACK_CLOSURE_TAIL_SOURCE,
   'i',
@@ -2485,26 +2520,41 @@ const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
 //    adverb list and still let "partial"/"temporary" straight through,
 //    caught empirically before this ever reached review.
 // 8. **Negation words excluded everywhere a free token or a hedge
-//    lookbehind already exists** (Codex review, PR #2868, round 10):
-//    hedge words (guards 5 and 7) say something was done to a DEGREE;
-//    negation words say it was NOT done at all -- a stronger, more
-//    severe inversion, not a hedging variant, so it is its own
-//    enumeration (`CODERABBIT_ACK_NEGATION_WORDS_SOURCE` above) rather
-//    than folded into either hedge list. "`@user`, confirmed. The fix
-//    never addresses the security concern.\n\n🐇 ✓" matched: "never"
-//    sits immediately before "addresses" the same way a hedge adverb
-//    would, but neither hedge enumeration includes negation words, so
-//    every guard passed it through untouched. Wired into all three
-//    locations a hedge check already exists -- the lookbehind
+//    lookbehind already exists** (Codex review, PR #2868, round 10,
+//    widened round 12): hedge words (guards 5 and 7) say something was
+//    done to a DEGREE; negation words say it was NOT done at all -- a
+//    stronger, more severe inversion, not a hedging variant, so it is
+//    its own enumeration (`CODERABBIT_ACK_NEGATION_WORDS_SOURCE` above)
+//    rather than folded into either hedge list. "`@user`, confirmed.
+//    The fix never addresses the security concern.\n\n🐇 ✓" matched:
+//    "never" sits immediately before "addresses" the same way a hedge
+//    adverb would, but neither hedge enumeration includes negation
+//    words, so every guard passed it through untouched. Round 12 found
+//    the initial enumeration still omitted `seldom`; widened in the same
+//    pass to also cover `in no way` / `by no means`. Wired into all
+//    three locations a hedge check already exists -- the lookbehind
 //    immediately before "addresses" (guard 5), the internal gap's
 //    per-token exclusion (guard 5), and the lead-in's per-token
 //    exclusion (guard 7) -- for the same defense-in-depth reasoning as
 //    guard 7's own dual adverb/adjective exclusion above.
+// 9. **Epistemic-adverb enumeration, added proactively rather than
+//    waiting for a review round** (self-critique, same pass as round
+//    12's negation widening): `CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE`
+//    above closes a fourth, distinct semantic relationship -- casting
+//    doubt on whether the claimed fix genuinely happened at all
+//    ("supposedly", "allegedly") -- neither a degree (hedge) nor an
+//    outright denial (negation). Wired into the same three locations as
+//    guards 5, 7, and 8. See the closing statement in that constant's
+//    own doc comment for why this is treated as the natural end of this
+//    enumeration family rather than an invitation to keep widening ad
+//    hoc: degree, epistemic, and negation are the closed function-word
+//    classes; a genuinely new semantic class is a design question for
+//    issue #2858, not another review round here.
 const CODERABBIT_ACK_CLOSURE_LEADIN_RE = new RegExp(
   '^[.!]\\s+(?:' +
     'this|that|it|' +
-    `the\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE})\\b)[\\w-]+` +
-    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE})\\b)[\\w-]+){0,1}|` +
+    `the\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\b)[\\w-]+` +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\b)[\\w-]+){0,1}|` +
     'commit\\s+`[0-9a-f]{7,40}`' +
     ')\\s+$',
   'i',

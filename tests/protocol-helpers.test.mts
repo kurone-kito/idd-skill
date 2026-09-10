@@ -2052,11 +2052,18 @@ test('classifyThreadAckOnlyPostDisposition rejects a negation adverb immediately
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
-test('classifyThreadAckOnlyPostDisposition rejects a "does not address" negation immediately before "addresses" (regression guard, #2858)', () => {
-  // Same class as the round-10 finding, with a different negation word
-  // ("not") to confirm the fix is not overfit to "never" alone.
+test('classifyThreadAckOnlyPostDisposition rejects a "no longer addresses" negation idiom immediately before "addresses" (regression guard, #2858)', () => {
+  // Same class as the round-10 finding, with a different negation
+  // member (the two-word idiom "no longer") to confirm the fix is not
+  // overfit to "never" alone. Copilot's round-12 review flagged the
+  // original version of this test: its fixture used "does not
+  // addresses" (ungrammatical -- "does not address" is the correct verb
+  // form), which placed the negation word immediately before the
+  // literal "addresses" token this regex matches but did not read as
+  // real English. "No longer addresses" is grammatical and exercises
+  // the `no\s+longer` idiom directly.
   const thread = {
-    id: 'thread-negation-not-addresses',
+    id: 'thread-negation-no-longer-addresses',
     isResolved: true,
     updatedAt: '',
     comments: {
@@ -2073,7 +2080,143 @@ test('classifyThreadAckOnlyPostDisposition rejects a "does not address" negation
           id: 'NT-2',
           author: { login: 'coderabbitai[bot]' },
           body:
-            '`@user`, confirmed. This does not addresses the ' +
+            '`@user`, confirmed. This no longer addresses the ' +
+            'wording concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects "seldom" before the closure verb (Codex round 12, #2868)', () => {
+  // Codex's round-12 finding on PR #2868: the initial negation
+  // enumeration (round 10) omitted "seldom", a negative-frequency
+  // adverb in the same class as "rarely"/"hardly" already covered. This
+  // is Codex's exact adversarial example.
+  const thread = {
+    id: 'thread-negation-seldom-addresses',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'SL-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'SL-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. The fix seldom addresses the ' +
+            'security concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects the "in no way" and "by no means" negation idioms (self-critique, same pass as round 12, #2858)', () => {
+  // Widened alongside the "seldom" fix rather than waiting for each
+  // idiom to surface as its own review round.
+  const opts = {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  const mkThread = (id, body) => ({
+    id,
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: `${id}-1`,
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: `${id}-2`,
+          author: { login: 'coderabbitai[bot]' },
+          body,
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  });
+
+  const inNoWay = mkThread(
+    'thread-negation-in-no-way',
+    '`@user`, confirmed. This in no way addresses the wording ' +
+      'concern.\n\n🐇 ✓',
+  );
+  const byNoMeans = mkThread(
+    'thread-negation-by-no-means',
+    '`@user`, confirmed. This by no means addresses the wording ' +
+      'concern.\n\n🐇 ✓',
+  );
+
+  assert.equal(
+    classifyThreadAckOnlyPostDisposition(inNoWay, opts).ackOnlyPostDisposition,
+    false,
+  );
+  assert.equal(
+    classifyThreadAckOnlyPostDisposition(byNoMeans, opts)
+      .ackOnlyPostDisposition,
+    false,
+  );
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects an epistemic adverb casting doubt on the acknowledgment (self-critique, same pass as round 12, #2858)', () => {
+  // A fourth closed enumeration added proactively rather than waiting
+  // for a review round: epistemic adverbs cast doubt on whether the
+  // claimed fix genuinely happened at all -- neither a degree (hedge)
+  // nor an outright denial (negation). "This supposedly addresses the
+  // concern" reads as the acknowledgment itself questioning its own
+  // claim.
+  const thread = {
+    id: 'thread-epistemic-supposedly-addresses',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'EP-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'EP-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This supposedly addresses the ' +
             'wording concern.\n\n🐇 ✓',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
