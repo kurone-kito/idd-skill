@@ -1069,7 +1069,17 @@ that list, a changed body digest, or the marker cannot be found conclusively
 `acquire`, `bootstrap`, `resume`, `release`, `release-guard`, or
 `release-complete` markers; only a `heartbeat` append may be skipped.
 
-**Hide superseded owner/publication-intent markers.** Once a fresh
+**Hide superseded owner/publication-intent markers.** Opportunistic: see
+the mandatory Stage 2 sweep below for the mechanism this contract
+actually relies on. Measured 2026-09-11 across 22 issues published
+after this per-post step first shipped (#2750/#2821): of 95
+expected-hideable `authoring-owner`/`authoring-publication-intent`
+comments, only 3 (about 3%) were actually minimized (#2896). Following
+this step in the moment is correct and still worth doing when
+convenient -- every comment it hides is one the Stage 2 sweep below does
+not have to -- but it is not something this contract can depend on by
+itself: a step invoked 3-9+ times per issue, buried mid-protocol with no
+mechanical enforcement, is too easy to skip under load. Once a fresh
 `authoring-owner` marker (any `mode`, including the first, generation-opening
 `acquire`/`bootstrap`) or `authoring-publication-intent` record (any `state`)
 has been posted and its own POST and re-fetch/verify above have both
@@ -1122,8 +1132,11 @@ nothing to minimize -- and every marker family already covered by the
 post-merge F4 cleanup driver (for example `claimed-by`, `review-watermark`,
 `advisory-wait`; see `docs/idd-comment-minimization.md`). Do not add
 `authoring-owner`, `authoring-publication-intent`, or `authoring-publication`
-to `OPERATIONAL_MARKERS`, and do not fold this step into the F4 driver: it
-is a separate, earlier-lifecycle, hide-at-post-time behavior.
+to `OPERATIONAL_MARKERS`, and do not fold this step or the Stage 2 sweep
+below into the F4 driver: minimization for this marker family stays a
+separate, earlier-lifecycle behavior owned by the issue-authoring
+protocol itself, not the post-merge cleanup driver -- whether triggered
+opportunistically here or mandatorily at Stage 2 release.
 
 Immediately before every body or roadmap relationship update, re-fetch both
 the target and the set anchor (the same fresh snapshot serves both roles when
@@ -1191,7 +1204,72 @@ release from the authoring hold (see the
 below for the one marker-scoped exception to this precondition). Keep the
 set anchor held until every other
 target's label removal is verified, and remove the anchor label last. First
-re-fetch owner comments during release-marker preflight. If a valid
+re-fetch owner comments during release-marker preflight.
+
+**Mandatory release-time hide-on-supersede sweep (#2896).** At this same
+point -- before the reuse-or-append decision below, so a retried or
+resumed release (which reuses an existing `release` marker and never
+appends a new one) still runs the sweep every time this preflight step
+is reached -- paginate the full owner-marker log this re-fetch just
+retrieved, plus the publication-intent log for the journal named in this
+session's own records, and minimize (classifier `OUTDATED`, via the
+existing `minimize-superseded-markers.mjs`, reusing
+`matchCanonicalAuthoringMarkerFamily` unchanged) every byte-exact
+canonical match that is not the newest **trusted-actor** match for its
+family, exactly as the opportunistic per-post step above does.
+
+**Fetch that paginated log via GraphQL, never a plain REST
+issue-comments fetch, and skip an already-minimized candidate before
+submitting it** (#2896 review, Codex): a GraphQL `issueComments` /
+`comments` query can select `isMinimized` on each node directly, while
+REST's issue-comments endpoint never carries that field at all, so a
+REST-fetched snapshot cannot distinguish a comment this sweep already
+cleared from one it never touched. Use that field to exclude any
+candidate already `isMinimized: true` **before** it ever reaches the
+minimize helper's `--subject-ids`, not only when auditing the result
+afterward. Without this, every historical byte-exact canonical comment
+on a long-lived shared journal (one can accumulate hundreds over time)
+gets resubmitted to `minimize-superseded-markers.mjs` on every single
+sweep invocation across every target, and that helper probes each
+subject ID serially with no overall deadline -- a degraded GitHub API
+can then consume its per-call timeout once per historical comment and
+stall release for many minutes despite the attempted-not-blocking
+framing below.
+
+**Also pass `--deadline-ms`** (#2896 review, Codex, round 8) to every
+`minimize-superseded-markers.mjs` invocation this sweep makes -- for
+example `--deadline-ms 300000` (five minutes) -- as a second,
+independent bound: the `isMinimized` pre-filter above only skips
+already-cleared candidates cheaply, but a first-ever sweep of a large
+backlog can still submit many genuinely-not-yet-minimized candidates
+that each cost a real GitHub API round-trip, and without
+`--deadline-ms` each one can individually consume the helper's own
+per-call timeout with no overall cap.
+
+Determine
+"newest" only among candidates from a trusted marker actor (#2896
+review, Codex), never from every structural match indiscriminately --
+an untrusted actor's byte-exact canonical comment posted after the real
+newest trusted one must never be treated as the thing to keep visible:
+`minimize-superseded-markers.mjs` itself refuses to minimize any comment
+outside `--trusted-marker-logins` regardless of this selection, so
+naively treating the untrusted comment as newest would instead select
+the legitimate trusted marker for minimization -- exactly backwards.
+This mirrors `checkAuthoringMarkerMinimizationBacklog`'s own audit-side
+fix; keep the two in sync. Attempt this once per target
+here, and once more on the anchor immediately before the release-complete
+preflight below; this is the sweep the contract depends on, but
+"mandatory" means **attempted**, not blocking -- a failed attempt
+(permission error, an unreadable comment list, or an unavailable helper
+runtime) skips silently and never stops release, matching the
+opportunistic step's own best-effort framing. See the
+[Closing sweep](#closing-sweep-after-stage-2-closes-2896-review-codex)
+section below for the third sweep point this preflight sweep alone does
+not cover, and for the explicit `authoring-marker-minimization-backlog`
+invocation that makes each sweep attempt's outcome a visible, countable
+signal instead of silence.
+
+If a valid
 current-owner/set `mode=release` marker already exists, reuse the earliest
 matching GitHub comment ID; otherwise append one with `supersedes` equal to
 the current owner token, re-fetch to verify it, and record its comment ID.
@@ -1215,8 +1293,13 @@ non-anchor
 labels one target at a time and re-fetch each result. After the
 final anchor label removal is verified, re-fetch every target and verify its
 current release marker, absent label, and expected body snapshot; any drift
-leaves the set open and prevents completion. Then reuse or append the
-anchor-only
+leaves the set open and prevents completion. Immediately before the
+release-complete reuse-or-append decision below, repeat the same
+mandatory sweep once more on the anchor's own owner-marker log and the
+journal's publication-intent log -- idempotent with every earlier
+target's own sweep above, since a comment either was already minimized
+or was not yet the newest for its family either way. Then reuse or
+append the anchor-only
 `mode=release-complete` marker and record its comment ID. Reconcile that ID
 and the paginated anchor log with bounded retries; a successful POST or
 verification timeout is inconclusive. If the trusted marker is found, keep
@@ -1245,6 +1328,101 @@ authorizes IDD execution for the released issues. Do it only as part
 of that explicit release request, or the narrow auto-release exception
 below; nothing else removes the label or starts Discover, Claim, and
 Work on its own.
+
+### Closing sweep (after Stage 2 closes, #2896 review, Codex)
+
+The two sweep points above run _before_ Stage 2's own later marker
+appends for the same generation -- the per-target `release` marker, the
+pre-label-removal heartbeat each target receives immediately before its
+own label removal, and (on the anchor) `release-guard` and
+`release-complete` itself. None of those markers exist yet when their
+target's preflight sweep runs, so the preflight sweep(s) alone can never
+clear them, and a target's Stage 2 for a given generation runs only
+once -- there is no future preflight sweep that would ever revisit them.
+Once the set-level release actually closes (the successful-close branch
+above: the trusted `release-complete` marker is found and every label is
+confirmed absent), attempt the mandatory sweep one more time: paginate
+every target's now-final owner-marker log (the anchor's included this
+time, not just its own) and the journal's publication-intent log, and
+minimize every byte-exact canonical match that is not the newest for its
+family, exactly as the preflight sweeps above do. Same
+attempted-not-blocking framing: a failed attempt here does not reopen
+the set or roll back the close already recorded above.
+
+**Make every sweep attempt's outcome visible.** Immediately after each
+of the three sweep attempts in this section (per-target preflight,
+anchor-before-release-complete, and this closing sweep), run
+`audit-authored-issue.mjs`'s `authoring-marker-minimization-backlog`
+check and note its reported count -- always with `--trusted-marker-logins`
+(or the equivalent `trustedMarkerActors` option on `auditAuthoredIssue()`)
+set to the same trusted actors the sweep itself used, so the check's own
+eligibility rule matches what the sweep could actually clear; omitting
+it makes the count overstate the real backlog by including
+untrusted-authored matches the sweep was never going to touch.
+
+**Normalize the author field before writing the comments-file JSON**
+(#2896 review, Codex): the paginated GitHub REST/GraphQL response this
+section already fetches exposes a comment's author nested as
+`user.login` (REST) or `author.login` (GraphQL), never as a flat
+`author` string -- write each entry's `--comments-file` /
+`--journal-comments-file` JSON with `author` set to that nested login,
+not passed through unmapped. Skipping this normalization does not
+error: every comment silently loses its author, the trust filter above
+then excludes every candidate as unknown-author, and the count falsely
+reports zero backlog even when the sweep was skipped or failed entirely
+-- the opposite failure mode from omitting `--trusted-marker-logins`
+(that overstates; this understates to nothing).
+
+**Feed it the sweep's own post-mutation result, never the pre-mutation
+snapshot the sweep read.** The minimize helper mutates GitHub directly;
+it never updates an in-memory or on-disk comment snapshot. Before
+running the check, update the just-fetched snapshot's `isMinimized`
+field to `true` for every candidate the minimize helper's own report
+(`minimize-superseded-markers.mjs`'s `items[]`, keyed by subject id)
+lists with **either** `status: "applied"` **or** `status: "skipped",
+reason: "already-minimized"` -- the latter fires whenever the fetched
+snapshot's own `isMinimized` was already stale or absent for a comment
+GitHub already considers minimized (for example one an earlier sweep or
+the opportunistic per-post step already cleared), and counts exactly the
+same as a fresh `"applied"` for this update: both mean the comment is
+minimized now, regardless of which attempt did it. Missing either status
+keeps that comment's snapshot entry wrongly `isMinimized: false`.
+Re-fetching the paginated log fresh **via GraphQL** (matching the
+sweep's own fetch above) is an acceptable alternative to this snapshot
+update, not merely a fallback -- either one produces the same accurate
+post-sweep state. A REST re-fetch is not a valid alternative here
+(#2896 review, Codex): REST's issue-comments endpoint never carries
+`isMinimized` at all, so a REST re-fetch is exactly as blind to
+minimization state as the stale pre-mutation snapshot this paragraph
+exists to correct -- it produces a different but equally wrong
+snapshot, not an accurate one. Skipping both and auditing the unmodified
+pre-mutation snapshot reports every comment the sweep (or a prior one)
+already minimized as still-outstanding backlog, making even a fully
+successful, fully idempotent sweep look like it failed. A nonzero count
+after this update means the sweep attempt genuinely did not fully clear
+the backlog it was supposed to (a partial
+permission failure or a genuine defect) -- record it, but never block
+release on it; this is the mechanical signal that makes a skipped or
+partially-failed sweep attempt visible instead of silent, the same kind
+of gap that went unnoticed for weeks in the original per-post-only
+instruction this section replaces (measured effectiveness cited above).
+
+**When the backlog check itself cannot run, record that fact through a
+runtime-independent path (#2896 review, Codex).** The check depends on
+the same paginated comment snapshot and the same helper runtime
+(Node.js) as the sweep it audits, so the one scenario this whole
+mechanism exists to catch -- the sweep silently skipped because the
+helper runtime is unavailable (`instructions-only` profile, or Node.js
+absent), or because the paginated comment fetch itself failed -- is
+exactly the scenario in which the mechanical count also cannot run,
+leaving no signal at all if nothing else is done. When either the sweep
+or the audit could not run for this reason, still post an explicit
+plain-text note through a path that needs no helper runtime (a
+`gh`/HTTP comment on the target, or the session's own live status
+digest) -- for example "hide-on-supersede sweep skipped this cycle:
+helper runtime unavailable" -- naming the reason. This never blocks
+release either; it only ensures a fully-silent skip never happens even
+in the one failure mode the mechanical signal cannot itself cover.
 
 ### Narrow auto-release exception (review-fix-loop-cutoff)
 
