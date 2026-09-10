@@ -8,7 +8,10 @@
 // Repository-local authoring guardrail (idd-skill issue #1677): fails when
 // a Markdown file contains an inline code span whose line break falls
 // mid-token (see code-span-wrap.mts for the exact rule and rationale).
-// This is dogfood-only tooling -- the lint configuration is not part of
+// Also fails on the prose counterpart (idd-skill issue #2876): a
+// hyphenated compound word whose line break falls immediately after the
+// hyphen inside `**bold**` / `*italic*` emphasis text. This is
+// dogfood-only tooling -- the lint configuration is not part of
 // the distributed idd-template/ (see docs/typescript-sources.md and this
 // script's registration in tests/helper-runtime-manifest.test.mts's
 // DOGFOOD_ONLY_CONCRETE_TOOLS set).
@@ -28,6 +31,7 @@ import { readFileSync } from 'node:fs';
 import {
   type CodeSpanWrapViolation,
   findCorruptingCodeSpanWraps,
+  findCorruptingProseWraps,
 } from './code-span-wrap.mts';
 
 const ROOT = process.cwd();
@@ -115,7 +119,8 @@ function readText(file: string): string {
 
 interface FileViolations {
   file: string;
-  violations: CodeSpanWrapViolation[];
+  codeSpanViolations: CodeSpanWrapViolation[];
+  proseViolations: CodeSpanWrapViolation[];
 }
 
 export interface AuditCodeSpanWrapsResult {
@@ -130,7 +135,12 @@ export interface AuditCodeSpanWrapsResult {
   unreadableFiles: string[];
 }
 
-/** Scan every non-ignored Markdown file for corrupting code-span wraps. */
+/**
+ * Scan every non-ignored Markdown file for corrupting mid-token line
+ * breaks: inline code spans ({@link findCorruptingCodeSpanWraps}) and, per
+ * idd-skill issue #2876, hyphenated compound words inside `**`/`*`
+ * emphasis-marked prose text ({@link findCorruptingProseWraps}).
+ */
 export function auditCodeSpanWraps(): AuditCodeSpanWrapsResult {
   const ignorePatterns = parseMarkdownlintIgnores(
     readText(MARKDOWNLINT_CONFIG_PATH),
@@ -149,9 +159,10 @@ export function auditCodeSpanWraps(): AuditCodeSpanWrapsResult {
       unreadableFiles.push(file);
       continue;
     }
-    const violations = findCorruptingCodeSpanWraps(text);
-    if (violations.length > 0) {
-      results.push({ file, violations });
+    const codeSpanViolations = findCorruptingCodeSpanWraps(text);
+    const proseViolations = findCorruptingProseWraps(text);
+    if (codeSpanViolations.length > 0 || proseViolations.length > 0) {
+      results.push({ file, codeSpanViolations, proseViolations });
     }
   }
   return { results, unreadableFiles };
@@ -175,13 +186,16 @@ if (import.meta.main) {
 
   if (results.length > 0) {
     failed = true;
-    console.error(
-      'audit-code-span-wrap: mid-token inline code span line break(s) found:',
-    );
-    for (const { file, violations } of results) {
-      for (const violation of violations) {
+    console.error('audit-code-span-wrap: mid-token line break(s) found:');
+    for (const { file, codeSpanViolations, proseViolations } of results) {
+      for (const violation of codeSpanViolations) {
         console.error(
-          `- ${file}:${violation.line}  ...${violation.before}|${violation.after}...`,
+          `- ${file}:${violation.line}  ...${violation.before}|${violation.after}... (code span)`,
+        );
+      }
+      for (const violation of proseViolations) {
+        console.error(
+          `- ${file}:${violation.line}  ...${violation.before}|${violation.after}... (prose emphasis)`,
         );
       }
     }
@@ -199,5 +213,7 @@ if (import.meta.main) {
   if (failed) {
     process.exit(1);
   }
-  console.log('audit-code-span-wrap: no mid-token code span wraps found.');
+  console.log(
+    'audit-code-span-wrap: no mid-token line breaks found (code spans or prose emphasis).',
+  );
 }

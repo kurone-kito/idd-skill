@@ -64,7 +64,11 @@ the reasoning behind this layout.
   wrap-point character is a hand-added artifact rather than part of
   the real value, delete it instead of just relocating the break.
   Enforced by `node scripts/audit-code-span-wrap.mjs`
-  (repository-local; not distributed to `idd-template/`).
+  (repository-local; not distributed to `idd-template/`). The same
+  script also flags this failure mode outside code spans, in prose
+  Markdown text: a hyphenated compound word (e.g. "transport-layer")
+  must never wrap right after the hyphen inside `**bold**` / `*italic*`
+  emphasis, for the same corrupting-space reason (issue `#2876`).
 - **Bare issue/PR reference wrapping**: a bare `#NNN` reference must
   never be the first token of a paragraph, list item, or wrapped
   continuation line in prose Markdown — `dprint fmt`'s automatic
