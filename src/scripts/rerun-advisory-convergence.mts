@@ -870,6 +870,157 @@ export function computeRerunPlan(
 }
 
 /**
+ * Full JSON document printed by `--refresh-latest`, an alternate CLI mode
+ * from {@link computeRerunPlan}'s own budget/classification-gated `plan`
+ * (Codex P1, PR #2855 review). #2764 Phase 1 moved `pull_request_review`
+ * off `idd-advisory-convergence.yml`'s own trigger list onto the
+ * non-required companion workflow, which now reruns the existing required
+ * run via this helper instead of a fresh direct trigger -- but the
+ * ordinary `--apply` path only reruns a `rerun-eligible` instance, which
+ * EXCLUDES anything already classified `pass` and enforces the
+ * rerun-once budget: a same-HEAD review landing after the gate already
+ * went green (or after its one rerun was already spent) would leave a
+ * stale verdict standing even though the review may have raised new
+ * blocking findings, silently losing the pre-#2764 guarantee that EVERY
+ * review submission gets a fresh evaluation -- the former direct
+ * `pull_request_review` trigger always started a brand-new run, regardless
+ * of any prior instance's own conclusion or attempt count.
+ * `--refresh-latest` restores that guarantee narrowly: it selects the
+ * single most-recently-started pull_request-family instance for this HEAD
+ * and (unless it is still running) reruns it unconditionally, bypassing
+ * {@link classifyInstance}'s pass/bot-gated/budget classification
+ * entirely. Deliberately NOT folded into `computeRerunPlan`/`--apply`
+ * itself: that budget exists to protect against a genuine comment-burst
+ * hazard (#2643) a review submission does not share (rare, human-paced,
+ * and already separately debounced by the companion workflow's own
+ * `advisory-comment-debounce.mjs` step) -- so the comment-family `--apply`
+ * path, and every existing test/invariant built around its budget, stays
+ * completely unchanged; only the companion workflow's
+ * `pull_request_review` step opts into this mode.
+ */
+export interface RefreshLatestPlan {
+  protocolVersion: '1';
+  prNumber: number;
+  prHeadSha: string;
+  checkName: string;
+  now: string;
+  /** The single instance selected for an unconditional rerun, or `null`
+   * when there is nothing safe/useful to rerun -- see `reason`. */
+  command: RerunPlanCommand | null;
+  /** Empty when `command` is set; otherwise explains why (no
+   * pull_request-family instance exists yet for this HEAD, the latest one
+   * is still running, or its underlying run id could not be resolved). */
+  reason: string;
+}
+
+/**
+ * Compute {@link RefreshLatestPlan} from the same already-fetched,
+ * already-enriched instances {@link computeRerunPlan} consumes -- pure, no
+ * I/O, directly unit-testable with fixtures, mirroring `computeRerunPlan`'s
+ * own DI shape.
+ */
+export function computeRefreshLatestPlan(
+  input: RerunPlanInput,
+  options: Pick<RerunPlanOptions, 'now'>,
+): RefreshLatestPlan {
+  const now = String(options.now ?? '');
+  if (!isValidIsoTimestamp(now)) {
+    throw new Error('now must be an ISO 8601 UTC timestamp');
+  }
+  const prHeadSha = String(input.prHeadSha ?? '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(prHeadSha)) {
+    throw new Error('prHeadSha must be a 40-character hexadecimal commit SHA');
+  }
+  const checkName =
+    String(input.checkName ?? '').trim() || RERUN_PLAN_CHECK_NAME;
+  const owner = String(input.owner ?? '').trim();
+  const repo = String(input.repo ?? '').trim();
+  const repoFlag = owner && repo ? ` -R ${owner}/${repo}` : '';
+
+  const header = {
+    protocolVersion: '1' as const,
+    prNumber: Number(input.prNumber),
+    prHeadSha,
+    checkName,
+    now,
+  };
+
+  const familyInstances = (input.instances ?? []).filter((instance) =>
+    PULL_REQUEST_FAMILY_EVENTS.has(
+      String(instance.runEvent ?? '')
+        .trim()
+        .toLowerCase(),
+    ),
+  );
+  if (familyInstances.length === 0) {
+    return {
+      ...header,
+      command: null,
+      reason:
+        'no pull_request-family check-run instance exists yet for this HEAD; nothing to refresh -- a future pull_request/pull_request_target trigger will create the first instance',
+    };
+  }
+
+  // Latest by startedAt (unknown/empty sorts LAST -- the opposite of
+  // buildOrderedPlan's own earliest-first, more-cautious ordering -- since
+  // this selects the single most-recent instance rather than building a
+  // deterministic multi-entry plan); numeric checkRunId breaks a tie.
+  const [latest] = [...familyInstances].sort((left, right) => {
+    const leftStarted = left.startedAt ?? '';
+    const rightStarted = right.startedAt ?? '';
+    if (leftStarted !== rightStarted) {
+      if (!leftStarted) return 1;
+      if (!rightStarted) return -1;
+      return leftStarted < rightStarted ? 1 : -1;
+    }
+    return Number(right.checkRunId) - Number(left.checkRunId);
+  });
+
+  const status = String(latest.status ?? '')
+    .trim()
+    .toLowerCase();
+  const conclusion = latest.conclusion
+    ? String(latest.conclusion).trim().toLowerCase()
+    : null;
+  // Mirrors classifyInstance step 2: rerunning a still-running instance
+  // cancels it instead of refreshing it.
+  if (!conclusion && PENDING_STATUSES.has(status)) {
+    return {
+      ...header,
+      command: null,
+      reason: `the latest pull_request-family instance (check-run ${latest.checkRunId}) is still running ("${status}"); rerunning a live run would cancel it instead of refreshing it -- once it completes, it will already reflect this review`,
+    };
+  }
+  // Mirrors classifyInstance steps 4-5: never guess a rerun target from an
+  // unresolvable run identity.
+  if (latest.runId === null) {
+    return {
+      ...header,
+      command: null,
+      reason: `the latest pull_request-family instance (check-run ${latest.checkRunId}) has no resolvable workflow run id; inspect manually`,
+    };
+  }
+  if (latest.runLookupFailed) {
+    return {
+      ...header,
+      command: null,
+      reason: `the underlying workflow run for the latest pull_request-family instance (check-run ${latest.checkRunId}) could not be fetched (network/permission/transient failure); inspect manually`,
+    };
+  }
+
+  return {
+    ...header,
+    command: {
+      runId: latest.runId,
+      command: `gh run rerun ${latest.runId}${repoFlag}`,
+      checkRunIds: [latest.checkRunId],
+      startedAt: latest.startedAt ?? '',
+    },
+    reason: '',
+  };
+}
+
+/**
  * Resolve whether `instance` may still be rerun under `rerunPolicy`, given
  * its own `runAttempt`. Reuses {@link resolveCiRerunDecision}
  * (ci-wait-policy.mts) -- the same rerun-once-budget decision
@@ -1465,6 +1616,10 @@ interface RerunPlanArgs {
    * via `gh run rerun` instead of only diagnosing them. See
    * {@link applyRerunPlan}. */
   apply: boolean;
+  /** When `true`, bypass `computeRerunPlan` entirely and compute
+   * {@link RefreshLatestPlan} instead -- see that type's own doc comment
+   * for why (#2764 Phase 1, Codex P1 review on PR #2855). */
+  refreshLatest: boolean;
   /** Raw `--check-name` value, trimmed but NOT yet defaulted -- an empty
    * string means the flag was either omitted or given a
    * whitespace-only value (indistinguishable after trimming, and
@@ -1504,6 +1659,7 @@ const RERUN_ADVISORY_CONVERGENCE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
   '--apply': { type: 'boolean', default: false },
   '--check-name': { type: 'string', default: '' },
+  '--refresh-latest': { type: 'boolean', default: false },
 } as const;
 
 /**
@@ -1544,6 +1700,7 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
       help: true,
       apply: false,
       checkName: '',
+      refreshLatest: false,
     };
   }
 
@@ -1601,6 +1758,7 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
     help: false,
     apply: Boolean(values.apply),
     checkName: String(values['check-name'] ?? '').trim(),
+    refreshLatest: Boolean(values['refresh-latest']),
   };
 }
 
@@ -1778,7 +1936,7 @@ export function buildRerunPlanTextSections(
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--check-name <name>] [--apply] [--help]
+  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--check-name <name>] [--apply] [--refresh-latest] [--help]
 
 By default (without --apply): read-only. Fetches every
 "${RERUN_PLAN_CHECK_NAME}" check-run instance for the PR's current HEAD SHA
@@ -1833,6 +1991,22 @@ finds nothing (field-reported, #1935; see the job-definition comment in
 Omitting this flag keeps output byte-identical to before this flag
 existed.
 
+--refresh-latest replaces the whole plan/budget computation above with a
+single, much narrower question: which pull_request-family instance for
+this HEAD started most recently, and is it safe to rerun unconditionally
+right now? Unlike the default mode, it does NOT classify pass /
+bot-gated-skip / rerun-budget-held -- it reruns the latest instance
+regardless of any of those, UNLESS that instance is still running (which
+would cancel it) or its run id could not be resolved. Intended only for
+the narrow #2764 Phase 1 case where a fresh pull_request_review submission
+must get a fresh evaluation even if the gate is already green or its
+rerun-once budget is already spent -- see the RefreshLatestPlan doc
+comment in the .mts source. With --apply, executes that single rerun (via
+the same "gh run rerun" mechanism as the default --apply path) instead of
+only printing it. Mutually exclusive in effect with the default plan
+computation: when given, --refresh-latest's own JSON document replaces
+the ordinary plan document on stdout.
+
 Honors the inspected repository's configured ciWait.rerunPolicy: when
 it is "hold", both the rerun plan and the recovery-refresh plan stay
 empty (with a notice explaining why) instead of recommending reruns a
@@ -1868,20 +2042,27 @@ export function runRerunAdvisoryConvergence(
   deps: RerunPlanDeps = defaultDeps,
 ): {
   plan: RerunAdvisoryConvergencePlan | null;
+  /** Populated instead of `plan` when `--refresh-latest` was given; see
+   * {@link computeRefreshLatestPlan}. */
+  refreshLatestPlan: RefreshLatestPlan | null;
   help: boolean;
   args: RerunPlanArgs;
 } {
   const args = parseArgs(argv);
   if (args.help) {
-    return { plan: null, help: true, args };
+    return { plan: null, refreshLatestPlan: null, help: true, args };
   }
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
 
   const { input, options } = deps.collect(args);
+  if (args.refreshLatest) {
+    const refreshLatestPlan = computeRefreshLatestPlan(input, options);
+    return { plan: null, refreshLatestPlan, help: false, args };
+  }
   const plan = computeRerunPlan(input, options);
-  return { plan, help: false, args };
+  return { plan, refreshLatestPlan: null, help: false, args };
 }
 
 // --- --apply: execute the plan's rerun-eligible instances ---------------
@@ -2723,11 +2904,28 @@ function buildProductionApplyDeps(args: RerunPlanArgs): RerunApplyDeps {
 // so importing this module (for unit tests) never parses process.argv,
 // prints usage, or makes a `gh` call.
 if (import.meta.main) {
-  const { plan, help, args } = runRerunAdvisoryConvergence(
+  const { plan, refreshLatestPlan, help, args } = runRerunAdvisoryConvergence(
     process.argv.slice(2),
   );
   if (help) {
     printHelp();
+  } else if (refreshLatestPlan) {
+    // Same stdout/stderr split as the ordinary plan below: JSON only on
+    // stdout, human-readable summary on stderr.
+    process.stdout.write(`${JSON.stringify(refreshLatestPlan, null, 2)}\n`);
+    if (refreshLatestPlan.command) {
+      process.stderr.write(
+        `\n--refresh-latest selected: ${refreshLatestPlan.command.command}\n`,
+      );
+      if (args.apply) {
+        buildProductionApplyDeps(args).rerunAndWait(refreshLatestPlan.command);
+        process.stderr.write(
+          `\n--refresh-latest --apply: executed ${refreshLatestPlan.command.command}.\n`,
+        );
+      }
+    } else {
+      process.stderr.write(`\n${refreshLatestPlan.reason}\n`);
+    }
   } else if (plan) {
     // stdout carries ONLY the JSON document -- nothing else -- so the
     // overall stdout stream stays valid, machine-parseable JSON (e.g.

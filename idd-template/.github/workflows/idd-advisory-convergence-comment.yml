@@ -22,10 +22,23 @@
 # comment families, a review submission always reruns the gate
 # unconditionally (see "Classify review comment" below): it is not
 # filtered by IDD-originated content, matching the gate's own former
-# unconditional `pull_request_review` trigger exactly. `issue_comment`
-# also fires for a comment on a plain issue, not only a PR; the
-# job-level `if:` below skips those (`github.event.issue.pull_request`
-# is only present when the commented-on issue is a PR).
+# unconditional `pull_request_review` trigger exactly -- and, per that
+# same "always" guarantee, "Rerun required HEAD check" below adds
+# `--refresh-latest` for this one trigger family: the ordinary `--apply`
+# alone only reruns a `rerun-eligible` instance (excludes anything
+# already `pass` and enforces the rerun-once budget), which would leave a
+# same-HEAD review landing after the gate already went green -- or after
+# its one rerun was already spent -- unable to force a fresh evaluation
+# (Codex P1, kurone-kito/idd-skill#2855 review). `--refresh-latest` reruns
+# the latest pull_request-family instance unconditionally instead,
+# restoring the former direct-trigger's "every review gets a fresh
+# evaluation" guarantee; see `RefreshLatestPlan`'s doc comment in the
+# canonical source repository's `rerun-advisory-convergence.mts` for why
+# this is a separate mode rather than changing `--apply`'s own budget for
+# every caller. `issue_comment` also fires for a comment on a plain
+# issue, not only a PR; the job-level `if:` below skips those
+# (`github.event.issue.pull_request` is only present when the
+# commented-on issue is a PR).
 #
 # Job id is deliberately NOT `idd-advisory-convergence`.
 #
@@ -337,6 +350,15 @@ jobs:
           PROFILE: ${{ steps.profile.outputs.profile }}
           PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
           MANAGER: ${{ steps.manager.outputs.manager }}
+          # A review submission always reruns unconditionally (module
+          # header above), including when the gate is already `pass` or
+          # its rerun-once budget is already spent -- neither of the two
+          # comment families needs that: they are already filtered to
+          # IDD-originated content and share the ordinary rerun-once
+          # budget deliberately (#2643 comment-burst protection). Single
+          # word, no spaces -- safe to expand unquoted below (omitted
+          # entirely, not an empty-string argument, when empty).
+          REFRESH_FLAG: ${{ github.event_name == 'pull_request_review' && '--refresh-latest' || '' }}
         run: |
           if [ -z "$PR_NUMBER" ]; then
             echo "::error::PR_NUMBER is empty"
@@ -344,24 +366,30 @@ jobs:
           fi
           case "$PROFILE" in
             vendored-node)
-              node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --apply
+              # shellcheck disable=SC2086 # REFRESH_FLAG is a single
+              # trusted word ("--refresh-latest" or empty); see env: above.
+              node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" $REFRESH_FLAG --apply
               ;;
             package-manager)
               case "$MANAGER" in
                 pnpm)
-                  pnpm exec idd-rerun-advisory-convergence --pr "$PR_NUMBER" --apply
+                  # shellcheck disable=SC2086
+                  pnpm exec idd-rerun-advisory-convergence --pr "$PR_NUMBER" $REFRESH_FLAG --apply
                   ;;
                 yarn)
-                  yarn idd-rerun-advisory-convergence --pr "$PR_NUMBER" --apply
+                  # shellcheck disable=SC2086
+                  yarn idd-rerun-advisory-convergence --pr "$PR_NUMBER" $REFRESH_FLAG --apply
                   ;;
                 *)
-                  npm exec idd-rerun-advisory-convergence -- --pr "$PR_NUMBER" --apply
+                  # shellcheck disable=SC2086
+                  npm exec idd-rerun-advisory-convergence -- --pr "$PR_NUMBER" $REFRESH_FLAG --apply
                   ;;
               esac
               ;;
             ephemeral-npx)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
-              npx --yes --package "$SPEC" idd-rerun-advisory-convergence --pr "$PR_NUMBER" --apply
+              # shellcheck disable=SC2086
+              npx --yes --package "$SPEC" idd-rerun-advisory-convergence --pr "$PR_NUMBER" $REFRESH_FLAG --apply
               ;;
             *)
               echo "::error::unrecognized helper-runtime profile \"$PROFILE\""

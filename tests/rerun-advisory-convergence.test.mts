@@ -6,6 +6,7 @@ import {
   buildCheckRunsForRefArgs,
   buildRerunPlanTextSections,
   buildRunViewLogArgs,
+  computeRefreshLatestPlan,
   computeRerunPlan,
   describeNoActionState,
   describeOutstandingStates,
@@ -2338,6 +2339,7 @@ test('parseArgs parses --pr, --owner, --repo, --now', () => {
     help: false,
     apply: false,
     checkName: '',
+    refreshLatest: false,
   });
 });
 
@@ -2423,6 +2425,14 @@ test('parseArgs recognizes --help', () => {
 test('parseArgs recognizes --apply, defaulting to false when omitted', () => {
   assert.equal(parseArgs(['--pr', '1431']).apply, false);
   assert.equal(parseArgs(['--pr', '1431', '--apply']).apply, true);
+});
+
+test('parseArgs recognizes --refresh-latest, defaulting to false when omitted', () => {
+  assert.equal(parseArgs(['--pr', '1431']).refreshLatest, false);
+  assert.equal(
+    parseArgs(['--pr', '1431', '--refresh-latest']).refreshLatest,
+    true,
+  );
 });
 
 // --- --check-name (#1935: escape hatch for a job `name:` override) ------
@@ -2712,6 +2722,156 @@ test('runRerunAdvisoryConvergence leaves checkName empty (default) when --check-
     },
   });
   assert.equal(receivedCheckName, '');
+});
+
+// --- computeRefreshLatestPlan (#2764 Phase 1, Codex P1 review on PR #2855) --
+//
+// The ordinary computeRerunPlan/--apply path only reruns a
+// rerun-eligible instance -- it never touches anything already `pass`,
+// and enforces the rerun-once budget. --refresh-latest exists precisely
+// to bypass both for the narrow pull_request_review case, so its own
+// tests deliberately probe those two exclusions computeRerunPlan itself
+// would apply.
+
+test('computeRefreshLatestPlan: no command and an explanatory reason when no pull_request-family instance exists', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ runEvent: 'workflow_dispatch' })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.command, null);
+  assert.match(plan.reason, /nothing to refresh/);
+});
+
+test('computeRefreshLatestPlan: reruns the latest instance even when it already classifies pass (the regression this mode exists to fix)', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:00Z',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.command?.runId, '5001');
+  assert.equal(plan.command?.command, 'gh run rerun 5001');
+  assert.equal(plan.reason, '');
+});
+
+test('computeRefreshLatestPlan: selects the most-recently-started pull_request-family instance among several', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:00Z',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          startedAt: '2026-07-16T10:05:00Z',
+          conclusion: 'failure',
+          runEvent: 'pull_request_target',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.command?.runId, '5002');
+  assert.deepEqual(plan.command?.checkRunIds, ['1002']);
+});
+
+test('computeRefreshLatestPlan: a still-running latest instance is left alone (never cancelled)', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          status: 'in_progress',
+          conclusion: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.command, null);
+  assert.match(plan.reason, /still running/);
+});
+
+test('computeRefreshLatestPlan: fails closed on an unresolvable run id', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runId: null })] }),
+    baseOptions(),
+  );
+  assert.equal(plan.command, null);
+  assert.match(plan.reason, /no resolvable workflow run id/);
+});
+
+test('computeRefreshLatestPlan: fails closed when the underlying run lookup failed', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runLookupFailed: true })] }),
+    baseOptions(),
+  );
+  assert.equal(plan.command, null);
+  assert.match(plan.reason, /could not be fetched/);
+});
+
+test('computeRefreshLatestPlan: includes -R owner/repo when both are known', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({ owner: 'kurone-kito', repo: 'idd-skill' }),
+    baseOptions(),
+  );
+  // No instances at all here -- command stays null; this test only
+  // exercises the header fields, covered separately below.
+  assert.equal(plan.prHeadSha, HEAD);
+});
+
+test('computeRefreshLatestPlan: -R owner/repo is embedded in the generated command', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+      instances: [baseInstance({ conclusion: 'success' })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(
+    plan.command?.command,
+    'gh run rerun 5001 -R kurone-kito/idd-skill',
+  );
+});
+
+// --- runRerunAdvisoryConvergence: --refresh-latest ------------------------
+
+test('runRerunAdvisoryConvergence: --refresh-latest returns refreshLatestPlan instead of plan', () => {
+  const result = runRerunAdvisoryConvergence(
+    ['--pr', '1431', '--refresh-latest'],
+    {
+      collect: () => ({
+        input: baseInput({
+          instances: [baseInstance({ conclusion: 'success' })],
+        }),
+        options: baseOptions(),
+      }),
+    },
+  );
+  assert.equal(result.plan, null);
+  assert.equal(result.refreshLatestPlan?.command?.runId, '5001');
+  assert.equal(result.args.refreshLatest, true);
+});
+
+test('runRerunAdvisoryConvergence: omitting --refresh-latest leaves refreshLatestPlan null', () => {
+  const result = runRerunAdvisoryConvergence(['--pr', '1431'], {
+    collect: () => ({ input: baseInput(), options: baseOptions() }),
+  });
+  assert.equal(result.refreshLatestPlan, null);
+  assert.equal(result.args.refreshLatest, false);
 });
 
 // --- applyRerunPlan -------------------------------------------------------

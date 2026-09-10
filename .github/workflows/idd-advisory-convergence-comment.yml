@@ -22,7 +22,20 @@
 # run re-asserts. Unlike the two comment families, a review submission
 # always reruns the gate unconditionally (see "Classify review comment"
 # below): it is not filtered by IDD-originated content, matching the
-# gate's own former unconditional `pull_request_review` trigger exactly.
+# gate's own former unconditional `pull_request_review` trigger exactly
+# -- and, per that same "always" guarantee, "Rerun required HEAD check"
+# below routes it through `rerun-advisory-convergence.mjs --refresh-latest
+# --apply` instead of the two comment families' plain `--apply`: the
+# ordinary `--apply` path only reruns a `rerun-eligible` instance
+# (excludes anything already `pass` and enforces the rerun-once budget),
+# which would leave a same-HEAD review that lands after the gate already
+# went green -- or after its one rerun was already spent -- unable to
+# force a fresh evaluation (Codex P1, PR #2855 review). `--refresh-latest`
+# reruns the latest pull_request-family instance unconditionally instead,
+# restoring the former direct-trigger's "every review gets a fresh
+# evaluation" guarantee; see `RefreshLatestPlan`'s doc comment in
+# `rerun-advisory-convergence.mts` for why this is a separate mode rather
+# than changing `--apply`'s own budget for every caller.
 # `issue_comment` also fires for a comment on a plain issue, not only a
 # PR; the job-level `if:` below skips those (`github.event.issue.pull_request`
 # is only present when the commented-on issue is a PR).
@@ -164,4 +177,16 @@ jobs:
           # PR number at github.event.pull_request.number; issue_comment
           # (#2411) carries it at github.event.issue.number instead.
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-        run: node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --apply
+          # A review submission always reruns unconditionally (module
+          # header above), including when the gate is already `pass` or
+          # its rerun-once budget is already spent -- neither of the two
+          # comment families needs that: they are already filtered to
+          # IDD-originated content and share the ordinary rerun-once
+          # budget deliberately (#2643 comment-burst protection).
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request_review" ]; then
+            node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --refresh-latest --apply
+          else
+            node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --apply
+          fi
