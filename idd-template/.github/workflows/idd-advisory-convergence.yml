@@ -537,19 +537,47 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PROFILE: ${{ steps.profile.outputs.profile }}
         run: |
-          # Kept in sync by hand with SELF_REFERENTIAL_WAIVER_TRIGGER_FILES
-          # in src/scripts/advisory-convergence.mts -- exactly the same
-          # seven committed paths, never derived from imports.
+          # kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895):
+          # the checker's own file surface differs by
+          # helperRuntime.profile -- a vendored-node adopter runs the
+          # COMPILED scripts/*.mjs (this profile never vends the source
+          # repository's own src/scripts/*.mts; see
+          # idd-helper-scripts.md's vendored-node row), and a
+          # package-manager adopter has no local checker file at all,
+          # upgrading it only through its dependency manifest and
+          # lockfile. Using this source repository's own src/scripts/*.mts
+          # paths unconditionally left the mechanism both non-functional
+          # for its intended adopters (a genuine checker upgrade could
+          # never match) and gameable (a PR could touch a path that does
+          # not exist at all in the adopter's own checkout purely to
+          # satisfy the string match). The two workflow paths are
+          # profile-invariant: every profile's own checker version pin
+          # lives in one of them or in the profile-specific paths below.
           ALLOWLIST=(
-            "src/scripts/advisory-convergence.mts"
-            "src/scripts/advisory-wait-state.mts"
-            "src/scripts/advisory-wait-policy.mts"
-            "src/scripts/rerun-advisory-convergence.mts"
-            "src/scripts/external-check-waiver.mts"
             ".github/workflows/idd-advisory-convergence.yml"
             ".github/workflows/idd-advisory-convergence-comment.yml"
           )
+          case "$PROFILE" in
+            vendored-node)
+              ALLOWLIST+=(
+                "scripts/advisory-convergence.mjs"
+                "scripts/advisory-wait-state.mjs"
+                "scripts/advisory-wait-policy.mjs"
+                "scripts/rerun-advisory-convergence.mjs"
+                "scripts/external-check-waiver.mjs"
+              )
+              ;;
+            package-manager)
+              ALLOWLIST+=(
+                "package.json"
+                "package-lock.json"
+                "pnpm-lock.yaml"
+                "yarn.lock"
+              )
+              ;;
+          esac
           CHANGED=$(gh pr diff "$PR_NUMBER" --name-only)
           TOUCHED=false
           for FILE in "${ALLOWLIST[@]}"; do
