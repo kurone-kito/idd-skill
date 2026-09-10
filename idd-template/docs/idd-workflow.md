@@ -594,8 +594,9 @@ several unrelated technical topics into one dense batch.
 **Apply the operator's answers back onto the issue**: update the score
 footer, remove or update the `triage:{outcome}` label -- and the
 configured needs-decision label too, when the hold-and-return rule
-below applied it to this same candidate, since nothing else removes it
--- revise acceptance criteria to reflect the decision, and record the
+below applied it to this same candidate, so Discover's own A3
+readiness filter stops excluding it -- revise acceptance criteria to
+reflect the decision, and record the
 decision as inline prose in the issue body: `Maintainer decision (<provenance>,
 Groom hearing, <date>): <resolution text>` -- the shape
 `suitability-triage.mjs`'s Check 7 recognizes as a resolved
