@@ -2233,6 +2233,146 @@ test('classifyThreadAckOnlyPostDisposition rejects an epistemic adverb casting d
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects "perhaps" and "possibly" as missing epistemic qualifiers (Codex round 13, #2868)', () => {
+  // Codex's round-13 finding on PR #2868: the initial epistemic
+  // enumeration (added proactively alongside round 12) omitted the
+  // common qualifiers "perhaps"/"possibly"/"maybe"/"presumably". This is
+  // Codex's exact adversarial example plus one additional member from
+  // its own suggested list.
+  const opts = {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  const mkThread = (id, body) => ({
+    id,
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: `${id}-1`,
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: `${id}-2`,
+          author: { login: 'coderabbitai[bot]' },
+          body,
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  });
+
+  const perhaps = mkThread(
+    'thread-epistemic-perhaps',
+    '`@user`, confirmed. The fix perhaps addresses the security ' +
+      'concern.\n\n🐇 ✓',
+  );
+  const possibly = mkThread(
+    'thread-epistemic-possibly',
+    '`@user`, confirmed. The fix possibly addresses the security ' +
+      'concern.\n\n🐇 ✓',
+  );
+
+  assert.equal(
+    classifyThreadAckOnlyPostDisposition(perhaps, opts).ackOnlyPostDisposition,
+    false,
+  );
+  assert.equal(
+    classifyThreadAckOnlyPostDisposition(possibly, opts).ackOnlyPostDisposition,
+    false,
+  );
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a compact conjunction-joined finding within the token cap (Codex round 13, #2868)', () => {
+  // Codex's round-13 finding on PR #2868: the round-7 token cap alone
+  // does not close every conjunction-joined bypass -- a COMPACT
+  // construction fits within the `{0,3}` budget where round 7's
+  // original 5-token example did not. "This addresses the concern but
+  // raises concerns.\n\n🐇 ✓" consumes "concern", "but", "raises" as
+  // three modifier tokens (within budget) and reaches the second,
+  // plural "concerns" as the closure target. This is Codex's exact
+  // adversarial example.
+  const thread = {
+    id: 'thread-conjunction-compact-but-raises',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'CC-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'CC-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This addresses the concern but ' +
+            'raises concerns.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a 2-token conjunction bypass demonstrating no finite token cap alone closes this class (self-critique, same pass as round 13, #2858)', () => {
+  // Confirms the doc comment's own claim: tightening the token cap
+  // cannot close this bypass class in general, since an even shorter
+  // (2-token) variant exists. Only excluding coordinating conjunctions
+  // themselves closes it.
+  const thread = {
+    id: 'thread-conjunction-two-token-yet',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'CY-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'CY-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This addresses the concern yet ' +
+            'concerns.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 

@@ -2261,18 +2261,42 @@ const CODERABBIT_ACK_NEGATION_WORDS_SOURCE =
 //
 // **Closing statement for this whole family of enumerations**: degree
 // (hedge), adjectival-degree, negation, and epistemic are the closed
-// function-word classes this guard enumerates, each independently
-// motivated by a distinct semantic relationship to the acknowledgment
-// ("to what degree," "was it done at all," "should the claim itself be
-// trusted"). A further member surfacing within one of these four
-// existing classes (a synonym for an adverb already covered, an
-// idiomatic variant) is a bounded widening, fixed in place the same way
-// this pass fixed `seldom`. A genuinely NEW semantic class (distinct
-// from all four) is a design question for issue #2858, the same
-// escalation path residual gap (a) already used -- not something to
-// keep discovering ad hoc inside this PR's review-fix loop.
+// SEMANTIC function-word classes this guard enumerates, each
+// independently motivated by a distinct relationship to the
+// acknowledgment ("to what degree," "was it done at all," "should the
+// claim itself be trusted"). A fifth, GRAMMATICAL (not semantic) class
+// -- coordinating conjunctions -- is enumerated separately below
+// (`CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE`) for a structural reason,
+// not a meaning-based one. A further member surfacing within one of
+// these five existing classes (a synonym for an adverb already covered,
+// an idiomatic variant) is a bounded widening, fixed in place the same
+// way round 12 fixed `seldom` and round 13 fixed `perhaps`/`possibly`/
+// `maybe`/`presumably` below. A genuinely NEW class -- distinct from all
+// five, and from the coordinating-conjunction structural fix -- is a
+// design question for issue #2858, the same escalation path residual
+// gap (a) already used -- not something to keep discovering ad hoc
+// inside this PR's review-fix loop.
 const CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE =
-  'supposedly|allegedly|ostensibly|nominally|purportedly|seemingly|apparently';
+  'supposedly|allegedly|ostensibly|nominally|purportedly|seemingly|apparently|perhaps|possibly|maybe|presumably';
+
+// A GRAMMATICAL (not semantic) closed class (Codex review, PR #2868,
+// round 13): the seven English coordinating conjunctions ("FANBOYS":
+// for/and/nor/but/or/yet/so) are excluded from the internal gap's
+// modifier tokens, closing a compact variant of the round-7 "but
+// reveals another finding" bypass that fits within the `{0,3}` token
+// cap: "`@user`, confirmed. This addresses the concern but raises
+// concerns.\n\n🐇 ✓" consumes "concern", "but", "raises" as three
+// modifier tokens (all within budget, unlike round 7's 5-token example)
+// and reaches the second, plural "concerns" as the closure target.
+// Tightening the token CAP further cannot close this in general: real
+// samples already need up to 2 tokens, and a 2-token variant of the same
+// bypass exists ("concern yet concerns"), so no finite cap excludes the
+// attack while still admitting real noun phrases. Excluding coordinating
+// conjunctions specifically is the right bound instead, because English
+// has EXACTLY seven of them -- a closed set fixed by the language's
+// grammar, not an open-ended vocabulary list -- and a genuine noun-phrase
+// modifier never needs one (neither real observed sample does).
+const CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE = 'for|and|nor|but|or|yet|so';
 
 // CodeRabbit review, PR #2868, round 4: two mechanical bypasses in the
 // pattern below, both closed by widening two sub-patterns from singular-
@@ -2424,7 +2448,7 @@ const CODERABBIT_ACK_CLOSURE_TAIL_SOURCE =
 const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
   `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\s+)` +
     '\\baddresses\\s+the\\b' +
-    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\b)[\\w-]+){0,3}` +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE}|${CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE})\\b)[\\w-]+){0,3}` +
     '\\s+\\b(?:concerns?|findings?)\\b\\.\\s*' +
     CODERABBIT_ACK_CLOSURE_TAIL_SOURCE,
   'i',
@@ -2539,22 +2563,46 @@ const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
 //    guard 7's own dual adverb/adjective exclusion above.
 // 9. **Epistemic-adverb enumeration, added proactively rather than
 //    waiting for a review round** (self-critique, same pass as round
-//    12's negation widening): `CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE`
-//    above closes a fourth, distinct semantic relationship -- casting
-//    doubt on whether the claimed fix genuinely happened at all
-//    ("supposedly", "allegedly") -- neither a degree (hedge) nor an
-//    outright denial (negation). Wired into the same three locations as
-//    guards 5, 7, and 8. See the closing statement in that constant's
-//    own doc comment for why this is treated as the natural end of this
-//    enumeration family rather than an invitation to keep widening ad
-//    hoc: degree, epistemic, and negation are the closed function-word
-//    classes; a genuinely new semantic class is a design question for
-//    issue #2858, not another review round here.
+//    12's negation widening; widened round 13):
+//    `CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE` above closes a fourth,
+//    distinct semantic relationship -- casting doubt on whether the
+//    claimed fix genuinely happened at all ("supposedly", "allegedly")
+//    -- neither a degree (hedge) nor an outright denial (negation).
+//    Wired into the same three locations as guards 5, 7, and 8. Round
+//    13 (Codex) found the initial enumeration omitted "perhaps"; widened
+//    the same pass to also cover "possibly"/"maybe"/"presumably". See
+//    the closing statement in that constant's own doc comment for why
+//    this is treated as the natural end of the SEMANTIC enumeration
+//    family (guard 10 below is a separate, GRAMMATICAL closed class, not
+//    a sixth semantic one).
+// 10. **Coordinating-conjunction exclusion, a grammatical rather than
+//     semantic closed class** (Codex review, PR #2868, round 13): the
+//     `{0,3}` token cap alone cannot close every conjunction-joined
+//     bypass, because a COMPACT one fits within budget where round 7's
+//     original 5-token example did not -- "confirmed. This addresses
+//     the concern but raises concerns.\n\n🐇 ✓" consumes "concern",
+//     "but", "raises" as three modifier tokens (within the cap) and
+//     reaches the second, plural "concerns" as the closure target.
+//     Tightening the cap further cannot close this in general: a
+//     2-token variant of the same bypass exists ("concern yet
+//     concerns"), and real samples already need up to 2 tokens, so no
+//     finite cap excludes the attack while still admitting real noun
+//     phrases. `CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE` excludes
+//     English's seven coordinating conjunctions ("FANBOYS") instead --
+//     a set fixed by the language's grammar, not open-ended vocabulary,
+//     so this is not the same class of fix as the semantic
+//     enumerations above and does not reopen the open-ended
+//     new-concern-blocklist problem. Wired into the internal gap (the
+//     demonstrated bypass) and the lead-in (defense-in-depth,
+//     consistent with guards 7-9); not the immediate pre-"addresses"
+//     lookbehind, since a bare conjunction directly before "addresses"
+//     ("confirmed. But addresses...") is not a coherent English
+//     sentence in the first place.
 const CODERABBIT_ACK_CLOSURE_LEADIN_RE = new RegExp(
   '^[.!]\\s+(?:' +
     'this|that|it|' +
-    `the\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\b)[\\w-]+` +
-    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\b)[\\w-]+){0,1}|` +
+    `the\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE}|${CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE})\\b)[\\w-]+` +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE}|${CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE})\\b)[\\w-]+){0,1}|` +
     'commit\\s+`[0-9a-f]{7,40}`' +
     ')\\s+$',
   'i',
