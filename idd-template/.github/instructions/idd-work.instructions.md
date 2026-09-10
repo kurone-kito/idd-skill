@@ -337,7 +337,7 @@ On no conflict, continue with the plan below.
 
 When the issue's "Proposed change" or "Acceptance criteria" cites an
 existing schema field, config key, or token as an example (not one it
-adds), verify it exists; fix or drop it if not, hold if unclear
+adds), verify it exists as cited; fix or drop if not, hold if unclear
 (`#2806`).
 
 Draft an implementation plan and post it as an issue comment, then run
