@@ -89,6 +89,71 @@ test('hasVerificationCommandSignal: an example inside a raw HTML block (<pre>) d
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test("hasVerificationCommandSignal: a raw HTML block (<pre>) opened as a list item's own first line does not count (Codex review, PR #2840, round 11)", () => {
+  // `- <pre>` previously left the block fully unmasked (findHtmlBlockRanges
+  // tested the unstripped "- <pre>" line, which its opener patterns --
+  // anchored at the line start -- never matched), so the two fake
+  // checkbox lines inside it were counted as real. Verified against
+  // GitHub's own renderer (gh api /markdown): the whole <pre> content
+  // renders as literal text, never a real checklist.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '- <pre>',
+    '  - [ ] one',
+    '  - [ ] two',
+    '  </pre>',
+    '',
+    '## Candidate files',
+    '',
+    '- `src/scripts/exists.mts`',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: a raw HTML block (<pre>) containing a fake heading, opened as a list item, does not count (Codex review, PR #2840, round 11)', () => {
+  // Same fix, a second angle: the fake heading inside the <pre> was
+  // already never counted as a real section boundary (it happened to be
+  // read as a NEXT_ATX_HEADING_PATTERN match instead, truncating the
+  // section early) -- this stays false, but now for the right reason: the
+  // whole block is masked, so neither the fake heading nor the fake
+  // checkboxes are visible to any signal at all.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '- <pre>',
+    '  ## Acceptance criteria',
+    '',
+    '  - [ ] one',
+    '  - [ ] two',
+    '  </pre>',
+    '',
+    '## Candidate files',
+    '',
+    '- `src/scripts/exists.mts`',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: a raw HTML block (<pre>) opened inside a blockquote does not count (Codex review, PR #2840, round 11)', () => {
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '> <pre>',
+    '> - [ ] one',
+    '> - [ ] two',
+    '> </pre>',
+    '',
+    '## Candidate files',
+    '',
+    '- `src/scripts/exists.mts`',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: an escaped backtick command span does not count (Codex review, PR #2840 round 5)', () => {
   // CommonMark renders an escaped backtick (`\` + backtick) as a literal
   // character, never a real code-span delimiter.

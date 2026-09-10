@@ -739,6 +739,27 @@ test('findHtmlBlockRanges masks a raw-text block (<pre>) through its own closing
   assert.equal(masked.includes('</pre>'), false);
 });
 
+test("findHtmlBlockRanges recognizes a raw-text block opener as a list item's own first line (Codex review, PR #2840, round 11)", () => {
+  // `- <pre>` previously tested the unstripped line against the opener
+  // pattern (anchored `^ {0,3}<`), which the leading "- " defeated -- the
+  // block's content stayed unmasked entirely.
+  const body = ['- <pre>', '  x', '  </pre>', ''].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(ranges[0]?.start, 0);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('x'), false);
+  assert.equal(masked.includes('</pre>'), false);
+});
+
+test('findHtmlBlockRanges recognizes a raw-text block opener inside a blockquote (Codex review, PR #2840, round 11)', () => {
+  const body = ['> <pre>', '> x', '> </pre>', ''].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('x'), false);
+});
+
 test('findHtmlBlockRanges masks an unclosed raw-text block through end of text', () => {
   const body = '<script>\nvar x = 1;\n';
   assert.deepEqual(findHtmlBlockRanges(body), [{ start: 0, end: body.length }]);

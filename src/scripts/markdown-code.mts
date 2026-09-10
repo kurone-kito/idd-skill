@@ -1156,6 +1156,31 @@ function isValidFenceOpener(fence: FencedLine): boolean {
  * which GitHub renders as literal/opaque content, not Markdown structure --
  * neither {@link findFencedCodeRanges}, {@link findIndentedCodeRanges}, nor
  * {@link findHtmlCommentRanges} masked that shape.
+ *
+ * Opener detection strips a container prefix first (Codex review, PR
+ * #2840, round 11): `- <pre>` (an HTML block opener as a list item's own
+ * first line) or `> <pre>` (inside a blockquote) previously tested the
+ * *unstripped* line against every opener pattern below, all of which are
+ * anchored at `^ {0,3}<`, so the leading marker made every one of them
+ * miss -- the block's opaque content stayed fully unmasked, letting a
+ * fake heading/checklist/candidate-path inside it satisfy a structural
+ * signal GitHub itself never renders as real structure. Reuses
+ * {@link parseContainerLine} (blockquote `>` stripping) and
+ * {@link stripListItemMarker} (list-marker stripping) -- the same helpers
+ * {@link findMarkdownBlockBoundary} already uses for this exact
+ * "container-prefix-aware opener" question -- rather than inventing new
+ * machinery. Only the *opener* tests need this: every close/end scan
+ * below (a raw-text tag's own closing tag, a special block's close
+ * token, a generic block's next blank line) already tests with an
+ * unanchored pattern or a blank-line check, both already
+ * container-agnostic. Deliberately still no multi-line container-depth
+ * tracking beyond the opening line -- matches this function's own
+ * existing top-level-scan scope note above; a custom-tag opener
+ * (`MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN`, which per CommonMark
+ * cannot interrupt a paragraph) technically starts a fresh container
+ * immediately after a list marker even when `previousLineBlank` is
+ * false for the *outer* text, an accepted residual edge this round does
+ * not additionally chase.
  */
 export function findHtmlBlockRanges(text: string): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
@@ -1175,14 +1200,15 @@ export function findHtmlBlockRanges(text: string): MarkdownCodeRange[] {
     const isBlank = line.trim() === '';
 
     if (!isBlank) {
-      const rawTag = rawTextOpenTag(line);
-      const closeToken = specialHtmlBlockCloseToken(line);
+      const content = stripListItemMarker(parseContainerLine(line).content);
+      const rawTag = rawTextOpenTag(content);
+      const closeToken = specialHtmlBlockCloseToken(content);
       const opensGeneric =
         rawTag === null &&
         closeToken === null &&
-        (MARKDOWN_HTML_BLOCK_START_PATTERN.test(line) ||
+        (MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
           (previousLineBlank &&
-            MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(line)));
+            MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content)));
 
       if (rawTag !== null) {
         // Copilot review, PR #2840 (round 8): a same-line self-closed
@@ -1224,7 +1250,7 @@ export function findHtmlBlockRanges(text: string): MarkdownCodeRange[] {
         // separately for the `<!--` case, but `<?`/`<!X`/`<![CDATA[` had
         // no other masking and fell through unmasked here entirely.
         let end = lineEnd;
-        if (!isSelfClosedSpecialHtmlBlock(line)) {
+        if (!isSelfClosedSpecialHtmlBlock(content)) {
           let scanStart = lineAfter;
           end = text.length;
           while (scanStart <= text.length) {
