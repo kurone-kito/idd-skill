@@ -268,6 +268,51 @@ test('comment-refresh workflows debounce the rerun call and preserve cancel-in-p
   }
 });
 
+// Codex P1 review, PR #2855, round 9: GitHub Actions implicitly prepends
+// `success()` to a step's own if: UNLESS the expression itself already
+// calls one of success()/failure()/always() -- so without an explicit
+// call, a failure in the preceding "Classify review comment" step (its
+// own review-comment-origin.mjs throwing) would silently skip this
+// ENTIRE step, defeating the pull_request_review disjunct's own "always
+// proceeds regardless of debounce" guarantee for the exact trigger that
+// guarantee exists to protect.
+test('comment-refresh workflows call success() explicitly so a classifier failure cannot silently skip a pull_request_review rerun', () => {
+  for (const path of COMMENT_PATHS) {
+    const text = readWorkflow(path);
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    assert.notEqual(rerunIndex, -1);
+    const rerunStepText = text.slice(
+      rerunIndex,
+      text.indexOf('\n      - name:', rerunIndex + 1) === -1
+        ? undefined
+        : text.indexOf('\n      - name:', rerunIndex + 1),
+    );
+    const ifLine = rerunStepText
+      .split('\n')
+      .find((line) => line.trim().startsWith('if:')) as string;
+    assert.ok(ifLine, `${path} rerun step must have an if: condition`);
+    assert.match(
+      ifLine,
+      /success\(\)/,
+      `${path} rerun step's if: must call success() explicitly to suppress GitHub's implicit prepend`,
+    );
+    // The pull_request_review disjunct itself must stay outside any
+    // success() gating -- a regex anchored on "pull_request_review' &&
+    // success()" (either operand order) would indicate success() ended
+    // up gating the review branch instead of only the comment branch.
+    assert.doesNotMatch(
+      ifLine,
+      /pull_request_review'\s*&&\s*success\(\)/,
+      `${path} rerun step's pull_request_review branch must not itself be gated by success()`,
+    );
+    assert.doesNotMatch(
+      ifLine,
+      /success\(\)\s*&&\s*\(?\s*github\.event_name\s*==\s*'pull_request_review'/,
+      `${path} rerun step's pull_request_review branch must not itself be gated by success()`,
+    );
+  }
+});
+
 // Codex P1 review, PR #2855: a review superseded by debounce would
 // silently downgrade to whatever a later comment-triggered run does
 // (plain `--apply`, never `--refresh-latest`), which could leave an

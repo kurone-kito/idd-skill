@@ -463,8 +463,25 @@ jobs:
         # not consulted for `pull_request_review` at all (that step's own
         # `if:` excludes it), so a review is never superseded by a later
         # comment-triggered run that cannot provide the same
-        # `--refresh-latest` guarantee.
-        if: steps.profile.outputs.profile != 'instructions-only' && steps.manager.outputs.manager != 'ambiguous' && (github.event_name == 'pull_request_review' || (steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'))
+        # `--refresh-latest` guarantee. The explicit `success() &&` on
+        # the comment-family branch is load-bearing, not redundant
+        # (Codex P1, kurone-kito/idd-skill#2855 review): GitHub Actions
+        # implicitly prepends `success()` to a step's own `if:` UNLESS
+        # the expression itself already calls one of success()/failure()/
+        # always() -- so without an explicit call here, a failure in
+        # "Classify review comment" above (its own `review-comment-
+        # origin.mjs` throwing, e.g. on a malformed review body) would
+        # implicitly skip this ENTIRE step, silently defeating the
+        # review branch's own "always proceeds" guarantee for the exact
+        # trigger that guarantee exists to protect. Calling success()
+        # explicitly here suppresses that implicit prepend and lets the
+        # `pull_request_review` disjunct genuinely short-circuit
+        # regardless of any earlier step's own outcome (profile/manager
+        # readiness still applies to both branches via the leading
+        # `&&`), while the comment-family branch still requires it,
+        # matching this step's pre-existing (implicit) behavior for
+        # that path unchanged.
+        if: steps.profile.outputs.profile != 'instructions-only' && steps.manager.outputs.manager != 'ambiguous' && (github.event_name == 'pull_request_review' || (success() && steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'))
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
