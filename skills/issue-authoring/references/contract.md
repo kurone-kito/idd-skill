@@ -1725,10 +1725,12 @@ only approval boundary.
   the same way an ordinary `Blocked by #<N>` line is — while
   `#<originating-issue>` stays open, a narrow exception to `Refs`
   otherwise being non-blocking everywhere else in this workflow. The
-  marked follow-up must carry exactly one `Refs` keyword line: nothing
-  in body text lets Discover safely tell the true origin apart from an
-  unrelated `Refs` citation that also starts its own line, so more than
-  one fails closed instead of guessing by position.
+  marked follow-up must carry exactly one `Refs` keyword line naming
+  exactly one issue: nothing in body text lets Discover safely tell the
+  true origin apart from an unrelated `Refs` citation that also starts
+  its own line, or apart from a second number on the same line, so more
+  than one line or more than one number fails closed instead of
+  guessing.
 
 ## Publication boundary
 

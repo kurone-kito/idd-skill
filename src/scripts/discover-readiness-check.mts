@@ -893,7 +893,8 @@ export function hasReviewFixLoopCutoffDeferMarker(
 }
 
 /** The `numbers` extracted from the body's sole `Refs` keyword line, or an
- * `ambiguous: true` marker when more than one such line exists -- see
+ * `ambiguous: true` marker when more than one such line exists, or the
+ * sole line names more than one issue -- see
  * {@link extractReviewFixLoopCutoffRefsIssueNumbers}. */
 export interface ReviewFixLoopCutoffRefsResult {
   numbers: number[];
@@ -901,24 +902,32 @@ export interface ReviewFixLoopCutoffRefsResult {
 }
 
 /**
- * Collect the `#N` references declared on the body's `Refs` keyword line --
+ * Collect the `#N` reference declared on the body's `Refs` keyword line --
  * never every `Refs` line the way {@link extractBlockedByIssueNumbers}
  * collects every `Blocked by` line (#2877 review fix, Codex P2). The D3
  * follow-up-issue rule requires exactly one `Refs #<originating-issue>`
- * line naming the work this marker's target was deferred from. Reading
- * only the first matching line by body position is order-fragile: a
- * later, unrelated `Refs #N` citation that also happens to start its own
- * line (for example a standalone `Refs #900 (non-blocking)` aside) is
+ * line naming exactly one issue this marker's target was deferred from.
+ * Reading only the first matching line by body position is order-fragile:
+ * a later, unrelated `Refs #N` citation that also happens to start its
+ * own line (for example a standalone `Refs #900 (non-blocking)` aside) is
  * textually indistinguishable from the true origin, and nothing in D3
  * guarantees the origin line comes first (#2877 review fix, Codex P2
  * round 2). Rather than guess an order, this requires exactly one genuine
  * `Refs` keyword line: zero yields `{ numbers: [], ambiguous: false }`
  * (the caller's `missing_defer_source_refs_line` reason covers that);
  * two or more yields `{ numbers: [], ambiguous: true }`, and the caller
- * fails closed instead of arbitrarily picking one. A `Refs` mention that
- * does not start its own line (ordinary prose citing an issue
- * mid-sentence, like `See also Refs #900 (non-blocking) for background.`)
- * is not a keyword line at all and never counts toward this check. See
+ * fails closed instead of arbitrarily picking one. The same ambiguity
+ * applies within the sole line itself: `Refs #410, #900` parses as two
+ * valid references (the generic dependency-ref-list grammar this shares
+ * with `Blocked by` intentionally allows a comma-separated list), but
+ * this marker's origin is a single issue, not a list, and this function
+ * cannot tell which of the two is the real origin -- so more than one
+ * extracted number (across the keyword line and any wrapped continuation
+ * lines together) is *also* ambiguous, not a multi-target blocker (#2877
+ * review fix round 3, Codex P2). A `Refs` mention that does not start its
+ * own line (ordinary prose citing an issue mid-sentence, like
+ * `See also Refs #900 (non-blocking) for background.`) is not a keyword
+ * line at all and never counts toward either check. See
  * {@link hasReviewFixLoopCutoffDeferMarker} for how the caller decides
  * whether any of this is blocking in the first place.
  */
@@ -943,10 +952,11 @@ export function extractReviewFixLoopCutoffRefsIssueNumbers(
     stripped,
     (match.index ?? 0) + match[0].length,
   );
-  return {
-    numbers: dedupeNumbers([...numbers, ...continuationNumbers]),
-    ambiguous: false,
-  };
+  const allNumbers = dedupeNumbers([...numbers, ...continuationNumbers]);
+  if (allNumbers.length > 1) {
+    return { numbers: [], ambiguous: true };
+  }
+  return { numbers: allNumbers, ambiguous: false };
 }
 
 /**

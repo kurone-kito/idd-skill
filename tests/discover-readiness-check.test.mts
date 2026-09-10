@@ -224,11 +224,7 @@ test('hasReviewFixLoopCutoffDeferMarker recognizes only the exact marker (#2877)
   );
 });
 
-test('extractReviewFixLoopCutoffRefsIssueNumbers captures Refs lines like extractBlockedByIssueNumbers (#2877)', () => {
-  assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers('Refs #100, #200'),
-    { numbers: [100, 200], ambiguous: false },
-  );
+test('extractReviewFixLoopCutoffRefsIssueNumbers captures a single Refs reference (#2877)', () => {
   assert.deepEqual(extractReviewFixLoopCutoffRefsIssueNumbers('- Refs #55'), {
     numbers: [55],
     ambiguous: false,
@@ -256,6 +252,25 @@ test('extractReviewFixLoopCutoffRefsIssueNumbers ignores a Refs mention that doe
       'Refs #100\n\nSee also Refs #900 (non-blocking) for background.',
     ),
     { numbers: [100], ambiguous: false },
+  );
+});
+
+test('extractReviewFixLoopCutoffRefsIssueNumbers reports ambiguous when the sole Refs line names more than one issue (#2877 review fix round 3, Codex P2)', () => {
+  // One keyword line, but it names two issues via the generic
+  // comma-separated ref-list grammar this shares with `Blocked by`. This
+  // marker's origin is a single issue, not a list, and nothing here can
+  // tell which of the two is the real origin -- so this fails closed the
+  // same way two separate Refs lines does, rather than treating both
+  // numbers as blockers.
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers('Refs #410, #900'),
+    { numbers: [], ambiguous: true },
+  );
+  // Same ambiguity via a wrapped continuation line (#2441) rather than a
+  // same-line comma list.
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers('Refs #410\n#900'),
+    { numbers: [], ambiguous: true },
   );
 });
 
@@ -879,6 +894,35 @@ test('a marked issue with two genuine Refs lines fails closed as ambiguous (#287
   ]);
 
   const summary = await evaluateDiscoverReadiness([412], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut[0].reasons, [
+    'ambiguous_defer_source_refs_lines',
+  ]);
+});
+
+test('a marked issue whose sole Refs line names two issues fails closed as ambiguous (#2877 review fix round 3, Codex P2)', async () => {
+  const issues = new Map([
+    [
+      413,
+      {
+        number: 413,
+        title: 'malformed deferred follow-up naming two issues on one line',
+        state: 'OPEN',
+        body: [
+          '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+          '',
+          'Refs #410, #900',
+        ].join('\n'),
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([413], {
     loadIssue: async (number) => issues.get(number) ?? null,
     findRoadmapsByMarker: async () => [],
   });
