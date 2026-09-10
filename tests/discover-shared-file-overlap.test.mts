@@ -226,6 +226,51 @@ test('parseCandidateFiles does not mistake an indented wrapped continuation line
   assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
 });
 
+test('parseCandidateFiles rejects a tab-indented "## Candidate files" heading -- CommonMark renders it as an indented code block, not a heading (Codex review, PR #2840, round 11)', () => {
+  // Verified against GitHub's own renderer (gh api /markdown): a tab
+  // advances to the next 4-column tab stop, past the 0-3-space ATX
+  // indent allowance, so this line renders as a <pre><code> block. The
+  // earlier `\s{0,3}` (matching a tab the same as a space) wrongly opened
+  // a section here anyway.
+  const body = [
+    'Some content.',
+    '',
+    '\t## Candidate files',
+    '',
+    '- `src/scripts/exists.mts`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
+test('parseCandidateFiles still accepts a 3-space-indented "## Candidate files" heading (control)', () => {
+  const body = [
+    'Some content.',
+    '',
+    '   ## Candidate files',
+    '',
+    '- `src/scripts/exists.mts`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/scripts/exists.mts']);
+});
+
+test('parseCandidateFiles does not treat a tab-indented underline as a Setext boundary (Codex review, PR #2840, round 11)', () => {
+  // Same tab-vs-space indent error on SETEXT_UNDERLINE_PATTERN: a
+  // tab-indented "-----" renders as plain paragraph text (verified via
+  // gh api /markdown), never a real Setext underline, so it must not end
+  // the Candidate files section before its own later real path.
+  const body = [
+    '## Candidate files',
+    '',
+    '- `src/a.mts`',
+    '',
+    'Notes',
+    '\t-----',
+    '',
+    '- `src/b.mts`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/a.mts', 'src/b.mts']);
+});
+
 // ---------------------------------------------------------------------------
 // parseCandidateFileEntries (#2767 round 8, Codex review PR #2840)
 // ---------------------------------------------------------------------------

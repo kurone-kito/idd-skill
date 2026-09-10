@@ -41,13 +41,18 @@ const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 /** Upper bound on the best-effort open-PR scan (a `gh pr list --limit`). */
 const OPEN_PR_SCAN_LIMIT = 500;
 /** A Setext-style sibling heading's own underline: a lone run of `=` or `-`
- * characters (optional leading indent up to 3 spaces, optional trailing
- * whitespace), with no other content on the line. Declared here (well
- * above the `import.meta.main` CLI entry block below) rather than next to
- * {@link parseCandidateFiles}'s own use of it -- a module-level binding
- * initialized after that block is a top-level-await TDZ risk
- * (`tests/cli-entry-smoke.test.mts`). */
-const SETEXT_UNDERLINE_PATTERN = /^[ \t]{0,3}(?:=+|-+)[ \t]*$/;
+ * characters (optional leading indent up to 3 *space* characters -- a tab
+ * does not qualify (Codex review, PR #2840, round 11): CommonMark's block
+ * openers tolerate 0-3 literal spaces of indent, never a tab (which
+ * advances to the next 4-column tab stop, past the threshold), so a
+ * tab-indented `---` renders as plain paragraph text, not a real
+ * underline; the earlier `[ \t]{0,3}` wrongly counted a tab the same as a
+ * space -- optional trailing whitespace), with no other content on the
+ * line. Declared here (well above the `import.meta.main` CLI entry block
+ * below) rather than next to {@link parseCandidateFiles}'s own use of it
+ * -- a module-level binding initialized after that block is a
+ * top-level-await TDZ risk (`tests/cli-entry-smoke.test.mts`). */
+const SETEXT_UNDERLINE_PATTERN = /^ {0,3}(?:=+|-+)[ \t]*$/;
 /**
  * A line CommonMark would never let become a Setext heading's own content
  * line even when immediately followed by an underline-shaped line: a list
@@ -70,9 +75,15 @@ const SETEXT_UNDERLINE_PATTERN = /^[ \t]{0,3}(?:=+|-+)[ \t]*$/;
  * an indented wrapped continuation line is this repository's own
  * documented multi-line-bullet convention. Trading the former's
  * correctness for the latter's is the safer direction here.
+ *
+ * The marker-line alternative's own leading indent is `{0,3}` *spaces*,
+ * not `[ \t]`, for the same reason as {@link SETEXT_UNDERLINE_PATTERN}
+ * (Codex review, PR #2840, round 11) -- kept separate from the second
+ * (wrapped-continuation) alternative's own `[ \t]+`, which is
+ * deliberately broad regardless of tab-vs-space.
  */
 const SETEXT_INELIGIBLE_PRECEDING_LINE_PATTERN =
-  /^[ \t]{0,3}(?:[-*+][ \t]+|\d+[.)][ \t]+|>)|^[ \t]+\S/;
+  /^ {0,3}(?:[-*+][ \t]+|\d+[.)][ \t]+|>)|^[ \t]+\S/;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `candidate:`): tests/flag-name-matrix.test.mts scans this file's
 // *compiled* .mjs source text for quoted flag literals such as the
@@ -181,7 +192,14 @@ export function parseCandidateFileEntries(body) {
       end = index - 1;
       break;
     }
-    const heading = lines[index].match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+    // Leading indent is `{0,3}` literal *spaces*, not `\s` (Codex review,
+    // PR #2840, round 11): `\s` also matches a tab, which CommonMark does
+    // not tolerate as ATX-heading indent (a tab advances to the next
+    // 4-column tab stop, past the 0-3-space threshold) -- a tab-indented
+    // `## Candidate files` line renders as an indented code block, not a
+    // real heading, so `\s{0,3}` wrongly opened (or closed) a section on
+    // a line GitHub itself never treats as one.
+    const heading = lines[index].match(/^ {0,3}(#{1,6})\s+(.*)$/);
     if (!heading) {
       continue;
     }
