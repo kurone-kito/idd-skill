@@ -55,11 +55,11 @@ repeated per row.
 
 No claim exists yet in this group; every row here runs before A5.
 
-| Mutation                                                                   | Reversible / Irreversible | Undo path / Governing gate         | Source                                   |
-| -------------------------------------------------------------------------- | ------------------------- | ---------------------------------- | ---------------------------------------- |
-| Post "A4.5 suitability gate rejection" diagnostic comment                  | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
-| Apply optional `triage:{outcome}` label                                    | Reversible                | Remove the label                   | A4.5 (`idd-suitability.instructions.md`) |
-| Post one-line reconciliation comment (Standing-rejection pre-check, #2803) | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
+| Mutation                                                                                        | Reversible / Irreversible | Undo path / Governing gate         | Source                                   |
+| ----------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------- | ---------------------------------------- |
+| Post "A4.5 suitability gate rejection" diagnostic comment                                       | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
+| Apply optional `triage:{outcome}` label                                                         | Reversible                | Remove the label                   | A4.5 (`idd-suitability.instructions.md`) |
+| Post one-line reconciliation comment (Standing-rejection pre-check, kurone-kito/idd-skill#2803) | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
 
 ### Claim & ownership (A5)
 

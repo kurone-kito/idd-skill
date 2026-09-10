@@ -1423,7 +1423,8 @@ standing rejection goes stale (a title/body edit, including a recorded
 Groom-hearing decision), or immediately when no standing rejection
 exists. A non-stale standing rejection is not itself a gap left for
 the customization to fill: `idd-suitability.instructions.md`'s
-Standing-rejection pre-check (`#2803`) already blocks reclaim on any
+Standing-rejection pre-check (`kurone-kito/idd-skill#2803`) already
+blocks reclaim on any
 "A4.5 suitability gate rejection" comment from a trusted marker actor
 before Check 1 ever runs, building on the `existingRejection` field
 issue #1887 shipped in `suitability-triage.mjs`; a rejected candidate

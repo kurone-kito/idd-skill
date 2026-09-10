@@ -275,10 +275,10 @@ risk, not a blocker on the gate above.
 
 ## Decision Flow
 
-**Standing-rejection pre-check (#2803).** Before Check 1, scan the
-candidate's existing comments for a non-stale "A4.5 suitability gate
-rejection" comment posted by a trusted marker actor — any outcome, not
-only the four carrying their own
+**Standing-rejection pre-check (kurone-kito/idd-skill#2803).** Before
+Check 1, scan the candidate's existing comments for a non-stale "A4.5
+suitability gate rejection" comment posted by a trusted marker actor —
+any outcome, not only the four carrying their own
 `idd-skill-triage-verdict` marker. Apply the same
 edit-postdates-rejection staleness rule as the Machine-readable outcome
 marker above (a recorded Groom-hearing decision counts as a body edit
@@ -303,7 +303,8 @@ Candidates = A4 survivor set
 Loop: Rerun A4 Step 2 over Candidates to pick the next candidate
   → Standing-rejection pre-check (see above)
     → Non-stale rejection found → do not claim; exclude, post nothing, loop
-      (for A0-T: report why the target is blocked, then STOP — no fallback)
+      (for A0-T: report why the target is blocked in the run output only
+      — not a second comment — then STOP, no fallback)
     → Stale rejection found → post reconciliation comment → Run Check 1
     → No trusted rejection found → Run Check 1
     → Scan inconclusive (fetch failed, or existingRejectionCollectionWarnings
