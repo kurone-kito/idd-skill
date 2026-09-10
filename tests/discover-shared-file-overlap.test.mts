@@ -12,6 +12,7 @@ import {
   normalizeContentionPath,
   type OverlapCandidateInput,
   parseArgs,
+  parseCandidateFileEntries,
   parseCandidateFiles,
   type RankableCandidate,
   resolveHighContentionFiles,
@@ -205,6 +206,47 @@ test('parseCandidateFiles does not mistake a bullet immediately before a themati
 test('parseCandidateFiles does not mistake a blockquoted line before an underline-shaped line for a Setext heading', () => {
   const body = ['## Candidate files', '', '> `src/a.mts`', '---'].join('\n');
   assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
+});
+
+// ---------------------------------------------------------------------------
+// parseCandidateFileEntries (#2767 round 8, Codex review PR #2840)
+// ---------------------------------------------------------------------------
+
+test('parseCandidateFileEntries carries the raw path alongside its normalized contention key', () => {
+  const body =
+    '## Candidate files\n\n- `idd-template/.github/instructions/idd-merge.instructions.md`\n';
+  assert.deepEqual(parseCandidateFileEntries(body), [
+    {
+      raw: 'idd-template/.github/instructions/idd-merge.instructions.md',
+      normalized: MERGE_FILE,
+    },
+  ]);
+});
+
+test('parseCandidateFileEntries keeps raw distinct from normalized for a plain (non-mirrored) path', () => {
+  const body = '## Candidate files\n\n- `src/scripts/foo.mts`\n';
+  assert.deepEqual(parseCandidateFileEntries(body), [
+    { raw: 'src/scripts/foo.mts', normalized: 'src/scripts/foo.mts' },
+  ]);
+});
+
+test('parseCandidateFileEntries de-dupes on the normalized key, keeping the first raw spelling seen', () => {
+  const body =
+    '## Candidate files\n\n- `idd-template/.github/instructions/idd-merge.instructions.md`\n- `.github/instructions/idd-merge.instructions.md`\n';
+  assert.deepEqual(parseCandidateFileEntries(body), [
+    {
+      raw: 'idd-template/.github/instructions/idd-merge.instructions.md',
+      normalized: MERGE_FILE,
+    },
+  ]);
+});
+
+test('parseCandidateFiles stays a thin normalized-only projection of parseCandidateFileEntries', () => {
+  const body = readFixture('candidate-merge.md');
+  assert.deepEqual(
+    parseCandidateFiles(body),
+    parseCandidateFileEntries(body).map((entry) => entry.normalized),
+  );
 });
 
 // ---------------------------------------------------------------------------

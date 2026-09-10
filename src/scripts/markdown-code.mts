@@ -1184,25 +1184,32 @@ export function findHtmlBlockRanges(text: string): MarkdownCodeRange[] {
           (previousLineBlank &&
             MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(line)));
 
-      if (
-        rawTag !== null &&
-        !HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[rawTag].test(line)
-      ) {
+      if (rawTag !== null) {
+        // Copilot review, PR #2840 (round 8): a same-line self-closed
+        // raw-text block (e.g. `<pre>- \`fake/path\`</pre>` entirely on
+        // one line) was previously left out of both branches below
+        // (`opensGeneric` is also false here, since `rawTag !== null`
+        // excludes it) -- masking nothing for that line at all. Emit the
+        // single-line range immediately in that case instead of scanning
+        // forward for a close that already happened.
         const closePattern = HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[rawTag];
-        let scanStart = lineAfter;
-        let end = text.length;
-        while (scanStart <= text.length) {
-          const nl = text.indexOf('\n', scanStart);
-          const scanLineEnd = nl === -1 ? text.length : nl;
-          const scanLineAfter = nl === -1 ? text.length : nl + 1;
-          if (closePattern.test(text.slice(scanStart, scanLineEnd))) {
-            end = scanLineEnd;
-            break;
+        let end = lineEnd;
+        if (!closePattern.test(line)) {
+          let scanStart = lineAfter;
+          end = text.length;
+          while (scanStart <= text.length) {
+            const nl = text.indexOf('\n', scanStart);
+            const scanLineEnd = nl === -1 ? text.length : nl;
+            const scanLineAfter = nl === -1 ? text.length : nl + 1;
+            if (closePattern.test(text.slice(scanStart, scanLineEnd))) {
+              end = scanLineEnd;
+              break;
+            }
+            if (nl === -1) {
+              break;
+            }
+            scanStart = scanLineAfter;
           }
-          if (nl === -1) {
-            break;
-          }
-          scanStart = scanLineAfter;
         }
         ranges.push({ start: lineStart, end });
         lineStart = end;
@@ -1210,21 +1217,29 @@ export function findHtmlBlockRanges(text: string): MarkdownCodeRange[] {
         continue;
       }
 
-      if (closeToken !== null && !isSelfClosedSpecialHtmlBlock(line)) {
-        let scanStart = lineAfter;
-        let end = text.length;
-        while (scanStart <= text.length) {
-          const nl = text.indexOf('\n', scanStart);
-          const scanLineEnd = nl === -1 ? text.length : nl;
-          const scanLineAfter = nl === -1 ? text.length : nl + 1;
-          if (text.slice(scanStart, scanLineEnd).includes(closeToken)) {
-            end = scanLineEnd;
-            break;
+      if (closeToken !== null) {
+        // Same same-line rationale as the raw-text branch above (Copilot
+        // review, PR #2840, round 8): a same-line self-closed special
+        // block (e.g. `<!-- x -->`) is masked by findHtmlCommentRanges
+        // separately for the `<!--` case, but `<?`/`<!X`/`<![CDATA[` had
+        // no other masking and fell through unmasked here entirely.
+        let end = lineEnd;
+        if (!isSelfClosedSpecialHtmlBlock(line)) {
+          let scanStart = lineAfter;
+          end = text.length;
+          while (scanStart <= text.length) {
+            const nl = text.indexOf('\n', scanStart);
+            const scanLineEnd = nl === -1 ? text.length : nl;
+            const scanLineAfter = nl === -1 ? text.length : nl + 1;
+            if (text.slice(scanStart, scanLineEnd).includes(closeToken)) {
+              end = scanLineEnd;
+              break;
+            }
+            if (nl === -1) {
+              break;
+            }
+            scanStart = scanLineAfter;
           }
-          if (nl === -1) {
-            break;
-          }
-          scanStart = scanLineAfter;
         }
         ranges.push({ start: lineStart, end });
         lineStart = end;

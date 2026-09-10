@@ -158,15 +158,37 @@ export function normalizeContentionPath(raw: unknown): string {
   return value;
 }
 
+/** One `## Candidate files` entry: the path exactly as written in the
+ * issue body (`raw`, backticks-stripped only -- no other normalization),
+ * alongside `normalized`'s contention-key form (mirror-collapsed,
+ * `idd-template/`-stripped, `*.instructions.md` basename-only). Only
+ * `normalized` is a valid contention-comparison key; only `raw` is a
+ * valid filesystem-existence-check input (Codex review, PR #2840, round
+ * 8): `normalized` was built to let this repo's own instruction-file
+ * source/mirror pair compare equal for contention purposes, not to name
+ * a real on-disk location -- a candidate like `idd-template/package.json`
+ * (which does not exist) normalizes to the contention key
+ * `package.json`, which DOES exist at repo root, so a filesystem check
+ * against `normalized` can wrongly report existence for a path that was
+ * never actually written. */
+export interface CandidateFileEntry {
+  raw: string;
+  normalized: string;
+}
+
 /**
  * Parse the `## Candidate files` section of an issue body into a
- * de-duplicated, normalized path list. The section is advisory, so parsing is
- * lenient: it extracts every backtick-quoted path in the section — including
- * the continuation lines of a multi-line bullet — plus the leading path-like
- * token of any bullet that has no backticks at all. Returns `[]` when the
- * section is absent.
+ * de-duplicated list of {@link CandidateFileEntry} (raw path alongside its
+ * normalized contention key). The section is advisory, so parsing is
+ * lenient: it extracts every backtick-quoted path in the section —
+ * including the continuation lines of a multi-line bullet — plus the
+ * leading path-like token of any bullet that has no backticks at all.
+ * Returns `[]` when the section is absent. De-duplicates on `normalized`
+ * (the pre-existing contract every current caller of
+ * {@link parseCandidateFiles} already relies on) -- two raw spellings that
+ * collapse to the same contention key keep only the first `raw` seen.
  */
-export function parseCandidateFiles(body: unknown): string[] {
+export function parseCandidateFileEntries(body: unknown): CandidateFileEntry[] {
   const text = typeof body === 'string' ? body : '';
   const lines = text.split(/\r?\n/);
   let start = -1;
@@ -219,13 +241,14 @@ export function parseCandidateFiles(body: unknown): string[] {
 
   const section = lines.slice(start, end);
   const sectionText = section.join('\n');
-  const files: string[] = [];
+  const entries: CandidateFileEntry[] = [];
 
   // Every backtick-quoted path in the section, regardless of line wrapping.
   for (const match of sectionText.matchAll(/`([^`]+)`/g)) {
-    const normalized = normalizeContentionPath(match[1]);
+    const raw = match[1].trim();
+    const normalized = normalizeContentionPath(raw);
     if (looksLikePath(normalized)) {
-      files.push(normalized);
+      entries.push({ raw, normalized });
     }
   }
 
@@ -235,23 +258,48 @@ export function parseCandidateFiles(body: unknown): string[] {
     if (!item || /`[^`]+`/.test(item[1])) {
       continue;
     }
-    const token = extractStandaloneToken(item[1]);
-    if (token) {
-      files.push(token);
+    const entry = extractStandaloneToken(item[1]);
+    if (entry) {
+      entries.push(entry);
     }
   }
 
-  return [...new Set(files)];
+  const seenNormalized = new Set<string>();
+  const deduped: CandidateFileEntry[] = [];
+  for (const entry of entries) {
+    if (seenNormalized.has(entry.normalized)) {
+      continue;
+    }
+    seenNormalized.add(entry.normalized);
+    deduped.push(entry);
+  }
+  return deduped;
+}
+
+/**
+ * Parse the `## Candidate files` section into a de-duplicated, normalized
+ * path list -- a thin `.map(e => e.normalized)` wrapper over
+ * {@link parseCandidateFileEntries} that keeps this exact pre-existing
+ * shape for its callers: `suitability-triage.mts`'s Check 4 high-contention
+ * tier and this module's own `analyzeSharedFileOverlap`, both of which
+ * compare candidate paths as contention keys, never as filesystem paths.
+ * {@link candidateFilesExistOnDisk} (triage-structural-evidence.mts, #2767)
+ * needs the un-normalized `raw` form instead -- a filesystem existence
+ * check against a mirror-collapsed contention key can report a real file
+ * as existing when the path actually written in the issue does not.
+ */
+export function parseCandidateFiles(body: unknown): string[] {
+  return parseCandidateFileEntries(body).map((entry) => entry.normalized);
 }
 
 /** Extract a strict leading path token from a bullet that quotes no path. */
-function extractStandaloneToken(itemBody: string): string | null {
+function extractStandaloneToken(itemBody: string): CandidateFileEntry | null {
   let text = itemBody.trim();
   text = text.split(/\s+(?:—|–|--)\s+/)[0];
   text = text.split(/\s+\(/)[0];
-  const leading = text.split(/[\s,;]+/)[0] ?? '';
-  const normalized = normalizeContentionPath(leading);
-  return looksLikeStandalonePath(normalized) ? normalized : null;
+  const raw = text.split(/[\s,;]+/)[0] ?? '';
+  const normalized = normalizeContentionPath(raw);
+  return looksLikeStandalonePath(normalized) ? { raw, normalized } : null;
 }
 
 /** A backtick-quoted token only needs a separator or extension. */

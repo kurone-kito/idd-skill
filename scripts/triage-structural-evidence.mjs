@@ -24,7 +24,7 @@
  * primitives their own way and call `evaluateStructuralEvidence`.
  */
 import { isAbsolute, relative, resolve } from 'node:path';
-import { parseCandidateFiles } from './discover-shared-file-overlap.mjs';
+import { parseCandidateFileEntries } from './discover-shared-file-overlap.mjs';
 import {
   findFencedCodeRanges,
   findHtmlBlockRanges,
@@ -65,9 +65,30 @@ const CHECKBOX_ITEM_PATTERN = /^\s*[-*+]\s+\[[ xX]\](?=[ \t]|$)/gm;
  * trusted issue and wrongly demote a genuine autonomy/verifiability
  * failure -- not merely fail to find the boundary, the false-positive
  * direction this module exists to avoid.
+ *
+ * Two further fixes (Copilot review, PR #2840, round 8) -- both
+ * false-negative directions (truncating a section's own real content
+ * too early), the opposite of the false-positive direction above, but
+ * still a genuine functional bug (this file's own `parseCandidateFiles`
+ * sibling boundary had the identical Setext/thematic-break confusion,
+ * fixed there in an earlier round of this same PR):
+ *
+ * - A negative lookahead excludes a list-item bullet, ordered-list
+ *   marker, or blockquote line from ever being read as Setext-heading
+ *   content: `- [ ] one\n---\n` is CommonMark's own thematic break
+ *   ending the list, never a Setext heading over that bullet, so
+ *   without the exclusion a genuine trailing checklist item followed by
+ *   a thematic break wrongly ended the `## Acceptance criteria` section
+ *   before its own real content.
+ * - `\r?\n` (not bare `\n`) before and after the underline line: this
+ *   pattern carries no `/m` flag, so `(?:\n|$)` never matched a
+ *   CRLF-terminated underline line, silently missing the Setext
+ *   boundary on a Windows-style-line-ending issue body (GitHub accepts
+ *   either) and leaking a later section's content the same way an
+ *   entirely-missed ATX boundary would have.
  */
 const NEXT_ATX_HEADING_PATTERN =
-  /\n(?: {0,3}#{1,6}\s|(?=[ \t]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)))/;
+  /\n(?: {0,3}#{1,6}\s|(?=[ \t]*(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
 /** Matches the `## Acceptance criteria` heading (any ATX level, any of
  * the two capitalization conventions used across this repository's own
  * issues) on its own line. Requires at least one space/tab after the `#`
@@ -173,13 +194,14 @@ export function hasVerificationCommandSignal(body) {
   return checkboxCount >= 2;
 }
 /**
- * A bare `*.instructions.md` reference is exactly what
- * `parseCandidateFiles`'s own `normalizeContentionPath` collapses an
- * `idd-template/.github/instructions/<name>` (or
- * `.github/instructions/<name>`) path down to, for its own contention-key
- * purpose -- correct there, but never a real filesystem path from repo
- * root. This is the one shape `candidateFilesExistOnDisk` resolves
- * specially before giving up on a path.
+ * A bare `*.instructions.md` reference is a documented shorthand this
+ * repository's own issues sometimes use in place of a full path -- expand
+ * it into both the mirror and the `idd-template/` source location before
+ * giving up on it. Only fires on a genuinely bare basename (no `/` at
+ * all); a full path is resolved as written (Codex review, PR #2840,
+ * round 8) -- see {@link candidateFilesExistOnDisk}'s own doc comment for
+ * why resolving the *raw* path, not a contention-key normalization of it,
+ * is what makes this distinction matter.
  */
 function candidatePathVariants(rawPath) {
   const variants = [rawPath];
@@ -192,18 +214,32 @@ function candidatePathVariants(rawPath) {
 /**
  * `candidateFilesExist` signal (#2767): the `## Candidate files` section
  * (parsed with `discover-shared-file-overlap.mts`'s own
- * `parseCandidateFiles` -- the same backtick-path extraction the issue
- * asks to reuse) lists at least one path that exists in the working
+ * `parseCandidateFileEntries` -- the same backtick-path extraction the
+ * issue asks to reuse) lists at least one path that exists in the working
  * tree, resolved against `repoRoot` (default `process.cwd()`).
+ *
+ * Resolves each entry's `raw` path, not `normalized` (Codex review, PR
+ * #2840, round 8): `normalized` is `parseCandidateFileEntries`'s
+ * contention-key form, which collapses a mirror pair (an
+ * `idd-template/.github/instructions/<name>` source and its
+ * `.github/instructions/<name>` mirror compare equal) and strips a
+ * leading `idd-template/` generally -- correct for contention comparison,
+ * but never a real on-disk location. A candidate written as
+ * `idd-template/package.json` (which does not exist) normalizes to the
+ * contention key `package.json` (which does exist at repo root),
+ * wrongly satisfying this filesystem-existence signal for a path the
+ * issue never actually named.
  */
 export function candidateFilesExistOnDisk(
   body,
   existsAt,
   repoRoot = process.cwd(),
 ) {
-  const paths = parseCandidateFiles(maskOpaqueMarkdown(String(body ?? '')));
-  return paths.some((path) =>
-    candidatePathVariants(path).some((variant) => {
+  const entries = parseCandidateFileEntries(
+    maskOpaqueMarkdown(String(body ?? '')),
+  );
+  return entries.some((entry) =>
+    candidatePathVariants(entry.raw).some((variant) => {
       const resolved = resolveRepoPath(repoRoot, variant);
       return resolved !== null && existsAt(resolved);
     }),
@@ -211,9 +247,9 @@ export function candidateFilesExistOnDisk(
 }
 /**
  * Resolves a `## Candidate files` path against `repoRoot`, containing it
- * to the repository -- `parseCandidateFiles` reads this text straight out
- * of untrusted issue-body prose. Returns `null` (never probed by
- * {@link candidateFilesExistOnDisk}, same as "does not exist") for an
+ * to the repository -- `parseCandidateFileEntries` reads this text
+ * straight out of untrusted issue-body prose. Returns `null` (never probed
+ * by {@link candidateFilesExistOnDisk}, same as "does not exist") for an
  * absolute path or one whose `..` segments escape `repoRoot` after
  * normalization (CodeRabbit review, PR #2840): the pre-fix version passed
  * an absolute path through unchanged and never normalized `..` segments at

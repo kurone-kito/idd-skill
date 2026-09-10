@@ -110,13 +110,17 @@ export function normalizeContentionPath(raw) {
 }
 /**
  * Parse the `## Candidate files` section of an issue body into a
- * de-duplicated, normalized path list. The section is advisory, so parsing is
- * lenient: it extracts every backtick-quoted path in the section — including
- * the continuation lines of a multi-line bullet — plus the leading path-like
- * token of any bullet that has no backticks at all. Returns `[]` when the
- * section is absent.
+ * de-duplicated list of {@link CandidateFileEntry} (raw path alongside its
+ * normalized contention key). The section is advisory, so parsing is
+ * lenient: it extracts every backtick-quoted path in the section —
+ * including the continuation lines of a multi-line bullet — plus the
+ * leading path-like token of any bullet that has no backticks at all.
+ * Returns `[]` when the section is absent. De-duplicates on `normalized`
+ * (the pre-existing contract every current caller of
+ * {@link parseCandidateFiles} already relies on) -- two raw spellings that
+ * collapse to the same contention key keep only the first `raw` seen.
  */
-export function parseCandidateFiles(body) {
+export function parseCandidateFileEntries(body) {
   const text = typeof body === 'string' ? body : '';
   const lines = text.split(/\r?\n/);
   let start = -1;
@@ -168,12 +172,13 @@ export function parseCandidateFiles(body) {
   }
   const section = lines.slice(start, end);
   const sectionText = section.join('\n');
-  const files = [];
+  const entries = [];
   // Every backtick-quoted path in the section, regardless of line wrapping.
   for (const match of sectionText.matchAll(/`([^`]+)`/g)) {
-    const normalized = normalizeContentionPath(match[1]);
+    const raw = match[1].trim();
+    const normalized = normalizeContentionPath(raw);
     if (looksLikePath(normalized)) {
-      files.push(normalized);
+      entries.push({ raw, normalized });
     }
   }
   // Bullets that quote no path fall back to a strict leading-token scan.
@@ -182,21 +187,45 @@ export function parseCandidateFiles(body) {
     if (!item || /`[^`]+`/.test(item[1])) {
       continue;
     }
-    const token = extractStandaloneToken(item[1]);
-    if (token) {
-      files.push(token);
+    const entry = extractStandaloneToken(item[1]);
+    if (entry) {
+      entries.push(entry);
     }
   }
-  return [...new Set(files)];
+  const seenNormalized = new Set();
+  const deduped = [];
+  for (const entry of entries) {
+    if (seenNormalized.has(entry.normalized)) {
+      continue;
+    }
+    seenNormalized.add(entry.normalized);
+    deduped.push(entry);
+  }
+  return deduped;
+}
+/**
+ * Parse the `## Candidate files` section into a de-duplicated, normalized
+ * path list -- a thin `.map(e => e.normalized)` wrapper over
+ * {@link parseCandidateFileEntries} that keeps this exact pre-existing
+ * shape for its callers: `suitability-triage.mts`'s Check 4 high-contention
+ * tier and this module's own `analyzeSharedFileOverlap`, both of which
+ * compare candidate paths as contention keys, never as filesystem paths.
+ * {@link candidateFilesExistOnDisk} (triage-structural-evidence.mts, #2767)
+ * needs the un-normalized `raw` form instead -- a filesystem existence
+ * check against a mirror-collapsed contention key can report a real file
+ * as existing when the path actually written in the issue does not.
+ */
+export function parseCandidateFiles(body) {
+  return parseCandidateFileEntries(body).map((entry) => entry.normalized);
 }
 /** Extract a strict leading path token from a bullet that quotes no path. */
 function extractStandaloneToken(itemBody) {
   let text = itemBody.trim();
   text = text.split(/\s+(?:—|–|--)\s+/)[0];
   text = text.split(/\s+\(/)[0];
-  const leading = text.split(/[\s,;]+/)[0] ?? '';
-  const normalized = normalizeContentionPath(leading);
-  return looksLikeStandalonePath(normalized) ? normalized : null;
+  const raw = text.split(/[\s,;]+/)[0] ?? '';
+  const normalized = normalizeContentionPath(raw);
+  return looksLikeStandalonePath(normalized) ? { raw, normalized } : null;
 }
 /** A backtick-quoted token only needs a separator or extension. */
 function looksLikePath(value) {

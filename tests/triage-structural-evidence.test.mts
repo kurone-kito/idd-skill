@@ -277,14 +277,49 @@ test('candidateFilesExistOnDisk: a relative path whose internal ../ segment stil
   );
 });
 
-test('candidateFilesExistOnDisk: resolves a bare instructions basename under .github/instructions', () => {
+test('candidateFilesExistOnDisk: resolves a full idd-template instructions path as written, not its mirror (Codex review, PR #2840 round 8)', () => {
+  // #2767 round 8: a full path is resolved as raw-written, never
+  // normalized-then-mirror-collapsed -- the pre-fix version resolved this
+  // against the *mirror* location instead (a false positive when the
+  // idd-template source itself does not exist), which is exactly the
+  // class of bug the round-8 fix (raw vs. normalized) closes. The
+  // idd-template source path itself must exist for this to pass.
+  const body = `## Candidate files\n\n- \`idd-template/.github/instructions/idd-suitability.instructions.md\`\n`;
+  const existing = new Set([
+    '/repo/idd-template/.github/instructions/idd-suitability.instructions.md',
+  ]);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    true,
+  );
+});
+
+test('candidateFilesExistOnDisk: does not satisfy the signal via the mirror when only the idd-template source path was written', () => {
+  // The mirror-only existence case: the body names the idd-template
+  // source path, but only the non-idd-template mirror exists on disk --
+  // must NOT satisfy the signal, since the path as actually written does
+  // not exist.
   const body = `## Candidate files\n\n- \`idd-template/.github/instructions/idd-suitability.instructions.md\`\n`;
   const existing = new Set([
     '/repo/.github/instructions/idd-suitability.instructions.md',
   ]);
   assert.equal(
     candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
-    true,
+    false,
+  );
+});
+
+test('candidateFilesExistOnDisk: a normalized-only match (contention key, not a real path) does not satisfy the signal (Codex review, PR #2840 round 8)', () => {
+  // The exact case Codex reported: `idd-template/package.json` does not
+  // exist, but normalizeContentionPath's `idd-template/`-stripping
+  // collapses it to the contention key `package.json`, which DOES exist
+  // at repo root. Resolving the raw path (not the normalized key) must
+  // not be fooled by that coincidence.
+  const body = `## Candidate files\n\n- \`idd-template/package.json\`\n`;
+  const existing = new Set(['/repo/package.json']);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    false,
   );
 });
 
