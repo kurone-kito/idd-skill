@@ -311,6 +311,15 @@ tolerant boundary `parseRunIdFromUrl`
 (`src/scripts/rerun-advisory-convergence.mts`) already uses for this
 exact URL shape.
 
+- **A nonzero exit alone is not failure.** `gh pr checks` exits `8`
+  whenever _any_ check on the PR is still pending (its own documented
+  behavior — `gh pr checks --help`), even when this query's own
+  stdout is valid; a script that aborts under `set -e` on that exit
+  code, or that treats any nonzero status as "lookup failed", falls
+  through and skips the wait below entirely, leaving the race this
+  check exists to close. Capture and parse stdout regardless of exit
+  status; only _no parseable output at all_ counts as a lookup
+  failure.
 - **No output, or the lookup itself fails** (old `gh`, no network, a
   GitHub Enterprise Server version without this data): no visible run
   for this PR. Continue to the duplicate-success-record skip rule
