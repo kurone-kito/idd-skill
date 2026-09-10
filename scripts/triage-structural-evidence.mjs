@@ -250,26 +250,28 @@ function countInterruptingCheckboxItems(sectionText) {
  * restores CommonMark's own real indent tolerance for the content line
  * itself, replacing round 15's zero-indent requirement.
  *
- * Known residual (round 20, Codex review, PR #2840): a genuine multi-line
- * Setext sibling heading (CommonMark lets a Setext heading's content span
- * several lines, e.g. `" First line\n Second line\n ---"`, `gh api
- * /markdown` confirms one heading forms from both) is recognized starting
- * at its LAST content line, not its first -- the underline-adjacency
- * check below only ever tests the line directly above the underline. The
- * one extra line this leaks into the current section is inert heading
- * prose (Setext content is inline-parsed text, never block-level list/
- * checkbox syntax), so it cannot itself satisfy `verificationCommand` --
- * unlike round 15/16's fixes, this does not reopen the false-positive
- * direction this module exists to avoid. Chasing full multi-line
- * recognition here would require restructuring the content-line match
- * itself (an unbounded run of same-indent lines before the underline,
- * not a single line) -- `discover-shared-file-overlap.mts`'s own
- * line-array form already gets this exactly right for its own purpose
- * (see its backward-walk fix); this regex-based sibling accepts the
- * imprecision rather than a substantially larger rewrite.
+ * A fifth fix (Codex review, PR #2840, round 22): round 20 documented a
+ * "residual" claiming a genuine multi-line Setext heading's own extra
+ * leaked line (recognized starting at its LAST content line, not its
+ * first) was inert prose that could not itself satisfy
+ * `verificationCommand` -- disproven by a concrete counter-example, e.g.
+ * `` "`node --test fake.test.mjs`\nNotes\n---" ``: the FIRST line is a
+ * genuine inline code span (`gh api /markdown` confirms it renders as
+ * real `<code>` inside the sibling `<h2>`), so leaving it inside the
+ * current section's extracted text set `verificationCommand: true` from
+ * a command that belongs to a different, later section entirely -- the
+ * dangerous direction this module exists to avoid, not a benign
+ * imprecision. The content-line match is now a `+`-repeated run of
+ * qualifying lines (each still excluded from being marker/blockquote-led,
+ * matching the single-line check this replaces) rather than exactly one
+ * line, so the match starts at the run's FIRST line whenever the whole
+ * run -- of any length -- ends in a real underline; `{0,3}` is now
+ * per-line inside the repeated group (not just before it), so each line
+ * of a genuinely multi-line, indented heading still gets its own
+ * CommonMark indent tolerance independently.
  */
 const NEXT_ATX_HEADING_PATTERN =
-  /\n(?: {0,3}#{1,6}\s|(?=(?<!(?:^|\n)(?: {0,3}[-*+][ \t]+| {0,3}\d{1,9}[.)][ \t]+| {0,3}>)[^\r\n]*\r?\n(?:[ \t]+\S[^\r\n]*\r?\n)*) {0,3}(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
+  /\n(?: {0,3}#{1,6}\s|(?=(?<!(?:^|\n)(?: {0,3}[-*+][ \t]+| {0,3}\d{1,9}[.)][ \t]+| {0,3}>)[^\r\n]*\r?\n(?:[ \t]+\S[^\r\n]*\r?\n)*)(?: {0,3}(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n)+ {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
 /** Matches the `## Acceptance criteria` heading (any ATX level, any of
  * the two capitalization conventions used across this repository's own
  * issues) on its own line. Requires at least one space/tab after the `#`

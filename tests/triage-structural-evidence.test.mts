@@ -179,6 +179,30 @@ test('hasVerificationCommandSignal: a genuine multi-line Setext heading does not
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: a multi-line Setext heading whose first line is a real command span does not count (Codex review, PR #2840, round 22)', () => {
+  // Round 20 documented a "residual" claiming the extra leaked line
+  // (recognized starting at the heading's LAST content line, not its
+  // first) was inert prose that could not itself satisfy
+  // verificationCommand -- disproven here: a code span inside Setext
+  // heading text still renders as a real <code> element (`gh api
+  // /markdown` confirms `<h2><code>node --test fake.test.mjs</code><br>
+  // Notes</h2>`), so leaving it inside the section wrongly counted a
+  // command that belongs to a different, later section entirely.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '- [ ] Only one thing',
+    '',
+    '`node --test fake.test.mjs`',
+    'Notes',
+    '---',
+    '',
+    '- `real/candidate.mts`',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: a heading with no space after the # run is not a real ATX heading (Codex review, PR #2840)', () => {
   // CommonMark requires a space/tab (or end of line) after the ATX `#`
   // run -- `##Acceptance criteria` renders as ordinary paragraph text,
