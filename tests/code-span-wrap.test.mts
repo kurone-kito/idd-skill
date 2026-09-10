@@ -223,12 +223,53 @@ test('findCorruptingProseWraps: still flags a real violation outside an unrelate
   assert.equal(violations.length, 1);
 });
 
-test('findCorruptingProseWraps: does not flag emphasis text preceding an unterminated HTML comment', () => {
+test('findCorruptingProseWraps: still flags a real violation preceding an unterminated HTML comment', () => {
   // An unterminated `<!--` masks through end of text (mirrors
   // resolved-decision.mts's own findHtmlCommentRanges close-scan), so a
   // real violation entirely before it must still be found.
   const violations = findCorruptingProseWraps(
     '**transport-\nlayer** failure <!-- unterminated',
+  );
+  assert.equal(violations.length, 1);
+});
+
+test('findCorruptingProseWraps: does not flag an indented code block containing literal emphasis markers', () => {
+  // PR #2880 review (Codex): a 4-space-indented code block renders
+  // literally, preserving its own line break, so it must not be scanned
+  // as prose emphasis.
+  const body = [
+    'before text',
+    '',
+    '    **well-',
+    '    known**',
+    '',
+    'after',
+  ].join('\n');
+  assert.deepEqual(findCorruptingProseWraps(body), []);
+});
+
+test('findCorruptingProseWraps: does not flag prose between two asterisk thematic-break lines', () => {
+  // PR #2880 review (CodeRabbit): a standalone `***` line is a thematic
+  // break, never an emphasis delimiter, so the prose between two of them
+  // must not be misread as one emphasis span.
+  const violations = findCorruptingProseWraps('***\nwell-\nknown\n***');
+  assert.deepEqual(violations, []);
+});
+
+test('findCorruptingProseWraps: still flags a real violation inside a genuine emphasis span next to a thematic break', () => {
+  // Regression guard: blanking thematic-break lines must not also blank
+  // a real, separate emphasis span elsewhere in the document.
+  const body = ['***', '', 'a **transport-', 'layer** failure'].join('\n');
+  const violations = findCorruptingProseWraps(body);
+  assert.equal(violations.length, 1);
+});
+
+test('findCorruptingProseWraps: an HTML comment with a stray backtick does not swallow real prose into a bogus code span', () => {
+  // PR #2880 review (Codex): comments must be masked before code-region
+  // detection runs, or a lone backtick inside one can pair with a later
+  // real backtick and blank the real prose between them.
+  const violations = findCorruptingProseWraps(
+    '<!-- ` --> **well-\nknown** `text`',
   );
   assert.equal(violations.length, 1);
 });

@@ -38,8 +38,9 @@
 
 import {
   blankFencedCodeBlocks,
+  findMarkdownCodeRanges,
   INLINE_CODE_SPAN_PATTERN,
-  stripMarkdownCodeRegions,
+  maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mts';
 
 export interface CodeSpanWrapViolation {
@@ -163,46 +164,95 @@ const EMPHASIS_SPAN_PATTERN =
 // idd-skill issue #2876 (PR #2880 review, Codex): an HTML comment can
 // legitimately quote example Markdown -- including a multi-line
 // `**bold**` hyphen wrap used to illustrate this very rule -- that
-// CommonMark never renders as real emphasis at all. stripMarkdownCodeRegions
-// deliberately does NOT mask HTML comments (some operational markers are
-// HTML comments), so mask them here, scoped to this prose scan only:
-// blank each `<!-- ... -->` region's content (preserving line/column
-// structure, same style as blankFencedCodeBlocks) before matching
-// emphasis spans. Simple `indexOf`-based closing, matching this
-// repository's other HTML-comment handling (e.g. resolved-decision.mts's
-// findHtmlCommentRanges) -- not a full HTML parser.
+// CommonMark never renders as real emphasis at all. findMarkdownCodeRanges/
+// stripMarkdownCodeRegions deliberately do NOT mask HTML comments (some
+// operational markers are HTML comments), so mask them here, scoped to
+// this prose scan only, and BEFORE code-region detection runs (a second
+// review round, Codex): otherwise a stray backtick inside a comment can
+// pair with a later real backtick outside it into one bogus code span
+// that blanks real intervening prose. Blank each `<!-- ... -->` region's
+// content (preserving line/column structure, same style as
+// blankFencedCodeBlocks), using a Private Use Area filler character
+// rather than a literal space: a same-line, mid-line comment (e.g.
+// `<!-- note --> **word-\nwrap**`) blanked to plain spaces left several
+// leading space columns before the real `**word-` content that follows
+// on the same line -- enough to misread that remainder as a 4+-space
+// indented code block once findMarkdownCodeRanges below started
+// covering indented code too, silently masking the real prose it was
+// supposed to scan (round-3 regression caught by this file's own
+// regression tests, not a live review finding). The filler character is
+// never whitespace (so it cannot manufacture indentation), never
+// alphanumeric or one of `-_/.` (so it can never satisfy
+// {@link TOKEN_CONTINUING}), and never a Markdown structural character
+// (` ` ` ~ * _ = # > + digit), so it is inert to every check in
+// markdown-code.mts and to this file's own matching alike. Regex-based
+// closing (not the `indexOf`-based scan resolved-decision.mts's
+// findHtmlCommentRanges uses for the same "mask an HTML comment" need)
+// -- not a full HTML parser either way.
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?(?:-->|$)/g;
+const HTML_COMMENT_MASK_CHAR = '';
 
 function blankHtmlComments(text: string): string {
   return text.replace(HTML_COMMENT_PATTERN, (match) =>
-    match.replace(/[^\r\n]/g, ' '),
+    match.replace(/[^\r\n]/g, HTML_COMMENT_MASK_CHAR),
   );
 }
 
+// idd-skill issue #2876 (PR #2880 review, CodeRabbit): a standalone
+// thematic-break line of 3+ `*` characters (optionally interior-spaced,
+// e.g. `***` or `* * *`) is never emphasis -- CommonMark resolves it as
+// its own block, never as an opening or closing delimiter run -- but
+// EMPHASIS_SPAN_PATTERN's plain `\*{1,2}` match does not know that, so
+// prose genuinely between two such lines (e.g. `***\nwell-\nknown\n***`)
+// could otherwise be misread as one emphasis span. Blank the asterisks on
+// a matching line (mirrors this repo's own unexported
+// MARKDOWN_THEMATIC_BREAK_PATTERN test in markdown-code.mts, narrowed to
+// the `*` marker this scan cares about) before matching emphasis.
+const ASTERISK_THEMATIC_BREAK_LINE_PATTERN = /^ {0,3}\*(?:[ \t]*\*){2,}[ \t]*$/;
+
+function blankAsteriskThematicBreaks(text: string): string {
+  return text
+    .split('\n')
+    .map((line) =>
+      ASTERISK_THEMATIC_BREAK_LINE_PATTERN.test(line)
+        ? line.replace(/\S/g, ' ')
+        : line,
+    )
+    .join('\n');
+}
+
 /**
- * Find `**`/`*` emphasis spans in prose Markdown text (outside fenced code
- * blocks, inline code spans, and HTML comments) whose line break falls
- * immediately after a hyphen joining a token on each side (reusing the
- * same {@link TOKEN_CONTINUING} neighbor test as
- * {@link findCorruptingCodeSpanWraps}) -- the prose counterpart of that
- * function. A hyphen at the very start of an emphasis span's content does
- * not qualify: with nothing before it, there is no left-side token to
- * join, so it is not a corrupted compound word (PR #2880 review,
- * Copilot). Returns one violation per corrupting break, in document
- * order.
+ * Find `**`/`*` emphasis spans in prose Markdown text (outside fenced,
+ * indented, and inline code, HTML comments, and asterisk thematic-break
+ * lines) whose line break falls immediately after a hyphen joining a
+ * token on each side (reusing the same {@link TOKEN_CONTINUING} neighbor
+ * test as {@link findCorruptingCodeSpanWraps}) -- the prose counterpart
+ * of that function. A hyphen at the very start of an emphasis span's
+ * content does not qualify: with nothing before it, there is no
+ * left-side token to join, so it is not a corrupted compound word (PR
+ * #2880 review, Copilot). Returns one violation per corrupting break, in
+ * document order.
  */
 export function findCorruptingProseWraps(
   text: string,
 ): CodeSpanWrapViolation[] {
   const normalized = text.replace(/\r\n?/g, '\n');
-  // stripMarkdownCodeRegions blanks fenced-block lines and masks inline
-  // code span interiors (backticks kept, content replaced with spaces),
-  // preserving line/column structure -- so code content already covered by
-  // findCorruptingCodeSpanWraps is never double-flagged here, and this scan
-  // never mistakes a code span's own emphasis-looking characters for real
-  // prose emphasis. blankHtmlComments does the same for HTML comment
-  // content, which is never real Markdown structure either.
-  const scanned = blankHtmlComments(stripMarkdownCodeRegions(normalized));
+  // Order matters: blank HTML comments first (see the comment above
+  // HTML_COMMENT_PATTERN for why), then mask every code region --
+  // fenced, indented, and inline (findMarkdownCodeRanges /
+  // maskMarkdownCodeRegionsPreservingPositions cover all three, unlike
+  // stripMarkdownCodeRegions's fenced-plus-inline-only scope; #2880
+  // review, Codex) -- so code content already covered by
+  // findCorruptingCodeSpanWraps is never double-flagged here and this
+  // scan never mistakes a code region's own emphasis-looking characters
+  // for real prose emphasis. Both preserve line/column structure. Then
+  // blank asterisk thematic-break lines, which are never real emphasis.
+  const withoutComments = blankHtmlComments(normalized);
+  const withoutCode = maskMarkdownCodeRegionsPreservingPositions(
+    withoutComments,
+    findMarkdownCodeRanges(withoutComments),
+  );
+  const scanned = blankAsteriskThematicBreaks(withoutCode);
   const violations: CodeSpanWrapViolation[] = [];
 
   for (const match of scanned.matchAll(EMPHASIS_SPAN_PATTERN)) {
