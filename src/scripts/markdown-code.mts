@@ -181,13 +181,22 @@ const MARKDOWN_THEMATIC_BREAK_PATTERN =
 type HtmlRawTextTag = 'script' | 'pre' | 'style' | 'textarea';
 const HTML_RAW_TEXT_TAG_OPEN_PATTERN =
   /^ {0,3}<(script|pre|style|textarea)\b/iu;
+// Codex review, PR #2840 (round 23): requires the literal closing `>`
+// (with only optional horizontal whitespace before it), not just a `\b`
+// word boundary after the tag name -- `</pre bogus` satisfies `\b` (a
+// boundary exists between "pre" and the space) but is not a real closing
+// tag at all. CommonMark does not close the raw-text block there, so the
+// block (and any fake Acceptance-criteria/Candidate-files content inside
+// it) extends to a real close or end of text, verified via `gh api
+// /markdown`; the unanchored `\b` version wrongly ended the block early,
+// exposing that still-opaque content as if it were real, visible text.
 const HTML_RAW_TEXT_TAG_CLOSE_PATTERNS: Readonly<
   Record<HtmlRawTextTag, RegExp>
 > = {
-  script: /<\/script\b/iu,
-  pre: /<\/pre\b/iu,
-  style: /<\/style\b/iu,
-  textarea: /<\/textarea\b/iu,
+  script: /<\/script[ \t]*>/iu,
+  pre: /<\/pre[ \t]*>/iu,
+  style: /<\/style[ \t]*>/iu,
+  textarea: /<\/textarea[ \t]*>/iu,
 };
 
 /**

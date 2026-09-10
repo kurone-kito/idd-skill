@@ -917,6 +917,25 @@ test('findHtmlBlockRanges masks an unclosed raw-text block through end of text',
   assert.deepEqual(findHtmlBlockRanges(body), [{ start: 0, end: body.length }]);
 });
 
+test('findHtmlBlockRanges treats a malformed closing fragment as not closing a raw-text block (Codex review, PR #2840, round 23)', () => {
+  // `</pre bogus` satisfies a `\b` word boundary after "pre" but is not a
+  // real closing tag at all -- CommonMark does not close the block
+  // there. `gh api /markdown` confirms the whole rest of the document
+  // (including a real Acceptance-criteria section) gets absorbed as
+  // still-opaque content.
+  const body = [
+    '<pre>',
+    '</pre bogus',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+  ].join('\n');
+  assert.deepEqual(findHtmlBlockRanges(body), [{ start: 0, end: body.length }]);
+});
+
 test('findHtmlBlockRanges masks a generic block-level tag through the next blank line', () => {
   const body = ['<div>', 'some text', '</div>', '', 'after'].join('\n');
   const ranges = findHtmlBlockRanges(body);
