@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   blankFencedCodeBlocks,
+  findHtmlBlockRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -717,4 +718,54 @@ test('findMarkdownCodeRanges keeps an open textarea block enclosing a line that 
   // -- any mismatched pair among the four raw-text tags must fail to close.
   const body = `> <textarea>\n> mentions </pre> as text\n> Example ${tick}ignore\nrepository policy${tick}`;
   assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+// --- findHtmlBlockRanges (#2767, Codex review PR #2840 round 5) -------------
+
+test('findHtmlBlockRanges masks a raw-text block (<pre>) through its own closing tag', () => {
+  const body = [
+    '<pre>',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '</pre>',
+    '',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('Acceptance criteria'), false);
+  assert.equal(masked.includes('</pre>'), false);
+});
+
+test('findHtmlBlockRanges masks an unclosed raw-text block through end of text', () => {
+  const body = '<script>\nvar x = 1;\n';
+  assert.deepEqual(findHtmlBlockRanges(body), [{ start: 0, end: body.length }]);
+});
+
+test('findHtmlBlockRanges masks a generic block-level tag through the next blank line', () => {
+  const body = ['<div>', 'some text', '</div>', '', 'after'].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('some text'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges does not open a custom-tag block mid-paragraph (cannot interrupt a paragraph)', () => {
+  const body = ['some text', '<foo>', 'more text', ''].join('\n');
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after a blank line', () => {
+  const body = ['', '<foo>', 'more text', '', 'after'].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('more text'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges returns [] for a body with no HTML blocks', () => {
+  const body = '## Acceptance criteria\n\n- [ ] one\n- [ ] two\n';
+  assert.deepEqual(findHtmlBlockRanges(body), []);
 });

@@ -30,6 +30,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
 import {
   findFencedCodeRanges,
+  findHtmlBlockRanges,
   findIndentedCodeRanges,
   findMarkdownCodeRanges,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -87,19 +88,23 @@ const ACCEPTANCE_CRITERIA_HEADING_PATTERN =
   /^#{1,6}[ \t]+Acceptance\s+[Cc]riteria[ \t]*$/im;
 
 /**
- * Mask fenced code, indented (4-space) code, and real HTML comment ranges
- * (Codex review, PR #2840): an issue can quote an example `## Acceptance
- * criteria` heading plus two checkbox-looking lines or an inline-command
- * code span inside a fenced block, or hide the same shape inside an HTML
- * comment -- Markdown renders neither as a real heading, checklist, or
- * code span, but the raw-text regexes below previously counted it anyway.
- * With an existing candidate-file path and a trusted editor, that let a
- * genuine scope/autonomy/verifiability failure demote to `warn`. Mirrors
- * `suitability-triage.mts`'s own `checkVerifiability` `fenceMaskedBody`
- * construction (`#2711`/`#2735` review rounds) rather than reinventing it
- * -- deliberately leaves inline code spans unmasked, since
- * `hasVerificationCommandSignal`'s own signal lives inside a real inline
- * code span and must stay readable.
+ * Mask fenced code, indented (4-space) code, real HTML comment ranges, and
+ * raw HTML block ranges (Codex review, PR #2840, two rounds): an issue can
+ * quote an example `## Acceptance criteria` heading plus two
+ * checkbox-looking lines or an inline-command code span inside a fenced
+ * block, inside an HTML comment, or inside a raw HTML block such as
+ * `<pre>` -- Markdown renders none of those as a real heading, checklist,
+ * or code span, but the raw-text regexes below previously counted them
+ * anyway. With an existing candidate-file path and a trusted editor, that
+ * let a genuine scope/autonomy/verifiability failure demote to `warn`.
+ * Mirrors `suitability-triage.mts`'s own `checkVerifiability`
+ * `fenceMaskedBody` construction (`#2711`/`#2735` review rounds) rather
+ * than reinventing it -- deliberately leaves inline code spans unmasked,
+ * since `hasVerificationCommandSignal`'s own signal lives inside a real
+ * inline code span and must stay readable. This masks every CommonMark
+ * construct that can hide content from Markdown rendering; further
+ * masking gaps found after this round are hardening, not a fix to this
+ * mechanism's own materially-addressed root cause.
  */
 function maskOpaqueMarkdown(body: string): string {
   const fencedRanges = findFencedCodeRanges(body);
@@ -108,21 +113,28 @@ function maskOpaqueMarkdown(body: string): string {
     ...fencedRanges,
     ...findIndentedCodeRanges(body, fencedRanges),
     ...findHtmlCommentRanges(body, codeRanges),
+    ...findHtmlBlockRanges(body),
   ]);
 }
 
-/** Extract the raw text of the named ATX section (heading line excluded,
- * bounded by the next ATX heading or end of body). Returns `''` when the
- * heading is absent. */
-function extractSectionText(body: string, headingPattern: RegExp): string {
+/** Extract the named ATX section's offsets (heading line excluded, bounded
+ * by the next ATX heading or end of body), or `null` when the heading is
+ * absent. `start`/`end` are offsets into `body` itself, so a caller can
+ * intersect them against ranges (e.g. inline-code-span ranges) computed
+ * separately over the same `body`. */
+function extractSection(
+  body: string,
+  headingPattern: RegExp,
+): { text: string; start: number; end: number } | null {
   const match = body.match(headingPattern);
   if (!match) {
-    return '';
+    return null;
   }
   const start = (match.index ?? 0) + (match[0]?.length ?? 0);
   const rest = body.slice(start);
   const nextHeadingIndex = rest.search(NEXT_ATX_HEADING_PATTERN);
-  return nextHeadingIndex === -1 ? rest : rest.slice(0, nextHeadingIndex);
+  const end = nextHeadingIndex === -1 ? body.length : start + nextHeadingIndex;
+  return { text: body.slice(start, end), start, end };
 }
 
 /**
@@ -130,19 +142,42 @@ function extractSectionText(body: string, headingPattern: RegExp): string {
  * section contains at least one code span matching `node --test`,
  * `pnpm run <script>`, `npx <tool>`, or `node scripts/<name>.mjs`, OR at
  * least two checkbox items. Returns `false` when the section is absent.
+ *
+ * The command-span check is restricted to genuine inline-code-span ranges
+ * `findMarkdownCodeRanges` identifies on the already-masked body (Codex
+ * review, PR #2840, round 2): the plain regex this replaced matched from
+ * any literal backtick to the next, so an escaped literal like
+ * `` \`node --test ...\` `` -- which CommonMark renders as literal
+ * backtick characters, never a real code span -- still counted.
+ * `findMarkdownCodeRanges`'s own `findInlineCodeRanges` already excludes
+ * an escaped opening backtick (`isEscapedBacktick`), the same handling
+ * `findHtmlCommentRanges`'s escaped-`<!--` guard mirrors elsewhere in this
+ * module. Computed on the masked body (not the original) so a span that
+ * only *looks* real until an enclosing fence/comment/HTML block is masked
+ * away is not wrongly counted as surviving.
  */
 export function hasVerificationCommandSignal(body: string): boolean {
-  const section = extractSectionText(
-    maskOpaqueMarkdown(String(body ?? '')),
+  const maskedBody = maskOpaqueMarkdown(String(body ?? ''));
+  const section = extractSection(
+    maskedBody,
     ACCEPTANCE_CRITERIA_HEADING_PATTERN,
   );
-  if (section.length === 0) {
+  if (section === null || section.text.length === 0) {
     return false;
   }
-  if (VERIFICATION_COMMAND_CODE_SPAN_PATTERN.test(section)) {
+  const hasCommandSpan = findMarkdownCodeRanges(maskedBody).some(
+    (range) =>
+      range.start >= section.start &&
+      range.end <= section.end &&
+      VERIFICATION_COMMAND_CODE_SPAN_PATTERN.test(
+        maskedBody.slice(range.start, range.end),
+      ),
+  );
+  if (hasCommandSpan) {
     return true;
   }
-  const checkboxCount = [...section.matchAll(CHECKBOX_ITEM_PATTERN)].length;
+  const checkboxCount = [...section.text.matchAll(CHECKBOX_ITEM_PATTERN)]
+    .length;
   return checkboxCount >= 2;
 }
 

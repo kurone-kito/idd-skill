@@ -76,6 +76,33 @@ test('hasVerificationCommandSignal: a heading with no space after the # run is n
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: an example inside a raw HTML block (<pre>) does not count (Codex review, PR #2840 round 5)', () => {
+  const body = [
+    '<pre>',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '</pre>',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: an escaped backtick command span does not count (Codex review, PR #2840 round 5)', () => {
+  // CommonMark renders an escaped backtick (`\` + backtick) as a literal
+  // character, never a real code-span delimiter.
+  const body =
+    '## Acceptance criteria\n\n- Run \\`node --test tests/example.test.mts\\` manually\n';
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: a real (non-escaped) command span still counts (control)', () => {
+  const body =
+    '## Acceptance criteria\n\n- Run `node --test tests/example.test.mts`\n';
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: case-insensitive heading', () => {
   const body = `## acceptance CRITERIA\n\n- [ ] a\n- [ ] b\n`;
   assert.equal(hasVerificationCommandSignal(body), true);
@@ -203,6 +230,22 @@ test('candidateFilesExistOnDisk: an example inside an HTML comment does not coun
     '',
     '- `src/scripts/foo.mts`',
     '-->',
+    '',
+  ].join('\n');
+  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    false,
+  );
+});
+
+test('candidateFilesExistOnDisk: an example inside a raw HTML block (<pre>) does not count (Codex review, PR #2840 round 5)', () => {
+  const body = [
+    '<pre>',
+    '## Candidate files',
+    '',
+    '- `src/scripts/foo.mts`',
+    '</pre>',
     '',
   ].join('\n');
   const existing = new Set(['/repo/src/scripts/foo.mts']);

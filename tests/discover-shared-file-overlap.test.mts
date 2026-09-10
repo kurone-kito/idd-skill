@@ -193,6 +193,20 @@ test('parseCandidateFiles stops at a Setext-style sibling heading, not just an A
   assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mjs']);
 });
 
+test('parseCandidateFiles does not mistake a bullet immediately before a thematic break for a Setext heading (Codex review, PR #2840 round 2)', () => {
+  // A `---` directly after a list-item bullet is CommonMark's thematic
+  // break ending the list, never a Setext heading over that bullet -- the
+  // naive "any nonblank preceding line" check wrongly truncated the
+  // section right at its own last (here, only) candidate path.
+  const body = ['## Candidate files', '', '- `src/a.mts`', '---'].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
+});
+
+test('parseCandidateFiles does not mistake a blockquoted line before an underline-shaped line for a Setext heading', () => {
+  const body = ['## Candidate files', '', '> `src/a.mts`', '---'].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
+});
+
 // ---------------------------------------------------------------------------
 // resolveHighContentionFiles
 // ---------------------------------------------------------------------------

@@ -975,6 +975,134 @@ function isValidFenceOpener(fence) {
   return fence.marker[0] !== '`' || !fence.info.includes('`');
 }
 /**
+ * Raw HTML block ranges (CommonMark block types 1-7): a `<script>`/`<pre>`/
+ * `<style>`/`<textarea>` raw-text element (closes only at its own matching
+ * closing tag, #1900's four-way tag matching reused via
+ * {@link rawTextOpenTag}/{@link HTML_RAW_TEXT_TAG_CLOSE_PATTERNS}); a
+ * comment/processing-instruction/declaration/CDATA "special" block (closes
+ * at its own token, {@link specialHtmlBlockCloseToken}, same-line self-close
+ * via {@link isSelfClosedSpecialHtmlBlock}); or a generic block-level tag
+ * (`<div>`, `<pre>`... as a *block* line, `<table>`, etc. --
+ * {@link MARKDOWN_HTML_BLOCK_START_PATTERN}) or a lone custom tag
+ * ({@link MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN}, which per CommonMark
+ * cannot interrupt a paragraph, so it only opens a block when the preceding
+ * line is blank or this is the first line of `text`) -- both closing at the
+ * next blank line or end of text. Top-level scan only, deliberately no
+ * container/list-depth tracking -- matches {@link findHtmlCommentRanges}'s
+ * existing scope choice for this same "mask untrusted issue-body text"
+ * purpose, unlike {@link isWithinOpenHtmlBlock}'s more elaborate
+ * container-aware backward/forward scan built for a different question (is
+ * a specific later code span destroyed by an enclosing block).
+ *
+ * Codex review, PR #2840: an issue can place example Markdown (a fake
+ * `## Acceptance criteria` heading plus a checklist, or a fake
+ * `## Candidate files` entry) inside a raw HTML block such as `<pre>`,
+ * which GitHub renders as literal/opaque content, not Markdown structure --
+ * neither {@link findFencedCodeRanges}, {@link findIndentedCodeRanges}, nor
+ * {@link findHtmlCommentRanges} masked that shape.
+ */
+export function findHtmlBlockRanges(text) {
+  const ranges = [];
+  let lineStart = 0;
+  let previousLineBlank = true;
+  while (lineStart <= text.length) {
+    const newlineIndex = text.indexOf('\n', lineStart);
+    const lineEnd =
+      newlineIndex === -1
+        ? text.length
+        : newlineIndex > lineStart && text[newlineIndex - 1] === '\r'
+          ? newlineIndex - 1
+          : newlineIndex;
+    const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const line = text.slice(lineStart, lineEnd);
+    const isBlank = line.trim() === '';
+    if (!isBlank) {
+      const rawTag = rawTextOpenTag(line);
+      const closeToken = specialHtmlBlockCloseToken(line);
+      const opensGeneric =
+        rawTag === null &&
+        closeToken === null &&
+        (MARKDOWN_HTML_BLOCK_START_PATTERN.test(line) ||
+          (previousLineBlank &&
+            MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(line)));
+      if (
+        rawTag !== null &&
+        !HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[rawTag].test(line)
+      ) {
+        const closePattern = HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[rawTag];
+        let scanStart = lineAfter;
+        let end = text.length;
+        while (scanStart <= text.length) {
+          const nl = text.indexOf('\n', scanStart);
+          const scanLineEnd = nl === -1 ? text.length : nl;
+          const scanLineAfter = nl === -1 ? text.length : nl + 1;
+          if (closePattern.test(text.slice(scanStart, scanLineEnd))) {
+            end = scanLineEnd;
+            break;
+          }
+          if (nl === -1) {
+            break;
+          }
+          scanStart = scanLineAfter;
+        }
+        ranges.push({ start: lineStart, end });
+        lineStart = end;
+        previousLineBlank = false;
+        continue;
+      }
+      if (closeToken !== null && !isSelfClosedSpecialHtmlBlock(line)) {
+        let scanStart = lineAfter;
+        let end = text.length;
+        while (scanStart <= text.length) {
+          const nl = text.indexOf('\n', scanStart);
+          const scanLineEnd = nl === -1 ? text.length : nl;
+          const scanLineAfter = nl === -1 ? text.length : nl + 1;
+          if (text.slice(scanStart, scanLineEnd).includes(closeToken)) {
+            end = scanLineEnd;
+            break;
+          }
+          if (nl === -1) {
+            break;
+          }
+          scanStart = scanLineAfter;
+        }
+        ranges.push({ start: lineStart, end });
+        lineStart = end;
+        previousLineBlank = false;
+        continue;
+      }
+      if (opensGeneric) {
+        let scanStart = lineAfter;
+        let end = text.length;
+        while (scanStart <= text.length) {
+          const nl = text.indexOf('\n', scanStart);
+          const scanLineEnd = nl === -1 ? text.length : nl;
+          const scanLineAfter = nl === -1 ? text.length : nl + 1;
+          if (text.slice(scanStart, scanLineEnd).trim() === '') {
+            end = scanStart;
+            break;
+          }
+          if (nl === -1) {
+            end = text.length;
+            break;
+          }
+          scanStart = scanLineAfter;
+        }
+        ranges.push({ start: lineStart, end });
+        lineStart = end;
+        previousLineBlank = true;
+        continue;
+      }
+    }
+    previousLineBlank = isBlank;
+    lineStart = lineAfter;
+    if (newlineIndex === -1) {
+      break;
+    }
+  }
+  return ranges;
+}
+/**
  * Fenced code block ranges only (no inline spans, no indented code). Unlike
  * {@link findMarkdownCodeRanges}, this lets a caller mask example Markdown
  * syntax inside a fence (a quoted heading or bullet) while leaving inline

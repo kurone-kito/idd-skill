@@ -51,6 +51,17 @@ const OPEN_PR_SCAN_LIMIT = 500;
  * initialized after that block is a top-level-await TDZ risk
  * (`tests/cli-entry-smoke.test.mts`). */
 const SETEXT_UNDERLINE_PATTERN = /^[ \t]{0,3}(?:=+|-+)[ \t]*$/;
+/**
+ * A line CommonMark would never let become a Setext heading's own content
+ * line even when immediately followed by an underline-shaped line: a list
+ * item bullet/ordered marker, or a blockquote marker (Codex review, PR
+ * #2840, round 2). A `- \`src/a.mts\`` bullet directly followed by a `---`
+ * thematic break is not a Setext heading over that bullet -- the `---`
+ * ends the list instead -- so treating it as one dropped the list's own
+ * final (and, for a one-item list, only) candidate path.
+ */
+const SETEXT_INELIGIBLE_PRECEDING_LINE_PATTERN =
+  /^[ \t]{0,3}(?:[-*+][ \t]+|\d+[.)][ \t]+|>)/;
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `candidate:`): tests/flag-name-matrix.test.mts scans this file's
@@ -170,11 +181,19 @@ export function parseCandidateFiles(body: unknown): string[] {
     // shape, letting an existing path in the later, unrelated section
     // leak into `candidateFilesExist`. `index > start` (rather than `>=`)
     // keeps the section's own opening line from ever being misread as a
-    // Setext heading's content line.
+    // Setext heading's content line. The preceding line must also be
+    // Setext-heading-*eligible* (round 2, Codex): a list-item bullet or
+    // blockquote line directly above an underline-shaped line is never a
+    // Setext heading over that line -- e.g. a `---` right after this
+    // section's own last candidate-file bullet ends the list (CommonMark's
+    // own thematic-break rule), it does not retroactively turn that bullet
+    // into a heading -- so wrongly truncating there dropped a real,
+    // possibly the only, candidate path.
     if (
       start !== -1 &&
       index > start &&
       lines[index - 1].trim() !== '' &&
+      !SETEXT_INELIGIBLE_PRECEDING_LINE_PATTERN.test(lines[index - 1]) &&
       SETEXT_UNDERLINE_PATTERN.test(lines[index])
     ) {
       end = index - 1;
