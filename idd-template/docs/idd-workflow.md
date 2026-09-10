@@ -638,7 +638,12 @@ infeasible `Maintainer decision` line rather than merely append beside
 it -- re-triage's own `hasResolvedDecision` check treats every unstruck
 occurrence as live and has no way to tell which one is current, so an
 unstruck infeasible line can keep reading as resolved alongside its
-replacement.
+replacement. Removing the label here does not itself trigger the
+appendix's usual removal-and-re-claim pairing: like the adjacent
+`triage:{outcome}` removal above, the actual re-claim happens through
+the next ordinary Discover pass reading the now-label-free issue, not
+through the Groom pass itself, which -- as already stated above --
+never claims or works the issue.
 
 **Worked example.** An issue was rejected `needs-decision` at score
 `2/5` because its acceptance criteria read "add caching, or document
