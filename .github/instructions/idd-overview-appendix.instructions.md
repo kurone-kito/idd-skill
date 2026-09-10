@@ -143,7 +143,8 @@ assessment. For the per-agent invocation table (Copilot / Claude Code /
 Codex CLI / Antigravity CLI (formerly Gemini CLI)) and the optional
 repository-configurable `critiqueLoop.delegate` surface, see
 [`docs/idd-workflow.md` → Critique pass invocation](../../docs/idd-workflow.md#critique-pass-invocation).
-When helper runtime is enabled, resolve the effective delegate with the
+For **C1 only** — this surface does not extend to E2 or E10 — when
+helper runtime is enabled, resolve the effective delegate with the
 `idd-critique-delegate` helper documented at
 [`docs/idd-helper-scripts.md` → Effective C1 critique delegate](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate).
 

@@ -462,9 +462,12 @@ guards are listed in `docs/policy-constants.md`. A repository may
 configure `critiqueLoop.delegate` to point this step at a different
 reviewer instead of the per-agent mechanism. When helper runtime is
 enabled, resolve the effective `critiqueLoop.delegate` with the
-[`idd-critique-delegate`](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate)
-helper (`node scripts/idd-critique-delegate.mjs`) instead of
-hand-deriving it; for `instructions-only` execution, apply the
+profile-selected
+[critique-delegate](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate)
+helper — `node scripts/idd-critique-delegate.mjs` for source-repo /
+vendored-node profiles, or the `idd-critique-delegate` command for
+package-manager / ephemeral-npx profiles — instead of hand-deriving
+it; for `instructions-only` execution, apply the
 resolution order directly instead: repo-local `critiqueLoop.delegate`
 always wins outright, and only when it is genuinely absent does a
 local runtime's user-global config file apply. A repository may also
