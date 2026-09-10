@@ -647,7 +647,9 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
 - **Inputs**: `--candidate <number>` (repeatable) or `--candidates <n1,n2>`,
   with optional `--owner <owner>`, `--repo <repo>`, `--policy <path>`,
   `--manifest <path>` (default `audit/sync-manifest.json`), `--bundles
-  <id1,id2>` (default `bundle-review,bundle-merge`), `--now <ISO8601>`, and
+  <id1,id2,...>` (default
+  `bundle-review-triage-phase,bundle-review-fix-phase,bundle-merge`),
+  `--now <ISO8601>`, and
   `--check-overlap`. The cross-issue active-set discovery (open PRs plus the
   claim comments of issues that have a remote `issue/<n>-*` branch, resolved
   with the shared claim-state rules and the configured claim stale age) is

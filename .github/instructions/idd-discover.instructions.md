@@ -661,15 +661,16 @@ gates, or crosses a band; the `discover-roadmap-graph` union already
 emits this order.
 
 **High-contention shared-file overlap (advisory).** Concurrent sessions
-tend to edit the same F-phase bundle files (`bundle-review` /
-`bundle-merge`, `audit/sync-manifest.json`). **Soft** tie-breaker after
+tend to edit the same F-phase bundle files and `audit/sync-manifest.json`.
+**Soft** tie-breaker after
 score/desync/milestone/effort: prefer a candidate whose `## Candidate
 files` do **not** overlap an actively-claimed or open-PR issue on one of
 those; `discover-shared-file-overlap` (see
 [IDD helper scripts](../../docs/idd-helper-scripts.md)) reports
 `overlapFlag`/`recommendedOrder`, or `manifestMissing: true` with an
 empty set. See the
-[convention](../../docs/policy-constants.md#high-contention-shared-files).
+[convention](../../docs/policy-constants.md#high-contention-shared-files)
+for the current bundle ids.
 
 After picking, proceed to **A4.5** (`idd-suitability.instructions.md`).
 
