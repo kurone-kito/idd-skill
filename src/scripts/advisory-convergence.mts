@@ -942,7 +942,15 @@ function verifySelfReferentialBootstrapWaiverRun(
     String(run.path ?? '') === expected.path &&
     String(run.headSha ?? '').toLowerCase() ===
       expected.headSha.toLowerCase() &&
-    String(run.repositoryFullName ?? '') === expected.repositoryFullName &&
+    // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): repository
+    // owner/name identities are case-insensitive on GitHub -- normalize
+    // both operands the same way headSha above (and
+    // resolveSelfReferentialTriggerFiles's own origin-repository check)
+    // already do, so a run reported back with different casing than
+    // this invocation's own resolved repositoryFullName is not
+    // incorrectly rejected.
+    String(run.repositoryFullName ?? '').toLowerCase() ===
+      expected.repositoryFullName.toLowerCase() &&
     run.event === 'pull_request_target'
   );
 }

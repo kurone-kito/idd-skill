@@ -3368,6 +3368,41 @@ test('self-referential-bootstrap-auto: a run hosted by a different repository is
   assert.equal(verdict.ready, false);
 });
 
+test('self-referential-bootstrap-auto: a run reported with different repository-name casing is still accepted (Copilot review, PR #2895)', () => {
+  // GitHub repository owner/name identities are case-insensitive; the
+  // Actions runs API can report `head_repository.full_name` in a
+  // different case than this invocation's own resolved
+  // repositoryFullName without that meaning a different repository.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: 'Kurone-Kito/IDD-Skill',
+        },
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
 test('self-referential-bootstrap-auto: a marker missing run-id: never resolves to any lookup, so it is rejected', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
