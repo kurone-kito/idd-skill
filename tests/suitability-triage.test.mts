@@ -5543,8 +5543,9 @@ test('runCli: non-verbose output mapping still spreads tier when present', () =>
 // bundle (the phase-specific bundle that #2789's bundle-core split
 // produced from `bundle-discovery`, alongside the new shared `bundle-core`)
 // whose file set is disjoint enough from DEFAULT_BUNDLE_IDS
-// (bundle-review/bundle-merge) to prove the override genuinely changes the
-// resolved exclusion set, not just accepts the flag syntactically.
+// (bundle-review-triage-phase, bundle-review-fix-phase, bundle-merge; #2694)
+// to prove the override genuinely changes the resolved exclusion set, not
+// just accepts the flag syntactically.
 
 test('loadHighContentionFiles: default bundle IDs resolve merge-bundle files, not discovery-bundle files', () => {
   const resolved = loadHighContentionFiles(

@@ -32,8 +32,21 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // can build the identical high-contention set this module uses for A4 Step 2,
 // instead of re-declaring its own copy of these defaults.
 export const DEFAULT_MANIFEST_PATH = 'audit/sync-manifest.json';
-/** F-phase bundles whose member instruction files concentrate concurrent edits. */
-export const DEFAULT_BUNDLE_IDS = ['bundle-review', 'bundle-merge'];
+/**
+ * F-phase bundles whose member instruction files concentrate concurrent
+ * edits. `bundle-review-triage-phase` + `bundle-review-fix-phase` replace
+ * the former single `bundle-review` id (#2694: split into E1-E8 assessment
+ * and E9-E15 remediation phase bundles, reusing #2789's shared `bundle-core`
+ * instead of a second overlapping core bundle) -- together with
+ * `bundle-merge` they resolve to the same 10-file union as before, since
+ * `idd-overview-core` / `idd-overview-appendix` remain directly listed in
+ * `bundle-merge` (bundle-merge itself is out of this split's scope).
+ */
+export const DEFAULT_BUNDLE_IDS = [
+  'bundle-review-triage-phase',
+  'bundle-review-fix-phase',
+  'bundle-merge',
+];
 /** Append-mostly shared surfaces that are not bundle members. */
 export const DEFAULT_EXTRA_FILES = [DEFAULT_MANIFEST_PATH];
 const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
@@ -633,7 +646,7 @@ function parsePositiveInt(value, flag) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-shared-file-overlap.mjs --candidate <number> [--candidate <number> ...] [--candidates <n1,n2>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--check-overlap] [--now <ISO8601>] [--help]
+  node scripts/discover-shared-file-overlap.mjs --candidate <number> [--candidate <number> ...] [--candidates <n1,n2>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2,...>] [--check-overlap] [--now <ISO8601>] [--help]
 
 Reports, per candidate, the high-contention shared files it would touch (from
 its '## Candidate files' section) and — with --check-overlap — whether any

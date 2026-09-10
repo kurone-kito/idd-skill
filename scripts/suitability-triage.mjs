@@ -3321,7 +3321,7 @@ function loadPolicy(policyPath) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--gh-token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--verbose] [--help]
+  node scripts/suitability-triage.mjs --issue <number> [--gh-token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2,...>] [--verbose] [--help]
   node scripts/suitability-triage.mjs (--body-file <path> | --stdin) [--policy <path>] [--verbose] [--help]
   Deprecated aliases (one release): --token -> --gh-token
 
