@@ -213,6 +213,21 @@ test('parseCandidateFiles still rejects a same-prefix sibling heading that also 
   assert.deepEqual(parseCandidateFiles(body), []);
 });
 
+test('parseCandidateFiles rejects a heading whose trailing hashes are real code-span content, not an ATX closer (Codex review, PR #2840, round 23)', () => {
+  // `` ## Candidate `files ##` `` keeps its trailing `##` as literal
+  // code-span content, not a real ATX closer -- `gh api /markdown`
+  // confirms the rendered heading is `Candidate <code>files ##</code>`,
+  // not `Candidate files`. Stripping backticks before the closing-hash
+  // check exposed those code-span hashes as if they were a real closer,
+  // wrongly opening the section.
+  const body = [
+    '## Candidate `files ##`',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
 test('parseCandidateFiles stops at a Setext-style sibling heading, not just an ATX one (Codex review, PR #2840)', () => {
   const body = [
     '## Candidate files',

@@ -250,17 +250,26 @@ export function parseCandidateFileEntries(body) {
       continue;
     }
     const title = heading[2]
-      .replace(/[*_`]/g, '')
       // Strip a valid ATX closing hash sequence (Codex review, PR #2840,
-      // round 14): `## Candidate files ##` renders on GitHub as a level-2
-      // heading titled exactly "Candidate files" -- the trailing `##` is
-      // closing-sequence syntax, not part of the title -- the same
-      // trailing-hash tolerance `ACCEPTANCE_CRITERIA_HEADING_PATTERN`
-      // already carries for the sibling section. Without this, the
-      // round-12 exact-match fix rejected a heading GitHub itself renders
-      // identically to the bare form, silently dropping every candidate
-      // path in that section.
+      // round 14, reordered round 23): `## Candidate files ##` renders on
+      // GitHub as a level-2 heading titled exactly "Candidate files" --
+      // the trailing `##` is closing-sequence syntax, not part of the
+      // title -- the same trailing-hash tolerance
+      // `ACCEPTANCE_CRITERIA_HEADING_PATTERN` already carries for the
+      // sibling section. Without this, the round-12 exact-match fix
+      // rejected a heading GitHub itself renders identically to the bare
+      // form, silently dropping every candidate path in that section.
+      //
+      // Must run BEFORE stripping inline formatting characters (round
+      // 23): `` ## Candidate `files ##` `` keeps its trailing `##` as
+      // literal code-span CONTENT, not a real ATX closer -- `gh api
+      // /markdown` confirms the rendered heading is
+      // `Candidate <code>files ##</code>`, not `Candidate files`.
+      // Stripping backticks first exposed those code-span hashes as if
+      // they were a real closer, wrongly opening the section on a
+      // heading GitHub renders as something else entirely.
       .replace(/[ \t]+#+[ \t]*$/, '')
+      .replace(/[*_`]/g, '')
       .trim()
       .toLowerCase();
     if (start === -1) {
