@@ -841,19 +841,23 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "addresses the ... fin
   assert.equal(classification.ackOnlyPostDisposition, true);
 });
 
-test('classifyThreadAckOnlyPostDisposition rejects the "addresses the ... concern" shape when "concern" sits more than 80 characters away, in the SAME sentence, immediately before genuine boilerplate (Copilot review, #2858)', () => {
-  // Locality guard: the third closure shape is bounded (`{0,80}`) so a
-  // "concern"/"finding" mention too far from "addresses the" does not
-  // create a false closure signal. Copilot review flagged the original
-  // version of this test: its fixture put "finding" in a different
+test('classifyThreadAckOnlyPostDisposition rejects the "addresses the ... concern" shape when "concern" sits more than 3 modifier tokens away, in the SAME sentence, immediately before genuine boilerplate (Copilot review, #2858; token-count bound since Codex round 7)', () => {
+  // Locality guard: the third closure shape's internal gap is bounded so
+  // a "concern"/"finding" mention too far from "addresses the" does not
+  // create a false closure signal. Originally an 80-character bound;
+  // Codex's round 7 replaced it with a 3-modifier-token cap (see the doc
+  // comment above `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE`), so this fixture
+  // now uses 4 plain noun-phrase tokens -- one over the cap -- rather
+  // than an unrealistic 45-token filler, to exercise the actual boundary
+  // instead of an arbitrary excess. Copilot's original review on this
+  // test flagged that its first version put "finding" in a different
   // sentence with no boilerplate anywhere, so it failed for those two
-  // reasons regardless of the 80-char bound, never actually exercising
+  // reasons regardless of the distance bound, never actually exercising
   // it. This fixture keeps "concern" in the SAME sentence (no `.!?`
   // between them, so the sentence-boundary guard does not fire) and adds
   // genuine boilerplate immediately after it (so the boilerplate-tail
-  // guard does not fire either) -- the >80-character gap is the only
+  // guard does not fire either) -- the over-cap token count is the only
   // remaining reason this must still be rejected.
-  const filler = 'x '.repeat(45); // 90 chars, no sentence-terminating punctuation
   const thread = {
     id: 'thread-addresses-far-from-concern',
     isResolved: true,
@@ -871,7 +875,9 @@ test('classifyThreadAckOnlyPostDisposition rejects the "addresses the ... concer
         {
           id: 'FA-2',
           author: { login: 'coderabbitai[bot]' },
-          body: `\`@kurone-kito\`, confirmed. This addresses the ${filler}concern.\n\n🐇 ✓`,
+          body:
+            '`@kurone-kito`, confirmed. This addresses the very ' +
+            'long compound noun concern.\n\n🐇 ✓',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -1484,6 +1490,92 @@ test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback sandwi
             '</details>\n\nHowever, the null-check remains ' +
             'unresolved.\n\n<details>\n<summary>bar</summary>\n' +
             '</details>',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a coordinating conjunction that swaps in a genuinely different, unaddressed concern (Codex round 7, #2868)', () => {
+  // Codex's round-7 finding on PR #2868: the internal gap between
+  // "addresses the" and "concern"/"finding" had no positive shape at
+  // all -- only "not a period, not concern/finding, within 80 chars" --
+  // so a coordinating conjunction could silently swap the addressed
+  // topic for a genuinely different one, with only ONE "concern"
+  // occurrence (so guard 4's no-backtrack protection never engages) that
+  // is immediately followed by genuine boilerplate. This is Codex's
+  // exact adversarial example.
+  const thread = {
+    id: 'thread-addresses-but-leaves-different-concern',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'BL-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'BL-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This addresses the documentation ' +
+            'issue but leaves a security concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a hedge word hidden inside the internal gap rather than immediately before "addresses" (regression guard, #2858)', () => {
+  // The hedge lookbehind only inspects the text immediately preceding
+  // "addresses" -- without also excluding hedge words from the internal
+  // gap's own token set, "addresses the partially resolved concern"
+  // would hide the same hedge inside the gap and bypass the lookbehind
+  // entirely. Each gap token is checked against the same closed hedge
+  // enumeration via a per-token negative lookahead.
+  const thread = {
+    id: 'thread-addresses-hedge-inside-gap',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'HG-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'HG-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed. This addresses the partially ' +
+            'resolved concern.\n\n🐇 ✓',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },

@@ -2256,11 +2256,58 @@ const CODERABBIT_ACK_CLOSURE_TAIL_SOURCE =
   `(?:\\s*${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})?` +
   `|${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})` +
   '\\s*$';
+// Internal gap tokenized, capped at 3 modifier words, hedge words
+// excluded per token (Codex review, PR #2868, round 7): the previous
+// `(?:(?!\b(?:concerns?|findings?)\b)[^.!?]){0,80}` gap was a NEGATIVE
+// bound again -- any non-period, non-concern/finding character was
+// allowed, for up to 80 of them -- and Codex demonstrated it accepts a
+// coordinating conjunction that silently swaps in a genuinely different,
+// unaddressed concern: "confirmed. This addresses the documentation
+// issue but leaves a security concern.\n\n🐇 ✓" has only ONE "concern"
+// occurrence (so guard 4's no-backtrack protection never engages), and
+// it is immediately followed by the required boilerplate, so the old
+// gap matched it as a clean acknowledgment even though "but leaves a"
+// means the opposite.
+//
+// Both real observed samples (kurone-kito/idd-skill#2853) show the gap
+// is a SHORT, plain noun-phrase modifier with no verbs or conjunctions
+// at all: "template link-resolution" and "template issue-reference" (2
+// tokens each). The fix flips this gap to the same positive-shape style
+// as guard 6's lead-in whitelist: the gap may consist of at most 3
+// space-separated `[\w-]+` tokens (one more than either real sample
+// needs, since a coherent conjunction-based "flip" needs a verb plus a
+// new subject -- realistically 4 or more words -- to read as a genuine
+// change of topic; Codex's own example needs 5). Restricting tokens to
+// `[\w-]+` also subsumes guards 2 and 4 for free: neither a comma nor a
+// sentence-terminating `.`/`!`/`?` is a word character or whitespace, so
+// either one breaks the token chain outright, and reaching a SECOND,
+// later "concern"/"finding" now requires consuming more modifier tokens
+// than the cap allows (verified against round 3's own "addresses the
+// original concern but reveals another finding" fixture below, still
+// rejected under the new grammar with no separate backtrack guard
+// needed).
+//
+// Each token is additionally checked against the same closed hedge-word
+// enumeration as the lookbehind below, via a per-token negative
+// lookahead: without this, "addresses the partially resolved concern"
+// would let a hedge word hide INSIDE the gap rather than immediately
+// before "addresses", bypassing the lookbehind (which only inspects the
+// text immediately preceding "addresses") entirely.
+//
+// Residual risk, stated rather than papered over, the same standard as
+// every guard above: within the 3-token cap, a semantically incoherent
+// but structurally valid modifier sequence -- e.g. "addresses the
+// concern finding." (treating "concern" itself as a 1-token modifier of
+// "finding") -- would still match. No sampled reply has produced word
+// salad like this; recognizing that a modifier sequence is not
+// grammatically sensible is the same open-ended natural-language
+// problem this file has repeatedly declared out of scope, the same
+// class as the `<details>` block's opaque interior above.
 const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
   `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE})\\s+)` +
     '\\baddresses\\s+the\\b' +
-    '(?:(?!\\b(?:concerns?|findings?)\\b)[^.!?]){0,80}' +
-    '\\b(?:concerns?|findings?)\\b\\.\\s*' +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE})\\b)[\\w-]+){0,3}` +
+    '\\s+\\b(?:concerns?|findings?)\\b\\.\\s*' +
     CODERABBIT_ACK_CLOSURE_TAIL_SOURCE,
   'i',
 );
