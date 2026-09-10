@@ -1659,6 +1659,16 @@ only approval boundary.
   with no overall deadline -- a degraded GitHub API can then consume
   its per-call timeout once per historical comment and stall release
   for many minutes despite the attempted-not-blocking framing below.
+  **Also pass `--deadline-ms`** (#2896 review, Codex, round 8) to
+  every `minimize-superseded-markers.mjs` invocation this sweep makes
+  -- for example `--deadline-ms 300000` (five minutes) -- as a second,
+  independent bound: the `isMinimized` pre-filter above only skips
+  already-cleared candidates cheaply, but a first-ever sweep of a
+  large backlog can still submit many genuinely-not-yet-minimized
+  candidates that each cost a real GitHub API round-trip, and without
+  `--deadline-ms` each one can individually consume the helper's own
+  per-call timeout with no overall cap.
+
   Determine "newest" only among candidates from a trusted marker actor
   (#2896 review, Codex), never from every structural match
   indiscriminately -- an untrusted actor's byte-exact canonical comment
