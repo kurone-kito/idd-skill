@@ -250,10 +250,11 @@ in this preamble, since the fallback differs per helper.
   [kurone-kito/idd-skill#1237](https://github.com/kurone-kito/idd-skill/issues/1237)).
   Source-repo internal helper; not distributed via the package-manager
   / ephemeral-npx profiles.
-- `scripts/idd-critique-delegate.mjs` for the C1 effective
-  `critiqueLoop.delegate` verdict: `usable`, `source`, `command`,
-  `mode`, and a machine-readable `reason` when unusable, delegating
-  entirely to the existing exported resolvers (referenced in
+- `scripts/idd-critique-delegate.mjs` for the effective
+  `critiqueLoop.delegate` verdict consumed by both C1 and E10:
+  `usable`, `source`, `command`, `mode`, and a machine-readable
+  `reason` when unusable, delegating entirely to the existing exported
+  resolvers (referenced in
   [kurone-kito/idd-skill#2329](https://github.com/kurone-kito/idd-skill/issues/2329))
 - `scripts/idd-critique-telemetry-hook.mjs` for the C-phase effective
   `critiqueLoop.telemetryHook` verdict (`usable`, `source`, `command`,
