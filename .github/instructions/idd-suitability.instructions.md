@@ -291,10 +291,10 @@ re-evaluation differs) before Check 1-7 run normally. This is now a
 hard pre-claim prohibition, so apply this workflow's
 [fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
 when the scan itself cannot be completed — a comments-fetch failure, or
-a helper result carrying a rejection-collection warning with no
-conclusive answer — rather than treating an inconclusive scan the same
-as a confirmed absence: stop and report instead of proceeding to Check
-1.
+a helper result whose `existingRejectionCollectionWarnings` field
+reports a collection failure with no conclusive `existingRejection`
+value — rather than treating an inconclusive scan the same as a
+confirmed absence: stop and report instead of proceeding to Check 1.
 
 ```text
 Candidates = A4 survivor set
@@ -305,8 +305,8 @@ Loop: Rerun A4 Step 2 over Candidates to pick the next candidate
     → Non-stale rejection found → do not claim; exclude, post nothing, loop
     → Stale rejection found → post reconciliation comment → Run Check 1
     → No trusted rejection found → Run Check 1
-    → Scan inconclusive (fetch failed, or a collection warning with no
-      conclusive answer) → stop, report (fail closed)
+    → Scan inconclusive (fetch failed, or existingRejectionCollectionWarnings
+      with no conclusive existingRejection) → stop, report (fail closed)
   → Run Check 1 (Repository Fit)
     → PASS → Run Check 2
     → FAIL → Classify as out-of-scope → Report, remove from Candidates, loop
