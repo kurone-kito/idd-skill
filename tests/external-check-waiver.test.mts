@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1599,6 +1599,112 @@ test('runExternalCheckWaiver: --auto-bootstrap posts end to end with no viewer-i
   assert.equal(parsed?.claimId, 'claim-20260830T222316Z-2328');
 });
 
+test('runExternalCheckWaiver: --auto-bootstrap clamps its fixed expiry to a configured shorter maxValidity (Codex review, PR #2895)', async () => {
+  // The fixed PT24H default is anchored on the HEAD commit timestamp
+  // independent of `advisoryWait.convergenceDeadline` (see the test above),
+  // but `planExternalCheckWaiver`'s own `withinMaxValidity` check compares
+  // whatever expiry is computed against the adopter's configured
+  // `ciGate.externalCheckWaivers.maxValidity` -- unconditionally, for every
+  // waiver kind. An adopter configuring a STRICTER maximum than PT24H (e.g.
+  // PT2H) would therefore have every auto-bootstrap marker rejected by its
+  // own posting job unless the computation clamps to that configured
+  // ceiling instead of always using the fixed default.
+  const dir = mkdtempSync(join(tmpdir(), 'idd-waiver-auto-bootstrap-clamp-'));
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github', 'idd', 'config.json'),
+      JSON.stringify({
+        ciGate: {
+          externalCheckWaivers: {
+            mode: 'maintainer-authorized',
+            maxValidity: 'PT2H',
+          },
+          externalChecks: {
+            waivable: [
+              { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+            ],
+          },
+        },
+      }),
+    );
+    process.chdir(dir);
+
+    let posted: { prNumber: number; body: string } | undefined;
+    const { report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          '--run-id',
+          '555',
+          '--auto-bootstrap',
+          '--apply',
+          '--yes',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+      },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+          },
+        ],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: () => [],
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T18:20:00Z'),
+      isTTY: false,
+      postComment: (prNumber, body) => {
+        posted = { prNumber, body };
+        return { html_url: 'https://example.invalid/posted' };
+      },
+    });
+
+    assert.equal(
+      report?.applied,
+      true,
+      'a shorter configured maxValidity must not block the clamped auto-bootstrap marker',
+    );
+    const parsed = parseExternalCheckWaiverComment(
+      posted?.body ?? '',
+      '2026-08-30T18:20:00Z',
+    );
+    // Clamped to PT2H from the HEAD commit timestamp, not the fixed PT24H
+    // default the un-clamped test above pins.
+    assert.equal(parsed?.expiresAt, '2026-08-30T20:13:24Z');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('runExternalCheckWaiver reads one post-write snapshot for the reconcile (#2328 review)', async () => {
   // Two sequential reads would leave `comments` older than `evidence`, and
   // the correlation can only find markers present in `comments` — so a
@@ -1832,6 +1938,144 @@ test('collectValidWaiverComments distinguishes entries by reason too (#2328 revi
   assert.deepEqual(
     found.map((entry) => entry.commentId),
     ['200'],
+  );
+});
+
+test('collectValidWaiverComments with expectedReason excludes an otherwise-fully-valid candidate whose own reason does not match it (Codex review, PR #2895)', () => {
+  // kurone-kito/idd-skill#2657: `--auto-bootstrap`'s reuse scan trusts
+  // `github-actions[bot]` as a marker author (it is the viewer), so
+  // WITHOUT `expectedReason` any other `github-actions[bot]`-authored,
+  // same-selector marker -- e.g. one a PR-controlled `pull_request`
+  // workflow could forge with a different reason -- would still correlate
+  // against a genuinely `valid` evidence entry and be reported reusable.
+  // `expectedReason` closes that: it is checked against the CANDIDATE
+  // COMMENT's own parsed `reason`, independent of what the evidence entry
+  // reports.
+  const genuineReason = SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON;
+  const forgedReason = 'a-forged-different-reason';
+  const sameSecond = '2026-08-30T22:05:01Z';
+  const forgedBody = renderExternalCheckWaiverComment({
+    actor: 'github-actions[bot]',
+    agentId: 'github-actions-bot',
+    claimId: 'claim-abc',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'idd-advisory-convergence',
+    reason: forgedReason,
+    expiresAt: '2026-08-31T10:00:00Z',
+  });
+  const forged = {
+    id: 300,
+    html_url:
+      'https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-300',
+    created_at: sameSecond,
+    user: { login: 'github-actions[bot]' },
+    body: forgedBody,
+  };
+  const evidence = {
+    valid: [
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt: sameSecond,
+        authorLogin: 'github-actions[bot]',
+        // The evidence entry's own `reason` still reflects the forged
+        // comment's actual reason -- `expectedReason` must reject this
+        // independent of whether the summarizer happened to classify the
+        // forged marker `valid` for some other selector/author reason.
+        reason: forgedReason,
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+    modeDisabled: [],
+  } as never;
+
+  const withoutExpectedReason = collectValidWaiverComments({
+    comments: [forged],
+    evidence,
+    checkSelector: 'idd-advisory-convergence',
+  });
+  assert.deepEqual(
+    withoutExpectedReason.map((entry) => entry.commentId),
+    ['300'],
+    'sanity check: without expectedReason the forged marker correlates normally',
+  );
+
+  const withExpectedReason = collectValidWaiverComments({
+    comments: [forged],
+    evidence,
+    checkSelector: 'idd-advisory-convergence',
+    expectedReason: genuineReason,
+  });
+  assert.deepEqual(
+    withExpectedReason,
+    [],
+    'expectedReason rejects a candidate whose own reason token does not match, even when evidence otherwise classifies it valid',
+  );
+
+  assert.equal(
+    findReusableWaiverComment({
+      comments: [forged],
+      evidence,
+      checkSelector: 'idd-advisory-convergence',
+      expectedReason: genuineReason,
+    }),
+    null,
+  );
+});
+
+test('collectValidWaiverComments with expectedReason still includes a candidate whose own reason matches it (Codex review, PR #2895)', () => {
+  const reason = SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON;
+  const createdAt = '2026-08-30T22:05:01Z';
+  const body = renderExternalCheckWaiverComment({
+    actor: 'github-actions[bot]',
+    agentId: 'github-actions-bot',
+    claimId: 'claim-abc',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'idd-advisory-convergence',
+    reason,
+    expiresAt: '2026-08-31T10:00:00Z',
+  });
+  const comment = {
+    id: 400,
+    html_url:
+      'https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-400',
+    created_at: createdAt,
+    user: { login: 'github-actions[bot]' },
+    body,
+  };
+  const evidence = {
+    valid: [
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt,
+        authorLogin: 'github-actions[bot]',
+        reason,
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+    modeDisabled: [],
+  } as never;
+
+  const found = collectValidWaiverComments({
+    comments: [comment],
+    evidence,
+    checkSelector: 'idd-advisory-convergence',
+    expectedReason: reason,
+  });
+  assert.deepEqual(
+    found.map((entry) => entry.commentId),
+    ['400'],
   );
 });
 

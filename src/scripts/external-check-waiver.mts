@@ -861,11 +861,31 @@ export async function runExternalCheckWaiver(
     if (!Number.isFinite(durationMs) || (durationMs ?? 0) <= 0) {
       return '';
     }
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): clamp to the
+    // adopter's configured `ciGate.externalCheckWaivers.maxValidity` when it
+    // is SHORTER than the fixed default above. Without this, an adopter who
+    // configures a stricter maximum (e.g. `PT2H`) would have every
+    // auto-bootstrap marker rejected by `planExternalCheckWaiver`'s own
+    // `withinMaxValidity` check the instant it computes an expiry longer
+    // than that configured ceiling, permanently blocking the self-waiver
+    // path for that adopter. A configured value this helper cannot parse is
+    // treated as absent -- `planExternalCheckWaiver` already fails closed on
+    // an unparsable `maxValidity` elsewhere, so silently ignoring it here
+    // only widens the window up to the untouched fixed default, never past
+    // it.
+    const configuredMaxValidityMs = parseIsoDurationToMs(
+      policy.ciGate.externalCheckWaivers.maxValidity,
+    );
+    const clampedDurationMs =
+      Number.isFinite(configuredMaxValidityMs) &&
+      (configuredMaxValidityMs ?? 0) > 0
+        ? Math.min(durationMs ?? 0, configuredMaxValidityMs ?? 0)
+        : (durationMs ?? 0);
     // Matches `resolveExpiryAt`'s own `--expires` (absolute) branch: strip
     // the millisecond suffix `toISOString()` always adds, for the same
     // whole-second canonical style every hand-authored/rendered timestamp
     // in this marker family already uses.
-    return new Date(headMs + (durationMs ?? 0))
+    return new Date(headMs + clampedDurationMs)
       .toISOString()
       .replace(/\.\d{3}Z$/, 'Z');
   };
@@ -1029,6 +1049,9 @@ export async function runExternalCheckWaiver(
     checkSelector: report.requested.selector,
     expectedHeadSha: wouldPost?.headSha ?? '',
     allowedClaimIds: toAllowedClaimIds(preWriteBinding),
+    expectedReason: args.autoBootstrap
+      ? SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON
+      : undefined,
   });
   if (existingWaiver) {
     const reusedReport = {
@@ -1143,6 +1166,9 @@ export async function runExternalCheckWaiver(
           checkSelector: report.requested.selector,
           expectedHeadSha: wouldPost?.headSha ?? '',
           allowedClaimIds: toAllowedClaimIds(postWriteBinding),
+          expectedReason: args.autoBootstrap
+            ? SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON
+            : undefined,
         })
       : [];
   if (concurrentWaivers.length > 1) {
@@ -1237,6 +1263,7 @@ export function findReusableWaiverComment(input: {
   checkSelector: string;
   expectedHeadSha?: string;
   allowedClaimIds?: string[];
+  expectedReason?: string;
 }): ReusableWaiver | null {
   return collectValidWaiverComments(input)[0] ?? null;
 }
@@ -1253,6 +1280,7 @@ export function collectValidWaiverComments({
   checkSelector,
   expectedHeadSha = '',
   allowedClaimIds = [],
+  expectedReason = '',
 }: {
   comments: WaiverCommentPayload[] | null | undefined;
   evidence: ExternalCheckWaiverEvidence | null | undefined;
@@ -1271,6 +1299,21 @@ export function collectValidWaiverComments({
    * exception. Empty skips the check.
    */
   allowedClaimIds?: string[];
+  /**
+   * kurone-kito/idd-skill#2657 (Codex review, PR #2895): require an exact
+   * `reason` match before treating an existing marker as reusable.
+   * Without this, `--auto-bootstrap`'s own reuse scan (which must trust
+   * `github-actions[bot]` to resolve its own prior post) would also
+   * treat ANY other `github-actions[bot]`-authored same-selector marker
+   * as reusable -- including one a PR-controlled `pull_request`-triggered
+   * workflow forged with a different (or absent) `run-id:` -- causing
+   * the trusted `pull_request_target` posting job to skip posting its
+   * own valid marker because it wrongly believes one already exists.
+   * Optional and unused by every other caller, which correlates on
+   * `entry.reason === parsed.reason` already (see `matchesValidEntry`
+   * below) without needing to assert a SPECIFIC expected value.
+   */
+  expectedReason?: string;
 }): ReusableWaiver[] {
   const selector = String(checkSelector ?? '').trim();
   if (!selector) return [];
@@ -1291,6 +1334,20 @@ export function collectValidWaiverComments({
       String(comment?.created_at ?? ''),
     );
     if (!parsed || parsed.checkSelector !== selector) continue;
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): reject a
+    // candidate whose OWN `reason:` token does not match the expected one
+    // before it ever reaches `matchesValidEntry` below -- see the
+    // `expectedReason` doc comment above for why this must be checked
+    // against the comment's own parsed field, not only via the evidence
+    // entry's `reason`, which a forged same-second marker could still
+    // share.
+    const normalizedExpectedReason = String(expectedReason ?? '').trim();
+    if (
+      normalizedExpectedReason &&
+      String(parsed.reason ?? '').trim() !== normalizedExpectedReason
+    ) {
+      continue;
+    }
     // #2328 (review): correlate on EVERY field the evidence entry carries,
     // not just expiry and timestamp. `created_at` has second resolution, so a
     // valid maintainer waiver and an unauthorized, wrong-HEAD, or wrong-claim
