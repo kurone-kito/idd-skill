@@ -112,6 +112,15 @@ export function stripMarkdownCodeRegions(text) {
       `${ticks}${inner.replace(/[^\r\n]/g, ' ')}${ticks}`,
   );
 }
+/**
+ * True when the character at `index` is escaped by an odd-length run of
+ * backslashes immediately before it. Despite the name, this counts
+ * backslashes only -- it never inspects `text[index]` itself -- so it is
+ * equally valid for a backtick (its original use), a link-text bracket, or
+ * an HTML tag's opening `<` (#2865): `\<span title="` and `\[test](` are
+ * both ordinary escaped-punctuation text per CommonMark, not the start of
+ * raw HTML or a real link.
+ */
 function isEscapedBacktick(text, index) {
   let backslashCount = 0;
   for (
@@ -1769,48 +1778,135 @@ function matchInlineHtmlTagEnd(text, start, end) {
 // span (#2865, Codex review PR #2840 round 27, databaseId 3977018342):
 // `[test](/url "`node --test`")` renders its title's backticks literally
 // too (`gh api /markdown` confirms `<a href="/url" title="`node
-// --test`">`), never a code span. A bare destination is a run of
-// non-whitespace, non-paren characters -- with one level of backslash-
-// escaped or balanced unescaped parens allowed, per spec (`gh api
-// /markdown` confirms `/wiki/Example_(disambiguation)` survives as a real
-// destination) -- or an angle-bracket-quoted form. The optional title is a
-// double-, single-, or paren-quoted string; unlike an HTML attribute value,
-// a title supports backslash-escaping so an escaped delimiter does not end
-// it early. Per spec the destination/title parenthesis must directly
-// follow the link text's own closing `]` with no intervening whitespace,
-// so the caller only tries this match when the preceding character is `]`
-// -- a link-shaped prefix that never reaches a valid destination/title/`)`
-// (e.g. `[note](which uses \`code\`)`) fails the whole anchored match and
-// falls through to ordinary text, leaving that backtick pair a genuine
-// code span (`gh api /markdown` confirms GitHub renders exactly that).
+// --test`">`), never a code span. The optional title is a double-,
+// single-, or paren-quoted string; unlike an HTML attribute value, a title
+// supports backslash-escaping so an escaped delimiter does not end it
+// early. The bare (non-angle-bracket) destination itself is scanned
+// manually by {@link scanBareLinkDestinationEnd} below, not matched by this
+// pattern, since CommonMark allows arbitrarily nested balanced parens
+// there (a fixed-depth regex alternative under-matched a real doubly-nested
+// destination -- Codex review round 1, databaseId 3978211245).
 const INLINE_LINK_TITLE_PATTERN =
   '(?:"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|\\((?:[^()\\\\]|\\\\.)*\\))';
-const INLINE_LINK_DESTINATION_PATTERN =
-  '(?:<[^<>\\r\\n]*>|(?:[^ \\t\\r\\n()\\\\]|\\\\.|\\([^()]*\\))*)';
-const INLINE_LINK_DEST_TITLE_PATTERN = new RegExp(
-  '^\\([ \\t\\r\\n]*' +
-    INLINE_LINK_DESTINATION_PATTERN +
-    `(?:[ \\t\\r\\n]+${INLINE_LINK_TITLE_PATTERN})?[ \\t\\r\\n]*\\)`,
+const INLINE_LINK_ANGLE_DESTINATION_PATTERN = /^<[^<>\r\n]*>/u;
+const INLINE_LINK_TITLE_AND_CLOSE_PATTERN = new RegExp(
+  `^(?:[ \\t\\r\\n]+${INLINE_LINK_TITLE_PATTERN})?[ \\t\\r\\n]*\\)`,
   'u',
 );
 /**
+ * The end offset of a bare (non-angle-bracket) link destination starting at
+ * `start`, honoring CommonMark's rule that parens are allowed there only
+ * when backslash-escaped or part of an arbitrarily-nested balanced pair
+ * (`gh api /markdown` confirms `/foo(a(b)c)` survives as a real
+ * destination with two nesting levels) -- manual scanning, rather than a
+ * fixed-depth regex alternative, generalizes to any nesting depth. Stops
+ * at the first whitespace or unbalanced (closing) `)`, which belongs to
+ * the enclosing link syntax, not the destination.
+ */
+function scanBareLinkDestinationEnd(text, start, end) {
+  let cursor = start;
+  let depth = 0;
+  while (cursor < end) {
+    const character = text[cursor];
+    if (character === '\\' && cursor + 1 < end) {
+      cursor += 2;
+      continue;
+    }
+    if (character === '(') {
+      depth += 1;
+      cursor += 1;
+      continue;
+    }
+    if (character === ')') {
+      if (depth === 0) {
+        break;
+      }
+      depth -= 1;
+      cursor += 1;
+      continue;
+    }
+    if (
+      character === ' ' ||
+      character === '\t' ||
+      character === '\r' ||
+      character === '\n'
+    ) {
+      break;
+    }
+    cursor += 1;
+  }
+  return cursor;
+}
+/**
+ * True when the nearest earlier unescaped `[` or `]` before
+ * `closeBracketIndex` -- bounded by the start of the current paragraph,
+ * since a link's own `[...]` text can never cross a blank line -- is a
+ * `[`, a plausible open link/image bracket for the `]` at
+ * `closeBracketIndex`. A bounded heuristic (nearest-bracket, not full
+ * CommonMark link-text balance/precedence parsing), but it resolves the
+ * two shapes Codex review round 1 (databaseId 3978211256) flagged: `gh api
+ * /markdown` confirms `foo](/url "`x`")` (no `[` at all) and
+ * `\[test](/url "`x`")` (the `[` itself escaped) both render their
+ * backticks as a genuine code span, never a link -- this must return
+ * `false` for both so {@link matchInlineLinkDestTitleEnd} never excludes
+ * them.
+ */
+function hasPlausibleLinkOpener(text, closeBracketIndex) {
+  let paragraphStart = 0;
+  for (const match of text.matchAll(/\r?\n[ \t]*\r?\n/gu)) {
+    const matchEnd = match.index + match[0].length;
+    if (matchEnd > closeBracketIndex) {
+      break;
+    }
+    paragraphStart = matchEnd;
+  }
+  for (
+    let cursor = closeBracketIndex - 1;
+    cursor >= paragraphStart;
+    cursor -= 1
+  ) {
+    const character = text[cursor];
+    if (
+      (character === '[' || character === ']') &&
+      !isEscapedBacktick(text, cursor)
+    ) {
+      return character === '[';
+    }
+  }
+  return false;
+}
+/**
  * The end offset of an inline link's `(destination "title")` span starting
  * at `start` (which must hold `(`), bounded to `[start, end)`, or `null`
- * when `start` is not immediately preceded by a link text's closing `]`,
- * no valid destination/title matches there, or the match would span a
- * blank line (see {@link matchInlineHtmlTagEnd}'s identical guard and
- * rationale).
+ * when `start` is not immediately preceded by a plausible open link/image
+ * bracket (see {@link hasPlausibleLinkOpener}), no valid destination/title
+ * matches there, or the match would span a blank line (see
+ * {@link matchInlineHtmlTagEnd}'s identical guard and rationale). A
+ * link-shaped prefix that never reaches a valid destination/title/`)`
+ * (e.g. `[note](which uses \`code\`)`) leaves the whole match unresolved
+ * and falls through to ordinary text, leaving that backtick pair a genuine
+ * code span (`gh api /markdown` confirms GitHub renders exactly that).
  */
 function matchInlineLinkDestTitleEnd(text, start, end) {
-  if (text[start - 1] !== ']') {
+  if (text[start - 1] !== ']' || !hasPlausibleLinkOpener(text, start - 1)) {
     return null;
   }
-  const remainder = text.slice(start, end);
-  const match = INLINE_LINK_DEST_TITLE_PATTERN.exec(remainder);
-  if (match === null) {
+  const leadingWhitespace = /^[ \t\r\n]*/u.exec(text.slice(start + 1, end));
+  let cursor = start + 1 + (leadingWhitespace?.[0].length ?? 0);
+  const angleMatch = INLINE_LINK_ANGLE_DESTINATION_PATTERN.exec(
+    text.slice(cursor, end),
+  );
+  cursor =
+    angleMatch !== null
+      ? cursor + angleMatch[0].length
+      : scanBareLinkDestinationEnd(text, cursor, end);
+  const rest = INLINE_LINK_TITLE_AND_CLOSE_PATTERN.exec(
+    text.slice(cursor, end),
+  );
+  if (rest === null) {
     return null;
   }
-  const matchEnd = start + match[0].length;
+  const matchEnd = cursor + rest[0].length;
   return hasBlankLine(text, start, matchEnd) ? null : matchEnd;
 }
 function findInlineCodeRanges(text, start, end) {
@@ -1820,14 +1916,19 @@ function findInlineCodeRanges(text, start, end) {
     // #2865: skip an inline HTML tag or a link's own destination/title span
     // entirely before ever considering a backtick inside it as a code-span
     // delimiter -- CommonMark's raw-HTML and link rules take precedence
-    // over the code-span rule there.
-    if (text[cursor] === '<') {
+    // over the code-span rule there. Codex review (round 1, databaseId
+    // 3978211270): an escaped `<` or `(` (`\<span title="`x`">`,
+    // `foo\(bar` `x` `)`) is ordinary text per CommonMark, never the start
+    // of raw HTML or a link's destination/title, so a backtick inside it
+    // stays a genuine code-span candidate -- skip the exclusion entirely
+    // when the opening character itself is escaped.
+    if (text[cursor] === '<' && !isEscapedBacktick(text, cursor)) {
       const tagEnd = matchInlineHtmlTagEnd(text, cursor, end);
       if (tagEnd !== null) {
         cursor = tagEnd;
         continue;
       }
-    } else if (text[cursor] === '(') {
+    } else if (text[cursor] === '(' && !isEscapedBacktick(text, cursor)) {
       const linkEnd = matchInlineLinkDestTitleEnd(text, cursor, end);
       if (linkEnd !== null) {
         cursor = linkEnd;

@@ -1265,3 +1265,46 @@ test('findHtmlBlockRanges stops an unclosed raw-text block at an inherited list-
   assert.equal(masked.includes('Acceptance criteria'), true);
   assert.equal(masked.includes('[ ] one'), true);
 });
+
+// --- #2865 review-fix (Codex review, round 1): four correctness gaps in
+// the round-4 matchers above, each verified against `gh api /markdown`.
+
+test('findMarkdownCodeRanges: a link destination with two levels of nested balanced parens still masks the title backticks (databaseId 3978211245)', () => {
+  // `gh api /markdown` confirms `/foo(a(b)c)` survives as a real
+  // destination (`<a href="/foo(a(b)c)" title="`node --test`">`) --
+  // the fixed-depth regex this replaced under-matched here, wrongly
+  // restoring the title's backticks as a real code span.
+  const body = 'See [test](/foo(a(b)c) "`node --test`") for details.\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: a bare `]` with no link opener leaves its backtick pair a real span (databaseId 3978211256)', () => {
+  // `gh api /markdown` confirms `foo](/url "`node --test`")` renders
+  // `foo](/url "` as literal text and `` `node --test` `` as a genuine
+  // code span -- never a link, since no `[` precedes the `]` at all.
+  const body = 'foo](/url "`node --test`")\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
+
+test('findMarkdownCodeRanges: an escaped `[` before `]` leaves its backtick pair a real span (databaseId 3978211256)', () => {
+  // `gh api /markdown` confirms `\[test](/url "`node --test`")` renders
+  // the escaped bracket as literal `[test](/url "` text, with a genuine
+  // code span for the backticks -- the escaped `[` is not a real link
+  // opener.
+  const body = '\\[test](/url "`node --test`")\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
+
+test('findMarkdownCodeRanges: an escaped `<` leaves its backtick pair a real span (databaseId 3978211270)', () => {
+  // `gh api /markdown` confirms `\<span title="`node --test`">` renders
+  // the escaped angle bracket as literal `&lt;span title="` text, with a
+  // genuine code span for the backticks -- never raw HTML.
+  const body = '\\<span title="`node --test`">\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
