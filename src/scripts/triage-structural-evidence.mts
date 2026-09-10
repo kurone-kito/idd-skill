@@ -54,9 +54,11 @@ export interface StructuralEvidence {
 const VERIFICATION_COMMAND_CODE_SPAN_PATTERN =
   /`(?:node --test\b[^`]*|pnpm run [^\s`]+[^`]*|npx [^\s`]+[^`]*|node scripts\/[^\s`]+\.mjs[^`]*)`/;
 
-/** A Markdown checkbox list item: `- [ ]` / `- [x]` / `* [X]` / `1. [ ]`.
- * Requires whitespace or end-of-line immediately after the closing `]`
- * (Codex review, PR #2840, round 7): GitHub only renders `[ ]`/`[x]` as an
+/** A Markdown checkbox list item on one line: `- [ ]` / `- [x]` / `* [X]` /
+ * `1. [ ]`, with the marker captured (group 1) so
+ * {@link countInterruptingCheckboxItems} can classify it. Requires
+ * whitespace or end-of-line immediately after the closing `]` (Codex
+ * review, PR #2840, round 7): GitHub only renders `[ ]`/`[x]` as an
  * interactive task-list checkbox when a space (or line end) follows the
  * bracket -- `- [ ]not a task` renders as literal bracket text, not a
  * checkbox, but the earlier pattern (no lookahead at all) still counted
@@ -75,9 +77,74 @@ const VERIFICATION_COMMAND_CODE_SPAN_PATTERN =
  * paragraph), never a real task-list checkbox. The marker and its `[ ]`
  * must stay on the one line a real GFM task-list item requires. Also
  * anchors `^` against `[ \t]*`, not `\s*` (the same cross-line leak in
- * the leading-indent position). */
-const CHECKBOX_ITEM_PATTERN =
-  /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX]\](?=[ \t]|$)/gm;
+ * the leading-indent position). No `g`/`m` flags -- tested per line by
+ * {@link countInterruptingCheckboxItems}, which needs the captured marker
+ * back for each line individually. */
+const CHECKBOX_ITEM_LINE_PATTERN =
+  /^[ \t]*([-*+]|\d{1,9}[.)])[ \t]+\[[ xX]\](?=[ \t]|$)/;
+/** Any list-item line at all, checkbox or not -- used by
+ * {@link countInterruptingCheckboxItems} to detect "this checkbox line
+ * continues an already-open list", regardless of that earlier item's own
+ * marker. */
+const LIST_ITEM_LINE_PATTERN = /^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+/;
+
+/**
+ * Counts only the checkbox items in `sectionText` that CommonMark would
+ * actually render as real GFM task-list items (Codex review, PR #2840,
+ * round 17): a plain `matchAll` count over the whole section (what this
+ * replaces) has no notion of paragraph interruption -- a non-`1`-numbered
+ * ordered marker (`2.`, `3.`, ...) cannot interrupt an already-open
+ * paragraph per CommonMark 5.2, so `prose\n2. [ ] a\n3. [ ] b` renders as
+ * one plain paragraph (with hard line breaks), never real checkboxes --
+ * `gh api /markdown` confirms this. A checkbox line counts when any of:
+ *
+ * - the immediately preceding line is blank (a fresh list can always
+ *   open after a blank line);
+ * - the immediately preceding line is itself ANY list-item line
+ *   (continuing an already-open list, regardless of that other item's
+ *   own marker -- a `2.` checkbox right after a `1.` or a `-` item is
+ *   still part of the same list, not a fresh interruption attempt);
+ * - its own marker is a bullet (`-`/`*`/`+`) or an ordered marker
+ *   starting at `1` (`1.`/`1)`) -- CommonMark lets both interrupt a
+ *   paragraph;
+ * - it is `sectionText`'s own first line -- nothing precedes it inside
+ *   the section to interrupt (the heading itself is a block boundary).
+ *
+ * Mirrors `findIndentedCodeRanges`'s own `isNonInterruptingListItem`
+ * logic (built for a different purpose -- container/list-content-indent
+ * tracking this simpler per-line walk does not need).
+ */
+function countInterruptingCheckboxItems(sectionText: string): number {
+  const lines = sectionText.split(/\r?\n/);
+  let count = 0;
+  let previousLineBlank = true;
+  let previousLineWasListItem = false;
+  for (const line of lines) {
+    const isBlank = line.trim() === '';
+    if (isBlank) {
+      previousLineBlank = true;
+      previousLineWasListItem = false;
+      continue;
+    }
+    const checkboxMatch = CHECKBOX_ITEM_LINE_PATTERN.exec(line);
+    if (checkboxMatch) {
+      const marker = checkboxMatch[1] ?? '';
+      const canInterrupt =
+        previousLineBlank ||
+        previousLineWasListItem ||
+        /^[-*+]$/.test(marker) ||
+        /^1[.)]$/.test(marker);
+      if (canInterrupt) {
+        count += 1;
+      }
+      previousLineWasListItem = true;
+    } else {
+      previousLineWasListItem = LIST_ITEM_LINE_PATTERN.test(line);
+    }
+    previousLineBlank = false;
+  }
+  return count;
+}
 
 /**
  * Section boundary: an ATX heading, or the position immediately before a
@@ -288,8 +355,7 @@ export function hasVerificationCommandSignal(body: string): boolean {
   if (hasCommandSpan) {
     return true;
   }
-  const checkboxCount = [...section.text.matchAll(CHECKBOX_ITEM_PATTERN)]
-    .length;
+  const checkboxCount = countInterruptingCheckboxItems(section.text);
   return checkboxCount >= 2;
 }
 

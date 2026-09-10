@@ -406,6 +406,66 @@ test('hasVerificationCommandSignal: an ordered-list checkbox item counts the sam
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: non-1-numbered ordered markers right after prose do not count (Codex review, PR #2840, round 17)', () => {
+  // A non-`1`-numbered ordered marker cannot interrupt an already-open
+  // paragraph per CommonMark 5.2, so `prose\n2. [ ] a\n3. [ ] b` renders as
+  // one plain paragraph (with hard line breaks), never real checkboxes.
+  // `gh api /markdown` confirms this.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    'Some prose describing the work.',
+    '2. [ ] first',
+    '3. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: bullet markers right after prose still count (control, round 17)', () => {
+  // Unlike a non-1 ordered marker, a bullet CAN interrupt a paragraph per
+  // CommonMark -- gh api /markdown confirms real checkboxes here.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    'Some prose describing the work.',
+    '- [ ] first',
+    '- [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: a 1-numbered ordered marker right after prose still counts (control, round 17)', () => {
+  // A `1.`-numbered ordered marker CAN interrupt a paragraph per
+  // CommonMark, unlike `2.`/`3.` -- gh api /markdown confirms real
+  // checkboxes here.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    'Some prose describing the work.',
+    '1. [ ] first',
+    '2. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: a non-1-numbered checkbox continuing an already-open list still counts (round 17)', () => {
+  // The continuation rule: a checkbox line right after ANY other list-item
+  // line (not just a blank line) is part of the same already-open list,
+  // not a fresh interruption attempt.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '1. [ ] first',
+    '2. [ ] second',
+    '3. [ ] third',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: a mixed multi-line double-backtick span with real headings inside is real structure, not smuggled content (Codex review, PR #2840 round 9 -- rejected)', () => {
   // Considered a P1 smuggling finding, then rejected after verification
   // against GitHub's own renderer (`gh api /markdown`, mode: gfm): an ATX
