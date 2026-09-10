@@ -300,6 +300,25 @@ export interface RerunPlanRawInstance {
    * {@link collectFromGitHub} fills it for non-pass terminal instances.
    */
   verdictReasons?: string[] | null;
+  /**
+   * The underlying workflow run's own live `status` (from
+   * `GET .../actions/runs/{run_id}`), independent of this check-run row's
+   * own (possibly stale) `status`/`conclusion` pair. Consulted only by
+   * {@link computeRefreshLatestPlan} (Codex P1, PR #2855 review): when a
+   * review arrives while an already-issued rerun for this same `runId` is
+   * still spinning up, the check-runs-for-ref endpoint can keep exposing
+   * the PRIOR attempt's completed row for a short window before the new
+   * attempt's own row/status propagates -- the same kind of
+   * stale-row-vs-fresh-row lag this file's own #1381 precedent already
+   * documents across TWO rows sharing a runId, but here there is only one
+   * row and its `status`/`conclusion` are themselves what's stale. Without
+   * this field, that stale conclusion alone would classify the instance as
+   * immediately rerun-eligible and fire another `gh run rerun` against a
+   * run that is, per the authoritative workflow-run endpoint, already
+   * live -- cancelling it instead of waiting for it. `null` when unset
+   * (tests) or when the per-run lookup failed (`runLookupFailed`).
+   */
+  runStatus?: string | null;
 }
 
 /** {@link RerunPlanRawInstance} plus the assigned classification and a
@@ -1122,7 +1141,20 @@ export function computeRefreshLatestPlan(
       botGatedCheckRunIds.push(instance.checkRunId);
       continue;
     }
-    const pending = !conclusion && PENDING_STATUSES.has(status);
+    // Also consult the workflow run's own live status (Codex P1, PR #2855
+    // review), not just this check-run row's own status/conclusion: a row
+    // fetched moments after an already-issued rerun for this same runId
+    // can still report the PRIOR attempt's terminal conclusion before the
+    // new attempt's row catches up. `runStatus` reflects the authoritative
+    // `GET .../actions/runs/{run_id}` state instead, so it wins even over
+    // a present (possibly stale) `conclusion` -- see
+    // `RerunPlanRawInstance.runStatus`'s own doc comment.
+    const runStatus = instance.runStatus
+      ? String(instance.runStatus).trim().toLowerCase()
+      : null;
+    const pending =
+      (!conclusion && PENDING_STATUSES.has(status)) ||
+      (runStatus !== null && PENDING_STATUSES.has(runStatus));
 
     const existing = commandsByRunId.get(instance.runId);
     if (existing) {
@@ -2466,8 +2498,14 @@ interface RawWorkflowRunPayload {
   /** 1 for the original run; increments on the SAME run id after `gh run
    * rerun` -- see {@link RerunPlanRawInstance.runAttempt}. */
   run_attempt?: number | null;
-  /** Consulted only by {@link waitForNewAttempt} (the `--apply` polling
-   * loop); every other reader of this payload shape ignores it. */
+  /** Consulted by {@link waitForNewAttempt} (the `--apply` polling loop)
+   * and, via {@link RerunPlanRawInstance.runStatus}, by
+   * {@link computeRefreshLatestPlan}'s pending classification (Codex P1,
+   * PR #2855 review): this is the authoritative live status of the
+   * workflow run itself, whereas a check-run row's own `status` can lag
+   * behind a rerun this function already knows was issued for the same
+   * `runId` -- see `runStatus`'s own doc comment for the race this
+   * closes. */
   status?: string | null;
 }
 
@@ -2814,6 +2852,8 @@ function collectFromGitHub(args: RerunPlanArgs): {
       triggeringActorLogin: string | null;
       triggeringActorType: string | null;
       runAttempt: number | null;
+      /** See {@link RerunPlanRawInstance.runStatus}. */
+      status: string | null;
     } | null // null means the per-run lookup itself failed
   >();
   // GH_TEXT_LOOP_TIMEOUT_OPTIONS (stdin ignored, 30s timeout), not a bare
@@ -2844,6 +2884,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
           Number.isInteger(runPayload.run_attempt)
             ? runPayload.run_attempt
             : null,
+        status: runPayload.status ? String(runPayload.status) : null,
       });
     } catch {
       runMetaById.set(runId, null);
@@ -2897,6 +2938,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
       runAttempt: meta?.runAttempt ?? null,
       verdictReasons:
         runId !== null ? (verdictReasonsByRunId.get(runId) ?? null) : null,
+      runStatus: meta?.status ?? null,
     };
   });
 

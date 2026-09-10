@@ -695,7 +695,20 @@ export function computeRefreshLatestPlan(input, options) {
       botGatedCheckRunIds.push(instance.checkRunId);
       continue;
     }
-    const pending = !conclusion && PENDING_STATUSES.has(status);
+    // Also consult the workflow run's own live status (Codex P1, PR #2855
+    // review), not just this check-run row's own status/conclusion: a row
+    // fetched moments after an already-issued rerun for this same runId
+    // can still report the PRIOR attempt's terminal conclusion before the
+    // new attempt's row catches up. `runStatus` reflects the authoritative
+    // `GET .../actions/runs/{run_id}` state instead, so it wins even over
+    // a present (possibly stale) `conclusion` -- see
+    // `RerunPlanRawInstance.runStatus`'s own doc comment.
+    const runStatus = instance.runStatus
+      ? String(instance.runStatus).trim().toLowerCase()
+      : null;
+    const pending =
+      (!conclusion && PENDING_STATUSES.has(status)) ||
+      (runStatus !== null && PENDING_STATUSES.has(runStatus));
     const existing = commandsByRunId.get(instance.runId);
     if (existing) {
       existing.command.checkRunIds.push(instance.checkRunId);
@@ -2134,6 +2147,7 @@ function collectFromGitHub(args) {
           Number.isInteger(runPayload.run_attempt)
             ? runPayload.run_attempt
             : null,
+        status: runPayload.status ? String(runPayload.status) : null,
       });
     } catch {
       runMetaById.set(runId, null);
@@ -2185,6 +2199,7 @@ function collectFromGitHub(args) {
       runAttempt: meta?.runAttempt ?? null,
       verdictReasons:
         runId !== null ? (verdictReasonsByRunId.get(runId) ?? null) : null,
+      runStatus: meta?.status ?? null,
     };
   });
   // Fetched from owner/repo's TRUSTED DEFAULT BRANCH, unconditionally --

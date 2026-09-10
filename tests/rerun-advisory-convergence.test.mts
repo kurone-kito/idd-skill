@@ -3112,6 +3112,55 @@ test('computeRefreshLatestPlan: a pending row wins regardless of which order the
   assert.equal(plan.pendingCommands.length, 1);
 });
 
+// Codex P1 review, PR #2855, round 11: a single check-run row's own
+// status/conclusion can itself be stale -- not just stale relative to a
+// SIBLING row (the pending-row-wins tests above), but stale relative to
+// the underlying workflow run's own live state, when a rerun for this
+// same runId was already issued moments earlier and its new attempt's row
+// has not propagated yet. `runStatus` (fetched from the authoritative
+// `GET .../actions/runs/{run_id}` endpoint) must win even over a present
+// terminal `conclusion` on the row itself, or the plan would re-issue
+// `gh run rerun` against a run that is, per the live workflow-run
+// endpoint, already running -- cancelling it instead of waiting for it.
+test('computeRefreshLatestPlan: a stale terminal conclusion on the only row for a runId still defers via pendingCommands when the live workflow run is running', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          status: 'completed',
+          conclusion: 'failure',
+          runStatus: 'in_progress',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.equal(plan.pendingCommands.length, 1);
+  assert.equal(plan.pendingCommands[0]?.runId, '5001');
+});
+
+test('computeRefreshLatestPlan: runStatus null (lookup unresolved or genuinely terminal) leaves the pre-existing conclusion-only classification unchanged', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          status: 'completed',
+          conclusion: 'failure',
+          runStatus: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.deepEqual(plan.pendingCommands, []);
+});
+
 // Codex P1 review, PR #2855, round 8: idd-ci.instructions.md documents
 // that rerunning an action_required-conclusion instance preserves the
 // original bot actor's privileges and simply re-enters action_required --
