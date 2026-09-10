@@ -57,11 +57,20 @@ reason and stop without claiming. Fall back to normal discovery only when
 the operator explicitly asks for normal discovery in the same run; do not
 silently search for another issue.
 
-For a valid open target, skip A0-O, A1, A1.5, A2, and candidate
-selection. Before A5, run targeted readiness and viability checks against
-that issue only:
+For a valid open target that is not itself a roadmap node (see step 1
+below), skip A0-O, A1, A1.5, A2, and candidate selection. Before A5, run
+targeted readiness and viability checks against that issue only:
 
-1. Re-fetch the target issue.
+1. Fetch the target issue. If it carries the configured roadmap label or
+   an `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker — the same test
+   **A2**'s roadmap-node/execution-leaf classification rule uses — do
+   not continue this targeted-readiness path. Instead, treat the
+   operator's target as scoping A1's own root selection: run a
+   single-root traversal from this issue as A2's root (skipping A1's
+   own roadmap search), then continue the normal
+   A1.5 → A2 → A3 → A3.5 → A4 → A4.5 → A5 sequence from there, ranking
+   and claiming the roadmap's own highest-suitability open children
+   first.
 2. If the target issue carries the configured authoring label, report
    `Issue #N is currently being authored`, run the stale-authoring
    warning check above, and stop without claiming.
