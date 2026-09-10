@@ -504,18 +504,27 @@ function killProcessGroup(
   const pid = child.pid;
   const hasPid = typeof pid === 'number' && pid > 0;
   if (platform === 'win32') {
-    const spawned = hasPid && killProcessTreeWindows(pid, spawnFn);
+    const spawned = hasPid && killProcessTreeWindows(child, spawnFn);
     if (!spawned) {
-      // `spawned` is false either because there was no pid to target at
-      // all (`hasPid` false -- `child.kill('SIGKILL')` below is then a
-      // guaranteed no-op, not a real fallback), or because the `taskkill`
-      // spawn itself threw synchronously (e.g. unresolvable on PATH --
-      // vanishingly rare on a real Windows install). Attempting the
+      // `spawned` is false only because there was no pid to target at all
+      // (`hasPid` false -- `child.kill('SIGKILL')` below is then a
+      // guaranteed no-op, not a real fallback) or because the `taskkill`
+      // spawn call itself threw synchronously (e.g. unresolvable on PATH
+      // -- vanishingly rare on a real Windows install). Attempting the
       // single-process kill regardless is still strictly better than
       // giving up outright: this is this file's pre-fix Windows
       // behavior, kept only as a last resort -- it does not reach a
       // further-descendant grandchild (the bug kurone-kito/idd-skill#2892
-      // fixes), but is better than no attempt when a pid is available.
+      // fixes), but is better than no attempt when a pid is available. An
+      // *asynchronous* `taskkill` spawn failure (the far more common
+      // real-world case -- e.g. ENOENT reported via the child's own
+      // `'error'` event rather than a synchronous throw) cannot be
+      // handled here: {@link killProcessTreeWindows} has already
+      // returned `true` and this branch has already been skipped by the
+      // time that event fires. `killProcessTreeWindows` itself now
+      // carries the equivalent fallback for that case (Codex review on
+      // PR #2897), since only it is still in scope when the async event
+      // arrives.
       try {
         child.kill('SIGKILL');
       } catch {
@@ -560,17 +569,42 @@ function killProcessGroup(
  * (e.g. `taskkill.exe` somehow unresolvable) -- this file's "never throws"
  * contract cannot depend on the environment always having `taskkill` on
  * `PATH`. Returns `false` only when the synchronous `spawnFn(...)` call
- * itself threw, so the caller can fall back to a plain single-process kill
- * instead of silently killing nothing.
+ * itself threw, so the caller ({@link killProcessGroup}) can fall back to
+ * a plain single-process kill instead of silently killing nothing.
+ *
+ * That synchronous-throw fallback in the caller cannot cover an
+ * *asynchronous* spawn failure, though (Codex review on PR #2897): a
+ * failure Node only discovers after the synchronous `spawnFn(...)` call
+ * already returned a `ChildProcess` handle (the actual common case for
+ * `ENOENT`-class failures, as opposed to the rare synchronous-throw case
+ * the caller's own fallback already covers) surfaces here as this
+ * function's own `'error'` event, fired well after this function --
+ * and with it, the caller's own `if (!spawned)` branch -- has already
+ * returned. Attempt the same last-resort single-process kill directly
+ * inside that listener instead, so an async `taskkill` failure does not
+ * silently regress to "kill nothing at all" (worse than this file's
+ * pre-fix single-process-only behavior, not merely equal to it).
  */
-function killProcessTreeWindows(pid: number, spawnFn: typeof spawn): boolean {
+function killProcessTreeWindows(
+  child: ChildProcess,
+  spawnFn: typeof spawn,
+): boolean {
+  const pid = child.pid as number;
   try {
     const killer = spawnFn('taskkill', ['/PID', String(pid), '/T', '/F'], {
       stdio: 'ignore',
       windowsHide: true,
     });
     killer.on('error', () => {
-      // Best-effort only -- see doc comment.
+      // Best-effort fallback for an asynchronous taskkill spawn failure
+      // -- see doc comment above. Mirrors killProcessGroup's own
+      // synchronous-throw fallback; does not reach a further-descendant
+      // grandchild, same known limitation as that fallback.
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // Already exited; ignore.
+      }
     });
     killer.unref();
     return true;

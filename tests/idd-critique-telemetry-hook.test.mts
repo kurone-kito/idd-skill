@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -827,6 +828,99 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       // after that leader has exited, as long as a member is still
       // alive), so this test does not leak an orphan into the rest of
       // the suite.
+      const pid = primaryChild?.pid;
+      if (typeof pid === 'number' && pid > 0) {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  } finally {
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when the win32 taskkill spawn fails asynchronously (Codex review on PR #2897)', async () => {
+  // Regression fixture, distinct from the synchronous-throw fallback test
+  // above: killProcessGroup's own `if (!spawned)` fallback branch only
+  // covers a `spawnFn('taskkill', ...)` call that throws *synchronously*.
+  // The far more realistic real-world failure (e.g. `taskkill.exe`
+  // unresolvable on `PATH`) instead returns a `ChildProcess` handle
+  // normally and reports the failure *asynchronously* via that handle's
+  // own `'error'` event -- by which point `killProcessTreeWindows` has
+  // already returned `true` and `killProcessGroup`'s own fallback branch
+  // has already been skipped. `killProcessTreeWindows` now attempts the
+  // same last-resort single-process kill directly inside its own
+  // `'error'` listener instead, so this async case does not silently
+  // regress to "kill nothing at all". A fake `EventEmitter` standing in
+  // for the real `taskkill` child (rather than an actually-unresolvable
+  // binary, which is not reliably reproducible across environments)
+  // always carries the production `'error'` listener already attached
+  // by the time this test emits on it, so this does not hit the
+  // listener-less-emitter reporting quirk the watchdog `'error'`-listener
+  // test above documents and deliberately avoids.
+  const restore = stubExecutable(
+    'idd-telemetry-hook-hang-win32-async-throw',
+    'setInterval(() => {}, 1000);\n',
+  );
+  try {
+    let primaryChild: ReturnType<typeof spawn> | undefined;
+    const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+      if (args[0] === 'taskkill') {
+        const fakeKiller = new EventEmitter() as unknown as ReturnType<
+          typeof spawn
+        >;
+        (fakeKiller as unknown as { unref: () => void }).unref = () => {};
+        // Asynchronous, like a real spawn failure -- never emitted
+        // synchronously from inside this spawnFn call itself, so
+        // killProcessTreeWindows's own try/catch cannot see it either.
+        queueMicrotask(() => {
+          fakeKiller.emit(
+            'error',
+            new Error('synthetic asynchronous taskkill spawn failure'),
+          );
+        });
+        return fakeKiller;
+      }
+      const child = spawn(...args);
+      if (
+        args[0] ===
+        stayAliveCommand('idd-telemetry-hook-hang-win32-async-throw')
+      ) {
+        primaryChild = child;
+      }
+      return child;
+    }) as typeof spawn;
+
+    try {
+      const result = await invokeCritiqueTelemetryHook(
+        stayAliveCommand('idd-telemetry-hook-hang-win32-async-throw'),
+        samplePayload(),
+        { timeoutMs: 500, spawnFn, platform: 'win32' },
+      );
+      assert.deepEqual(result, { attempted: true, ok: false });
+      assert.ok(
+        primaryChild,
+        'expected the primary command to have been spawned',
+      );
+      // Same guarantee (and same known limitation vs. a further
+      // descendant) as `child.kill('SIGKILL')` in the synchronous-throw
+      // fallback test above -- see that test's own comment.
+      const gone = await waitUntilProcessGone(
+        primaryChild?.pid as number,
+        10_000,
+      );
+      assert.ok(
+        gone,
+        `expected the asynchronous-error fallback to have terminated the wrapper (pid ${primaryChild?.pid})`,
+      );
+    } finally {
+      // See the assertion comment above: this fallback's own known
+      // limitation can leave a real descendant behind on this (POSIX)
+      // test host. Reap it directly via the real POSIX group-kill, same
+      // as the synchronous-throw fallback test above.
       const pid = primaryChild?.pid;
       if (typeof pid === 'number' && pid > 0) {
         try {
