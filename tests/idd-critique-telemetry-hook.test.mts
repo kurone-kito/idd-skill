@@ -487,6 +487,35 @@ function stayAliveCommand(name: string): string {
   return `${name} idd-stub-stay-alive`;
 }
 
+/**
+ * Real, host-platform-appropriate process-tree cleanup for a test's own
+ * `finally` block -- NOT the code under test (kurone-kito/idd-skill#2892,
+ * #2897 CI finding). Several tests inject `platform: 'win32'` to exercise
+ * that branch deterministically from any host, but the actual leftover
+ * process still belongs to *this host's real OS* regardless of which
+ * branch the code under test took -- branching on `process.platform`
+ * (the real host), not the injected option, is required so the fallback
+ * tests' own documented "leaves a real descendant behind" limitation
+ * does not leak a genuine orphan into a `windows-latest` CI run: a POSIX
+ * negative-pid group-kill is meaningless there (the same gap this whole
+ * issue fixes in the code under test), so it must be `taskkill /PID ...
+ * /T /F` on that host instead. Best-effort: swallows any failure (already
+ * exited, insufficient privilege, etc.).
+ */
+function cleanupProcessTree(pid: number): void {
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+      });
+    } else {
+      process.kill(-pid, 'SIGKILL');
+    }
+  } catch {
+    // Already gone, or nothing to clean up.
+  }
+}
+
 test('invokeCritiqueTelemetryHook is a no-op for an empty/whitespace command', async () => {
   assert.deepEqual(await invokeCritiqueTelemetryHook('', samplePayload()), {
     attempted: false,
@@ -689,22 +718,17 @@ test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PI
       assert.equal(taskkillOptions?.windowsHide, true);
     } finally {
       // The `platform: 'win32'` override above makes killProcessGroup take
-      // the taskkill branch. On this (non-Windows) test host, that spawn
-      // is a real no-op (ENOENT, absorbed by its own 'error' listener), so
-      // the real hanging process this test spawned is never actually
-      // reaped by the code under test -- clean it up directly via the
-      // real (POSIX) group-kill this host actually supports. (On the
-      // `windows-latest` CI job this test also runs on, `taskkill` is the
-      // real, working reaper instead, and this POSIX cleanup line is
-      // itself the no-op -- harmless either way, since it is wrapped in
-      // its own try/catch below.)
+      // the taskkill branch. On a non-Windows test host, that spawn is a
+      // real no-op (ENOENT, absorbed by its own 'error' listener), so the
+      // real hanging process this test spawned is never actually reaped
+      // by the code under test -- clean it up directly via
+      // cleanupProcessTree (host-appropriate: POSIX group-kill here). On
+      // the `windows-latest` CI job this test also runs on, the code
+      // under test's own `taskkill` already reaped it for real, so this
+      // is a harmless no-op there too.
       const pid = primaryChild?.pid;
       if (typeof pid === 'number' && pid > 0) {
-        try {
-          process.kill(-pid, 'SIGKILL');
-        } catch {
-          // Already gone.
-        }
+        cleanupProcessTree(pid);
       }
     }
   } finally {
@@ -747,7 +771,7 @@ test('invokeCritiqueTelemetryHook spawns a win32 backup watchdog (powershell.exe
     const script = watchdogArgs?.[5] ?? '';
     assert.match(
       script,
-      /^Start-Sleep -Seconds 5; Start-Process -FilePath taskkill -ArgumentList '\/PID',\d+,'\/T','\/F' -WindowStyle Hidden -Wait$/,
+      /^Start-Sleep -Seconds 5; \$p = New-Object System\.Diagnostics\.Process; \$p\.StartInfo\.FileName = 'taskkill'; \$p\.StartInfo\.Arguments = '\/PID \d+ \/T \/F'; \$p\.StartInfo\.UseShellExecute = \$false; \$p\.StartInfo\.CreateNoWindow = \$true; \[void\]\$p\.Start\(\); \$p\.WaitForExit\(\)$/,
       `expected the win32 watchdog script shape, got: ${script}`,
     );
     // Also assert the options object, not just argv (C1 review,
@@ -822,19 +846,18 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       );
     } finally {
       // See the assertion comment above: this fallback's own known
-      // limitation can leave a real descendant behind on this (POSIX)
-      // test host. Reap it directly via the real POSIX group-kill (the
-      // process group persists under its original leader's pid even
-      // after that leader has exited, as long as a member is still
-      // alive), so this test does not leak an orphan into the rest of
-      // the suite.
+      // limitation can leave a real descendant behind, on any host --
+      // including a real `windows-latest` CI run, where this fallback's
+      // `child.kill('SIGKILL')` only reaches the immediate wrapper, same
+      // as everywhere else. Reap it directly via cleanupProcessTree
+      // (host-appropriate real tree-kill), so this test does not leak an
+      // orphan into the rest of the suite (kurone-kito/idd-skill#2897 CI
+      // finding: a POSIX-only `process.kill(-pid, ...)` here is silently
+      // meaningless on a real Windows host and previously left this
+      // exact orphan running for the rest of the job).
       const pid = primaryChild?.pid;
       if (typeof pid === 'number' && pid > 0) {
-        try {
-          process.kill(-pid, 'SIGKILL');
-        } catch {
-          // Already gone.
-        }
+        cleanupProcessTree(pid);
       }
     }
   } finally {
@@ -918,16 +941,12 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       );
     } finally {
       // See the assertion comment above: this fallback's own known
-      // limitation can leave a real descendant behind on this (POSIX)
-      // test host. Reap it directly via the real POSIX group-kill, same
-      // as the synchronous-throw fallback test above.
+      // limitation can leave a real descendant behind, on any host. Reap
+      // it directly via cleanupProcessTree, same as the synchronous-throw
+      // fallback test above.
       const pid = primaryChild?.pid;
       if (typeof pid === 'number' && pid > 0) {
-        try {
-          process.kill(-pid, 'SIGKILL');
-        } catch {
-          // Already gone.
-        }
+        cleanupProcessTree(pid);
       }
     }
   } finally {

@@ -754,16 +754,31 @@ function spawnWatchdogPosix(
  * supported"). `Start-Sleep -Seconds <n>` (a PowerShell built-in cmdlet,
  * not a further child process) is the sleep primitive instead.
  *
- * The kill step is `Start-Process -FilePath taskkill -ArgumentList '/PID',
- * <pid>,'/T','/F' -WindowStyle Hidden -Wait`, not a bare `taskkill ...`
- * call inside the `-Command` script: `-WindowStyle Hidden` sets
- * `STARTF_USESHOWWINDOW`/`wShowWindow=SW_HIDE` directly on *taskkill's
- * own* STARTUPINFO, so it stays hidden regardless of whatever console
- * state this watchdog's own `powershell.exe` process ends up with --
- * unlike a bare `taskkill` invocation, which would simply inherit that
- * state. `-Wait` keeps this whole script's own execution (and thus the
- * watchdog process) alive until `taskkill` actually finishes, matching the
- * POSIX version's `sleep <n>; kill ...` sequencing.
+ * The kill step builds a `System.Diagnostics.Process` directly
+ * (`UseShellExecute = $false; CreateNoWindow = $true`) rather than
+ * `Start-Process -WindowStyle Hidden` (kurone-kito/idd-skill#2897 CI
+ * finding, `windows-latest`): a real `windows-latest` CI round confirmed
+ * this watchdog was not actually killing its target -- the CLI-invoked
+ * regression test this backup exists for
+ * ("does not wait for a hanging resolved hook... still killed after the
+ * CLI exits") timed out waiting for the process to die, and it was still
+ * running when the job was later force-cancelled, while the *separately*
+ * exercised direct-Node `taskkill` path in {@link killProcessTreeWindows}
+ * passed cleanly in the same run. `Start-Process -WindowStyle Hidden`
+ * launches its target via `ShellExecuteEx`, a documented source of
+ * reliability quirks in non-interactive/service-style process contexts
+ * distinct from a plain `CreateProcess` launch; `UseShellExecute = $false`
+ * bypasses that layer entirely and is the same underlying mechanism
+ * Node's own `windowsHide` option (and this file's already-confirmed-
+ * working `killProcessTreeWindows`) relies on, so this keeps both
+ * `taskkill` call sites on the same, empirically-working process-creation
+ * path instead of two different ones. `.Arguments` (a single
+ * space-joined string), not the array-based `.ArgumentList`: the latter
+ * requires .NET Core 2.1+, unavailable on `powershell.exe` (Windows
+ * PowerShell 5.1's .NET Framework runtime). `$p.WaitForExit()` keeps this
+ * whole script's own execution (and thus the watchdog process) alive
+ * until `taskkill` actually finishes, matching the POSIX version's
+ * `sleep <n>; kill ...` sequencing.
  *
  * **Known residual, not present on the POSIX side**: {@link
  * cancelWatchdog}'s PID-reuse-race argument (see {@link
@@ -794,7 +809,13 @@ function spawnWatchdogWindows(
     const seconds = Math.ceil(Math.max(timeoutMs, 0) / 1000);
     const script =
       `Start-Sleep -Seconds ${seconds}; ` +
-      `Start-Process -FilePath taskkill -ArgumentList '/PID',${pid},'/T','/F' -WindowStyle Hidden -Wait`;
+      '$p = New-Object System.Diagnostics.Process; ' +
+      "$p.StartInfo.FileName = 'taskkill'; " +
+      `$p.StartInfo.Arguments = '/PID ${pid} /T /F'; ` +
+      '$p.StartInfo.UseShellExecute = $false; ' +
+      '$p.StartInfo.CreateNoWindow = $true; ' +
+      '[void]$p.Start(); ' +
+      '$p.WaitForExit()';
     const watchdog = spawnFn(
       'powershell.exe',
       [
