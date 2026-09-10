@@ -203,7 +203,20 @@ export function parseCandidateFileEntries(body) {
     if (!heading) {
       continue;
     }
-    const title = heading[2].replace(/[*_`]/g, '').trim().toLowerCase();
+    const title = heading[2]
+      .replace(/[*_`]/g, '')
+      // Strip a valid ATX closing hash sequence (Codex review, PR #2840,
+      // round 14): `## Candidate files ##` renders on GitHub as a level-2
+      // heading titled exactly "Candidate files" -- the trailing `##` is
+      // closing-sequence syntax, not part of the title -- the same
+      // trailing-hash tolerance `ACCEPTANCE_CRITERIA_HEADING_PATTERN`
+      // already carries for the sibling section. Without this, the
+      // round-12 exact-match fix rejected a heading GitHub itself renders
+      // identically to the bare form, silently dropping every candidate
+      // path in that section.
+      .replace(/[ \t]+#+[ \t]*$/, '')
+      .trim()
+      .toLowerCase();
     if (start === -1) {
       // Exact match, not a `\b`-bounded prefix (Codex review, PR #2840,
       // round 12): the prefix form also matched a related but distinct

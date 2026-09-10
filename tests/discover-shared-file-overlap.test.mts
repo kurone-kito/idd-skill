@@ -194,6 +194,25 @@ test('parseCandidateFiles requires an exact "Candidate files" heading, not merel
   assert.deepEqual(parseCandidateFiles(body), []);
 });
 
+test('parseCandidateFiles recognizes a heading with a valid ATX closing hash sequence (Codex review, PR #2840, round 14)', () => {
+  // `## Candidate files ##` renders on GitHub as a level-2 heading titled
+  // exactly "Candidate files" -- the trailing `##` is closing-sequence
+  // syntax (gh api /markdown confirms), not part of the title. The
+  // round-12 exact-match fix rejected this heading entirely (title stayed
+  // "candidate files ##"), silently dropping every candidate path.
+  const body = ['## Candidate files ##', '', '- `scripts/a.mjs`'].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mjs']);
+});
+
+test('parseCandidateFiles still rejects a same-prefix sibling heading that also carries a closing hash sequence (control, round 14)', () => {
+  const body = [
+    '## Candidate files considered but rejected ##',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
 test('parseCandidateFiles stops at a Setext-style sibling heading, not just an ATX one (Codex review, PR #2840)', () => {
   const body = [
     '## Candidate files',
