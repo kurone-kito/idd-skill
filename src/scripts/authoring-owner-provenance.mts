@@ -25,6 +25,21 @@
 // target issue (never on a different anchor issue), so the live body and
 // the marker to compare it against always come from the one `--issue`
 // argument.
+//
+// Generation-boundary caveat: `mode=release-complete` is anchor-only
+// (contract.md). For `target === anchor` -- the single-target hold shape
+// this helper is built for (a review-fix-loop-cutoff follow-up is always
+// orphan-shaped, never a set member) -- the target's own comment log
+// carries every generation boundary directly and the replay below is
+// exact. A non-anchor child in a multi-target set never carries its own
+// `release-complete`, so this helper (which reads only the named
+// `--issue`'s own log, never an anchor's) cannot see a child's true
+// generation boundary; every acquire on such a child reads as one
+// still-open generation. That is the fail-closed direction -- a
+// legitimately re-acquired child compares against the first
+// generation's digest and reports `mismatch`, never a false `pass` --
+// so it is an accepted limitation, not a defect. Fetching the anchor's
+// own log to resolve it is out of scope for kurone-kito/idd-skill#2891.
 
 import { createHash } from 'node:crypto';
 import { parseCliArgs } from './cli-args.mts';
@@ -40,6 +55,7 @@ import {
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 
 export interface AuthoringOwnerProvenanceComment {
+  id: number;
   authorLogin: string;
   body: string;
   createdAt: string;
@@ -57,6 +73,7 @@ export interface AuthoringOwnerProvenanceCheck {
   id: string;
   name: string;
   result: 'pass' | 'fail';
+  evidence: string;
 }
 
 export interface AuthoringOwnerProvenanceMarkerEvidence {
@@ -77,7 +94,7 @@ export interface AuthoringOwnerProvenanceResult {
   checks: AuthoringOwnerProvenanceCheck[];
 }
 
-interface AcquireCandidate {
+interface OwnerMarkerEvent {
   comment: AuthoringOwnerProvenanceComment;
   parsed: ParsedAuthoringOwnerMarker;
 }
@@ -88,40 +105,70 @@ function normalizeMarkerPrefix(prefix: unknown): string {
 }
 
 /**
- * Find every trusted-actor `mode=acquire` `authoring-owner` marker on
- * `comments` whose `target` field exactly equals `target`, sorted ascending
- * by comment `createdAt`. There should normally be exactly one per
- * acquisition generation; a re-acquisition after a full release cycle can
- * legitimately produce more than one over an issue's lifetime, so the
- * caller takes the most recent (last) entry rather than the first.
+ * Replay `target`'s own trusted `authoring-owner` marker log in
+ * chronological order (ties broken by comment `id`, ascending — the
+ * deterministic order contract.md's replay rule requires) and return the
+ * `mode=acquire` marker that won the log's last generation, or `null` if
+ * none exists.
+ *
+ * A generation opens at an acquire marker when no generation is
+ * currently open; the first acquire in an open generation keeps
+ * ownership through the whole generation (contract.md: "choose the
+ * winner by deterministic comment order"), so a second acquire while a
+ * generation is already open is a same-generation race — a losing
+ * racer or a duplicate — and never overrides the winner (kurone-kito/idd-skill#2891
+ * review: this previously picked the globally-last acquire instead,
+ * which could authorize the auto-release exception against a losing
+ * racer's edited-body digest). A generation closes only on
+ * `mode=release-complete`: release / release-guard alone do not,
+ * since contract.md allows a new acquisition to start "only once the
+ * anchor completion is reconciled" — an acquire after `release` but
+ * before `release-complete` is still a same-generation race, not a
+ * fresh generation. See this file's header comment for the anchor-only
+ * `release-complete` caveat this replay accepts for a non-anchor child
+ * target.
  */
-function findAcquireCandidates(
+function findWinningAcquire(
   comments: readonly AuthoringOwnerProvenanceComment[],
   target: string,
   markerPrefix: string,
   trustedMarkerLogins: readonly string[],
-): AcquireCandidate[] {
+): OwnerMarkerEvent | null {
   const trusted = new Set(
     trustedMarkerLogins.map((login) => login.toLowerCase()),
   );
-  const candidates: AcquireCandidate[] = [];
+  const events: OwnerMarkerEvent[] = [];
   for (const comment of comments) {
     if (!trusted.has(String(comment.authorLogin ?? '').toLowerCase())) {
       continue;
     }
     const parsed = parseAuthoringOwnerComment(comment.body, markerPrefix);
-    if (!parsed || parsed.mode !== 'acquire' || parsed.target !== target) {
+    if (!parsed || parsed.target !== target) {
       continue;
     }
-    candidates.push({ comment, parsed });
+    events.push({ comment, parsed });
   }
-  return candidates.sort((a, b) =>
-    a.comment.createdAt < b.comment.createdAt
-      ? -1
-      : a.comment.createdAt > b.comment.createdAt
-        ? 1
-        : 0,
-  );
+  events.sort((a, b) => {
+    if (a.comment.createdAt !== b.comment.createdAt) {
+      return a.comment.createdAt < b.comment.createdAt ? -1 : 1;
+    }
+    return a.comment.id - b.comment.id;
+  });
+
+  let winner: OwnerMarkerEvent | null = null;
+  let generationOpen = false;
+  for (const event of events) {
+    if (event.parsed.mode === 'acquire') {
+      if (!generationOpen) {
+        winner = event;
+        generationOpen = true;
+      }
+      // else: same-generation race -- the first acquire keeps ownership.
+    } else if (event.parsed.mode === 'release-complete') {
+      generationOpen = false;
+    }
+  }
+  return winner;
 }
 
 /**
@@ -141,13 +188,12 @@ export function evaluateAuthoringOwnerProvenance(
   const computedBodySha256 = createHash('sha256')
     .update(input.liveBody, 'utf8')
     .digest('hex');
-  const candidates = findAcquireCandidates(
+  const winner = findWinningAcquire(
     input.comments ?? [],
     input.target,
     input.markerPrefix,
     input.trustedMarkerLogins ?? [],
   );
-  const winner = candidates.at(-1) ?? null;
 
   if (!winner) {
     return {
@@ -161,11 +207,13 @@ export function evaluateAuthoringOwnerProvenance(
           id: 'acquire_marker_found',
           name: 'Trusted mode=acquire owner marker found for target',
           result: 'fail',
+          evidence: `No trusted mode=acquire authoring-owner marker for target ${input.target} won an open generation in the replayed log.`,
         },
         {
           id: 'body_sha256_match',
           name: 'Live body sha256 matches acquire-time recorded digest',
           result: 'fail',
+          evidence: 'No acquire marker to compare against.',
         },
       ],
     };
@@ -191,11 +239,15 @@ export function evaluateAuthoringOwnerProvenance(
         id: 'acquire_marker_found',
         name: 'Trusted mode=acquire owner marker found for target',
         result: 'pass',
+        evidence: `Winning acquire posted by ${winner.comment.authorLogin} at ${winner.comment.createdAt} (owner=${winner.parsed.owner}).`,
       },
       {
         id: 'body_sha256_match',
         name: 'Live body sha256 matches acquire-time recorded digest',
         result: matches ? 'pass' : 'fail',
+        evidence: matches
+          ? `computed ${computedBodySha256} matches recorded ${recordedBodySha256}.`
+          : `computed ${computedBodySha256} does not match recorded ${recordedBodySha256}.`,
       },
     ],
   };
@@ -235,10 +287,22 @@ function parseArgs(argv: string[]): ParsedArgs {
     AUTHORING_OWNER_PROVENANCE_FLAG_SPEC,
   );
   const issueToken = values.issue as string | undefined;
+  const owner = ((values.owner as string | undefined) ?? '').trim();
+  const repo = ((values.repo as string | undefined) ?? '').trim();
+  // Copilot review finding on PR #2901: exactly one of --owner/--repo would
+  // mix a caller-supplied repo with resolveCurrentGithubRepository()'s
+  // current-directory repo, potentially targeting the wrong repository for
+  // the issue lookup. Mirrors suitability-close-execute.mts's own
+  // --owner/--repo pairing guard: require both or neither.
+  if ((owner === '') !== (repo === '')) {
+    throw new Error(
+      'authoring-owner-provenance: --owner and --repo must be provided together or not at all',
+    );
+  }
   return {
     issue: issueToken === undefined ? null : Number.parseInt(issueToken, 10),
-    owner: (values.owner as string | undefined) ?? '',
-    repo: (values.repo as string | undefined) ?? '',
+    owner,
+    repo,
     policy: (values.policy as string | undefined) ?? '',
     markerPrefix: (values['marker-prefix'] as string | undefined) ?? '',
     ghToken: (values['gh-token'] as string | undefined) ?? '',
@@ -251,12 +315,23 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/authoring-owner-provenance.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--gh-token <token>] [--trusted-marker-logins <login1,login2>] [--verbose]
+  node scripts/authoring-owner-provenance.mjs --issue <number> [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--gh-token <token>] [--trusted-marker-logins <login1,login2>] [--verbose]
 
 Mechanically compares a live issue body's sha256 against that same issue's
 own trusted mode=acquire authoring-owner marker's recorded body-sha256
 (kurone-kito/idd-skill#2891). Read-only: never posts, labels, or mutates
-anything.
+anything. --owner and --repo must be given together or not at all.
+
+The comparison replays this issue's own authoring-owner marker log to find
+the acquire marker that won its last generation (a same-generation race
+between two competing acquires resolves to the first one, per contract.md's
+deterministic-comment-order tie-break); a generation closes only on
+mode=release-complete. Caveat: release-complete is anchor-only, so for a
+non-anchor child target in a multi-target set this replay cannot see the
+child's true generation boundary and treats every acquire on it as one
+still-open generation -- fail-closed (mismatch, never a false pass), not a
+security gap; a review-fix-loop-cutoff follow-up (the case this helper
+exists for) is always a single-target orphan, never a set member.
 
 Output schema:
 {
@@ -266,13 +341,17 @@ Output schema:
   "verdict": "pass|mismatch|not-found",
   "computedBodySha256": "<64-hex>",
   "recordedBodySha256": "<64-hex>|null",
-  "marker": {"author": "...", "createdAt": "...", "owner": "...", "set": "...", "session": "..."} | null,
+  "marker": {"author": "...", "createdAt": "...", "owner": "...", "set": "...", "session": "...", "bodySha256": "<64-hex>"} | null,
   "checks": [{"id":"acquire_marker_found","name":"...","result":"pass|fail"}, {"id":"body_sha256_match","name":"...","result":"pass|fail"}]
 }
 
 "not-found" means no trusted mode=acquire authoring-owner marker exists for
 this issue's own target -- never treated as a pass. "mismatch" means the
 live body has changed since the acquire-time marker was posted.
+
+--verbose adds an "evidence" string to each checks[] entry (the computed
+and recorded digests, or the winning marker's author/timestamp); omitted by
+default to keep default output terse.
 `);
 }
 
@@ -303,6 +382,7 @@ function runCli(): void {
   const comments: AuthoringOwnerProvenanceComment[] = port
     .listWorkItemComments(issueNumber)
     .map((comment) => ({
+      id: comment.id,
       authorLogin: comment.authorLogin,
       body: comment.body,
       createdAt: comment.createdAt,
@@ -340,7 +420,13 @@ function runCli(): void {
     computedBodySha256: result.computedBodySha256,
     recordedBodySha256: result.recordedBodySha256,
     marker: result.marker,
-    checks: result.checks,
+    checks: args.verbose
+      ? result.checks
+      : result.checks.map((check) => ({
+          id: check.id,
+          name: check.name,
+          result: check.result,
+        })),
   };
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);

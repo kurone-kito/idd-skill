@@ -272,7 +272,19 @@ in this preamble, since the fallback differs per helper.
   `pass`/`mismatch`/`not-found` verdict — `not-found` is never treated as
   a pass. Read-only: never posts, labels, or mutates anything (referenced
   in
-  [kurone-kito/idd-skill#2891](https://github.com/kurone-kito/idd-skill/issues/2891))
+  [kurone-kito/idd-skill#2891](https://github.com/kurone-kito/idd-skill/issues/2891)).
+  Replays the target's own marker log to pick the acquire that won its
+  last generation (a same-generation race between two competing acquires
+  resolves to the earlier one, per contract.md's deterministic-comment-
+  order tie-break; a generation closes only on `mode=release-complete`),
+  rather than always taking the globally-last acquire comment (PR #2901
+  review, chatgpt-codex-connector: the earlier form could authorize the
+  auto-release exception against a losing racer's edited-body digest).
+  `mode=release-complete` is anchor-only, so for a non-anchor child in a
+  multi-target set this replay cannot see the child's true generation
+  boundary and fails closed (`mismatch`, never a false `pass`) instead —
+  an accepted limitation, since this helper's own single-target orphan
+  use case never hits it
 
 **Review & Merge Phase Helpers:**
 
