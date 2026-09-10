@@ -128,10 +128,12 @@ Pass `--nonce` when this session already recorded one for that
 `{claim-id}` (true after forced-handoff step 5) so a session that lost
 the nonce tie-break cannot pass as `already_owned`; omit it otherwise.
 
-| Top-level `state` / `action` | Meaning                                                           |
-| ---------------------------- | ----------------------------------------------------------------- |
-| `already_owned` / `keep`     | Confirmed — see the two cases below                               |
-| anything else                | Not yours — forced-handoff: Stop-and-ask; else fall through below |
+<!-- dprint-ignore-start -->
+| Top-level `state` / `action` | Meaning |
+| --- | --- |
+| `already_owned` / `keep` | Confirmed — see the two cases below |
+| anything else | Not yours — forced-handoff: Stop-and-ask; else fall through below |
+<!-- dprint-ignore-end -->
 
 `already_owned`/`keep` splits in two: if `--nonce` was passed above
 (resume/heartbeat continuation), skip to Claim verification (or
@@ -149,11 +151,13 @@ write:
 node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 ```
 
-| Helper `fresh_claim_gate.verdict` | Action                                |
-| --------------------------------- | ------------------------------------- |
-| `claimable`                       | Proceed to Claim execution (fresh)    |
-| `stale-reclaimable`               | Proceed to Claim execution (takeover) |
-| `already-claimed`                 | **STOP** — live competitor or race    |
+<!-- dprint-ignore-start -->
+| Helper `fresh_claim_gate.verdict` | Action |
+| --- | --- |
+| `claimable` | Proceed to Claim execution (fresh) |
+| `stale-reclaimable` | Proceed to Claim execution (takeover) |
+| `already-claimed` | **STOP** — live competitor or race |
+<!-- dprint-ignore-end -->
 
 Written fallback (`instructions-only` profile only — per the Helper
 runtime contract above, any other profile stops-and-asks on a
@@ -246,12 +250,14 @@ gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<N>-" \
   --jq '.[].ref | sub("^refs/heads/"; "")'
 ```
 
-| Match found?                                                           | Action                                                          |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------- |
-| No local or remote match                                               | Proceed to claim posting                                        |
-| Match corresponds to an inheritable claim (per (d) above)              | Proceed — expected branch                                       |
-| Match does not correspond, but an active non-stale claim references it | **STOP** — concurrent session                                   |
-| Match does not correspond, and no active claim references it           | **STOP** — hold note, possible orphaned branch; operator review |
+<!-- dprint-ignore-start -->
+| Match found? | Action |
+| --- | --- |
+| No local or remote match | Proceed to claim posting |
+| Match corresponds to an inheritable claim (per (d) above) | Proceed — expected branch |
+| Match does not correspond, but an active non-stale claim references it | **STOP** — concurrent session |
+| Match does not correspond, and no active claim references it | **STOP** — hold note, possible orphaned branch; operator review |
+<!-- dprint-ignore-end -->
 
 No remote branch with the computed name may already exist unless it is
 inheritable per the table above.
