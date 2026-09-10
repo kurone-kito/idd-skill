@@ -1727,9 +1727,12 @@ Interpretation rules:
   available): resolve the private admin directory the same way as the
   lock file above, then atomically create-or-replace an
   `idd-generated-tokens-<sanitized-claim-id>-<8-hex-char sha256
-  prefix>.json` file there, writing `{ agentId, claimId, nonce?,
-  recordedAt }`. No exclusive-create semantics needed (unlike the lock):
-  a plain atomic replace is correct since this is idempotent evidence,
+  prefix>.json` file there (`<sanitized-claim-id>`: non-`[A-Za-z0-9._-]`
+  characters replaced with `_`, then truncated to 64 characters, so a
+  long claim-id can't push the filename past the filesystem's
+  `NAME_MAX`), writing `{ agentId, claimId, nonce?, recordedAt }`. No
+  exclusive-create semantics needed (unlike the lock): a plain atomic
+  replace is correct since this is idempotent evidence,
   not a mutual-exclusion primitive.
 
 ### Clone-scoped lock

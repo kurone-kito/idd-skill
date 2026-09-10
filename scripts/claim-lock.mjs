@@ -114,6 +114,18 @@ import { parseCliArgs } from './cli-args.mjs';
 const CLAIM_LOCK_FILE_NAME = 'idd-claim.lock';
 const GENERATED_TOKENS_FILE_PREFIX = 'idd-generated-tokens';
 const MAX_RETRY_ATTEMPTS = 5;
+/**
+ * Cap on the sanitized-claim-id portion of a generated-tokens filename
+ * (see {@link sanitizeClaimIdForFilename}). A claim-id is an opaque
+ * token -- forced-handoff recovery can adopt one this process never
+ * generated -- so nothing upstream bounds its length; without a cap
+ * here, a long enough claim-id pushes the interpolated filename past
+ * the filesystem's `NAME_MAX` and `--record-tokens` fails with
+ * `ENAMETOOLONG`, permanently blocking the fail-closed ownership gate
+ * for that claim. The content-hash suffix already disambiguates, so
+ * truncating this prefix costs only human-readability, not safety.
+ */
+const MAX_SANITIZED_CLAIM_ID_LENGTH = 64;
 const CLAIM_LOCK_FLAG_SPEC = {
   '--acquire': { type: 'boolean' },
   '--check': { type: 'boolean' },
@@ -182,17 +194,21 @@ export function resolveClaimLockPath(worktree) {
   return join(resolveWorktreeAdminDir(worktree), CLAIM_LOCK_FILE_NAME);
 }
 /**
- * Sanitize `claimId` into a filesystem-safe token: anything outside
- * `[A-Za-z0-9._-]` becomes `_`. Claim-ids already follow that character
- * set by convention, but this is defensive, not assumed -- combined with
- * the content-hash suffix in {@link resolveGeneratedTokensPath}, two
- * distinct claim-ids resolving to the same sanitized filename is
- * astronomically unlikely, even when an out-of-convention claim-id
- * defeats the character-class sanitization alone (the truncated 8-hex-char
- * hash makes this vanishingly improbable, not provably impossible).
+ * Sanitize `claimId` into a filesystem-safe, length-bounded token:
+ * anything outside `[A-Za-z0-9._-]` becomes `_`, then the result is
+ * truncated to {@link MAX_SANITIZED_CLAIM_ID_LENGTH} characters. Claim-ids
+ * already follow that character set and a much shorter length by
+ * convention, but neither is assumed -- combined with the content-hash
+ * suffix in {@link resolveGeneratedTokensPath}, two distinct claim-ids
+ * resolving to the same sanitized filename is astronomically unlikely,
+ * even when an out-of-convention claim-id defeats the character-class
+ * sanitization and the length cap both (the truncated 8-hex-char hash
+ * makes this vanishingly improbable, not provably impossible).
  */
 function sanitizeClaimIdForFilename(claimId) {
-  return claimId.replace(/[^A-Za-z0-9._-]/g, '_');
+  return claimId
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+    .slice(0, MAX_SANITIZED_CLAIM_ID_LENGTH);
 }
 /**
  * Resolve the generated-tokens record's path inside `cwd`'s own private

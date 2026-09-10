@@ -712,6 +712,35 @@ test('generated-tokens: two claim-ids that sanitize to the same string still res
   }
 });
 
+test('generated-tokens: a very long claim-id does not push the filename past NAME_MAX', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    // Claim-ids are opaque tokens -- forced-handoff recovery can adopt one
+    // this process never generated -- so nothing upstream bounds their
+    // length. Without truncating the sanitized prefix, this filename would
+    // exceed most filesystems' 255-byte NAME_MAX and `--record-tokens`
+    // would fail with ENAMETOOLONG, permanently blocking the fail-closed
+    // ownership gate for that claim.
+    const longClaimId = `claude-idd-thin-c1b296-20260910T130055Z-${'a'.repeat(300)}`;
+    const path = resolveGeneratedTokensPath(fixture.worktree, longClaimId);
+    assert.ok(
+      Buffer.byteLength(basename(path), 'utf8') <= 255,
+      `expected the filename to stay under NAME_MAX, got ${Buffer.byteLength(basename(path), 'utf8')} bytes: ${basename(
+        path,
+      )}`,
+    );
+
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId: longClaimId,
+    });
+    const read = readGeneratedClaimTokens(fixture.worktree, longClaimId);
+    assert.equal(read.status, 'present');
+  } finally {
+    teardown(fixture);
+  }
+});
+
 test('generated-tokens: resolveGeneratedTokensPath resolves inside the linked worktree private git-dir, sibling to the lock file', () => {
   const fixture = setupLinkedWorktree();
   try {
