@@ -267,3 +267,97 @@ test('comment-refresh workflows debounce the rerun call and preserve cancel-in-p
     );
   }
 });
+
+// Codex P1 review, PR #2855: a review superseded by debounce would
+// silently downgrade to whatever a later comment-triggered run does
+// (plain `--apply`, never `--refresh-latest`), which could leave an
+// already-green gate green even though the review added new blocking
+// findings. `pull_request_review` must bypass debounce entirely, not
+// merely be exempted from the origin-classification half of the gate.
+test('comment-refresh workflows never let debounce suppress a pull_request_review rerun', () => {
+  for (const path of COMMENT_PATHS) {
+    const text = readWorkflow(path);
+    const debounceIndex = text.indexOf(
+      '- name: Check for newer qualifying event',
+    );
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    assert.ok(debounceIndex !== -1 && rerunIndex !== -1);
+
+    const debounceStepText = text.slice(debounceIndex, rerunIndex);
+    const debounceIfLine = debounceStepText
+      .split('\n')
+      .find((line) => line.trim().startsWith('if:'));
+    assert.ok(
+      debounceIfLine,
+      `${path} debounce step must have an if: condition`,
+    );
+    assert.doesNotMatch(
+      debounceIfLine as string,
+      /pull_request_review/,
+      `${path} debounce step's if: must not run for pull_request_review -- its skip output must never be consulted for a review`,
+    );
+
+    const rerunStepText = text.slice(
+      rerunIndex,
+      text.indexOf('\n      - name:', rerunIndex + 1) === -1
+        ? undefined
+        : text.indexOf('\n      - name:', rerunIndex + 1),
+    );
+    const rerunIfLine = rerunStepText
+      .split('\n')
+      .find((line) => line.trim().startsWith('if:'));
+    assert.ok(rerunIfLine, `${path} rerun step must have an if: condition`);
+    // The pull_request_review disjunct must stand on its own, never
+    // conjoined with `steps.debounce.outputs.skip` -- a regex anchored on
+    // "pull_request_review' &&...debounce" (in either operand order)
+    // would indicate the bypass regressed back to being debounce-gated.
+    assert.doesNotMatch(
+      rerunIfLine as string,
+      /pull_request_review'\s*&&[^|]*debounce/,
+      `${path} rerun step's pull_request_review branch must not be gated by debounce.outputs.skip`,
+    );
+    assert.doesNotMatch(
+      rerunIfLine as string,
+      /debounce\.outputs\.skip[^|]*&&[^)]*pull_request_review/,
+      `${path} rerun step's pull_request_review branch must not be gated by debounce.outputs.skip`,
+    );
+  }
+});
+
+// CodeRabbit review, PR #2855: idd-template's helper-runtime profile
+// guard ("Classify review comment" step's own if:) must still apply to
+// the debounce and rerun steps even though pull_request_review bypasses
+// origin classification -- an instructions-only install has no helper
+// runtime to execute either step's run: case statement with, regardless
+// of which trigger family reaches it.
+test('idd-template comment-refresh workflow keeps the profile/manager guard on debounce and rerun steps', () => {
+  const path =
+    'idd-template/.github/workflows/idd-advisory-convergence-comment.yml';
+  const text = readWorkflow(path);
+  const debounceIndex = text.indexOf(
+    '- name: Check for newer qualifying event',
+  );
+  const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+  assert.ok(debounceIndex !== -1 && rerunIndex !== -1);
+
+  const rerunStepText = text.slice(
+    rerunIndex,
+    text.indexOf('\n      - name:', rerunIndex + 1) === -1
+      ? undefined
+      : text.indexOf('\n      - name:', rerunIndex + 1),
+  );
+  const rerunIfLine = rerunStepText
+    .split('\n')
+    .find((line) => line.trim().startsWith('if:'));
+  assert.ok(rerunIfLine, `${path} rerun step must have an if: condition`);
+  assert.match(
+    rerunIfLine as string,
+    /steps\.profile\.outputs\.profile\s*!=\s*'instructions-only'/,
+    `${path} rerun step's if: must still exclude instructions-only`,
+  );
+  assert.match(
+    rerunIfLine as string,
+    /steps\.manager\.outputs\.manager\s*!=\s*'ambiguous'/,
+    `${path} rerun step's if: must still exclude an ambiguous package manager`,
+  );
+});

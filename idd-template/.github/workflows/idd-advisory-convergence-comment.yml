@@ -74,23 +74,39 @@
 # once per comment, exhausting every same-HEAD instance's one-time rerun
 # budget mid-burst. The "Check for newer qualifying event" step below
 # waits a short quiet window, then re-queries whether a newer
-# IDD-originated comment/review has since landed on the same PR; if so,
-# this run skips its own `--apply` call and leaves it to the
-# later-triggered run (which asks the same question in turn). This is a
-# job-body-level check -- it does not alter `cancel-in-progress: false`
-# below, which stays exactly as #2136 established it. (Note on that
-# setting's actual scope: it protects only the currently in-progress
-# run in this group from cancellation; a merely *pending*, not-yet-
-# started run is still cancelled and replaced by the newest pending run
-# when another is queued behind it, since no `queue:` key is set here
-# -- the debounce below exists for the case where a run has already
-# started and must itself decide whether a newer event supersedes it,
-# which that pending-run replacement does not cover.) If the debounce
-# step's own live-data collection fails, the step fails and GitHub
-# Actions' default sequential-failure behavior skips "Rerun required
-# HEAD check" entirely for that run -- safe, since this is a
-# non-required companion refresh, and a later qualifying event (or the
-# required check's own polling) will trigger a fresh attempt.
+# IDD-originated comment has since landed on the same PR; if so, this
+# run skips its own `--apply` call and leaves it to the later-triggered
+# run (which asks the same question in turn). This is a job-body-level
+# check -- it does not alter `cancel-in-progress: false` below, which
+# stays exactly as #2136 established it. (Note on that setting's actual
+# scope: it protects only the currently in-progress run in this group
+# from cancellation; a merely *pending*, not-yet-started run is still
+# cancelled and replaced by the newest pending run when another is
+# queued behind it, since no `queue:` key is set here -- the debounce
+# below exists for the case where a run has already started and must
+# itself decide whether a newer event supersedes it, which that
+# pending-run replacement does not cover.) If the debounce step's own
+# live-data collection fails, the step fails and GitHub Actions'
+# default sequential-failure behavior skips "Rerun required HEAD check"
+# entirely for that run -- safe, since this is a non-required companion
+# refresh, and a later qualifying event (or the required check's own
+# polling) will trigger a fresh attempt.
+#
+# `pull_request_review` deliberately skips debounce entirely (Codex P1,
+# PR #2855 review): the two comment families need it because a burst of
+# them all ask the SAME question (plain `--apply`), so skipping in favor
+# of a later one is safe -- but a review's `--refresh-latest` is a
+# STRONGER question a superseding comment-triggered run cannot answer on
+# its behalf (comment-triggered runs never carry `--refresh-latest`). A
+# review superseded by debounce would silently downgrade to whatever the
+# later comment run does, which could leave an already-green gate green
+# even though the review added new blocking findings. Debounce exists
+# purely to protect the rerun-once budget from a comment burst (#2643)
+# -- a hazard `--refresh-latest` does not share (it bypasses that budget
+# already) and reviews do not produce (human-paced, not bursty) -- so
+# this workflow does not need debounce protection for reviews at all;
+# "Rerun required HEAD check" below always proceeds for a review
+# submission instead of consulting the debounce step's output.
 name: IDD advisory-convergence comment refresh
 concurrency:
   # Do not cancel: a later human LGTM must not abort an in-flight
@@ -294,7 +310,15 @@ jobs:
           esac
       - name: Check for newer qualifying event
         id: debounce
-        if: steps.origin.outputs.idd_originated == 'true' || github.event_name == 'pull_request_review'
+        # `pull_request_review` deliberately excluded -- see the Debounce
+        # module-header paragraph above for why a review must not be
+        # debounced in favor of a later comment-triggered run. Depending
+        # only on `steps.origin.outputs.idd_originated` (never set under
+        # `instructions-only`/`ambiguous` -- "Classify review comment"
+        # above already gates on profile/manager) keeps this step's own
+        # `if:` correctly gated for the comment families it still serves,
+        # with no separate profile/manager check needed here.
+        if: steps.origin.outputs.idd_originated == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
@@ -352,7 +376,19 @@ jobs:
               ;;
           esac
       - name: Rerun required HEAD check
-        if: (steps.origin.outputs.idd_originated == 'true' || github.event_name == 'pull_request_review') && steps.debounce.outputs.skip != 'true'
+        # Profile/manager readiness guard (CodeRabbit review, PR #2855):
+        # required unconditionally, including for `pull_request_review`
+        # -- under `instructions-only`/`ambiguous` there is no helper
+        # runtime to execute this step's `run:` case statement with
+        # regardless of trigger family, so "always proceeds" below means
+        # only "bypasses debounce," never "bypasses readiness." A review
+        # submission always proceeds once readiness holds, ignoring the
+        # debounce step's output entirely (module header above) -- it is
+        # not consulted for `pull_request_review` at all (that step's own
+        # `if:` excludes it), so a review is never superseded by a later
+        # comment-triggered run that cannot provide the same
+        # `--refresh-latest` guarantee.
+        if: steps.profile.outputs.profile != 'instructions-only' && steps.manager.outputs.manager != 'ambiguous' && (github.event_name == 'pull_request_review' || (steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'))
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
