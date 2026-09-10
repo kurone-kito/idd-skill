@@ -154,8 +154,10 @@ name: IDD advisory-convergence gate
 # longer triggers this workflow directly (#2764 Phase 1 moved it to the
 # companion `idd-advisory-convergence-comment.yml` workflow); a review
 # submission now reaches this job only indirectly, via the companion's
-# `rerun-advisory-convergence.mjs --apply` reissuing `gh run rerun` on
-# an already-terminal instance, not by entering this concurrency group
+# `rerun-advisory-convergence.mjs --refresh-latest --apply` (Copilot,
+# PR #2855 review -- not the plain `--apply` the two comment-family
+# triggers use) reissuing `gh run rerun` on an already-terminal
+# instance, not by entering this concurrency group
 # as a fresh trigger while a sibling is still polling. Whether a
 # rerun re-entering this group while another instance is still polling
 # can still cancel it is not re-derived here -- this note corrects the
