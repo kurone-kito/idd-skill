@@ -19,7 +19,10 @@ import { promisify } from 'node:util';
 import {
   acquireClaimLock,
   checkClaimLock,
+  readGeneratedClaimTokens,
+  recordGeneratedClaimTokens,
   resolveClaimLockPath,
+  resolveGeneratedTokensPath,
 } from '../src/scripts/claim-lock.mts';
 
 const execFileAsync = promisify(execFile);
@@ -495,6 +498,212 @@ test('acquire: N concurrent forced-takeovers never corrupt the lock — every wr
       winningClaimIds.includes(finalBody.claimId),
       `expected the final lock to record exactly one of the racing claim-ids, got: ${JSON.stringify(finalBody)}`,
     );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+// Generated-tokens record tests (#2719).
+
+test('generated-tokens: record/read round trip reports the recorded fields', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const written = recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId: 'claim-a',
+      nonce: 'nonce-a',
+    });
+    assert.equal(
+      basename(written.path).startsWith('idd-generated-tokens-'),
+      true,
+    );
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'present');
+    assert.equal(read.status === 'present' && read.record.agentId, 'agent-a');
+    assert.equal(read.status === 'present' && read.record.claimId, 'claim-a');
+    assert.equal(read.status === 'present' && read.record.nonce, 'nonce-a');
+    assert.equal(read.path, written.path);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('generated-tokens: a never-recorded claim-id reads absent, never treated as owned', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId: 'claim-a',
+    });
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-b');
+    assert.equal(read.status, 'absent');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('generated-tokens: a malformed record file reads malformed, never silently absent', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const path = resolveGeneratedTokensPath(fixture.worktree, 'claim-a');
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, 'not json at all {{{');
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'malformed');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('generated-tokens: a record whose internal claim-id disagrees with the requested one reads malformed', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    // Simulate a tampered/collided file: written for "claim-a" but its own
+    // internal claimId field names a different claim entirely.
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId: 'claim-a',
+    });
+    const path = resolveGeneratedTokensPath(fixture.worktree, 'claim-a');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        agentId: 'agent-a',
+        claimId: 'claim-other',
+        recordedAt: new Date().toISOString(),
+      }),
+    );
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'malformed');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('generated-tokens: re-recording the same claim-id idempotently overwrites (e.g. to add a nonce)', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId: 'claim-a',
+    });
+    const first = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(first.status === 'present' && first.record.nonce, undefined);
+
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId: 'claim-a',
+      nonce: 'nonce-a',
+    });
+    const second = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(second.status === 'present' && second.record.nonce, 'nonce-a');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('generated-tokens: two claim-ids that sanitize to the same string still resolve to different paths', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    // Both sanitize to "claim_a" under the [A-Za-z0-9._-] allowlist, but the
+    // content-hash suffix keeps their resolved paths distinct.
+    const pathA = resolveGeneratedTokensPath(fixture.worktree, 'claim:a');
+    const pathB = resolveGeneratedTokensPath(fixture.worktree, 'claim/a');
+    assert.notEqual(pathA, pathB);
+
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId: 'claim:a',
+    });
+    // The differently-punctuated claim-id was never recorded, and must not
+    // resolve to the same on-disk evidence as "claim:a" above.
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim/a');
+    assert.equal(read.status, 'absent');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('generated-tokens: resolveGeneratedTokensPath resolves inside the linked worktree private git-dir, sibling to the lock file', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const lockPath = resolveClaimLockPath(fixture.worktree);
+    const tokensPath = resolveGeneratedTokensPath(fixture.worktree, 'claim-a');
+    assert.equal(join(tokensPath, '..'), join(lockPath, '..'));
+    assert.ok(
+      tokensPath.split(sep).includes('worktrees'),
+      `expected the linked worktree's private admin dir, got: ${tokensPath}`,
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const recordResult = await execFileAsync(process.execPath, [
+      CLI_PATH,
+      '--record-tokens',
+      '--worktree',
+      fixture.worktree,
+      '--agent-id',
+      'agent-a',
+      '--claim-id',
+      'claim-a',
+      '--nonce',
+      'nonce-a',
+    ]);
+    const recordOutcome = JSON.parse(recordResult.stdout);
+    assert.equal(typeof recordOutcome.path, 'string');
+
+    const readResult = await execFileAsync(process.execPath, [
+      CLI_PATH,
+      '--read-tokens',
+      '--worktree',
+      fixture.worktree,
+      '--claim-id',
+      'claim-a',
+    ]);
+    const readOutcome = JSON.parse(readResult.stdout);
+    assert.equal(readOutcome.present, true);
+    assert.equal(readOutcome.record.agentId, 'agent-a');
+    assert.equal(readOutcome.record.claimId, 'claim-a');
+    assert.equal(readOutcome.record.nonce, 'nonce-a');
+
+    // A different claim-id was never recorded.
+    const readOtherResult = await execFileAsync(process.execPath, [
+      CLI_PATH,
+      '--read-tokens',
+      '--worktree',
+      fixture.worktree,
+      '--claim-id',
+      'claim-b',
+    ]);
+    const readOtherOutcome = JSON.parse(readOtherResult.stdout);
+    assert.equal(readOtherOutcome.present, false);
+
+    // A corrupt record at the resolved path reads malformed, not absent.
+    const malformedPath = resolveGeneratedTokensPath(
+      fixture.worktree,
+      'claim-c',
+    );
+    writeFileSync(malformedPath, 'not json at all {{{');
+    const readMalformedResult = await execFileAsync(process.execPath, [
+      CLI_PATH,
+      '--read-tokens',
+      '--worktree',
+      fixture.worktree,
+      '--claim-id',
+      'claim-c',
+    ]);
+    const readMalformedOutcome = JSON.parse(readMalformedResult.stdout);
+    assert.equal(readMalformedOutcome.present, true);
+    assert.equal(readMalformedOutcome.malformed, true);
   } finally {
     teardown(fixture);
   }

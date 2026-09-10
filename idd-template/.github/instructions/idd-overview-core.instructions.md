@@ -53,9 +53,8 @@ but never create new hidden-only claim comments.
   session-record checks. Generate a fresh value on every fresh claim or
   stale takeover. Reuse the same `{claim-id}` only for heartbeats of
   that already-verified claim. Reading an existing `{claim-id}` from
-  issue comments does not by itself prove ownership; the current
-  session must have recorded that token before the
-  revalidation step.
+  issue comments does not prove ownership; the current session must
+  have recorded that token on disk first (`idd-claim.instructions.md`).
 - `{prior-claim-id}` is `none` for a fresh claim on an unclaimed issue.
   For a stale-claim takeover, set it to the currently active claim's
   `{claim-id}`.

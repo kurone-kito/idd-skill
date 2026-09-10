@@ -594,6 +594,11 @@ session's leftover lock resolves the same way. See
 `docs/idd-helper-scripts.md`'s Worktree-local claim lock entry for
 mechanical detail.
 
+**Generated-tokens record.** Write `{agent-id}` / `{claim-id}` (then the
+nonce) via `--record-tokens` before posting each marker; re-check with
+`--read-tokens` alongside `--acquire` before trusting a recalled
+`{claim-id}`. See `docs/idd-helper-scripts.md`.
+
 Then continue to `idd-work.instructions.md`.
 
 ## Claim-state parsing

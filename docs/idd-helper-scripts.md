@@ -1658,6 +1658,72 @@ Interpretation rules:
   namespace, so a helper-runtime session and an instructions-only
   session see the same lock.
 
+### Worktree-local generated-tokens record
+
+- A sibling artifact to the worktree-local claim lock above, in the same
+  admin directory, answering a narrower question (#2719): not "does
+  anyone else hold this worktree" but "did _this_ session actually
+  generate the `{agent-id}`/`{claim-id}` it is about to trust, on disk,
+  independent of possibly-compacted conversation memory." Referenced by
+  the "Generated-tokens record" paragraph in
+  [`idd-claim.instructions.md`'s Worktree-local lock file section](../.github/instructions/idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision).
+- Source repo / vendored-node commands:
+  `node scripts/claim-lock.mjs --record-tokens --worktree <path>
+  --agent-id <id> --claim-id <id> [--nonce <nonce>]`
+  and `node scripts/claim-lock.mjs --read-tokens --worktree <path>
+  --claim-id <id>`
+- Package-manager / ephemeral-npx command: use the same profile-selected
+  `idd:claim-lock` command as the lock above; the literal invocations are:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-claim-lock --record-tokens --worktree <path> --agent-id <id> \
+    --claim-id <id> [--nonce <nonce>]
+
+  npx --yes --package <helper-package-spec> \
+    idd-claim-lock --read-tokens --worktree <path> --claim-id <id>
+  ```
+
+- **When to call `--record-tokens`**: once at A5 claim time, right after
+  generating `{agent-id}`/`{claim-id}`, before posting the `claimed-by`
+  marker (the B1 worktree does not exist yet, so `<path>` is then the
+  _primary_ worktree); again with `--nonce` right before posting the
+  activation-nonce marker; again at B1 once the sibling worktree exists,
+  mirroring the lock's own `--acquire` step. Keyed by `--claim-id` (a
+  content-hash-suffixed, sanitized filename), so two sessions generating
+  two different claim-ids never collide even while sharing the primary
+  worktree's admin directory. No collision or `--takeover` concept: this
+  is per-claim-id evidence, not a mutual-exclusion primitive, so
+  re-invoking for the same `--claim-id` is always a safe, idempotent
+  overwrite. Exits `0` unless a filesystem error occurs.
+- **When to call `--read-tokens`**: alongside every later `--acquire`
+  re-run, before trusting a `{claim-id}` recalled only from context.
+  Reports `{ path, present, malformed?, record? }` read-only, mirroring
+  `--check`'s own shape: `present: true` with `record` means a
+  well-formed record for exactly this `--claim-id` exists; `present:
+  true, malformed: true` means a file exists at the resolved path but
+  cannot be trusted as this claim-id's record (corrupt content, or an
+  internal `claimId` field that disagrees with the path it was found
+  at); `present: false` means this claim-id was never recorded. Treat
+  `malformed` the same as absent for an ownership check — never trust a
+  claim-id this record does not affirmatively confirm.
+- No explicit release verb, no cleanup across takeovers: like the lock
+  file, the record lives inside the worktree's own private git-admin
+  directory, so `git worktree remove` at F4 deletes it together with the
+  worktree. The _primary_-worktree copy written at A5 (before the B1
+  worktree exists) is not cleaned up by that removal — an accepted
+  residual, since giving this record cross-worktree, pre-acquisition
+  visibility is explicitly out of scope (see the lock file's own
+  cross-worktree-visibility note above).
+- **`instructions-only` helper-free fallback** (no helper runtime
+  available): resolve the private admin directory the same way as the
+  lock file above, then atomically create-or-replace an
+  `idd-generated-tokens-<sanitized-claim-id>-<8-hex-char sha256
+  prefix>.json` file there, writing `{ agentId, claimId, nonce?,
+  recordedAt }`. No exclusive-create semantics needed (unlike the lock):
+  a plain atomic replace is correct since this is idempotent evidence,
+  not a mutual-exclusion primitive.
+
 ### Clone-scoped lock
 
 - Source repo / vendored-node commands:

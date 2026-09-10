@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // idd-generated-from: src/scripts/claim-lock.mts
 //
 // The scripts/claim-lock.mjs copy is generated from the .mts source
@@ -44,8 +45,37 @@
 // lock) is the real authority there: GitHub claim parsing is deterministic,
 // so only one concurrent takeover's claim-id can actually be the active one,
 // regardless of what this local lock file happens to contain.
+//
+// Generated-tokens record (#2719): a second, sibling on-disk artifact in
+// the same admin directory, answering a narrower question than the lock
+// above -- not "does anyone else hold this worktree" but "did *this*
+// session actually generate the agent-id/claim-id it is about to trust,
+// on disk, independent of (possibly compacted) conversation memory."
+// Keyed by claim-id rather than a single fixed filename because the
+// *first* write happens at A5 claim time, before the B1 worktree exists --
+// the current cwd is then the primary worktree, whose admin directory is
+// shared by every concurrent session in the same clone. A fixed filename
+// there would let two sessions generating two different claim-ids clobber
+// each other; a claim-id-keyed filename (plus a short content hash suffix
+// so sanitization can never collide two distinct claim-ids onto the same
+// path) does not. B1 repeats the same write into the new worktree's own
+// private admin directory once it exists, mirroring how `idd-claim.lock`
+// already works there. Unlike the lock, this record has no collision or
+// `--takeover` concept: it is per-claim-id evidence, not a mutual-exclusion
+// primitive, so re-recording (idempotent overwrite) is always safe and
+// expected -- both writes above, plus the follow-up write once the
+// activation-nonce is minted, target the same path for a given cwd.
+//
+// This record does not itself replace GitHub claim state as authority.
+// The GitHub claim-id parse (`idd-overview-core.instructions.md`'s Claim
+// revalidation gate) always stays authoritative for *whether* a claim is
+// active; this record answers a narrower question that gate alone cannot:
+// whether the claim-id it finds active is one this session actually
+// generated, rather than one merely recalled from (possibly compacted)
+// conversation context.
 
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   readFileSync,
   renameSync,
@@ -69,14 +99,18 @@ interface ClaimLockBody {
 }
 
 const CLAIM_LOCK_FILE_NAME = 'idd-claim.lock';
+const GENERATED_TOKENS_FILE_PREFIX = 'idd-generated-tokens';
 const MAX_RETRY_ATTEMPTS = 5;
 
 const CLAIM_LOCK_FLAG_SPEC = {
   '--acquire': { type: 'boolean' },
   '--check': { type: 'boolean' },
+  '--record-tokens': { type: 'boolean' },
+  '--read-tokens': { type: 'boolean' },
   '--worktree': { type: 'string' },
   '--agent-id': { type: 'string' },
   '--claim-id': { type: 'string' },
+  '--nonce': { type: 'string' },
   '--takeover': { type: 'boolean' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -109,21 +143,70 @@ function sanitizedGitEnvironment(): NodeJS.ProcessEnv {
 }
 
 /**
+ * Resolve `cwd`'s own private git-admin directory (`git rev-parse
+ * --absolute-git-dir`) — inside a linked worktree, `.git` is a *file* (a
+ * `gitdir:` pointer), not a directory, so a literal `.git/...` path would
+ * throw `ENOTDIR`. Shared by every path resolved inside this admin
+ * directory (the lock file and the generated-tokens record below), so
+ * `git worktree remove` deletes all of them together with the worktree,
+ * with no separate cleanup step required.
+ */
+function resolveWorktreeAdminDir(cwd: string): string {
+  return execFileSync('git', ['-C', cwd, 'rev-parse', '--absolute-git-dir'], {
+    encoding: 'utf8',
+    env: sanitizedGitEnvironment(),
+  }).trim();
+}
+
+/**
  * Resolve the lock file's path inside `worktree`'s own private git-admin
- * directory (`git rev-parse --absolute-git-dir`), never a literal
- * `.git/idd-claim.lock` — inside a linked worktree, `.git` is a *file*
- * (a `gitdir:` pointer), not a directory, so that literal path would throw
- * `ENOTDIR`. Using the worktree's own admin dir also means `git worktree
- * remove` deletes the lock together with the worktree, with no separate
- * cleanup step required.
+ * directory, never a literal `.git/idd-claim.lock` (see
+ * {@link resolveWorktreeAdminDir}).
  */
 export function resolveClaimLockPath(worktree: string): string {
-  const gitDir = execFileSync(
-    'git',
-    ['-C', worktree, 'rev-parse', '--absolute-git-dir'],
-    { encoding: 'utf8', env: sanitizedGitEnvironment() },
-  ).trim();
-  return join(gitDir, CLAIM_LOCK_FILE_NAME);
+  return join(resolveWorktreeAdminDir(worktree), CLAIM_LOCK_FILE_NAME);
+}
+
+/**
+ * Sanitize `claimId` into a filesystem-safe token: anything outside
+ * `[A-Za-z0-9._-]` becomes `_`. Claim-ids already follow that character
+ * set by convention, but this is defensive, not assumed -- combined with
+ * the content-hash suffix in {@link resolveGeneratedTokensPath}, two
+ * distinct claim-ids can never collide onto the same sanitized filename
+ * even if an out-of-convention claim-id defeats the character-class
+ * sanitization alone.
+ */
+function sanitizeClaimIdForFilename(claimId: string): string {
+  return claimId.replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+/**
+ * Resolve the generated-tokens record's path inside `cwd`'s own private
+ * git-admin directory, sibling to `idd-claim.lock` (see
+ * {@link resolveWorktreeAdminDir}). Keyed by `claimId` rather than a
+ * single fixed filename: the first write happens at A5 claim time,
+ * before the B1 worktree exists, so `cwd` is then the *primary*
+ * worktree — its admin directory is shared by every concurrent session
+ * in the same clone. A claim-id-keyed filename means two sessions
+ * generating two different claim-ids never collide on the same path,
+ * even while they momentarily share that admin directory; once B1
+ * creates the sibling worktree, its own private admin directory is
+ * unique per worktree anyway (matching `idd-claim.lock`'s existing
+ * guarantee), so the same scheme still works there unchanged.
+ */
+export function resolveGeneratedTokensPath(
+  cwd: string,
+  claimId: string,
+): string {
+  const sanitized = sanitizeClaimIdForFilename(claimId);
+  const contentHash = createHash('sha256')
+    .update(claimId, 'utf8')
+    .digest('hex')
+    .slice(0, 8);
+  return join(
+    resolveWorktreeAdminDir(cwd),
+    `${GENERATED_TOKENS_FILE_PREFIX}-${sanitized}-${contentHash}.json`,
+  );
 }
 
 /**
@@ -185,22 +268,19 @@ function renderLockBody(agentId: string, claimId: string): string {
 }
 
 /**
- * Replace `path` with a freshly-rendered lock body. The temp file is written
- * in the same directory as `path` (a cross-filesystem rename is not atomic),
- * then renamed into place. POSIX `rename` onto an existing regular file is
+ * Replace `path` with `body`. The temp file is written in the same
+ * directory as `path` (a cross-filesystem rename is not atomic), then
+ * renamed into place. POSIX `rename` onto an existing regular file is
  * atomic, but Windows does not replace an existing destination, so a regular
  * file must be removed before retrying the rename on that platform. A
  * directory target is handled the same way for malformed-lock recovery.
  * The `finally` cleans up the temp file if `renameSync` throws, so a failed
- * replace never leaks it.
+ * replace never leaks it. Shared by the lock file's authorized-takeover
+ * path and the generated-tokens record's always-idempotent write.
  */
-function overwriteLockAtomically(
-  path: string,
-  agentId: string,
-  claimId: string,
-): void {
+function atomicReplaceFile(path: string, body: string): void {
   const tmpPath = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-  writeFileSync(tmpPath, renderLockBody(agentId, claimId), { flag: 'wx' });
+  writeFileSync(tmpPath, body, { flag: 'wx' });
   try {
     try {
       renameSync(tmpPath, path);
@@ -238,6 +318,19 @@ function overwriteLockAtomically(
       // ignore
     }
   }
+}
+
+/**
+ * Replace `path` with a freshly-rendered lock body. Only reached from an
+ * authorized `--takeover` (see {@link acquireClaimLock}); see
+ * {@link atomicReplaceFile} for the write mechanics.
+ */
+function overwriteLockAtomically(
+  path: string,
+  agentId: string,
+  claimId: string,
+): void {
+  atomicReplaceFile(path, renderLockBody(agentId, claimId));
 }
 
 /** Outcome shape returned by {@link acquireClaimLock}. */
@@ -363,12 +456,121 @@ export function checkClaimLock(worktree: string): CheckLockOutcome {
   return { path, present: true, holder: read.lock };
 }
 
+/**
+ * Shape of the JSON generated-tokens record written to disk (#2719).
+ * `recordedAt` is audit-only, mirroring {@link ClaimLockBody}'s
+ * `acquiredAt` -- no code path here reads it back to make a decision.
+ */
+interface GeneratedTokensBody {
+  agentId: string;
+  claimId: string;
+  nonce?: string;
+  recordedAt: string;
+}
+
+function isGeneratedTokensBody(value: unknown): value is GeneratedTokensBody {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.agentId === 'string' &&
+    typeof candidate.claimId === 'string' &&
+    typeof candidate.recordedAt === 'string' &&
+    (candidate.nonce === undefined || typeof candidate.nonce === 'string')
+  );
+}
+
+/**
+ * A read of the generated-tokens path resolves to exactly one of: absent
+ * (never recorded, or recorded for a different claim-id -- a different
+ * claim-id resolves to a different path by construction, see
+ * {@link resolveGeneratedTokensPath}), malformed (a file exists at the
+ * resolved path but is not a well-formed record for that exact claim-id --
+ * corrupted write, truncated crash, foreign content, or its own internal
+ * `claimId` field disagrees with the path it was found at), or a valid
+ * parsed body. Callers must never treat `malformed` the same as `absent`:
+ * a record that cannot be trusted must never be read as "this claim-id was
+ * never recorded" -- that would silently defeat the ownership check this
+ * record exists to support.
+ */
+export type GeneratedTokensReadResult =
+  | { status: 'absent'; path: string }
+  | { status: 'malformed'; path: string }
+  | { status: 'present'; path: string; record: GeneratedTokensBody };
+
+/**
+ * Read-only inspection of the generated-tokens record for `claimId` at
+ * `cwd`'s own private git-admin directory. Never creates, mutates, or
+ * deletes anything.
+ */
+export function readGeneratedClaimTokens(
+  cwd: string,
+  claimId: string,
+): GeneratedTokensReadResult {
+  const path = resolveGeneratedTokensPath(cwd, claimId);
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { status: 'absent', path };
+    }
+    // Any other read failure means the path cannot be trusted as absent or
+    // valid (EACCES/EPERM, EISDIR, a transient filesystem error). Fail
+    // closed as malformed, matching {@link readLock}'s own convention.
+    return { status: 'malformed', path };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: 'malformed', path };
+  }
+  if (!isGeneratedTokensBody(parsed) || parsed.claimId !== claimId) {
+    // The claim-id check defends against a would-be hash-suffix collision
+    // or manual tampering, not just a missing/corrupt file: a record whose
+    // own recorded claim-id disagrees with the one this path was resolved
+    // for is never trustworthy evidence for that claim-id.
+    return { status: 'malformed', path };
+  }
+  return { status: 'present', path, record: parsed };
+}
+
+/**
+ * Write (create or idempotently replace) the generated-tokens record for
+ * `claimId` at `cwd`'s own private git-admin directory. Unlike the lock
+ * file, this has no collision/`--takeover` concept: the record is
+ * per-claim-id evidence, not a mutual-exclusion primitive, so re-invoking
+ * (once in the primary worktree at A5 claim time with `{agentId,
+ * claimId}`, again with `{agentId, claimId, nonce}` right before the
+ * activation-nonce marker posts, and again in the new sibling worktree at
+ * B1) is always a safe, expected, idempotent overwrite of the same path.
+ */
+export function recordGeneratedClaimTokens(
+  cwd: string,
+  fields: { agentId: string; claimId: string; nonce?: string },
+): { path: string } {
+  const path = resolveGeneratedTokensPath(cwd, fields.claimId);
+  const body: GeneratedTokensBody = {
+    agentId: fields.agentId,
+    claimId: fields.claimId,
+    ...(fields.nonce === undefined ? {} : { nonce: fields.nonce }),
+    recordedAt: new Date().toISOString(),
+  };
+  atomicReplaceFile(path, JSON.stringify(body));
+  return { path };
+}
+
 interface ParsedArgs {
   acquire: boolean;
   check: boolean;
+  recordTokens: boolean;
+  readTokens: boolean;
   worktree: string | null;
   agentId: string | null;
   claimId: string | null;
+  nonce: string | null;
   takeover: boolean;
   help: boolean;
 }
@@ -378,6 +580,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   return {
     acquire: Boolean(values.acquire),
     check: Boolean(values.check),
+    recordTokens: Boolean(values['record-tokens']),
+    readTokens: Boolean(values['read-tokens']),
     worktree: typeof values.worktree === 'string' ? values.worktree : null,
     agentId:
       typeof values['agent-id'] === 'string'
@@ -387,9 +591,17 @@ function parseArgs(argv: string[]): ParsedArgs {
       typeof values['claim-id'] === 'string'
         ? (values['claim-id'] as string)
         : null,
+    nonce: typeof values.nonce === 'string' ? values.nonce : null,
     takeover: Boolean(values.takeover),
     help,
   };
+}
+
+/** Exactly one of the four mode flags, for the `runCli` mode-selection error. */
+function selectedModeCount(args: ParsedArgs): number {
+  return [args.acquire, args.check, args.recordTokens, args.readTokens].filter(
+    Boolean,
+  ).length;
 }
 
 function runCli(): void {
@@ -398,8 +610,10 @@ function runCli(): void {
     printHelp();
     process.exit(0);
   }
-  if (args.acquire === args.check) {
-    throw new Error('exactly one of --acquire or --check is required');
+  if (selectedModeCount(args) !== 1) {
+    throw new Error(
+      'exactly one of --acquire, --check, --record-tokens, or --read-tokens is required',
+    );
   }
   if (args.worktree === null) {
     throw new Error('--worktree is required');
@@ -407,6 +621,37 @@ function runCli(): void {
 
   if (args.check) {
     process.stdout.write(`${JSON.stringify(checkClaimLock(args.worktree))}\n`);
+    return;
+  }
+
+  if (args.readTokens) {
+    if (args.claimId === null) {
+      throw new Error('--claim-id is required for --read-tokens');
+    }
+    const read = readGeneratedClaimTokens(args.worktree, args.claimId);
+    const outcome =
+      read.status === 'present'
+        ? { path: read.path, present: true, record: read.record }
+        : read.status === 'malformed'
+          ? { path: read.path, present: true, malformed: true }
+          : { path: read.path, present: false };
+    process.stdout.write(`${JSON.stringify(outcome)}\n`);
+    return;
+  }
+
+  if (args.recordTokens) {
+    if (args.agentId === null) {
+      throw new Error('--agent-id is required for --record-tokens');
+    }
+    if (args.claimId === null) {
+      throw new Error('--claim-id is required for --record-tokens');
+    }
+    const outcome = recordGeneratedClaimTokens(args.worktree, {
+      agentId: args.agentId,
+      claimId: args.claimId,
+      ...(args.nonce === null ? {} : { nonce: args.nonce }),
+    });
+    process.stdout.write(`${JSON.stringify(outcome)}\n`);
     return;
   }
 
@@ -432,6 +677,8 @@ function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <id> --claim-id <id> [--takeover]
   node scripts/claim-lock.mjs --check --worktree <path>
+  node scripts/claim-lock.mjs --record-tokens --worktree <path> --agent-id <id> --claim-id <id> [--nonce <nonce>]
+  node scripts/claim-lock.mjs --read-tokens --worktree <path> --claim-id <id>
 
 Worktree-local lock file: a same-machine fast path that complements the
 cross-machine activation-nonce claim check. Resolves the lock file inside
@@ -455,5 +702,26 @@ and an authorized takeover.
 --check is read-only: it reports the current lock state without creating,
 mutating, or deleting anything. \`malformed: true\` means a lock file
 exists but could not be parsed as a well-formed lock body.
+
+--record-tokens writes (creating or idempotently replacing) the
+generated-tokens record (#2719) for --claim-id at <path>'s own private
+git-admin directory -- a sibling artifact to the lock file above, keyed by
+claim-id so it is safe to call before the B1 worktree exists (<path> is
+then the primary worktree, whose admin directory is shared by every
+concurrent session in the same clone). Call it once right after
+generating --agent-id/--claim-id, before posting the \`claimed-by\`
+marker, and again with --nonce right before posting the activation-nonce
+marker. Unlike --acquire, this has no collision concept: re-invoking is
+always a safe, expected overwrite.
+
+--read-tokens is read-only: it reports whether --claim-id was actually
+recorded on disk by this mechanism, distinguishing \`present\` (a
+well-formed record whose own claim-id matches) from \`malformed\` (a
+file exists at the resolved path but cannot be trusted as that claim-id's
+record) from neither field set, meaning absent -- this claim-id was never
+recorded (or was recorded under a different claim-id, which resolves to a
+different path). Both \`malformed\` and absent must be treated the same
+way by a caller checking ownership: never trust a claim-id this record
+does not affirmatively confirm.
 `);
 }
