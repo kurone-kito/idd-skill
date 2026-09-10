@@ -273,7 +273,13 @@ export function parseCandidateFileEntries(body: unknown): CandidateFileEntry[] {
     }
     const title = heading[2].replace(/[*_`]/g, '').trim().toLowerCase();
     if (start === -1) {
-      if (/^candidate files\b/.test(title)) {
+      // Exact match, not a `\b`-bounded prefix (Codex review, PR #2840,
+      // round 12): the prefix form also matched a related but distinct
+      // sibling heading such as "## Candidate files considered but
+      // rejected" -- a real heading, just not this section's contract
+      // heading -- wrongly opening the section on it and letting an
+      // existing path listed there satisfy `candidateFilesExist`.
+      if (title === 'candidate files') {
         start = index + 1;
       }
       continue;

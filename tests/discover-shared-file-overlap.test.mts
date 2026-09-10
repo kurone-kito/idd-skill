@@ -180,6 +180,20 @@ test('parseCandidateFiles stops at the next heading and ignores non-list prose',
   assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mjs']);
 });
 
+test('parseCandidateFiles requires an exact "Candidate files" heading, not merely a same-prefix sibling (Codex review, PR #2840, round 12)', () => {
+  // "## Candidate files considered but rejected" is a real, distinct
+  // heading -- the prior `\b`-bounded prefix match ("^candidate files\b")
+  // wrongly treated it as this section's own contract heading, letting a
+  // path listed there satisfy candidateFilesExist for a section the issue
+  // never actually opened.
+  const body = [
+    '## Candidate files considered but rejected',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
 test('parseCandidateFiles stops at a Setext-style sibling heading, not just an ATX one (Codex review, PR #2840)', () => {
   const body = [
     '## Candidate files',
