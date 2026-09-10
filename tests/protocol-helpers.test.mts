@@ -841,12 +841,19 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "addresses the ... fin
   assert.equal(classification.ackOnlyPostDisposition, true);
 });
 
-test('classifyThreadAckOnlyPostDisposition rejects the "addresses the ... concern" shape when the closure phrase is more than 80 characters from a distant, unrelated "finding" mention (#2858)', () => {
-  // Locality guard: the third closure shape is bounded (`{0,80}`) so an
-  // incidental "finding"/"concern" mention deep in a reply's boilerplate
-  // (e.g. a Learnings-used block) does not retroactively turn an
-  // unrelated "addresses the" phrase into a false closure signal.
-  const farAway = 'x'.repeat(200);
+test('classifyThreadAckOnlyPostDisposition rejects the "addresses the ... concern" shape when "concern" sits more than 80 characters away, in the SAME sentence, immediately before genuine boilerplate (Copilot review, #2858)', () => {
+  // Locality guard: the third closure shape is bounded (`{0,80}`) so a
+  // "concern"/"finding" mention too far from "addresses the" does not
+  // create a false closure signal. Copilot review flagged the original
+  // version of this test: its fixture put "finding" in a different
+  // sentence with no boilerplate anywhere, so it failed for those two
+  // reasons regardless of the 80-char bound, never actually exercising
+  // it. This fixture keeps "concern" in the SAME sentence (no `.!?`
+  // between them, so the sentence-boundary guard does not fire) and adds
+  // genuine boilerplate immediately after it (so the boilerplate-tail
+  // guard does not fire either) -- the >80-character gap is the only
+  // remaining reason this must still be rejected.
+  const filler = 'x '.repeat(45); // 90 chars, no sentence-terminating punctuation
   const thread = {
     id: 'thread-addresses-far-from-concern',
     isResolved: true,
@@ -864,9 +871,7 @@ test('classifyThreadAckOnlyPostDisposition rejects the "addresses the ... concer
         {
           id: 'FA-2',
           author: { login: 'coderabbitai[bot]' },
-          body:
-            `\`@kurone-kito\`, confirmed. This addresses the retry path. ${farAway} ` +
-            'Unrelated closing remark about a finding elsewhere.',
+          body: `\`@kurone-kito\`, confirmed. This addresses the ${filler}concern.\n\n🐇 ✓`,
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },

@@ -2112,7 +2112,7 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 //    keeps out the cross-sentence example above, since "However, ..." is
 //    not one of the known boilerplate forms.
 //
-// Hedge-adverb guard (Codex review round 2, PR #2868, #2858): even with
+// Hedge-adverb guard (issue #2858, Codex round-2 review on PR #2868): even with
 // both constraints above, "`@user`, confirmed. This partially addresses
 // the concern.\n\n🐇 ✓" still matched -- genuine boilerplate immediately
 // follows, and "partially" sits inside the matched sentence rather than
