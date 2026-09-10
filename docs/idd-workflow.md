@@ -644,15 +644,20 @@ decision-blocked again, rather than silently reinterpreting,
 downscoping, or unilaterally picking a different resolution: apply the
 configured needs-decision label and release the claim, the same
 general hold mechanism the shared Hold / suspend rules in
-`idd-overview-appendix.instructions.md` already document. Record
-exactly what made the recorded option infeasible in the hold comment,
-so the next Groom pass has the information a corrected question needs.
-That later pass removes the needs-decision label as part of applying
-its own operator's answers back onto the issue (above) -- alongside the
-`triage:{outcome}` label, the score footer, and a fresh `Maintainer
-decision` line that supersedes the infeasible one -- rather than
-leaving the label in place indefinitely or removing it without
-recording a genuinely buildable replacement.
+`.github/instructions/idd-overview-appendix.instructions.md` already
+document. Record exactly what made the recorded option infeasible in
+the hold comment, so the next Groom pass has the information a
+corrected question needs. That later pass removes the needs-decision
+label as part of applying its own operator's answers back onto the
+issue (above), alongside the `triage:{outcome}` label and the score
+footer, rather than leaving the label in place indefinitely or
+removing it without recording a genuinely buildable replacement.
+That replacement must strike through or otherwise replace the
+infeasible `Maintainer decision` line rather than merely append beside
+it -- re-triage's own `hasResolvedDecision` check treats every unstruck
+occurrence as live and has no way to tell which one is current, so an
+unstruck infeasible line can keep reading as resolved alongside its
+replacement.
 
 **Worked example.** An issue was rejected `needs-decision` at score
 `2/5` because its acceptance criteria read "add caching, or document
