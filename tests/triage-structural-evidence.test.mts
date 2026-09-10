@@ -542,6 +542,22 @@ test('hasVerificationCommandSignal: a non-interrupting ordered line does not see
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: an indented explanation between two ordered checkboxes does not end the list (Codex review, PR #2840, round 21)', () => {
+  // CommonMark keeps an indented continuation line inside the preceding
+  // list item's own content, with the list still open for the next
+  // marker right after it. `gh api /markdown` confirms both items render
+  // as real checkboxes.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '1. [ ] first',
+    '   an indented explanation',
+    '2. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: a mixed multi-line double-backtick span with real headings inside is real structure, not smuggled content (Codex review, PR #2840 round 9 -- rejected)', () => {
   // Considered a P1 smuggling finding, then rejected after verification
   // against GitHub's own renderer (`gh api /markdown`, mode: gfm): an ATX

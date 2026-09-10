@@ -117,32 +117,59 @@ function isInterruptingMarker(marker) {
  * `findIndentedCodeRanges`'s own `isNonInterruptingListItem` logic (built
  * for a different purpose -- container/list-content-indent tracking this
  * simpler per-line walk does not need).
+ *
+ * A non-list-item-shaped line does not always end the list either (Codex
+ * review, PR #2840, round 21): an indented explanation between two
+ * ordered items -- `1. [ ] first\n   an indented explanation\n2. [ ]
+ * second` -- is CommonMark's own multi-line list-item content, absorbed
+ * into item 1, with the list still open for item 2 right after it (`gh
+ * api /markdown` confirms both render as real checkboxes). Once a list
+ * item genuinely opens or continues, its own content-start column
+ * (`activeListContentIndent`, the raw character length of its own
+ * marker-plus-spacing match) is remembered; a following non-list-shaped
+ * line keeps the list open only when it is indented at least that far
+ * AND the list was already open, otherwise the list ends there (a
+ * dedented or top-level paragraph line is a genuine interruption).
  */
 function countInterruptingCheckboxItems(sectionText) {
   const lines = sectionText.split(/\r?\n/);
   let count = 0;
   let previousLineBlank = true;
   let previousLineOpensOrContinuesList = false;
+  let activeListContentIndent = null;
   for (const line of lines) {
     const isBlank = line.trim() === '';
     if (isBlank) {
       previousLineBlank = true;
       previousLineOpensOrContinuesList = false;
+      activeListContentIndent = null;
       continue;
     }
     const listItemMatch = LIST_ITEM_LINE_PATTERN.exec(line);
-    let currentLineOpensOrContinuesList = false;
+    let currentLineOpensOrContinuesList;
     if (listItemMatch) {
       const marker = listItemMatch[1] ?? '';
       currentLineOpensOrContinuesList =
         previousLineBlank ||
         previousLineOpensOrContinuesList ||
         isInterruptingMarker(marker);
+      activeListContentIndent = currentLineOpensOrContinuesList
+        ? listItemMatch[0].length
+        : null;
       if (
         currentLineOpensOrContinuesList &&
         CHECKBOX_ITEM_LINE_PATTERN.test(line)
       ) {
         count += 1;
+      }
+    } else {
+      const indentColumns = /^[ \t]*/.exec(line)?.[0].length ?? 0;
+      currentLineOpensOrContinuesList =
+        previousLineOpensOrContinuesList &&
+        activeListContentIndent !== null &&
+        indentColumns >= activeListContentIndent;
+      if (!currentLineOpensOrContinuesList) {
+        activeListContentIndent = null;
       }
     }
     previousLineOpensOrContinuesList = currentLineOpensOrContinuesList;
