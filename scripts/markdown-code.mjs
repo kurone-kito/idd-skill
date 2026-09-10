@@ -1805,6 +1805,14 @@ const INLINE_LINK_TITLE_AND_CLOSE_PATTERN = new RegExp(
  * CommonMark link destination or link-text length in practice.
  */
 const MAX_LINK_SCAN_LENGTH = 2000;
+// CommonMark §2.4: only an ASCII punctuation character may be
+// backslash-escaped; a backslash before anything else (including
+// whitespace) is a literal backslash, not an escape (Codex review, PR
+// #2869 round 3, databaseId 3978515897): `gh api /markdown` confirms
+// `[x](foo\ bar "`node --test`")` renders entirely as literal text with a
+// genuine code span for the backticks -- `\` before a space never escapes
+// it, so the space still ends the bare destination.
+const ASCII_PUNCTUATION_PATTERN = /[!-/:-@[-`{-~]/u;
 /**
  * The end offset of a bare (non-angle-bracket) link destination starting at
  * `start`, honoring CommonMark's rule that parens are allowed there only
@@ -1824,7 +1832,11 @@ function scanBareLinkDestinationEnd(text, start, end) {
   let depth = 0;
   while (cursor < bound) {
     const character = text[cursor];
-    if (character === '\\' && cursor + 1 < bound) {
+    if (
+      character === '\\' &&
+      cursor + 1 < bound &&
+      ASCII_PUNCTUATION_PATTERN.test(text[cursor + 1] ?? '')
+    ) {
       cursor += 2;
       continue;
     }
@@ -1862,7 +1874,21 @@ function scanBareLinkDestinationEnd(text, start, end) {
  * True when `closeBracketIndex` (which must hold `]`) is the properly
  * balanced close of an earlier unescaped `[` -- a plausible open link/image
  * bracket -- within the current paragraph (a link's own `[...]` text can
- * never cross a blank line) and within {@link MAX_LINK_SCAN_LENGTH}.
+ * never cross a blank line) and within {@link MAX_LINK_SCAN_LENGTH} of
+ * `closeBracketIndex` (the paragraph search itself is bounded to that same
+ * trailing window, not the whole document -- Codex review, PR #2869 round
+ * 3, databaseId 3978515904: an unbounded `matchAll` over the full text on
+ * every call reintroduced quadratic behavior even after the backward
+ * bracket scan itself was bounded). `codeRanges` -- the genuine code-span
+ * ranges `findInlineCodeRanges` has already found to the left of this
+ * point in the same call -- lets the scan skip over an already-closed code
+ * span as one opaque unit rather than reading a bracket inside it as real
+ * Markdown structure (Codex review, PR #2869 round 3, databaseId
+ * 3978515893): `gh api /markdown` confirms `` `[foo` ](/url "`x`") ``
+ * renders `` `[foo` `` as its own real code span and `` `x` `` as a
+ * second, separate one -- the `[` inside the first span must never count
+ * as a link opener for the `]` that follows it.
+ *
  * Tracks nested-bracket depth while scanning backward, rather than
  * accepting or rejecting on the nearest bracket alone (Codex review, PR
  * #2869 round 2, databaseId 3978373742): `gh api /markdown` confirms a
@@ -1873,24 +1899,25 @@ function scanBareLinkDestinationEnd(text, start, end) {
  * "`x`")` (the `[` itself escaped) both render their backticks as a
  * genuine code span, never a link, so this must return `false` for both.
  */
-function hasPlausibleLinkOpener(text, closeBracketIndex) {
-  let paragraphStart = 0;
-  for (const match of text.matchAll(/\r?\n[ \t]*\r?\n/gu)) {
-    const matchEnd = match.index + match[0].length;
-    if (matchEnd > closeBracketIndex) {
-      break;
-    }
-    paragraphStart = matchEnd;
+function hasPlausibleLinkOpener(text, closeBracketIndex, codeRanges) {
+  const searchFloor = Math.max(0, closeBracketIndex - MAX_LINK_SCAN_LENGTH);
+  const searchWindow = text.slice(searchFloor, closeBracketIndex);
+  let paragraphStart = searchFloor;
+  for (const match of searchWindow.matchAll(/\r?\n[ \t]*\r?\n/gu)) {
+    paragraphStart = searchFloor + match.index + match[0].length;
   }
-  const lowerBound = Math.max(
-    paragraphStart,
-    closeBracketIndex - MAX_LINK_SCAN_LENGTH,
-  );
+  let cursor = closeBracketIndex - 1;
   let depth = 0;
-  for (let cursor = closeBracketIndex - 1; cursor >= lowerBound; cursor -= 1) {
+  while (cursor >= paragraphStart) {
+    const enclosingCodeRange = getMarkdownCodeRange(text, cursor, codeRanges);
+    if (enclosingCodeRange !== null) {
+      cursor = enclosingCodeRange.start - 1;
+      continue;
+    }
     const character = text[cursor];
     if (character === ']' && !isEscapedBacktick(text, cursor)) {
       depth += 1;
+      cursor -= 1;
       continue;
     }
     if (character === '[' && !isEscapedBacktick(text, cursor)) {
@@ -1899,6 +1926,7 @@ function hasPlausibleLinkOpener(text, closeBracketIndex) {
       }
       depth -= 1;
     }
+    cursor -= 1;
   }
   return false;
 }
@@ -1913,9 +1941,13 @@ function hasPlausibleLinkOpener(text, closeBracketIndex) {
  * (e.g. `[note](which uses \`code\`)`) leaves the whole match unresolved
  * and falls through to ordinary text, leaving that backtick pair a genuine
  * code span (`gh api /markdown` confirms GitHub renders exactly that).
+ * `codeRanges` is forwarded to {@link hasPlausibleLinkOpener} unchanged.
  */
-function matchInlineLinkDestTitleEnd(text, start, end) {
-  if (text[start - 1] !== ']' || !hasPlausibleLinkOpener(text, start - 1)) {
+function matchInlineLinkDestTitleEnd(text, start, end, codeRanges) {
+  if (
+    text[start - 1] !== ']' ||
+    !hasPlausibleLinkOpener(text, start - 1, codeRanges)
+  ) {
     return null;
   }
   const leadingWhitespace = /^[ \t\r\n]*/u.exec(text.slice(start + 1, end));
@@ -1961,7 +1993,7 @@ function findInlineCodeRanges(text, start, end) {
         continue;
       }
     } else if (text[cursor] === '(' && !isEscapedBacktick(text, cursor)) {
-      const linkEnd = matchInlineLinkDestTitleEnd(text, cursor, end);
+      const linkEnd = matchInlineLinkDestTitleEnd(text, cursor, end, ranges);
       if (linkEnd !== null) {
         cursor = linkEnd;
         continue;

@@ -1337,3 +1337,48 @@ test('findMarkdownCodeRanges: many unresolved link-like prefixes stay linear, no
     `expected a bounded scan to stay well under 2s, took ${elapsedMs}ms`,
   );
 });
+
+// --- #2865 review-fix (Codex review, round 3): a bracket inside an
+// earlier code span, an invalid (non-punctuation) escape in a bare
+// destination, and a still-unbounded paragraph search.
+
+test('findMarkdownCodeRanges: a bracket inside an earlier code span is not a link opener (databaseId 3978515893)', () => {
+  // `gh api /markdown` confirms `` `[foo` ](/url "`node --test`") `` is
+  // TWO separate real code spans (`` `[foo` `` and `` `node --test` ``)
+  // with plain text between them -- the `[` inside the first span is
+  // literal code content, not a real Markdown bracket, so it must never
+  // count as a link opener for the `]` that follows.
+  const body = '`[foo` ](/url "`node --test`")\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 2);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`[foo`');
+  assert.equal(body.slice(ranges[1].start, ranges[1].end), '`node --test`');
+});
+
+test('findMarkdownCodeRanges: a backslash before a non-punctuation character in a bare destination is literal (databaseId 3978515897)', () => {
+  // `gh api /markdown` confirms `[x](foo\ bar "`node --test`")` renders
+  // entirely as literal text with a genuine code span for the backticks
+  // -- CommonMark only allows backslash-escaping ASCII punctuation, so
+  // `\` before a space is a literal backslash and the space still ends
+  // the bare destination, breaking this out of link syntax entirely.
+  const body = '[x](foo\\ bar "`node --test`")\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
+
+test('findMarkdownCodeRanges: many unresolved link-like prefixes stay linear even with the paragraph-boundary search (databaseId 3978515904)', () => {
+  // Same pathological shape as the round-2 performance test above, but
+  // specifically exercising that hasPlausibleLinkOpener's own
+  // paragraph-start search is bounded to the trailing scan window, not
+  // the whole document, on every one of the 20000 calls this makes.
+  const body = '[x]('.repeat(20000);
+  const start = Date.now();
+  const ranges = findMarkdownCodeRanges(body);
+  const elapsedMs = Date.now() - start;
+  assert.deepEqual(ranges, []);
+  assert.ok(
+    elapsedMs < 2000,
+    `expected a bounded scan to stay well under 2s, took ${elapsedMs}ms`,
+  );
+});
