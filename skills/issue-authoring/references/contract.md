@@ -1790,6 +1790,23 @@ only approval boundary.
   instead of silent, the same kind of gap that went unnoticed for weeks
   in the original per-post-only instruction this section replaces
   (measured effectiveness cited above).
+
+  **When the backlog check itself cannot run, record that fact through a
+  runtime-independent path (#2896 review, Codex).** The check depends on
+  the same paginated comment snapshot and the same helper runtime
+  (Node.js) as the sweep it audits, so the one scenario this whole
+  mechanism exists to catch -- the sweep silently skipped because the
+  helper runtime is unavailable (`instructions-only` profile, or Node.js
+  absent), or because the paginated comment fetch itself failed -- is
+  exactly the scenario in which the mechanical count also cannot run,
+  leaving no signal at all if nothing else is done. When either the
+  sweep or the audit could not run for this reason, still post an
+  explicit plain-text note through a path that needs no helper runtime
+  (a `gh`/HTTP comment on the target, or the session's own live status
+  digest) -- for example "hide-on-supersede sweep skipped this cycle:
+  helper runtime unavailable" -- naming the reason. This never blocks
+  release either; it only ensures a fully-silent skip never happens even
+  in the one failure mode the mechanical signal cannot itself cover.
 - **Narrow auto-release exception (review-fix-loop-cutoff).** A
   follow-up issue whose body carried the exact marker
   `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->` at
