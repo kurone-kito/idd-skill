@@ -691,6 +691,53 @@ test('hasVerificationCommandSignal: a multi-line blockquote with no list previou
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: task-list items nested directly inside a blockquote still count (Codex review, PR #2840, round 26, databaseId 3976819201)', () => {
+  // GFM renders task lists inside a blockquote exactly like a top-level
+  // one -- `gh api /markdown` confirms both checkboxes render as real,
+  // nested `<li>` elements inside the `<blockquote>`. Treating every
+  // blockquote-prefixed line as a pure container boundary, with no test
+  // of its own quoted content, previously undercounted both to zero.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '> - [ ] first',
+    '> - [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: a non-1 marker nested in a blockquote cannot interrupt a nested open paragraph (control, round 26)', () => {
+  // `gh api /markdown` confirms "2. [ ] item" stays literal continuation
+  // text of the nested "prose" paragraph inside the blockquote -- a
+  // non-`1` marker cannot interrupt an open paragraph even when both are
+  // nested one level inside a blockquote.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '> prose',
+    '> 2. [ ] item',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: nested blockquote checkboxes still count across a lazily-absorbed unprefixed line (control, round 26)', () => {
+  // The unprefixed middle line lazily continues the first item's own
+  // content (the same blockquote-laziness rule round 25 established at
+  // the top level applies one level down too) -- `gh api /markdown`
+  // confirms both checkboxes still render as real, nested items.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '> - [ ] first',
+    'not quoted',
+    '> - [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: a mixed multi-line double-backtick span with real headings inside is real structure, not smuggled content (Codex review, PR #2840 round 9 -- rejected)', () => {
   // Considered a P1 smuggling finding, then rejected after verification
   // against GitHub's own renderer (`gh api /markdown`, mode: gfm): an ATX

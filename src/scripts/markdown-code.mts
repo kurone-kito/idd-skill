@@ -143,6 +143,32 @@ const MARKDOWN_BLOCK_CONTENT_PATTERN =
   /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:[-+*])[ \t]+|1[.)][ \t]+|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
 const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
   /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
+/**
+ * A tightly-packed `=`-run (any length) or a short `-`-run (1-2 dashes,
+ * too few to also qualify as a thematic break) -- the two
+ * {@link MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN} shapes that are
+ * genuinely ambiguous rather than self-contained. An ATX heading always
+ * ends its own block on its own line, and a run of 3+ `-`/`_`/`*`
+ * characters is always ALSO a valid thematic break (CommonMark resolves
+ * that overlap in favor of whichever reading applies -- Setext heading
+ * when a paragraph precedes it, thematic break otherwise -- but either
+ * way the line ends its own block, so no context check is needed there).
+ * A bare `=`-run can never be a thematic break at all, and a 1-2-dash run
+ * is too short for one either: both are ONLY a genuine Setext heading
+ * underline when a paragraph is actually open before them to close.
+ * With nothing open before it, the line is ordinary paragraph text
+ * instead, which does NOT end its own block (Codex review, PR #2840,
+ * round 26, databaseId 3976819197): `gh api /markdown` confirms a
+ * standalone `===` with no preceding paragraph text renders as its own
+ * open paragraph, so a following custom tag with no blank line before it
+ * lazily continues that paragraph as literal text, never opening a
+ * type-7 HTML block -- masking a real, later Acceptance-criteria or
+ * Candidate-files section through the next blank line or EOF, exactly
+ * because the previous code treated *any* dash/equals run as always
+ * ending its own block regardless of what (if anything) preceded it.
+ */
+const MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN =
+  /^ {0,3}(?:={1,}|-{1,2})[ \t]*$/u;
 const MARKDOWN_HTML_BLOCK_START_PATTERN =
   /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
 const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
@@ -1357,12 +1383,25 @@ export function findHtmlBlockRanges(
     // wrongly count). Read at the bottom fallback, the only place that
     // still needs it once every dedicated opener branch above has
     // already `continue`d past it.
+    //
+    // A bare `=`-run or a short 1-2-dash run is genuinely ambiguous,
+    // though (Codex review, PR #2840, round 26, databaseId 3976819197):
+    // {@link MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN} only ends its own
+    // block as a Setext heading underline when `noOpenParagraph` (still
+    // holding its value from *before* this line, read here ahead of the
+    // reassignment at this loop's own bottom) is false -- i.e. a
+    // paragraph was genuinely open to close. With nothing open before
+    // it, the line is ordinary paragraph text instead, which stays open
+    // rather than ending its own block; see that pattern's own doc
+    // comment for the masking bug this closes.
     let endsOwnBlock = false;
     if (!isBlank) {
       const openerLine = parseContainerLine(line);
       const containerContent = openerLine.content;
       endsOwnBlock =
-        MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(containerContent) ||
+        (MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(containerContent) &&
+          (!MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN.test(containerContent) ||
+            !noOpenParagraph)) ||
         MARKDOWN_THEMATIC_BREAK_PATTERN.test(containerContent);
       const content = stripListItemMarker(containerContent);
       // Codex review, PR #2840 (round 13): `stripListItemMarker` returns

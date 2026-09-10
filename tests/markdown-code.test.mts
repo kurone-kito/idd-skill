@@ -1028,6 +1028,53 @@ test('findHtmlBlockRanges opens a custom-tag block right after a spaced thematic
   assert.equal(masked.includes('after'), true);
 });
 
+test('findHtmlBlockRanges does not open a custom-tag block right after a standalone === with no preceding paragraph (Codex review, PR #2840, round 26, databaseId 3976819197)', () => {
+  // A bare `=`-run can never be a thematic break, and is only a genuine
+  // Setext heading underline when a paragraph is actually open before it
+  // to close. As the section's own first line, nothing precedes "===" --
+  // `gh api /markdown` confirms it renders as its own open paragraph, so
+  // the following custom tag lazily continues that paragraph as literal
+  // text instead of opening a type-7 HTML block, and the real checkboxes
+  // stay real.
+  const body = ['===', '<x-demo>', '- [ ] one', '- [ ] two', '', 'after'].join(
+    '\n',
+  );
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges does not open a custom-tag block right after a short -- with no preceding paragraph (Codex review, PR #2840, round 26)', () => {
+  // A 1-2-dash run is too short to be a thematic break either, so the
+  // same rule applies: `gh api /markdown` confirms it renders as its own
+  // open paragraph with nothing preceding it, and the following custom
+  // tag stays literal continuation text rather than opening a block.
+  const body = ['--', '<x-demo>', '- [ ] one', '- [ ] two', '', 'after'].join(
+    '\n',
+  );
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges still opens a custom-tag block right after a genuine Setext heading (control, round 26)', () => {
+  // Unlike the two cases above, "Intro" is a real preceding open
+  // paragraph here, so "===" genuinely closes it as a Setext heading and
+  // still ends its own block -- `gh api /markdown` confirms the tag's
+  // content (including the fake checkboxes) renders as literal masked
+  // text, same as round 20's behavior.
+  const body = [
+    'Intro',
+    '===',
+    '<x-demo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
 test('findHtmlBlockRanges still does not open a custom-tag block right after a list-item line (control, round 20)', () => {
   // A list item's own content line can still be, or start, an open
   // paragraph within that item -- unlike a heading or thematic break, it

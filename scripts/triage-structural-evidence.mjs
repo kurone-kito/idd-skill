@@ -108,6 +108,16 @@ const BLOCKQUOTE_START_LINE_PATTERN = /^[ \t]{0,3}>/;
  * that list-item pattern, and CommonMark itself resolves exactly this
  * ambiguity in favor of the thematic-break reading. */
 const THEMATIC_BREAK_LINE_PATTERN = /^[ \t]{0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/;
+/** Strips exactly one level of leading blockquote marker (`>`, plus at
+ * most one following space) from a line already known to match
+ * {@link BLOCKQUOTE_START_LINE_PATTERN}, exposing its own quoted content
+ * for {@link countInterruptingCheckboxItems}'s nested list-item check
+ * (Codex review, PR #2840, round 26, databaseId 3976819201): GFM task
+ * lists render inside a blockquote too -- `> - [ ] first\n> - [ ] second`
+ * confirmed via `gh api /markdown` to render two real checkboxes -- but
+ * treating every blockquote-prefixed line as a pure container boundary,
+ * with no test of its own quoted content, undercounted both to zero. */
+const BLOCKQUOTE_MARKER_STRIP_PATTERN = /^[ \t]{0,3}>[ \t]?/;
 /**
  * Counts only the checkbox items in `sectionText` that CommonMark would
  * actually render as real GFM task-list items (Codex review, PR #2840,
@@ -186,6 +196,23 @@ const THEMATIC_BREAK_LINE_PATTERN = /^[ \t]{0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/;
  * line before "plain paragraph" instead makes it a real top-level
  * paragraph that blocks the following non-`1` marker, and this function
  * matches that too.
+ *
+ * A blockquote-prefixed line can ALSO carry its own list-item marker on
+ * the same line -- `> - [ ] first\n> - [ ] second` (Codex review, PR
+ * #2840, round 26, databaseId 3976819201) -- and GFM renders task lists
+ * nested inside a blockquote exactly like a top-level one, confirmed via
+ * `gh api /markdown`. A second, independent state pair
+ * (`quotedNoOpenParagraph` / `quotedListOpen`) tracks list-continuation
+ * for that quoted content, reset fresh whenever a blockquote region
+ * starts (mirroring the top-level state at the section's own start) and
+ * left untouched across a lazily-absorbed unprefixed line in between --
+ * `> - [ ] first\nnot quoted\n> - [ ] second` still renders both
+ * checkboxes as real (the unprefixed line lazily continues item 1's own
+ * content, per the same blockquote-laziness rule above), confirmed via
+ * `gh api /markdown`. Deliberately scoped to one level of quoting only
+ * (a nested blockquote or thematic break inside the quoted content is
+ * out of scope for this line-based scanner, same as the top-level walk
+ * never models deeper container nesting either).
  */
 function countInterruptingCheckboxItems(sectionText) {
   const lines = sectionText.split(/\r?\n/);
@@ -193,6 +220,8 @@ function countInterruptingCheckboxItems(sectionText) {
   let noOpenParagraph = true;
   let previousLineOpensOrContinuesList = false;
   let insideOpenBlockquote = false;
+  let quotedNoOpenParagraph = true;
+  let quotedListOpen = false;
   for (const line of lines) {
     const isBlank = line.trim() === '';
     if (isBlank) {
@@ -201,13 +230,42 @@ function countInterruptingCheckboxItems(sectionText) {
       insideOpenBlockquote = false;
       continue;
     }
-    if (
-      THEMATIC_BREAK_LINE_PATTERN.test(line) ||
-      BLOCKQUOTE_START_LINE_PATTERN.test(line)
-    ) {
+    if (THEMATIC_BREAK_LINE_PATTERN.test(line)) {
       noOpenParagraph = true;
       previousLineOpensOrContinuesList = false;
-      insideOpenBlockquote = BLOCKQUOTE_START_LINE_PATTERN.test(line);
+      insideOpenBlockquote = false;
+      continue;
+    }
+    if (BLOCKQUOTE_START_LINE_PATTERN.test(line)) {
+      if (!insideOpenBlockquote) {
+        quotedNoOpenParagraph = true;
+        quotedListOpen = false;
+      }
+      const quotedContent = line.replace(BLOCKQUOTE_MARKER_STRIP_PATTERN, '');
+      if (quotedContent.trim() === '') {
+        quotedNoOpenParagraph = true;
+        quotedListOpen = false;
+      } else {
+        const quotedListItemMatch = LIST_ITEM_LINE_PATTERN.exec(quotedContent);
+        if (quotedListItemMatch) {
+          const marker = quotedListItemMatch[1] ?? '';
+          const quotedOpensOrContinues =
+            quotedNoOpenParagraph ||
+            quotedListOpen ||
+            isInterruptingMarker(marker);
+          if (
+            quotedOpensOrContinues &&
+            CHECKBOX_ITEM_LINE_PATTERN.test(quotedContent)
+          ) {
+            count += 1;
+          }
+          quotedListOpen = quotedOpensOrContinues;
+        }
+        quotedNoOpenParagraph = false;
+      }
+      noOpenParagraph = true;
+      previousLineOpensOrContinuesList = false;
+      insideOpenBlockquote = true;
       continue;
     }
     const listItemMatch = LIST_ITEM_LINE_PATTERN.exec(line);
