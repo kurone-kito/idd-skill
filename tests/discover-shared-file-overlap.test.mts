@@ -470,7 +470,7 @@ test('resolveHighContentionFiles unions the named bundles plus extra surfaces', 
     bundleBudgets: [
       { id: 'bundle-review-triage-phase', files: ['a.md', 'shared.md'] },
       { id: 'bundle-review-fix-phase', files: ['d.md'] },
-      { id: 'bundle-merge', files: ['shared.md', 'b.md'] },
+      { id: 'bundle-merge-phase', files: ['shared.md', 'b.md'] },
       { id: 'bundle-discovery', files: ['c.md'] },
     ],
   };

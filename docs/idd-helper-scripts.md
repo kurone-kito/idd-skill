@@ -670,7 +670,7 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   with optional `--owner <owner>`, `--repo <repo>`, `--policy <path>`,
   `--manifest <path>` (default `audit/sync-manifest.json`), `--bundles
   <id1,id2,...>` (default
-  `bundle-review-triage-phase,bundle-review-fix-phase,bundle-merge`),
+  `bundle-core,bundle-review-triage-phase,bundle-review-fix-phase,bundle-merge-phase`),
   `--now <ISO8601>`, and
   `--check-overlap`. The cross-issue active-set discovery (open PRs plus the
   claim comments of issues that have a remote `issue/<n>-*` branch, resolved
