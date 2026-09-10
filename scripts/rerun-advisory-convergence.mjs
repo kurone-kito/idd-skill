@@ -575,6 +575,20 @@ export function computeRefreshLatestPlan(input, options) {
     checkName,
     now,
   };
+  // Honored, not bypassed (Copilot review, PR #2855): a "hold" policy is
+  // a repository's explicit opt-out of every automatic rerun, checked
+  // before instance selection so it can never be reached even
+  // incidentally -- see this function's own doc comment above.
+  const rerunPolicy =
+    String(options.rerunPolicy ?? '').trim() === 'hold' ? 'hold' : 'rerun-once';
+  if (rerunPolicy === 'hold') {
+    return {
+      ...header,
+      command: null,
+      reason:
+        'ciWait.rerunPolicy is "hold": this repository has opted out of automatic reruns, including --refresh-latest -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics)',
+    };
+  }
   const familyInstances = (input.instances ?? []).filter((instance) =>
     PULL_REQUEST_FAMILY_EVENTS.has(
       String(instance.runEvent ?? '')
@@ -1508,15 +1522,19 @@ this HEAD started most recently, and is it safe to rerun unconditionally
 right now? Unlike the default mode, it does NOT classify pass /
 bot-gated-skip / rerun-budget-held -- it reruns the latest instance
 regardless of any of those, UNLESS that instance is still running (which
-would cancel it) or its run id could not be resolved. Intended only for
-the narrow #2764 Phase 1 case where a fresh pull_request_review submission
-must get a fresh evaluation even if the gate is already green or its
-rerun-once budget is already spent -- see the RefreshLatestPlan doc
-comment in the .mts source. With --apply, executes that single rerun (via
-the same "gh run rerun" mechanism as the default --apply path) instead of
-only printing it. Mutually exclusive in effect with the default plan
-computation: when given, --refresh-latest's own JSON document replaces
-the ordinary plan document on stdout.
+would cancel it) or its run id could not be resolved. It still honors
+ciWait.rerunPolicy, though: a "hold" policy returns no command here
+either, the same as the default mode -- bypassing pass/bot-gated/budget
+classification is not license to override a repository's own explicit
+no-automatic-reruns policy. Intended only for the narrow #2764 Phase 1
+case where a fresh pull_request_review submission must get a fresh
+evaluation even if the gate is already green or its rerun-once budget is
+already spent -- see the RefreshLatestPlan doc comment in the .mts
+source. With --apply, executes that single rerun (via the same "gh run
+rerun" mechanism as the default --apply path) instead of only printing
+it. Mutually exclusive in effect with the default plan computation: when
+given, --refresh-latest's own JSON document replaces the ordinary plan
+document on stdout.
 
 Honors the inspected repository's configured ciWait.rerunPolicy: when
 it is "hold", both the rerun plan and the recovery-refresh plan stay

@@ -2763,6 +2763,27 @@ test('computeRefreshLatestPlan: reruns the latest instance even when it already 
   assert.equal(plan.reason, '');
 });
 
+// Copilot review (PR #2855): --refresh-latest bypasses pass/bot-gated/
+// budget classification, but a "hold" rerunPolicy is a repository's
+// explicit opt-out of every automatic rerun, not one of those three --
+// it must still be honored here exactly as computeRerunPlan honors it.
+test('computeRefreshLatestPlan: a "hold" rerunPolicy suppresses the rerun, even for an otherwise-reruns-anyway pass instance', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.equal(plan.command, null);
+  assert.match(plan.reason, /ciWait\.rerunPolicy is "hold"/);
+});
+
 test('computeRefreshLatestPlan: selects the most-recently-started pull_request-family instance among several', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
@@ -2820,16 +2841,6 @@ test('computeRefreshLatestPlan: fails closed when the underlying run lookup fail
   );
   assert.equal(plan.command, null);
   assert.match(plan.reason, /could not be fetched/);
-});
-
-test('computeRefreshLatestPlan: includes -R owner/repo when both are known', () => {
-  const plan = computeRefreshLatestPlan(
-    baseInput({ owner: 'kurone-kito', repo: 'idd-skill' }),
-    baseOptions(),
-  );
-  // No instances at all here -- command stays null; this test only
-  // exercises the header fields, covered separately below.
-  assert.equal(plan.prHeadSha, HEAD);
 });
 
 test('computeRefreshLatestPlan: -R owner/repo is embedded in the generated command', () => {
