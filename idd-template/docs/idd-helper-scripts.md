@@ -290,7 +290,19 @@ in this preamble, since the fallback differs per helper.
   whose trusted marker log opens with some other mode (`bootstrap`,
   `resume`, `heartbeat`, `release`, ...) reports `not-found` rather than
   accepting that non-acquire first marker's own digest, since every one
-  of those modes presupposes a prior acquire
+  of those modes presupposes a prior acquire. Also validates every other
+  condition contract.md attaches to a genuine Stage 1 acquire, failing
+  closed to `not-found` (with the specific reason surfaced in
+  `--verbose` evidence) rather than accepting an invalid marker: its own
+  `supersedes` field is `none` (contract.md requires this for `acquire`);
+  its `body-sha256` is a real 64-hex digest, never the sentinel `none`;
+  its own `anchor` names the same issue as its own `target` (a mismatch
+  means the marker declares itself a multi-target set's non-anchor
+  child, out of scope for this single-target-orphan helper); and the
+  underlying comment's `updatedAt` equals its `createdAt` (contract.md:
+  owner comments are append-only and must not be edited, since an edited
+  comment could have had its `body-sha256` rewritten after the fact) (PR
+  #2901 review round 5, chatgpt-codex-connector and Copilot)
 
 **Review & Merge Phase Helpers:**
 

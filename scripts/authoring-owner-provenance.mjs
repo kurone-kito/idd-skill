@@ -65,17 +65,77 @@ function sameIssueRef(a, b) {
   return a.toLowerCase() === b.toLowerCase();
 }
 /**
- * Find `target`'s own first trusted `mode=acquire` `authoring-owner`
- * marker in deterministic comment order (`createdAt`, ties broken by
- * comment `id` ascending), or `null` if none exists.
+ * Matches a real 64-lowercase-hex sha256 digest, excluding the
+ * shape-valid-but-malformed sentinel `none` that a marker's own
+ * `body-sha256`/`snapshot-sha256` field can legitimately carry for other
+ * modes (`release-guard`'s `body-sha256=none`, for example) but never for
+ * a genuine Stage 1 `mode=acquire` marker, whose entire purpose is
+ * recording the published body's digest.
+ */
+const REAL_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+/**
+ * True when `event` is a genuine, unedited Stage 1 `mode=acquire` marker
+ * for `target` -- every condition contract.md attaches to a valid
+ * acquisition, checked explicitly rather than assumed:
+ *
+ * - `mode === 'acquire'`: every other mode (`bootstrap`, `resume`,
+ *   `heartbeat`, `release`, `release-complete`, ...) presupposes a prior
+ *   acquire, so a well-formed history never opens with one of them.
+ * - `supersedes === 'none'`: contract.md requires this for `acquire` (and
+ *   `bootstrap`) specifically -- only `resume` names a prior owner token
+ *   (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector round 5).
+ * - `bodySha256` is a real 64-hex digest, never the shape-valid sentinel
+ *   `none` -- a Stage 1 acquire's whole purpose is recording the
+ *   published body's digest, so `none` here is malformed, not merely
+ *   unlucky.
+ * - the marker's own `anchor` names the same issue as `target`: per
+ *   contract.md, "the anchor's own marker uses its target as the
+ *   anchor" -- a marker with a different anchor is a multi-target set's
+ *   non-anchor child, out of scope for this helper's single-target
+ *   orphan design (kurone-kito/idd-skill#2891's own acceptance
+ *   criteria; kurone-kito/idd-skill#2901 review, Copilot round 5).
+ * - `comment.updatedAt === comment.createdAt`: contract.md requires
+ *   owner comments to be "append-only and must not be edited or
+ *   deleted" -- an edited comment could have had its `body-sha256`
+ *   silently rewritten to match a body modified after Stage 1, so this
+ *   fails closed instead of trusting an editable field
+ *   (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector
+ *   round 5).
+ *
+ * Returns `null` when valid, or a short human-readable reason string
+ * when not (surfaced in the `acquire_marker_found` check's evidence).
+ */
+function invalidStageOneAcquireReason(event, target) {
+  const { parsed, comment } = event;
+  if (parsed.mode !== 'acquire') {
+    return `first trusted marker has mode=${parsed.mode}, not acquire`;
+  }
+  if (parsed.supersedes !== 'none') {
+    return `acquire marker has supersedes=${parsed.supersedes} (acquire requires none)`;
+  }
+  if (!REAL_DIGEST_PATTERN.test(parsed.bodySha256)) {
+    return `acquire marker's body-sha256 is not a real digest (got ${parsed.bodySha256})`;
+  }
+  if (!sameIssueRef(parsed.anchor, target)) {
+    return `acquire marker's anchor (${parsed.anchor}) differs from its target -- a multi-target set's non-anchor child is out of scope for this helper`;
+  }
+  if (comment.updatedAt !== comment.createdAt) {
+    return `acquire marker comment was edited after posting (createdAt=${comment.createdAt}, updatedAt=${comment.updatedAt}) -- owner comments must be append-only`;
+  }
+  return null;
+}
+/**
+ * Find `target`'s own first trusted `authoring-owner` marker in
+ * deterministic comment order (`createdAt`, ties broken by comment `id`
+ * ascending) and validate it as a genuine Stage 1 `mode=acquire` marker
+ * (see `invalidStageOneAcquireReason`).
  *
  * This is deliberately narrower than "whichever marker currently owns
  * the target": contract.md's provenance-check clause and
  * kurone-kito/idd-skill#2891's own acceptance criteria both name "a
  * named target's `mode=acquire` owner marker" -- singular, tied to
  * Stage 1 publication, not a general ownership-resolution query. Only
- * the target's *first* trusted marker can carry that property, and only
- * when that first marker is itself a `mode=acquire`:
+ * the target's *first* trusted marker can carry that property:
  *
  * - A later `mode=acquire` (a legitimate re-acquisition after a full
  *   release cycle) hashes whatever body is live at *its own* posting
@@ -89,14 +149,11 @@ function sameIssueRef(a, b) {
  *   any release) still resolves to the first one, matching contract.md's
  *   general "first valid marker by GitHub comment order wins" rule and
  *   this helper's own round-1/round-3 regression tests.
- * - If the target's first trusted marker is some other mode (`bootstrap`,
- *   `resume`, `heartbeat`, `release`, ...), that is an anomaly: every
- *   one of those modes presupposes a prior acquire, so a well-formed
- *   history never opens with them. Reporting `not-found` (fail-closed)
- *   for that case, rather than silently accepting a non-acquire first
- *   marker's own digest, is the only defensible reading of "the
- *   target's own `mode=acquire` owner marker" when no such marker heads
- *   the log.
+ *
+ * Returns `{ event: null, rejectReason }` (never a false `pass`) when
+ * the first marker exists but fails validation, `{ event: null,
+ * rejectReason: null }` when no trusted marker exists at all, or
+ * `{ event, rejectReason: null }` on success.
  */
 function findStageOneAcquire(
   comments,
@@ -125,10 +182,14 @@ function findStageOneAcquire(
     return a.comment.id - b.comment.id;
   });
   const first = events[0];
-  if (!first || first.parsed.mode !== 'acquire') {
-    return null;
+  if (!first) {
+    return { event: null, rejectReason: null };
   }
-  return first;
+  const rejectReason = invalidStageOneAcquireReason(first, target);
+  if (rejectReason) {
+    return { event: null, rejectReason };
+  }
+  return { event: first, rejectReason: null };
 }
 /**
  * Compute the sha256 of `input.liveBody` (exact UTF-8 content, matching how
@@ -147,7 +208,7 @@ export function evaluateAuthoringOwnerProvenance(input) {
   const computedBodySha256 = createHash('sha256')
     .update(input.liveBody, 'utf8')
     .digest('hex');
-  const acquire = findStageOneAcquire(
+  const { event: acquire, rejectReason } = findStageOneAcquire(
     input.comments ?? [],
     input.target,
     input.markerPrefix,
@@ -163,9 +224,11 @@ export function evaluateAuthoringOwnerProvenance(input) {
       checks: [
         {
           id: 'acquire_marker_found',
-          name: "Target's marker log opens with a trusted mode=acquire marker",
+          name: "Target's marker log opens with a valid trusted mode=acquire marker",
           result: 'fail',
-          evidence: `No trusted authoring-owner marker log for target ${input.target} opens with a mode=acquire marker.`,
+          evidence: rejectReason
+            ? `Target ${input.target}'s first trusted authoring-owner marker is not a valid Stage 1 acquire: ${rejectReason}.`
+            : `No trusted authoring-owner marker log for target ${input.target} opens with a mode=acquire marker.`,
         },
         {
           id: 'body_sha256_match',
@@ -195,9 +258,9 @@ export function evaluateAuthoringOwnerProvenance(input) {
     checks: [
       {
         id: 'acquire_marker_found',
-        name: "Target's marker log opens with a trusted mode=acquire marker",
+        name: "Target's marker log opens with a valid trusted mode=acquire marker",
         result: 'pass',
-        evidence: `Stage 1 mode=acquire marker posted by ${acquire.comment.authorLogin} at ${acquire.comment.createdAt} (owner=${acquire.parsed.owner}).`,
+        evidence: `Valid Stage 1 mode=acquire marker posted by ${acquire.comment.authorLogin} at ${acquire.comment.createdAt} (owner=${acquire.parsed.owner}).`,
       },
       {
         id: 'body_sha256_match',
@@ -242,8 +305,17 @@ function parseArgs(argv) {
       'authoring-owner-provenance: --owner and --repo must be provided together or not at all',
     );
   }
+  // `Number.parseInt` accepts trailing garbage ("2891junk" -> 2891), so a
+  // typo'd --issue would silently target the wrong issue instead of
+  // failing loudly (kurone-kito/idd-skill#2901 review, Copilot round 5).
+  // Require the whole token to be digits, matching
+  // suitability-close-execute.mts's own --issue parsing.
+  const issue =
+    issueToken !== undefined && /^\d+$/.test(issueToken)
+      ? Number(issueToken)
+      : null;
   return {
-    issue: issueToken === undefined ? null : Number.parseInt(issueToken, 10),
+    issue,
     owner,
     repo,
     policy: values.policy ?? '',
@@ -276,10 +348,23 @@ the originally published one -- comparing against a later acquire would
 make this check pass trivially for a body edited before that later
 marker (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector round
 4). target comparisons fold case, since GitHub owner/repo names are
-case-insensitive. If the target's first trusted marker is some other mode
-(bootstrap, resume, heartbeat, release, ...), that is an anomaly -- every
-one of those modes presupposes a prior acquire -- and reports not-found
-rather than accepting a non-acquire first marker's own digest.
+case-insensitive.
+
+The first marker must also pass every validity condition contract.md
+attaches to a genuine Stage 1 acquire, or this reports not-found rather
+than accepting an invalid marker's own digest (kurone-kito/idd-skill#2901
+review round 5): mode=acquire itself (every other mode -- bootstrap,
+resume, heartbeat, release, ... -- presupposes a prior acquire, so a
+well-formed history never opens with one); supersedes=none (contract.md
+requires this specifically for acquire); a real 64-hex body-sha256, never
+the shape-valid sentinel "none"; its own anchor names the same issue as
+its own target (a mismatch declares the marker a multi-target set's
+non-anchor child, out of scope for this single-target-orphan helper); and
+the underlying comment's updatedAt equals its createdAt (contract.md:
+owner comments are append-only and must not be edited or deleted -- an
+edited comment could have had its body-sha256 rewritten after the fact).
+--verbose surfaces which condition failed in the acquire_marker_found
+check's evidence.
 
 Output schema:
 {
@@ -288,18 +373,15 @@ Output schema:
   "target": "owner/repo#2891",
   "verdict": "pass|mismatch|not-found",
   "computedBodySha256": "<64-hex>",
-  "recordedBodySha256": "<64-hex-or-the-literal-string-none>|null",
-  "marker": {"author": "...", "createdAt": "...", "mode": "acquire", "owner": "...", "set": "...", "session": "...", "bodySha256": "<64-hex-or-the-literal-string-none>"} | null,
+  "recordedBodySha256": "<64-hex>|null",
+  "marker": {"author": "...", "createdAt": "...", "mode": "acquire", "owner": "...", "set": "...", "session": "...", "bodySha256": "<64-hex>"} | null,
   "checks": [{"id":"acquire_marker_found","name":"...","result":"pass|fail"}, {"id":"body_sha256_match","name":"...","result":"pass|fail"}]
 }
 
 "not-found" means this issue's own trusted authoring-owner marker log does
-not open with a mode=acquire marker for this target -- never treated as a
-pass. "mismatch" means the live body has changed since the Stage 1
-acquire marker's own snapshot, including when its body-sha256 is the
-malformed-but-shape-valid sentinel "none" -- it can never equal a real
-64-hex computed digest, so this stays fail-closed rather than silently
-passing.
+not open with a valid mode=acquire marker for this target -- never
+treated as a pass. "mismatch" means a valid Stage 1 acquire marker exists
+but the live body has changed since its own snapshot.
 
 --verbose adds an "evidence" string to each checks[] entry (the computed
 and recorded digests, or the acquire marker's author/timestamp); omitted
@@ -325,16 +407,25 @@ function runCli() {
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
   const issueNumber = args.issue ?? 0;
-  const rawIssue = port.getWorkItem(issueNumber);
-  if (!rawIssue) {
-    throw new Error(`issue #${issueNumber} not found`);
-  }
+  // Fetch the (potentially slow, paginated) comment log BEFORE the issue
+  // body, and hash the body immediately after fetching it below -- the
+  // whole point of this check is a fresh read taken as close as possible
+  // to the comparison, so the body fetch must be the last network call
+  // before hashing, not the first (kurone-kito/idd-skill#2901 review,
+  // chatgpt-codex-connector round 5: fetching the body first left a
+  // window, spanning the comment fetch, during which a live edit would
+  // go undetected).
   const comments = port.listWorkItemComments(issueNumber).map((comment) => ({
     id: comment.id,
     authorLogin: comment.authorLogin,
     body: comment.body,
     createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt,
   }));
+  const rawIssue = port.getWorkItem(issueNumber);
+  if (!rawIssue) {
+    throw new Error(`issue #${issueNumber} not found`);
+  }
   const policy = loadPolicyConfig(args.policy || undefined);
   const config = policy.config;
   const markerPrefix = normalizeMarkerPrefix(

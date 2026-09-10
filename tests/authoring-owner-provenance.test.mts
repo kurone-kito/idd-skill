@@ -40,12 +40,17 @@ function ownerMarkerBody(
 
 function acquireMarkerBody(
   bodySha256: string,
-  overrides: { owner?: string; target?: string; anchor?: string } = {},
+  overrides: {
+    owner?: string;
+    target?: string;
+    anchor?: string;
+    supersedes?: string;
+  } = {},
 ): string {
   return ownerMarkerBody('acquire', {
     owner: overrides.owner ?? 'owner-token-1',
     bodySha256,
-    supersedes: 'none',
+    supersedes: overrides.supersedes ?? 'none',
     target: overrides.target,
     anchor: overrides.anchor,
   });
@@ -96,6 +101,7 @@ test('unchanged body with a matching acquire-time hash reports pass', () => {
         authorLogin: 'kurone-kito',
         body: acquireMarkerBody(sha256(liveBody)),
         createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -123,6 +129,7 @@ test('a body edited after acquire fails closed with mismatch', () => {
         authorLogin: 'kurone-kito',
         body: acquireMarkerBody(sha256(acquireTimeBody)),
         createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -145,6 +152,7 @@ test('no acquire marker for the target reports not-found, never pass', () => {
         authorLogin: 'kurone-kito',
         body: 'unrelated comment',
         createdAt: '2026-09-10T16:00:00Z',
+        updatedAt: '2026-09-10T16:00:00Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -166,6 +174,7 @@ test('an untrusted actor acquire marker is ignored, falling through to not-found
         authorLogin: 'random-untrusted-user',
         body: acquireMarkerBody(sha256(liveBody)),
         createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -191,12 +200,14 @@ test('a later heartbeat marker never shadows the Stage 1 acquire marker digest',
         authorLogin: 'kurone-kito',
         body: acquireMarkerBody(sha256(acquireTimeBody)),
         createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
       },
       {
         id: 2,
         authorLogin: 'kurone-kito',
         body: heartbeatMarkerBody(sha256(laterBody)),
         createdAt: '2026-09-10T17:07:59Z',
+        updatedAt: '2026-09-10T17:07:59Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -233,6 +244,7 @@ test('a same-generation acquire race resolves to the first acquire, never the la
           owner: 'owner-token-1',
         }),
         createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
       },
       {
         id: 2,
@@ -241,6 +253,7 @@ test('a same-generation acquire race resolves to the first acquire, never the la
           owner: 'owner-token-2',
         }),
         createdAt: '2026-09-10T16:49:00Z',
+        updatedAt: '2026-09-10T16:49:00Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -278,6 +291,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
           owner: 'owner-token-1',
         }),
         createdAt: '2026-09-01T00:00:00Z',
+        updatedAt: '2026-09-01T00:00:00Z',
       },
       {
         id: 2,
@@ -288,6 +302,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
           supersedes: 'owner-token-1',
         }),
         createdAt: '2026-09-01T01:00:00Z',
+        updatedAt: '2026-09-01T01:00:00Z',
       },
       {
         id: 3,
@@ -297,6 +312,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
           supersedes: 'owner-token-1',
         }),
         createdAt: '2026-09-01T01:00:05Z',
+        updatedAt: '2026-09-01T01:00:05Z',
       },
       {
         id: 4,
@@ -307,6 +323,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
           supersedes: 'owner-token-1',
         }),
         createdAt: '2026-09-01T01:00:10Z',
+        updatedAt: '2026-09-01T01:00:10Z',
       },
       {
         id: 5,
@@ -315,6 +332,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
           owner: 'owner-token-2',
         }),
         createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -344,6 +362,7 @@ test('a target whose trusted marker log opens with bootstrap, not acquire, repor
           owner: 'owner-token-bootstrap',
         }),
         createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -368,6 +387,7 @@ test('a target whose trusted marker log opens with resume, not acquire, reports 
           owner: 'owner-token-resume',
         }),
         createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -400,6 +420,7 @@ test('an acquire marker whose target differs only by capitalization still wins',
           anchor: differentlyCasedTarget,
         }),
         createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -408,4 +429,135 @@ test('an acquire marker whose target differs only by capitalization still wins',
   assert.equal(result.verdict, 'pass');
   assert.ok(result.marker);
   assert.equal(result.recordedBodySha256, sha256(liveBody));
+});
+
+test('an acquire marker comment edited after posting fails closed with not-found', () => {
+  // contract.md: "Owner comments are append-only and must not be edited
+  // or deleted." An edited comment's own createdAt is unchanged, so the
+  // deterministic-comment-order replay would still treat it as the
+  // Stage 1 acquire -- but its body-sha256 field could have been
+  // silently rewritten to match a body modified after Stage 1
+  // (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector
+  // round 5). Detect the edit via updatedAt !== createdAt and fail
+  // closed instead of trusting an editable field.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody)),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T17:00:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /edited after posting/,
+  );
+});
+
+test('an acquire marker whose anchor differs from its own target reports not-found', () => {
+  // This helper is built for the single-target orphan case; contract.md:
+  // "the anchor's own marker uses its target as the anchor." A marker
+  // whose anchor differs from its target declares itself a multi-target
+  // set's non-anchor child, out of scope here (kurone-kito/idd-skill#2901
+  // review, Copilot round 5) -- fail closed rather than silently
+  // comparing against a child marker's digest.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), {
+          anchor: 'kurone-kito/idd-skill#1',
+        }),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /anchor/,
+  );
+});
+
+test('an acquire marker with a non-none supersedes reports not-found', () => {
+  // contract.md: "supersedes=none for acquire and bootstrap, while
+  // resume names the prior owner token." An acquire carrying a non-none
+  // supersedes is malformed and must not authorize the exception
+  // (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector
+  // round 5).
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), {
+          supersedes: 'owner-token-stale',
+        }),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /supersedes/,
+  );
+});
+
+test('an acquire marker with body-sha256=none reports not-found, never pass', () => {
+  // "none" is a shape-valid sentinel for other modes (release-guard's
+  // body-sha256=none, for example) but a genuine Stage 1 acquire's whole
+  // purpose is recording the published body's digest -- "none" here is
+  // malformed, not merely a coincidental miss.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody('none'),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /body-sha256/,
+  );
 });
