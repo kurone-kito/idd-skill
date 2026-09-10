@@ -2490,8 +2490,17 @@ reflexively as any other CLI option.
   `DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS`, default 7.5s, up to
   `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS`, default 60s) before its real
   `--assert`-driven exit, absorbing the common race where the hosting
-  workflow's `pull_request` `synchronize` trigger fires before the
-  separate `pull_request_review` trigger's review has landed. Every other
+  workflow's `pull_request`/`pull_request_target` `synchronize` trigger
+  fires before the primary bot's own review has landed. (Through
+  Phase 1 of the shipped `idd-advisory-convergence.yml` template's own
+  trigger topology, `#2764`, a review landing refreshed this same run
+  via a direct `pull_request_review` trigger on the hosting workflow
+  itself; that trigger now lives on the non-required companion
+  `idd-advisory-convergence-comment.yml` instead, which reruns the
+  existing required run via `rerun-advisory-convergence.mjs --apply` --
+  a same-repository PR could otherwise edit the required workflow's own
+  copy to control when its `pull_request_review`-triggered run
+  re-asserted.) Every other
   not-ready reason (an off-HEAD review, unresolved threads, an
   indeterminate claim scope, a deadline/terminal reason, etc.) still fails
   immediately with no wait, exactly as before this addition — the
@@ -2505,12 +2514,14 @@ reflexively as any other CLI option.
   120s for a paginated call, `#1675`), not by `maxWaitMs` — closing that
   gap would mean threading a remaining-budget deadline into every `gh`
   call inside `collectFromGitHub`, out of scope for this narrow poll
-  wrapper; (2) a review that lands while this poll is asleep can still
-  start a fresh `pull_request_review`-triggered run in the hosting
-  workflow's own PR-scoped `cancel-in-progress` concurrency group,
-  cancelling this run before it observes the review — a narrower win than
-  "never needs an external rerun again"; see the full analysis in
-  `runAdvisoryConvergenceWithPoll`'s doc comment
+  wrapper; (2) as of `#2764` Phase 1, a review landing while this poll
+  is asleep no longer starts a fresh trigger directly in the hosting
+  workflow's own PR-scoped `cancel-in-progress` concurrency group (see
+  the parenthetical above) — it instead reaches this run only
+  indirectly, via the companion's `gh run rerun` on an already-terminal
+  instance. Whether that indirect path can still race and cancel a
+  still-polling sibling is not re-derived here; see the full poll
+  analysis in `runAdvisoryConvergenceWithPoll`'s doc comment
   (`src/scripts/advisory-convergence.mts`).
 - **Deadlock / deadline policy**: while the primary bot has not reviewed
   the current HEAD, `pending` is `true` and the gate is not ready. After
