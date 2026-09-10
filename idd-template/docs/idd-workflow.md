@@ -565,6 +565,22 @@ as a blocker has since closed or merged -- a cached readiness snapshot
 can be stale, and a closed blocker is a "free" suitability lever that
 costs nothing to re-apply.
 
+**Verify feasibility before drafting a question.** Before drafting a
+decision-blocked question, confirm every option it offers is actually
+buildable against the codebase's current architecture, with no
+undisclosed scope expansion -- a new persistence layer, a new
+dependency, or a change to an unrelated component's contract. A
+competing-options question can read as complete because every option
+sounds coherent in English, while only an implementing session's actual
+codebase familiarity reveals that one option needs a capability the
+architecture does not have. If an option fails this check, either drop
+it from the question or disclose the scope expansion it would require
+as part of the question itself, so the operator chooses with the same
+information an implementing session would need (field evidence observed
+2026-09-10,
+[kurone-kito/idd-skill#2805](https://github.com/kurone-kito/idd-skill/issues/2805)
+in the source repository).
+
 **Never override a deliberate decision.** When the original rejection
 recorded a genuinely deliberate empirical or product decision (not
 merely an unanswered question), grooming must never resolve it
@@ -576,9 +592,12 @@ tradeoffs behind each question before asking it, rather than bundling
 several unrelated technical topics into one dense batch.
 
 **Apply the operator's answers back onto the issue**: update the score
-footer, remove or update the `triage:{outcome}` label, revise
-acceptance criteria to reflect the decision, and record the decision as
-inline prose in the issue body: `Maintainer decision (<provenance>,
+footer, remove or update the `triage:{outcome}` label -- and the
+configured needs-decision label too, when the hold-and-return rule
+below applied it to this same candidate, so Discover's own A3
+readiness filter stops excluding it -- revise acceptance criteria to
+reflect the decision, and record the
+decision as inline prose in the issue body: `Maintainer decision (<provenance>,
 Groom hearing, <date>): <resolution text>` -- the shape
 `suitability-triage.mjs`'s Check 7 recognizes as a resolved
 decision
@@ -594,6 +613,38 @@ ordinary Discover pass then
 picks the issue up normally -- grooming itself never claims or works
 the issue (see
 [Mutation Policy and Coordination Rule](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)).
+
+**Hold when a recorded resolution proves infeasible.** The feasibility
+check above reduces the risk of drafting an infeasible option, but does
+not eliminate it -- the same field evidence (2026-09-10,
+[kurone-kito/idd-skill#2805](https://github.com/kurone-kito/idd-skill/issues/2805)
+in the source repository) shows infeasibility that only became visible
+once an implementing session was deep enough into the codebase to see
+it. When a session reaches implementation and finds the Groom-recorded
+resolution cannot be built as specified, it must hold the candidate as
+decision-blocked again, rather than silently reinterpreting,
+downscoping, or unilaterally picking a different resolution: apply the
+configured needs-decision label and release the claim, the same
+general hold mechanism the shared Hold / suspend rules in
+`.github/instructions/idd-overview-appendix.instructions.md` already
+document. Record exactly what made the recorded option infeasible in
+the hold comment, so the next Groom pass has the information a
+corrected question needs. That later pass removes the needs-decision
+label as part of applying its own operator's answers back onto the
+issue (above), alongside the `triage:{outcome}` label and the score
+footer, rather than leaving the label in place indefinitely or
+removing it without recording a genuinely buildable replacement.
+That replacement must strike through or otherwise replace the
+infeasible `Maintainer decision` line rather than merely append beside
+it -- re-triage's own `hasResolvedDecision` check treats every unstruck
+occurrence as live and has no way to tell which one is current, so an
+unstruck infeasible line can keep reading as resolved alongside its
+replacement. Removing the label here does not itself trigger the
+appendix's usual removal-and-re-claim pairing: like the adjacent
+`triage:{outcome}` removal above, the actual re-claim happens through
+the next ordinary Discover pass reading the now-label-free issue, not
+through the Groom pass itself, which -- as already stated above --
+never claims or works the issue.
 
 **Worked example.** An issue was rejected `needs-decision` at score
 `2/5` because its acceptance criteria read "add caching, or document
