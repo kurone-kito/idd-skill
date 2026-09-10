@@ -849,24 +849,30 @@ function parseMinimizeArgs(argv: string[]): MinimizeArgs {
   // unbounded behavior) but, when given, must be a non-negative integer --
   // this file stays self-contained (see the module header comment on
   // loadIddConfig) so it cannot reuse cli-args.mts's canonical-integer
-  // helper; the same rejection shape as the flags above (a bare "requires
-  // a value"-style error, not a silent NaN) is reproduced by hand here.
-  // `0` is deliberately accepted, not just `>= 1`: runMinimize() gives it a
-  // specific, well-defined meaning of its own (the budget reads exhausted
-  // immediately at every checkpoint except the very first candidate's own
-  // probe, which still falls back to the un-throttled default timeout --
-  // see runMinimize's own deadlineMs doc comment and its "review round 2"
-  // test) -- a real degenerate-but-legitimate input, not an off-by-one
-  // edge case to reject. `^(?:0|[1-9]\d*)$` accepts exactly "0" or a
-  // non-zero-leading positive integer -- the same no-leading-zero idiom
-  // REST_SHAPED_SUBJECT_ID_PATTERN above already uses -- so "00"/"007" are
-  // still rejected as malformed rather than silently parsed.
+  // helper. `0` is deliberately accepted, not just `>= 1`: runMinimize()
+  // gives it a specific, well-defined meaning of its own (the budget
+  // reads exhausted immediately at every checkpoint except the very
+  // first candidate's own probe, which still falls back to the
+  // un-throttled default timeout -- see runMinimize's own deadlineMs doc
+  // comment and its "review round 2" test) -- a real
+  // degenerate-but-legitimate input, not an off-by-one edge case to
+  // reject. `^(?:0|[1-9]\d*)$` accepts exactly "0" or a non-zero-leading
+  // positive integer -- the same no-leading-zero idiom
+  // REST_SHAPED_SUBJECT_ID_PATTERN above already uses -- so "00"/"007"
+  // are still rejected as malformed rather than silently parsed.
   let deadlineMs: number | undefined;
   if (values['deadline-ms'] !== undefined) {
-    if (
-      values['deadline-ms'] === '' ||
-      !/^(?:0|[1-9]\d*)$/.test(values['deadline-ms'])
-    ) {
+    // An explicit empty value (--deadline-ms='' or --deadline-ms=) gets
+    // its own branch, reproducing the exact "requires a value" shape the
+    // other flags above use (#2896 review, Copilot, round 9): folding it
+    // into the malformed-value branch below would report "must be a
+    // non-negative integer" for an input that is not malformed so much
+    // as simply absent, an inconsistent and less actionable message for
+    // that specific case.
+    if (values['deadline-ms'] === '') {
+      throw new Error('--deadline-ms requires a value');
+    }
+    if (!/^(?:0|[1-9]\d*)$/.test(values['deadline-ms'])) {
       throw new Error(
         '--deadline-ms must be a non-negative integer (milliseconds)',
       );

@@ -776,6 +776,24 @@ test('a non-numeric --deadline-ms is rejected at parse time', () => {
   );
 });
 
+test('an explicit empty --deadline-ms value is rejected with the same "requires a value" shape as the other flags (#2896 review, Copilot, round 9)', () => {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'minimize-superseded-markers.mjs',
+  );
+  const result = spawnSync(
+    process.execPath,
+    [script, '--subject-ids', 'IC_a', '--allow-untrusted', '--deadline-ms='],
+    { encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr.trim(), 'error: --deadline-ms requires a value');
+});
+
 test('--deadline-ms 0 is accepted, not rejected (a deliberate, well-defined degenerate value)', () => {
   // 0 is not an edge case to reject: runMinimize() gives it a specific
   // meaning of its own (see the "actually bounding the pass end-to-end"
