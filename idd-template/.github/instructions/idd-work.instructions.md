@@ -455,12 +455,22 @@ problems exist. See `idd-overview-appendix.instructions.md` for per-agent
 implementation. The distributed defaults for the C-phase skip and loop
 guards are listed in `docs/policy-constants.md`. A repository may
 configure `critiqueLoop.delegate` to point this step at a different
-reviewer instead of the per-agent mechanism, or `critiqueLoop.telemetryHook`
-for a separate fire-and-forget per-round JSON record (round, repo,
-issue, PR, findings/severity/accepted/rejected counts, delegate usage,
-timestamp) that C2/C4 below invoke but that never gates control flow;
-see `docs/idd-workflow.md`'s "Critique pass invocation" section for
-both.
+reviewer instead of the per-agent mechanism. When helper runtime is
+enabled, resolve the effective `critiqueLoop.delegate` with the
+[`idd-critique-delegate`](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate)
+helper — `node scripts/idd-critique-delegate.mjs` for source-repo /
+vendored-node profiles; for package-manager / ephemeral-npx, resolve
+the profile-selected command from `docs/idd-helper-scripts.md` rather
+than hardcoding that bare binary name — instead of hand-deriving it;
+for `instructions-only` execution, apply the
+resolution order directly instead: repo-local `critiqueLoop.delegate`
+always wins outright, and only when it is genuinely absent does a
+local runtime's user-global config file apply. A repository may also
+configure `critiqueLoop.telemetryHook` for a separate fire-and-forget
+per-round JSON record (round, repo, issue, PR,
+findings/severity/accepted/rejected counts, delegate usage, timestamp)
+that C2/C4 below invoke but that never gates control flow; see
+`docs/idd-workflow.md`'s "Critique pass invocation" section for both.
 
 **Objective diff validation floor**: neither C2 nor C4 below may skip to
 `idd-pr-submit.instructions.md` unless **fix-validate** — the same
