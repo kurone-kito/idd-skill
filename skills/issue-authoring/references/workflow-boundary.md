@@ -439,10 +439,10 @@ time and report the specific failure (unclear, invalid, duplicate).
 
 ## Handoff to execution
 
-Once the user's explicit release request — or the narrow
-review-fix-loop-cutoff auto-release exception — removes the authoring
-label from every issue in the released set, execution is authorized:
-the repository's normal entry file and routed
-`.github/instructions/*.instructions.md` phase files (Discover, Claim,
-Work) may pick up the released issues. This bundle does not itself
-start that loop.
+Once the authoring label is removed from every issue in a released
+set — via the user's explicit release request, or, for a single
+marked target only, the narrow review-fix-loop-cutoff auto-release
+exception — execution is authorized: the repository's normal entry
+file and routed `.github/instructions/*.instructions.md` phase files
+(Discover, Claim, Work) may pick up the released issue(s). This bundle
+does not itself start that loop.
