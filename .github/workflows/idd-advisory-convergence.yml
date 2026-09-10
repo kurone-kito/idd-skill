@@ -1,12 +1,12 @@
 concurrency:
   cancel-in-progress: true
-  # Grouped by PR number, not github.ref: pull_request_review is not
-  # a pull_request-family event, so github.ref is not guaranteed to
-  # resolve the same way for it as it does for a pull_request-only
-  # workflow (see idd-doctor.yml / lint.yml). Review-thread comments
-  # live in a separate non-required workflow (#2136) and must not
-  # share this group. workflow_dispatch has no pull_request context
-  # either, so it falls back to its own inputs.
+  # Grouped by PR number, not github.ref: pull_request_target resolves
+  # github.ref to the base branch (refs/heads/main), the same value for
+  # every PR targeting it, so grouping by ref would collapse unrelated
+  # PRs into one concurrency slot. workflow_dispatch has no pull_request
+  # context either, so it falls back to its own inputs. Review-thread
+  # comments and review submissions live in a separate non-required
+  # workflow (#2136, #2764 Phase 1) and must not share this group.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
 name: IDD advisory-convergence gate
 # Required-check gate (#1341): asserts that the primary advisory bot's
@@ -15,6 +15,23 @@ name: IDD advisory-convergence gate
 # with --assert. This turns the F2 advisory/disposition sub-gate from a
 # judgment the execution model must choose to honor into a
 # non-bypassable required status check -- see roadmap #1342.
+#
+# Trigger-migration transition state (#2764 Phase 1): this workflow's
+# own copy of `on:` below is evaluated against the pull request's merge
+# ref for `pull_request` -- exactly the trust gap `pull_request_target`
+# closes, since THAT trigger is evaluated against the base branch's own
+# workflow YAML instead, so a same-repository PR cannot edit its copy of
+# this file to force its own required check green. Both `pull_request`
+# and `pull_request_target` are active simultaneously during Phase 1
+# (same activity types on both) so the implementing PR itself stays
+# normally mergeable -- `pull_request_target` cannot fire against the
+# PR that first defines it, only against PRs opened after it merges to
+# `main`. A follow-up issue (Phase 2, filed once Phase 1 has run cleanly
+# on production PRs for a period) will remove the now-redundant
+# `pull_request` trigger. The accepted, bounded cost of this transition
+# window is two required-check runs per PR under the same check name,
+# temporarily widening `#1381`'s known same-SHA-multiple-runs race (see
+# the concurrency-hardening investigation below) from rare to routine.
 #
 # Read-only: contents: read + issues: read + pull-requests: read. The
 # helper only queries the GitHub API (via `gh`) for reviews, review
@@ -55,14 +72,17 @@ name: IDD advisory-convergence gate
 #
 # CI topology: unlike lint.yml/idd-doctor.yml's pull_request-only
 # trigger, convergence can also change WITHOUT a new push when Copilot
-# submits its review (`pull_request_review`). That trigger stays here
-# on the required job. Review-thread *comments* do not: a casual
+# submits its review (`pull_request_review`). That trigger ran directly
+# on this required job before #2764 Phase 1; a same-repository PR could
+# edit this file's own copy of the trigger list to control when its
+# review-triggered run re-asserted, the same tamper path
+# `pull_request_target` closes for pushes -- so review submissions now
+# refresh the existing HEAD-associated required run from the companion
+# `idd-advisory-convergence-comment.yml` workflow instead, via
+# `rerun-advisory-convergence --apply`, the same mechanism review-thread
+# *comments* already used for the identical reason (#2136): a casual
 # human reply used to start this same required job, overwrite or
-# cancel the SHA's verdict, and show up as "the reply got linted"
-# (#2136). IDD-originated comments (disposition / stamp / operational
-# marker) refresh the existing HEAD-associated required run from the
-# companion `idd-advisory-convergence-comment.yml` workflow instead,
-# via `rerun-advisory-convergence --apply`.
+# cancel the SHA's verdict, and show up as "the reply got linted".
 #
 # Known gap vs. the issue's original three-trigger proposal:
 # `pull_request_review_thread` (thread resolved/unresolved) is a real
@@ -94,11 +114,15 @@ name: IDD advisory-convergence gate
 #
 # Bounded poll for the "not reviewed yet" race (#2015): the
 # `pull_request` `synchronize` trigger above fires the instant a push
-# lands, independent of the separate `pull_request_review` trigger,
-# which only fires once the primary bot's own review actually lands
-# (typically 10-40s later) -- so a push that also needed a fresh review
-# used to get asserted, and fail, before that review existed, costing an
-# external rerun most of the time (the exact recovery documented a few
+# lands, well before the primary bot's own review typically lands
+# (10-40s later) -- originally via the separate `pull_request_review`
+# trigger this workflow declared directly; that trigger moved to the
+# companion workflow in #2764 Phase 1, but the timing gap this poll
+# exists for is unchanged, since the push-triggered run still starts
+# immediately regardless of where the review's own signal now arrives
+# from -- so a push that also needed a fresh review used to get
+# asserted, and fail, before that review existed, costing an external
+# rerun most of the time (the exact recovery documented a few
 # paragraphs below). `advisory-convergence.mjs`'s CLI entry point now
 # runs `runAdvisoryConvergenceWithPoll` instead of asserting
 # immediately: when (and ONLY when) the verdict's sole blocking reason
@@ -115,26 +139,29 @@ name: IDD advisory-convergence gate
 # not landed by the end of the window, or lands with outstanding items,
 # the job fails exactly as it always has.
 #
-# Known residual (PR #2023 review): this job's own concurrency group
-# (below) is keyed by PR number ALONE across all three of its triggers,
-# with `cancel-in-progress: true`. If the primary bot's review actually
-# lands WHILE this poll is asleep, that submission starts a fresh
-# `pull_request_review`-triggered run in the SAME group, which cancels
-# THIS run before its next scheduled re-check ever observes the review
-# -- this run ends CANCELLED, and the fresh run becomes the one
-# responsible for reflecting convergence, subject to the exact same
-# stale-rollup risk `#1381` documents a few paragraphs below (whose
-# recovery, `rerun-advisory-convergence.mjs`, already handles a stale
-# CANCELLED sibling instance, not only a FAILURE one -- see "Rerun
-# mechanics" in `idd-ci.instructions.md`). Not a regression versus the
-# pre-#2015 baseline (before this change, the run always finished
-# FAILURE well before the review landed, so cancellation essentially
-# never happened, but the later review-triggered run's rollup update
-# was ALREADY subject to this same `#1381` risk) -- only a narrower win
-# than "no external rerun ever needed." See
+# Known residual (PR #2023 review), reshaped by #2764 Phase 1: this
+# job's own concurrency group (below) is keyed by PR number ALONE
+# across all three of its triggers, with `cancel-in-progress: true`.
+# Originally, if the primary bot's review landed WHILE this poll was
+# asleep, that submission started a fresh `pull_request_review`-triggered
+# run directly in the SAME group, cancelling this run before its next
+# scheduled re-check ever observed the review. `pull_request_review` no
+# longer triggers this workflow directly (#2764 Phase 1 moved it to the
+# companion `idd-advisory-convergence-comment.yml` workflow); a review
+# submission now reaches this job only indirectly, via the companion's
+# `rerun-advisory-convergence.mjs --apply` reissuing `gh run rerun` on
+# an already-terminal instance, not by entering this concurrency group
+# as a fresh trigger while a sibling is still polling. Whether a
+# rerun re-entering this group while another instance is still polling
+# can still cancel it is not re-derived here -- this note corrects the
+# outdated trigger description without re-litigating the underlying
+# race, which is the same one `#1381` documents a few paragraphs below
+# (whose recovery, `rerun-advisory-convergence.mjs`, already handles a
+# stale CANCELLED sibling instance, not only a FAILURE one -- see
+# "Rerun mechanics" in `idd-ci.instructions.md`). See
 # `runAdvisoryConvergenceWithPoll`'s own doc comment
-# (`src/scripts/advisory-convergence.mts`) for the full analysis; no
-# safe mechanical fix was found within #2015's scope.
+# (`src/scripts/advisory-convergence.mts`) for the full #2015 analysis;
+# no safe mechanical fix was found within that issue's scope.
 #
 # Correction (kurone-kito/idd-skill#1381): in practice, workflow_dispatch
 # does NOT reliably flip the PR's required-check rollup for its own HEAD
@@ -149,7 +176,7 @@ name: IDD advisory-convergence gate
 # associated with the default branch instead of the intended branch, so
 # it never surfaces in that PR's required-check rollup at all even when
 # the run itself succeeds. The verified recovery is `gh run rerun
-# <run-id>` on the *existing* pull_request / pull_request_review /
+# <run-id>` on the *existing* pull_request / pull_request_target /
 # pull_request_review_comment-triggered run for the current HEAD SHA --
 # found via `gh run list --workflow=idd-advisory-convergence.yml --json
 # databaseId,headSha,event,url` filtered to that exact SHA (not merely
@@ -256,9 +283,11 @@ on:
       - opened
       - reopened
       - synchronize
-  pull_request_review:
+  pull_request_target:
     types:
-      - submitted
+      - opened
+      - reopened
+      - synchronize
   workflow_dispatch:
     inputs:
       pr_number:

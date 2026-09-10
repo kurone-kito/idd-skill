@@ -49,7 +49,40 @@ test('required advisory-convergence workflows no longer trigger on review commen
       `${path} on: must not include issue_comment`,
     );
     assert.match(onBlock, /pull_request:/);
-    assert.match(onBlock, /pull_request_review:/);
+  }
+});
+
+// #2764 Phase 1: pull_request_review moved to the companion workflow (a
+// PR-edited copy of this file could otherwise control when its own
+// required check re-asserts); pull_request_target was added alongside
+// the existing pull_request trigger so the implementing PR itself stays
+// normally mergeable (pull_request_target cannot fire against its own
+// defining PR -- verification of its attachment is deferred to the
+// first PR opened after this change merges).
+test('required advisory-convergence workflows moved pull_request_review to pull_request_target', () => {
+  for (const path of REQUIRED_PATHS) {
+    const text = readWorkflow(path);
+    const onBlock = text.slice(
+      text.indexOf('\non:'),
+      text.indexOf('\npermissions:'),
+    );
+    assert.doesNotMatch(
+      onBlock,
+      /(?<!_)pull_request_review:/,
+      `${path} on: must not include pull_request_review (moved to the companion workflow)`,
+    );
+    assert.match(
+      onBlock,
+      /pull_request_target:/,
+      `${path} on: must include pull_request_target`,
+    );
+    // Still checks out only the trusted default branch, for every
+    // trigger including the new one -- see the module-header rationale.
+    assert.match(
+      text,
+      /ref:\s*main/,
+      `${path} checkout must stay pinned to ref: main`,
+    );
   }
 });
 
@@ -113,6 +146,50 @@ test('comment-refresh workflows also trigger on issue_comment and guard non-PR i
       prNumberAssignment[1],
       /github\.event\.pull_request\.number\s*\|\|\s*github\.event\.issue\.number/,
       `${path} PR_NUMBER must resolve from either event shape`,
+    );
+  }
+});
+
+// #2764 Phase 1: pull_request_review submissions now refresh the gate
+// through this companion instead of running a PR-controlled copy of the
+// gate workflow directly.
+test('comment-refresh workflows now trigger on pull_request_review submissions', () => {
+  for (const path of COMMENT_PATHS) {
+    const text = readWorkflow(path);
+    const onBlock = text.slice(
+      text.indexOf('\non:'),
+      text.indexOf('\npermissions:'),
+    );
+    assert.match(
+      onBlock,
+      /pull_request_review:/,
+      `${path} on: must include pull_request_review`,
+    );
+    // The rerun/debounce steps' if: conditions must OR in the review
+    // trigger explicitly, not rely on content classification -- a
+    // review's own body is not filtered through the IDD-origin marker
+    // check the way a comment's is (#2764 review floor: silently
+    // routing review events through unchanged idd_originated-only
+    // conditions would never actually rerun the gate on a review).
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    assert.notEqual(rerunIndex, -1);
+    const rerunStepText = text.slice(
+      rerunIndex,
+      text.indexOf('\n      - name:', rerunIndex + 1) === -1
+        ? undefined
+        : text.indexOf('\n      - name:', rerunIndex + 1),
+    );
+    const ifLine = rerunStepText
+      .split('\n')
+      .find((line) => line.trim().startsWith('if:'));
+    assert.ok(
+      ifLine,
+      `${path} Rerun required HEAD check step must have an if:`,
+    );
+    assert.match(
+      ifLine as string,
+      /github\.event_name\s*==\s*'pull_request_review'/,
+      `${path} rerun step's if: must OR in pull_request_review explicitly`,
     );
   }
 });

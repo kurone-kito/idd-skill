@@ -11,14 +11,21 @@
 # existing pull_request-family required run for the current HEAD SHA.
 # It never asserts `ready` itself.
 #
-# Two trigger families land here (#2411): `pull_request_review_comment`
-# (inline review-thread comments) and `issue_comment` (regular PR
-# comments -- where post-idd-marker.mjs and
-# disposition-non-review-notices.mjs actually post every marker/
-# disposition type, since both use the issues-comments API). `issue_comment`
-# also fires for a comment on a plain issue, not only a PR; the job-level
-# `if:` below skips those (`github.event.issue.pull_request` is only
-# present when the commented-on issue is a PR).
+# Three trigger families land here: `pull_request_review_comment` (inline
+# review-thread comments) and `issue_comment` (regular PR comments --
+# where post-idd-marker.mjs and disposition-non-review-notices.mjs
+# actually post every marker/disposition type, since both use the
+# issues-comments API), both from #2411; and `pull_request_review`
+# (review submissions, #2764 Phase 1) -- moved here from
+# idd-advisory-convergence.yml's own trigger list so a same-repository
+# PR cannot edit that workflow's copy to control when its own required
+# run re-asserts. Unlike the two comment families, a review submission
+# always reruns the gate unconditionally (see "Classify review comment"
+# below): it is not filtered by IDD-originated content, matching the
+# gate's own former unconditional `pull_request_review` trigger exactly.
+# `issue_comment` also fires for a comment on a plain issue, not only a
+# PR; the job-level `if:` below skips those (`github.event.issue.pull_request`
+# is only present when the commented-on issue is a PR).
 #
 # Job id is deliberately NOT `idd-advisory-convergence`.
 #
@@ -52,6 +59,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
 name: IDD advisory-convergence comment refresh
 on:
+  pull_request_review:
+    types:
+      - submitted
   pull_request_review_comment:
     types:
       - created
@@ -100,17 +110,30 @@ jobs:
       - name: Classify review comment
         id: origin
         env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
+          # A pull_request_review event carries its free-text summary at
+          # github.event.review.body, not github.event.comment.body (no
+          # `comment` object exists for that event). Feeding it through
+          # the same classifier costs nothing -- a review body can itself
+          # carry an IDD marker (a session's own review-ack, or a bot's
+          # stamped review) -- but a review submission always qualifies
+          # for a rerun regardless of this classifier's verdict; see the
+          # `if:` conditions below, which OR in `pull_request_review`
+          # explicitly rather than relying on content classification.
+          COMMENT_BODY: ${{ github.event.review.body || github.event.comment.body }}
         run: node scripts/review-comment-origin.mjs
       - name: Check for newer qualifying event
         id: debounce
-        if: steps.origin.outputs.idd_originated == 'true'
+        if: steps.origin.outputs.idd_originated == 'true' || github.event_name == 'pull_request_review'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          # Same dual-trigger-family PR-number resolution as the rerun
+          # Same three-trigger-family PR-number resolution as the rerun
           # step below.
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          # pull_request_review and pull_request_review_comment both
+          # carry github.event.pull_request.number; issue_comment carries
+          # github.event.issue.number instead (#2411).
+          #
           # Both pull_request_review_comment and issue_comment carry the
           # triggering comment's own timestamps at github.event.comment
           # (matching COMMENT_BODY above). Prefer updated_at:
@@ -121,16 +144,24 @@ jobs:
           # "newer than the trigger" and wrongly skip this run.
           # updated_at equals created_at for a never-edited comment, so
           # this is safe for the created-event case too (#2650 review,
-          # Copilot).
-          TRIGGERED_AT: ${{ github.event.comment.updated_at || github.event.comment.created_at }}
+          # Copilot). pull_request_review carries its own timestamp at
+          # github.event.review.submitted_at instead -- there is no
+          # comment object to fall back to for that event. This helper's
+          # own live data collection does not query PR reviews (only
+          # issue and review-thread comments), so it can never find a
+          # "newer review" specifically; it can still find a newer
+          # IDD-originated *comment* that landed after this review, which
+          # is real, useful debounce signal even on a review-triggered
+          # run.
+          TRIGGERED_AT: ${{ github.event.review.submitted_at || github.event.comment.updated_at || github.event.comment.created_at }}
         run: node scripts/advisory-comment-debounce.mjs --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
       - name: Rerun required HEAD check
-        if: steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'
+        if: (steps.origin.outputs.idd_originated == 'true' || github.event_name == 'pull_request_review') && steps.debounce.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          # pull_request_review_comment carries the PR number at
-          # github.event.pull_request.number; issue_comment (#2411)
-          # carries it at github.event.issue.number instead.
+          # pull_request_review and pull_request_review_comment carry the
+          # PR number at github.event.pull_request.number; issue_comment
+          # (#2411) carries it at github.event.issue.number instead.
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --apply
