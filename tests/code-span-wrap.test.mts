@@ -4,7 +4,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { findCorruptingCodeSpanWraps } from '../src/scripts/code-span-wrap.mts';
+import {
+  findCorruptingCodeSpanWraps,
+  findCorruptingProseWraps,
+} from '../src/scripts/code-span-wrap.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -140,4 +143,70 @@ test('real-corpus regression: a known word-boundary multi-line span is not flagg
     'utf8',
   );
   assert.deepEqual(findCorruptingCodeSpanWraps(text), []);
+});
+
+// idd-skill issue #2876: findCorruptingProseWraps flags a hyphenated
+// compound word wrapped right after the hyphen inside `**`/`*` emphasis
+// text, outside code spans.
+
+test('findCorruptingProseWraps: flags this issue’s own incident (bold emphasis, hyphen mid-token wrap)', () => {
+  // Reproduces PR #2875's incident: "**infrastructure/transport-layer
+  // failure**" hard-wrapped as "transport-\n  layer" inside bold emphasis.
+  const violations = findCorruptingProseWraps(
+    'a **infrastructure/transport-\n  layer failure** occurred',
+  );
+  assert.equal(violations.length, 1);
+  assert.deepEqual(violations[0], {
+    line: 1,
+    before: 'structure/transport-',
+    after: 'layer failure',
+  });
+});
+
+test('findCorruptingProseWraps: flags a hyphen mid-token wrap inside single-* italic emphasis', () => {
+  const violations = findCorruptingProseWraps('*well-\nknown* term');
+  assert.equal(violations.length, 1);
+  assert.deepEqual(violations[0], { line: 1, before: 'well-', after: 'known' });
+});
+
+test('findCorruptingProseWraps: does not flag a word-boundary wrap inside bold emphasis', () => {
+  assert.deepEqual(findCorruptingProseWraps('**foo bar\nbaz** text'), []);
+});
+
+test('findCorruptingProseWraps: does not misread a bullet-list `*` marker as an emphasis opener', () => {
+  assert.deepEqual(findCorruptingProseWraps('* item-\nfoo\n* other'), []);
+});
+
+test('findCorruptingProseWraps: does not flag a hyphen mid-token wrap inside a code span', () => {
+  // Code-span wraps stay findCorruptingCodeSpanWraps's own concern; this
+  // function must not double-flag them.
+  assert.deepEqual(findCorruptingProseWraps('`foo-\nbar` plain text'), []);
+});
+
+test('findCorruptingProseWraps: does not flag prose text with no emphasis markers at all', () => {
+  assert.deepEqual(
+    findCorruptingProseWraps('plain transport-\nlayer text, no emphasis'),
+    [],
+  );
+});
+
+test('findCorruptingProseWraps: does not flag when the hyphen sits right before the closing delimiter', () => {
+  // Nothing continues the "token" after the hyphen but the closing `**`
+  // itself, so this is not a corrupted compound word.
+  assert.deepEqual(findCorruptingProseWraps('**foo-\n**bar'), []);
+});
+
+test('findCorruptingProseWraps: real-corpus regression finds no violations on this repository’s own tracked Markdown files', () => {
+  // Direct counterpart of code-span-wrap's own real-corpus regression
+  // above, and of audit-code-span-wrap.test.mts's end-to-end
+  // auditCodeSpanWraps() check -- confirms acceptance criterion 3 (no new
+  // false positives) at the function level too.
+  const text = readFileSync(
+    join(
+      REPO_ROOT,
+      '.claude/skills/issue-authoring/references/draft-patterns.md',
+    ),
+    'utf8',
+  );
+  assert.deepEqual(findCorruptingProseWraps(text), []);
 });
