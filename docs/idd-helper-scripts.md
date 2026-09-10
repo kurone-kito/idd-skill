@@ -1241,12 +1241,21 @@ facade and F-phase consumer land. The contract is intentionally
 auditable and fail-closed.
 
 ```md
+<!-- idd-external-check-waiver: {agent-id} {claim-id|none} {head-sha} check:{check-selector} reason:{reason-token} expires:{iso8601} -->
+
+_{actor}: external check waiver for IDD F phase._
+```
+
+`run-id:{run-id}` is an optional trailing field (kurone-kito/idd-skill#2657,
+Copilot review PR #2895: shown as its own separate extended form below, so
+neither snippet reads as though the field were required):
+
+```md
 <!-- idd-external-check-waiver: {agent-id} {claim-id|none} {head-sha} check:{check-selector} reason:{reason-token} expires:{iso8601} run-id:{run-id} -->
 
 _{actor}: external check waiver for IDD F phase._
 ```
 
-`run-id:{run-id}` is an optional trailing field (kurone-kito/idd-skill#2657):
 the posting GitHub Actions run's own `GITHUB_RUN_ID`, carried verbatim (not
 percent-encoded -- it is a numeric run id, not free text). Every
 person-authored waiver omits it and parses exactly as before this field

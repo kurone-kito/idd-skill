@@ -346,3 +346,42 @@ test('collectFromGitHub never looks up a run id for a comment that is not this w
     assert.deepEqual(inputs.autoWaiverRunLookups, {});
   });
 });
+
+test('collectFromGitHub never looks up a run id from a non-github-actions[bot] author, even with the exact reason token (Copilot review, PR #2895: rate-limit exhaustion guard)', () => {
+  withHermeticCwd(() => {
+    // Same reason token and run-id shape as a genuine auto-waiver marker,
+    // but authored by an arbitrary commenter -- without the author check,
+    // this would cost one Actions-run API lookup per such comment on
+    // every assert invocation, a cheap way to drain the repository-shared
+    // GITHUB_TOKEN rate-limit budget. No `workflowRuns` fixture exists, so
+    // an attempted lookup would throw and this test would fail with that
+    // exception instead of the assertion below.
+    const impostor = {
+      id: 3,
+      body: renderExternalCheckWaiverComment({
+        agentId: 'someone',
+        claimId: 'claim-abc',
+        headSha: HEAD_SHA,
+        checkSelector: 'idd-advisory-convergence',
+        reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        expiresAt: '2099-01-01T00:00:00Z',
+        actor: 'not-github-actions',
+        runId: RUN_ID,
+      }),
+      createdAt: '2026-07-31T09:00:00Z',
+      updatedAt: '2026-07-31T09:00:00Z',
+      authorLogin: 'not-github-actions',
+    };
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [impostor] },
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunLookups, {});
+  });
+});

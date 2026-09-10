@@ -35,6 +35,7 @@ import {
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
   viewerProbeGhOptions,
   writeAdvisoryConvergenceCliOutput,
 } from '../src/scripts/advisory-convergence.mts';
@@ -3550,6 +3551,54 @@ test('self-referential-bootstrap-auto: an indeterminate PR with no bindable clai
   assertValidVerdict(verdict);
   assert.equal(verdict.applicability.status, 'indeterminate');
   assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver makes ready true, even past the deadline (Copilot review, PR #2895)', () => {
+  // Before this fix, the pre-existing deadline/terminal reason-push
+  // guards only excluded `waived` -- a ready verdict reached solely
+  // through `autoWaiverValid` (which is never gated behind
+  // deadlinePassed/terminalUnavailable) could carry a stale "deadline
+  // passed with no valid waiver" reason directly alongside `ready:
+  // true`, contradicting the very first `converged` test's
+  // `assert.deepEqual(verdict.reasons, [])` invariant and the
+  // `nextActions` doc comment's "empty exactly when ready is true"
+  // contract.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // still pending -- would otherwise push a reason
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+    }),
+    baseOptions({
+      headCommittedAt: OLD, // deadline HAS passed -- would otherwise push a reason
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+  assert.deepEqual(verdict.nextActions, []);
+});
+
+test('ADVISORY_CONVERGENCE_WORKFLOW_PATH stays a member of SELF_REFERENTIAL_WAIVER_TRIGGER_FILES (Copilot review, PR #2895)', () => {
+  // Declared as independent literals (not index-derived) so a future
+  // reorder of the allowlist can never silently repoint the workflow-path
+  // trust condition -- this pins the two values can never drift apart
+  // despite that independence.
+  assert.ok(
+    (SELF_REFERENTIAL_WAIVER_TRIGGER_FILES as readonly string[]).includes(
+      ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    ),
+  );
 });
 
 // --- #1570 AC6: no code path this issue adds ever invokes `gh pr merge

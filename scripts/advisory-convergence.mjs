@@ -193,11 +193,15 @@ export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
 /** kurone-kito/idd-skill#2657: this gate's own workflow file path, as
  * reported by the GitHub Actions runs API's `path` field -- the value a
  * self-referential-bootstrap-auto waiver's `run-id:` lookup must match
- * (trust condition (c)). Named once and reused both here and in
- * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} above so the two never
- * drift apart. */
+ * (trust condition (c)). Declared as its own explicit literal (Copilot
+ * review, PR #2895) rather than derived by indexing into
+ * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} -- an index-derived value
+ * would silently point at the wrong entry if that array is ever
+ * reordered. A dedicated test asserts this value is still a member of
+ * that array, so the two can never drift apart despite being declared
+ * independently. */
 export const ADVISORY_CONVERGENCE_WORKFLOW_PATH =
-  SELF_REFERENTIAL_WAIVER_TRIGGER_FILES[5];
+  '.github/workflows/idd-advisory-convergence.yml';
 // kurone-kito/idd-skill#2657: `SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON` /
 // `SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY` are declared in
 // `advisory-wait-policy.mts` (imported above) and re-exported here for
@@ -962,6 +966,13 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
       // contract.
       waivableSelectors: [...(options.waivableSelectors ?? [])],
       maxValidity: String(options.waiverMaxValidity ?? 'PT24H'),
+      // Explicit rather than relying solely on the enclosing `if`'s
+      // `waiverMode === 'maintainer-authorized'` guard above (Copilot
+      // review, PR #2895): a future refactor that loosens that guard
+      // without noticing this implicit dependency could otherwise
+      // silently reopen this call's own mode gate. Matches the
+      // auto-waiver call below, which already passes this explicitly.
+      mode: waiverMode,
     });
     // Even when the configured list makes SOME check waivable, only count a
     // waiver whose own marker selector is THIS gate's selector -- a valid
@@ -1069,6 +1080,18 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     converged ||
     ((deadlinePassed || terminalUnavailable) && waived) ||
     autoWaiverValid;
+  // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): the
+  // `reasons.push` guards above only exclude `waived`, so a `ready`
+  // verdict reached solely through `autoWaiverValid` (never gated
+  // behind `deadlinePassed`/`terminalUnavailable` the way `waived` is)
+  // could otherwise carry a stale "deadline passed with no valid
+  // waiver" or "terminally unavailable" explanation alongside
+  // `ready: true` -- a directly contradictory pair no consumer of this
+  // JSON verdict should ever see. Mirrors the existing `nextActions`
+  // invariant below: a ready verdict's `reasons` is always `[]`.
+  if (ready) {
+    reasons.length = 0;
+  }
   const reviewReport = {
     ...review,
     satisfied: reviewSatisfied,
@@ -2016,16 +2039,29 @@ export function collectFromGitHub(
   // /repos/{owner}/{repo}/actions/runs/{run-id}` evidence for any
   // self-referential-bootstrap-auto waiver candidate marker, so the pure
   // verdict function performs no I/O of its own. A cheap, network-free
-  // local scan (marker-shape prefix test + reason/run-id parse) narrows
-  // this to the small set of comments that could possibly be this waiver
-  // kind before paying for one Actions-run lookup per DISTINCT run id
-  // among them -- author/head-SHA/expiry/claim trust is verified later,
-  // inside `computeAdvisoryConvergenceVerdict`; this scan is a cost
-  // optimization only, never the authoritative check.
+  // local scan (marker-shape prefix test + author/reason/run-id parse)
+  // narrows this to the small set of comments that could possibly be
+  // this waiver kind before paying for one Actions-run lookup per
+  // DISTINCT run id among them -- head-SHA/expiry/claim trust is
+  // verified later, inside `computeAdvisoryConvergenceVerdict`; this
+  // scan is a cost optimization only, never the authoritative check.
+  // The author check (Copilot review, PR #2895) is still required here,
+  // not merely redundant with the authoritative one: without it, any
+  // commenter could post arbitrarily many fake same-reason markers with
+  // distinct `run-id:` values and force this required check to spend
+  // one Actions-run lookup per fake id on every assert invocation --
+  // individually fail-closed, but a real drain on the repository-shared
+  // `GITHUB_TOKEN` rate-limit budget.
   const autoWaiverRunIds = new Set();
   for (const comment of comments) {
     const body = String(comment.body ?? '');
     if (!/^<!--\s*idd-external-check-waiver:/i.test(body)) {
+      continue;
+    }
+    const authorLogin = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (authorLogin !== 'github-actions[bot]') {
       continue;
     }
     const parsed = parseExternalCheckWaiverComment(
