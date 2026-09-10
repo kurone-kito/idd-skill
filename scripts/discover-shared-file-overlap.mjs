@@ -130,6 +130,35 @@ function isSetextIneligiblePrecedingLine(lines, contentIndex) {
     boundary !== undefined && SETEXT_MARKER_LED_LINE_PATTERN.test(boundary)
   );
 }
+/**
+ * Given `lastContentIndex` -- a line already confirmed eligible (not
+ * `isSetextIneligiblePrecedingLine`) as the line directly above a Setext
+ * heading's own underline -- finds the FIRST line of that heading's own
+ * content paragraph, walking backward through as many immediately
+ * preceding non-blank, non-marker-led lines as exist (Codex review, PR
+ * #2840, round 24): CommonMark lets a Setext heading's content span
+ * several lines, e.g. `` "`package.json`\nNotes\n---" `` renders as one
+ * heading from BOTH lines -- `gh api /markdown` confirms
+ * `<h2><code>package.json</code><br>Notes</h2>`. Round 20's own fix only
+ * corrected *eligibility* (is the last line before the underline part of
+ * a real heading, not a list continuation); it left the truncation point
+ * itself at that last line, so a real backtick-quoted path on an EARLIER
+ * line of the same multi-line heading still leaked into the preceding
+ * section's own extracted text. Never walks back past `lowerBound`
+ * (the section's own opening line), matching the caller's existing
+ * `index > start` guard against misreading the section's own first line.
+ */
+function findSetextContentRunStart(lines, lastContentIndex, lowerBound) {
+  let index = lastContentIndex;
+  while (
+    index > lowerBound &&
+    (lines[index - 1] ?? '').trim() !== '' &&
+    !SETEXT_MARKER_LED_LINE_PATTERN.test(lines[index - 1] ?? '')
+  ) {
+    index -= 1;
+  }
+  return index;
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `candidate:`): tests/flag-name-matrix.test.mts scans this file's
 // *compiled* .mjs source text for quoted flag literals such as the
@@ -235,7 +264,7 @@ export function parseCandidateFileEntries(body) {
       !isSetextIneligiblePrecedingLine(lines, index - 1) &&
       SETEXT_UNDERLINE_PATTERN.test(lines[index])
     ) {
-      end = index - 1;
+      end = findSetextContentRunStart(lines, index - 1, start);
       break;
     }
     // Leading indent is `{0,3}` literal *spaces*, not `\s` (Codex review,

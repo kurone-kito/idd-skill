@@ -332,6 +332,24 @@ test('parseCandidateFiles stops at a genuine multi-line Setext heading, not just
   assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mts']);
 });
 
+test('parseCandidateFiles does not leak a backtick-quoted path from an earlier line of a multi-line Setext heading (Codex review, PR #2840, round 24)', () => {
+  // Round 20 fixed *eligibility* (is the last line before the underline
+  // part of a real heading, not a list continuation) but left the
+  // truncation point at that last line, so a real backtick-quoted path
+  // on an EARLIER line of the same multi-line heading still leaked into
+  // the preceding section. `gh api /markdown` confirms
+  // "`package.json`\nNotes\n---" renders as one heading
+  // (<h2><code>package.json</code><br>Notes</h2>), never a candidate path.
+  const body = [
+    '## Candidate files',
+    '',
+    '`package.json`',
+    'Notes',
+    '---',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
 test('parseCandidateFiles rejects a tab-indented "## Candidate files" heading -- CommonMark renders it as an indented code block, not a heading (Codex review, PR #2840, round 11)', () => {
   // Verified against GitHub's own renderer (gh api /markdown): a tab
   // advances to the next 4-column tab stop, past the 0-3-space ATX
