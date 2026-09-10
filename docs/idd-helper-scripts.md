@@ -1345,9 +1345,17 @@ files -- exactly seven paths, a committed constant, never derived from
 imports), that PR cannot benefit from its own fix to the checker while
 still unmerged. `idd-advisory-convergence.yml` detects this from a
 separate job with `issues: write` as its only write permission (the
-verdict job's own read-only permissions are unchanged) and posts a marker
-as `github-actions[bot]` via `GITHUB_TOKEN`, using the CLI's
-`--auto-bootstrap` mode:
+verdict job stays read-only; it additionally gains `actions: read`,
+required for the run-id trust verification's own
+`GET /repos/{owner}/{repo}/actions/runs/{run-id}` call in a private
+repository) and posts a marker as `github-actions[bot]` via
+`GITHUB_TOKEN`, using the CLI's `--auto-bootstrap` mode. The verdict job
+also runs `needs:` this posting job (with `if: ${{ !cancelled() }}` so it
+still runs when the posting job skips) so an allowlisted PR's own
+bootstrap marker is guaranteed to exist -- posted or definitively not --
+before the verdict job ever fetches PR comments; without that ordering
+the two jobs race, since posting a PR comment does not itself trigger a
+fresh run of this workflow:
 
 ```sh
 idd-external-check-waiver --pr 123 \

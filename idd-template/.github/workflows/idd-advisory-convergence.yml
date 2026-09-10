@@ -122,6 +122,40 @@ jobs:
     # once you have history (see idd-doctor.yml/lint.yml in the source
     # repository for the pattern of sizing this from real run durations).
     timeout-minutes: 10
+    # kurone-kito/idd-skill#2657 (Codex review, PR #2895): sequenced after
+    # the self-waiver job below so an allowlisted PR's own bootstrap
+    # marker is guaranteed to exist (posted or definitively not posted)
+    # before this job ever fetches PR comments -- without this ordering,
+    # the two jobs share no dependency and start in parallel, so this
+    # (typically much faster) job can read comments and fail BEFORE the
+    # self-waiver job finishes its diff check, claim resolution, and
+    # posting call. Since posting a PR comment is not one of this
+    # workflow's own trigger events, that race would leave the required
+    # check red until an unrelated push or manual rerun -- defeating the
+    # whole "no human click required" point of the bootstrap path.
+    # `if: ${{ !cancelled() }}` overrides `needs:`'s own default (a
+    # skipped dependency job skips its dependents too) -- this job must
+    # still run on every trigger, including `workflow_dispatch` or a
+    # `pull_request` run where the self-waiver job's own `if:` skips it
+    # outright, and a non-allowlisted PR where it runs but posts nothing.
+    needs: idd-advisory-convergence-self-waiver
+    if: ${{ !cancelled() }}
+    # Job-level override of the workflow-level `permissions:` block above,
+    # adding `actions: read` (Codex review, PR #2895): `port.getWorkflowRun`
+    # (the self-referential-bootstrap-auto trust verification) calls
+    # `GET /repos/{owner}/{repo}/actions/runs/{id}`, which needs this scope
+    # explicitly in a private repository (an unspecified `GITHUB_TOKEN`
+    # permission defaults to `none`, not inherited from the repository's
+    # own default). A job-level block replaces the workflow-level one
+    # entirely rather than adding to it, so every previously-granted scope
+    # is repeated here too. The self-waiver job below never calls this
+    # endpoint, so its own job-level permissions (unaffected by this one)
+    # do not need this scope.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
