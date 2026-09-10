@@ -583,6 +583,11 @@ export function computeRefreshLatestPlan(input, options) {
     prHeadSha,
     checkName,
     now,
+    // Overridden below only once `unresolvableReasons` has actually been
+    // computed; every earlier return (hold policy, no instance at all)
+    // never reaches a state where an instance could have been skipped as
+    // unresolvable.
+    unresolvedInstanceCount: 0,
   };
   // Honored, not bypassed (Copilot review, PR #2855): a "hold" policy is
   // a repository's explicit opt-out of every automatic rerun, checked
@@ -623,15 +628,24 @@ export function computeRefreshLatestPlan(input, options) {
   // but (Codex P1, PR #2855 review) applied per-instance, not just to a
   // single "latest" pick: one instance's unresolvable identity is
   // reported and skipped rather than aborting every OTHER instance's
-  // refresh. Deduplicated by runId: two check-run instances can briefly
-  // resolve to the same underlying workflow run (e.g. one instance's
-  // `gh api` lookup racing another's), and rerunning the same run id
-  // twice in one pass is redundant, not merely harmless.
-  const seenRunIds = new Set();
+  // refresh.
   const unresolvableReasons = [];
   const nonFamilyEvents = new Set();
-  const resolvedCommands = [];
-  const pendingResolvedCommands = [];
+  // Keyed by runId, not deduplicated away (Copilot, PR #2855 review,
+  // round 6): two check-run instances can briefly resolve to the same
+  // underlying workflow run (e.g. one instance's `gh api` lookup racing
+  // another's), and rerunning the same run id twice in one pass is
+  // redundant, not merely harmless -- but silently DROPPING the
+  // duplicate's own check-run id broke `RerunPlanCommand.checkRunIds`'s
+  // own documented contract ("every check-run id that contributed to
+  // this run id"). A duplicate's checkRunId is merged into the
+  // already-tracked command instead, keeping the earliest known
+  // `startedAt` between the two (matches this function's own
+  // newest-first sort semantics: an unknown/empty startedAt already
+  // sorts last, so preferring the known, earlier value is the more
+  // informative choice when a later-fetched duplicate turns out to have
+  // a smaller or missing startedAt).
+  const commandsByRunId = new Map();
   for (const instance of allInstances) {
     if (instance.runId === null) {
       unresolvableReasons.push(
@@ -655,10 +669,19 @@ export function computeRefreshLatestPlan(input, options) {
       nonFamilyEvents.add(resolvedRunEvent || '(unknown)');
       continue;
     }
-    if (seenRunIds.has(instance.runId)) {
+    const existing = commandsByRunId.get(instance.runId);
+    if (existing) {
+      existing.command.checkRunIds.push(instance.checkRunId);
+      const instanceStartedAt = instance.startedAt ?? '';
+      if (
+        instanceStartedAt &&
+        (!existing.command.startedAt ||
+          instanceStartedAt < existing.command.startedAt)
+      ) {
+        existing.command.startedAt = instanceStartedAt;
+      }
       continue;
     }
-    seenRunIds.add(instance.runId);
     const status = String(instance.status ?? '')
       .trim()
       .toLowerCase();
@@ -680,12 +703,19 @@ export function computeRefreshLatestPlan(input, options) {
     // review landed, and nothing else is guaranteed to trigger a fresh
     // evaluation afterward. `pendingCommands` carries the same resolved
     // command for the caller to rerun ONCE this run reaches a terminal
-    // state, rather than declining to act on it at all.
-    if (!conclusion && PENDING_STATUSES.has(status)) {
-      pendingResolvedCommands.push(resolvedCommand);
-    } else {
-      resolvedCommands.push(resolvedCommand);
-    }
+    // state, rather than declining to act on it at all. Classified once,
+    // from the FIRST instance seen for this runId -- a duplicate sharing
+    // the identical runId shares the identical underlying workflow run,
+    // so its own status/conclusion cannot meaningfully disagree.
+    commandsByRunId.set(instance.runId, {
+      command: resolvedCommand,
+      pending: !conclusion && PENDING_STATUSES.has(status),
+    });
+  }
+  const resolvedCommands = [];
+  const pendingResolvedCommands = [];
+  for (const { command, pending } of commandsByRunId.values()) {
+    (pending ? pendingResolvedCommands : resolvedCommands).push(command);
   }
   // Newest-`startedAt` first (unknown/empty sorts LAST) purely for a
   // stable, readable summary -- unlike the single-instance selection this
@@ -723,6 +753,7 @@ export function computeRefreshLatestPlan(input, options) {
         unresolvableReasons.length > 0
           ? `no resolvable pull_request-family instance for this HEAD -- ${unresolvableReasons.join('; ')}; inspect manually`
           : `no pull_request-family check-run instance exists yet for this HEAD (found: ${[...nonFamilyEvents].join(', ')}); nothing to refresh -- a future pull_request/pull_request_target trigger will create the first instance`,
+      unresolvedInstanceCount: unresolvableReasons.length,
     };
   }
   const unresolvableSuffix =
@@ -737,6 +768,7 @@ export function computeRefreshLatestPlan(input, options) {
       pendingResolvedCommands.length > 0
         ? `${pendingResolvedCommands.length} pull_request-family instance(s) for this HEAD are still running; rerunning a live run now would cancel it instead of refreshing it -- wait for each to reach a terminal state, then rerun it (see pendingCommands)${unresolvableSuffix}`
         : unresolvableSuffix.trim(),
+    unresolvedInstanceCount: unresolvableReasons.length,
   };
 }
 /**
@@ -2463,6 +2495,7 @@ if (import.meta.main) {
     // Same stdout/stderr split as the ordinary plan below: JSON only on
     // stdout, human-readable summary on stderr.
     process.stdout.write(`${JSON.stringify(refreshLatestPlan, null, 2)}\n`);
+    let applyFailedCount = 0;
     if (
       refreshLatestPlan.commands.length === 0 &&
       refreshLatestPlan.pendingCommands.length === 0
@@ -2512,23 +2545,30 @@ if (import.meta.main) {
         // `planCaveat` already documents why a rerun burst must stay
         // serialized rather than racing multiple `gh run rerun` calls
         // against the same PR's shared concurrency group.
-        //
-        // A non-empty `failed` means at least one independent instance
-        // for this HEAD was NOT refreshed despite --apply having run
-        // (CodeRabbit, PR #2855 review) -- exit non-zero so the
-        // companion job surfaces that instead of reporting green while
-        // the required gate may still be stuck. Deliberately NOT the
-        // same convention as the ordinary --apply path below (which
-        // always exits 0, even when its own budget is exhausted
-        // unresolved): that path's "not yet resolved" is an expected,
-        // bounded policy limit with its own recovery text, whereas a
-        // `failed` entry here is an actual thrown error (network/gh
-        // failure, or a wait timeout) on an otherwise-independent
-        // instance -- a different, more actionable severity.
-        if (refreshResult.failed.length > 0) {
-          process.exitCode = 1;
-        }
+        applyFailedCount = refreshResult.failed.length;
       }
+    }
+    // A non-empty `failed`, or a non-zero `unresolvedInstanceCount`, both
+    // mean at least one instance for this HEAD was NOT refreshed despite
+    // --apply having run (CodeRabbit + Codex P1, PR #2855 review) --
+    // exit non-zero so the companion job surfaces that instead of
+    // reporting green while the required gate may still be stuck. Checked
+    // unconditionally here, not only inside the `else` branch above: an
+    // unresolved instance can be the ONLY instance for this HEAD, in
+    // which case `commands`/`pendingCommands` are both empty and the
+    // apply block above never even runs -- that must fail closed too,
+    // not silently report success on a plan with nothing left to try.
+    // Deliberately NOT the same convention as the ordinary --apply path
+    // below (which always exits 0, even when its own budget is exhausted
+    // unresolved): that path's "not yet resolved" is an expected,
+    // bounded policy limit with its own recovery text, whereas either
+    // condition here is a genuine risk that the instance actually
+    // controlling the required rollup was never attempted.
+    if (
+      args.apply &&
+      (applyFailedCount > 0 || refreshLatestPlan.unresolvedInstanceCount > 0)
+    ) {
+      process.exitCode = 1;
     }
   } else if (plan) {
     // stdout carries ONLY the JSON document -- nothing else -- so the

@@ -2979,6 +2979,81 @@ test('computeRefreshLatestPlan: skips an unresolvable instance without blocking 
   assert.equal(plan.commands[0]?.runId, '5002');
   assert.match(plan.reason, /skipped 1 unresolvable instance/);
   assert.match(plan.reason, /check-run 1001/);
+  assert.equal(plan.unresolvedInstanceCount, 1);
+});
+
+// Codex P1 review, PR #2855, round 6: an unresolved instance could be the
+// one the required rollup is actually pinned to -- computeRefreshLatestPlan
+// itself cannot tell, so it exposes the count structurally rather than
+// only inside the free-text `reason`, letting the CLI's --apply path fail
+// closed on it.
+test('computeRefreshLatestPlan: unresolvedInstanceCount is 0 whenever nothing was skipped as unresolvable', () => {
+  const clean = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions(),
+  );
+  assert.equal(clean.unresolvedInstanceCount, 0);
+
+  const nonFamilyOnly = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runEvent: 'workflow_dispatch' })] }),
+    baseOptions(),
+  );
+  assert.equal(nonFamilyOnly.unresolvedInstanceCount, 0);
+
+  const held = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.equal(held.unresolvedInstanceCount, 0);
+});
+
+test('computeRefreshLatestPlan: unresolvedInstanceCount reflects every skipped instance when nothing resolved at all', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({ checkRunId: '1001', runId: null }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runLookupFailed: true,
+          runEvent: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.equal(plan.unresolvedInstanceCount, 2);
+});
+
+// Copilot review, PR #2855, round 6: two check-run instances resolving to
+// the SAME runId must not drop the duplicate's own checkRunId --
+// RerunPlanCommand.checkRunIds is documented as "every check-run id that
+// contributed to this run id."
+test('computeRefreshLatestPlan: two instances sharing a runId merge into one command with both checkRunIds', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          startedAt: '2026-07-16T10:05:00Z',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:00Z',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.deepEqual(plan.commands[0]?.checkRunIds, ['1001', '1002']);
+  // The earlier of the two known startedAt values is kept.
+  assert.equal(plan.commands[0]?.startedAt, '2026-07-16T10:00:00Z');
 });
 
 // Copilot review (PR #2855, round 5, "previously missed"): an instance
@@ -3094,6 +3169,7 @@ function refreshLatestPlan(
     commands: [],
     pendingCommands: [],
     reason: '',
+    unresolvedInstanceCount: 0,
     ...overrides,
   };
 }
