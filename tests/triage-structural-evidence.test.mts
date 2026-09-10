@@ -184,6 +184,25 @@ test('hasVerificationCommandSignal: a raw HTML block (<pre>) opened inside a blo
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: an Acceptance criteria section after an unclosed raw HTML block opened inside a blockquote still counts (Codex review, PR #2840, round 15)', () => {
+  // An unclosed `<pre>` inside a blockquote previously scanned to end of
+  // text looking for a real `</pre>`, masking the real Acceptance
+  // criteria section that follows once the blockquote itself ends.
+  // `gh api /markdown` confirms GitHub closes the block at the
+  // blockquote's own end, never leaking past it.
+  const body = [
+    '> <pre>',
+    '> still open',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: an Acceptance criteria section after a fenced example containing an unclosed raw tag still counts (Codex review, PR #2840, round 14)', () => {
   // Same round-14 fenced-bleed fix as candidateFilesExistOnDisk's mirror
   // test above: the unclosed `<pre>` inside the fence previously extended
@@ -461,6 +480,23 @@ test('candidateFilesExistOnDisk: an example inside a raw HTML block (<pre>) does
   assert.equal(
     candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
     false,
+  );
+});
+
+test('candidateFilesExistOnDisk: a real Candidate files section after an unclosed raw HTML block opened inside a blockquote still counts (Codex review, PR #2840, round 15)', () => {
+  const body = [
+    '> <pre>',
+    '> still open',
+    '',
+    '## Candidate files',
+    '',
+    '- `src/scripts/foo.mts`',
+    '',
+  ].join('\n');
+  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    true,
   );
 });
 

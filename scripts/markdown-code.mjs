@@ -987,12 +987,16 @@ function isValidFenceOpener(fence) {
  * ({@link MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN}, which per CommonMark
  * cannot interrupt a paragraph, so it only opens a block when the preceding
  * line is blank or this is the first line of `text`) -- both closing at the
- * next blank line or end of text. Top-level scan only, deliberately no
- * container/list-depth tracking -- matches {@link findHtmlCommentRanges}'s
- * existing scope choice for this same "mask untrusted issue-body text"
- * purpose, unlike {@link isWithinOpenHtmlBlock}'s more elaborate
- * container-aware backward/forward scan built for a different question (is
- * a specific later code span destroyed by an enclosing block).
+ * next blank line or end of text. No general container/list-depth
+ * *tracking* (state threaded across unrelated lines) -- matches
+ * {@link findHtmlCommentRanges}'s existing scope choice for this same
+ * "mask untrusted issue-body text" purpose, unlike
+ * {@link isWithinOpenHtmlBlock}'s more elaborate container-aware
+ * backward/forward scan built for a different question (is a specific
+ * later code span destroyed by an enclosing block). Each opener's own
+ * close-scan is still bounded by that opener's own container, derived
+ * directly from its own line (round 15 below) -- a narrower, cheaper
+ * question than full cross-line tracking.
  *
  * Codex review, PR #2840: an issue can place example Markdown (a fake
  * `## Acceptance criteria` heading plus a checklist, or a fake
@@ -1013,13 +1017,19 @@ function isValidFenceOpener(fence) {
  * {@link stripListItemMarker} (list-marker stripping) -- the same helpers
  * {@link findMarkdownBlockBoundary} already uses for this exact
  * "container-prefix-aware opener" question -- rather than inventing new
- * machinery. Only the *opener* tests need this: every close/end scan
- * below (a raw-text tag's own closing tag, a special block's close
- * token, a generic block's next blank line) already tests with an
- * unanchored pattern or a blank-line check, both already
- * container-agnostic. Deliberately still no multi-line container-depth
- * tracking beyond the opening line -- matches this function's own
- * existing top-level-scan scope note above.
+ * machinery.
+ *
+ * Every close/end scan (a raw-text tag's own closing tag, a special
+ * block's close token, a generic block's next blank line) additionally
+ * stops at the opener's own enclosing container boundary (Codex review,
+ * PR #2840, round 15; {@link isHtmlBlockContainerEnded}): an unclosed
+ * raw-text/special block that opens inside a blockquote or list item
+ * (`> <pre>` with no matching `</pre>` anywhere in `text`) previously
+ * scanned all the way to a real closing tag or end of text, masking any
+ * genuine Acceptance-criteria/Candidate-files content that renders
+ * *outside* the block once its enclosing container itself ends --
+ * `gh api /markdown` confirms GitHub closes an unclosed HTML block at
+ * its container's own end, never leaking past it.
  *
  * A custom-tag opener (`MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN`, which
  * per CommonMark cannot interrupt a paragraph) is additionally eligible
@@ -1042,6 +1052,49 @@ function isValidFenceOpener(fence) {
  * Acceptance-criteria/Candidate-files content after the fence. Must be in
  * ascending `start` order, as {@link findFencedCodeRanges} already returns.
  */
+/**
+ * True when `scanLine` -- a line reached while scanning forward for an
+ * already-open HTML block's own close condition -- falls outside the
+ * Markdown container the block's *opener* line itself opened in (Codex
+ * review, PR #2840, round 15). Mirrors {@link findFencedCodeRanges}'s own
+ * fence-close condition almost verbatim -- the identical question ("has
+ * the enclosing blockquote/list-item container this opener line started
+ * in already ended by this later line") reusing the same
+ * {@link parseContainerLine}, {@link stripContainerPrefixes}, and
+ * {@link continuesListContainer} helpers, just carried as a local
+ * variable pair for one opener's own forward scan rather than threaded
+ * cross-line tracker state: an HTML block's opener line always directly
+ * names its own container context (the literal `<` character that opens
+ * it), unlike a bare fence line that can silently inherit an earlier,
+ * unmarked list's content-zone -- the harder problem
+ * {@link createListContentIndentTrackerState} exists to solve -- so no
+ * tracker is needed here.
+ */
+function isHtmlBlockContainerEnded(
+  scanLine,
+  openerContainerDepth,
+  openerListContentIndent,
+) {
+  const containerLine = parseContainerLine(scanLine);
+  if (
+    openerContainerDepth > 0 &&
+    containerLine.containerDepth < openerContainerDepth
+  ) {
+    return true;
+  }
+  if (openerListContentIndent !== null) {
+    const listContinuationLine = stripContainerPrefixes(
+      scanLine,
+      openerContainerDepth,
+    );
+    if (
+      !continuesListContainer(listContinuationLine, openerListContentIndent)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 export function findHtmlBlockRanges(text, fencedRanges = []) {
   const ranges = [];
   let lineStart = 0;
@@ -1083,7 +1136,8 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
       continue;
     }
     if (!isBlank) {
-      const containerContent = parseContainerLine(line).content;
+      const openerLine = parseContainerLine(line);
+      const containerContent = openerLine.content;
       const content = stripListItemMarker(containerContent);
       // Codex review, PR #2840 (round 13): `stripListItemMarker` returns
       // its input unchanged when the line has no list marker, so this
@@ -1093,6 +1147,13 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
       // `previousLineBlank` already permits a custom-tag opener right
       // after a blank line.
       const opensFreshContainer = content !== containerContent;
+      // Codex review, PR #2840 (round 15): this opener's own container
+      // context, carried through its forward scan below via
+      // {@link isHtmlBlockContainerEnded} -- see that function's doc
+      // comment for why deriving it directly from this line (rather than
+      // a cross-line tracker) is sufficient here.
+      const openerContainerDepth = openerLine.containerDepth;
+      const openerListContentIndent = openerLine.listContentIndent;
       const rawTag = rawTextOpenTag(content);
       const closeToken = specialHtmlBlockCloseToken(content);
       const opensGeneric =
@@ -1118,7 +1179,23 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
             const nl = text.indexOf('\n', scanStart);
             const scanLineEnd = nl === -1 ? text.length : nl;
             const scanLineAfter = nl === -1 ? text.length : nl + 1;
-            if (closePattern.test(text.slice(scanStart, scanLineEnd))) {
+            const scanLine = text.slice(scanStart, scanLineEnd);
+            // Codex review, PR #2840 (round 15): stop at the opener's own
+            // container boundary before testing for the real closing tag
+            // -- once the enclosing blockquote/list-item container has
+            // ended, a line past it is never part of this block, real
+            // closing tag or not.
+            if (
+              isHtmlBlockContainerEnded(
+                scanLine,
+                openerContainerDepth,
+                openerListContentIndent,
+              )
+            ) {
+              end = scanStart;
+              break;
+            }
+            if (closePattern.test(scanLine)) {
               end = scanLineEnd;
               break;
             }
@@ -1147,7 +1224,18 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
             const nl = text.indexOf('\n', scanStart);
             const scanLineEnd = nl === -1 ? text.length : nl;
             const scanLineAfter = nl === -1 ? text.length : nl + 1;
-            if (text.slice(scanStart, scanLineEnd).includes(closeToken)) {
+            const scanLine = text.slice(scanStart, scanLineEnd);
+            if (
+              isHtmlBlockContainerEnded(
+                scanLine,
+                openerContainerDepth,
+                openerListContentIndent,
+              )
+            ) {
+              end = scanStart;
+              break;
+            }
+            if (scanLine.includes(closeToken)) {
               end = scanLineEnd;
               break;
             }
@@ -1165,11 +1253,31 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
       if (opensGeneric) {
         let scanStart = lineAfter;
         let end = text.length;
+        // Ends at whichever comes first: its own next-blank-line close
+        // condition, or the opener's enclosing container ending on a
+        // non-blank line (Codex review, PR #2840, round 15) -- tracked
+        // separately from `end` itself so the two termination reasons can
+        // set `previousLineBlank` correctly below (a blank-line ending
+        // leaves the next line's own "previous line" blank; a
+        // container-ending non-blank line does not).
+        let endedOnBlankLine = false;
         while (scanStart <= text.length) {
           const nl = text.indexOf('\n', scanStart);
           const scanLineEnd = nl === -1 ? text.length : nl;
           const scanLineAfter = nl === -1 ? text.length : nl + 1;
-          if (text.slice(scanStart, scanLineEnd).trim() === '') {
+          const scanLine = text.slice(scanStart, scanLineEnd);
+          if (scanLine.trim() === '') {
+            end = scanStart;
+            endedOnBlankLine = true;
+            break;
+          }
+          if (
+            isHtmlBlockContainerEnded(
+              scanLine,
+              openerContainerDepth,
+              openerListContentIndent,
+            )
+          ) {
             end = scanStart;
             break;
           }
@@ -1181,7 +1289,7 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
         }
         ranges.push({ start: lineStart, end });
         lineStart = end;
-        previousLineBlank = true;
+        previousLineBlank = endedOnBlankLine;
         continue;
       }
     }

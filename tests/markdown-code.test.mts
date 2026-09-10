@@ -761,6 +761,91 @@ test('findHtmlBlockRanges recognizes a raw-text block opener inside a blockquote
   assert.equal(masked.includes('x'), false);
 });
 
+test('findHtmlBlockRanges stops an unclosed raw-text block at its own blockquote container end (Codex review, PR #2840, round 15)', () => {
+  // An unclosed `<pre>` opened inside a blockquote previously scanned to
+  // end of text looking for a real `</pre>`, masking real content after
+  // the blockquote itself ends. `gh api /markdown` confirms GitHub closes
+  // the block at the blockquote's own end, never leaking past it.
+  const body = [
+    '> <pre>',
+    '> still open',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('still open'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+  assert.equal(masked.includes('[ ] one'), true);
+});
+
+test('findHtmlBlockRanges stops an unclosed raw-text block at its own list-item container end (Codex review, PR #2840, round 15)', () => {
+  // Same fix, the list-item shape: dedenting to column 0 ends the list
+  // item's own content zone, closing the unclosed `<pre>` there too.
+  const body = [
+    '- <pre>',
+    '  still open',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('still open'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+  assert.equal(masked.includes('[ ] one'), true);
+});
+
+test('findHtmlBlockRanges stops an unclosed special block (comment) at its own blockquote container end (Codex review, PR #2840, round 15)', () => {
+  const body = [
+    '> <!-- comment',
+    '> still comment',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('still comment'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+});
+
+test('findHtmlBlockRanges stops an unclosed generic block (<div>) at its own blockquote container end (Codex review, PR #2840, round 15)', () => {
+  const body = [
+    '> <div>',
+    '> some quoted text',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('some quoted text'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+});
+
+test('findHtmlBlockRanges still masks a raw-text block through its own real closing tag inside the same container (control, round 11 behavior preserved by round 15)', () => {
+  const body = ['- <pre>', '  x', '  </pre>', ''].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('x'), false);
+  assert.equal(masked.includes('</pre>'), false);
+});
+
 test("findHtmlBlockRanges opens a custom-tag block as a list item's own first line (Codex review, PR #2840, round 13)", () => {
   // Round 11 fixed the opener-detection *pattern match* for a list-marker
   // prefix but left the custom-tag branch's `previousLineBlank` gate
