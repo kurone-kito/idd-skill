@@ -9,9 +9,11 @@ import { fileURLToPath } from 'node:url';
 import {
   classifyIssue,
   extractBlockedByReferences,
+  fetchOpenIssues,
   filterOrphanIssues,
   getOrphanFirstPolicy,
 } from '../src/scripts/discover-orphan-filter.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -330,6 +332,139 @@ test('#2767: filterOrphanIssues degrades to the plain (filtered) result when fet
   assert.equal(result.orphans.length, 0);
   assert.equal(result.filtered.runtime_observation_precondition.length, 1);
   assert.equal(result.warnings.length, 0);
+});
+
+// #2767 (CodeRabbit review, PR #2840): a fixture that builds an
+// `OrphanIssueInput` by hand (every test above) bypasses `fetchOpenIssues`/
+// `normalizeIssue` entirely, which is exactly how the live CLI's `user`
+// field silently never reached the `trustedEditor` signal -- this test goes
+// through the real function instead.
+test('#2767: fetchOpenIssues carries the provider user field through to the normalized issue', () => {
+  const port = createFakeProviderAdapter({
+    workItems: {
+      33: {
+        number: 33,
+        title: 'demotable candidate',
+        body: 'body',
+        state: 'open',
+        user: { login: 'alice' },
+      },
+    },
+  });
+  const [issue] = fetchOpenIssues(port);
+  assert.deepEqual(issue?.user, { login: 'alice' });
+});
+
+test('#2767: filterOrphanIssues demotes a runtime-observation-precondition candidate reached through fetchOpenIssues (not a hand-built fixture)', async () => {
+  const port = createFakeProviderAdapter({
+    workItems: {
+      34: {
+        number: 34,
+        title: 'demoted candidate via fetchOpenIssues',
+        body:
+          'Do this only after the prior fix has merged and is confirmed to ' +
+          'take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`',
+        state: 'open',
+        user: { login: 'alice' },
+      },
+    },
+  });
+  const issues = fetchOpenIssues(port);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => ['alice'],
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+  });
+
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.orphans[0].number, 34);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(
+    (result.warnings[0] as { reason: string }).reason,
+    'runtime_observation_precondition_demoted',
+  );
+});
+
+// #2767 (CodeRabbit review, PR #2840): the demotion warning must not be
+// emitted for a candidate that does not survive to the final `orphans`
+// partition -- verified against both removal paths below.
+test('#2767: filterOrphanIssues suppresses the demotion warning when the candidate is later excluded by the triage-verdict filter', async () => {
+  const issues = [
+    {
+      number: 35,
+      title: 'demoted then triage-verdict-rejected',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`',
+      url: 'https://example.com/35',
+      user: { login: 'alice' },
+      createdAt: '2026-01-01T00:00:00Z',
+    },
+  ];
+
+  const rejectionComment = {
+    body: `${SUITABILITY_REJECTION_PREFIX} — Check 2 (Coherence): reason.\n\n<!-- idd-skill-triage-verdict: unclear -->`,
+    created_at: '2026-06-01T00:00:00Z',
+    user: { login: 'alice' },
+  };
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => ['alice'],
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+    fetchCommentsByIssueNumber: () => [rejectionComment],
+    fetchTimelineByIssueNumber: () => [],
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 1);
+  assert.equal(
+    result.warnings.length,
+    0,
+    'no demotion warning for a candidate excluded by the triage-verdict filter',
+  );
+});
+
+test('#2767: filterOrphanIssues suppresses the demotion warning when the candidate is routed to routed_to_human', async () => {
+  const issues = [
+    {
+      number: 36,
+      title: 'demoted then routed below the autopilot floor',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Do this only after the prior fix has merged and is confirmed to ' +
+        'take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`\n\n<!-- idd-skill-autopilot-suitability: 1 -->',
+      url: 'https://example.com/36',
+      user: { login: 'alice' },
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => ['alice'],
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+    autopilot: true,
+    autopilotSuitabilityFloor: 3,
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.routed_to_human.length, 1);
+  assert.equal(
+    result.warnings.length,
+    0,
+    'no demotion warning for a candidate routed to routed_to_human',
+  );
 });
 
 test('filterOrphanIssues excludes providerOutage.declarationTarget end-to-end (#2800)', async () => {

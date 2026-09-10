@@ -570,6 +570,15 @@ export async function filterOrphanIssues(issues, options = {}) {
   const orphans = [];
   const unresolvable = [];
   const warnings = [];
+  // #2767 (CodeRabbit review, PR #2840): collected here, not pushed
+  // immediately -- a candidate can still be excluded from the final
+  // `orphans` list below (the triage-verdict-rejected filter, or
+  // autopilot's below-floor `routed_to_human` routing), and this warning's
+  // own text asserts "it stays listed as an orphan," which would be wrong
+  // for an issue that does not survive to the final partition. Emitted
+  // only for numbers still present in `ranked` at the end of this
+  // function.
+  const demotedOrphanNumbers = new Set();
   // Self-batch lookup for the dependency parent-epic exemption (#1536): in
   // the CLI wiring `issues` is always the full open-issue batch
   // (`fetchOpenIssues`), so any `Depends on` / task-list reference that
@@ -673,13 +682,7 @@ export async function filterOrphanIssues(issues, options = {}) {
     }
     if (result.orphan) {
       if (result.warning === 'runtime_observation_precondition_demoted') {
-        warnings.push({
-          issueNumber: issue.number,
-          reason: result.warning,
-          message:
-            `Warning: Issue #${issue.number} names a runtime/production-observation ` +
-            'precondition, but every structural-evidence signal held, so it stays listed as an orphan.',
-        });
+        demotedOrphanNumbers.add(issue.number);
       }
       orphans.push({
         number: issue.number,
@@ -834,6 +837,26 @@ export async function filterOrphanIssues(issues, options = {}) {
       getScore: (orphan) => orphan.autopilotSuitability,
     },
   );
+  // #2767 (CodeRabbit review, PR #2840): emit the demotion warning only
+  // for a candidate that actually survives to the final `ranked` orphans
+  // list -- the triage-verdict filter above and the routing split just
+  // above can both remove a candidate from that final partition, and the
+  // warning's own text asserts it stays listed as an orphan.
+  if (demotedOrphanNumbers.size > 0) {
+    const rankedNumbers = new Set(ranked.map((orphan) => orphan.number));
+    for (const issueNumber of demotedOrphanNumbers) {
+      if (!rankedNumbers.has(issueNumber)) {
+        continue;
+      }
+      warnings.push({
+        issueNumber,
+        reason: 'runtime_observation_precondition_demoted',
+        message:
+          `Warning: Issue #${issueNumber} names a runtime/production-observation ` +
+          'precondition, but every structural-evidence signal held, so it stays listed as an orphan.',
+      });
+    }
+  }
   const counts = {
     scanned: issues.length,
     orphans: ranked.length,
@@ -1219,6 +1242,11 @@ function normalizeIssue(issue) {
     url: issue.url ?? issue.html_url ?? '',
     milestone: issue.milestone,
     createdAt: issue.createdAt,
+    // #2767 (CodeRabbit review, PR #2840): carried through so the live CLI
+    // wiring below can read the author login for the `trustedEditor`
+    // structural-evidence signal -- omitting it here silently made that
+    // signal fail closed for every live orphan candidate.
+    user: issue.user,
   };
 }
 /**
@@ -1336,7 +1364,12 @@ function normalizeRoadmapLabelName(labelName) {
     ? labelName
     : POLICY_DEFAULTS.labels.roadmapLabelName;
 }
-function fetchOpenIssues(port) {
+/** Exported for `tests/discover-orphan-filter.test.mts`'s #2767 regression
+ * (CodeRabbit review, PR #2840): a direct `OrphanIssueInput` fixture in a
+ * test bypasses this function and `normalizeIssue` entirely, which is
+ * exactly how the live CLI's `user`-propagation gap went uncaught -- a
+ * test must go through this function to actually exercise it. */
+export function fetchOpenIssues(port) {
   // listOpenWorkItems() already excludes pull requests -- no re-filtering
   // needed here.
   return port.listOpenWorkItems().map((item) =>
@@ -1350,6 +1383,7 @@ function fetchOpenIssues(port) {
       html_url: item.htmlUrl,
       milestone: item.milestone,
       createdAt: item.createdAt,
+      user: item.user,
     }),
   );
 }

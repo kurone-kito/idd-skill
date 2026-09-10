@@ -19,7 +19,11 @@ import {
   parseCandidateFiles,
   resolveHighContentionFiles,
 } from './discover-shared-file-overlap.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  resolveGhApiHostname,
+} from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
   findFencedCodeRanges,
@@ -68,6 +72,9 @@ import {
  * as a live binding.)
  */
 const MERGED_PR_SCAN_DEADLINE_MS = 2 * 60 * 1000;
+/** Mirrors `provider-adapter-github.mts`'s
+ * `USER_CONTENT_EDITS_MAX_PAGES` -- see that constant's doc comment. */
+const USER_CONTENT_EDITORS_MAX_PAGES = 10;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -3745,37 +3752,72 @@ function fetchIssue(repoRef, issueNumber) {
  * file is not yet migrated onto `provider-port.mts` (see
  * `tests/provider-port-migration-guard.test.mts`'s `MIGRATED_HELPERS`
  * list), so it makes its own direct `gh api graphql` call rather than
- * adopting the port abstraction mid-issue; the query mirrors that
- * adapter's own.
+ * adopting the port abstraction mid-issue; the query and its pagination
+ * (Codex/CodeRabbit review, PR #2840) mirror that adapter's own.
  */
 function fetchUserContentEditors(owner, repo, issueNumber) {
-  const query = `query($owner:String!,$repo:String!,$number:Int!){
+  const allNodes = [];
+  let before = null;
+  for (let page = 0; page < USER_CONTENT_EDITORS_MAX_PAGES; page += 1) {
+    const query = `query($owner:String!,$repo:String!,$number:Int!,$before:String){
   repository(owner:$owner,name:$repo){
     issue(number:$number){
-      userContentEdits(last:100){
+      userContentEdits(last:100, before:$before){
+        pageInfo { hasPreviousPage startCursor }
         nodes { editor { login } }
       }
     }
   }
 }`;
-  const parsed = ghJson([
-    'api',
-    'graphql',
-    '-f',
-    `query=${query}`,
-    '-f',
-    `owner=${owner}`,
-    '-f',
-    `repo=${repo}`,
-    '-F',
-    `number=${issueNumber}`,
-  ]);
-  const nodes = parsed.data?.repository?.issue?.userContentEdits?.nodes;
-  if (!Array.isArray(nodes)) {
-    return [];
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...(resolveGhApiHostname() ? ['--hostname', resolveGhApiHostname()] : []),
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-F',
+      `number=${issueNumber}`,
+    ];
+    // Omit `before` entirely on the first page -- an empty-string `-f
+    // before=` would send a literal empty-string cursor to GraphQL, not
+    // "unset" (mirrors provider-adapter-github.mts's own `after` handling).
+    if (before) {
+      apiArgs.push('-f', `before=${before}`);
+    }
+    const parsed = ghJson(apiArgs);
+    // Codex review (PR #2840): reject an absent connection/nodes array
+    // instead of defaulting to `[]` -- treating a genuine read failure (a
+    // deleted/inaccessible issue between the earlier REST fetch and this
+    // call, or a malformed response) as "zero edits" would silently let a
+    // real failure through as a false trustedEditor signal, since the
+    // caller's fail-open catch never runs when this function does not
+    // throw.
+    const connection = parsed.data?.repository?.issue?.userContentEdits;
+    if (!connection || !Array.isArray(connection.nodes)) {
+      throw new Error(
+        'userContentEdits: issue, connection, or nodes is null/absent',
+      );
+    }
+    allNodes.push(...connection.nodes);
+    if (connection.pageInfo?.hasPreviousPage !== true) {
+      return allNodes.map((node) =>
+        typeof node?.editor?.login === 'string' ? node.editor.login : null,
+      );
+    }
+    const startCursor = connection.pageInfo?.startCursor;
+    if (typeof startCursor !== 'string' || !startCursor) {
+      throw new Error(
+        'userContentEdits: hasPreviousPage is true but startCursor is absent',
+      );
+    }
+    before = startCursor;
   }
-  return nodes.map((node) =>
-    typeof node?.editor?.login === 'string' ? node.editor.login : null,
+  throw new Error(
+    `userContentEdits: exceeded ${USER_CONTENT_EDITORS_MAX_PAGES} pages without reaching the start of the connection`,
   );
 }
 /**

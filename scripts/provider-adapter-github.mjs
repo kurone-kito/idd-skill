@@ -102,11 +102,20 @@ function assertNoGraphqlErrors(payload, context) {
  * `editor` resolves to `null` for a deleted/ghost account -- GitHub still
  * records the edit itself.
  */
-function fetchWorkItemUserContentEdits(deps, owner, repo, number) {
-  const query = `query($owner:String!,$repo:String!,$number:Int!){
+/** Bounds the backward-pagination loop in {@link fetchWorkItemUserContentEdits}
+ * below: 10 pages of 100 edits each (1,000 total) is far beyond any
+ * realistic issue's edit history, so hitting it indicates a runaway
+ * connection (or a malicious/corrupted response) rather than a genuine
+ * long-lived issue -- fail closed (throw) past this rather than silently
+ * truncating the trust-relevant editor set the way the un-paginated
+ * `last:100` query already did. */
+const USER_CONTENT_EDITS_MAX_PAGES = 10;
+function fetchWorkItemUserContentEditsPage(deps, owner, repo, number, before) {
+  const query = `query($owner:String!,$repo:String!,$number:Int!,$before:String){
   repository(owner:$owner,name:$repo){
     issue(number:$number){
-      userContentEdits(last:100){
+      userContentEdits(last:100, before:$before){
+        pageInfo { hasPreviousPage startCursor }
         nodes { editedAt editor { login } }
       }
     }
@@ -125,6 +134,13 @@ function fetchWorkItemUserContentEdits(deps, owner, repo, number) {
     '-F',
     `number=${number}`,
   ];
+  // Omit the `before` variable entirely on the first page (rather than
+  // passing an empty-string `-f before=`, which GraphQL would treat as a
+  // literal empty-string cursor, not "unset") -- mirrors
+  // getWorkItemClosingPullRequestsPage's own `after` handling below.
+  if (before) {
+    apiArgs.push('-f', `before=${before}`);
+  }
   const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
   assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
   // Codex review, PR #2836: reject an absent connection/nodes array
@@ -143,13 +159,52 @@ function fetchWorkItemUserContentEdits(deps, owner, repo, number) {
       'userContentEdits: issue, connection, or nodes is null/absent',
     );
   }
-  return connection.nodes
-    .filter((node) => typeof node?.editedAt === 'string')
-    .map((node) => ({
-      editedAt: node.editedAt,
-      editorLogin:
-        typeof node.editor?.login === 'string' ? node.editor.login : null,
-    }));
+  return {
+    nodes: connection.nodes,
+    hasPreviousPage: connection.pageInfo?.hasPreviousPage === true,
+    startCursor:
+      typeof connection.pageInfo?.startCursor === 'string'
+        ? connection.pageInfo.startCursor
+        : null,
+  };
+}
+/** #2767 (Codex/CodeRabbit review, PR #2840): the `trustedEditor` signal
+ * requires every recorded editor to be trusted, so a single `last:100`
+ * page silently dropped an untrusted editor beyond the most recent 100
+ * edits -- exactly the laundering path the signal exists to block. Pages
+ * backward via `before:`/`hasPreviousPage` until the full connection is
+ * read, bounded by {@link USER_CONTENT_EDITS_MAX_PAGES}. */
+function fetchWorkItemUserContentEdits(deps, owner, repo, number) {
+  const allNodes = [];
+  let before = null;
+  for (let page = 0; page < USER_CONTENT_EDITS_MAX_PAGES; page += 1) {
+    const result = fetchWorkItemUserContentEditsPage(
+      deps,
+      owner,
+      repo,
+      number,
+      before,
+    );
+    allNodes.push(...result.nodes);
+    if (!result.hasPreviousPage) {
+      return allNodes
+        .filter((node) => typeof node?.editedAt === 'string')
+        .map((node) => ({
+          editedAt: node.editedAt,
+          editorLogin:
+            typeof node.editor?.login === 'string' ? node.editor.login : null,
+        }));
+    }
+    if (!result.startCursor) {
+      throw new Error(
+        'userContentEdits: hasPreviousPage is true but startCursor is absent',
+      );
+    }
+    before = result.startCursor;
+  }
+  throw new Error(
+    `userContentEdits: exceeded ${USER_CONTENT_EDITS_MAX_PAGES} pages without reaching the start of the connection`,
+  );
 }
 /**
  * #2460: synchronous bounded sleep via `Atomics.wait` on a throwaway
@@ -607,6 +662,13 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           htmlUrl:
             row.html_url === undefined ? undefined : String(row.html_url),
           milestone: row.milestone,
+          // #2767 (CodeRabbit review, PR #2840): populate user like
+          // getWorkItem() above already does -- discover-orphan-filter.mts's
+          // structural-evidence trustedEditor signal reads the author login
+          // straight off the bulk listOpenWorkItems() result (no secondary
+          // per-issue fetch), so an absent value here silently made the
+          // author check fail closed for every live orphan candidate.
+          user: row.user,
           // #2243 (Copilot review, PR #2557): populate createdAt like
           // getWorkItem() above already does -- discover-orphan-filter.mts's
           // triage-verdict staleness anchor reads this field straight off

@@ -135,6 +135,33 @@ test('listOpenWorkItems maps REST created_at into createdAt, like getWorkItem', 
   assert.equal(item.createdAt, '2026-08-01T00:00:00Z');
 });
 
+// #2767 (CodeRabbit review, PR #2840): same gap, same shape, for `user` --
+// getWorkItem already mapped REST's `user` into ProviderWorkItem's `user`
+// field, but listOpenWorkItems's own row mapping omitted it too.
+// discover-orphan-filter.mts's live CLI wiring reads the author login for
+// the `trustedEditor` structural-evidence signal straight off this bulk
+// result, so the gap silently made that signal fail closed for every live
+// orphan candidate, while every test using a hand-built fixture (bypassing
+// this REST-shape mapping) stayed green.
+test('listOpenWorkItems maps REST user into user, like getWorkItem', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          number: 901,
+          title: 'issue 901',
+          state: 'open',
+          user: { login: 'alice' },
+        },
+      ],
+    }),
+  );
+  const [item] = port.listOpenWorkItems();
+  assert.deepEqual(item.user, { login: 'alice' });
+});
+
 // ---------------------------------------------------------------------------
 // listRequiredChecks (#2266): the pre-migration ghJson/
 // recoverJsonFromGhFailure recovery this method replaces, verified through
@@ -490,6 +517,136 @@ test('getWorkItemUserContentEditTimestamps throws when nodes is missing from an 
   assert.throws(
     () => port.getWorkItemUserContentEditTimestamps(2738),
     /connection, or nodes is null\/absent/,
+  );
+});
+
+// #2767 (Codex/CodeRabbit review, PR #2840): a single `last:100` page
+// silently dropped an untrusted editor beyond the most recent 100 edits --
+// exactly the laundering path the `trustedEditor` signal exists to block.
+// getWorkItemUserContentEdits now pages backward via
+// `before`/`hasPreviousPage` until the full connection is read.
+
+test('getWorkItemUserContentEdits pages backward across multiple pages and aggregates every editor', () => {
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: (args) => {
+        call += 1;
+        // First call omits the `before` variable entirely; the second
+        // call must carry the first page's startCursor forward.
+        if (call === 1) {
+          assert.ok(
+            !args.some((arg) => String(arg).startsWith('before=')),
+            'first page must not send a before cursor',
+          );
+          return JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  userContentEdits: {
+                    pageInfo: {
+                      hasPreviousPage: true,
+                      startCursor: 'CURSOR_1',
+                    },
+                    nodes: [
+                      {
+                        editedAt: '2026-09-08T00:00:00Z',
+                        editor: { login: 'trusted-actor' },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          });
+        }
+        assert.equal(call, 2);
+        assert.ok(
+          args.includes('before=CURSOR_1'),
+          "second page must carry the first page's startCursor",
+        );
+        return JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: { hasPreviousPage: false, startCursor: null },
+                  nodes: [
+                    {
+                      editedAt: '2026-01-01T00:00:00Z',
+                      editor: { login: 'untrusted-actor' },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  const edits = port.getWorkItemUserContentEdits(2840);
+  assert.equal(call, 2);
+  assert.deepEqual(edits.map((edit) => edit.editorLogin).sort(), [
+    'trusted-actor',
+    'untrusted-actor',
+  ]);
+});
+
+test('getWorkItemUserContentEdits throws when hasPreviousPage is true but startCursor is absent', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: { hasPreviousPage: true, startCursor: null },
+                  nodes: [{ editedAt: '2026-09-08T00:00:00Z' }],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemUserContentEdits(2840),
+    /hasPreviousPage is true but startCursor is absent/,
+  );
+});
+
+test('getWorkItemUserContentEdits fails closed after exceeding the max page count', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: {
+                    hasPreviousPage: true,
+                    startCursor: 'ALWAYS_MORE',
+                  },
+                  nodes: [{ editedAt: '2026-09-08T00:00:00Z' }],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemUserContentEdits(2840),
+    /exceeded \d+ pages/,
   );
 });
 
