@@ -1256,3 +1256,32 @@ test('#2767: evaluateDiscoverViability degrades to the plain (pre-evidence) resu
   assert.equal(summary.discarded[0]?.number, 11);
   assert.ok(summary.discarded[0]?.failedCriteria.includes('limited_scope'));
 });
+
+test('#2767: evaluateDiscoverViability never calls computeStructuralEvidence when the only failure is clear_verification (Copilot/Codex review, PR #2840)', async () => {
+  const issues = new Map([
+    [
+      13,
+      {
+        number: 13,
+        title: 'tune UX copy',
+        state: 'OPEN',
+        body: 'Success is when it looks good and passes maintainer preference review.',
+      },
+    ],
+  ]);
+  let called = false;
+
+  const summary = await evaluateDiscoverViability([13], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    computeStructuralEvidence: () => {
+      called = true;
+      return ALL_STRUCTURAL_SIGNALS;
+    },
+  });
+
+  assert.equal(called, false, 'computeStructuralEvidence must not be called');
+  assert.equal(summary.discarded.length, 1);
+  assert.ok(
+    summary.discarded[0]?.failedCriteria.includes('clear_verification'),
+  );
+});

@@ -405,11 +405,20 @@ export async function evaluateDiscoverViability(
 
     // #2767: evaluate without structural evidence first, and only fetch it
     // (an extra network round trip in the live CLI) when the issue would
-    // otherwise fail -- an issue that already passes on wording alone never
-    // needs the demotion path, so this keeps the common case byte- and
-    // network-identical to before this hook existed.
+    // otherwise fail on a demotable criterion -- an issue that already
+    // passes on wording alone never needs the demotion path, and neither
+    // does one whose only failure is `clear_verification` (never
+    // demotable), so this keeps the common case byte- and
+    // network-identical to before this hook existed. (Copilot/Codex
+    // review, PR #2840): the prior `!result.passed` condition alone fired
+    // this fetch for a `clear_verification`-only failure too, spending an
+    // editor-history request plus a collaborator-permission lookup that
+    // could never change the outcome.
     let result = evaluateA4Viability(issue);
-    if (!result.passed && computeStructuralEvidence) {
+    const hasDemotableFailure = result.failedCriteria.some(
+      (id) => id === 'limited_scope' || id === 'autonomous_completion',
+    );
+    if (hasDemotableFailure && computeStructuralEvidence) {
       // #2767: a transient GitHub API failure (rate limit, timeout, an
       // absent GraphQL connection) fetching structural evidence must not
       // abort evaluation of every other issue in this batch -- degrade to
