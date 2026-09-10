@@ -510,18 +510,14 @@ see
 [docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#context-inheriting-delegation-residual-risk)
 for the field evidence.
 
-**Restate the CI/advisory-wait topology-safety condition; use the
-snapshot-then-stop pattern.** Carry — verbatim or by reference — the
-topology-safety condition from [idd-ci.instructions.md's Wake-up
+**Restate the CI/advisory-wait topology-safety condition.** Carry —
+verbatim or by reference — the topology-safety condition from
+[idd-ci.instructions.md's Wake-up
 discipline](idd-ci.instructions.md#wake-up-discipline) (also in
 [docs/idd-workflow.md's Orchestrator fan-out
 variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant));
 without it, a worker can stall indefinitely on an unconfirmed
-backgrounded wait (#2210). Default: the worker takes one non-blocking
-snapshot, reports it, stops if incomplete, never polls or waits on a
-notification. The orchestrator alone polls and resumes via a
-follow-up message (a fresh delegate re-inherits stale context and
-no-ops).
+backgrounded wait (#2210).
 
 ### Hide displaced claim chain on takeover
 
