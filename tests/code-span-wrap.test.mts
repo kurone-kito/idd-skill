@@ -233,11 +233,11 @@ test('findCorruptingProseWraps: does not flag emphasis text preceding an untermi
   assert.equal(violations.length, 1);
 });
 
-test('findCorruptingProseWraps: a single fixture file with no emphasis markup reports no violations', () => {
-  // This checks one specific fixture, not a full repository corpus scan
-  // -- that end-to-end check lives in
-  // audit-code-span-wrap.test.mts's auditCodeSpanWraps() regression
-  // (PR #2880 review, Copilot).
+test('findCorruptingProseWraps: a real fixture file with emphasis markup has no corrupting hyphen wraps', () => {
+  // This checks one specific fixture (which does contain `**bold**`
+  // emphasis, e.g. its "**Example**:" line -- PR #2880 review, Copilot),
+  // not a full repository corpus scan; that end-to-end check lives in
+  // audit-code-span-wrap.test.mts's auditCodeSpanWraps() regression.
   const text = readFileSync(
     join(
       REPO_ROOT,

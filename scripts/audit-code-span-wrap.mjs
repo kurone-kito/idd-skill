@@ -181,5 +181,7 @@ if (import.meta.main) {
   if (failed) {
     process.exit(1);
   }
-  console.log('audit-code-span-wrap: no mid-token code span wraps found.');
+  console.log(
+    'audit-code-span-wrap: no mid-token line breaks found (code spans or prose emphasis).',
+  );
 }
