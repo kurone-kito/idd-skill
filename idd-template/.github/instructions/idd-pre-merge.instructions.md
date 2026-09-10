@@ -139,17 +139,22 @@ turns an operator-visible failure into a silent stall.
   before deciding whether to retry. On an **infrastructure/transport-
   layer failure** — the invocation itself fails with no well-formed
   gate result at all (a bare network/transport error, or a non-2xx
-  HTTP status with no substantive JSON body) — retry the identical
-  invocation once, mirroring the CI-wait algorithm's own infra-vs-code
-  retry distinction (`ciWait.rerunPolicy`,
+  HTTP status with no substantive JSON body), **or returns well-formed
+  JSON whose sole content is a collection/transport-failure placeholder
+  rather than a real gate criterion** (for example a non-empty
+  `blockers` array whose only entry describes the collection failure
+  itself, not any actual merge-readiness criterion) — retry the
+  identical invocation once, mirroring the CI-wait algorithm's own
+  infra-vs-code retry distinction (`ciWait.rerunPolicy`,
   `idd-ci.instructions.md`) rather than inventing a new pattern; if the
   retry fails the same way, fall back to the discard-and-fetch-directly
   path below unchanged — a single bounded attempt, not a loop. A
   **substantive non-passing gate result** — the helper ran to
-  completion and returned well-formed JSON with real gate fields (for
-  example `claimValid: false` backed by an actual criterion, not a
-  collection-failure placeholder) — is never retried; continue trusting
-  it at face value, unchanged from today. For every other case —
+  completion and returned well-formed JSON with real gate fields backed
+  by an actual merge-readiness criterion (for example `claimValid:
+  false`), not a collection-failure placeholder — is never retried;
+  continue trusting it at face value, unchanged from today. For every
+  other case —
   output is invalid JSON, required sections are missing, or live GitHub
   state disagrees with it — discard helper output and fetch the
   activity universe snapshot (same scope as E1 Step 1) plus current CI
