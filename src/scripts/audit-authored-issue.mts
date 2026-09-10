@@ -65,6 +65,7 @@ import {
 } from './marker-helpers.mts';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
+import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 
@@ -276,6 +277,24 @@ export interface AuditOptions {
    * this one) omits it and gets the pre-#2703 no-op behavior.
    */
   upstreamEscalationEnabled?: boolean;
+  /**
+   * Trusted marker actor logins (case-insensitive), used only by
+   * `authoring-marker-minimization-backlog` to filter its count to
+   * comments the live hide-on-supersede sweep could actually clear
+   * (#2896 review, Codex): `minimize-superseded-markers.mts` and the
+   * documented sweep both reject a comment from an actor outside this
+   * set regardless of how byte-exact its body is, so counting an
+   * untrusted-author match as "eligible" would overstate what the sweep
+   * can clear. When omitted, this check does not filter by author at
+   * all -- every check in this module stays network-free and has no
+   * independent way to resolve a trust policy on its own, so an omitted
+   * value is treated as "trust unknown, do not filter" rather than "no
+   * one is trusted" (which would instead silently zero out the count).
+   * `main()` resolves this the same flag/env/config way every other
+   * `resolveTrustedMarkerActors` caller in this codebase does; a direct
+   * (non-CLI) caller that wants an accurate count should supply it.
+   */
+  trustedMarkerActors?: readonly string[];
 }
 
 /** One pre-fetched comment, as supplied to {@link AuditOptions.comments} and
@@ -293,9 +312,9 @@ export interface AuthoringCommentInput {
    * `isMinimized` field the GraphQL `node(id:)` probe in
    * `minimize-superseded-markers.mts` reads). Omitted or `false` is treated
    * as "not minimized" -- the fail-closed default for an observability
-   * count: a caller that does not know a comment's minimization state must
-   * not silently undercount the backlog `authoring-marker-minimization-
-   * backlog` reports.
+   * count: a caller that does not know a comment's minimization state
+   * must not silently undercount the backlog
+   * `authoring-marker-minimization-backlog` reports.
    */
   isMinimized?: boolean;
 }
@@ -538,6 +557,7 @@ const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--comments-file': { type: 'string' },
   '--journal-comments-file': { type: 'string' },
   '--new-issue': { type: 'boolean', default: false },
+  '--trusted-marker-logins': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
 } as const;
 
@@ -1718,17 +1738,29 @@ function checkAuthoringOwnerMarkerTrail(
  * `matchCanonicalAuthoringMarkerFamily` would see live.
  *
  * A match whose `isMinimized` is already `true` is excluded from the
- * count -- it is not backlog, it is already handled. Returns `0` when
- * `comments` is `undefined` (the caller, {@link
- * checkAuthoringMarkerMinimizationBacklog}, reports that family as "not
- * checked" rather than treating this `0` as a confirmed zero) or when
- * fewer than two matches exist (nothing can be "superseded" without a
- * later match to supersede it).
+ * count -- it is not backlog, it is already handled. When
+ * `trustedActors` is provided (#2896 review, Codex), a match whose
+ * `comment.author` is missing or not a case-insensitive member of that
+ * set is also excluded from the count: `minimize-superseded-markers.mts`
+ * and the documented sweep both require a trusted marker actor
+ * regardless of body match, so an untrusted-author match is never
+ * actually clearable and must not inflate this "eligible" count. This
+ * filter applies only to eligibility, never to which match is
+ * "newest" -- the newest determination stays purely structural (see
+ * above) so an untrusted-author comment can still correctly supersede
+ * an earlier trusted one. `trustedActors` left `undefined` disables this
+ * filter entirely (backward-compatible: every match counts regardless
+ * of author). Returns `0` when `comments` is `undefined` (the caller,
+ * {@link checkAuthoringMarkerMinimizationBacklog}, reports that family
+ * as "not checked" rather than treating this `0` as a confirmed zero) or
+ * when fewer than two matches exist (nothing can be "superseded" without
+ * a later match to supersede it).
  */
 function countEligibleSupersededMarkers(
   comments: readonly AuthoringCommentInput[] | undefined,
   markerPrefix: string,
   family: 'authoring-owner' | 'authoring-publication-intent',
+  trustedActors: ReadonlySet<string> | undefined,
 ): number {
   if (comments === undefined) {
     return 0;
@@ -1749,6 +1781,15 @@ function countEligibleSupersededMarkers(
   for (const index of matchIndexes) {
     if (index === newestIndex || comments[index].isMinimized === true) {
       continue;
+    }
+    if (trustedActors !== undefined) {
+      const author = comments[index].author;
+      if (
+        typeof author !== 'string' ||
+        !trustedActors.has(author.toLowerCase())
+      ) {
+        continue;
+      }
     }
     count += 1;
   }
@@ -1805,11 +1846,18 @@ function checkAuthoringMarkerMinimizationBacklog(
       'not applicable: neither comments nor journalComments were supplied to this check',
     );
   }
+  const trustedActors =
+    options.trustedMarkerActors === undefined
+      ? undefined
+      : new Set(
+          options.trustedMarkerActors.map((actor) => actor.toLowerCase()),
+        );
   const ownerBacklog = ownerChecked
     ? countEligibleSupersededMarkers(
         options.comments,
         markerPrefix,
         'authoring-owner',
+        trustedActors,
       )
     : null;
   const publicationIntentBacklog = intentChecked
@@ -1817,6 +1865,7 @@ function checkAuthoringMarkerMinimizationBacklog(
         options.journalComments,
         markerPrefix,
         'authoring-publication-intent',
+        trustedActors,
       )
     : null;
   const total = (ownerBacklog ?? 0) + (publicationIntentBacklog ?? 0);
@@ -1826,7 +1875,11 @@ function checkAuthoringMarkerMinimizationBacklog(
   const intentPart = intentChecked
     ? `authoring-publication-intent: ${publicationIntentBacklog}`
     : 'authoring-publication-intent: not checked (journalComments not supplied)';
-  const breakdown = `${ownerPart}, ${intentPart}`;
+  const trustNote =
+    trustedActors === undefined
+      ? ' [not author-trust-filtered: pass trustedMarkerActors for an accurate count]'
+      : '';
+  const breakdown = `${ownerPart}, ${intentPart}${trustNote}`;
   if (total === 0) {
     return pass(
       id,
@@ -2447,6 +2500,7 @@ interface CliArgs {
   commentsFile?: string;
   journalCommentsFile?: string;
   newIssue: boolean;
+  trustedMarkerLogins?: string;
 }
 
 /**
@@ -2571,6 +2625,16 @@ function main(): void {
 
   const policy = loadPolicy(args.configPath);
   const markerPrefix = args.markerPrefix ?? policy.markerPrefix;
+  // Same flag/env/config precedence every other resolveTrustedMarkerActors
+  // caller in this codebase uses (#2896 review, Codex): an empty
+  // resolution (no flag/env/config trusted actors configured) leaves
+  // authoring-marker-minimization-backlog's trust filter disabled, the
+  // same as omitting --trusted-marker-logins entirely.
+  const { actors: trustedMarkerActors } = resolveTrustedMarkerActors({
+    flagValue: args.trustedMarkerLogins ?? '',
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: policy.rawConfig,
+  });
 
   const report = auditAuthoredIssue(bodyText, {
     shape: args.shape as IssueShape,
@@ -2593,6 +2657,12 @@ function main(): void {
       : undefined,
     newIssue: args.newIssue,
     upstreamEscalationEnabled: policy.upstreamEscalationEnabled,
+    // An empty resolution (no flag/env/config trusted actors found) is
+    // "trust unknown," not "no one is trusted" -- pass `undefined` so
+    // authoring-marker-minimization-backlog's trust filter stays
+    // disabled (permissive) rather than zeroing out every count.
+    trustedMarkerActors:
+      trustedMarkerActors.length > 0 ? trustedMarkerActors : undefined,
   });
 
   writeReport(report, args.format);
@@ -2621,6 +2691,14 @@ function loadPolicy(configPath?: string): {
   needsDecisionLabelName: string;
   authoringLabelName: string;
   upstreamEscalationEnabled: boolean;
+  /**
+   * The raw loaded config object (or `null` when absent/unreadable),
+   * threaded through so `main()` can resolve `trustedMarkerActors` via
+   * the shared `resolveTrustedMarkerActors` flag/env/config ladder
+   * without this function needing its own opinion about that resolution
+   * order (#2896 review, Codex).
+   */
+  rawConfig: { trustedMarkerActors?: unknown } | null;
 } {
   // Default path: reuse the shared loadIddConfig() (idd-config.mts) rather
   // than a second "readFileSync + JSON.parse, null on error" copy of the
@@ -2661,6 +2739,7 @@ function loadPolicy(configPath?: string): {
       needsDecisionLabelName: POLICY_DEFAULTS.labels.needsDecisionLabelName,
       authoringLabelName: POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
       upstreamEscalationEnabled: false,
+      rawConfig: null,
     };
   }
   return {
@@ -2674,6 +2753,7 @@ function loadPolicy(configPath?: string): {
     authoringLabelName:
       normalizePolicyConfig(config).issueAuthoring.authoringLabelName,
     upstreamEscalationEnabled: isUpstreamEscalationEnabled(config),
+    rawConfig: config as { trustedMarkerActors?: unknown },
   };
 }
 
@@ -2732,6 +2812,7 @@ function parseArgs(argv: string[]): CliArgs {
     commentsFile: values['comments-file'] as string | undefined,
     journalCommentsFile: values['journal-comments-file'] as string | undefined,
     newIssue: values['new-issue'] as boolean,
+    trustedMarkerLogins: values['trusted-marker-logins'] as string | undefined,
     format,
   };
 }
@@ -2809,8 +2890,20 @@ Options:
                                     authoring-publication body line, and (when
                                     --comments-file is also given) requires
                                     --journal-comments-file and --issue too
+  --trusted-marker-logins <csv>    comma-separated trusted GitHub actor logins
+                                    (flag > $IDD_TRUSTED_MARKER_ACTORS >
+                                    .github/idd/config.json's trustedMarkerActors);
+                                    filters authoring-marker-minimization-backlog's
+                                    count to comments from a trusted actor, matching
+                                    minimize-superseded-markers.mjs's own trust gate.
+                                    Omitted or empty leaves that count unfiltered
+                                    (every check above this one is unaffected)
   --format <json|table>            output format (default: json)
   --help                           show this help
+
+Environment:
+  IDD_TRUSTED_MARKER_ACTORS        comma-separated trusted actor logins, used when
+                                    --trusted-marker-logins is not given (see above)
 `);
 }
 

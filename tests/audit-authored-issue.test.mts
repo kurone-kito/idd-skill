@@ -2972,6 +2972,119 @@ test('authoring-marker-minimization-backlog never fails the report, even with a 
   assert.equal(report.passed, true);
 });
 
+test('authoring-marker-minimization-backlog without trustedMarkerActors counts every byte-exact match regardless of author (backward compatible)', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'acquire' }),
+        author: 'some-untrusted-user',
+      },
+      { body: canonicalOwnerMarkerBody({ mode: 'release' }) },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.match(finding?.detail ?? '', /authoring-owner: 1/);
+  assert.match(finding?.detail ?? '', /not author-trust-filtered/);
+});
+
+test('authoring-marker-minimization-backlog with trustedMarkerActors excludes an untrusted-author match from the count (#2896 review, Codex)', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    trustedMarkerActors: ['kurone-kito'],
+    comments: [
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'acquire' }),
+        author: 'some-untrusted-user',
+      },
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'release' }),
+        author: 'kurone-kito',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  // The untrusted-author 'acquire' match is superseded but is never
+  // actually clearable by the live sweep -- it must not count as
+  // eligible, and the detail text must not repeat the "unfiltered"
+  // caveat once trustedMarkerActors is actually supplied.
+  assert.match(finding?.detail ?? '', /authoring-owner: 0\b/);
+  assert.doesNotMatch(finding?.detail ?? '', /not author-trust-filtered/);
+});
+
+test('authoring-marker-minimization-backlog with trustedMarkerActors counts a trusted-author match (case-insensitive)', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    trustedMarkerActors: ['Kurone-Kito'],
+    comments: [
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'acquire' }),
+        author: 'kurone-kito',
+      },
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'release' }),
+        author: 'KURONE-KITO',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.match(finding?.detail ?? '', /authoring-owner: 1/);
+});
+
+test('authoring-marker-minimization-backlog with trustedMarkerActors excludes a match with no author at all', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    trustedMarkerActors: ['kurone-kito'],
+    comments: [
+      // No `author` field -- unknown authorship must not be treated as
+      // trusted merely because a trust set was supplied.
+      { body: canonicalOwnerMarkerBody({ mode: 'acquire' }) },
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'release' }),
+        author: 'kurone-kito',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.match(finding?.detail ?? '', /authoring-owner: 0\b/);
+});
+
+test('authoring-marker-minimization-backlog trust filtering never changes which match is "newest"', () => {
+  // The 'release' marker (untrusted author) is still correctly excluded
+  // as "newest" -- structural newest-selection never consults trust --
+  // rather than being wrongly treated as a NEW eligible candidate simply
+  // because its own author fails the trust check. The earlier 'acquire'
+  // marker (trusted author) is genuinely superseded backlog and still
+  // counts as eligible on its own merits, regardless of who posted the
+  // newer marker that supersedes it.
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    trustedMarkerActors: ['kurone-kito'],
+    comments: [
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'acquire' }),
+        author: 'kurone-kito',
+      },
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'release' }),
+        author: 'some-untrusted-user',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.match(finding?.detail ?? '', /authoring-owner: 1/);
+});
+
 // --- upstream-candidate-marker-label: bidirectional pairing (#2700/#2703) ---
 
 function withUpstreamCandidateMarker(body: string): string {
