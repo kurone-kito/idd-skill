@@ -899,14 +899,16 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
   // match." The closure sentence must end in a period immediately
   // followed by known CodeRabbit reply boilerplate (or end of body) --
   // a genuinely new concern appended after a comma, rather than a
-  // period, never reaches that tail check, even though it is well
-  // within the 80-character locality bound the sibling test above
-  // exercises. CodeRabbit's round-4 review on PR #2868 found the
-  // original fixture used "partially addresses," so the hedge-adverb
-  // guard (guard 5) rejected it before ever reaching the tail check this
-  // test is meant to exercise -- the assertion held, but not for the
-  // stated reason. Dropped "partially" so the tail check (guard 3) is
-  // what actually rejects this fixture, matching the test's own claim.
+  // period, never reaches that tail check, even though "concern" is
+  // well within the 3-modifier-token gap bound the sibling test above
+  // exercises (the comma itself also breaks the token chain outright,
+  // since round 7 restricted gap tokens to `[\w-]+`). CodeRabbit's
+  // round-4 review on PR #2868 found the original fixture used
+  // "partially addresses," so the hedge-adverb guard (guard 5) rejected
+  // it before ever reaching the tail check this test is meant to
+  // exercise -- the assertion held, but not for the stated reason.
+  // Dropped "partially" so the tail check (guard 3) is what actually
+  // rejects this fixture, matching the test's own claim.
   const thread = {
     id: 'thread-addresses-concern-but-new-issue',
     isResolved: true,
