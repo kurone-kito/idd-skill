@@ -350,13 +350,15 @@ Before any mutating action in F3, apply the
    node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
    ```
 
-   **Workflow-run pre-post check (#2846)**: before this rule (here and
-   below), check this PR's `post-merge-cleanup.yml` run, waiting
-   (bounded) for it to finish if still in flight — see
-   `docs/idd-comment-minimization.md`'s Workflow-run ownership check.
-   Its posting step's conclusion exactly `success`: skip the agent's
-   own post entirely — that run owns it. Otherwise (no run found, or
-   any other conclusion): continue to the rule below unchanged.
+   **Workflow-run pre-post check (#2846)**: immediately before actually
+   posting below (fresh each time, not cached from here — a run's
+   status can change during dry-run/apply), check this PR's
+   `post-merge-cleanup.yml` run, waiting (bounded) for it to finish if
+   still in flight — see `docs/idd-comment-minimization.md`'s
+   Workflow-run ownership check. Its posting step's conclusion exactly
+   `success`: skip the agent's own post entirely — that run owns it.
+   Otherwise (no run found, or any other conclusion): continue to the
+   rule below unchanged.
 
    **Duplicate-success-record skip rule**: before posting any evidence
    comment below, skip it if the PR already carries a

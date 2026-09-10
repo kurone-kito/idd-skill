@@ -279,9 +279,9 @@ finished doing so — closing the residual race the marker-comment check
 alone cannot: a run that has started but not yet posted its comment
 leaves no marker for that rule to find, so without this earlier check
 both sides can still post within the same few-second window after
-merge (the observed incident: a live CodeRabbit review caught exactly
-this duplicate `idd-cleanup-evidence` comment on
-`kurone-kito/dotfiles#396`).
+merge (observed 2026-09-09 on `kurone-kito/dotfiles#396`: a live
+CodeRabbit review caught exactly this duplicate `idd-cleanup-evidence`
+comment on an adopter's PR).
 
 `gh pr checks` surfaces this `pull_request_target`-triggered run as a
 normal PR check even though it fires after merge — verified on PR
@@ -596,9 +596,13 @@ merge does not re-block the merge; it is an explicit record only.
 Post this comment to the PR after a successful or partial apply. The
 HTML comment token on the first line acts as a stable machine-readable
 marker so a resuming agent — or a concurrent `post-merge-cleanup`
-workflow run — can detect that evidence was already posted. Both the
-**agent-side** F4 step and the `post-merge-cleanup` workflow key on the
-prior **success** record: **skip the post when the latest trusted
+workflow run — can detect that evidence was already posted. The
+[Workflow-run ownership check](#server-side-fallback-optional) above
+runs first, even earlier than this marker-based rule; reaching this
+rule at all already means that check found no run to defer to. Both
+the **agent-side** F4 step and the `post-merge-cleanup` workflow then
+key on the prior **success** record: **skip the post when the latest
+trusted
 `<!-- idd-cleanup-evidence:` comment records a successful outcome
 (`applied` / `clean`)**, so neither side stacks a duplicate success
 record — even when this run's own apply returned `applied` for residual
