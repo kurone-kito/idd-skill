@@ -1069,7 +1069,17 @@ that list, a changed body digest, or the marker cannot be found conclusively
 `acquire`, `bootstrap`, `resume`, `release`, `release-guard`, or
 `release-complete` markers; only a `heartbeat` append may be skipped.
 
-**Hide superseded owner/publication-intent markers.** Once a fresh
+**Hide superseded owner/publication-intent markers.** Opportunistic: see
+the mandatory Stage 2 sweep below for the mechanism this contract
+actually relies on. Measured 2026-09-11 across 22 issues published
+after this per-post step first shipped (#2750/#2821): of 95
+expected-hideable `authoring-owner`/`authoring-publication-intent`
+comments, only 3 (about 3%) were actually minimized (#2896). Following
+this step in the moment is correct and still worth doing when
+convenient -- every comment it hides is one the Stage 2 sweep below does
+not have to -- but it is not something this contract can depend on by
+itself: a step invoked 3-9+ times per issue, buried mid-protocol with no
+mechanical enforcement, is too easy to skip under load. Once a fresh
 `authoring-owner` marker (any `mode`, including the first, generation-opening
 `acquire`/`bootstrap`) or `authoring-publication-intent` record (any `state`)
 has been posted and its own POST and re-fetch/verify above have both
@@ -1122,8 +1132,11 @@ nothing to minimize -- and every marker family already covered by the
 post-merge F4 cleanup driver (for example `claimed-by`, `review-watermark`,
 `advisory-wait`; see `docs/idd-comment-minimization.md`). Do not add
 `authoring-owner`, `authoring-publication-intent`, or `authoring-publication`
-to `OPERATIONAL_MARKERS`, and do not fold this step into the F4 driver: it
-is a separate, earlier-lifecycle, hide-at-post-time behavior.
+to `OPERATIONAL_MARKERS`, and do not fold this step or the Stage 2 sweep
+below into the F4 driver: minimization for this marker family stays a
+separate, earlier-lifecycle behavior owned by the issue-authoring
+protocol itself, not the post-merge cleanup driver -- whether triggered
+opportunistically here or mandatorily at Stage 2 release.
 
 Immediately before every body or roadmap relationship update, re-fetch both
 the target and the set anchor (the same fresh snapshot serves both roles when
@@ -1191,7 +1204,32 @@ release from the authoring hold (see the
 below for the one marker-scoped exception to this precondition). Keep the
 set anchor held until every other
 target's label removal is verified, and remove the anchor label last. First
-re-fetch owner comments during release-marker preflight. If a valid
+re-fetch owner comments during release-marker preflight.
+
+**Mandatory release-time hide-on-supersede sweep (#2896).** At this same
+point -- before the reuse-or-append decision below, so a retried or
+resumed release (which reuses an existing `release` marker and never
+appends a new one) still runs the sweep every time this preflight step
+is reached -- paginate the full owner-marker log this re-fetch just
+retrieved, plus the publication-intent log for the journal named in this
+session's own records, and minimize (classifier `OUTDATED`, via the
+existing `minimize-superseded-markers.mjs`, reusing
+`matchCanonicalAuthoringMarkerFamily` unchanged) every byte-exact
+canonical match that is not the newest for its family, exactly as the
+opportunistic per-post step above does. Attempt this once per target
+here, and once more on the anchor immediately before the release-complete
+preflight below; this is the sweep the contract depends on, but
+"mandatory" means **attempted**, not blocking -- a failed attempt
+(permission error, an unreadable comment list, or an unavailable helper
+runtime) skips silently and never stops release, matching the
+opportunistic step's own best-effort framing.
+`src/scripts/audit-authored-issue.mts`'s
+`authoring-marker-minimization-backlog` check, given the same paginated
+comment data, reports the count of eligible-but-not-yet-minimized markers
+mechanically, so a skipped or failed sweep attempt becomes a visible,
+countable signal instead of silence.
+
+If a valid
 current-owner/set `mode=release` marker already exists, reuse the earliest
 matching GitHub comment ID; otherwise append one with `supersedes` equal to
 the current owner token, re-fetch to verify it, and record its comment ID.
@@ -1215,8 +1253,13 @@ non-anchor
 labels one target at a time and re-fetch each result. After the
 final anchor label removal is verified, re-fetch every target and verify its
 current release marker, absent label, and expected body snapshot; any drift
-leaves the set open and prevents completion. Then reuse or append the
-anchor-only
+leaves the set open and prevents completion. Immediately before the
+release-complete reuse-or-append decision below, repeat the same
+mandatory sweep once more on the anchor's own owner-marker log and the
+journal's publication-intent log -- idempotent with every earlier
+target's own sweep above, since a comment either was already minimized
+or was not yet the newest for its family either way. Then reuse or
+append the anchor-only
 `mode=release-complete` marker and record its comment ID. Reconcile that ID
 and the paginated anchor log with bounded retries; a successful POST or
 verification timeout is inconclusive. If the trusted marker is found, keep
