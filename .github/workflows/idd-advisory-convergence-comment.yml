@@ -117,6 +117,30 @@
 # -- so this workflow does not need debounce protection for reviews at
 # all; "Rerun required HEAD check" below always proceeds for a review
 # submission instead of consulting the debounce step's output.
+#
+# Residual NOT closed by the above (Codex P1, PR #2855 review): the
+# pending-run-replacement gap this same module header already discloses
+# a few paragraphs up (a *queued*, not-yet-started run can still be
+# evicted and replaced by a newer trigger sharing this same
+# `concurrency.group`, before debounce -- which only judges an
+# ALREADY-STARTED run -- ever gets a say) applies to a review-triggered
+# run exactly as it does to a comment-triggered one: if a comment run
+# is already in-flight when a review lands, the review's own run queues
+# behind it, and a THIRD event landing before that queue slot is served
+# evicts the review's queued run in favor of the newer one, which never
+# carries `--refresh-latest`. This is not new to reviews -- it is the
+# same already-documented, already-accepted gap the pre-existing
+# comment-burst case already lived with -- and splitting this workflow
+# into a separate concurrency group per trigger family was already
+# considered and rejected for the analogous rollup-ordering race
+# `idd-advisory-convergence.yml`'s own "Concurrency-hardening
+# investigation" note documents: it would defeat the deliberate
+# cross-trigger debouncing this workflow depends on, without actually
+# closing the underlying queue-depth-of-one platform limitation. No safe
+# mechanical fix was found within this PR's scope; recovery is the same
+# manual `rerun-advisory-convergence.mjs --refresh-latest --apply` this
+# file's header already documents for the `action_required` and
+# fork-PR-token cases above.
 concurrency:
   # Do not cancel: a later human LGTM must not abort an in-flight
   # IDD-originated refresh before it reruns the required check (#2136).
@@ -190,8 +214,17 @@ jobs:
         id: debounce
         # `pull_request_review` deliberately excluded -- see the Debounce
         # module-header paragraph above for why a review must not be
-        # debounced in favor of a later comment-triggered run.
-        if: steps.origin.outputs.idd_originated == 'true'
+        # debounced in favor of a later comment-triggered run. The
+        # `github.event_name != 'pull_request_review'` conjunct is load-
+        # bearing, not redundant (Copilot + Codex P1, PR #2855 review): a
+        # review body that happens to classify as IDD-originated (it is
+        # fed through the same classifier as a comment, for the reason
+        # documented on "Classify review comment" above) would otherwise
+        # still satisfy `idd_originated == 'true'` and run this step for
+        # a review -- and if this step's own `gh api` calls then failed,
+        # the job would stop here (module header above), never reaching
+        # "Rerun required HEAD check" at all for that review.
+        if: steps.origin.outputs.idd_originated == 'true' && github.event_name != 'pull_request_review'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}

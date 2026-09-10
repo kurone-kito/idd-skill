@@ -78,9 +78,13 @@ name: IDD advisory-convergence gate
 # review-triggered run re-asserted, the same tamper path
 # `pull_request_target` closes for pushes -- so review submissions now
 # refresh the existing HEAD-associated required run from the companion
-# `idd-advisory-convergence-comment.yml` workflow instead, via
-# `rerun-advisory-convergence --apply`, the same mechanism review-thread
-# *comments* already used for the identical reason (#2136): a casual
+# `idd-advisory-convergence-comment.yml` workflow instead: a review
+# submission reruns via `rerun-advisory-convergence --refresh-latest
+# --apply` (Codex P1, PR #2855 review, after `--apply` alone turned out
+# to silently skip an already-passing or budget-exhausted instance --
+# see `RefreshLatestPlan`'s doc comment in `rerun-advisory-convergence.mts`),
+# while review-thread *comments* keep the plain `--apply` mechanism
+# they already used for a related but distinct reason (#2136): a casual
 # human reply used to start this same required job, overwrite or
 # cancel the SHA's verdict, and show up as "the reply got linted".
 #

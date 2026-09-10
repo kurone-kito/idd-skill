@@ -291,10 +291,16 @@ test('comment-refresh workflows never let debounce suppress a pull_request_revie
       debounceIfLine,
       `${path} debounce step must have an if: condition`,
     );
-    assert.doesNotMatch(
+    // Copilot + Codex P1 review, PR #2855: merely not MENTIONING
+    // pull_request_review is not enough -- a review body that happens to
+    // classify as IDD-originated (it is fed through the same classifier
+    // as a comment) would otherwise still satisfy
+    // `idd_originated == 'true'` and run this step for a review anyway.
+    // The exclusion must be explicit and load-bearing, not incidental.
+    assert.match(
       debounceIfLine as string,
-      /pull_request_review/,
-      `${path} debounce step's if: must not run for pull_request_review -- its skip output must never be consulted for a review`,
+      /github\.event_name\s*!=\s*'pull_request_review'/,
+      `${path} debounce step's if: must explicitly exclude pull_request_review, not merely omit mentioning it`,
     );
 
     const rerunStepText = text.slice(
