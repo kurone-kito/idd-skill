@@ -227,40 +227,49 @@ test('hasReviewFixLoopCutoffDeferMarker recognizes only the exact marker (#2877)
 test('extractReviewFixLoopCutoffRefsIssueNumbers captures Refs lines like extractBlockedByIssueNumbers (#2877)', () => {
   assert.deepEqual(
     extractReviewFixLoopCutoffRefsIssueNumbers('Refs #100, #200'),
-    [100, 200],
+    { numbers: [100, 200], ambiguous: false },
   );
-  assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers('- Refs #55'),
-    [55],
-  );
+  assert.deepEqual(extractReviewFixLoopCutoffRefsIssueNumbers('- Refs #55'), {
+    numbers: [55],
+    ambiguous: false,
+  });
   // Mid-sentence prose is not a dependency declaration.
   assert.deepEqual(
     extractReviewFixLoopCutoffRefsIssueNumbers('this refs #5 in passing'),
-    [],
+    { numbers: [], ambiguous: false },
   );
   // Inline-code and fenced examples stay masked, matching the other
   // extractors' #1121 boundary.
-  assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers('`Refs #77`'),
-    [],
-  );
+  assert.deepEqual(extractReviewFixLoopCutoffRefsIssueNumbers('`Refs #77`'), {
+    numbers: [],
+    ambiguous: false,
+  });
 });
 
-test('extractReviewFixLoopCutoffRefsIssueNumbers takes only the first Refs line (#2877 review fix, Codex P2)', () => {
-  // A second, unrelated `Refs` citation elsewhere in the body (e.g. an
-  // informational aside) must not also be treated as an originating-issue
-  // declaration -- only the first line's numbers count.
+test('extractReviewFixLoopCutoffRefsIssueNumbers ignores a Refs mention that does not start its own line (#2877 review fix, Codex P2)', () => {
+  // "See also Refs #900 ..." does not begin with the `Refs` keyword after
+  // the shared line prefix, so it is ordinary prose, not a second
+  // keyword-line declaration -- the sole genuine line (`Refs #100`) wins
+  // unambiguously.
   assert.deepEqual(
     extractReviewFixLoopCutoffRefsIssueNumbers(
       'Refs #100\n\nSee also Refs #900 (non-blocking) for background.',
     ),
-    [100],
+    { numbers: [100], ambiguous: false },
   );
+});
+
+test('extractReviewFixLoopCutoffRefsIssueNumbers reports ambiguous when more than one genuine Refs line exists (#2877 review fix round 2, Codex P2)', () => {
+  // Both lines start with the `Refs` keyword, so nothing in the body text
+  // distinguishes the true origin from an unrelated citation -- D3 requires
+  // exactly one such line, so this fails closed rather than guessing by
+  // body position (the earlier "take the first line" behavior was
+  // order-fragile).
   assert.deepEqual(
     extractReviewFixLoopCutoffRefsIssueNumbers(
       '## Background\n\nRefs #12, #13\n\nRefs #999 unrelated',
     ),
-    [12, 13],
+    { numbers: [], ambiguous: true },
   );
 });
 
@@ -846,6 +855,37 @@ test('a marked issue with no Refs line at all fails closed (#2877 review fix)', 
   assert.equal(summary.ready.length, 0);
   assert.deepEqual(summary.filteredOut[0].reasons, [
     'missing_defer_source_refs_line',
+  ]);
+});
+
+test('a marked issue with two genuine Refs lines fails closed as ambiguous (#2877 review fix round 2, Codex P2)', async () => {
+  const issues = new Map([
+    [
+      412,
+      {
+        number: 412,
+        title: 'malformed deferred follow-up with two Refs lines',
+        state: 'OPEN',
+        body: [
+          '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+          '',
+          'Refs #900 (non-blocking)',
+          '',
+          'Refs #410',
+        ].join('\n'),
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([412], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut[0].reasons, [
+    'ambiguous_defer_source_refs_lines',
   ]);
 });
 

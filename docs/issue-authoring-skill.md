@@ -1249,7 +1249,7 @@ Work on its own.
 ### Narrow auto-release exception (review-fix-loop-cutoff)
 
 A follow-up issue whose body carried the exact marker
-`<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->` at
+`<!-- <marker-prefix>-authoring-defer-source: review-fix-loop-cutoff -->` at
 Stage 1 publication time — part of the initial `authoring-publication` body
 write, never added by a later edit — may complete the full release
 checklist and label-removal sequence above without the "user explicitly
@@ -1305,7 +1305,11 @@ line back to the deferred work (the D3 follow-up-issue rule in
 treats that specific `Refs` reference as a hard blocker — resolved the
 same way an ordinary `Blocked by #<N>` line is — while
 `#<originating-issue>` stays open, a narrow exception to `Refs`
-otherwise being non-blocking everywhere else in this workflow.
+otherwise being non-blocking everywhere else in this workflow. The
+marked follow-up must carry exactly one `Refs` keyword line: nothing
+in body text lets Discover safely tell the true origin apart from an
+unrelated `Refs` citation that also starts its own line, so more than
+one fails closed instead of guessing by position.
 
 ## Reuse-first issue policy
 

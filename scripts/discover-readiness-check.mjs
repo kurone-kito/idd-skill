@@ -341,14 +341,22 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     // closes. An issue without the marker is completely unaffected -- its
     // own `Refs` lines are never inspected here.
     if (hasReviewFixLoopCutoffDeferMarker(issue.body, resolvedMarkerPrefix)) {
-      const deferSourceRefsNumbers = extractReviewFixLoopCutoffRefsIssueNumbers(
-        issue.body,
-      );
+      const {
+        numbers: deferSourceRefsNumbers,
+        ambiguous: deferSourceRefsAmbiguous,
+      } = extractReviewFixLoopCutoffRefsIssueNumbers(issue.body);
       // Review fix (#2877): a marked issue with no extracted `Refs` target
       // at all is a malformed marker -- missing the D3-required
       // originating-issue line -- and must fail closed (blocked) rather
       // than silently becoming Discover-ready with no blocker reasons.
-      if (deferSourceRefsNumbers.length === 0) {
+      // Review fix round 2 (#2877, Codex P2): a marked issue with *more
+      // than one* genuine `Refs` keyword line is equally malformed -- D3
+      // requires exactly one, and nothing about body order lets this
+      // function safely guess which line is the true origin -- so this
+      // also fails closed instead of picking one arbitrarily.
+      if (deferSourceRefsAmbiguous) {
+        reasons.add('ambiguous_defer_source_refs_lines');
+      } else if (deferSourceRefsNumbers.length === 0) {
         reasons.add('missing_defer_source_refs_line');
       }
       for (const refsNumber of deferSourceRefsNumbers) {
@@ -677,35 +685,50 @@ export function hasReviewFixLoopCutoffDeferMarker(
   return pattern.test(stripMarkdownCodeRegions(body));
 }
 /**
- * Collect the `#N` references declared on the **first** `Refs` keyword line
- * in the body -- never every `Refs` line the way
- * {@link extractBlockedByIssueNumbers} collects every `Blocked by` line
- * (#2877 review fix, Codex P2). The D3 follow-up-issue rule requires
- * exactly one `Refs #<originating-issue>` line naming the work this
- * marker's target was deferred from; a later, unrelated `Refs #N` citation
- * elsewhere in the body (for example an informational
- * `Refs #900 (non-blocking)` aside) is ordinary prose, not a second
- * originating-issue declaration, and must not also become a hard blocker.
- * The caller decides whether the result is blocking -- see
- * {@link hasReviewFixLoopCutoffDeferMarker} -- and how to treat an empty
- * result (no `Refs` line found at all).
+ * Collect the `#N` references declared on the body's `Refs` keyword line --
+ * never every `Refs` line the way {@link extractBlockedByIssueNumbers}
+ * collects every `Blocked by` line (#2877 review fix, Codex P2). The D3
+ * follow-up-issue rule requires exactly one `Refs #<originating-issue>`
+ * line naming the work this marker's target was deferred from. Reading
+ * only the first matching line by body position is order-fragile: a
+ * later, unrelated `Refs #N` citation that also happens to start its own
+ * line (for example a standalone `Refs #900 (non-blocking)` aside) is
+ * textually indistinguishable from the true origin, and nothing in D3
+ * guarantees the origin line comes first (#2877 review fix, Codex P2
+ * round 2). Rather than guess an order, this requires exactly one genuine
+ * `Refs` keyword line: zero yields `{ numbers: [], ambiguous: false }`
+ * (the caller's `missing_defer_source_refs_line` reason covers that);
+ * two or more yields `{ numbers: [], ambiguous: true }`, and the caller
+ * fails closed instead of arbitrarily picking one. A `Refs` mention that
+ * does not start its own line (ordinary prose citing an issue
+ * mid-sentence, like `See also Refs #900 (non-blocking) for background.`)
+ * is not a keyword line at all and never counts toward this check. See
+ * {@link hasReviewFixLoopCutoffDeferMarker} for how the caller decides
+ * whether any of this is blocking in the first place.
  */
 export function extractReviewFixLoopCutoffRefsIssueNumbers(body) {
   const stripped = stripMarkdownCodeRegions(body);
   const linePattern = new RegExp(
     `${DEPENDENCY_LINE_PREFIX}Refs:?[ \\t]+(#\\d+.*)$`,
-    'im',
+    'gim',
   );
-  const match = linePattern.exec(stripped);
-  if (!match) {
-    return [];
+  const lineMatches = [...stripped.matchAll(linePattern)];
+  if (lineMatches.length === 0) {
+    return { numbers: [], ambiguous: false };
   }
+  if (lineMatches.length > 1) {
+    return { numbers: [], ambiguous: true };
+  }
+  const [match] = lineMatches;
   const { numbers } = consumeDependencyRefList(match[1]);
   const continuationNumbers = consumeContinuationRefLines(
     stripped,
     (match.index ?? 0) + match[0].length,
   );
-  return dedupeNumbers([...numbers, ...continuationNumbers]);
+  return {
+    numbers: dedupeNumbers([...numbers, ...continuationNumbers]),
+    ambiguous: false,
+  };
 }
 /**
  * Walk `argv` and return every occurrence of the given long-flag literals
