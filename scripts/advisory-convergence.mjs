@@ -2146,10 +2146,10 @@ export function collectFromGitHub(
   // /repos/{owner}/{repo}/actions/runs/{run-id}` evidence for any
   // self-referential-bootstrap-auto waiver candidate marker, so the pure
   // verdict function performs no I/O of its own. A cheap, network-free
-  // local scan (marker-shape prefix test + author/reason/run-id parse)
-  // narrows this to the small set of comments that could possibly be
-  // this waiver kind before paying for one Actions-run lookup per
-  // DISTINCT run id among them -- head-SHA/expiry/claim trust is
+  // local scan (marker-shape prefix test + author/reason/run-id/HEAD
+  // parse) narrows this to the small set of comments that could
+  // possibly be this waiver kind before paying for one Actions-run
+  // lookup per DISTINCT run id among them -- expiry/claim trust is
   // verified later, inside `computeAdvisoryConvergenceVerdict`; this
   // scan is a cost optimization only, never the authoritative check.
   // The author check (Copilot review, PR #2895) is still required here,
@@ -2159,7 +2159,28 @@ export function collectFromGitHub(
   // one Actions-run lookup per fake id on every assert invocation --
   // individually fail-closed, but a real drain on the repository-shared
   // `GITHUB_TOKEN` rate-limit budget.
-  const autoWaiverRunIds = new Set();
+  //
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 5): the
+  // author check alone does not bound the COUNT of lookups -- a
+  // same-repository PR-authored `pull_request` workflow with
+  // `issues: write` can still post as `github-actions[bot]` (that
+  // token's permissions are not fork-restricted for a same-repository
+  // PR) and spam arbitrarily many distinct fake `run-id:` values under
+  // the correct reason token, each costing a separate serialized
+  // Actions API call. Two additional, independent filters close
+  // this: (1) a local, network-free HEAD-SHA match against this PR's
+  // OWN current HEAD -- cheap and correlates every genuine marker,
+  // since `renderExternalCheckWaiverComment` always binds one to the
+  // HEAD it was posted for; and (2) a hard cap on the number of
+  // distinct run ids ever looked up, taking the EARLIEST candidates by
+  // `createdAt` (mirroring `collectValidWaiverComments`'s own
+  // earliest-wins convention) so a flood of later spam comments can
+  // never crowd out the genuine, normally-single, early post. Five is
+  // generous headroom over the "at most one legitimate marker per
+  // relevant push" steady state while keeping a burst bounded and cheap.
+  const MAX_AUTO_WAIVER_RUN_LOOKUPS = 5;
+  const autoWaiverCandidates = [];
+  const seenAutoWaiverRunIds = new Set();
   for (const comment of comments) {
     const body = String(comment.body ?? '');
     if (!/^<!--\s*idd-external-check-waiver:/i.test(body)) {
@@ -2171,18 +2192,27 @@ export function collectFromGitHub(
     if (authorLogin !== 'github-actions[bot]') {
       continue;
     }
-    const parsed = parseExternalCheckWaiverComment(
-      body,
-      String(comment.createdAt ?? ''),
-    );
+    const createdAt = String(comment.createdAt ?? '');
+    const parsed = parseExternalCheckWaiverComment(body, createdAt);
     if (
       parsed &&
       parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
-      parsed.runId
+      parsed.runId &&
+      !seenAutoWaiverRunIds.has(parsed.runId) &&
+      String(parsed.headSha ?? '')
+        .trim()
+        .toLowerCase() === prHeadSha
     ) {
-      autoWaiverRunIds.add(parsed.runId);
+      seenAutoWaiverRunIds.add(parsed.runId);
+      autoWaiverCandidates.push({ runId: parsed.runId, createdAt });
     }
   }
+  const autoWaiverRunIds = new Set(
+    autoWaiverCandidates
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .slice(0, MAX_AUTO_WAIVER_RUN_LOOKUPS)
+      .map((candidate) => candidate.runId),
+  );
   const autoWaiverRunLookups = {};
   for (const runId of autoWaiverRunIds) {
     try {

@@ -434,3 +434,94 @@ test('collectFromGitHub never looks up a run id from a non-github-actions[bot] a
     assert.deepEqual(inputs.autoWaiverRunLookups, {});
   });
 });
+
+test("collectFromGitHub never looks up a run id whose own marker HEAD does not match this PR's current HEAD (Codex review, PR #2895, round 5)", () => {
+  withHermeticCwd(() => {
+    // Correct author, reason, and run-id shape -- only the bound HEAD is
+    // wrong. Without a local HEAD pre-filter this would still cost an
+    // Actions-run lookup; the authoritative HEAD check inside
+    // computeAdvisoryConvergenceVerdict already rejects it later, but by
+    // then the API call (and its rate-limit cost) has already happened.
+    const wrongHeadMarker = {
+      id: 4,
+      body: renderExternalCheckWaiverComment({
+        agentId: 'github-actions-bot',
+        claimId: 'claim-abc',
+        headSha: 'b'.repeat(40),
+        checkSelector: 'idd-advisory-convergence',
+        reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        expiresAt: '2099-01-01T00:00:00Z',
+        actor: 'github-actions[bot]',
+        runId: RUN_ID,
+      }),
+      createdAt: '2026-07-31T09:00:00Z',
+      updatedAt: '2026-07-31T09:00:00Z',
+      authorLogin: 'github-actions[bot]',
+    };
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [wrongHeadMarker] },
+      // No `workflowRuns` fixture at all -- any lookup attempt would throw.
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunLookups, {});
+  });
+});
+
+test('collectFromGitHub bounds the number of run-id lookups, keeping only the earliest candidates by createdAt (Codex review, PR #2895, round 5: DoS-via-comment-flood guard)', () => {
+  withHermeticCwd(() => {
+    // Seven distinct, otherwise-fully-valid candidates -- a same-repository
+    // PR-authored pull_request workflow with issues: write is not
+    // fork-restricted and could post arbitrarily many of these. Only a
+    // hard cap on lookup COUNT closes this, independent of the HEAD/author
+    // filters above (a flood could still share this PR's own real HEAD).
+    const candidateCount = 7;
+    const comments = Array.from({ length: candidateCount }, (_, index) => ({
+      id: 100 + index,
+      body: renderExternalCheckWaiverComment({
+        agentId: 'github-actions-bot',
+        claimId: 'claim-abc',
+        headSha: HEAD_SHA,
+        checkSelector: 'idd-advisory-convergence',
+        reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        expiresAt: '2099-01-01T00:00:00Z',
+        actor: 'github-actions[bot]',
+        runId: String(index),
+      }),
+      // Ascending createdAt -- the earliest five (run ids "0".."4") are
+      // the ones a bound respecting earliest-wins must keep.
+      createdAt: `2026-07-31T09:00:0${index}Z`,
+      updatedAt: `2026-07-31T09:00:0${index}Z`,
+      authorLogin: 'github-actions[bot]',
+    }));
+    const workflowRuns: Record<string, unknown> = {};
+    for (let index = 0; index < candidateCount; index += 1) {
+      workflowRuns[`o/r/${index}`] = {
+        path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+        head_sha: HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      };
+    }
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: comments },
+      workflowRuns,
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    const lookedUpRunIds = Object.keys(inputs.autoWaiverRunLookups ?? {})
+      .map(Number)
+      .sort((left, right) => left - right);
+    assert.deepEqual(lookedUpRunIds, [0, 1, 2, 3, 4]);
+  });
+});
