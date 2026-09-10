@@ -25,6 +25,13 @@
  */
 import { isAbsolute, relative, resolve } from 'node:path';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mjs';
+import {
+  findFencedCodeRanges,
+  findIndentedCodeRanges,
+  findMarkdownCodeRanges,
+  maskMarkdownCodeRegionsPreservingPositions,
+} from './markdown-code.mjs';
+import { findHtmlCommentRanges } from './resolved-decision.mjs';
 
 /**
  * A code span inside the `## Acceptance criteria` section naming one of
@@ -59,6 +66,30 @@ const NEXT_ATX_HEADING_PATTERN =
  * issues) on its own line. */
 const ACCEPTANCE_CRITERIA_HEADING_PATTERN =
   /^#{1,6}[ \t]*Acceptance\s+[Cc]riteria[ \t]*$/im;
+/**
+ * Mask fenced code, indented (4-space) code, and real HTML comment ranges
+ * (Codex review, PR #2840): an issue can quote an example `## Acceptance
+ * criteria` heading plus two checkbox-looking lines or an inline-command
+ * code span inside a fenced block, or hide the same shape inside an HTML
+ * comment -- Markdown renders neither as a real heading, checklist, or
+ * code span, but the raw-text regexes below previously counted it anyway.
+ * With an existing candidate-file path and a trusted editor, that let a
+ * genuine scope/autonomy/verifiability failure demote to `warn`. Mirrors
+ * `suitability-triage.mts`'s own `checkVerifiability` `fenceMaskedBody`
+ * construction (`#2711`/`#2735` review rounds) rather than reinventing it
+ * -- deliberately leaves inline code spans unmasked, since
+ * `hasVerificationCommandSignal`'s own signal lives inside a real inline
+ * code span and must stay readable.
+ */
+function maskOpaqueMarkdown(body) {
+  const fencedRanges = findFencedCodeRanges(body);
+  const codeRanges = findMarkdownCodeRanges(body);
+  return maskMarkdownCodeRegionsPreservingPositions(body, [
+    ...fencedRanges,
+    ...findIndentedCodeRanges(body, fencedRanges),
+    ...findHtmlCommentRanges(body, codeRanges),
+  ]);
+}
 /** Extract the raw text of the named ATX section (heading line excluded,
  * bounded by the next ATX heading or end of body). Returns `''` when the
  * heading is absent. */
@@ -80,7 +111,7 @@ function extractSectionText(body, headingPattern) {
  */
 export function hasVerificationCommandSignal(body) {
   const section = extractSectionText(
-    String(body ?? ''),
+    maskOpaqueMarkdown(String(body ?? '')),
     ACCEPTANCE_CRITERIA_HEADING_PATTERN,
   );
   if (section.length === 0) {
@@ -121,7 +152,7 @@ export function candidateFilesExistOnDisk(
   existsAt,
   repoRoot = process.cwd(),
 ) {
-  const paths = parseCandidateFiles(body);
+  const paths = parseCandidateFiles(maskOpaqueMarkdown(String(body ?? '')));
   return paths.some((path) =>
     candidatePathVariants(path).some((variant) => {
       const resolved = resolveRepoPath(repoRoot, variant);
@@ -152,7 +183,14 @@ function resolveRepoPath(repoRoot, candidatePath) {
   }
   const resolved = resolve(repoRoot, candidatePath);
   const rel = relative(repoRoot, resolved);
-  if (rel === '..' || rel.startsWith(`..${'/'}`) || isAbsolute(rel)) {
+  // `path.relative`'s own separator is platform-bound (win32 emits
+  // `..\...`, not `../...`) -- checking only the POSIX form (Copilot
+  // review, PR #2840) let an escaping `rel` through unnoticed whenever this
+  // module runs on a Windows host. `path.relative` always normalizes any
+  // `..` segments to the front of the result, so checking the first
+  // segment under either separator is sufficient without a second
+  // backslash-specific `startsWith`.
+  if (rel.split(/[\\/]/)[0] === '..' || isAbsolute(rel)) {
     return null;
   }
   return resolved;

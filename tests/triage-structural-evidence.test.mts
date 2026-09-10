@@ -71,6 +71,38 @@ test('hasVerificationCommandSignal: case-insensitive heading', () => {
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: an example inside a fenced code block does not count (Codex review, PR #2840)', () => {
+  const body = [
+    'Some prose about the marker syntax:',
+    '',
+    '```markdown',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '```',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: an example inside an HTML comment does not count (Codex review, PR #2840)', () => {
+  const body = [
+    '<!--',
+    '## Acceptance criteria',
+    '',
+    '- `node --test tests/foo.test.mts` passes',
+    '-->',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: a real command inside a real inline code span still counts even after masking (control)', () => {
+  const body = `## Acceptance criteria\n\n- \`node --test tests/foo.test.mts\` passes\n`;
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 // --- candidateFilesExistOnDisk -----------------------------------------------
 
 test('candidateFilesExistOnDisk: true when at least one listed path exists', () => {
@@ -118,6 +150,54 @@ test('candidateFilesExistOnDisk: a ../-escaping path candidate never satisfies t
   const body = `## Candidate files\n\n- \`../../etc/passwd\`\n`;
   assert.equal(
     candidateFilesExistOnDisk(body, () => true, '/repo'),
+    false,
+  );
+});
+
+test('candidateFilesExistOnDisk: a Windows-backslash-form ../-escaping path never satisfies the signal, even on a POSIX host (Copilot review, PR #2840)', () => {
+  // On a genuinely POSIX host, `path.resolve`/`path.relative` never treat
+  // a backslash as a directory separator, so this candidate cannot
+  // actually escape repoRoot on the host actually running this test --
+  // this exercises `resolveRepoPath`'s own defense-in-depth (the same
+  // separator-agnostic check the drive-letter case already required),
+  // not a POSIX-host escape.
+  const body = '## Candidate files\n\n- `..\\..\\etc\\passwd`\n';
+  assert.equal(
+    candidateFilesExistOnDisk(body, () => true, '/repo'),
+    false,
+  );
+});
+
+test('candidateFilesExistOnDisk: an example inside a fenced code block does not count (Codex review, PR #2840)', () => {
+  const body = [
+    'Some prose about the marker syntax:',
+    '',
+    '```markdown',
+    '## Candidate files',
+    '',
+    '- `src/scripts/foo.mts`',
+    '```',
+    '',
+  ].join('\n');
+  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    false,
+  );
+});
+
+test('candidateFilesExistOnDisk: an example inside an HTML comment does not count (Codex review, PR #2840)', () => {
+  const body = [
+    '<!--',
+    '## Candidate files',
+    '',
+    '- `src/scripts/foo.mts`',
+    '-->',
+    '',
+  ].join('\n');
+  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
     false,
   );
 });
