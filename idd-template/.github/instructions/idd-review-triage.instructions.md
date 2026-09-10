@@ -72,9 +72,9 @@ Then apply path-specific scoring:
   does not reach `Accept forced` merely for being High-severity.
   Record a rejected instance as a known limitation (the PR body's
   "Follow-up issues (if any)" section), not a defect, editing the
-  body under the same safeguards as
-  `idd-review-fix.instructions.md`'s E12 "PR body sync" (claim
-  revalidation gate immediately before the edit, fetch the current full
+  body under the same safeguards as the "PR body sync" subsection of
+  `idd-review-fix.instructions.md`'s E12 (claim revalidation gate
+  immediately before the edit, fetch the current full
   body, edit only this claim, post the full result back, then re-check
   `closingIssuesReferences`) regardless of whether E9-E15 otherwise runs
   this round — a scope-fenced rejection can leave the Accepted PATH A
