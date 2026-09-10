@@ -864,6 +864,28 @@ test('planExternalCheckWaiver: --auto-bootstrap requires a run id', () => {
   assert.match(report.blockingReasons.join(' | '), /requires a run id/);
 });
 
+test('planExternalCheckWaiver: --auto-bootstrap rejects a run id that is not a canonical positive integer (Codex review, PR #2895, round 11)', () => {
+  // Same invariant as the CLI-layer parseArgs check, repeated here in case
+  // a future caller constructs the plan input directly instead of
+  // through the CLI (this exact file's own doc comment on the check).
+  for (const invalid of ['0', '-1', '1.5', 'abc', '123/../../evil']) {
+    const input = buildAutoBootstrapInput();
+    input.runId = invalid;
+
+    const report = planExternalCheckWaiver(input, {
+      now: new Date('2026-08-31T03:13:24Z'),
+      repoOwner: 'kurone-kito',
+    });
+
+    assert.equal(report.canApply, false, `run id ${invalid} must block`);
+    assert.match(
+      report.blockingReasons.join(' | '),
+      /canonical positive integer/,
+      `run id ${invalid} must report the canonical-integer reason`,
+    );
+  }
+});
+
 test('planExternalCheckWaiver: --auto-bootstrap cannot be combined with --claimless', () => {
   const input = buildAutoBootstrapInput();
   input.claimless = true;
@@ -1022,6 +1044,36 @@ test('parseArgs: --auto-bootstrap requires --run-id, the dedicated --reason, and
   assert.throws(
     () => parseArgs([...base, '--auto-bootstrap', '--claimless']),
     /cannot be combined with --claimless/,
+  );
+});
+
+test('parseArgs: --auto-bootstrap rejects a --run-id that is not a canonical positive integer (Codex review, PR #2895, round 11)', () => {
+  // `advisory-convergence.mts`'s `collectFromGitHub` only ever trusts a
+  // `run-id:` token that parses as a canonical positive integer
+  // (`parseCanonicalIntegerOrNull`, guarding against path-injection into
+  // the Actions REST run-lookup path). Posting a marker with a run id
+  // that consumer is guaranteed to reject would leave the required gate
+  // red with no visible cause -- reject it here, at the producer, instead.
+  const base = [
+    '--pr',
+    '5',
+    '--check',
+    'idd-advisory-convergence',
+    '--reason',
+    SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    '--auto-bootstrap',
+  ];
+  for (const invalid of ['0', '-1', '1.5', 'abc', '007', '123/../../evil']) {
+    assert.throws(
+      () => parseArgs([...base, '--run-id', invalid]),
+      /canonical positive integer/,
+      `--run-id ${invalid} must be rejected`,
+    );
+  }
+  assert.equal(
+    parseArgs([...base, '--run-id', '999']).runId,
+    '999',
+    'a genuine canonical positive integer must still be accepted',
   );
 });
 

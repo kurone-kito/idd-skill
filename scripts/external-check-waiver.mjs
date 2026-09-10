@@ -12,7 +12,7 @@ import {
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
-import { parseCliArgs } from './cli-args.mjs';
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mjs';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mjs';
 import {
@@ -277,6 +277,17 @@ export function planExternalCheckWaiver(input, options = {}) {
   }
   if (autoBootstrap && !runId) {
     blockingReasons.push('--auto-bootstrap requires a run id');
+  }
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895 round 11): the same
+  // invariant the CLI layer enforces (parseArgs), repeated here in case a
+  // future caller constructs the plan input directly instead of through
+  // the CLI -- a non-canonical run id would post a marker
+  // `collectFromGitHub`'s `parseCanonicalIntegerOrNull` guard can never
+  // look up, leaving the required gate red with no consumer-visible cause.
+  else if (autoBootstrap && parseCanonicalIntegerOrNull(runId) === null) {
+    blockingReasons.push(
+      `--auto-bootstrap requires a run id that is a canonical positive integer, got: ${runId}`,
+    );
   }
   if (autoBootstrap && claimless) {
     blockingReasons.push(
@@ -1659,6 +1670,19 @@ export function parseArgs(argv) {
       }
       if (!parsed.runId) {
         throw new Error('--auto-bootstrap requires --run-id <id>');
+      }
+      // kurone-kito/idd-skill#2657 (Codex review, PR #2895 round 11):
+      // `advisory-convergence.mts`'s `collectFromGitHub` only trusts a
+      // `run-id:` token that parses as a canonical positive integer
+      // (`parseCanonicalIntegerOrNull`, guarding against path-injection
+      // into the Actions REST run-lookup path) -- reject a non-canonical
+      // value here too, so this producer can never post evidence its own
+      // consumer is guaranteed to ignore, silently leaving the required
+      // gate red.
+      if (parseCanonicalIntegerOrNull(parsed.runId) === null) {
+        throw new Error(
+          `--auto-bootstrap requires --run-id to be a canonical positive integer, got: ${parsed.runId}`,
+        );
       }
       if (parsed.reason !== SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON) {
         throw new Error(
