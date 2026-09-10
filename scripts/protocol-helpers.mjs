@@ -320,6 +320,7 @@ export function summarizeExternalCheckWaivers(
       reason: parsed.reason,
       expiresAt: parsed.expiresAt,
       createdAt: parsed.createdAt,
+      runId: parsed.runId,
     });
   }
   return {

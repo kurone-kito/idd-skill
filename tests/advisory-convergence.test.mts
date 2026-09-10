@@ -12,6 +12,7 @@ import { test } from 'node:test';
 
 import {
   ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN,
+  ADVISORY_CONVERGENCE_WORKFLOW_PATH,
   type AdvisoryConvergenceDeps,
   type AdvisoryConvergenceInputs,
   type AdvisoryConvergenceOptions,
@@ -33,6 +34,7 @@ import {
   runAdvisoryConvergence,
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
   viewerProbeGhOptions,
   writeAdvisoryConvergenceCliOutput,
 } from '../src/scripts/advisory-convergence.mts';
@@ -3151,6 +3153,403 @@ test('late Copilot review recovery: a fresh clean review landing on HEAD clears 
   assert.equal(verdict.converged, true);
   assert.equal(verdict.waived, false); // never needed -- the ordinary path resolved it
   assert.equal(verdict.ready, true);
+});
+
+// --- 10b. self-referential-bootstrap-auto waiver (kurone-kito/idd-skill#2657)
+
+const BOT_LOGIN = 'github-actions[bot]';
+const RUN_ID = '4242424242';
+const REPO_FULL_NAME = 'kurone-kito/idd-skill';
+
+function autoWaiverBody(
+  overrides: {
+    reason?: string;
+    runId?: string | null;
+    headSha?: string;
+    claimId?: string;
+  } = {},
+): string {
+  return renderExternalCheckWaiverComment({
+    agentId: 'github-actions-bot',
+    claimId: overrides.claimId ?? CLAIM_ID,
+    headSha: overrides.headSha ?? HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: overrides.reason ?? SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: BOT_LOGIN,
+    runId: overrides.runId === null ? undefined : (overrides.runId ?? RUN_ID),
+  });
+}
+
+function acceptedRunLookup() {
+  return {
+    path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    headSha: HEAD,
+    repositoryFullName: REPO_FULL_NAME,
+    event: 'pull_request_target',
+  };
+}
+
+test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true immediately, before deadlinePassed/terminalUnavailable (regression for the 2026-09-10 self-cancellation shape)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // still pending -- Copilot never reviewed
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT, // deadline has NOT passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.deadline.passed, false);
+  assert.equal(verdict.terminal.state, 'NOT_TERMINAL');
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: a pull_request-triggered run is rejected the same way an untrusted actor is (event-type condition)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: { ...acceptedRunLookup(), event: 'pull_request' },
+      },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run whose own workflow path does not match is rejected', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          path: '.github/workflows/lint.yml',
+        },
+      },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run bound to a different head SHA is rejected', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: { ...acceptedRunLookup(), headSha: OTHER_SHA },
+      },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run hosted by a different repository is rejected', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: 'someone-else/fork',
+        },
+      },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a marker missing run-id: never resolves to any lookup, so it is rejected', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ runId: null }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run-id lookup error (unresolvable run) fails closed', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: { error: 'HTTP 404' } },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a different reason token never counts as this waiver kind', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ reason: 'some-other-automated-reason' }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a human-authored marker with the same reason token never counts (author must be github-actions[bot])', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: waiverMode disabled means no automated waiver either, matching the manual flow', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'disabled',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: an ordinary person-authored waiver keeps its existing deadline-gated behavior unchanged (non-regression)', () => {
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: AGENT_ID,
+    claimId: CLAIM_ID,
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'ordinary maintainer waiver, unaffected by #2657',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const beforeDeadline = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT, // deadline has NOT passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  // Unlike the auto-waiver kind, an ordinary waiver's evidence is not even
+  // evaluated before its precondition opens -- `waived` stays `false` here
+  // by construction, not merely `unused`.
+  assert.equal(beforeDeadline.waived, false);
+  assert.equal(beforeDeadline.ready, false);
+
+  const afterDeadline = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD, // deadline has passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(afterDeadline.ready, true);
+});
+
+test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a real bindable claim still validates immediately (#1686 path 3 symmetry)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-different', // branch mismatch -> indeterminate
+      headCommittedAt: RECENT, // deadline has NOT passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.applicability.status, 'indeterminate');
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: an indeterminate PR with no bindable claim (path 2/4) stays unwaivable, same as the ordinary waiver', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [],
+      claimCandidateAmbiguous: true, // #1686 path 2 -- no activeClaimId to bind to
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ claimId: CLAIM_ID }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.applicability.status, 'indeterminate');
+  assert.equal(verdict.ready, false);
 });
 
 // --- #1570 AC6: no code path this issue adds ever invokes `gh pr merge

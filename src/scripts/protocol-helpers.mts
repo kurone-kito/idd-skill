@@ -338,6 +338,11 @@ export interface ExternalCheckWaiverEvidence {
     // blocked. `'none'` when the comment's `createdAt` was unparseable --
     // fails closed (never covers).
     createdAt: string;
+    /** kurone-kito/idd-skill#2657: the marker's optional `run-id:` field,
+     * verbatim (`''` when absent). Only the `self-referential-bootstrap-auto`
+     * consumer in `advisory-convergence.mts` reads this -- every other caller
+     * of this function is unaffected by its presence. */
+    runId: string;
   }[];
   expired: { authorLogin: string; checkSelector: string; expiresAt: string }[];
   wrongHead: {
@@ -878,6 +883,7 @@ export function summarizeExternalCheckWaivers(
       reason: parsed.reason,
       expiresAt: parsed.expiresAt,
       createdAt: parsed.createdAt,
+      runId: parsed.runId,
     });
   }
 

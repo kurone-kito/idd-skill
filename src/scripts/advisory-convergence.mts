@@ -128,7 +128,11 @@ import {
 } from './external-check-waiver.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadIddConfig } from './idd-config.mts';
-import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mts';
+import {
+  isValidIsoTimestamp,
+  parseClaimComment,
+  parseExternalCheckWaiverComment,
+} from './marker-helpers.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -189,6 +193,52 @@ import { loadJson, validateConfigSection } from './validate-schemas.mts';
  * and value are unchanged for existing consumers. */
 export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR;
+
+/** kurone-kito/idd-skill#2657: the committed allowlist of paths whose own
+ * edit lets `idd-advisory-convergence.yml` auto-post a scoped
+ * `self-referential-bootstrap-auto` waiver for the PR that edits them --
+ * the narrow trigger set the Background section requires (an
+ * import-derived set would auto-waive most PRs, since this gate's own
+ * script transitively imports several of the most-edited files in the
+ * repository). Exactly the seven paths the hearing pinned; widening this
+ * set is a reviewed edit to the constant, never automatic. Exported so
+ * the posting-side workflow step and its own tests can both reference the
+ * single source of truth. */
+export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
+  'src/scripts/advisory-convergence.mts',
+  'src/scripts/advisory-wait-state.mts',
+  'src/scripts/advisory-wait-policy.mts',
+  'src/scripts/rerun-advisory-convergence.mts',
+  'src/scripts/external-check-waiver.mts',
+  '.github/workflows/idd-advisory-convergence.yml',
+  '.github/workflows/idd-advisory-convergence-comment.yml',
+] as const;
+
+/** kurone-kito/idd-skill#2657: this gate's own workflow file path, as
+ * reported by the GitHub Actions runs API's `path` field -- the value a
+ * self-referential-bootstrap-auto waiver's `run-id:` lookup must match
+ * (trust condition (c)). Named once and reused both here and in
+ * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} above so the two never
+ * drift apart. */
+export const ADVISORY_CONVERGENCE_WORKFLOW_PATH =
+  SELF_REFERENTIAL_WAIVER_TRIGGER_FILES[5];
+
+/** kurone-kito/idd-skill#2657: the dedicated reason token identifying the
+ * CI-workflow-posted, run-bound waiver -- distinct from any
+ * person-authored reason token, so a manually-typed waiver can never
+ * masquerade as this automated kind. */
+export const SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON =
+  'self-referential-bootstrap-auto';
+
+/** kurone-kito/idd-skill#2657: the fixed, bounded validity window for a
+ * self-referential-bootstrap-auto waiver, anchored on the PR's HEAD
+ * commit timestamp -- deliberately independent of
+ * `advisoryWait.convergenceDeadline` (the 2026-09-10 self-cancellation
+ * bug: a waiver anchored and durationed identically to `deadlinePassed`
+ * is always already expired the moment `deadlinePassed` becomes true).
+ * Matches this gate's own existing `waiverMaxValidity` default used
+ * elsewhere for external-check waivers. */
+export const SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY = 'PT24H';
 
 /** #1719: stable, machine-readable tokens for
  * `sameHeadReroll.ineligibleReasons` -- one per boolean term of the
@@ -539,6 +589,24 @@ export interface AdvisoryConvergenceInputs {
    * outcome, the same safe direction this field's own consumer
    * (`options.exemptBotAuthoredPrs`) already defaults to when unset. */
   prAuthorIsBot?: boolean;
+  /** kurone-kito/idd-skill#2657: pre-resolved `GET
+   * /repos/{owner}/{repo}/actions/runs/{run-id}` evidence, keyed by the
+   * run id (as a string) named in a candidate
+   * `self-referential-bootstrap-auto` waiver marker's `run-id:` field.
+   * `collectFromGitHub` fetches this (network); this pure verdict
+   * function only reads it -- an absent key or an `{error}` entry means
+   * "could not resolve", which the four-condition check below always
+   * treats as a rejection, never a pass. */
+  autoWaiverRunLookups?: Record<
+    string,
+    | {
+        path?: string | null;
+        headSha?: string | null;
+        repositoryFullName?: string | null;
+        event?: string | null;
+      }
+    | { error: string }
+  >;
 }
 
 /** Pure options accepted by {@link computeAdvisoryConvergenceVerdict}. */
@@ -578,6 +646,14 @@ export interface AdvisoryConvergenceOptions {
   waiverMode?: string;
   waiverMaxValidity?: string;
   waiverCheckSelector?: string;
+  /** kurone-kito/idd-skill#2657: the current repository's `owner/repo`
+   * full name, e.g. `kurone-kito/idd-skill`. Used only to verify a
+   * candidate `self-referential-bootstrap-auto` waiver's `run-id:`
+   * lookup resolves to a run hosted by THIS repository (condition (c),
+   * `head_repository.full_name`) -- never trusted from the marker body
+   * itself. Omitted/empty fails that check closed (no auto-waiver can
+   * ever validate), the safe default. */
+  repositoryFullName?: string;
   /** #2353: whether an active `providerOutage.declarationTarget`
    * declaration exists for THIS gate's own selector, already resolved by
    * the caller (fetch, validity, actor authority -- see
@@ -673,6 +749,50 @@ export function reviewPolicyNotApplicableReason(
     return REVIEW_POLICY_NOT_APPLICABLE_REASON[reviewPolicy];
   }
   return null;
+}
+
+/**
+ * kurone-kito/idd-skill#2657: the fourth (path/head-sha/repo) and fifth
+ * (event-type) trust conditions a `self-referential-bootstrap-auto`
+ * waiver's `run-id:` field must resolve to, given an already-fetched (or
+ * errored) `GET /repos/{owner}/{repo}/actions/runs/{run-id}` lookup
+ * result. Pure and fail-closed: an absent/errored lookup, or any single
+ * mismatching field, is `false`, never a thrown exception -- a
+ * transient or malformed lookup must never widen trust. The event check
+ * is the specific gap the 2026-09-11 hearing added: during
+ * kurone-kito/idd-skill#2764 Phase 1, `idd-advisory-convergence.yml`
+ * still declares both `pull_request` and `pull_request_target`, so a
+ * same-repository PR editing the workflow YAML can still trigger a
+ * `pull_request`-triggered run of it whose `path`/`head_sha`/
+ * `head_repository.full_name` all satisfy the other three conditions.
+ */
+function verifySelfReferentialBootstrapWaiverRun(
+  run:
+    | {
+        path?: string | null;
+        headSha?: string | null;
+        repositoryFullName?: string | null;
+        event?: string | null;
+      }
+    | { error: string }
+    | null
+    | undefined,
+  expected: {
+    path: string;
+    headSha: string;
+    repositoryFullName: string;
+  },
+): boolean {
+  if (!run || 'error' in run) {
+    return false;
+  }
+  return (
+    String(run.path ?? '') === expected.path &&
+    String(run.headSha ?? '').toLowerCase() ===
+      expected.headSha.toLowerCase() &&
+    String(run.repositoryFullName ?? '') === expected.repositoryFullName &&
+    run.event === 'pull_request_target'
+  );
 }
 
 /**
@@ -1417,10 +1537,64 @@ export function computeAdvisoryConvergenceVerdict(
     );
   }
 
+  // --- Self-referential-bootstrap-auto waiver (kurone-kito/idd-skill#2657) -
+  // --- Evaluated UNCONDITIONALLY -- never gated behind
+  // `deadlinePassed`/`terminalUnavailable` the way the ordinary waiver
+  // above is. This is the 2026-09-11 hearing's fix for the 2026-09-10
+  // self-cancellation bug: a waiver whose validity window shares
+  // `deadlinePassed`'s own anchor/duration is always already expired by
+  // the time it would ever be read through that same gated branch.
+  //
+  // A SECOND `summarizeExternalCheckWaivers` call, identical to the
+  // primary call above in every option except `trustedMarkerLogins` --
+  // which is extended to include `github-actions[bot]` for THIS call
+  // only. The primary call's own `trustedMarkerLogins` binding is never
+  // reassigned, so this can never widen trust for an ordinary
+  // person-authored waiver. `mode` is threaded through identically: an
+  // adopter with `ciGate.externalCheckWaivers.mode` not
+  // `maintainer-authorized` gets no automated waiver either, matching
+  // the manual flow.
+  const autoWaiverEvidence = summarizeExternalCheckWaivers(comments, {
+    prHeadSha,
+    activeClaimId,
+    activeClaimSupersedes,
+    trustedMarkerLogins: [...trustedMarkerLogins, 'github-actions[bot]'],
+    now,
+    waivableSelectors: [...(options.waivableSelectors ?? [])],
+    maxValidity: String(options.waiverMaxValidity ?? 'PT24H'),
+    mode: waiverMode,
+  });
+  const autoWaiverRepositoryFullName = String(
+    options.repositoryFullName ?? '',
+  ).trim();
+  // Defense in depth: the trust-set extension above already scopes the
+  // call to one login, but a marker's `reason`/`runId` are still
+  // attacker-shaped input from that login's own comment body, so this
+  // filters the specific marker kind within it rather than trusting
+  // every `github-actions[bot]`-authored waiver of any reason.
+  const autoWaiverValid =
+    !scopeNotApplicable &&
+    autoWaiverEvidence.valid.some(
+      (entry) =>
+        entry.checkSelector === waiverCheckSelector &&
+        entry.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
+        entry.authorLogin === 'github-actions[bot]' &&
+        entry.runId !== '' &&
+        verifySelfReferentialBootstrapWaiverRun(
+          inputs.autoWaiverRunLookups?.[entry.runId],
+          {
+            path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+            headSha: prHeadSha,
+            repositoryFullName: autoWaiverRepositoryFullName,
+          },
+        ),
+    );
+
   const ready =
     scopeNotApplicable ||
     converged ||
-    ((deadlinePassed || terminalUnavailable) && waived);
+    ((deadlinePassed || terminalUnavailable) && waived) ||
+    autoWaiverValid;
 
   const reviewReport: AdvisoryConvergenceReviewClause = {
     ...review,
@@ -2489,6 +2663,62 @@ export function collectFromGitHub(
     }
   }
 
+  // kurone-kito/idd-skill#2657: pre-resolve `GET
+  // /repos/{owner}/{repo}/actions/runs/{run-id}` evidence for any
+  // self-referential-bootstrap-auto waiver candidate marker, so the pure
+  // verdict function performs no I/O of its own. A cheap, network-free
+  // local scan (marker-shape prefix test + reason/run-id parse) narrows
+  // this to the small set of comments that could possibly be this waiver
+  // kind before paying for one Actions-run lookup per DISTINCT run id
+  // among them -- author/head-SHA/expiry/claim trust is verified later,
+  // inside `computeAdvisoryConvergenceVerdict`; this scan is a cost
+  // optimization only, never the authoritative check.
+  const autoWaiverRunIds = new Set<string>();
+  for (const comment of comments) {
+    const body = String(comment.body ?? '');
+    if (!/^<!--\s*idd-external-check-waiver:/i.test(body)) {
+      continue;
+    }
+    const parsed = parseExternalCheckWaiverComment(
+      body,
+      String(comment.createdAt ?? ''),
+    );
+    if (
+      parsed &&
+      parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
+      parsed.runId
+    ) {
+      autoWaiverRunIds.add(parsed.runId);
+    }
+  }
+  const autoWaiverRunLookups: NonNullable<
+    AdvisoryConvergenceInputs['autoWaiverRunLookups']
+  > = {};
+  for (const runId of autoWaiverRunIds) {
+    try {
+      const raw = port.getWorkflowRun(owner, repo, runId) as {
+        path?: string | null;
+        head_sha?: string | null;
+        head_repository?: { full_name?: string | null } | null;
+        event?: string | null;
+      };
+      autoWaiverRunLookups[runId] = {
+        path: raw?.path ?? null,
+        headSha: raw?.head_sha ?? null,
+        repositoryFullName: raw?.head_repository?.full_name ?? null,
+        event: raw?.event ?? null,
+      };
+    } catch (error) {
+      // Fail closed per run id: a lookup failure (unknown run, transient
+      // API error) must never crash the whole collection, and
+      // `verifySelfReferentialBootstrapWaiverRun` already treats an
+      // `{error}` entry the same as an absent one -- always a rejection.
+      autoWaiverRunLookups[runId] = {
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   return {
     inputs: {
       prNumber: Number(args.prNumber),
@@ -2500,6 +2730,7 @@ export function collectFromGitHub(
       claimMarkerHistoryPresent,
       claimCandidateAmbiguous,
       prAuthorIsBot,
+      autoWaiverRunLookups,
     },
     options: {
       now: resolvedNow,
@@ -2521,6 +2752,7 @@ export function collectFromGitHub(
       ),
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
+      repositoryFullName: owner && repo ? `${owner}/${repo}` : '',
       outageDeclarationActive,
       sameHeadRerollCap,
       pendingWindowMinutes,

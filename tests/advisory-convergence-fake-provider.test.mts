@@ -5,10 +5,13 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  ADVISORY_CONVERGENCE_WORKFLOW_PATH,
   collectFromGitHub,
   parseArgs,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from '../src/scripts/advisory-convergence.mts';
 import { DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES } from '../src/scripts/advisory-wait-policy.mts';
+import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 
 // ---------------------------------------------------------------------------
@@ -226,5 +229,120 @@ test('collectFromGitHub falls back to the default terminal window when advisoryW
       options.terminalWindowMinutes,
       DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// self-referential-bootstrap-auto waiver run-id resolution
+// (kurone-kito/idd-skill#2657): collectFromGitHub is the only place this
+// gate performs the `GET /repos/{owner}/{repo}/actions/runs/{run-id}`
+// lookup a candidate marker's `run-id:` field names -- exercised here
+// end-to-end against the fake provider's `workflowRuns` fixture, with the
+// actual trust verdict covered by the pure computeAdvisoryConvergenceVerdict
+// unit tests in advisory-convergence.test.mts.
+// ---------------------------------------------------------------------------
+
+const RUN_ID = '999';
+const HEAD_SHA = 'a'.repeat(40);
+
+function autoWaiverComment() {
+  return {
+    id: 1,
+    body: renderExternalCheckWaiverComment({
+      agentId: 'github-actions-bot',
+      claimId: 'claim-abc',
+      headSha: HEAD_SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: '2099-01-01T00:00:00Z',
+      actor: 'github-actions[bot]',
+      runId: RUN_ID,
+    }),
+    createdAt: '2026-07-31T09:00:00Z',
+    updatedAt: '2026-07-31T09:00:00Z',
+    authorLogin: 'github-actions[bot]',
+  };
+}
+
+test("collectFromGitHub resolves a candidate self-referential-bootstrap-auto marker's run-id against the runs API (accepted shape)", () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment()] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+    });
+
+    const { inputs, options } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunLookups?.[RUN_ID], {
+      path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+      headSha: HEAD_SHA,
+      repositoryFullName: 'o/r',
+      event: 'pull_request_target',
+    });
+    assert.equal(options.repositoryFullName, 'o/r');
+  });
+});
+
+test('collectFromGitHub resolves a candidate run-id lookup failure to an {error} entry instead of crashing the whole collection', () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment()] },
+      // No `workflowRuns` fixture entry for RUN_ID -- the fake adapter
+      // throws "no workflow-run fixture for ..." on lookup, matching the
+      // real adapter's own no-catch, throw-on-failure contract for an
+      // unresolvable run.
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    const lookup = inputs.autoWaiverRunLookups?.[RUN_ID];
+    assert.ok(lookup && 'error' in lookup && lookup.error.length > 0);
+  });
+});
+
+test('collectFromGitHub never looks up a run id for a comment that is not this waiver kind (no wasted API calls)', () => {
+  withHermeticCwd(() => {
+    const ordinaryWaiver = {
+      id: 2,
+      body: renderExternalCheckWaiverComment({
+        agentId: 'kurone-kito',
+        claimId: 'claim-abc',
+        headSha: HEAD_SHA,
+        checkSelector: 'CodeRabbit',
+        reason: 'rate limit',
+        expiresAt: '2099-01-01T00:00:00Z',
+        actor: 'kurone-kito',
+      }),
+      createdAt: '2026-07-31T09:00:00Z',
+      updatedAt: '2026-07-31T09:00:00Z',
+      authorLogin: 'kurone-kito',
+    };
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [ordinaryWaiver] },
+      // No `workflowRuns` fixture at all -- any lookup attempt would throw.
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunLookups, {});
   });
 });
