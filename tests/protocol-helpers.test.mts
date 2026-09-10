@@ -988,9 +988,10 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
-// Codex review findings on this PR (#2858), both verified against source
-// before accepting: a legitimate structural gap, not the semantic
-// "new concern" phrasing this file already documents as out of scope.
+// Codex review findings on PR #2868 (fixing issue #2858), both verified
+// against source before accepting: a legitimate structural gap, not the
+// semantic "new concern" phrasing this file already documents as out of
+// scope.
 
 test('classifyThreadAckOnlyPostDisposition rejects a hedged closure sentence with no trailing boilerplate at all (Codex P1, #2858)', () => {
   // Codex's exact adversarial example: a single-sentence reply --
