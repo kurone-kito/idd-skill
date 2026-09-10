@@ -949,6 +949,57 @@ test('findHtmlBlockRanges does not open a custom-tag block when a complete open+
   assert.deepEqual(findHtmlBlockRanges(body), []);
 });
 
+test('findHtmlBlockRanges opens a custom-tag block right after an ATX heading (Codex review, PR #2840, round 20)', () => {
+  // An ATX heading is a complete, one-line block -- it leaves no open
+  // paragraph behind, so a following custom tag still freely opens even
+  // though the heading line itself is not blank. `gh api /markdown`
+  // confirms this (the fake checkboxes render as literal text).
+  const body = [
+    '# Intro',
+    '<x-demo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after a thematic break (Codex review, PR #2840, round 20)', () => {
+  const body = [
+    'Intro',
+    '',
+    '---',
+    '<x-demo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges still does not open a custom-tag block right after a list-item line (control, round 20)', () => {
+  // A list item's own content line can still be, or start, an open
+  // paragraph within that item -- unlike a heading or thematic break, it
+  // must not be treated as "leaves nothing open". `gh api /markdown`
+  // confirms the custom tag here does not open (its content is
+  // sanitized away, but the real paragraph after it stays a real,
+  // separate paragraph rather than opaque block content).
+  const body = ['- some list text', '<x-demo>', 'content', '', 'after'].join(
+    '\n',
+  );
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
 test('findHtmlBlockRanges opens a custom-tag block right after a blank line', () => {
   const body = ['', '<foo>', 'more text', '', 'after'].join('\n');
   const ranges = findHtmlBlockRanges(body);

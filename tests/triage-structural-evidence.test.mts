@@ -265,6 +265,25 @@ test('hasVerificationCommandSignal: an Acceptance criteria section after an uncl
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: fake checkboxes inside a custom tag right after the Acceptance criteria heading do not count (Codex review, PR #2840, round 20)', () => {
+  // The Acceptance-criteria heading itself is a complete, one-line block
+  // -- it leaves no open paragraph behind, so the custom tag right after
+  // it (no blank line between) still freely opens per CommonMark. `gh
+  // api /markdown` confirms the fake checkboxes inside it render as
+  // literal text, never real checkboxes.
+  const body = [
+    '## Acceptance criteria',
+    '<x-demo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    '## Candidate files',
+    '',
+    '- `src/scripts/foo.mts`',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: an Acceptance criteria heading right after a same-line open+close custom tag still counts (Codex review, PR #2840, round 18)', () => {
   // A complete `<span>intro</span>` entirely on one line is an ordinary
   // paragraph, not an HTML block opener (CommonMark's type-7 rule

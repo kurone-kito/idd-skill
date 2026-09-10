@@ -1166,9 +1166,24 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
       }
       continue;
     }
+    // Codex review, PR #2840 (round 20): does this non-blank line, on its
+    // own, complete a one-line block that leaves no paragraph open behind
+    // it -- an ATX heading or a thematic break (never a list-item line,
+    // which the shared {@link MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN}
+    // already excludes: unlike those two, a list item's own content line
+    // can still be, or start, an open paragraph within that item). Tested
+    // against the blockquote-stripped `containerContent` set below inside
+    // the `!isBlank` branch, never the list-marker-stripped `content`
+    // (which would let a list item's own text that merely *looks*
+    // heading-shaped after stripping wrongly count). Read at the bottom
+    // fallback, the only place that still needs it once every dedicated
+    // opener branch above has already `continue`d past it.
+    let endsOwnBlock = false;
     if (!isBlank) {
       const openerLine = parseContainerLine(line);
       const containerContent = openerLine.content;
+      endsOwnBlock =
+        MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(containerContent);
       const content = stripListItemMarker(containerContent);
       // Codex review, PR #2840 (round 13): `stripListItemMarker` returns
       // its input unchanged when the line has no list marker, so this
@@ -1356,7 +1371,7 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
         continue;
       }
     }
-    noOpenParagraph = isBlank;
+    noOpenParagraph = isBlank || endsOwnBlock;
     lineStart = lineAfter;
     if (newlineIndex === -1) {
       break;
