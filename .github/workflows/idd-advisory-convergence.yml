@@ -389,3 +389,119 @@ jobs:
           # expression directly into the run: script.
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: node scripts/advisory-convergence.mjs --pr "$PR_NUMBER" --assert
+
+  # kurone-kito/idd-skill#2657: a PR that fixes this gate's own checking
+  # logic (or a handful of directly-related files) can never benefit from
+  # its own fix while unmerged, because the verdict job above always runs
+  # the version checked out from `main`. This job auto-posts a narrowly-
+  # scoped, run-bound `idd-external-check-waiver` marker for exactly that
+  # case. See docs/idd-helper-scripts.md's "External-check waiver
+  # contract" (self-referential-bootstrap-auto section) for the full
+  # trust model and the four acceptance conditions
+  # `advisory-convergence.mts` verifies before ever honoring the marker;
+  # this job's own job is only to detect the trigger and post it --
+  # trust is established entirely at consume time, not here.
+  #
+  # `if: pull_request_target` only, never `pull_request`: during
+  # kurone-kito/idd-skill#2764 Phase 1's transition window, both triggers
+  # remain active on this file, so a same-repository PR editing this YAML
+  # could otherwise also run this job under a `pull_request`-triggered
+  # instance it fully controls. The consumer's fourth trust condition
+  # (the marker's `run-id:` must resolve to a `pull_request_target`-
+  # triggered run) would reject a marker from that instance anyway, but
+  # gating the job itself here avoids granting `issues: write` under an
+  # untrusted-YAML trigger in the first place, and avoids posting a
+  # marker the consumer will only ever reject.
+  idd-advisory-convergence-self-waiver:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    # Narrower than the verdict job's read-only posture above: this job
+    # additionally needs `pull-requests: read` (to diff and fetch the PR)
+    # and `issues: write` (to post the marker, and to read the linked
+    # issue's own comment stream to resolve its active claim -- the
+    # PR-conversation-comment endpoint and the linked-issue-comment
+    # endpoint are both gated under the Issues permission category, same
+    # as the verdict job's own header comment already notes for reads).
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Same trusted-default-branch rationale as the verdict job
+          # above: this job's own posting logic
+          # (scripts/external-check-waiver.mjs) must be the trusted copy,
+          # never the PR's own -- otherwise a PR could edit that script to
+          # post a differently-shaped marker or waive an unrelated check.
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Assert Node.js floor
+        run: |
+          node -e '
+            const versionParts = process.versions.node.split(".");
+            const [major, minor, patch] = versionParts.map(Number);
+            const isPrerelease = versionParts.some((part) => part.includes("-"));
+            const ok =
+              !isPrerelease &&
+              ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||
+                (major === 24 && minor >= 2) ||
+                major >= 26);
+            if (!ok) {
+              console.error(
+                "Node " + process.version + " does not satisfy this " +
+                "repository'"'"'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",
+              );
+              process.exit(1);
+            }
+          '
+      - name: Detect self-referential trigger-file allowlist touch
+        id: allowlist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Kept in sync by hand with SELF_REFERENTIAL_WAIVER_TRIGGER_FILES
+          # in src/scripts/advisory-convergence.mts -- exactly the same
+          # seven committed paths, never derived from imports (see that
+          # constant's own doc comment for why an import-derived set would
+          # auto-waive most PRs).
+          ALLOWLIST=(
+            "src/scripts/advisory-convergence.mts"
+            "src/scripts/advisory-wait-state.mts"
+            "src/scripts/advisory-wait-policy.mts"
+            "src/scripts/rerun-advisory-convergence.mts"
+            "src/scripts/external-check-waiver.mts"
+            ".github/workflows/idd-advisory-convergence.yml"
+            ".github/workflows/idd-advisory-convergence-comment.yml"
+          )
+          CHANGED=$(gh pr diff "$PR_NUMBER" --name-only)
+          TOUCHED=false
+          for FILE in "${ALLOWLIST[@]}"; do
+            if grep -qxF "$FILE" <<<"$CHANGED"; then
+              TOUCHED=true
+              break
+            fi
+          done
+          echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
+      - name: Post the self-referential-bootstrap-auto waiver
+        # Skip a fork PR entirely: the consumer's run-bound trust check
+        # would reject it anyway (a fork's own workflow run never matches
+        # this repository), so this avoids a doomed post and the API
+        # calls it would cost.
+        if: steps.allowlist.outputs.touched == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          node scripts/external-check-waiver.mjs \
+            --pr "$PR_NUMBER" \
+            --check idd-advisory-convergence \
+            --reason self-referential-bootstrap-auto \
+            --run-id "$GITHUB_RUN_ID" \
+            --auto-bootstrap \
+            --apply --yes

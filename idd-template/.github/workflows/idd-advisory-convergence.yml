@@ -332,3 +332,226 @@ jobs:
               exit 1
               ;;
           esac
+
+  # kurone-kito/idd-skill#2657: optional companion job -- a PR that fixes
+  # this gate's own checking logic (or a handful of directly-related
+  # files) can never benefit from its own fix while unmerged, because the
+  # verdict job above always runs the version checked out from `main`.
+  # This job auto-posts a narrowly-scoped, run-bound
+  # `idd-external-check-waiver` marker for exactly that case. See
+  # docs/idd-helper-scripts.md's "External-check waiver contract"
+  # (self-referential-bootstrap-auto section) for the full trust model
+  # and the four acceptance conditions `advisory-convergence.mts`
+  # verifies before ever honoring the marker -- this job's only role is
+  # to detect the trigger and post it; trust is established entirely at
+  # consume time, not here.
+  #
+  # `if: pull_request_target` only, never `pull_request`: a
+  # same-repository PR editing this YAML could otherwise also run this
+  # job under a `pull_request`-triggered instance it fully controls. The
+  # consumer's fourth trust condition (the marker's `run-id:` must
+  # resolve to a `pull_request_target`-triggered run) would reject a
+  # marker from that instance anyway, but gating the job itself here
+  # avoids granting `issues: write` under an untrusted-YAML trigger in
+  # the first place.
+  #
+  # This job duplicates the verdict job's own profile-resolution and
+  # dependency-install steps rather than sharing them via `needs:` +
+  # job outputs: this template's workflows are each single-job by
+  # convention, and the duplication keeps this job independently
+  # copy-and-adjustable (or removable) without touching the required
+  # verdict job above.
+  idd-advisory-convergence-self-waiver:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER_LABEL || 'ubuntu-slim' }}
+    timeout-minutes: 10
+    # Narrower than the verdict job's read-only posture above: this job
+    # additionally needs `pull-requests: read` (to diff and fetch the PR)
+    # and `issues: write` (to post the marker, and to read the linked
+    # issue's own comment stream to resolve its active claim -- the
+    # PR-conversation-comment endpoint and the linked-issue-comment
+    # endpoint are both gated under the Issues permission category, same
+    # as the verdict job's own header comment already notes for reads).
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Trusted default-branch checkout, not the PR head -- see the
+          # verdict job's own comment above for the full rationale. This
+          # job's posting logic (external-check-waiver) must be the
+          # trusted copy too, or a PR could edit it to post a
+          # differently-shaped marker or waive an unrelated check.
+          ref: main
+          persist-credentials: false
+      - name: Resolve helper-runtime profile
+        id: profile
+        run: |
+          PROFILE="instructions-only"
+          PACKAGE_SPEC=""
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "::warning::jq is not available on this runner, so helperRuntime.profile cannot be resolved; treating as instructions-only. Install jq on this runner, or use a runner image that provides it."
+          else
+            for CANDIDATE in .github/idd/config.json idd-policy.json; do
+              if [ -f "$CANDIDATE" ]; then
+                if RESOLVED=$(jq -r '
+                  (.helperRuntime) as $hr
+                  | ($hr != null and ($hr|type) == "object") as $is_object
+                  | if $is_object then
+                      (($hr | keys) - ["profile","packageSpec"]) as $extra
+                      | ($hr.profile) as $profile
+                      | ($extra | length == 0) as $keys_ok
+                      | ($profile != null and ($profile|type) == "string" and ($profile|length) > 0 and (["vendored-node","package-manager","ephemeral-npx","instructions-only"] | index($profile)) != null) as $profile_ok
+                      | (if ($hr | has("packageSpec")) then
+                           ($hr.packageSpec) as $spec
+                           | ($spec != null and ($spec|type) == "string" and ($spec | test("\\A[A-Za-z0-9@:/_.+^#%-]+\\z")))
+                         else true end) as $spec_ok
+                      | if ($keys_ok and $profile_ok and $spec_ok) then
+                          "\($hr.profile)\t\($hr.packageSpec // "")"
+                        else empty end
+                    else empty end
+                ' "$CANDIDATE" 2>/dev/null) && [ -n "$RESOLVED" ]; then
+                  IFS=$'\t' read -r PROFILE PACKAGE_SPEC <<<"$RESOLVED"
+                fi
+                break
+              fi
+            done
+          fi
+          echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
+          echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
+      - name: Fail closed when no helper runtime is configured
+        if: steps.profile.outputs.profile == 'instructions-only'
+        run: |
+          echo "::error::This repository hosts the idd-advisory-convergence-self-waiver job but resolves helperRuntime.profile to instructions-only (no runnable helper command). Configure helperRuntime.profile in .github/idd/config.json, or remove this optional job."
+          exit 1
+      - uses: actions/setup-node@v4
+        if: steps.profile.outputs.profile != 'instructions-only'
+        with:
+          node-version: 24.x
+      - name: Detect package manager
+        id: manager
+        if: steps.profile.outputs.profile == 'package-manager'
+        run: |
+          MANAGER=$(node -e "
+            const fs = require('node:fs');
+            let declared = '';
+            try {
+              const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              declared = String(pkg.packageManager || '').split('@')[0];
+            } catch {
+              // No readable package.json: fall through to lockfile detection.
+            }
+            if (['npm', 'pnpm', 'yarn'].includes(declared)) {
+              console.log(declared);
+            } else {
+              const lockfiles = [
+                ['pnpm-lock.yaml', 'pnpm'],
+                ['package-lock.json', 'npm'],
+                ['yarn.lock', 'yarn'],
+              ].filter(([file]) => fs.existsSync(file));
+              if (lockfiles.length === 1) {
+                console.log(lockfiles[0][1]);
+              } else if (lockfiles.length === 0) {
+                console.log('npm');
+              } else {
+                console.log('ambiguous');
+              }
+            }
+          ")
+          if [ "$MANAGER" = "ambiguous" ]; then
+            echo "::warning::Multiple package-manager lockfiles were found with no declared \"packageManager\" field in package.json; refusing to guess which one to use. Add a \"packageManager\": \"<name>@<version>\" field to package.json, or remove the stale lockfile(s)."
+          fi
+          echo "manager=$MANAGER" >> "$GITHUB_OUTPUT"
+      - name: Fail closed on ambiguous package manager
+        if: steps.manager.outputs.manager == 'ambiguous'
+        run: |
+          echo "::error::This job resolves helperRuntime.profile to package-manager, but multiple package-manager lockfiles were found with no declared \"packageManager\" field in package.json, so which manager to use cannot be determined. Add a \"packageManager\": \"<name>@<version>\" field to package.json, or remove the stale lockfile(s)."
+          exit 1
+      - name: Install dependencies (package-manager profile)
+        if: steps.profile.outputs.profile == 'package-manager'
+        env:
+          MANAGER: ${{ steps.manager.outputs.manager }}
+        run: |
+          case "$MANAGER" in
+            pnpm)
+              corepack enable
+              pnpm install --frozen-lockfile
+              ;;
+            yarn)
+              corepack enable
+              yarn install --frozen-lockfile
+              ;;
+            *)
+              npm ci
+              ;;
+          esac
+      - name: Detect self-referential trigger-file allowlist touch
+        id: allowlist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Kept in sync by hand with SELF_REFERENTIAL_WAIVER_TRIGGER_FILES
+          # in src/scripts/advisory-convergence.mts -- exactly the same
+          # seven committed paths, never derived from imports.
+          ALLOWLIST=(
+            "src/scripts/advisory-convergence.mts"
+            "src/scripts/advisory-wait-state.mts"
+            "src/scripts/advisory-wait-policy.mts"
+            "src/scripts/rerun-advisory-convergence.mts"
+            "src/scripts/external-check-waiver.mts"
+            ".github/workflows/idd-advisory-convergence.yml"
+            ".github/workflows/idd-advisory-convergence-comment.yml"
+          )
+          CHANGED=$(gh pr diff "$PR_NUMBER" --name-only)
+          TOUCHED=false
+          for FILE in "${ALLOWLIST[@]}"; do
+            if grep -qxF "$FILE" <<<"$CHANGED"; then
+              TOUCHED=true
+              break
+            fi
+          done
+          echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
+      - name: Post the self-referential-bootstrap-auto waiver
+        # Skip a fork PR entirely: the consumer's run-bound trust check
+        # would reject it anyway (a fork's own workflow run never matches
+        # this repository), so this avoids a doomed post and the API
+        # calls it would cost.
+        if: steps.allowlist.outputs.touched == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PROFILE: ${{ steps.profile.outputs.profile }}
+          PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
+          MANAGER: ${{ steps.manager.outputs.manager }}
+        run: |
+          case "$PROFILE" in
+            vendored-node)
+              node scripts/external-check-waiver.mjs --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+              ;;
+            package-manager)
+              case "$MANAGER" in
+                pnpm)
+                  pnpm exec idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+                  ;;
+                yarn)
+                  yarn idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+                  ;;
+                *)
+                  npm exec idd-external-check-waiver -- --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+                  ;;
+              esac
+              ;;
+            ephemeral-npx)
+              SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
+              npx --yes --package "$SPEC" idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+              ;;
+            *)
+              echo "::error::unrecognized helper-runtime profile \"$PROFILE\""
+              exit 1
+              ;;
+          esac
