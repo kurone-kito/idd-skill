@@ -578,7 +578,8 @@ for the full algorithm.
 
 A same-machine fast path complementing the cross-machine claim check
 above. Acquire once the B1 worktree exists (before the first mutation;
-also re-run `--record-tokens` there), then re-run alongside every later
+also re-run `--record-tokens` there (with `--nonce`)), then re-run
+alongside every later
 pre-mutation check:
 `node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id
 {agent-id} --claim-id {claim-id}`.

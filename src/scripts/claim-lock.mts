@@ -135,7 +135,8 @@ const MAX_RETRY_ATTEMPTS = 5;
  * here, a long enough claim-id pushes the interpolated filename past
  * the filesystem's `NAME_MAX` and `--record-tokens` fails with
  * `ENAMETOOLONG`, permanently blocking the fail-closed ownership gate
- * for that claim. The content-hash suffix already disambiguates, so
+ * for that claim (#2879 review, Codex P1). The content-hash suffix
+ * already disambiguates, so
  * truncating this prefix costs only human-readability, not safety.
  */
 const MAX_SANITIZED_CLAIM_ID_LENGTH = 64;

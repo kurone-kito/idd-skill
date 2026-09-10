@@ -167,7 +167,10 @@ tools" above), acquire the
 immediately after the worktree exists, **before Step 3** —
 `install-deps` itself writes into the worktree and runs lifecycle
 hooks, so acquiring the lock any later leaves that install unprotected.
-Also re-run `--record-tokens` for this worktree's own copy of the
+Also re-run `--record-tokens` (with the same `{nonce}` the A5 write
+used — `--record-tokens` overwrites rather than merges, so omitting it
+here drops the nonce from this worktree's own copy) for this
+worktree's own copy of the
 [generated-tokens record](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
 at the same point — the A5 copy lives in the primary worktree's admin
 directory, not this one, so the later Claim revalidation gate's
@@ -176,8 +179,8 @@ directory, not this one, so the later Claim revalidation gate's
 WorkTrunk's pre-start hook runs before the create command returns. If it
 installs dependencies, its **first** command must acquire the lock for
 the new worktree with the current `{agent-id}` / `{claim-id}` and
-re-run `--record-tokens`, then run the install — doing either afterward
-is too late. Under
+re-run `--record-tokens` (with the same `{nonce}` the A5 write used),
+then run the install — doing either afterward is too late. Under
 `package-manager`, the new worktree's `idd:claim-lock` bin may not exist
 yet: invoke a pre-install-available helper from the primary worktree
 with the new path as `--worktree`, or use the helper-free fallback

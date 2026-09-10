@@ -1689,7 +1689,11 @@ Interpretation rules:
   marker (the B1 worktree does not exist yet, so `<path>` is then the
   _primary_ worktree); again with `--nonce` right before posting the
   activation-nonce marker; a third time at B1 once the sibling worktree
-  exists, mirroring the lock's own `--acquire` step. Keyed by
+  exists, again with `--nonce` carried over from the A5 write --
+  mirroring the lock's own `--acquire` step, but into a distinct file in
+  the new worktree's own admin directory, so the earlier primary-worktree
+  write's `nonce` field must be copied forward rather than omitted (the
+  B1 write is not a re-read-then-rewrite of the same file). Keyed by
   `--claim-id` (a content-hash-suffixed, sanitized filename), so two
   sessions generating two different claim-ids resolve to different paths
   (an astronomically unlikely, not provably impossible, chance of
@@ -1723,17 +1727,31 @@ Interpretation rules:
   residual, since giving this record cross-worktree, pre-acquisition
   visibility is explicitly out of scope (see the lock file's own
   cross-worktree-visibility note above).
-- **`instructions-only` helper-free fallback** (no helper runtime
-  available): resolve the private admin directory the same way as the
-  lock file above, then atomically create-or-replace an
-  `idd-generated-tokens-<sanitized-claim-id>-<8-hex-char sha256
-  prefix>.json` file there (`<sanitized-claim-id>`: non-`[A-Za-z0-9._-]`
-  characters replaced with `_`, then truncated to 64 characters, so a
-  long claim-id can't push the filename past the filesystem's
-  `NAME_MAX`), writing `{ agentId, claimId, nonce?, recordedAt }`. No
-  exclusive-create semantics needed (unlike the lock): a plain atomic
-  replace is correct since this is idempotent evidence,
-  not a mutual-exclusion primitive.
+- **`instructions-only` helper-free fallback, write side** (no helper
+  runtime available — `instructions-only` is the distributed default
+  profile, see
+  [Helper Runtime Profile](customization.md#helper-runtime-profile) —
+  so this path is the common case, not an edge case): resolve the
+  private admin
+  directory the same way as the lock file above, then atomically
+  create-or-replace an `idd-generated-tokens-<sanitized-claim-id>-<8-hex
+  -char sha256 prefix>.json` file there (`<sanitized-claim-id>`:
+  non-`[A-Za-z0-9._-]` characters replaced with `_`, then truncated to
+  64 characters, so a long claim-id can't push the filename past the
+  filesystem's `NAME_MAX` -- #2879 review, Codex P1), writing
+  `{ agentId, claimId, nonce?, recordedAt }`. No exclusive-create
+  semantics needed (unlike the lock): a plain atomic replace is correct
+  since this is idempotent evidence, not a mutual-exclusion primitive.
+- **`instructions-only` helper-free fallback, read side** (#2879 review,
+  Codex P1 -- the mandatory `--read-tokens` check in the Claim
+  revalidation gate has no helper-free path without this): resolve the
+  same filename for the queried `{claim-id}`, using the same sanitize-
+  then-truncate rule as the write side. Missing file, unparseable JSON,
+  or a parsed `claimId` field that disagrees with the queried
+  `{claim-id}` are all `present: false`/`malformed` -- treat every one
+  of them as absent and fail closed, mirroring the CLI's own
+  `readGeneratedClaimTokens` behavior above; only a well-formed record
+  whose `claimId` field matches is `present: true`.
 
 ### Clone-scoped lock
 
