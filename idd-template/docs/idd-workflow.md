@@ -791,7 +791,7 @@ routes there) after every delegated-worker completion is too
 expensive; a 2026-09-09 hearing decided to document a re-run cadence
 instead (kurone-kito/idd-skill#2706). A re-run always repeats the mode
 and routing already in force for this session — A1's single-root or
-cross-roadmap choice, and A0/A0-O's own `issue-scope`/
+cross-roadmap choice, and A0/A0-O's own `issue-scope` and
 `orphan-first-policy` routing — refreshing the same search, never
 widening it to a broader mode this session never selected.
 
