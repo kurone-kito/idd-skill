@@ -5910,7 +5910,9 @@ test('runCli: non-verbose output mapping still spreads tier when present', () =>
 // --- #1499: --manifest / --bundles override surface (loadHighContentionFiles) ----
 // loadHighContentionFiles reads a real file (readFileSync), so these exercise
 // it against this repository's own real audit/sync-manifest.json rather than
-// an in-memory fixture -- `bundle-discovery` is a real, non-default bundle
+// an in-memory fixture -- `bundle-discovery-phase` is a real, non-default
+// bundle (the phase-specific bundle that #2789's bundle-core split
+// produced from `bundle-discovery`, alongside the new shared `bundle-core`)
 // whose file set is disjoint enough from DEFAULT_BUNDLE_IDS
 // (bundle-review/bundle-merge) to prove the override genuinely changes the
 // resolved exclusion set, not just accepts the flag syntactically.
@@ -5927,12 +5929,12 @@ test('loadHighContentionFiles: default bundle IDs resolve merge-bundle files, no
 
 test('loadHighContentionFiles: a --bundles override resolves that bundle instead of the default', () => {
   // Regression guard for the #1499 bug: this must validate against the
-  // REQUESTED bundle ID (bundle-discovery), not the hardcoded
+  // REQUESTED bundle ID (bundle-discovery-phase), not the hardcoded
   // DEFAULT_BUNDLE_IDS -- with the pre-#1499 hardcoded validation this would
-  // incorrectly return null (bundle-discovery is absent from
+  // incorrectly return null (bundle-discovery-phase is absent from
   // DEFAULT_BUNDLE_IDS's completeness check).
   const resolved = loadHighContentionFiles(DEFAULT_MANIFEST_PATH, [
-    'bundle-discovery',
+    'bundle-discovery-phase',
   ]);
   assert.notEqual(resolved, null);
   assert.equal(resolved?.includes('idd-discover.instructions.md'), true);

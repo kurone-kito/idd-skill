@@ -593,6 +593,20 @@ as a blocker has since closed or merged -- a cached readiness snapshot
 can be stale, and a closed blocker is a "free" suitability lever that
 costs nothing to re-apply.
 
+**Verify feasibility before drafting a question.** Before drafting a
+decision-blocked question, confirm every option it offers is actually
+buildable against the codebase's current architecture, with no
+undisclosed scope expansion -- a new persistence layer, a new
+dependency, or a change to an unrelated component's contract. A
+competing-options question can read as complete because every option
+sounds coherent in English, while only an implementing session's actual
+codebase familiarity reveals that one option needs a capability the
+architecture does not have. If an option fails this check, either drop
+it from the question or disclose the scope expansion it would require
+as part of the question itself, so the operator chooses with the same
+information an implementing session would need (field evidence observed
+2026-09-10, issue `#2805`).
+
 **Never override a deliberate decision.** When the original rejection
 recorded a genuinely deliberate empirical or product decision (not
 merely an unanswered question), grooming must never resolve it
@@ -604,9 +618,12 @@ tradeoffs behind each question before asking it, rather than bundling
 several unrelated technical topics into one dense batch.
 
 **Apply the operator's answers back onto the issue**: update the score
-footer, remove or update the `triage:{outcome}` label, revise
-acceptance criteria to reflect the decision, and record the decision as
-inline prose in the issue body: `Maintainer decision (<provenance>,
+footer, remove or update the `triage:{outcome}` label -- and the
+configured needs-decision label too, when the hold-and-return rule
+below applied it to this same candidate, so Discover's own A3
+readiness filter stops excluding it -- revise acceptance criteria to
+reflect the decision, and record the
+decision as inline prose in the issue body: `Maintainer decision (<provenance>,
 Groom hearing, <date>): <resolution text>` -- the shape
 `suitability-triage.mjs`'s Check 7 recognizes as a resolved
 decision (`#2661`); a comment may additionally note the decision, but the body
@@ -616,6 +633,37 @@ so a re-groomed issue is not discarded before Check 7 ever sees it. The
 next ordinary Discover pass then picks the issue up normally -- grooming
 itself never claims or works the issue (see
 [Mutation Policy and Coordination Rule](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)).
+
+**Hold when a recorded resolution proves infeasible.** The feasibility
+check above reduces the risk of drafting an infeasible option, but does
+not eliminate it -- the same field evidence (2026-09-10, issue
+`#2805`) shows infeasibility that only became visible once an
+implementing session was deep enough into the codebase to see it. When
+a session reaches implementation and finds the Groom-recorded
+resolution cannot be built as specified, it must hold the candidate as
+decision-blocked again, rather than silently reinterpreting,
+downscoping, or unilaterally picking a different resolution: apply the
+configured needs-decision label and release the claim, the same
+general hold mechanism the shared Hold / suspend rules in
+`.github/instructions/idd-overview-appendix.instructions.md` already
+document. Record exactly what made the recorded option infeasible in
+the hold comment, so the next Groom pass has the information a
+corrected question needs. That later pass removes the needs-decision
+label as part of applying its own operator's answers back onto the
+issue (above), alongside the `triage:{outcome}` label and the score
+footer, rather than leaving the label in place indefinitely or
+removing it without recording a genuinely buildable replacement.
+That replacement must strike through or otherwise replace the
+infeasible `Maintainer decision` line rather than merely append beside
+it -- re-triage's own `hasResolvedDecision` check treats every unstruck
+occurrence as live and has no way to tell which one is current, so an
+unstruck infeasible line can keep reading as resolved alongside its
+replacement. Removing the label here does not itself trigger the
+appendix's usual removal-and-re-claim pairing: like the adjacent
+`triage:{outcome}` removal above, the actual re-claim happens through
+the next ordinary Discover pass reading the now-label-free issue, not
+through the Groom pass itself, which -- as already stated above --
+never claims or works the issue.
 
 **Worked example.** An issue was rejected `needs-decision` at score
 `2/5` because its acceptance criteria read "add caching, or document
@@ -717,19 +765,24 @@ external scheduler.
 Running this variant safely requires:
 
 - **A non-context-inheriting delegation mechanism for the full
-  B-through-F4 worker role, when the calling tool offers one.** A
-  context-inheriting worker (e.g. Claude Code's `fork` subagent) can let
-  the orchestrator's own recent framing compete with, and sometimes
-  override, the delegation brief's own role statement — the same
-  problem [Critique pass invocation](#critique-pass-invocation) already
-  avoids for Claude Code's narrower critique-pass role, since that row
-  also picks a fresh `general-purpose` agent rather than a
+  B-through-F4 worker role, whenever the calling tool offers one — a
+  strong preference, not merely a suggestion, per
+  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).**
+  A context-inheriting worker (e.g. Claude Code's `fork` subagent) can
+  let the orchestrator's own recent framing compete with, and
+  sometimes override, the delegation brief's own role statement — the
+  same problem [Critique pass invocation](#critique-pass-invocation)
+  already avoids for Claude Code's narrower critique-pass role, since
+  that row also picks a fresh `general-purpose` agent rather than a
   context-inheriting one. Extend that same preference to this full
-  worker role, whenever the tool exposes the choice, and fall back to
-  the explicit role-statement wording in
-  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation)
-  as defense-in-depth when only a context-inheriting mechanism is
-  available (kurone-kito/idd-skill#2221, kurone-kito/idd-skill#2624).
+  worker role whenever the tool exposes the choice; a
+  context-inheriting mechanism is a fallback only for when no
+  non-context-inheriting alternative exists, and even careful brief
+  wording (the explicit role-statement text in
+  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation))
+  does not reliably close its residual role-misread risk — a
+  documented known limitation (kurone-kito/idd-skill#2221,
+  kurone-kito/idd-skill#2624, kurone-kito/idd-skill#2802).
 - **A small concurrency cap**, sized against CI-minute cost and
   shared-file contention rather than raised without bound. The optional
   `discover-shared-file-overlap` helper (see
@@ -804,6 +857,53 @@ Running this variant safely requires:
   `gh pr view <n> --json mergeable,mergeStateStatus`) or an orphaned
   claim before dispatching further workers, rather than assuming success
   or failure either way.
+
+### Discover re-run cadence
+
+Re-running the full Discover enumeration this session established
+(`discover-roadmap-graph`, and `discover-orphan-filter` when A0/A0-O
+routes there) after every delegated-worker completion is too
+expensive; a 2026-09-09 hearing decided to document a re-run cadence
+instead (kurone-kito/idd-skill#2706). A re-run always repeats the mode
+and routing already in force for this session — A1's single-root or
+cross-roadmap choice, and A0/A0-O's own `issue-scope` and
+`orphan-first-policy` routing — refreshing the same search, never
+widening it to a broader mode this session never selected.
+
+- **Do not re-run** Discover after every delegated-worker completion.
+  Dispatch the next worker from the previously enumerated graph
+  instead, after a fresh target-local A3 readiness check for that
+  specific candidate (the configured authoring label, and any
+  newly-added open dependency) — the per-delegation A4/A4.5/A5 gates
+  above do not repeat A3's own exclusions, so a candidate that became
+  blocked only after the graph was built would otherwise slip through
+  uncaught.
+- **Do re-run** on any of the following: a worker reports exhaustion
+  or no startable candidate remains in the graph already in hand, or
+  that graph is stale enough that the orchestrator no longer trusts it
+  for the next dispatch — for example when a completed issue may have
+  unblocked a dependent still listed as not-ready. A worker merely
+  finishing the issue it was dispatched for is not by itself a reason
+  to re-run: that happens on every successful dispatch, so treating it
+  as a trigger would collapse straight back into the every-completion
+  cadence the first bullet rules out. Wait for the helper's own
+  process exit before parsing its output — never a mid-run stdout
+  read — per
+  [A2's helper read timing note](../.github/instructions/idd-discover.instructions.md#a2--enumerate-sub-issues).
+- **On a caller-side tool timeout** during the Discover invocation —
+  the orchestrator's own tool-invocation wrapper (for example a
+  bounded Bash-tool or subprocess timeout) elapsing while the helper
+  process may still be running to completion, not the helper itself
+  erroring or exiting non-zero — give that same invocation one more
+  attempt with a longer time budget (re-attach to the still-running
+  process when the tool only stopped waiting rather than killing it;
+  otherwise reissue the command) before concluding anything failed.
+  Only a second timeout under the longer budget counts as an A2
+  enumeration failure, unchanged from today's A2 rule; a helper that
+  actually errors or exits non-zero is already an A2 enumeration
+  failure on the first occurrence.
+- **No caching layer or change-detection pre-check**: this section
+  documents a cadence, not a cache.
 
 ## Live Status Digests
 
