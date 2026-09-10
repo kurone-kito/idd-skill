@@ -294,6 +294,55 @@ test("collectFromGitHub resolves a candidate self-referential-bootstrap-auto mar
   });
 });
 
+test('collectFromGitHub fetches and threads listChangeRequestChangedFiles into inputs.changedFilePaths when a candidate auto-waiver marker is present (Codex review, PR #2895: independent allowlist verification)', () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment()] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      changedFiles: {
+        [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH, 'README.md'],
+      },
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.changedFilePaths, [
+      ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+      'README.md',
+    ]);
+  });
+});
+
+test('collectFromGitHub never fetches listChangeRequestChangedFiles when no candidate auto-waiver marker is present (no wasted API call)', () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [] },
+      // No `changedFiles` fixture entry -- the fake adapter would return
+      // `[]` regardless, so this only proves the field stays `undefined`
+      // when there is nothing to verify, not that the call was skipped.
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.equal(inputs.changedFilePaths, undefined);
+  });
+});
+
 test('collectFromGitHub resolves a candidate run-id lookup failure to an {error} entry instead of crashing the whole collection', () => {
   withHermeticCwd(() => {
     const port = createFakeProviderAdapter({

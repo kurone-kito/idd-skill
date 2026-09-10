@@ -3204,6 +3204,7 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: RECENT, // deadline has NOT passed
@@ -3217,6 +3218,39 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
   assert.equal(verdict.terminal.state, 'NOT_TERMINAL');
   assert.equal(verdict.converged, false);
   assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: a PR that does not touch the trigger-file allowlist is rejected even with an otherwise fully valid marker and run (independent allowlist verification, Codex review, PR #2895)', () => {
+  // The four trust conditions on the cited run alone only prove the marker
+  // cites SOME genuine `pull_request_target`-triggered run of the correct
+  // workflow file/head/repo -- they do not prove THIS PR's own changed
+  // files actually matched the allowlist that run's own job re-derives.
+  // Every other field here is identical to the fully-accepted case above;
+  // only `changedFilePaths` differs, isolating this as the one condition
+  // under test.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: ['docs/README.md'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
 });
 
 test('self-referential-bootstrap-auto: a pull_request-triggered run is rejected the same way an untrusted actor is (event-type condition)', () => {
@@ -3509,6 +3543,7 @@ test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a r
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       convergenceScope: 'idd-claimed',
@@ -3575,6 +3610,7 @@ test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
       headCommittedAt: OLD, // deadline HAS passed -- would otherwise push a reason

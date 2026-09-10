@@ -778,6 +778,7 @@ const advisoryConvergenceFixture = {
     activeClaimId: '',
     validCount: 0,
     outageRelieved: false,
+    autoWaiverValid: false,
   },
   dispositionEvidence: {
     missingRegularCommentCount: 0,

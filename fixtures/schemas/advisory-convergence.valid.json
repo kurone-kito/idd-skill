@@ -38,7 +38,8 @@
     "checkSelector": "idd-advisory-convergence",
     "activeClaimId": "",
     "validCount": 0,
-    "outageRelieved": false
+    "outageRelieved": false,
+    "autoWaiverValid": false
   },
   "dispositionEvidence": {
     "missingRegularCommentCount": 0,

@@ -391,6 +391,17 @@ export interface AdvisoryConvergenceWaiver {
    * (the schema-locked, truthfully-reported count #2021 already
    * established). See {@link evaluateProviderOutageRelief}. */
   outageRelieved: boolean;
+  /** kurone-kito/idd-skill#2657 (Copilot review, PR #2895): whether a
+   * valid, run-bound `self-referential-bootstrap-auto` waiver makes
+   * `ready` true through the independent disjunct in the `ready`
+   * formula. Unlike every other field on this object, this one is
+   * evaluated UNCONDITIONALLY -- never gated behind
+   * `deadlinePassed`/`terminalUnavailable` the way `validCount`/
+   * `outageRelieved` (and the `waived` field they feed) are. Reported
+   * here so a `ready: true` verdict reached solely through this path
+   * is self-explaining, rather than leaving every other waiver/
+   * readiness field false/inapplicable with no visible cause. */
+  autoWaiverValid: boolean;
 }
 
 /** Scope gate evidence for the advisory-convergence verdict.
@@ -608,6 +619,26 @@ export interface AdvisoryConvergenceInputs {
       }
     | { error: string }
   >;
+  /** kurone-kito/idd-skill#2657 (Codex review, PR #2895): the PR's own
+   * changed file paths, fetched by `collectFromGitHub` only when at
+   * least one candidate self-referential-bootstrap-auto marker exists
+   * (same cost-optimization scope as `autoWaiverRunLookups`) --
+   * `undefined`/`[]` otherwise, which correctly makes `autoWaiverValid`
+   * always `false` in that case regardless (no candidate marker to
+   * validate against either). This independent, consume-time check is
+   * required, not merely defense in depth: the four run-id trust
+   * conditions alone prove a marker was posted by a genuine run of
+   * THIS repository's own workflow file, but never prove that run's
+   * own allowlist check actually found a match -- any PR that can get
+   * `github-actions[bot]` to post an issue comment via a PR-authored,
+   * `pull_request`-triggered workflow with `issues: write` (a
+   * same-repository PR fully controls that trigger's own workflow
+   * content) could otherwise forge a marker citing the ordinary
+   * verdict job's own trivially-discoverable `pull_request_target` run
+   * id for its own HEAD -- which independently satisfies path/head-
+   * SHA/repository/event -- and bypass advisory convergence for a
+   * change that never touched the allowlist at all. */
+  changedFilePaths?: string[];
 }
 
 /** Pure options accepted by {@link computeAdvisoryConvergenceVerdict}. */
@@ -1522,39 +1553,20 @@ export function computeAdvisoryConvergenceVerdict(
       waivableSelectors: [...(options.waivableSelectors ?? [])],
     });
   }
-  const waiver: AdvisoryConvergenceWaiver = {
-    mode: waiverMode,
-    checkSelector: waiverCheckSelector,
-    activeClaimId,
-    validCount: validWaiverCount,
-    outageRelieved: outageRelief.relieved,
-  };
-  const waived =
-    !scopeNotApplicable && (validWaiverCount > 0 || outageRelief.relieved);
-  if (!scopeNotApplicable && !converged && terminalUnavailable && !waived) {
-    reasons.push(
-      waiverMode === 'maintainer-authorized'
-        ? `Copilot is terminally unavailable (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver and no active provider-outage declaration relief for selector "${waiverCheckSelector}" on current HEAD`
-        : `Copilot is terminally unavailable (recovery cap exhausted and terminal window elapsed with no current-HEAD review) and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
-    );
-  } else if (!scopeNotApplicable && !converged && deadlinePassed && !waived) {
-    reasons.push(
-      waiverMode === 'maintainer-authorized'
-        ? `deadline (${deadlineMinutes}m) passed with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD (a provider-outage declaration cannot relieve the deadline-only path -- it requires this pull request's own proven terminal-unavailable state)`
-        : `deadline (${deadlineMinutes}m) passed and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
-    );
-  }
-
   // --- Self-referential-bootstrap-auto waiver (kurone-kito/idd-skill#2657) -
   // --- Evaluated UNCONDITIONALLY -- never gated behind
   // `deadlinePassed`/`terminalUnavailable` the way the ordinary waiver
-  // above is. This is the 2026-09-11 hearing's fix for the 2026-09-10
+  // below is. This is the 2026-09-11 hearing's fix for the 2026-09-10
   // self-cancellation bug: a waiver whose validity window shares
   // `deadlinePassed`'s own anchor/duration is always already expired by
   // the time it would ever be read through that same gated branch.
+  // Computed BEFORE the `waiver` object below so its own outcome can be
+  // reported there (Copilot review, PR #2895: a `ready: true` verdict
+  // reached solely through this path previously exposed no field
+  // explaining why, contradicting the published `ready` formula).
   //
   // A SECOND `summarizeExternalCheckWaivers` call, identical to the
-  // primary call above in every option except `trustedMarkerLogins` --
+  // primary call below in every option except `trustedMarkerLogins` --
   // which is extended to include `github-actions[bot]` for THIS call
   // only. The primary call's own `trustedMarkerLogins` binding is never
   // reassigned, so this can never widen trust for an ordinary
@@ -1575,6 +1587,19 @@ export function computeAdvisoryConvergenceVerdict(
   const autoWaiverRepositoryFullName = String(
     options.repositoryFullName ?? '',
   ).trim();
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): independently
+  // verify the PR's own diff actually touches the committed allowlist,
+  // rather than trusting the posting job's own internal check to have
+  // enforced it -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
+  // doc comment for the exact bypass this closes. This is a hard
+  // precondition on `autoWaiverValid` below, independent of the four
+  // run-id trust conditions.
+  const touchesSelfReferentialAllowlist = (inputs.changedFilePaths ?? []).some(
+    (path) =>
+      (SELF_REFERENTIAL_WAIVER_TRIGGER_FILES as readonly string[]).includes(
+        path,
+      ),
+  );
   // Defense in depth: the trust-set extension above already scopes the
   // call to one login, but a marker's `reason`/`runId` are still
   // attacker-shaped input from that login's own comment body, so this
@@ -1582,6 +1607,7 @@ export function computeAdvisoryConvergenceVerdict(
   // every `github-actions[bot]`-authored waiver of any reason.
   const autoWaiverValid =
     !scopeNotApplicable &&
+    touchesSelfReferentialAllowlist &&
     autoWaiverEvidence.valid.some(
       (entry) =>
         entry.checkSelector === waiverCheckSelector &&
@@ -1597,6 +1623,30 @@ export function computeAdvisoryConvergenceVerdict(
           },
         ),
     );
+
+  const waiver: AdvisoryConvergenceWaiver = {
+    mode: waiverMode,
+    checkSelector: waiverCheckSelector,
+    activeClaimId,
+    validCount: validWaiverCount,
+    outageRelieved: outageRelief.relieved,
+    autoWaiverValid,
+  };
+  const waived =
+    !scopeNotApplicable && (validWaiverCount > 0 || outageRelief.relieved);
+  if (!scopeNotApplicable && !converged && terminalUnavailable && !waived) {
+    reasons.push(
+      waiverMode === 'maintainer-authorized'
+        ? `Copilot is terminally unavailable (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver and no active provider-outage declaration relief for selector "${waiverCheckSelector}" on current HEAD`
+        : `Copilot is terminally unavailable (recovery cap exhausted and terminal window elapsed with no current-HEAD review) and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
+    );
+  } else if (!scopeNotApplicable && !converged && deadlinePassed && !waived) {
+    reasons.push(
+      waiverMode === 'maintainer-authorized'
+        ? `deadline (${deadlineMinutes}m) passed with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD (a provider-outage declaration cannot relieve the deadline-only path -- it requires this pull request's own proven terminal-unavailable state)`
+        : `deadline (${deadlineMinutes}m) passed and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
+    );
+  }
 
   const ready =
     scopeNotApplicable ||
@@ -2753,6 +2803,19 @@ export function collectFromGitHub(
     }
   }
 
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): fetched only
+  // when a candidate marker exists (same cost-optimization scope as the
+  // run-id lookups above) -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
+  // doc comment for why the pure verdict function needs this
+  // independent evidence rather than trusting the posting job's own
+  // internal allowlist check.
+  const changedFilePaths =
+    autoWaiverRunIds.size > 0
+      ? retryTransientGhFailure(() =>
+          port.listChangeRequestChangedFiles(Number(args.prNumber)),
+        )
+      : undefined;
+
   return {
     inputs: {
       prNumber: Number(args.prNumber),
@@ -2765,6 +2828,7 @@ export function collectFromGitHub(
       claimCandidateAmbiguous,
       prAuthorIsBot,
       autoWaiverRunLookups,
+      changedFilePaths,
     },
     options: {
       now: resolvedNow,

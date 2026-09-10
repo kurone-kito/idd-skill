@@ -2683,7 +2683,11 @@ reflexively as any other CLI option.
   Without `--assert` it always exits `0` (report-only). With `--assert` it
   exits non-zero unless `ready` is `true` (`ready = not_applicable ||
   converged || ((deadline passed || terminal-unavailable) && validly
-  waived)`).
+  waived) || autoWaiverValid`, the last disjunct added by
+  kurone-kito/idd-skill#2657 -- see the self-referential-bootstrap-auto
+  waiver section above; `waiver.autoWaiverValid` in the verdict reports
+  it directly, since every other `waiver.*` field stays gated behind the
+  deadline/terminal precondition this new disjunct is not).
 - **Structured `nextActions` (`#2143`)**: the verdict also reports a
   `nextActions` array populated from the same catalog the `--assert`
   failure stderr block uses (`collectAssertNextActions`). Each item
@@ -2779,7 +2783,9 @@ reflexively as any other CLI option.
   ordinary deadline has passed — but `ready` still requires a valid
   waiver in addition (`ready = not_applicable || converged ||
   ((deadline.passed || terminal.state == "COPILOT_UNAVAILABLE") &&
-  waived)`); the terminal state alone never sets `ready: true`. A
+  waived) || autoWaiverValid`, the last disjunct unaffected by this
+  section — kurone-kito/idd-skill#2657's self-referential-bootstrap-auto
+  waiver above); the terminal state alone never sets `ready: true`. A
   `not_applicable` applicability (including `reviewPolicy`
   `human-required` / `no-advisory`) is an independent ready path and
   does not change this waiver rule. Observed incident:
