@@ -1038,7 +1038,7 @@ function isValidFenceOpener(fence) {
  * is present, so `content !== containerContent` means this line is a
  * list item's own first line, which has no "previous line" inside that
  * new container for the interruption rule to apply to -- the same
- * reasoning `previousLineBlank` already covers for the top-level case.
+ * reasoning `noOpenParagraph` already covers for the top-level case.
  *
  * `fencedRanges` (Codex review, PR #2840, round 14; same
  * caller-supplied-ranges convention {@link findIndentedCodeRanges} already
@@ -1098,7 +1098,19 @@ function isHtmlBlockContainerEnded(
 export function findHtmlBlockRanges(text, fencedRanges = []) {
   const ranges = [];
   let lineStart = 0;
-  let previousLineBlank = true;
+  // Despite reading like a literal "was the raw previous line blank"
+  // flag, this tracks CommonMark's real type-7 (custom tag) gate: no
+  // paragraph is currently open before the current line (Codex review,
+  // PR #2840, round 16 -- renamed from `previousLineBlank` after finding
+  // three places that name had led to the wrong value). A genuinely
+  // blank line satisfies this, but so does any line right after a block
+  // that just closed -- a self-closed raw-text tag, a closed fence, a
+  // closed special/generic HTML block, or a block whose enclosing
+  // container just ended -- none of those leave an open paragraph behind
+  // either, `gh api /markdown` confirms a type-7 tag freely opens
+  // immediately after any of them. Every block-closing exit below sets
+  // this `true` for exactly that reason.
+  let noOpenParagraph = true;
   let fencedRangeIndex = 0;
   while (lineStart <= text.length) {
     const newlineIndex = text.indexOf('\n', lineStart);
@@ -1123,12 +1135,11 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
       lineStart > fencedRange.start &&
       lineStart < fencedRange.end;
     if (isOpaqueFenceContent) {
-      // The fenced block itself is one real, non-blank block, so a line
-      // right after it (once the loop resumes normal processing) has a
-      // non-blank "previous line" regardless of how this skipped line's
-      // own text looks (e.g. an interior blank-looking line of example
-      // code is not a document-level blank line separating blocks).
-      previousLineBlank = false;
+      // A closed fence leaves no open paragraph behind either (Codex
+      // review, PR #2840, round 16 -- corrects this round's own earlier
+      // `false`): `gh api /markdown` confirms a type-7 tag right after a
+      // closed fence, with no blank line between, still freely opens.
+      noOpenParagraph = true;
       lineStart = lineAfter;
       if (newlineIndex === -1) {
         break;
@@ -1144,7 +1155,7 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
       // line's own first line of a *fresh* list item container -- CommonMark
       // 5.2 -- has no "previous line" within that container for the
       // paragraph-interruption rule to apply to, the same reason
-      // `previousLineBlank` already permits a custom-tag opener right
+      // `noOpenParagraph` already permits a custom-tag opener right
       // after a blank line.
       const opensFreshContainer = content !== containerContent;
       // Codex review, PR #2840 (round 15): this opener's own container
@@ -1160,7 +1171,7 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
         rawTag === null &&
         closeToken === null &&
         (MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
-          ((previousLineBlank || opensFreshContainer) &&
+          ((noOpenParagraph || opensFreshContainer) &&
             MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content)));
       if (rawTag !== null) {
         // Copilot review, PR #2840 (round 8): a same-line self-closed
@@ -1172,9 +1183,20 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
         // forward for a close that already happened.
         const closePattern = HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[rawTag];
         let end = lineEnd;
+        // `resumeAt` (Codex review, PR #2840, round 16) is deliberately
+        // separate from `end`: `end` is the masking boundary and must
+        // stay *before* the line's own newline (downstream position-
+        // preserving masking depends on that newline surviving), but
+        // resuming the outer loop AT that same pre-newline position made
+        // it re-process the bare newline character as its own spurious
+        // one-character "blank line" next iteration -- Copilot review,
+        // PR #2840, round 16. `resumeAt` always lands exactly on a real
+        // line boundary instead.
+        let resumeAt = lineAfter;
         if (!closePattern.test(line)) {
           let scanStart = lineAfter;
           end = text.length;
+          resumeAt = text.length;
           while (scanStart <= text.length) {
             const nl = text.indexOf('\n', scanStart);
             const scanLineEnd = nl === -1 ? text.length : nl;
@@ -1193,10 +1215,12 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
               )
             ) {
               end = scanStart;
+              resumeAt = scanStart;
               break;
             }
             if (closePattern.test(scanLine)) {
               end = scanLineEnd;
+              resumeAt = scanLineAfter;
               break;
             }
             if (nl === -1) {
@@ -1206,8 +1230,13 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
           }
         }
         ranges.push({ start: lineStart, end });
-        lineStart = end;
-        previousLineBlank = false;
+        lineStart = resumeAt;
+        // A closed raw-text block leaves no open paragraph behind either
+        // (Codex review, PR #2840, round 16 -- corrects this branch's
+        // pre-existing `false` from round 8): `gh api /markdown` confirms
+        // a type-7 tag right after a self-closed, scan-closed, or
+        // container-ended raw-text block still freely opens.
+        noOpenParagraph = true;
         continue;
       }
       if (closeToken !== null) {
@@ -1217,9 +1246,13 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
         // separately for the `<!--` case, but `<?`/`<!X`/`<![CDATA[` had
         // no other masking and fell through unmasked here entirely.
         let end = lineEnd;
+        // See the raw-text branch above for why `resumeAt` is tracked
+        // separately from `end` (Codex review, PR #2840, round 16).
+        let resumeAt = lineAfter;
         if (!isSelfClosedSpecialHtmlBlock(content)) {
           let scanStart = lineAfter;
           end = text.length;
+          resumeAt = text.length;
           while (scanStart <= text.length) {
             const nl = text.indexOf('\n', scanStart);
             const scanLineEnd = nl === -1 ? text.length : nl;
@@ -1233,10 +1266,12 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
               )
             ) {
               end = scanStart;
+              resumeAt = scanStart;
               break;
             }
             if (scanLine.includes(closeToken)) {
               end = scanLineEnd;
+              resumeAt = scanLineAfter;
               break;
             }
             if (nl === -1) {
@@ -1246,8 +1281,12 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
           }
         }
         ranges.push({ start: lineStart, end });
-        lineStart = end;
-        previousLineBlank = false;
+        lineStart = resumeAt;
+        // A closed special block leaves no open paragraph behind either
+        // (Codex review, PR #2840, round 16 -- corrects this branch's
+        // pre-existing `false` from round 8); see the raw-text branch's
+        // identical comment above.
+        noOpenParagraph = true;
         continue;
       }
       if (opensGeneric) {
@@ -1255,12 +1294,10 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
         let end = text.length;
         // Ends at whichever comes first: its own next-blank-line close
         // condition, or the opener's enclosing container ending on a
-        // non-blank line (Codex review, PR #2840, round 15) -- tracked
-        // separately from `end` itself so the two termination reasons can
-        // set `previousLineBlank` correctly below (a blank-line ending
-        // leaves the next line's own "previous line" blank; a
-        // container-ending non-blank line does not).
-        let endedOnBlankLine = false;
+        // non-blank line (Codex review, PR #2840, round 15). Both land on
+        // a real line-start offset already, so no separate `resumeAt` is
+        // needed here (contrast the raw-text/special-block branches
+        // above).
         while (scanStart <= text.length) {
           const nl = text.indexOf('\n', scanStart);
           const scanLineEnd = nl === -1 ? text.length : nl;
@@ -1268,7 +1305,6 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
           const scanLine = text.slice(scanStart, scanLineEnd);
           if (scanLine.trim() === '') {
             end = scanStart;
-            endedOnBlankLine = true;
             break;
           }
           if (
@@ -1289,11 +1325,18 @@ export function findHtmlBlockRanges(text, fencedRanges = []) {
         }
         ranges.push({ start: lineStart, end });
         lineStart = end;
-        previousLineBlank = endedOnBlankLine;
+        // A closed generic block leaves no open paragraph behind either,
+        // regardless of whether it closed via its own blank-line rule or
+        // via its container ending (Codex review, PR #2840, round 16 --
+        // corrects this branch's own round-15 `endedOnBlankLine`
+        // conditional, which wrongly kept the container-ending case
+        // `false`); see the raw-text branch's comment above for the
+        // `gh api /markdown` verification this generalizes.
+        noOpenParagraph = true;
         continue;
       }
     }
-    previousLineBlank = isBlank;
+    noOpenParagraph = isBlank;
     lineStart = lineAfter;
     if (newlineIndex === -1) {
       break;
