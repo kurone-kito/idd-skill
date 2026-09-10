@@ -4216,7 +4216,22 @@ function fetchUserContentEditors(
           } | null;
         } | null;
       };
+      errors?: unknown;
     };
+    // Codex review (PR #2840, this round): `gh api graphql` exits non-zero
+    // on a schema-level error, but a resolver-level failure can still come
+    // back as HTTP 200 with a non-empty top-level `errors` array alongside
+    // a *partial* `userContentEdits.nodes` -- the same shape
+    // `fetchClosedByMergedPrNumbers` above already guards against.
+    // Accepting that partial page as complete could omit an older
+    // untrusted editor while `pageInfo.hasPreviousPage` still reads
+    // `false`/absent, wrongly satisfying `trustedEditor`; throw so the
+    // caller's fail-open catch (never "zero editors") runs instead.
+    if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+      throw new Error(
+        `userContentEdits GraphQL response returned errors: ${JSON.stringify(parsed.errors)}`,
+      );
+    }
     // Codex review (PR #2840): reject an absent connection/nodes array
     // instead of defaulting to `[]` -- treating a genuine read failure (a
     // deleted/inaccessible issue between the earlier REST fetch and this

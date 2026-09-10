@@ -6472,3 +6472,23 @@ test('evaluateSuitabilityLocal honors configured blocked/needs-decision label na
   const autonomyCheck = result.checks.find((check) => check.id === 'autonomy');
   assert.equal(autonomyCheck?.result, 'pass');
 });
+
+// --- #2767 (Codex review, PR #2840): fetchUserContentEditors rejects a
+// partial GraphQL errors response, mirroring fetchClosedByMergedPrNumbers's
+// own established check. Neither function is unit-tested by mocking
+// `ghJson` (real gh I/O, same rationale as the two `shouldCollectEvidence`
+// wiring checks above), so this is the same source-text structural pin
+// pattern: prove the `errors` check runs, and runs before the
+// connection/nodes null check could otherwise mask it by throwing first
+// for a different reason.
+
+test('fetchUserContentEditors rejects a non-empty top-level GraphQL errors array before trusting a partial connection (#2767)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /if \(Array\.isArray\(parsed\.errors\) && parsed\.errors\.length > 0\) \{\s*\n\s*throw new Error\(\s*\n\s*`userContentEdits GraphQL response returned errors:[\s\S]*?const connection = parsed\.data\?\.repository\?\.issue\?\.userContentEdits;/,
+  );
+});
