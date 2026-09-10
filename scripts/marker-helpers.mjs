@@ -815,6 +815,7 @@ export function renderExternalCheckWaiverComment(payload) {
   const expiresAt = normalizeIsoTimestamp(
     payload?.expiresAt ?? payload?.expires,
   );
+  const runId = normalizeNonWhitespaceToken(payload?.runId);
   if (
     !agentId ||
     !claimId ||
@@ -827,8 +828,9 @@ export function renderExternalCheckWaiverComment(payload) {
   }
   const encodedCheck = encodeExternalCheckWaiverField(checkSelector);
   const encodedReason = encodeExternalCheckWaiverField(reason);
+  const runIdSuffix = runId ? ` run-id:${runId}` : '';
   return [
-    `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${encodedCheck} reason:${encodedReason} expires:${expiresAt} -->`,
+    `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${encodedCheck} reason:${encodedReason} expires:${expiresAt}${runIdSuffix} -->`,
     '',
     renderExternalCheckWaiverNote({
       actor: payload?.actor,
@@ -1886,7 +1888,7 @@ export function parseExternalCheckWaiverComment(body, createdAt) {
     .trimEnd()
     .match(
       new RegExp(
-        `^<!--\\s*idd-external-check-waiver:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+check:(\\S+)\\s+reason:(\\S+)\\s+expires:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        `^<!--\\s*idd-external-check-waiver:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+check:(\\S+)\\s+reason:(\\S+)\\s+expires:(\\S+)(?:\\s+run-id:(\\S+))?\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
         'i',
       ),
     );
@@ -1911,6 +1913,9 @@ export function parseExternalCheckWaiverComment(body, createdAt) {
     reason,
     expiresAt,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+    // kurone-kito/idd-skill#2657: raw token, no percent-decoding -- see
+    // ParsedExternalCheckWaiver.runId's doc comment.
+    runId: match[7] ?? '',
   };
 }
 export function parseReviewWatermarkComment(body, createdAt) {

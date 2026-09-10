@@ -319,9 +319,49 @@ test('renderExternalCheckWaiverComment round-trips whitespace selectors and reas
     reason: 'rate limit',
     expiresAt: '2026-05-18T00:00:00Z',
     createdAt: '2026-05-17T00:00:00Z',
+    runId: '',
   });
   assert.match(body, /check:Copilot%20code%20review/);
   assert.match(body, /reason:rate%20limit/);
+});
+
+test('renderExternalCheckWaiverComment/parseExternalCheckWaiverComment round-trip an optional run-id (kurone-kito/idd-skill#2657)', () => {
+  const body = renderExternalCheckWaiverComment({
+    actor: 'github-actions[bot]',
+    agentId: 'claude-sonnet5',
+    claimId: 'claim-123',
+    headSha: 'a'.repeat(40),
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'self-referential-bootstrap-auto',
+    expiresAt: '2026-05-18T00:00:00Z',
+    runId: '123456789',
+  });
+
+  assert.match(body, / run-id:123456789 -->/);
+
+  const parsed = parseExternalCheckWaiverComment(body, '2026-05-17T00:00:00Z');
+  assert.deepEqual(parsed, {
+    agentId: 'claude-sonnet5',
+    claimId: 'claim-123',
+    headSha: 'a'.repeat(40),
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'self-referential-bootstrap-auto',
+    expiresAt: '2026-05-18T00:00:00Z',
+    createdAt: '2026-05-17T00:00:00Z',
+    runId: '123456789',
+  });
+});
+
+test('parseExternalCheckWaiverComment ignores a missing run-id (backward compatible)', () => {
+  const legacyBody =
+    '<!-- idd-external-check-waiver: codex-cli claim-123 ' +
+    `${'a'.repeat(40)} check:CodeRabbit reason:rate%20limit ` +
+    'expires:2026-05-18T00:00:00Z -->';
+  const parsed = parseExternalCheckWaiverComment(
+    legacyBody,
+    '2026-05-17T00:00:00Z',
+  );
+  assert.equal(parsed?.runId, '');
 });
 
 test('planExternalCheckWaiver allows a configured non-passing waivable check', () => {

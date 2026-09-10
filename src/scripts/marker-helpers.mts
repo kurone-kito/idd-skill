@@ -137,6 +137,19 @@ export interface ParsedExternalCheckWaiver {
   reason: string;
   expiresAt: string;
   createdAt: string;
+  /**
+   * Optional trailing `run-id:{run-id}` field (kurone-kito/idd-skill#2657):
+   * the posting GitHub Actions run's own `GITHUB_RUN_ID`, carried verbatim
+   * (never percent-encoded/decoded -- it is a numeric run id, not free
+   * text). Empty string when the marker predates this field or omits it;
+   * every existing person-authored waiver has no `run-id:` and keeps
+   * parsing identically. The consumer
+   * (`self-referential-bootstrap-auto` trust check in
+   * `advisory-convergence.mts`) resolves this against the live
+   * `GET /repos/{owner}/{repo}/actions/runs/{run-id}` response; this
+   * parser only recovers the wire value.
+   */
+  runId: string;
 }
 
 /**
@@ -1185,6 +1198,10 @@ export function renderExternalCheckWaiverComment(
         expiresAt?: unknown;
         expires?: unknown;
         actor?: unknown;
+        /** kurone-kito/idd-skill#2657: optional trailing `run-id:` field --
+         * see {@link ParsedExternalCheckWaiver.runId}. Omitted/empty renders
+         * the marker exactly as before this field existed. */
+        runId?: unknown;
       }
     | null
     | undefined,
@@ -1199,6 +1216,7 @@ export function renderExternalCheckWaiverComment(
   const expiresAt = normalizeIsoTimestamp(
     payload?.expiresAt ?? payload?.expires,
   );
+  const runId = normalizeNonWhitespaceToken(payload?.runId);
 
   if (
     !agentId ||
@@ -1213,9 +1231,10 @@ export function renderExternalCheckWaiverComment(
 
   const encodedCheck = encodeExternalCheckWaiverField(checkSelector);
   const encodedReason = encodeExternalCheckWaiverField(reason);
+  const runIdSuffix = runId ? ` run-id:${runId}` : '';
 
   return [
-    `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${encodedCheck} reason:${encodedReason} expires:${expiresAt} -->`,
+    `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${encodedCheck} reason:${encodedReason} expires:${expiresAt}${runIdSuffix} -->`,
     '',
     renderExternalCheckWaiverNote({
       actor: payload?.actor,
@@ -2503,7 +2522,7 @@ export function parseExternalCheckWaiverComment(
     .trimEnd()
     .match(
       new RegExp(
-        `^<!--\\s*idd-external-check-waiver:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+check:(\\S+)\\s+reason:(\\S+)\\s+expires:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        `^<!--\\s*idd-external-check-waiver:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+check:(\\S+)\\s+reason:(\\S+)\\s+expires:(\\S+)(?:\\s+run-id:(\\S+))?\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
         'i',
       ),
     );
@@ -2530,6 +2549,9 @@ export function parseExternalCheckWaiverComment(
     reason,
     expiresAt,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+    // kurone-kito/idd-skill#2657: raw token, no percent-decoding -- see
+    // ParsedExternalCheckWaiver.runId's doc comment.
+    runId: match[7] ?? '',
   };
 }
 
