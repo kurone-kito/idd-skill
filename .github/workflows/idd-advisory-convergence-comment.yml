@@ -248,13 +248,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          # Same three-trigger-family PR-number resolution as the rerun
-          # step below.
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-          # pull_request_review and pull_request_review_comment both
-          # carry github.event.pull_request.number; issue_comment carries
+          # Same PR-number resolution as the rerun step below, though
+          # this step itself only ever runs for pull_request_review_comment
+          # or issue_comment -- its own `if:` above excludes
+          # pull_request_review entirely (Copilot, PR #2855 review: an
+          # earlier revision's comments here still described
+          # review-specific behavior even after that exclusion landed).
+          # pull_request_review_comment carries
+          # github.event.pull_request.number; issue_comment carries
           # github.event.issue.number instead (#2411).
-          #
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           # Both pull_request_review_comment and issue_comment carry the
           # triggering comment's own timestamps at github.event.comment
           # (matching COMMENT_BODY above). Prefer updated_at:
@@ -265,16 +268,8 @@ jobs:
           # "newer than the trigger" and wrongly skip this run.
           # updated_at equals created_at for a never-edited comment, so
           # this is safe for the created-event case too (#2650 review,
-          # Copilot). pull_request_review carries its own timestamp at
-          # github.event.review.submitted_at instead -- there is no
-          # comment object to fall back to for that event. This helper's
-          # own live data collection does not query PR reviews (only
-          # issue and review-thread comments), so it can never find a
-          # "newer review" specifically; it can still find a newer
-          # IDD-originated *comment* that landed after this review, which
-          # is real, useful debounce signal even on a review-triggered
-          # run.
-          TRIGGERED_AT: ${{ github.event.review.submitted_at || github.event.comment.updated_at || github.event.comment.created_at }}
+          # Copilot).
+          TRIGGERED_AT: ${{ github.event.comment.updated_at || github.event.comment.created_at }}
         run: node scripts/advisory-comment-debounce.mjs --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
       - name: Rerun required HEAD check
         # A review submission always proceeds, bypassing the debounce
