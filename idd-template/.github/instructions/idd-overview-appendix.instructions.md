@@ -125,8 +125,7 @@ handling rules, see `idd-review-triage.instructions.md`.
 ## Upstream-candidate escalation
 
 **Gating.** Applies only when `upstreamEscalation.enabled` is `true`
-in `.github/idd/config.json` (absent or `false`: skip silently, no new
-behavior).
+in `.github/idd/config.json` (absent or `false`: skip silently).
 
 **Qualifying criteria** (high-confidence bar, mirroring A4.5's
 `invalid`/`out-of-scope` rigor in `idd-suitability.instructions.md`):
@@ -148,7 +147,7 @@ code, config, or a local customization).
 a local issue through `skills/issue-authoring/` as usual, additionally
 carrying the GitHub label `status:upstream-candidate` (create it on
 first use) and the hidden marker
-`<!-- {marker-prefix}-upstream-candidate: true -->`.
+`<!-- {{PROJECT_MARKER_PREFIX}}-upstream-candidate: true -->`.
 
 **What never to do.** Never write to `kurone-kito/idd-skill` or any
 other repository — no comment, no issue, no mutation of any kind.
