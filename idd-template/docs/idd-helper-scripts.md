@@ -1393,8 +1393,18 @@ idd-external-check-waiver --pr 123 \
 - `--reason` must equal the literal token `self-referential-bootstrap-auto`
   (a value the parser rejects for every other purpose) and `--run-id` is
   required; `--expires`/`--expires-in` are rejected -- the expiry is
-  always computed internally as the PR's HEAD commit timestamp plus a
-  fixed `PT24H`, independent of `advisoryWait.convergenceDeadline`;
+  always computed internally, independent of
+  `advisoryWait.convergenceDeadline`. The base window is the PR's HEAD
+  commit timestamp plus a fixed `PT24H`, but two further rules apply
+  (Codex review, PR #2895): the duration clamps to the configured
+  `ciGate.externalCheckWaivers.maxValidity` when that is shorter than
+  `PT24H` (an adopter with a stricter configured maximum still gets a
+  marker, just a shorter-lived one, instead of every post being
+  rejected by that same policy's own validation), and if the
+  HEAD-anchored result would already be non-future (a stale HEAD from a
+  `reopened` trigger with no new commit), the window anchors on the
+  current time instead, so a stale-enough PR still gets a
+  genuinely-future expiry rather than one rejected outright;
 - it still resolves the linked issue's real active claim exactly like the
   ordinary path (never a claimless `none` waiver) and still requires one
   to exist;
