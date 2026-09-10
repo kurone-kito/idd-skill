@@ -35,8 +35,8 @@ Before posting the handoff comment, confirm all of the following:
    arguments — resolve the exact command from
    `docs/idd-helper-scripts.md` if unsure). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
-   `--read-tokens --worktree <path> --claim-id <id>` and require
-   `present: true` with no `malformed`; otherwise stop.
+   `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
+   and require `present: true` with no `malformed`; otherwise stop.
 4. If any check fails, stop.
 
 ## F2.5 — Draft and post the handoff comment

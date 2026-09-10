@@ -86,8 +86,8 @@ other GitHub side effect, confirm all of the following:
    arguments — resolve the exact command from
    `docs/idd-helper-scripts.md` if unsure). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
-   `--read-tokens --worktree <path> --claim-id <id>` and require
-   `present: true` with no `malformed`; otherwise stop.
+   `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
+   and require `present: true` with no `malformed`; otherwise stop.
 6. If any check fails, stop.
 
 ## E9 — Fix accepted issues
