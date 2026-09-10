@@ -54,8 +54,10 @@ import {
 } from './supersession-detection.mjs';
 import {
   buildTrustedLoginPredicate,
+  candidateFilesExistOnDisk,
   evaluateStructuralEvidence,
   hasAllStructuralSignals,
+  hasVerificationCommandSignal,
 } from './triage-structural-evidence.mjs';
 
 /**
@@ -3889,8 +3891,28 @@ function fetchUserContentEditors(owner, repo, issueNumber) {
  * repository's configured `trustedMarkerActors` plus a live
  * collaborator-permission check, then computes the structural-evidence
  * signal for `issue`.
+ *
+ * Checks the two local-only signals (`verificationCommand`,
+ * `candidateFilesExist` -- both computable from `issue.body` alone, no
+ * network) before touching the network at all (Codex review, PR #2840,
+ * round 12): `runCli`'s own `wouldDemoteWithFullEvidence` sentinel only
+ * gates whether this function is called at all (is demotion *ever*
+ * possible for this failure branch); it says nothing about whether
+ * *this specific issue's real body* actually satisfies the two local
+ * signals. Demotion requires all three signals together, so either one
+ * being false already makes the live `fetchUserContentEditors` fetch (a
+ * paginated GraphQL round trip) and the collaborator-permission lookup
+ * wasted network cost for no possible change in outcome -- the same
+ * fix already applied to `discover-viability-gate.mts`'s own
+ * `computeLiveStructuralEvidence` (commit fb7efc8f).
  */
 function computeLiveStructuralEvidence(owner, repo, issue, policyConfig) {
+  const body = issue.body;
+  const verificationCommand = hasVerificationCommandSignal(body);
+  const candidateFilesExist = candidateFilesExistOnDisk(body, existsSync);
+  if (!verificationCommand || !candidateFilesExist) {
+    return { verificationCommand, candidateFilesExist, trustedEditor: false };
+  }
   const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
     config: policyConfig,
@@ -3909,7 +3931,7 @@ function computeLiveStructuralEvidence(owner, repo, issue, policyConfig) {
     },
   );
   return evaluateStructuralEvidence({
-    body: issue.body,
+    body,
     author: issue.author,
     editorLogins: fetchUserContentEditors(owner, repo, issue.number),
     isTrustedLogin,

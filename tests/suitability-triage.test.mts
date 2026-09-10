@@ -6085,6 +6085,39 @@ test('runCli: the live structural-evidence fetch is gated behind an all-true sen
   );
 });
 
+// #2767 round 12 (Codex review, PR #2840): the `wouldDemoteWithFullEvidence`
+// sentinel above only gates whether computeLiveStructuralEvidence is called
+// at all (is demotion *ever* possible for this failure branch); it says
+// nothing about whether the issue's REAL body actually satisfies the two
+// local-only signals. computeLiveStructuralEvidence itself (unexported live
+// I/O wiring, not unit-testable via mocked ghJson -- same reason as the
+// other source-text pins in this file) must check those first and skip the
+// userContentEditors fetch when either is false, mirroring the fix already
+// applied to discover-viability-gate.mts's own computeLiveStructuralEvidence
+// (commit fb7efc8f). The behavioral premise (a false local signal keeps
+// hasAllStructuralSignals false regardless of trustedEditor) is proven
+// directly in triage-structural-evidence.test.mts's own
+// hasAllStructuralSignals suite.
+test('computeLiveStructuralEvidence skips the live fetchUserContentEditors fetch when a local-only signal is already false (#2767 round 12)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /const verificationCommand = hasVerificationCommandSignal\(body\);\s*\n\s*const candidateFilesExist = candidateFilesExistOnDisk\(body, existsSync\);\s*\n\s*if \(!verificationCommand \|\| !candidateFilesExist\) \{\s*\n\s*return \{ verificationCommand, candidateFilesExist, trustedEditor: false \};\s*\n\s*\}/,
+  );
+  // The early-return check must run before the fetchUserContentEditors
+  // call, not merely exist somewhere in the function -- pin the ordering.
+  const earlyReturnIndex = source.indexOf(
+    'if (!verificationCommand || !candidateFilesExist)',
+  );
+  const fetchIndex = source.lastIndexOf('fetchUserContentEditors(');
+  assert.notEqual(earlyReturnIndex, -1);
+  assert.notEqual(fetchIndex, -1);
+  assert.equal(earlyReturnIndex < fetchIndex, true);
+});
+
 // C1 self-review finding (#1815): the structural pins above prove
 // `shouldCollectEvidence` is wired to these three checks, but not that the
 // minimal `preEvidenceContext` runCli builds (issue + repository only,
