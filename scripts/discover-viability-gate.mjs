@@ -305,7 +305,17 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
     // network-identical to before this hook existed.
     let result = evaluateA4Viability(issue);
     if (!result.passed && computeStructuralEvidence) {
-      const structuralEvidence = await computeStructuralEvidence(issue);
+      // #2767: a transient GitHub API failure (rate limit, timeout, an
+      // absent GraphQL connection) fetching structural evidence must not
+      // abort evaluation of every other issue in this batch -- degrade to
+      // "no evidence available" (the plain `result` computed above stays
+      // unchanged) rather than letting the rejection propagate.
+      let structuralEvidence;
+      try {
+        structuralEvidence = await computeStructuralEvidence(issue);
+      } catch {
+        structuralEvidence = undefined;
+      }
       if (structuralEvidence) {
         result = evaluateA4Viability(issue, structuralEvidence);
       }

@@ -303,6 +303,35 @@ test('#2767: filterOrphanIssues never demotes when fetchUserContentEditorsByIssu
   assert.equal(result.warnings.length, 0);
 });
 
+test('#2767: filterOrphanIssues degrades to the plain (filtered) result when fetchUserContentEditorsByIssueNumber throws', async () => {
+  const issues = [
+    {
+      number: 32,
+      title: 'still filtered after a throwing fetch',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`',
+      url: 'https://example.com/32',
+      user: { login: 'alice' },
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => {
+      throw new Error('gh api graphql ... failed: rate limited (HTTP 429)');
+    },
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.runtime_observation_precondition.length, 1);
+  assert.equal(result.warnings.length, 0);
+});
+
 test('filterOrphanIssues excludes providerOutage.declarationTarget end-to-end (#2800)', async () => {
   const issues = [
     {

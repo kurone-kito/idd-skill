@@ -3162,16 +3162,27 @@ function runCli() {
       result.failedCheck === 'autonomy' ||
       result.failedCheck === 'verifiability')
   ) {
-    const structuralEvidence = computeLiveStructuralEvidence(
-      owner,
-      repo,
-      issue,
-      policyConfig,
-    );
-    result = evaluateSuitability(issue, {
-      ...suitabilityOptions,
-      structuralEvidence,
-    });
+    // Same fail-open contract as the `existingRejection` scan above: this
+    // is a detect-only demotion path, not a gate, so a transient GitHub
+    // API failure (rate limit, timeout, an absent GraphQL connection --
+    // `getWorkItemUserContentEdits`/`collaboratorPermission` both throw on
+    // one) must degrade to "no structural evidence" -- keep the plain
+    // `result` computed above unchanged -- rather than crashing the whole
+    // suitability evaluation.
+    try {
+      const structuralEvidence = computeLiveStructuralEvidence(
+        owner,
+        repo,
+        issue,
+        policyConfig,
+      );
+      result = evaluateSuitability(issue, {
+        ...suitabilityOptions,
+        structuralEvidence,
+      });
+    } catch {
+      // Keep the plain `result` from above.
+    }
   }
   const output = {
     repository: { owner, repo },

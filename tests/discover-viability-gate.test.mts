@@ -595,6 +595,63 @@ test('still fails autonomous completion when "checked" appears without a past-te
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+// #2767 AC: reuse the #2738/#2716/#2711/#2697-shape adversarial "still
+// fails" corpora above (numbers 33-35) -- the genuine fail siblings of the
+// pass-shape corpora further below -- rather than only fresh synthetic
+// bodies, so the demotion mechanism is proven against the real false-
+// positive shapes that motivated this issue, not just a representative
+// one-liner.
+for (const { number, title, body } of [
+  {
+    number: 33,
+    title: 'wire external approval gate',
+    body:
+      'This has no ambiguity here. Waiting for maintainer sign-off is ' +
+      'required before this can ship. Verification: add unit tests.',
+  },
+  {
+    number: 34,
+    title: "wire external approval gate for the customer's workflow",
+    body:
+      "The customer's rollout requires external coordination before " +
+      'this can ship. Verification: add unit tests.',
+  },
+  {
+    number: 35,
+    title: 'add pre-merge external verification step',
+    body:
+      'It must be checked whether production access is required before ' +
+      'this ships. Verification: add unit tests.',
+  },
+]) {
+  test(`#2767: demotes issue #${number}'s genuine autonomous_completion fail (#2738 adversarial corpus) to warn when all structural signals hold`, () => {
+    const issue = { number, title, body, state: 'OPEN' };
+
+    const withoutEvidence = evaluateA4Viability(issue);
+    assert.equal(withoutEvidence.passed, false);
+    assert.ok(withoutEvidence.failedCriteria.includes('autonomous_completion'));
+
+    const withEvidence = evaluateA4Viability(issue, ALL_STRUCTURAL_SIGNALS);
+    assert.equal(withEvidence.passed, true);
+    const autonomy = withEvidence.criteria.find(
+      (c) => c.id === 'autonomous_completion',
+    );
+    assert.equal(autonomy?.result, 'warn');
+
+    for (const key of Object.keys(
+      ALL_STRUCTURAL_SIGNALS,
+    ) as (keyof StructuralEvidence)[]) {
+      const partial: StructuralEvidence = {
+        ...ALL_STRUCTURAL_SIGNALS,
+        [key]: false,
+      };
+      const result = evaluateA4Viability(issue, partial);
+      assert.equal(result.passed, false, `expected fail with ${key}: false`);
+      assert.ok(result.failedCriteria.includes('autonomous_completion'));
+    }
+  });
+}
+
 // --- Independent critique follow-ups on the exclusions above: a
 // comma/list-boundary guard for negation, paragraph-scoped quote pairing,
 // and a generic-mention exclusion for a trigger word used to describe a
@@ -1159,4 +1216,43 @@ test('#2767: evaluateDiscoverViability demotes a candidate via computeStructural
     (c) => c.id === 'limited_scope',
   );
   assert.equal(limitedScope?.result, 'warn');
+});
+
+test('#2767: evaluateDiscoverViability degrades to the plain (pre-evidence) result when computeStructuralEvidence throws, without aborting the batch', async () => {
+  const issues = new Map([
+    [
+      11,
+      {
+        number: 11,
+        title: 'cross-cutting redesign',
+        state: 'OPEN',
+        body: 'across multiple subsystems and architecture overhaul, with unit tests and ci verification',
+      },
+    ],
+    [
+      12,
+      {
+        number: 12,
+        title: 'targeted helper update',
+        state: 'OPEN',
+        body: 'single module change with unit tests and ci verification',
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverViability([11, 12], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    computeStructuralEvidence: () => {
+      throw new Error('gh api graphql ... failed: rate limited (HTTP 429)');
+    },
+  });
+
+  // The candidate whose plain evaluation failed stays discarded (the
+  // pre-#2767 fail, degraded from a thrown structural-evidence fetch),
+  // and the unrelated, already-viable candidate is unaffected.
+  assert.equal(summary.viable.length, 1);
+  assert.equal(summary.viable[0]?.number, 12);
+  assert.equal(summary.discarded.length, 1);
+  assert.equal(summary.discarded[0]?.number, 11);
+  assert.ok(summary.discarded[0]?.failedCriteria.includes('limited_scope'));
 });

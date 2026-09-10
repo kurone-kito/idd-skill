@@ -931,20 +931,33 @@ export async function filterOrphanIssues(
       result.reason === 'runtime_observation_precondition' &&
       typeof options.fetchUserContentEditorsByIssueNumber === 'function'
     ) {
-      const authorLogin = (issue.user as { login?: unknown } | null)?.login;
-      const structuralEvidence = evaluateStructuralEvidence({
-        body: String(issue.body ?? ''),
-        author: typeof authorLogin === 'string' ? authorLogin : '',
-        editorLogins: options.fetchUserContentEditorsByIssueNumber(
-          issue.number,
-        ),
-        isTrustedLogin,
-        existsAt: options.existsAt ?? existsSync,
-      });
-      result = classifyIssue(issue, {
-        ...classifyOptions,
-        structuralEvidence,
-      });
+      // CodeRabbit review, PR #2557 (same fail-open contract this file
+      // already applies below to its other opportunistic per-candidate
+      // fetches): a transient GitHub API failure from either the editor
+      // fetch or the live collaborator-permission check must not abort the
+      // whole default-on discover pass. Degrade to "no structural evidence
+      // available" -- keep the plain `result` computed above unchanged --
+      // rather than crashing or guessing a trust verdict.
+      try {
+        const authorLogin = (issue.user as { login?: unknown } | null)?.login;
+        const structuralEvidence = evaluateStructuralEvidence({
+          body: String(issue.body ?? ''),
+          author: typeof authorLogin === 'string' ? authorLogin : '',
+          editorLogins: options.fetchUserContentEditorsByIssueNumber(
+            issue.number,
+          ),
+          isTrustedLogin,
+          existsAt: options.existsAt ?? existsSync,
+        });
+        result = classifyIssue(issue, {
+          ...classifyOptions,
+          structuralEvidence,
+        });
+      } catch {
+        // Keep the original `result` (still filtered under
+        // runtime_observation_precondition, the prior byte-stable
+        // behavior).
+      }
     }
 
     if (result.reason === 'unresolvable_reference') {
