@@ -1678,6 +1678,334 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedged "partially  addresse
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects a hedge adjective inside the lead-in noun phrase (self-critique, E2 pass, #2858)', () => {
+  // E2 critique pass on this PR found the hedge-word exclusion added to
+  // the internal "addresses the ... concern" gap never reached the
+  // LEAD-IN's own "the" plus 1-2 word slots, since that whitelist was a
+  // purely structural check. "The partial workaround addresses the
+  // wording concern" matched despite "partial" being exactly the
+  // hedged, non-committal shape the hedge guard exists to reject
+  // elsewhere. The first attempted fix reused only the existing
+  // degree-ADVERB enumeration and still let this through, since a
+  // lead-in noun phrase's modifier is grammatically an ADJECTIVE
+  // ("partial", "temporary") rather than an adverb ("partially") --
+  // caught empirically before this ever reached review.
+  const thread = {
+    id: 'thread-leadin-hedge-adjective',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'LH-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'LH-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. The partial workaround addresses ' +
+            'the wording concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a second hedge adjective inside the lead-in noun phrase (self-critique, E2 pass, #2858)', () => {
+  // Same class as above with a second word from the adjective
+  // enumeration, confirming the fix is not overfit to "partial" alone.
+  const thread = {
+    id: 'thread-leadin-hedge-adjective-temporary',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'LT-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'LT-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. The temporary fix addresses the ' +
+            'wording concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition safely rejects a first "addresses the ... concern" occurrence composed with a genuine second one (self-critique, E2 pass, #2858)', () => {
+  // `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` is not left-anchored, so a
+  // first "addresses the ... concern" occurrence that fails only the
+  // boilerplate-tail check does not abort the whole match -- the engine
+  // retries at a later "addresses" occurrence. This fixture confirms
+  // the composition stays safe: the gap from the opening to the SECOND
+  // occurrence spans an entire extra sentence ("The retry still
+  // fails."), which the lead-in whitelist (guard 6) rejects. This pins
+  // an interaction between two independently-motivated guards (the tail
+  // anchor and the lead-in whitelist) that was previously untested in
+  // combination.
+  const thread = {
+    id: 'thread-two-addresses-occurrences',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'TO-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'TO-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This addresses the layout concern. ' +
+            'The retry still fails. Commit `abc1234` addresses the ' +
+            'wording concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test("classifyThreadAckOnlyPostDisposition recognizes the tail grammar's disclaimer-only branch with no sign-off or details block (self-critique, E2 pass, #2858)", () => {
+  // `CODERABBIT_ACK_CLOSURE_TAIL_SOURCE` is a 4-branch alternation; only
+  // the full-stack and details-first branches had a positive test before
+  // this. This pins the disclaimer-only entry point.
+  const thread = {
+    id: 'thread-tail-disclaimer-only',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'TDO-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'TDO-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This addresses the wording ' +
+            'concern.\n\n_You are interacting with an AI system._',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+test("classifyThreadAckOnlyPostDisposition recognizes the tail grammar's marker-only branch with no other boilerplate (self-critique, E2 pass, #2858)", () => {
+  // Pins the fourth and final tail-grammar entry point: the bare
+  // auto-generated-reply marker with nothing else following the closure.
+  const thread = {
+    id: 'thread-tail-marker-only',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'TMO-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'TMO-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This addresses the wording ' +
+            'concern.\n\n<!-- This is an auto-generated reply by ' +
+            'CodeRabbit -->',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+test('classifyThreadAckOnlyPostDisposition recognizes the lead-in whitelist\'s bare "that"/"it" pronoun branches (self-critique, E2 pass, #2858)', () => {
+  // Every existing fixture using "This" as the lead-in pronoun is a
+  // NEGATIVE test failing for an unrelated reason; "that" and "it"
+  // appeared in no fixture at all. Pins both positively in one test.
+  const thatThread = {
+    id: 'thread-leadin-that-pronoun',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'PT-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'PT-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. That addresses the wording ' +
+            'concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+  const itThread = {
+    id: 'thread-leadin-it-pronoun',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'PI-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'PI-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. It addresses the wording ' +
+            'concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const opts = {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  assert.equal(
+    classifyThreadAckOnlyPostDisposition(thatThread, opts)
+      .ackOnlyPostDisposition,
+    true,
+  );
+  assert.equal(
+    classifyThreadAckOnlyPostDisposition(itThread, opts).ackOnlyPostDisposition,
+    true,
+  );
+});
+
+test('classifyThreadAckOnlyPostDisposition safely rejects the "Thanks for the fix." opening combined with the third closure shape (self-critique, E2 pass, #2858)', () => {
+  // `CODERABBIT_ACK_OPENING_RE`'s own doc comment cites "Thanks for the
+  // fix." as a real observed opening. Paired with the third-form
+  // closure, this is rejected: the opening match stops right after
+  // "Thanks", so the rest of that same sentence (" for the fix.") lands
+  // inside the opening-to-closure gap and its leading whitespace breaks
+  // the lead-in whitelist's `^[.!]` anchor. This fails CLOSED (safe) --
+  // guard 6's own stated philosophy explicitly accepts rejecting an
+  // unobserved-but-legitimate combination -- but pins the current,
+  // intentional behavior so a future edit that changes it is a visible
+  // decision, not a silent one.
+  const thread = {
+    id: 'thread-thanks-for-fix-plus-third-form',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'TF-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'TF-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user` Thanks for the fix. Commit `abc1234` addresses ' +
+            'the template concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 

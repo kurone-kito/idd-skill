@@ -1348,8 +1348,9 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 //    a hedged, non-committal acknowledgment that would otherwise pass on
 //    structure alone.
 // 4. **No backtracking past an earlier same-sentence "concern"/"finding"**
-//    (round 3, Codex; now a natural consequence of guards 1-2's token
-//    grammar rather than a separate per-character lookahead): "`@user`,
+//    (round 3, Codex; largely a consequence of guards 1-2's token
+//    grammar rather than a separate per-character lookahead, but not
+//    unconditionally so -- see the precise bound stated below): "`@user`,
 //    confirmed. This addresses the original concern but reveals another
 //    finding.\n\n🐇 ✓" has a genuinely new finding joined by "but" in the
 //    SAME sentence. Reaching the later "finding" would require consuming
@@ -1357,7 +1358,15 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 //    before even reaching "another finding", already past the `{0,3}`
 //    cap guard 1 enforces -- so no valid parse reaches the second
 //    occurrence; the match fails at the first "concern" instead, exactly
-//    as guard 3's tail check requires.
+//    as guard 3's tail check requires. This holds whenever reaching the
+//    second occurrence needs MORE than 3 modifier tokens; a short,
+//    non-contrastive conjunctive bridge can still consume an earlier
+//    occurrence as a plain token within budget and reach a second one --
+//    "addresses the concern and finding.\n\n🐇 ✓" matches by treating
+//    "concern" as modifier-token #1 (self-critique, E2 pass on this PR).
+//    Not treated as a precision bug: "X addresses the concern and
+//    finding" reads as a benign compound object (both were addressed),
+//    not a hidden new concern, unlike the "but"-joined case above.
 // 5. **Hedge-adverb guard, both before "addresses" and inside the gap**
 //    (round 2, Codex; scoping fixed round 3, Copilot; extended into the
 //    gap itself, round 7, Codex): "`@user`, confirmed. This partially
@@ -1420,6 +1429,20 @@ const CODERABBIT_ACK_STRONG_CLOSURE_RE =
   /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
 const CODERABBIT_ACK_HEDGE_WORDS_SOURCE =
   'partially|partly|somewhat|mostly|largely|barely|slightly|arguably|in\\s+part|to\\s+some\\s+extent|not\\s+(?:fully|entirely|completely|really)';
+// Sibling enumeration to the degree-adverb list above, for the SAME
+// hedged/non-committal semantic class but the ADJECTIVE part of speech
+// (self-critique, E2 pass on this PR, PR #2868): the adverb list above
+// modifies a VERB ("partially addresses"); a lead-in noun phrase instead
+// takes an ADJECTIVE modifying its noun ("The partial workaround
+// addresses...", "The temporary fix addresses..."). Grammatically
+// distinct from the adverb list, so it is its own enumeration rather
+// than folded in, but the SAME bounded philosophy: a small, closed set
+// of English words describing partial/provisional completeness -- not
+// the open-ended CONTRASTIVE-adjective class (residual gap (a) above,
+// "wrong", "different", "unrelated") that states something was done
+// incorrectly rather than only partially or temporarily.
+const CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE =
+  'partial|temporary|interim|provisional|tentative|preliminary|stopgap|incomplete';
 // CodeRabbit review, PR #2868, round 4: two mechanical bypasses in the
 // pattern below, both closed by widening two sub-patterns from singular-
 // only to also accept the plural/multi-space form, exactly the same
@@ -1646,10 +1669,29 @@ const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
 //    DECISION, which this file's own reasoning above already treats as
 //    unable to co-occur with a new concern in the same reply, so they
 //    keep the whole-body `.test()` they always had.
+//
+// 7. **Hedge words excluded from the lead-in's own noun-phrase tokens
+//    too** (self-critique, E2 pass on this PR): guard 5's hedge-adverb
+//    enumeration reaches the internal "addresses the ... concern" gap
+//    (guard 5 above) but never reached the LEAD-IN's own "the" plus
+//    1-2 word slots, since that whitelist was designed purely as a
+//    structural check (pronoun / short noun phrase / commit SHA), not a
+//    semantic filter. "`@user`, confirmed. The partial workaround
+//    addresses the wording concern.\n\n🐇 ✓" matched despite "partial"
+//    being exactly the hedged, non-committal shape guard 5 exists to
+//    reject elsewhere. Applying the same per-token negative lookahead
+//    used in the internal gap closes this location too. Excludes BOTH
+//    enumerations (adverb and adjective forms), since a lead-in noun
+//    phrase's modifier is grammatically an adjective ("partial",
+//    "temporary") even though the internal gap's is an adverb
+//    ("partially") -- the first attempt at this fix reused only the
+//    adverb list and still let "partial"/"temporary" straight through,
+//    caught empirically before this ever reached review.
 const CODERABBIT_ACK_CLOSURE_LEADIN_RE = new RegExp(
   '^[.!]\\s+(?:' +
     'this|that|it|' +
-    'the\\s+[\\w-]+(?:\\s+[\\w-]+){0,1}|' +
+    `the\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE})\\b)[\\w-]+` +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE})\\b)[\\w-]+){0,1}|` +
     'commit\\s+`[0-9a-f]{7,40}`' +
     ')\\s+$',
   'i',
