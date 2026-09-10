@@ -441,6 +441,51 @@ function extractWatchdogScript(args: string[] | undefined): string {
   return args[1] ?? '';
 }
 
+/**
+ * Appends a bare positional argument to a stub `command` string whose
+ * `scriptBody` must genuinely stay alive (a `setInterval`-based hang, or
+ * async `process.stdin` listeners) rather than exit synchronously
+ * (kurone-kito/idd-skill#2892, Codex review on PR #2897).
+ *
+ * Without any argument, `stubExecutable`'s win32 hardlinked-`node.exe`
+ * trick hits Node's own "no script argument, non-TTY stdin -> evaluate
+ * stdin as a script" bootstrap path (`node:internal/main/eval_stdin`) --
+ * a documented, version-stable Node CLI behavior that never goes through
+ * `Module._load` at all, so the preload's own `isMain` override (built
+ * for the normal module-loading path) cannot intercept it. The hook's
+ * own JSON payload on stdin is not valid top-level JS there, so that path
+ * throws a `SyntaxError` and crashes the stub almost instantly -- before
+ * a `setInterval`-only `scriptBody` (which never itself calls
+ * `process.exit()`) gets a chance to matter, or before async
+ * `process.stdin` listeners finish receiving their data -- rather than
+ * behaving as the fixture intends. (A `scriptBody` that calls
+ * `process.exit()` synchronously and unconditionally, e.g.
+ * `'process.exit(0);\n'`, terminates before returning control to Node's
+ * bootstrap at all, so it is not affected and does not need this.)
+ *
+ * A single non-dash-prefixed positional argument routes the launch
+ * through `run_main_module` instead, which *does* go through
+ * `Module._load` with `isMain: true` -- exactly what the win32 preload's
+ * own override already intercepts as a no-op, letting `scriptBody` run
+ * normally afterward with no further stdin-bootstrap interference. Must
+ * not start with `-`: a leading-dash first argument is rejected by
+ * Node's own C++ option parser before any preload runs (this file's own
+ * `buildStubPreloadSource` comment documents the same constraint).
+ * Verified empirically (not just reasoned from documentation): an
+ * otherwise-identical `node --require <preload>` invocation with JSON
+ * piped to stdin crashes with exactly this `SyntaxError` when given no
+ * trailing argument, and stays alive as intended once given one.
+ *
+ * A cosmetic no-op on POSIX (harmless — none of the affected
+ * `scriptBody`s inspect `process.argv`): the shebang wrapper there
+ * already supplies an explicit script-file argument regardless of
+ * anything appended here, so POSIX never hits this ambiguity to begin
+ * with.
+ */
+function stayAliveCommand(name: string): string {
+  return `${name} idd-stub-stay-alive`;
+}
+
 test('invokeCritiqueTelemetryHook is a no-op for an empty/whitespace command', async () => {
   assert.deepEqual(await invokeCritiqueTelemetryHook('', samplePayload()), {
     attempted: false,
@@ -518,7 +563,7 @@ test('invokeCritiqueTelemetryHook resolves ok:false promptly (bounded by timeout
     const timeoutMs = 1_000;
     const startedAt = Date.now();
     const result = await invokeCritiqueTelemetryHook(
-      'idd-telemetry-hook-hang',
+      stayAliveCommand('idd-telemetry-hook-hang'),
       samplePayload(),
       { timeoutMs },
     );
@@ -610,7 +655,7 @@ test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PI
     let taskkillOptions: Record<string, unknown> | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       const child = spawn(...args);
-      if (args[0] === 'idd-telemetry-hook-hang-win32') {
+      if (args[0] === stayAliveCommand('idd-telemetry-hook-hang-win32')) {
         primaryChild = child;
       }
       if (args[0] === 'taskkill') {
@@ -622,7 +667,7 @@ test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PI
 
     try {
       const result = await invokeCritiqueTelemetryHook(
-        'idd-telemetry-hook-hang-win32',
+        stayAliveCommand('idd-telemetry-hook-hang-win32'),
         samplePayload(),
         { timeoutMs: 500, spawnFn, platform: 'win32' },
       );
@@ -737,7 +782,7 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
         throw new Error('synthetic taskkill spawn failure');
       }
       const child = spawn(...args);
-      if (args[0] === 'idd-telemetry-hook-hang-win32-throw') {
+      if (args[0] === stayAliveCommand('idd-telemetry-hook-hang-win32-throw')) {
         primaryChild = child;
       }
       return child;
@@ -745,7 +790,7 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
 
     try {
       const result = await invokeCritiqueTelemetryHook(
-        'idd-telemetry-hook-hang-win32-throw',
+        stayAliveCommand('idd-telemetry-hook-hang-win32-throw'),
         samplePayload(),
         { timeoutMs: 500, spawnFn, platform: 'win32' },
       );
@@ -1064,7 +1109,9 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
       policyPath,
       JSON.stringify({
         critiqueLoop: {
-          telemetryHook: { command: 'idd-telemetry-hook-cli-hang' },
+          telemetryHook: {
+            command: stayAliveCommand('idd-telemetry-hook-cli-hang'),
+          },
         },
       }),
     );
@@ -1131,7 +1178,9 @@ process.stdin.on('end', () => {
       policyPath,
       JSON.stringify({
         critiqueLoop: {
-          telemetryHook: { command: 'idd-telemetry-hook-capture-stdin' },
+          telemetryHook: {
+            command: stayAliveCommand('idd-telemetry-hook-capture-stdin'),
+          },
         },
       }),
     );
