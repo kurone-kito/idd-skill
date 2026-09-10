@@ -216,6 +216,19 @@ export function planExternalCheckWaiver(input, options = {}) {
       `--auto-bootstrap requires reason to be exactly "${SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON}"`,
     );
   }
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): the reverse
+  // case. summarizeExternalCheckWaivers now deliberately excludes every
+  // marker with this exact reason from generic waiver evidence
+  // (allowSelfReferentialBootstrapAuto's own doc comment), so an
+  // ordinary (non-`--auto-bootstrap`) post using it would report a
+  // successful apply for a marker no consumer can ever honor -- not
+  // even a maintainer, past any deadline. Reject it outright instead of
+  // silently accepting a marker that can never take effect.
+  if (!autoBootstrap && reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON) {
+    blockingReasons.push(
+      `reason "${SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON}" is reserved for --auto-bootstrap`,
+    );
+  }
   if (autoBootstrap && !runId) {
     blockingReasons.push('--auto-bootstrap requires a run id');
   }

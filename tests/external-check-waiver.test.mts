@@ -829,6 +829,27 @@ test('planExternalCheckWaiver: --auto-bootstrap requires the exact dedicated rea
   );
 });
 
+test('planExternalCheckWaiver: rejects the reserved auto-bootstrap reason outside --auto-bootstrap (Codex review, PR #2895)', () => {
+  // summarizeExternalCheckWaivers now deliberately excludes every marker
+  // with this exact reason from generic waiver evidence, so an operator
+  // who copies the documented command but omits --auto-bootstrap would
+  // otherwise get a successful "applied: true" report for a marker no
+  // consumer can ever honor, even past any deadline.
+  const input = buildBaseInput();
+  input.reason = SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON;
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-05-17T00:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join(' | '),
+    /reason "self-referential-bootstrap-auto" is reserved for --auto-bootstrap/,
+  );
+});
+
 test('planExternalCheckWaiver: --auto-bootstrap requires a run id', () => {
   const input = buildAutoBootstrapInput();
   input.runId = '';
