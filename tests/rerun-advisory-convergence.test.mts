@@ -2809,11 +2809,20 @@ test('computeRefreshLatestPlan: selects the most-recently-started pull_request-f
   assert.deepEqual(plan.command?.checkRunIds, ['1002']);
 });
 
-test('computeRefreshLatestPlan: a still-running latest instance is left alone (never cancelled)', () => {
+// Codex P1 review, PR #2855: a still-running instance is NOT the same as
+// "will already reflect this review" -- its own evidence was fetched at
+// whatever point during its execution the live query happened to run,
+// which can be before this review landed. `pendingCommand` carries the
+// resolved rerun for the caller to issue once the run actually completes
+// (see the CLI's --refresh-latest --apply wiring), rather than declining
+// to act at all.
+test('computeRefreshLatestPlan: a still-running latest instance is left alone (never cancelled), but its rerun is deferred via pendingCommand', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
       instances: [
         baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
           status: 'in_progress',
           conclusion: null,
         }),
@@ -2823,6 +2832,44 @@ test('computeRefreshLatestPlan: a still-running latest instance is left alone (n
   );
   assert.equal(plan.command, null);
   assert.match(plan.reason, /still running/);
+  assert.doesNotMatch(
+    plan.reason,
+    /it will already reflect this review/,
+    'the reason must not assert the very claim the still-running instance cannot guarantee',
+  );
+  assert.equal(plan.pendingCommand?.runId, '5001');
+  assert.equal(plan.pendingCommand?.command, 'gh run rerun 5001');
+});
+
+test('computeRefreshLatestPlan: pendingCommand is null whenever command is resolved', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'success' })],
+    }),
+    baseOptions(),
+  );
+  assert.notEqual(plan.command, null);
+  assert.equal(plan.pendingCommand, null);
+});
+
+test('computeRefreshLatestPlan: pendingCommand is null for every no-op reason (hold policy, no instance, unresolvable run id)', () => {
+  const held = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.equal(held.pendingCommand, null);
+
+  const noInstance = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runEvent: 'workflow_dispatch' })] }),
+    baseOptions(),
+  );
+  assert.equal(noInstance.pendingCommand, null);
+
+  const unresolvable = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runId: null })] }),
+    baseOptions(),
+  );
+  assert.equal(unresolvable.pendingCommand, null);
 });
 
 test('computeRefreshLatestPlan: fails closed on an unresolvable run id', () => {

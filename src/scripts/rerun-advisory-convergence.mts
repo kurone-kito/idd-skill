@@ -924,10 +924,21 @@ export interface RefreshLatestPlan {
   /** The single instance selected for an unconditional rerun, or `null`
    * when there is nothing safe/useful to rerun -- see `reason`. */
   command: RerunPlanCommand | null;
-  /** Empty when `command` is set; otherwise explains why (a `"hold"`
-   * rerunPolicy, no pull_request-family instance exists yet for this
-   * HEAD, the latest one is still running, or its underlying run id
-   * could not be resolved). */
+  /** Set (with `command` left `null`) only when the latest instance is
+   * still running (Codex P1, PR #2855 review): the CLI's `--apply` path
+   * waits for this run to reach a terminal state, THEN reruns it --
+   * never treats "it's already running" as equivalent to "it will
+   * already reflect this review." A live run's evidence was fetched at
+   * whatever point during ITS OWN execution the query happened to run,
+   * which can be BEFORE this review landed; nothing else is guaranteed
+   * to trigger a fresh evaluation afterward once this function declines
+   * to act. `null` in every other case, including every case where
+   * `command` is itself set. */
+  pendingCommand: RerunPlanCommand | null;
+  /** Empty when `command` or `pendingCommand` is set; otherwise explains
+   * why (a `"hold"` rerunPolicy, no pull_request-family instance exists
+   * yet for this HEAD, or the latest instance's run id could not be
+   * resolved). */
   reason: string;
 }
 
@@ -955,12 +966,16 @@ export function computeRefreshLatestPlan(
   const repo = String(input.repo ?? '').trim();
   const repoFlag = owner && repo ? ` -R ${owner}/${repo}` : '';
 
+  // `pendingCommand: null` by default -- only the still-running branch
+  // below overrides it; every other branch's `...header` spread inherits
+  // this default so it never needs repeating at each return site.
   const header = {
     protocolVersion: '1' as const,
     prNumber: Number(input.prNumber),
     prHeadSha,
     checkName,
     now,
+    pendingCommand: null as RerunPlanCommand | null,
   };
 
   // Honored, not bypassed (Copilot review, PR #2855): a "hold" policy is
@@ -1015,21 +1030,15 @@ export function computeRefreshLatestPlan(
   const conclusion = latest.conclusion
     ? String(latest.conclusion).trim().toLowerCase()
     : null;
-  // Mirrors classifyInstance step 2: rerunning a still-running instance
-  // cancels it instead of refreshing it.
-  if (!conclusion && PENDING_STATUSES.has(status)) {
-    return {
-      ...header,
-      command: null,
-      reason: `the latest pull_request-family instance (check-run ${latest.checkRunId}) is still running ("${status}"); rerunning a live run would cancel it instead of refreshing it -- once it completes, it will already reflect this review`,
-    };
-  }
   // Mirrors classifyInstance steps 4-5: never guess a rerun target from an
-  // unresolvable run identity.
+  // unresolvable run identity. Checked BEFORE the pending-status branch
+  // below so that branch can always build a `pendingCommand` from an
+  // already-validated runId.
   if (latest.runId === null) {
     return {
       ...header,
       command: null,
+      pendingCommand: null,
       reason: `the latest pull_request-family instance (check-run ${latest.checkRunId}) has no resolvable workflow run id; inspect manually`,
     };
   }
@@ -1037,18 +1046,41 @@ export function computeRefreshLatestPlan(
     return {
       ...header,
       command: null,
+      pendingCommand: null,
       reason: `the underlying workflow run for the latest pull_request-family instance (check-run ${latest.checkRunId}) could not be fetched (network/permission/transient failure); inspect manually`,
+    };
+  }
+
+  const resolvedCommand: RerunPlanCommand = {
+    runId: latest.runId,
+    command: `gh run rerun ${latest.runId}${repoFlag}`,
+    checkRunIds: [latest.checkRunId],
+    startedAt: latest.startedAt ?? '',
+  };
+
+  // Mirrors classifyInstance step 2's "rerunning a still-running instance
+  // cancels it instead of refreshing it" -- but unlike classifyInstance,
+  // this does NOT assume the live run will already reflect this review
+  // once it finishes (Codex P1, PR #2855 review): that run's own
+  // evidence was fetched at whatever point during ITS execution the
+  // query happened to run, which can be BEFORE this review landed, and
+  // nothing else is guaranteed to trigger a fresh evaluation afterward.
+  // `pendingCommand` carries the same resolved command for the caller to
+  // rerun ONCE this run reaches a terminal state, rather than declining
+  // to act at all.
+  if (!conclusion && PENDING_STATUSES.has(status)) {
+    return {
+      ...header,
+      command: null,
+      pendingCommand: resolvedCommand,
+      reason: `the latest pull_request-family instance (check-run ${latest.checkRunId}) is still running ("${status}"); rerunning a live run now would cancel it instead of refreshing it -- wait for it to reach a terminal state, then rerun it (see pendingCommand)`,
     };
   }
 
   return {
     ...header,
-    command: {
-      runId: latest.runId,
-      command: `gh run rerun ${latest.runId}${repoFlag}`,
-      checkRunIds: [latest.checkRunId],
-      startedAt: latest.startedAt ?? '',
-    },
+    command: resolvedCommand,
+    pendingCommand: null,
     reason: '',
   };
 }
@@ -2861,6 +2893,56 @@ function waitForNewAttempt(
   }
 }
 
+/** Safety bound: {@link waitForRunCompletion} fails closed (throws)
+ * instead of polling forever when a still-running instance never
+ * reaches a terminal state within this window. Shorter than {@link
+ * APPLY_POLL_TIMEOUT_MS} (which waits for a NEW attempt after `gh run
+ * rerun` already started one) -- this instead waits for the ORIGINAL,
+ * already-in-flight run this helper never touched, so a bound comfortably
+ * inside the companion workflow's own job `timeout-minutes: 10` (see
+ * `idd-advisory-convergence-comment.yml`) matters more here: a wait that
+ * outlives the job's own timeout would be silently killed with no
+ * visible error, defeating the throw-on-timeout contract entirely. */
+const PENDING_RUN_POLL_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Blocks until `runId` (within `owner`/`repo`) reports
+ * `status === 'completed'` -- i.e. the run {@link
+ * computeRefreshLatestPlan}'s `pendingCommand` deferred (it was still
+ * running when the plan was computed) has reached a terminal state, safe
+ * to rerun without cancelling it. Companion to {@link waitForNewAttempt}
+ * (same `ghText` + polling shape), but waits for the ORIGINAL run's own
+ * completion rather than a NEW attempt after an already-issued rerun --
+ * this function issues no mutation itself; the caller reruns `runId`
+ * only after this returns (Codex P1, PR #2855 review: `pendingCommand`'s
+ * own doc comment explains why declining to act at all is not safe
+ * here).
+ */
+function waitForRunCompletion(
+  owner: string,
+  repo: string,
+  runId: string,
+): void {
+  const deadline = Date.now() + PENDING_RUN_POLL_TIMEOUT_MS;
+  for (;;) {
+    const payload = JSON.parse(
+      ghText(
+        ['api', `repos/${owner}/${repo}/actions/runs/${runId}`],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      ),
+    ) as RawWorkflowRunPayload;
+    if (payload.status === 'completed') {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `timed out waiting for run ${runId} (${owner}/${repo}) to reach a terminal state before rerunning it`,
+      );
+    }
+    sleepSync(APPLY_POLL_INTERVAL_MS);
+  }
+}
+
 /** Resolves `{owner, repo}` the same way {@link collectFromGitHub} does
  * (explicit `--owner`/`--repo` first, else `gh repo view` auto-detection)
  * -- duplicated as these two lines rather than extracted into a shared
@@ -2958,6 +3040,28 @@ if (import.meta.main) {
         buildProductionApplyDeps(args).rerunAndWait(refreshLatestPlan.command);
         process.stderr.write(
           `\n--refresh-latest --apply: executed ${refreshLatestPlan.command.command}.\n`,
+        );
+      }
+    } else if (refreshLatestPlan.pendingCommand) {
+      process.stderr.write(`\n${refreshLatestPlan.reason}\n`);
+      if (args.apply) {
+        // The still-running run this deferred is NOT touched by
+        // rerunAndWait's own pre-rerun run_attempt capture -- this waits
+        // for ITS completion first (waitForRunCompletion), then issues
+        // the actual rerun through the same production apply deps every
+        // other --apply path uses, preserving one code path for the
+        // mutation itself.
+        const { owner, repo } = resolveOwnerRepo(args);
+        waitForRunCompletion(
+          owner,
+          repo,
+          refreshLatestPlan.pendingCommand.runId,
+        );
+        buildProductionApplyDeps(args).rerunAndWait(
+          refreshLatestPlan.pendingCommand,
+        );
+        process.stderr.write(
+          `\n--refresh-latest --apply: executed ${refreshLatestPlan.pendingCommand.command} after it reached a terminal state.\n`,
         );
       }
     } else {
