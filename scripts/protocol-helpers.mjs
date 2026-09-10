@@ -1301,78 +1301,99 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 // failing) to resolve this thread, because it was already resolved
 // independently (e.g. by the IDD agent's own resolve-review-thread.mjs)
 // before CodeRabbit replied, so it had no attempt of its own to report.
-// Bounded to a short gap (`{0,80}`) so it matches only the same
-// single-clause shape actually observed, not an incidental "concern" or
-// "finding" mention far away in the same reply's trailing
-// Learnings-used block.
+// Kept as its own regex (`CODERABBIT_ACK_ADDRESSES_CLOSURE_RE`, below,
+// tested only after the two strong forms above fail) rather than folded
+// into one `|`-alternation, specifically so its own guards -- narrowed
+// across three rounds of Codex/Copilot review on this same PR (#2858,
+// PR #2868) -- never apply to the two strong, structurally-safe forms:
 //
-// Sentence-boundary tail anchor: an enumerated negation/new-concern
-// blocklist was tried here and reverted (see above) precisely because it
-// cannot keep up with natural language, so this shape is instead
-// recognized the same way as the other two -- a structural fingerprint of
-// CodeRabbit's own reply template, not a semantic read of the prose. Two
-// structural constraints, both narrowed further after Codex review found
-// concrete false-positive constructions in this same PR (#2858):
+// 1. **Locality bound** (`{0,80}`): the gap between "addresses the" and
+//    "concern"/"finding" is capped so an incidental "concern"/"finding"
+//    mention far away in the same reply's trailing Learnings-used block
+//    can't retroactively create a false closure signal.
+// 2. **Sentence-boundary exclusion** (`[^.!?]` in the gap, round 1): a
+//    plain `[\s\S]` gap let the match cross a sentence boundary entirely
+//    -- "This addresses the requested change. However, I still have a
+//    concern." has its own genuinely new, unrelated concern in a SECOND
+//    sentence, but an un-narrowed gap could reach that later "concern"
+//    anyway. Excluding `.!?` forces "concern"/"finding" into the SAME
+//    sentence as "addresses the", as in both real observed replies.
+// 3. **Mandatory boilerplate tail, no bare end-of-body fallback**
+//    (round 1): the closure sentence must end in a period immediately
+//    followed by known CodeRabbit reply boilerplate (the 🐇 sign-off,
+//    the `---` + Learnings-used separator, the auto-generated-reply
+//    marker, or the "You are interacting with an AI system" disclaimer).
+//    Every sampled reply (all 20: the original 18 plus these 2) carries
+//    real trailing boilerplate, so requiring it unconditionally costs no
+//    real match; this also rejects a single-sentence reply with nothing
+//    following it at all, such as "`@user`, confirmed. This partially
+//    addresses the concern." with no footer -- a hedged, non-committal
+//    acknowledgment that would otherwise pass on structure alone.
+// 4. **No backtracking past an earlier same-sentence "concern"/"finding"**
+//    (round 3, Codex): a plain lazy `[^.!?]{0,80}?` gap still let the
+//    regex engine skip an EARLIER "concern"/"finding" occurrence that
+//    failed the boilerplate-tail check, to find a LATER one that
+//    succeeds -- "`@user`, confirmed. This addresses the original
+//    concern but reveals another finding.\n\n🐇 ✓" has a genuinely new
+//    finding joined by "but" in the SAME sentence, yet the gap could
+//    still stretch past the first "concern" (not followed by a period)
+//    to match the later "finding." instead. The gap is rewritten as
+//    `(?:(?!\b(?:concern|finding)\b)[^.!?]){0,80}` -- consume characters
+//    only while the upcoming text is NOT the start of "concern" or
+//    "finding" -- so the match is pinned to the FIRST such occurrence in
+//    the sentence; the whole alternative fails if that first occurrence
+//    isn't immediately followed by the boilerplate tail, rather than
+//    scanning ahead for a second one that is.
+// 5. **Hedge-adverb guard, scoped to only this alternative** (round 2,
+//    Codex; scoping fixed round 3, Copilot): even with all of the above,
+//    "`@user`, confirmed. This partially addresses the concern.\n\n🐇 ✓"
+//    still matched -- genuine boilerplate immediately follows, no
+//    sentence boundary is crossed, and "concern" is the first and only
+//    candidate, so guards 1-4 don't catch it. A small, closed set of
+//    English degree adverbs immediately before "addresses" -- the same
+//    narrow-enumeration style `CODERABBIT_ACK_OPENING_RE` already uses
+//    for its own confirmation verbs (thanks/confirmed/agreed) -- is
+//    materially different from the open-ended "new concern" blocklist
+//    already tried and reverted above: that attempt tried to recognize
+//    arbitrarily-phrased new substantive content (unbounded), while this
+//    is a small, well-known closed class of adverbs modifying
+//    "addresses" itself. Implemented as a negative lookbehind directly on
+//    this alternative (not a separate whole-body check) so it can never
+//    reject the two strong forms merely because unrelated hedge-shaped
+//    wording happens to appear elsewhere in the same reply's boilerplate
+//    (e.g. a Learnings-used block quoting a past PR's discussion) --
+//    Copilot's round-3 finding on the round-2 fix. Given this
+//    repository's `fully_autonomous_merge` policy (AGENTS.md), a hedged
+//    "addresses" is exactly the shape most likely to hide real
+//    outstanding feedback behind an ack-shaped reply, so closing this
+//    demonstrated case outweighs leaving it as stated residual risk the
+//    way the new-concern class above still is.
 //
-// 1. The gap between "addresses the" and "concern"/"finding" excludes
-//    sentence-terminating punctuation (`[^.!?]`), not just any character.
-//    A plain `[\s\S]` gap let the match cross a sentence boundary
-//    entirely -- "This addresses the requested change. However, I still
-//    have a concern." has its own genuinely new, unrelated concern in a
-//    SECOND sentence, but the un-narrowed gap could reach that later
-//    "concern" anyway, since nothing stopped it from skipping the period
-//    in between. Excluding `.!?` from the gap forces "concern"/"finding"
-//    to appear in the SAME sentence as "addresses the", as in both real
-//    observed replies.
-// 2. The closure sentence must end in a period immediately followed by
-//    known CodeRabbit reply boilerplate (the 🐇 sign-off, the `---` +
-//    Learnings-used separator, the auto-generated-reply marker, or the
-//    "You are interacting with an AI system" disclaimer) -- no bare
-//    end-of-body fallback. Every sampled reply (all 20: the original 18
-//    plus these 2) carries real trailing boilerplate, so requiring it
-//    unconditionally costs no real match; dropping the end-of-body
-//    fallback closes a single-sentence reply with nothing following it,
-//    such as "`@user`, confirmed. This partially addresses the concern."
-//    with no footer at all -- a hedged, non-committal acknowledgment that
-//    would otherwise pass on structure alone. This also independently
-//    keeps out the cross-sentence example above, since "However, ..." is
-//    not one of the known boilerplate forms.
-//
-// Hedge-adverb guard (issue #2858, Codex round-2 review on PR #2868): even with
-// both constraints above, "`@user`, confirmed. This partially addresses
-// the concern.\n\n🐇 ✓" still matched -- genuine boilerplate immediately
-// follows, and "partially" sits inside the matched sentence rather than
-// crossing a sentence boundary, so neither guard above catches it. This
-// is a materially different problem class from the reverted "new
-// concern" blocklist above: that attempt tried to recognize an
-// open-ended, arbitrarily-phrased NEW substantive finding appended after
-// a genuine ack (unbounded -- natural language has unlimited ways to
-// raise a concern). A hedge adverb directly modifying "addresses" itself
-// is a small, closed, well-known class of English degree adverbs -- the
-// same kind of narrow enumeration `CODERABBIT_ACK_OPENING_RE` already
-// uses for its own confirmation verbs (thanks/confirmed/agreed). Given
-// this repository's `fully_autonomous_merge` policy (AGENTS.md), a
-// hedged "addresses" is exactly the shape most likely to hide real
-// outstanding feedback behind an ack-shaped reply, so closing the
-// specific, demonstrated case outweighs leaving it as stated residual
-// risk the way the new-concern class above still is.
-const CODERABBIT_ACK_HEDGE_RE =
-  /\b(?:partially|partly|somewhat|mostly|largely|barely|slightly|arguably|in\s+part|to\s+some\s+extent|not\s+(?:fully|entirely|completely|really))\s+addresses\s+the\b/i;
 // Residual risk, stated rather than papered over -- NOT the same class as
-// the two forms above: those report CodeRabbit's own resolve-attempt
+// the two strong forms: those report CodeRabbit's own resolve-attempt
 // DECISION, which by this file's own reasoning cannot co-occur with a new
 // substantive concern in the same reply. This third form reads prose with
-// no such structural barrier, so it is strictly weaker: a hedge word this
-// enumeration does not cover (e.g. "kind of", "sort of", or a novel
-// phrasing), or a reply whose SAME sentence both raises a concern in some
-// non-hedge-adverb way and still ends with a period immediately before
-// genuine CodeRabbit boilerplate, would still misclassify. No sampled
-// reply has done either. Extending the hedge-adverb enumeration further
-// is a bounded, reviewable change; recognizing arbitrary new-concern
-// phrasing is not -- that line is why the guard above stops at degree
-// adverbs and does not attempt the open-ended problem.
-const CODERABBIT_ACK_CLOSURE_RE =
-  /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform|\baddresses\s+the\b[^.!?]{0,80}?\b(?:concern|finding)\b\.\s*(?:🐇|---|<details|<!--|_You are interacting)/i;
+// no such structural barrier, so it is strictly weaker: a hedge word the
+// enumeration above does not cover (e.g. "kind of", "sort of", or a novel
+// phrasing), or a new concern joined to the acknowledgment some way other
+// than a mid-sentence conjunction guard 4 already closes, would still
+// misclassify. No sampled reply has done either. Extending the
+// hedge-adverb enumeration further is a bounded, reviewable change;
+// recognizing arbitrary new-concern phrasing is not -- that line is why
+// guard 5 stops at degree adverbs and does not attempt the open-ended
+// problem.
+const CODERABBIT_ACK_STRONG_CLOSURE_RE =
+  /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
+const CODERABBIT_ACK_HEDGE_WORDS_SOURCE =
+  'partially|partly|somewhat|mostly|largely|barely|slightly|arguably|in\\s+part|to\\s+some\\s+extent|not\\s+(?:fully|entirely|completely|really)';
+const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
+  `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE})\\s)` +
+    '\\baddresses\\s+the\\b' +
+    '(?:(?!\\b(?:concern|finding)\\b)[^.!?]){0,80}' +
+    '\\b(?:concern|finding)\\b\\.\\s*' +
+    '(?:🐇|---|<details|<!--|_You are interacting)',
+  'i',
+);
 // Explicit `isCodeRabbitLogin` author check (Copilot review, #2649,
 // round 4): the closure phrase is CodeRabbit's own resolution decision in
 // practice, but it is still literal text a differently-configured
@@ -1395,14 +1416,22 @@ const CODERABBIT_ACK_CLOSURE_RE =
 function isKnownAdvisoryAckTemplate(comment) {
   const authorLogin = String(comment.author?.login ?? '');
   const body = String(comment.body ?? '');
-  return (
-    !!authorLogin &&
-    isCodeRabbitLogin(authorLogin) &&
-    !!body &&
-    CODERABBIT_ACK_OPENING_RE.test(body) &&
-    CODERABBIT_ACK_CLOSURE_RE.test(body) &&
-    !CODERABBIT_ACK_HEDGE_RE.test(body)
-  );
+  if (!authorLogin || !isCodeRabbitLogin(authorLogin) || !body) {
+    return false;
+  }
+  if (!CODERABBIT_ACK_OPENING_RE.test(body)) {
+    return false;
+  }
+  // The two strong forms (CodeRabbit's own resolve-attempt decision) are
+  // checked on the whole body with no further guard -- see the comment
+  // above `CODERABBIT_ACK_STRONG_CLOSURE_RE` for why the weaker third
+  // form's guards (locality, sentence-boundary, hedge-adverb) must never
+  // apply here, even when unrelated hedge-shaped wording happens to
+  // appear elsewhere in the same reply (e.g. a Learnings-used block).
+  if (CODERABBIT_ACK_STRONG_CLOSURE_RE.test(body)) {
+    return true;
+  }
+  return CODERABBIT_ACK_ADDRESSES_CLOSURE_RE.test(body);
 }
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
 // three of "Codex usage limit(s)", a reach/exceed/hit-family verb, and "for

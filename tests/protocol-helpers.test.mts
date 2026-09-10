@@ -1103,6 +1103,98 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedged "partially addresses
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects a same-sentence "addresses the X but reveals another Y" construction (Codex P1 round 3, #2858)', () => {
+  // Codex's round-3 finding: a plain lazy gap could still backtrack past
+  // an EARLIER "concern"/"finding" occurrence that failed the
+  // boilerplate-tail check, to match a LATER one that succeeds --
+  // "confirmed. This addresses the original concern but reveals another
+  // finding.\n\n🐇 ✓" has a genuinely new finding joined by "but" in the
+  // same sentence, yet the gap could stretch past the first "concern"
+  // (not followed by a period) to reach "finding." instead. The gap is
+  // now pinned to the FIRST "concern"/"finding" occurrence via a
+  // per-character negative lookahead, so this must still be rejected.
+  const thread = {
+    id: 'thread-addresses-but-reveals-another',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'BR-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'BR-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed. This addresses the original ' +
+            'concern but reveals another finding.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition still recognizes a strong "Review thread resolved" closure even when unrelated boilerplate elsewhere contains hedge-shaped wording (Copilot round 3, #2858)', () => {
+  // Copilot's round-3 finding on the round-2 hedge-adverb fix: the guard
+  // originally tested the WHOLE body, so a genuinely strong closure
+  // ("Review thread resolved.") could be wrongly rejected if unrelated
+  // trailing boilerplate -- such as a Learnings-used block quoting a
+  // past PR's discussion -- happened to contain phrasing like "partially
+  // addresses the concern." The hedge-adverb guard is now a lookbehind
+  // scoped to only the weaker "addresses the ..." alternative, so it
+  // never reaches the two strong forms at all.
+  const thread = {
+    id: 'thread-strong-closure-with-unrelated-hedge-text',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'SH-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'SH-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed.\n\n✅ Review thread resolved.\n\n' +
+            '<details><summary>🧠 Learnings used</summary>\n' +
+            'Learning: a past reviewer noted that this pattern only ' +
+            'partially addresses the concern in an unrelated PR.\n' +
+            '</details>',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 
