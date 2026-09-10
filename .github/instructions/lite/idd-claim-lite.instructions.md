@@ -27,7 +27,8 @@ collapses to a single outcome here: **STOP and report; do not claim**.
 2. **When the repository is `instructions-only`** (no helper runtime
    shipped): skip the helper commands and use the written tables only.
    That is the sole path where the tables below are the primary
-   control surface.
+   control surface. The `--record-tokens`/`--read-tokens` check
+   instead uses `docs/idd-helper-scripts.md`'s helper-free fallback.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
 vendored-node** invocation form. Under `package-manager` /
@@ -128,10 +129,12 @@ Pass `--nonce` when this session already recorded one for that
 `{claim-id}` (true after forced-handoff step 5) so a session that lost
 the nonce tie-break cannot pass as `already_owned`; omit it otherwise.
 
-| Top-level `state` / `action` | Meaning                                                           |
-| ---------------------------- | ----------------------------------------------------------------- |
-| `already_owned` / `keep`     | Confirmed — see the two cases below                               |
-| anything else                | Not yours — forced-handoff: Stop-and-ask; else fall through below |
+<!-- dprint-ignore-start -->
+| Top-level `state` / `action` | Meaning |
+| --- | --- |
+| `already_owned` / `keep` | Confirmed — see the two cases below |
+| anything else | Not yours — forced-handoff: Stop-and-ask; else fall through below |
+<!-- dprint-ignore-end -->
 
 `already_owned`/`keep` splits in two: if `--nonce` was passed above
 (resume/heartbeat continuation), skip to Claim verification (or
@@ -149,11 +152,13 @@ write:
 node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 ```
 
-| Helper `fresh_claim_gate.verdict` | Action                                |
-| --------------------------------- | ------------------------------------- |
-| `claimable`                       | Proceed to Claim execution (fresh)    |
-| `stale-reclaimable`               | Proceed to Claim execution (takeover) |
-| `already-claimed`                 | **STOP** — live competitor or race    |
+<!-- dprint-ignore-start -->
+| Helper `fresh_claim_gate.verdict` | Action |
+| --- | --- |
+| `claimable` | Proceed to Claim execution (fresh) |
+| `stale-reclaimable` | Proceed to Claim execution (takeover) |
+| `already-claimed` | **STOP** — live competitor or race |
+<!-- dprint-ignore-end -->
 
 Written fallback (`instructions-only` profile only — per the Helper
 runtime contract above, any other profile stops-and-asks on a
@@ -246,12 +251,14 @@ gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<N>-" \
   --jq '.[].ref | sub("^refs/heads/"; "")'
 ```
 
-| Match found?                                                           | Action                                                          |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------- |
-| No local or remote match                                               | Proceed to claim posting                                        |
-| Match corresponds to an inheritable claim (per (d) above)              | Proceed — expected branch                                       |
-| Match does not correspond, but an active non-stale claim references it | **STOP** — concurrent session                                   |
-| Match does not correspond, and no active claim references it           | **STOP** — hold note, possible orphaned branch; operator review |
+<!-- dprint-ignore-start -->
+| Match found? | Action |
+| --- | --- |
+| No local or remote match | Proceed to claim posting |
+| Match corresponds to an inheritable claim (per (d) above) | Proceed — expected branch |
+| Match does not correspond, but an active non-stale claim references it | **STOP** — concurrent session |
+| Match does not correspond, and no active claim references it | **STOP** — hold note, possible orphaned branch; operator review |
+<!-- dprint-ignore-end -->
 
 No remote branch with the computed name may already exist unless it is
 inheritable per the table above.
@@ -283,7 +290,10 @@ differently for step 5:
    inheritable match → use the name pre-check (e) computed.
 2. **`{claim-id}`**: generate a fresh opaque token — **except**
    forced-handoff adopt-verbatim, which reuses the marker's
-   `newClaimId` instead.
+   `newClaimId` instead. Record it with the profile-selected
+   `claim-lock` helper's `--record-tokens` mode (`--worktree <path>
+   --agent-id <id> --claim-id <id>`; resolve the exact command from
+   `docs/idd-helper-scripts.md`) before step 4.
 3. **`{prior-claim-id}` / `supersedes:`**: `none` for a fresh claim or
    legacy migration; the active claim's `{claim-id}` for a stale
    takeover. Not applicable to forced-handoff (step 4 is skipped
@@ -318,7 +328,9 @@ differently for step 5:
 
 5. **Every fresh activation** (fresh claim, takeover, legacy migration,
    or forced-handoff adopt-verbatim) also posts an activation-nonce —
-   never for a plain heartbeat:
+   never for a plain heartbeat. Record it with the same
+   `--record-tokens` invocation as step 2 plus `--nonce <nonce>`
+   (primary worktree) first:
 
    ```sh
    node scripts/post-idd-marker.mjs --type activation-nonce \
@@ -419,6 +431,10 @@ Once the B1 worktree exists, before every mutation:
 node scripts/claim-lock.mjs --acquire --worktree <path> \
   --agent-id <agent-id> --claim-id <claim-id>
 ```
+
+Then, separately, run `--read-tokens --worktree <path> --claim-id
+<id>` and require `present: true` with no `malformed`; otherwise
+stop. See `docs/idd-helper-scripts.md`.
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
 `{claim-id}` is always a collision — re-run pre-check (c) (`--claim-id`
