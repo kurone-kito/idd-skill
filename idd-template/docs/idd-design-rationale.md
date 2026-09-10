@@ -426,6 +426,41 @@ own narrower question. This record moved here from
 kurone-kito/idd-skill#2000, which stayed open only as a findable record
 until one of the revisit triggers above fires.
 
+### Context-inheriting delegation residual risk
+
+kurone-kito/idd-skill#2624 adopted a documented positive-framed
+mitigation for the [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation)
+context-inheriting fallback: the delegation brief must state
+explicitly that the delegate is the sole worker for the named issue,
+with no peer workers to coordinate with or wait on. That issue was
+scoped to the wake-up-discipline stall pattern and did not evaluate
+this mitigation against a different, related failure mode: a
+context-inheriting delegate mistaking itself for the orchestrator that
+dispatched it, rather than the worker the brief names it as.
+
+kurone-kito/idd-skill#2802 recorded direct field evidence, from this
+project's own dogfooding, that neither that positive-framed
+mitigation, nor an added explicit negative instruction naming the
+failure mode directly, reliably prevents it: three independent
+occurrences of a context-inheriting delegate (sharing the
+orchestrator's own full conversation transcript) opening its first
+turn by describing having delegated to, and now waiting on, a
+sub-worker that did not exist — the delegate itself was the intended
+worker — even when the brief's role-reassignment wording matched the
+documented mitigation nearly verbatim, and even when a further attempt
+added an explicit negative instruction naming the confusion directly.
+Each occurrence needed an explicit follow-up message (or abandoning
+delegation entirely) to correct. See kurone-kito/idd-skill#2802 for the
+full narrative and observation counts.
+
+**Adopted mitigation**: state the non-context-inheriting delegation
+mechanism as a strong preference, not merely a suggestion, whenever
+the calling tool offers one, and record the context-inheriting
+fallback's residual role-misread risk explicitly as a known, accepted
+limitation next to the delegation-brief wording, rather than
+continuing to iterate on brief wording that field evidence shows does
+not reliably close the gap.
+
 ## Work and self-review
 
 ### B1 Step 3 — install-deps silent under-install detection
