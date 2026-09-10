@@ -154,6 +154,25 @@ interface MinimizeArgs {
   allowUntrusted: boolean;
   format: string;
   help: boolean;
+  /**
+   * Optional overall wall-clock budget in milliseconds for the whole
+   * pass, threaded straight into {@link runMinimize}'s own `deadlineMs`
+   * parameter (#2896 review, Codex, round 8). Previously exercised only
+   * by non-CLI callers (`post-idd-marker.mts`'s hide-at-post-time step,
+   * #2754) -- the CLI entry point itself always omitted it, so a caller
+   * invoking this file as a subprocess (the only path available to the
+   * issue-authoring contract's own sweep instructions, which cannot
+   * import `runMinimize` directly) had no way to bound a sweep with a
+   * large candidate list: `runMinimize` probes subject IDs serially,
+   * each candidate costing up to `GH_TIMEOUT_MS` (30s) twice (probe +
+   * apply) with no deadline, so a degraded GitHub API could stall a
+   * single sweep attempt for a very long time on a large
+   * first-ever-swept backlog, undercutting the
+   * attempted-not-blocking contract that same sweep is documented
+   * under. `undefined` (the flag omitted) keeps the pre-existing
+   * unbounded behavior.
+   */
+  deadlineMs?: number;
 }
 
 if (import.meta.main) {
@@ -209,6 +228,7 @@ if (import.meta.main) {
     trustedSet,
     apply: args.apply,
     allowUntrusted: args.allowUntrusted,
+    deadlineMs: args.deadlineMs,
   });
   report.trustedMarkerActors = [...trustedSet].sort();
   report.trustedMarkerActorsSource = trustedMarkerActorsSource;
@@ -810,6 +830,7 @@ function parseMinimizeArgs(argv: string[]): MinimizeArgs {
       // the genuinely-absent case.
       'trusted-marker-logins': { type: 'string', default: '' },
       format: { type: 'string', default: 'json' },
+      'deadline-ms': { type: 'string' },
     },
     strict: true,
   });
@@ -824,6 +845,35 @@ function parseMinimizeArgs(argv: string[]): MinimizeArgs {
     }
   }
 
+  // --deadline-ms is optional (undefined keeps runMinimize's pre-existing
+  // unbounded behavior) but, when given, must be a non-negative integer --
+  // this file stays self-contained (see the module header comment on
+  // loadIddConfig) so it cannot reuse cli-args.mts's canonical-integer
+  // helper; the same rejection shape as the flags above (a bare "requires
+  // a value"-style error, not a silent NaN) is reproduced by hand here.
+  // `0` is deliberately accepted, not just `>= 1`: runMinimize() gives it a
+  // specific, well-defined meaning of its own (the budget reads exhausted
+  // immediately at every checkpoint except the very first candidate's own
+  // probe, which still falls back to the un-throttled default timeout --
+  // see runMinimize's own deadlineMs doc comment and its "review round 2"
+  // test) -- a real degenerate-but-legitimate input, not an off-by-one
+  // edge case to reject. `^(?:0|[1-9]\d*)$` accepts exactly "0" or a
+  // non-zero-leading positive integer -- the same no-leading-zero idiom
+  // REST_SHAPED_SUBJECT_ID_PATTERN above already uses -- so "00"/"007" are
+  // still rejected as malformed rather than silently parsed.
+  let deadlineMs: number | undefined;
+  if (values['deadline-ms'] !== undefined) {
+    if (
+      values['deadline-ms'] === '' ||
+      !/^(?:0|[1-9]\d*)$/.test(values['deadline-ms'])
+    ) {
+      throw new Error(
+        '--deadline-ms must be a non-negative integer (milliseconds)',
+      );
+    }
+    deadlineMs = Number.parseInt(values['deadline-ms'], 10);
+  }
+
   return {
     subjectIds: (values['subject-ids'] ?? '')
       .split(',')
@@ -835,12 +885,13 @@ function parseMinimizeArgs(argv: string[]): MinimizeArgs {
     allowUntrusted: values['allow-untrusted'] ?? false,
     format: values.format ?? 'json',
     help: values.help ?? false,
+    deadlineMs,
   };
 }
 
 function printUsage(): void {
   console.log(
-    `Usage: minimize-superseded-markers --subject-ids <id1,id2,...> [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table]
+    `Usage: minimize-superseded-markers --subject-ids <id1,id2,...> [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table] [--deadline-ms <milliseconds>]
 
 The trusted-author gate is mandatory by default: supply trusted logins
 via --trusted-marker-logins, IDD_TRUSTED_MARKER_ACTORS, or the
@@ -854,6 +905,14 @@ verified the subject IDs are operationally safe to hide.
 IC_kwDOSWpaqs8AAAABIk9VAg), not REST numeric IDs (e.g. 4870591746).
 Convert a REST ID to its node ID first, using the command for the
 subject type:
-${NODE_ID_CONVERSION_COMMANDS}`,
+${NODE_ID_CONVERSION_COMMANDS}
+
+--deadline-ms bounds the whole pass to an overall wall-clock budget
+(non-negative integer milliseconds); omit it to keep the default unbounded
+behavior. Without it, a degraded GitHub API can stall the whole
+invocation for up to ~60s per candidate (a probe call plus an apply
+call, each capped at 30s) with no overall cap -- pass it for any
+invocation over a large or untrusted-source candidate list, such as a
+release-time sweep over a long-lived shared journal's full history.`,
   );
 }

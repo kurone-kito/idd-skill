@@ -737,3 +737,217 @@ process.exit(1);
 // invoke this same runMinimize call site with deadlineMs:
 // HIDE_STEP_DEADLINE_MS (45s, never exhausted in-test) and assert the
 // mutation actually ran via readMutatedSubjectIds.
+
+// --- --deadline-ms CLI flag (#2896 review, Codex, round 8) ---
+//
+// The CLI entry point previously always called runMinimize() without a
+// deadlineMs, so a subprocess caller (the only invocation path available
+// to the issue-authoring contract's own sweep instructions, which cannot
+// import runMinimize directly) had no way to bound a sweep over a large
+// candidate list. These tests cover the new --deadline-ms flag's
+// parse-time validation and its actual end-to-end wiring into
+// runMinimize's own deadline enforcement.
+
+test('a non-numeric --deadline-ms is rejected at parse time', () => {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'minimize-superseded-markers.mjs',
+  );
+  const result = spawnSync(
+    process.execPath,
+    [
+      script,
+      '--subject-ids',
+      'IC_a',
+      '--allow-untrusted',
+      '--deadline-ms',
+      'notanumber',
+    ],
+    { encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.equal(
+    result.stderr.trim(),
+    'error: --deadline-ms must be a non-negative integer (milliseconds)',
+  );
+});
+
+test('--deadline-ms 0 is accepted, not rejected (a deliberate, well-defined degenerate value)', () => {
+  // 0 is not an edge case to reject: runMinimize() gives it a specific
+  // meaning of its own (see the "actually bounding the pass end-to-end"
+  // test below, and runMinimize's own review-round-2 test) -- the budget
+  // reads exhausted at every checkpoint except the first candidate's own
+  // probe. Parse-time validation must accept it, matching that contract.
+  const restore = withProbeOnlyGhStub();
+  try {
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        'IC_a',
+        '--allow-untrusted',
+        '--deadline-ms',
+        '0',
+        '--format',
+        'json',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.notEqual(result.status, 2);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.counts.deadlineSkipped, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('a negative --deadline-ms is rejected', () => {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'minimize-superseded-markers.mjs',
+  );
+  // The `=`-joined form, not a separate `--deadline-ms -5` pair: a
+  // dash-shaped bare value after a string flag is ambiguous to parseArgs
+  // itself (it could be the next flag), so it throws its own "argument
+  // is ambiguous" error before this file's own validation ever runs --
+  // matching this file's own documented parseArgs-migration deltas. The
+  // `=` form is parseArgs' own escape hatch and reaches this file's
+  // --deadline-ms validation as intended.
+  const result = spawnSync(
+    process.execPath,
+    [script, '--subject-ids', 'IC_a', '--allow-untrusted', '--deadline-ms=-5'],
+    { encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 2);
+  assert.equal(
+    result.stderr.trim(),
+    'error: --deadline-ms must be a non-negative integer (milliseconds)',
+  );
+});
+
+test('a leading-zero --deadline-ms (e.g. "007") is rejected as malformed', () => {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'minimize-superseded-markers.mjs',
+  );
+  const result = spawnSync(
+    process.execPath,
+    [
+      script,
+      '--subject-ids',
+      'IC_a',
+      '--allow-untrusted',
+      '--deadline-ms',
+      '007',
+    ],
+    { encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 2);
+  assert.equal(
+    result.stderr.trim(),
+    'error: --deadline-ms must be a non-negative integer (milliseconds)',
+  );
+});
+
+test('an omitted --deadline-ms keeps the pre-existing unbounded behavior (no rejection, no deadline-skipped items)', () => {
+  const restore = withProbeOnlyGhStub();
+  try {
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        'IC_a',
+        '--allow-untrusted',
+        '--format',
+        'json',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.counts.deadlineSkipped, 0);
+    assert.equal(report.counts.eligible, 1);
+  } finally {
+    restore();
+  }
+});
+
+test('--deadline-ms is threaded through the CLI into runMinimize, actually bounding the pass end-to-end', () => {
+  // deadlineMs: 0 means the budget reads exhausted the instant any
+  // wall-clock time has passed -- true by the time the first (real,
+  // subprocess-spawning) probe call returns, proving this flag reaches
+  // runMinimize's own deadline enforcement, not merely that it parses.
+  // 0 is deliberately used rather than a small positive value: it is the
+  // one value for which the FIRST candidate's own probe still gets the
+  // un-throttled default timeout (falls back to `undefined` rather than a
+  // near-zero timeoutMs that would itself kill the real subprocess call),
+  // so the probe genuinely completes and the deadline is only caught at
+  // the pre-apply checkpoint -- exactly mirroring runMinimize's own
+  // review-round-2 test. withProbeOnlyGhStub fails loudly on any mutation
+  // call, so a bug that let this candidate through the deadline check
+  // would surface as a hard subprocess failure here, not a
+  // silently-wrong report.
+  const restore = withProbeOnlyGhStub();
+  try {
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        'IC_a',
+        '--allow-untrusted',
+        '--apply',
+        '--deadline-ms',
+        '0',
+        '--format',
+        'json',
+      ],
+      { encoding: 'utf8' },
+    );
+    const report = JSON.parse(result.stdout);
+    assert.deepEqual(
+      report.items.map(
+        (item: { subjectId: string; status: string; reason?: string }) => ({
+          subjectId: item.subjectId,
+          status: item.status,
+          reason: item.reason,
+        }),
+      ),
+      [{ subjectId: 'IC_a', status: 'skipped', reason: 'deadline-exceeded' }],
+    );
+    assert.equal(report.counts.deadlineSkipped, 1);
+    assert.equal(report.counts.applied, 0);
+  } finally {
+    restore();
+  }
+});
