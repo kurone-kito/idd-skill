@@ -599,6 +599,98 @@ test('hasVerificationCommandSignal: an unindented lazy continuation between two 
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: a thematic break with no list previously open still frees the next non-1 markers to open a fresh list (Codex review, PR #2840, round 25, databaseId 3976526317)', () => {
+  // A thematic break interrupts an open paragraph/list unconditionally
+  // per CommonMark 4.1, leaving no open paragraph behind -- `gh api
+  // /markdown` confirms both non-`1` markers right after it render as
+  // real checkboxes in one fresh list (`<ol start="2">`), even though no
+  // list was open before the break.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '---',
+    '2. [ ] first',
+    '3. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: a blockquote with no list previously open still frees the next non-1 markers to open a fresh list (Codex review, PR #2840, round 25, databaseId 3976526317)', () => {
+  // A blockquote marker also interrupts an open paragraph unconditionally
+  // per CommonMark 5.1. `gh api /markdown` confirms both non-`1` markers
+  // right after the blockquote render as real checkboxes in one fresh
+  // list, even with prose (an open paragraph) before the blockquote and
+  // no list ever open beforehand.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    'Some prose describing the work.',
+    '> quoted block',
+    '2. [ ] first',
+    '3. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: an intervening blockquote-then-lazily-absorbed paragraph still lets the next marker open a fresh list (Codex review, PR #2840, round 25 finding text -- confirmed already correct, not a regression)', () => {
+  // The literal round-25 finding text. `gh api /markdown` confirms
+  // "plain paragraph" is CommonMark's own lazy continuation of the
+  // blockquote's *inner* paragraph (rendered inside the <blockquote>,
+  // not as a separate top-level <p>), so no open top-level paragraph
+  // remains to block "2." -- both checkboxes render as real, in two
+  // separate lists (`<ol>` then `<ol start="2">`). This function already
+  // returned `true` here before the round-25 fix; kept as an explicit
+  // regression guard because it is the exact shape reviewers flagged.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '1. [ ] first',
+    '> quoted block',
+    'plain paragraph',
+    '2. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: a genuine blank-line-separated paragraph after a blockquote still blocks a following non-1 marker (control, round 25)', () => {
+  // Unlike the previous test, a real blank line here closes the
+  // blockquote outright, so "some paragraph" becomes its own genuine
+  // top-level open paragraph -- `gh api /markdown` confirms only the
+  // first checkbox renders; "2. [ ] second" stays literal continuation
+  // text of "some paragraph" (a non-`1` marker cannot interrupt an open
+  // paragraph).
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '1. [ ] first',
+    '> quoted block',
+    '',
+    'some paragraph',
+    '2. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: a multi-line blockquote with no list previously open still frees the next non-1 markers (control, round 25)', () => {
+  // Every continuation line of the blockquote itself carries its own `>`
+  // marker here (no lazy-absorption ambiguity) -- `gh api /markdown`
+  // confirms both non-`1` markers right after render as real checkboxes.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '1. [ ] first',
+    '> quoted block',
+    '> still quoted',
+    '2. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: a mixed multi-line double-backtick span with real headings inside is real structure, not smuggled content (Codex review, PR #2840 round 9 -- rejected)', () => {
   // Considered a P1 smuggling finding, then rejected after verification
   // against GitHub's own renderer (`gh api /markdown`, mode: gfm): an ATX

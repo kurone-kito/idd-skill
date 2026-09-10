@@ -83,6 +83,31 @@ const LIST_ITEM_LINE_PATTERN = /^[ \t]*([-*+]|\d{1,9}[.)])[ \t]+/;
 function isInterruptingMarker(marker) {
   return /^[-*+]$/.test(marker) || /^1[.)]$/.test(marker);
 }
+/** A blockquote-start line (`>`, optionally indented up to 3 spaces) --
+ * used by {@link countInterruptingCheckboxItems} to recognize that a
+ * block quote marker, per CommonMark 5.1, always interrupts whatever
+ * paragraph or list preceded it, unlike a non-`1` ordered list marker.
+ * Checked ahead of {@link THEMATIC_BREAK_LINE_PATTERN} would not matter
+ * here (the two never overlap: a thematic break's repeated `-`/`_`/`*`
+ * run cannot itself start with `>`), but is checked ahead of
+ * {@link LIST_ITEM_LINE_PATTERN} deliberately -- `>` is not a list-item
+ * marker character, so no ordering conflict exists there either. */
+const BLOCKQUOTE_START_LINE_PATTERN = /^[ \t]{0,3}>/;
+/** CommonMark 4.1 thematic break: 3 or more matching `-`, `_`, or `*`
+ * characters, each optionally followed by spaces/tabs, occupying the
+ * whole line (interior spacing allowed, e.g. `_ _ _`). Mirrors
+ * `markdown-code.mts`'s own `MARKDOWN_THEMATIC_BREAK_PATTERN` (not
+ * imported -- that pattern is applied to an already-stripped container
+ * `content` string in a different scanning pass with different masking
+ * needs; duplicating the four-line pattern here avoids coupling this
+ * module's simpler line-based walk to that one's container-aware
+ * contract). CommonMark also lets a thematic break interrupt an
+ * already-open paragraph or list unconditionally, same as a blockquote
+ * marker -- checked ahead of {@link LIST_ITEM_LINE_PATTERN} because a
+ * run of bare `-` characters (e.g. `- - -`) would otherwise also match
+ * that list-item pattern, and CommonMark itself resolves exactly this
+ * ambiguity in favor of the thematic-break reading. */
+const THEMATIC_BREAK_LINE_PATTERN = /^[ \t]{0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/;
 /**
  * Counts only the checkbox items in `sectionText` that CommonMark would
  * actually render as real GFM task-list items (Codex review, PR #2840,
@@ -131,19 +156,58 @@ function isInterruptingMarker(marker) {
  * first\nlazy continuation\n2. [ ] second` still renders both as real
  * checkboxes. A non-list-shaped line therefore keeps the list open
  * whenever the list was already open, with no indentation test at all --
- * only a blank line (handled above) or another list-item line's own
- * eligibility check ends it.
+ * only a blank line, a blockquote-start line, or a thematic-break line
+ * (all three handled next) ends it.
+ *
+ * A blockquote marker or a thematic break also frees the *next* line to
+ * open a brand-new list with any marker shape, exactly like a blank line
+ * (Codex review, PR #2840, round 25, databaseId 3976526317): both
+ * constructs interrupt an open paragraph/list unconditionally per
+ * CommonMark 5.1/4.1, so `---\n2. [ ] first\n3. [ ] second` and
+ * `prose\n> quoted\n2. [ ] first\n3. [ ] second` both render every
+ * checkbox as real -- confirmed via `gh api /markdown` -- yet the
+ * previous version left `previousLineOpensOrContinuesList` (and the
+ * implicit "is a paragraph open" state) stuck at whatever it was
+ * *before* the interrupting line, wrongly undercounting both. A
+ * thematic break is a self-contained leaf block (never absorbs a
+ * following line), so the very next line starts fresh either way. A
+ * blockquote is a container, though: an unprefixed line right after it
+ * (no blank line in between) is CommonMark's own lazy continuation of
+ * the blockquote's *own* inner paragraph, not a new top-level paragraph
+ * -- `1. [ ] first\n> quoted block\nplain paragraph\n2. [ ] second`
+ * (the literal round-25 finding text) still renders both checkboxes,
+ * because "plain paragraph" is absorbed into the blockquote, leaving no
+ * open top-level paragraph for "2." to interrupt. A dedicated
+ * `insideOpenBlockquote` flag tracks exactly that: it starts (and stays)
+ * true across every such absorbed, non-blank, non-block-starting line,
+ * and is cleared the moment a blank line, a fresh interrupting
+ * construct, or a line that itself successfully opens/continues a list
+ * appears -- `gh api /markdown` confirms that inserting a genuine blank
+ * line before "plain paragraph" instead makes it a real top-level
+ * paragraph that blocks the following non-`1` marker, and this function
+ * matches that too.
  */
 function countInterruptingCheckboxItems(sectionText) {
   const lines = sectionText.split(/\r?\n/);
   let count = 0;
-  let previousLineBlank = true;
+  let noOpenParagraph = true;
   let previousLineOpensOrContinuesList = false;
+  let insideOpenBlockquote = false;
   for (const line of lines) {
     const isBlank = line.trim() === '';
     if (isBlank) {
-      previousLineBlank = true;
+      noOpenParagraph = true;
       previousLineOpensOrContinuesList = false;
+      insideOpenBlockquote = false;
+      continue;
+    }
+    if (
+      THEMATIC_BREAK_LINE_PATTERN.test(line) ||
+      BLOCKQUOTE_START_LINE_PATTERN.test(line)
+    ) {
+      noOpenParagraph = true;
+      previousLineOpensOrContinuesList = false;
+      insideOpenBlockquote = BLOCKQUOTE_START_LINE_PATTERN.test(line);
       continue;
     }
     const listItemMatch = LIST_ITEM_LINE_PATTERN.exec(line);
@@ -151,7 +215,7 @@ function countInterruptingCheckboxItems(sectionText) {
     if (listItemMatch) {
       const marker = listItemMatch[1] ?? '';
       currentLineOpensOrContinuesList =
-        previousLineBlank ||
+        noOpenParagraph ||
         previousLineOpensOrContinuesList ||
         isInterruptingMarker(marker);
       if (
@@ -160,11 +224,17 @@ function countInterruptingCheckboxItems(sectionText) {
       ) {
         count += 1;
       }
+      if (currentLineOpensOrContinuesList) {
+        noOpenParagraph = false;
+        insideOpenBlockquote = false;
+      }
     } else {
       currentLineOpensOrContinuesList = previousLineOpensOrContinuesList;
+      if (!insideOpenBlockquote) {
+        noOpenParagraph = false;
+      }
     }
     previousLineOpensOrContinuesList = currentLineOpensOrContinuesList;
-    previousLineBlank = false;
   }
   return count;
 }
