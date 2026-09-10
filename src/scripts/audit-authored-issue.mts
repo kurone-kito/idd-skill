@@ -2603,14 +2603,17 @@ function main(): void {
   // journalComments passed without --new-issue is simply unused by that
   // check, exactly as before.
   //
-  // Supplying journal data with no --comments-file would silently produce
-  // a misleading pass: the owner-marker check (a prerequisite for even
-  // reaching the journal cross-check) reports "not applicable" without
-  // --comments-file, so the journal data would never actually be consulted
-  // (#2628 review, Copilot).
-  if (args.journalCommentsFile && !args.commentsFile) {
-    fail_('--journal-comments-file requires --comments-file');
-  }
+  // #2896 review (round 3, Codex): --journal-comments-file also no longer
+  // requires --comments-file. It used to (#2628 review, Copilot): without
+  // --comments-file, authoring-owner-marker-trail's journal cross-check
+  // was unreachable, so journal data alone would go unconsulted by that
+  // ONE check -- but that check already reports "not applicable" (never a
+  // false compliant pass) whenever --comments-file is absent, with or
+  // without this gate, and authoring-marker-minimization-backlog's own
+  // publication-intent half now consults journalComments completely on
+  // its own. Requiring --comments-file here made the CLI advertise
+  // "--comments-file and/or --journal-comments-file" in its own --help
+  // text while actually rejecting the journal-only half of that "or".
   // Without this, a new-issue check with real owner-marker evidence but no
   // journal data would report "not applicable" for the journal half and
   // still exit 0 -- a misleading success for the AC's combined
@@ -2894,16 +2897,17 @@ Options:
                                     comments itself; isMinimized defaults to
                                     "not minimized" when omitted)
   --journal-comments-file <path>   JSON array of the journal issue's pre-fetched
-                                    comments (same shape as --comments-file);
-                                    requires --comments-file. Feeds the
-                                    authoring-publication-intent half of
-                                    authoring-marker-minimization-backlog on its
-                                    own (usable without --new-issue -- for
-                                    example, at Stage 2 release on an
-                                    already-published issue), and additionally
-                                    feeds the new-issue publication-intent
-                                    cross-check when --new-issue and --issue
-                                    are also given
+                                    comments (same shape as --comments-file).
+                                    Feeds the authoring-publication-intent half
+                                    of authoring-marker-minimization-backlog on
+                                    its own -- usable standalone, without
+                                    --comments-file or --new-issue (for example,
+                                    to audit only the shared journal's backlog at
+                                    Stage 2 release on an already-published
+                                    issue) -- and additionally feeds the
+                                    new-issue publication-intent cross-check
+                                    when --comments-file, --new-issue, and
+                                    --issue are also given
   --new-issue                      this issue was just created in this invocation
                                     (not an edit); requires the leading
                                     authoring-publication body line, and (when
