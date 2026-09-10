@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   blankFencedCodeBlocks,
+  findFencedCodeRanges,
   findHtmlBlockRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
@@ -795,6 +796,35 @@ test('findHtmlBlockRanges does not open a custom-tag block mid-list-item-continu
     '\n',
   );
   assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges ignores an unclosed raw-text tag that is literal text inside a fenced example (Codex review, PR #2840, round 14)', () => {
+  // Without `fencedRanges`, an unclosed `<pre>` inside a fenced example is
+  // read as a real HTML block opener with no real closing tag anywhere in
+  // `text`, extending the returned range through the remainder of the
+  // body -- masking any genuine content after the fence. `gh api
+  // /markdown` confirms GitHub renders the whole fenced block as a
+  // literal code block; the `<pre>` text inside it never opens anything.
+  const body = [
+    'Example:',
+    '',
+    '```',
+    '<pre>',
+    'unclosed',
+    '```',
+    '',
+    'after',
+    '',
+  ].join('\n');
+  const fencedRanges = findFencedCodeRanges(body);
+  assert.deepEqual(findHtmlBlockRanges(body, fencedRanges), []);
+  // Control: the same unclosed tag OUTSIDE any fence still masks through
+  // end of text (fenced-range skipping must not blunt the real case).
+  const control = ['<pre>', 'var x = 1;', ''].join('\n');
+  assert.deepEqual(
+    findHtmlBlockRanges(control, findFencedCodeRanges(control)),
+    [{ start: 0, end: control.length }],
+  );
 });
 
 test('findHtmlBlockRanges masks an unclosed raw-text block through end of text', () => {

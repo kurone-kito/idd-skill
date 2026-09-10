@@ -154,6 +154,28 @@ test('hasVerificationCommandSignal: a raw HTML block (<pre>) opened inside a blo
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: an Acceptance criteria section after a fenced example containing an unclosed raw tag still counts (Codex review, PR #2840, round 14)', () => {
+  // Same round-14 fenced-bleed fix as candidateFilesExistOnDisk's mirror
+  // test above: the unclosed `<pre>` inside the fence previously extended
+  // an "HTML block" range through the remainder of the body (no real
+  // closing tag anywhere), masking the real checkboxes below it.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    'Example:',
+    '',
+    '```',
+    '<pre>',
+    'unclosed',
+    '```',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test("hasVerificationCommandSignal: a custom-tag HTML block opened as a list item's own first line does not count (Codex review, PR #2840, round 13)", () => {
   // Round 11 fixed the opener-detection *pattern match* for a list-marker
   // prefix but left the custom-tag branch's blank-line-eligibility gate
@@ -409,6 +431,34 @@ test('candidateFilesExistOnDisk: an example inside a raw HTML block (<pre>) does
   assert.equal(
     candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
     false,
+  );
+});
+
+test('candidateFilesExistOnDisk: a real Candidate files section after a fenced example containing an unclosed raw tag still counts (Codex review, PR #2840, round 14)', () => {
+  // `findHtmlBlockRanges` previously scanned the raw text independent of
+  // fenced-code ranges: the unclosed `<pre>` inside the fence had no real
+  // closing tag anywhere in the body, so it opened a raw-text block that
+  // extended through the remainder of the body -- masking this genuine
+  // section entirely. `gh api /markdown` confirms GitHub renders the
+  // fenced block as a literal code block; the real section after it is
+  // real structure.
+  const body = [
+    'Example:',
+    '',
+    '```',
+    '<pre>',
+    'unclosed',
+    '```',
+    '',
+    '## Candidate files',
+    '',
+    '- `src/scripts/foo.mts`',
+    '',
+  ].join('\n');
+  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    true,
   );
 });
 

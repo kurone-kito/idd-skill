@@ -158,7 +158,7 @@ function maskOpaqueMarkdown(body: string): string {
     ...fencedRanges,
     ...findIndentedCodeRanges(body, fencedRanges),
     ...findHtmlCommentRanges(body, codeRanges),
-    ...findHtmlBlockRanges(body),
+    ...findHtmlBlockRanges(body, fencedRanges),
   ]);
 }
 

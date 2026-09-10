@@ -1029,11 +1029,24 @@ function isValidFenceOpener(fence) {
  * list item's own first line, which has no "previous line" inside that
  * new container for the interruption rule to apply to -- the same
  * reasoning `previousLineBlank` already covers for the top-level case.
+ *
+ * `fencedRanges` (Codex review, PR #2840, round 14; same
+ * caller-supplied-ranges convention {@link findIndentedCodeRanges} already
+ * uses for the identical purpose) lets a caller exclude fenced-code-block
+ * content from opener/closer detection: an unclosed raw-text tag such as
+ * `<pre>` *inside* a fenced example is literal example text, not a real
+ * HTML block opener, but a scan of the raw line text alone cannot tell the
+ * difference -- without this, that literal `<pre>` opened a raw-text block
+ * with no real closing tag anywhere in `text`, extending the returned
+ * range through the remainder of the body and masking any genuine
+ * Acceptance-criteria/Candidate-files content after the fence. Must be in
+ * ascending `start` order, as {@link findFencedCodeRanges} already returns.
  */
-export function findHtmlBlockRanges(text) {
+export function findHtmlBlockRanges(text, fencedRanges = []) {
   const ranges = [];
   let lineStart = 0;
   let previousLineBlank = true;
+  let fencedRangeIndex = 0;
   while (lineStart <= text.length) {
     const newlineIndex = text.indexOf('\n', lineStart);
     const lineEnd =
@@ -1045,6 +1058,30 @@ export function findHtmlBlockRanges(text) {
     const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const line = text.slice(lineStart, lineEnd);
     const isBlank = line.trim() === '';
+    while (
+      fencedRangeIndex < fencedRanges.length &&
+      lineStart >= (fencedRanges[fencedRangeIndex]?.end ?? text.length)
+    ) {
+      fencedRangeIndex += 1;
+    }
+    const fencedRange = fencedRanges[fencedRangeIndex];
+    const isOpaqueFenceContent =
+      fencedRange !== undefined &&
+      lineStart > fencedRange.start &&
+      lineStart < fencedRange.end;
+    if (isOpaqueFenceContent) {
+      // The fenced block itself is one real, non-blank block, so a line
+      // right after it (once the loop resumes normal processing) has a
+      // non-blank "previous line" regardless of how this skipped line's
+      // own text looks (e.g. an interior blank-looking line of example
+      // code is not a document-level blank line separating blocks).
+      previousLineBlank = false;
+      lineStart = lineAfter;
+      if (newlineIndex === -1) {
+        break;
+      }
+      continue;
+    }
     if (!isBlank) {
       const containerContent = parseContainerLine(line).content;
       const content = stripListItemMarker(containerContent);

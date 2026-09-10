@@ -144,7 +144,7 @@ function maskOpaqueMarkdown(body) {
     ...fencedRanges,
     ...findIndentedCodeRanges(body, fencedRanges),
     ...findHtmlCommentRanges(body, codeRanges),
-    ...findHtmlBlockRanges(body),
+    ...findHtmlBlockRanges(body, fencedRanges),
   ]);
 }
 /** Extract the named ATX section's offsets (heading line excluded, bounded
