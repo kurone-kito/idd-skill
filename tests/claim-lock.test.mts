@@ -606,6 +606,90 @@ test('generated-tokens: re-recording the same claim-id idempotently overwrites (
   }
 });
 
+test('generated-tokens: recording never deletes a pre-existing directory at the resolved path (regression, #2879 review)', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const path = resolveGeneratedTokensPath(fixture.worktree, 'claim-a');
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, 'unrelated-file.txt'), 'do not delete me');
+
+    assert.throws(() =>
+      recordGeneratedClaimTokens(fixture.worktree, {
+        agentId: 'agent-a',
+        claimId: 'claim-a',
+      }),
+    );
+
+    // The pre-existing directory and its contents must survive untouched —
+    // unlike the lock file's authorized-takeover path, plain token
+    // recording must never silently delete a directory that happens to
+    // occupy the resolved path.
+    assert.equal(statSync(path).isDirectory(), true);
+    assert.equal(
+      readFileSync(join(path, 'unrelated-file.txt'), 'utf8'),
+      'do not delete me',
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('generated-tokens: primary-worktree admin dir is shared across concurrent "sessions" -- two different claim-ids do not clobber each other there', () => {
+  // Exercises the actual A5 pre-B1 scenario the claim-id keying scheme
+  // exists for (#2879 review): before the B1 worktree exists, `cwd` for
+  // this write is the *primary* worktree, whose admin directory every
+  // concurrent session in the clone shares. Uses `fixture.primary`
+  // directly, unlike every other case in this file (which exercises the
+  // dedicated linked-worktree path).
+  const fixture = setupLinkedWorktree();
+  try {
+    recordGeneratedClaimTokens(fixture.primary, {
+      agentId: 'agent-a',
+      claimId: 'claim-a',
+    });
+    recordGeneratedClaimTokens(fixture.primary, {
+      agentId: 'agent-b',
+      claimId: 'claim-b',
+    });
+
+    const readA = readGeneratedClaimTokens(fixture.primary, 'claim-a');
+    const readB = readGeneratedClaimTokens(fixture.primary, 'claim-b');
+    assert.equal(readA.status === 'present' && readA.record.agentId, 'agent-a');
+    assert.equal(readB.status === 'present' && readB.record.agentId, 'agent-b');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('generated-tokens: documented limitation -- a --read-tokens hit against the shared primary path is not proof a *different* caller generated it (#2879 review, Codex P1)', () => {
+  // This is the documented boundary, not a bug: `readGeneratedClaimTokens`
+  // has no process/session identity to check, so any caller resolving the
+  // *same* cwd sees the *same* record. The mitigation is procedural (every
+  // caller must resolve `--read-tokens` against its own current cwd, never
+  // an explicit different worktree's path -- see the "Scope of the
+  // ownership proof" header comment) and by the existing GitHub
+  // claim-state / branch-collision / worktree-local-lock defenses, not a
+  // guarantee this function itself can provide. This test documents that
+  // boundary so it cannot silently regress into an unnoticed assumption.
+  const fixture = setupLinkedWorktree();
+  try {
+    // "Session A" records its own claim-id in the shared primary dir.
+    recordGeneratedClaimTokens(fixture.primary, {
+      agentId: 'agent-a',
+      claimId: 'claim-a',
+    });
+
+    // "Session B" merely recalls that same claim-id (for example, having
+    // read it off a GitHub claimed-by comment) and checks it against the
+    // *same shared primary path* -- `readGeneratedClaimTokens` has no way
+    // to distinguish this from session A's own genuine self-check.
+    const sessionBRead = readGeneratedClaimTokens(fixture.primary, 'claim-a');
+    assert.equal(sessionBRead.status, 'present');
+  } finally {
+    teardown(fixture);
+  }
+});
+
 test('generated-tokens: two claim-ids that sanitize to the same string still resolve to different paths', () => {
   const fixture = setupLinkedWorktree();
   try {

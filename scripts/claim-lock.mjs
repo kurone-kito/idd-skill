@@ -55,11 +55,14 @@
 // the current cwd is then the primary worktree, whose admin directory is
 // shared by every concurrent session in the same clone. A fixed filename
 // there would let two sessions generating two different claim-ids clobber
-// each other; a claim-id-keyed filename (plus a short content hash suffix
-// so sanitization can never collide two distinct claim-ids onto the same
-// path) does not. B1 repeats the same write into the new worktree's own
-// private admin directory once it exists, mirroring how `idd-claim.lock`
-// already works there. Unlike the lock, this record has no collision or
+// each other; a claim-id-keyed filename (plus a short content hash suffix,
+// so sanitization collapsing two distinct claim-ids to the same string
+// still resolves to different paths in all but an astronomically unlikely
+// collision -- an 8-hex-char truncated hash cannot make that provably
+// impossible) makes that far less likely. B1 repeats the same write into
+// the new worktree's own private admin directory once it exists,
+// mirroring how `idd-claim.lock` already works there. Unlike the lock,
+// this record has no collision or
 // `--takeover` concept: it is per-claim-id evidence, not a mutual-exclusion
 // primitive, so re-recording (idempotent overwrite) is always safe and
 // expected -- both writes above, plus the follow-up write once the
@@ -72,6 +75,29 @@
 // whether the claim-id it finds active is one this session actually
 // generated, rather than one merely recalled from (possibly compacted)
 // conversation context.
+//
+// Scope of the ownership proof (#2879 review, Codex P1): a `present: true`
+// `--read-tokens` result proves "a `--record-tokens` call for this exact
+// claim-id landed at this path" -- it does not cryptographically bind that
+// call to the specific process or conversation now reading it back, since
+// each CLI invocation is a stateless one-shot child (see above) with no
+// tracked process/session identity to check against. During the narrow
+// A5-to-B1 window, the primary worktree's admin directory is shared by
+// every concurrent session in the same clone, so a `--read-tokens` check
+// made *against that shared path* is corroborating bootstrap evidence,
+// not sole proof of current-session ownership. This is why every caller
+// must resolve `--read-tokens`/`--acquire` against its **own current
+// cwd** (never an explicit different worktree's path): once B1 creates
+// the dedicated worktree, that admin directory is private to the one
+// claim/branch it represents, and the pre-mutation claim revalidation
+// gate (`idd-overview-core.instructions.md`) already scopes its own
+// cwd-vs-claim check to exactly that post-B1 contract (B3, D, E, F2/F3),
+// where this record's guarantee is strongest. The existing GitHub
+// claim-state, branch-collision, and worktree-local-lock checks remain
+// the primary defense against a genuinely different session mutating
+// under a claim-id it never generated; this record's own job is narrower
+// and complementary: helping *this* session's own memory survive its own
+// context compaction, not adjudicating between two sessions.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -130,9 +156,16 @@ function sanitizedGitEnvironment() {
  * --absolute-git-dir`) — inside a linked worktree, `.git` is a *file* (a
  * `gitdir:` pointer), not a directory, so a literal `.git/...` path would
  * throw `ENOTDIR`. Shared by every path resolved inside this admin
- * directory (the lock file and the generated-tokens record below), so
- * `git worktree remove` deletes all of them together with the worktree,
- * with no separate cleanup step required.
+ * directory (the lock file and the generated-tokens record below).
+ *
+ * When `cwd` is a **linked** worktree (the normal B1-onward case),
+ * `git worktree remove` deletes this whole admin directory together with
+ * the worktree, with no separate cleanup step required. That guarantee
+ * does **not** hold when `cwd` is the **primary** worktree (the A5,
+ * pre-B1 generated-tokens record write, #2879 review): the primary
+ * worktree's admin directory is never removed by `git worktree remove`,
+ * is shared by every concurrent session in the same clone, and persists
+ * indefinitely — callers must not assume it is ever cleaned up.
  */
 function resolveWorktreeAdminDir(cwd) {
   return execFileSync('git', ['-C', cwd, 'rev-parse', '--absolute-git-dir'], {
@@ -153,9 +186,10 @@ export function resolveClaimLockPath(worktree) {
  * `[A-Za-z0-9._-]` becomes `_`. Claim-ids already follow that character
  * set by convention, but this is defensive, not assumed -- combined with
  * the content-hash suffix in {@link resolveGeneratedTokensPath}, two
- * distinct claim-ids can never collide onto the same sanitized filename
- * even if an out-of-convention claim-id defeats the character-class
- * sanitization alone.
+ * distinct claim-ids resolving to the same sanitized filename is
+ * astronomically unlikely, even when an out-of-convention claim-id
+ * defeats the character-class sanitization alone (the truncated 8-hex-char
+ * hash makes this vanishingly improbable, not provably impossible).
  */
 function sanitizeClaimIdForFilename(claimId) {
   return claimId.replace(/[^A-Za-z0-9._-]/g, '_');
@@ -168,11 +202,18 @@ function sanitizeClaimIdForFilename(claimId) {
  * before the B1 worktree exists, so `cwd` is then the *primary*
  * worktree — its admin directory is shared by every concurrent session
  * in the same clone. A claim-id-keyed filename means two sessions
- * generating two different claim-ids never collide on the same path,
- * even while they momentarily share that admin directory; once B1
- * creates the sibling worktree, its own private admin directory is
- * unique per worktree anyway (matching `idd-claim.lock`'s existing
- * guarantee), so the same scheme still works there unchanged.
+ * generating two different claim-ids resolve to different paths (in all
+ * but an astronomically unlikely hash-suffix collision, see
+ * {@link sanitizeClaimIdForFilename}), even while they momentarily share
+ * that admin directory; once B1 creates the sibling worktree, its own
+ * private admin directory is unique per worktree anyway (matching
+ * `idd-claim.lock`'s existing guarantee), so the same scheme still works
+ * there unchanged. A `present: true` result from a `--read-tokens` check
+ * against this **shared primary** path is bootstrap evidence only, not
+ * proof of current-session ownership by itself — see the header comment's
+ * "Generated-tokens record" note and {@link resolveWorktreeAdminDir} for
+ * why a caller must always resolve against its **own** current cwd, never
+ * an explicit different worktree's path.
  */
 export function resolveGeneratedTokensPath(cwd, claimId) {
   const sanitized = sanitizeClaimIdForFilename(claimId);
@@ -231,13 +272,21 @@ function renderLockBody(agentId, claimId) {
  * directory as `path` (a cross-filesystem rename is not atomic), then
  * renamed into place. POSIX `rename` onto an existing regular file is
  * atomic, but Windows does not replace an existing destination, so a regular
- * file must be removed before retrying the rename on that platform. A
- * directory target is handled the same way for malformed-lock recovery.
- * The `finally` cleans up the temp file if `renameSync` throws, so a failed
+ * file must be removed before retrying the rename on that platform. The
+ * `finally` cleans up the temp file if `renameSync` throws, so a failed
  * replace never leaks it. Shared by the lock file's authorized-takeover
  * path and the generated-tokens record's always-idempotent write.
+ *
+ * A directory at `path` is replaced (recursively removed, then the temp
+ * file renamed in) **only** when `options.replaceDirectory` is `true` —
+ * the authorized-takeover recovery path for a malformed lock directory.
+ * Every other caller (including the generated-tokens record's plain
+ * idempotent write) must never silently delete an unrelated directory
+ * that happens to occupy the resolved path; that case throws instead,
+ * surfacing it as a genuine error for the caller to investigate (#2879
+ * review).
  */
-function atomicReplaceFile(path, body) {
+function atomicReplaceFile(path, body, options = {}) {
   const tmpPath = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
   writeFileSync(tmpPath, body, { flag: 'wx' });
   try {
@@ -263,6 +312,9 @@ function atomicReplaceFile(path, body) {
         renameSync(tmpPath, path);
         return;
       }
+      if (!options.replaceDirectory) {
+        throw error;
+      }
       rmSync(path, { recursive: true, force: true });
       renameSync(tmpPath, path);
     }
@@ -280,11 +332,15 @@ function atomicReplaceFile(path, body) {
 }
 /**
  * Replace `path` with a freshly-rendered lock body. Only reached from an
- * authorized `--takeover` (see {@link acquireClaimLock}); see
- * {@link atomicReplaceFile} for the write mechanics.
+ * authorized `--takeover` (see {@link acquireClaimLock}), which is also
+ * the malformed-lock-directory recovery path, so directory replacement is
+ * intentionally enabled here; see {@link atomicReplaceFile} for the write
+ * mechanics.
  */
 function overwriteLockAtomically(path, agentId, claimId) {
-  atomicReplaceFile(path, renderLockBody(agentId, claimId));
+  atomicReplaceFile(path, renderLockBody(agentId, claimId), {
+    replaceDirectory: true,
+  });
 }
 /**
  * Acquire (or idempotently re-acquire) the worktree-local claim lock.

@@ -1688,14 +1688,22 @@ Interpretation rules:
   generating `{agent-id}`/`{claim-id}`, before posting the `claimed-by`
   marker (the B1 worktree does not exist yet, so `<path>` is then the
   _primary_ worktree); again with `--nonce` right before posting the
-  activation-nonce marker; again at B1 once the sibling worktree exists,
-  mirroring the lock's own `--acquire` step. Keyed by `--claim-id` (a
-  content-hash-suffixed, sanitized filename), so two sessions generating
-  two different claim-ids never collide even while sharing the primary
-  worktree's admin directory. No collision or `--takeover` concept: this
-  is per-claim-id evidence, not a mutual-exclusion primitive, so
-  re-invoking for the same `--claim-id` is always a safe, idempotent
-  overwrite. Exits `0` unless a filesystem error occurs.
+  activation-nonce marker; a third time at B1 once the sibling worktree
+  exists, mirroring the lock's own `--acquire` step. Keyed by
+  `--claim-id` (a content-hash-suffixed, sanitized filename), so two
+  sessions generating two different claim-ids resolve to different paths
+  (an astronomically unlikely, not provably impossible, chance of
+  collision from the truncated hash suffix) even while sharing the
+  primary worktree's admin directory. No collision or `--takeover`
+  concept: this is per-claim-id evidence, not a mutual-exclusion
+  primitive, so re-invoking for the same `--claim-id` is always a safe,
+  idempotent overwrite. Exits `0` unless a filesystem error occurs.
+  **Scope**: a `--read-tokens` hit against the **shared primary**
+  worktree path is bootstrap evidence only, not proof of current-session
+  ownership by itself — see `claim-lock.mts`'s own "Scope of the
+  ownership proof" header comment (#2879 review). Always resolve
+  `--read-tokens`/`--acquire` against the caller's own current cwd, never
+  an explicit different worktree's path.
 - **When to call `--read-tokens`**: alongside every later `--acquire`
   re-run, before trusting a `{claim-id}` recalled only from context.
   Reports `{ path, present, malformed?, record? }` read-only, mirroring
