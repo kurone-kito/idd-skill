@@ -3509,6 +3509,22 @@ function runCli(): void {
   // is skipped. Mirrors the fix already applied to
   // `discover-viability-gate.mts` (commit 4053e95a), generalized here to
   // cover per-branch (not just per-check) non-demotability.
+  //
+  // Gates on the CURRENT failed check's own result flipping to `warn` in
+  // the all-true re-run, not on the whole re-run's aggregate `.passed`
+  // (Codex review, PR #2840, round 13): `evaluateSuitability` is
+  // fail-fast (CHECKS.mts's `for` loop returns at the first `!pass`), so
+  // when the current failure is demotable but an independent LATER check
+  // also fails on its own (non-demotable) grounds -- e.g. a lexical
+  // autonomy hit followed by Check 7's escape-hatch branch -- the all-true
+  // re-run demotes the current check to `warn` and continues, only to
+  // stop at that later check's own genuine failure, so its aggregate
+  // `.passed` is still `false` even though the fetch IS worth making: the
+  // output's `checks` array (populated for every check the loop actually
+  // reaches, `runCli`'s own `output.checks` below) reports each check's
+  // own `result` regardless of the overall verdict, so live evidence that
+  // demotes the current check to `warn` is real, useful information even
+  // when a later check still blocks overall `passed`.
   const allTrueStructuralEvidence: StructuralEvidence = {
     verificationCommand: true,
     candidateFilesExist: true,
@@ -3522,7 +3538,9 @@ function runCli(): void {
     evaluateSuitability(issue, {
       ...suitabilityOptions,
       structuralEvidence: allTrueStructuralEvidence,
-    }).passed;
+    }).checks.some(
+      (check) => check.id === result.failedCheck && check.result === 'warn',
+    );
   if (wouldDemoteWithFullEvidence) {
     // Same fail-open contract as the `existingRejection` scan above: this
     // is a detect-only demotion path, not a gate, so a transient GitHub

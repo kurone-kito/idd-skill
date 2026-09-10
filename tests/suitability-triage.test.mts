@@ -3539,6 +3539,49 @@ test('#2767: evaluateSuitability never demotes a blocked-by-human autonomy fail,
   assert.equal(result.failedCheck, 'autonomy');
 });
 
+// #2767 round 13 (Codex review, PR #2840): evaluateSuitability is
+// fail-fast (the CHECKS loop returns at the first `!pass`), so when the
+// CURRENT failure is demotable but an independent LATER check also fails
+// on its own (non-demotable) grounds -- an autonomy fail here, followed
+// by Check 7's escape-hatch branch, once autonomy demotes to `warn` and
+// the loop continues -- the all-true re-run's aggregate `.passed` stays
+// `false`. Gating the live fetch on `.passed` (round 9's original form)
+// would skip it here even though the fetch is worth making: `runCli`'s
+// own `output.checks` reports every check's own `result` regardless of
+// the overall verdict, so demoting the CURRENT check to `warn` is real,
+// useful output even when a later check still blocks overall `passed`.
+// This test proves the underlying premise the round-13 fix
+// (`checks.some(check => check.id === result.failedCheck && check.result
+// === 'warn')`, replacing the bare `.passed` check) relies on.
+test('#2767: evaluateSuitability demotes the current autonomy fail to warn even though an independent later verifiability escape-hatch fail still blocks overall passed (round 13 sentinel premise)', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: `Either add validation, or TBD -- not yet decided.
+
+## Acceptance Criteria
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+- tests pass
+`,
+  };
+  const opts = {
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    duplicateCandidates: [{ number: 1, title: issue.title }],
+  };
+
+  const plain = evaluateSuitability(issue, opts);
+  assert.equal(plain.passed, false);
+  assert.equal(plain.failedCheck, 'autonomy');
+
+  const withEvidence = evaluateSuitability(issue, {
+    ...opts,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  });
+  assert.equal(withEvidence.passed, false);
+  assert.equal(withEvidence.failedCheck, 'verifiability');
+  const autonomy = withEvidence.checks.find((c) => c.id === 'autonomy');
+  assert.equal(autonomy?.result, 'warn');
+});
+
 test('#2767: checkVerifiability demotes a missing-objective-signal fail to warn', () => {
   const issue = {
     ...BASE_ISSUE,
@@ -6081,7 +6124,7 @@ test('runCli: the live structural-evidence fetch is gated behind an all-true sen
   );
   assert.match(
     source,
-    /const allTrueStructuralEvidence: StructuralEvidence = \{\s*\n\s*verificationCommand: true,\s*\n\s*candidateFilesExist: true,\s*\n\s*trustedEditor: true,\s*\n\s*\};\s*\n\s*const wouldDemoteWithFullEvidence =\s*\n\s*!result\.passed &&\s*\n\s*\(result\.failedCheck === 'actionability' \|\|\s*\n\s*result\.failedCheck === 'autonomy' \|\|\s*\n\s*result\.failedCheck === 'verifiability'\) &&\s*\n\s*evaluateSuitability\(issue, \{\s*\n\s*\.\.\.suitabilityOptions,\s*\n\s*structuralEvidence: allTrueStructuralEvidence,\s*\n\s*\}\)\.passed;\s*\n\s*if \(wouldDemoteWithFullEvidence\) \{/,
+    /const allTrueStructuralEvidence: StructuralEvidence = \{\s*\n\s*verificationCommand: true,\s*\n\s*candidateFilesExist: true,\s*\n\s*trustedEditor: true,\s*\n\s*\};\s*\n\s*const wouldDemoteWithFullEvidence =\s*\n\s*!result\.passed &&\s*\n\s*\(result\.failedCheck === 'actionability' \|\|\s*\n\s*result\.failedCheck === 'autonomy' \|\|\s*\n\s*result\.failedCheck === 'verifiability'\) &&\s*\n\s*evaluateSuitability\(issue, \{\s*\n\s*\.\.\.suitabilityOptions,\s*\n\s*structuralEvidence: allTrueStructuralEvidence,\s*\n\s*\}\)\.checks\.some\(\s*\n\s*\(check\) => check\.id === result\.failedCheck && check\.result === 'warn',\s*\n\s*\);\s*\n\s*if \(wouldDemoteWithFullEvidence\) \{/,
   );
 });
 
