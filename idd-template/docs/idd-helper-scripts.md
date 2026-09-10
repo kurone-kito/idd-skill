@@ -2497,10 +2497,17 @@ reflexively as any other CLI option.
   via a direct `pull_request_review` trigger on the hosting workflow
   itself; that trigger now lives on the non-required companion
   `idd-advisory-convergence-comment.yml` instead, which reruns the
-  existing required run via `rerun-advisory-convergence.mjs --apply` --
-  a same-repository PR could otherwise edit the required workflow's own
-  copy to control when its `pull_request_review`-triggered run
-  re-asserted.) Every other
+  existing required run via
+  `rerun-advisory-convergence.mjs --refresh-latest --apply` (not the
+  budget-gated plain `--apply` the two comment-family triggers share) --
+  see that flag's own doc comment in `rerun-advisory-convergence.mts`
+  for why a review submission needs the stronger mode. This move keeps
+  the required workflow's own trigger list free of a same-repository
+  PR's ability to disable or reshape a review-triggered rerun of its
+  required check, though the companion itself stays exactly as
+  PR-editable as that former direct trigger was; the push-triggered
+  gate (via `pull_request_target`, also `#2764`) is what actually stays
+  trusted.) Every other
   not-ready reason (an off-HEAD review, unresolved threads, an
   indeterminate claim scope, a deadline/terminal reason, etc.) still fails
   immediately with no wait, exactly as before this addition — the
