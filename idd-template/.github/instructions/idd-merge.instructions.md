@@ -345,6 +345,15 @@ Before any mutating action in F3, apply the
    node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
    ```
 
+   **In-flight cleanup-run wait (#2846)**: immediately before actually
+   posting below (fresh each time, not cached from here — a run's
+   status can change during dry-run/apply), check whether this PR's
+   `post-merge-cleanup.yml` run is still in flight, waiting (bounded)
+   for it to finish if so — see `docs/idd-comment-minimization.md`'s
+   In-flight cleanup-run wait. Either way, continue to the rule below
+   unchanged: it reads whatever that run may have posted and decides
+   ownership from the marker's own recorded status.
+
    **Duplicate-success-record skip rule**: before posting any evidence
    comment below, skip it if the PR already carries a
    `<!-- idd-cleanup-evidence:` comment recording a successful outcome

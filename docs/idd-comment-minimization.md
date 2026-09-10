@@ -271,6 +271,65 @@ fresh evidence (preventive; no observed incident yet — #2043). The
 workflow's PR-keyed `concurrency` group only serializes workflow runs
 against each other; it does not gate the agent's local F4.
 
+**In-flight cleanup-run wait (#2846).** Before the agent's F4 step
+decides whether to post its own evidence comment (the
+duplicate-success-record rule above — only the agent can run this
+wait; the workflow itself cannot block on its own run without
+deadlocking), also check whether this PR's own
+`post-merge-cleanup.yml` check run is still in flight — narrowing the
+residual race the
+marker-comment check alone cannot fully close: a run that has started
+but not yet posted its comment leaves no marker for that rule to find,
+so without this earlier wait both sides can still post within the same
+few-second window after merge (observed 2026-09-09 on
+`kurone-kito/dotfiles#396`: a live CodeRabbit review caught exactly
+this duplicate `idd-cleanup-evidence` comment on an adopter's PR). This
+wait only narrows the window, it does not close it: GitHub registers
+the check run asynchronously after the triggering webhook fires, so a
+run that has not yet been created has no entry here to find yet; that
+residual sliver is an accepted fail-open gap, not something this check
+claims to close.
+
+`gh pr checks` surfaces this `pull_request_target`-triggered run as a
+normal PR check even though it fires after merge — verified on PR
+`#2855`, 2026-09-10. Filter on whatever `name:` the adopter's own copy
+of the workflow actually declares; this repository's dogfooded copy
+and the template both currently say `Post-merge cleanup`.
+
+```sh
+gh pr checks <pr-number> --json workflow,bucket --jq \
+  'map(select(.workflow == "Post-merge cleanup")) | any(.bucket == "pending")'
+```
+
+- **A nonzero exit alone is not failure.** `gh pr checks` exits `8`
+  whenever _any_ check on the PR is still pending (its own documented
+  behavior — `gh pr checks --help`), even when this query's own
+  stdout is valid; a script that aborts under `set -e` on that exit
+  code, or that treats any nonzero status as "lookup failed", falls
+  through and skips the wait below entirely, leaving the race this
+  check exists to narrow. Capture and parse stdout regardless of exit
+  status; only _no parseable output at all_ counts as a lookup
+  failure.
+- **`false`, or no parseable output at all** (old `gh`, no network, a
+  GitHub Enterprise Server version without this data, or no run found
+  for this PR): not in flight. Continue to the duplicate-success-record
+  skip rule unchanged — it reads whatever that run may have posted (if
+  any) and adjudicates on the marker's own recorded status, regardless
+  of how the run itself concluded.
+- **`true`**: the run is in flight. Poll the same query at a reasonable
+  interval until it returns `false`, bounded by
+  `ciWait.generationTimeout` (default `PT10M`) measured from this
+  first `true` observation. A single bound suffices here — unlike the
+  longer-running checks `idd-ci.instructions.md`'s own polling
+  algorithm bounds with the queued/running split, this workflow's job
+  completes in roughly 15 seconds, so distinguishing a merely queued
+  run from an actually running one buys nothing at that scale. Past
+  that bound with the run still in flight, treat it the same as
+  "not in flight" and continue to the duplicate-success-record skip
+  rule unchanged — a resulting duplicate comment is this check's
+  accepted fail-open default, the same one the "not in flight" case
+  above already accepts.
+
 ## GitHub mechanism
 
 GitHub GraphQL exposes `minimizeComment`:
@@ -501,9 +560,15 @@ merge does not re-block the merge; it is an explicit record only.
 Post this comment to the PR after a successful or partial apply. The
 HTML comment token on the first line acts as a stable machine-readable
 marker so a resuming agent — or a concurrent `post-merge-cleanup`
-workflow run — can detect that evidence was already posted. Both the
-**agent-side** F4 step and the `post-merge-cleanup` workflow key on the
-prior **success** record: **skip the post when the latest trusted
+workflow run — can detect that evidence was already posted. The
+[In-flight cleanup-run wait](#server-side-fallback-optional) above
+runs first, delaying only until any in-flight `post-merge-cleanup.yml`
+run finishes (or the wait bound elapses) — this marker-based rule is
+what actually adjudicates ownership once that run, if any, has had its
+chance to post. Both
+the **agent-side** F4 step and the `post-merge-cleanup` workflow then
+key on the prior **success** record: **skip the post when the latest
+trusted
 `<!-- idd-cleanup-evidence:` comment records a successful outcome
 (`applied` / `clean`)**, so neither side stacks a duplicate success
 record — even when this run's own apply returned `applied` for residual
