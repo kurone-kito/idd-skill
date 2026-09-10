@@ -1647,12 +1647,11 @@ only approval boundary.
   depends on, but "mandatory" means **attempted**, not
   blocking -- a failed attempt (permission error, an unreadable comment
   list, or an unavailable helper runtime) skips silently and never stops
-  release, matching the opportunistic step's own best-effort framing.
-  `audit-authored-issue.mjs`'s `authoring-marker-minimization-backlog`
-  check, given the same paginated comment data, reports the count of
-  eligible-but-not-yet-minimized markers mechanically, so a skipped or
-  failed sweep attempt becomes a visible, countable signal instead of
-  silence.
+  release, matching the opportunistic step's own best-effort framing. See
+  the **Closing sweep** bullet below for the third sweep point this
+  preflight sweep alone does not cover, and for the explicit
+  `authoring-marker-minimization-backlog` invocation that makes each
+  sweep attempt's outcome a visible, countable signal instead of silence.
   If a valid current-owner/set `mode=release` marker already exists, reuse the
   earliest matching GitHub comment ID; otherwise append one with `supersedes`
   equal to the current owner token, re-fetch to verify it, and record its
@@ -1708,6 +1707,41 @@ only approval boundary.
   record a set-level recovery hold and never claim a partial release. Release
   is a human action; nothing in this bundle auto-releases a held issue set,
   except the narrow, marker-scoped exception immediately below.
+- **Closing sweep (after Stage 2 closes, #2896 review, Codex).** The two
+  sweep points above run _before_ Stage 2's own later marker appends for
+  the same generation -- the per-target `release` marker, the
+  pre-label-removal heartbeat each target receives immediately before
+  its own label removal, and (on the anchor) `release-guard` and
+  `release-complete` itself. None of those markers exist yet when their
+  target's preflight sweep runs, so the preflight sweep(s) alone can
+  never clear them, and a target's Stage 2 for a given generation runs
+  only once -- there is no future preflight sweep that would ever
+  revisit them. Once the set-level release actually closes (the
+  successful-close branch immediately above: the trusted
+  `release-complete` marker is found and every label is confirmed
+  absent), attempt the mandatory sweep one more time: paginate every
+  target's now-final owner-marker log (the anchor's included this time,
+  not just its own) and the journal's publication-intent log, and
+  minimize every byte-exact canonical match that is not the newest for
+  its family, exactly as the preflight sweeps above do. Same
+  attempted-not-blocking framing: a failed attempt here does not reopen
+  the set or roll back the close already recorded above.
+
+  **Make every sweep attempt's outcome visible.** Immediately after each
+  of the three sweep attempts in this section (per-target preflight,
+  anchor-before-release-complete, and this closing sweep), run
+  `audit-authored-issue.mjs`'s `authoring-marker-minimization-backlog`
+  check against the same paginated owner-marker/journal data just
+  fetched for that sweep (`--comments-file`/`--journal-comments-file`,
+  or `auditAuthoredIssue()` directly) and note its reported count. A
+  nonzero count immediately after a sweep attempt means that attempt did
+  not fully clear the backlog it was supposed to (a partial permission
+  failure, an untrusted-authored candidate the sweep correctly declined
+  to touch, or a genuine defect) -- record it, but never block release
+  on it; this is the mechanical signal that makes a skipped or
+  partially-failed sweep attempt visible instead of silent, the way
+  #2750/#2821's original per-post-only instruction's gap went unnoticed
+  for weeks.
 - **Narrow auto-release exception (review-fix-loop-cutoff).** A
   follow-up issue whose body carried the exact marker
   `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->` at
