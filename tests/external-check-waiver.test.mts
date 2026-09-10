@@ -17,6 +17,7 @@ import {
   resolveActorLogin,
   runExternalCheckWaiver,
 } from '../src/scripts/external-check-waiver.mts';
+import { operationalMarkerPrefix } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
   parseExternalCheckWaiverComment,
@@ -2434,5 +2435,50 @@ test('runExternalCheckWaiver reconciles against the refreshed claim after a take
     report?.concurrentWaivers?.map((entry) => entry.commentId),
     ['500', '501'],
     'both the A-bound and B-bound waivers are live to the gate after the takeover',
+  );
+});
+
+test('operationalMarkerPrefix recognizes a run-id-bound external-check-waiver marker (Codex review, PR #2895)', () => {
+  // The trailing run-id: field is optional -- only --auto-bootstrap posts
+  // it -- and this generic operational-marker shape check must accept it
+  // the same way parseExternalCheckWaiverComment's own regex already
+  // does. Without this, an auto-bootstrap marker's own comment fails this
+  // check, operationalMarkerPrefix returns null for it, and
+  // summarizeRegularCommentsForGate/summarizeDispositionEvidenceForGate
+  // misclassify the bot's own posted marker as unreplied regular
+  // feedback requiring human disposition -- a comment no one will ever
+  // reply to, permanently routing F2 back to E1 even after the waiver
+  // makes the required check ready.
+  const body = renderExternalCheckWaiverComment({
+    actor: 'github-actions[bot]',
+    agentId: 'github-actions-bot',
+    claimId: 'claim-abc',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'idd-advisory-convergence',
+    reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    expiresAt: '2099-01-01T00:00:00Z',
+    runId: '555',
+  });
+
+  assert.equal(
+    operationalMarkerPrefix(body),
+    '<!-- idd-external-check-waiver:',
+  );
+});
+
+test('operationalMarkerPrefix still recognizes an ordinary external-check-waiver marker with no run-id (non-regression)', () => {
+  const body = renderExternalCheckWaiverComment({
+    actor: 'kurone-kito',
+    agentId: 'claude-6043e89f',
+    claimId: 'claim-abc',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'CodeRabbit',
+    reason: 'rate limit',
+    expiresAt: '2099-01-01T00:00:00Z',
+  });
+
+  assert.equal(
+    operationalMarkerPrefix(body),
+    '<!-- idd-external-check-waiver:',
   );
 });

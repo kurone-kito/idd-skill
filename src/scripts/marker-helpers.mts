@@ -427,8 +427,19 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
   },
   {
     label: '<!-- idd-external-check-waiver:',
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): the trailing
+    // `run-id:` field is optional -- only `--auto-bootstrap` posts it --
+    // and must be accepted here the same way
+    // `parseExternalCheckWaiverComment`'s own regex already does.
+    // Without this, every auto-bootstrap marker fails this shape check,
+    // `operationalMarkerPrefix` returns null for it, and
+    // `summarizeRegularCommentsForGate`/`summarizeDispositionEvidenceForGate`
+    // misclassify the bot's own posted marker as unreplied regular
+    // feedback requiring human disposition -- a comment no one will ever
+    // reply to, permanently routing F2 back to E1 even after the waiver
+    // makes the required check ready.
     pattern:
-      /^<!--\s*idd-external-check-waiver:\s+\S+\s+\S+\s+[0-9a-f]{40}\s+check:\S+\s+reason:\S+\s+expires:\S+\s*-->[\s\S]*$/i,
+      /^<!--\s*idd-external-check-waiver:\s+\S+\s+\S+\s+[0-9a-f]{40}\s+check:\S+\s+reason:\S+\s+expires:\S+(?:\s+run-id:\S+)?\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*idd-external-check-waiver:/i,
   },
   {
