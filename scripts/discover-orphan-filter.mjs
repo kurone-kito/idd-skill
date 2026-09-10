@@ -385,6 +385,15 @@ export function getOrphanFirstPolicy(config) {
   return 'none';
 }
 export function classifyIssue(issue, options) {
+  // #2800: checked first, ahead of every marker/label check below — the
+  // declaration target is deliberately marker-less and label-less, so
+  // none of those checks would ever catch it on their own.
+  if (
+    options.providerOutageDeclarationTarget != null &&
+    Number(issue.number) === options.providerOutageDeclarationTarget
+  ) {
+    return { orphan: false, reason: 'provider_outage_target' };
+  }
   const labels = new Set(normalizeLabels(issue.labels));
   const body = String(issue.body ?? '');
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
@@ -524,6 +533,7 @@ export async function filterOrphanIssues(issues, options = {}) {
       ? options.fetchIssueStateByNumber
       : () => 'UNRESOLVABLE';
   const filtered = {
+    provider_outage_target: [],
     roadmap_marker: [],
     blocked_by_marker: [],
     blocked_label: [],
@@ -564,6 +574,7 @@ export async function filterOrphanIssues(issues, options = {}) {
       blockedByHumanLabelName: options.blockedByHumanLabelName,
       needsDecisionLabelName: options.needsDecisionLabelName,
       roadmapLabelName: options.roadmapLabelName,
+      providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       openIssueDetailsByNumber,
     });
     if (result.reason === 'unresolvable_reference') {
@@ -644,6 +655,10 @@ export async function filterOrphanIssues(issues, options = {}) {
       typeof options.fetchTimelineByIssueNumber === 'function'
         ? options.fetchTimelineByIssueNumber
         : () => [];
+    const fetchUserContentEdits =
+      typeof options.fetchUserContentEditsByIssueNumber === 'function'
+        ? options.fetchUserContentEditsByIssueNumber
+        : () => [];
     const trustedMarkerLogins = options.trustedMarkerLogins;
     const markerPrefix =
       typeof options.markerPrefix === 'string'
@@ -668,10 +683,17 @@ export async function filterOrphanIssues(issues, options = {}) {
       }
       let editedAt = null;
       if (record?.markerOutcome) {
+        // Both fetches evaluate inside this one try block (#2762): a
+        // failure from EITHER the timeline or the userContentEdits read
+        // degrades the whole anchor to null ("unknown") rather than
+        // computing a partial result from whichever fetch happened to
+        // succeed -- a partial result could still collapse to the bare
+        // `created_at` anchor this issue fixes.
         try {
           editedAt = resolveLatestSubstantiveIssueEditAt(
             issueCreatedAtByNumber.get(orphan.number),
             fetchTimeline(orphan.number),
+            fetchUserContentEdits(orphan.number),
           );
         } catch {
           editedAt = null;
@@ -805,6 +827,8 @@ async function runCli() {
       fetchIssueCommentsForTriageVerdict(port, issueNumber),
     fetchTimelineByIssueNumber: (issueNumber) =>
       port.getWorkItemTimeline(issueNumber),
+    fetchUserContentEditsByIssueNumber: (issueNumber) =>
+      port.getWorkItemUserContentEditTimestamps(issueNumber),
     trustedMarkerLogins,
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
@@ -812,6 +836,7 @@ async function runCli() {
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
     roadmapLabelName: policy.roadmapLabelName,
+    providerOutageDeclarationTarget: policy.providerOutageDeclarationTarget,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
     autopilot: args.autopilot,
@@ -931,6 +956,7 @@ Output schema:
   "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "filtered": {
+    "provider_outage_target": [...],
     "roadmap_marker": [...],
     "blocked_by_marker": [...],
     "blocked_label": [...],
@@ -945,6 +971,14 @@ Output schema:
   "warnings": [{"issueNumber": 1, "message": "Warning: ..."}],
   "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0}
 }
+
+"filtered.provider_outage_target" (#2800) excludes the exact issue named by
+the configured "providerOutage.declarationTarget" -- a permanent,
+adopter-authored coordination issue documented to stay open indefinitely,
+never claimed, never closed, and carrying no roadmap/blocked marker or
+blocking label of its own. Checked by issue number alone, ahead of every
+marker/label check above, since none of them would otherwise catch it.
+Absent config leaves this filter a no-op.
 
 "filtered.runtime_observation_precondition" (#2467) excludes an issue whose
 body names a runtime/production-observation precondition in prose --
@@ -986,7 +1020,10 @@ configured, this check is a no-op and makes no extra GitHub API call.
 Staleness-checked (fail-closed toward NOT excluding): the marker only
 excludes when the rejection comment is at or after the issue's latest
 substantive (title/body) edit, so an issue legitimately improved after
-being rejected stays selectable.
+being rejected stays selectable -- a title edit is a timeline "renamed"
+event, and a body edit is a GraphQL "userContentEdits.editedAt" value
+(#2762); a failed GraphQL read degrades the anchor to unknown rather than
+falling back to created_at.
 
 --with-claim-state (opt-in) annotates each candidate in "orphans" and
 "routed_to_human" with active-claim eligibility, exactly mirroring
@@ -1021,7 +1058,8 @@ function loadPolicy(policyPath) {
   const { path: source, config: rawConfig } = loadPolicyConfig(policyPath);
   const config = rawConfig ?? {};
   const authoringPolicy = resolveAuthoringGuardPolicy(config);
-  const labelsPolicy = normalizePolicyConfig(config).labels;
+  const normalizedPolicy = normalizePolicyConfig(config);
+  const labelsPolicy = normalizedPolicy.labels;
   return {
     source,
     orphanFirstPolicy: getOrphanFirstPolicy(config),
@@ -1032,6 +1070,12 @@ function loadPolicy(policyPath) {
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     roadmapLabelName: labelsPolicy.roadmapLabelName,
+    // #2800: own-property-omitted when unconfigured or invalid, matching
+    // normalizePolicyConfig's own absence semantics -- resolved to
+    // `null` below so downstream callers get a stable, always-present
+    // field instead of testing for key presence.
+    providerOutageDeclarationTarget:
+      normalizedPolicy.providerOutage.declarationTarget ?? null,
     autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
     autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
     // Passed through verbatim (raw, un-normalized) for

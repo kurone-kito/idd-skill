@@ -256,6 +256,7 @@ interface PolicyConfigFile {
     maxClarificationRounds?: number;
     authoringLabelName?: string;
     authoringStaleAge?: string;
+    heartbeatCoalesceWindow?: string;
     journalIssue?: string;
   };
   autopilotSuitability?: { floor?: 1 | 2 | 3 | 4 | 5; enabled?: boolean };
@@ -515,6 +516,8 @@ export const tokenCostSnapshotKeys = [
   'vendors',
   'asOf',
   'totalUsage',
+  'turnCount',
+  'toolCallCount',
   'stageUsage',
   'compactionCount',
   'cacheHitRatio',
@@ -1225,6 +1228,7 @@ const policyConfigFixture = {
     maxClarificationRounds: 3,
     authoringLabelName: 'status:authoring',
     authoringStaleAge: 'PT4H',
+    heartbeatCoalesceWindow: 'PT2M',
     journalIssue: 'kurone-kito/idd-skill#2674',
   },
   autopilotSuitability: { floor: 3, enabled: true },

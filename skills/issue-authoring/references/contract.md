@@ -1243,6 +1243,20 @@ only approval boundary.
   <!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; journal=<owner>/<repo>#<number>; issue=<owner>/<repo>#<number>|none; actor=<trusted-marker-actor>; state=<pending|member|cleanup|abandoned> -->
   ```
 
+  Append the visible note below immediately after this HTML comment, joined
+  by a single newline (no blank line between them, matching the
+  `authoring-owner` marker's own posted shape) — this exact pairing is the
+  canonical rendered template `matchCanonicalAuthoringMarkerFamily`
+  (`marker-helpers.mts`) matches for the hide-on-supersede step below.
+  Historical comments predating this canonical pin may use a different
+  separator, note text, or no note at all (#2750); those never
+  byte-exact-match the canonical template and are correctly left visible —
+  expected fail-closed behavior, not retroactive cleanup:
+
+  ```text
+  _Issue-authoring publication-intent record. Do not edit or delete._
+  ```
+
   `issue` is the returned canonical issue identity or `none`. Append
   `state=pending; issue=none` before creation, then append the returned
   identity while it remains `pending`, append `member` only after the owner
@@ -1327,6 +1341,15 @@ only approval boundary.
 
   _Issue-authoring ownership marker. Do not edit or delete._
 
+  Join the HTML comment and the visible note above by a single newline (no
+  blank line between them) -- this exact pairing, for any `mode`, is the
+  canonical rendered template `matchCanonicalAuthoringMarkerFamily`
+  (`marker-helpers.mts`) matches for the hide-on-supersede step below.
+  Historical comments predating this canonical pin may use a blank-line
+  separator instead (#2750); those never byte-exact-match the canonical
+  template and are correctly left visible -- expected fail-closed behavior,
+  not retroactive cleanup.
+
   The companion uses the same `body-sha256` and `snapshot-sha256` fields as the
   portable owner protocol. Target markers hash the exact UTF-8 body from the
   fresh read immediately before posting; anchor-only `release-guard` uses
@@ -1398,7 +1421,19 @@ only approval boundary.
   and matching prior owner token. A `release` marker must match the current
   owner and set, but remains provisional while its set release is in
   progress; an individual label removal never closes that target's
-  generation. Only after a fresh re-read verifies every target's release
+  generation. During the owning set's own Stage 2 (observed 2026-09-09,
+  kurone-kito/idd-skill#2791), the heartbeat renewal and the pre-removal
+  ownership recheck must treat that set's provisional `mode=release`
+  markers and the anchor's `mode=release-guard` as the expected state
+  rather than as a competing generation; the acquisition-time rule that
+  a target carrying a release marker cannot be re-acquired until that
+  release's `release-complete` is found applies to a later session's
+  fresh acquisition of the child, not to the releasing set's own
+  rechecks or to a resume of the exact interrupted set, which stays
+  the established recovery path when `release-complete` is missing;
+  the releasing set's own rechecks never change the current winner,
+  unlike a valid resume marker for that exact set, which does. Only
+  after a fresh re-read verifies every target's release
   marker and label removal and the anchor's `release-complete` marker does
   the set-level release close all target generations, after which a later
   `acquire` starts a new generation. The
@@ -1446,20 +1481,94 @@ only approval boundary.
   the designated lead target as the anchor. The anchor winner serializes
   acquisition for the whole set; no session may publish or acquire children
   independently. Before each child acquisition or resume, append and verify
-  a same-owner heartbeat on the anchor, re-fetch the anchor's paginated log,
-  and require its current owner token, set, anchor, and session. Append the
-  child marker only after that validation, then immediately re-fetch both
-  anchor and child and require the same anchor ownership; if either read
-  changes, leave the child hold in place and stop rather than forming a split
-  set. If any target cannot be acquired under that anchor, stop all body and
-  relationship edits, leave labels and append-only markers in place, and
-  require an exact verified resume of that set rather than allowing a split
-  ownership set.
+  a same-owner heartbeat on the anchor (or reuse one per the coalesce rule
+  below), re-fetch the anchor's paginated log, and require its current owner
+  token, set, anchor, and session. Append the child marker only after that
+  validation, then immediately re-fetch both anchor and child and require the
+  same anchor ownership; if either read changes, leave the child hold in
+  place and stop rather than forming a split set. If any target cannot be
+  acquired under that anchor, stop all body and relationship edits, leave
+  labels and append-only markers in place, and require an exact verified
+  resume of that set rather than allowing a split ownership set.
   After each `acquire`/`resume`/`bootstrap` marker POST, wait the configured
   `claim.verifySettleDelay`, replay the full paginated log, and choose the
   winner by deterministic comment order; an immediate local read never
   authorizes edits. Apply the same settle delay and full paginated replay after
   every heartbeat before it authorizes an edit or label removal.
+- **Heartbeat coalescing (`issueAuthoring.heartbeatCoalesceWindow`,
+  default `PT2M`, #2768).** Before appending any heartbeat at the three
+  sites in this section (the anchor heartbeat above, "Renew before every
+  edit" below, and Stage 2's pre-label-removal heartbeat below), first
+  replay the target's paginated owner-marker log. Reuse the latest
+  trusted marker instead of appending a new one when **all four** hold:
+  it is for the same owner, set, and session; its `mode` is `acquire`,
+  `bootstrap`, `resume`, or `heartbeat`; its GitHub `created_at` is
+  younger than the configured window; and its `body-sha256` equals the
+  digest of the body just fetched. Re-fetch and verify the reused marker
+  exactly as a freshly posted one would be — only the redundant POST is
+  skipped, never the replay or ownership verification. Any other case —
+  an older marker, a different owner/set/session, a mode outside that
+  list, a changed body digest, or the marker cannot be found
+  conclusively — keeps today's append-and-verify path. This window never
+  applies to `acquire`, `bootstrap`, `resume`, `release`,
+  `release-guard`, or `release-complete` markers; only a `heartbeat`
+  append may be skipped.
+- **Hide superseded owner/publication-intent markers.** Once a fresh
+  `authoring-owner` marker (any `mode`, including the first,
+  generation-opening `acquire`/`bootstrap`) or `authoring-publication-intent`
+  record (any `state`) has been posted and its own POST and re-fetch/verify
+  above have both succeeded -- never before, and never interleaved with
+  posting -- scan that same target's prior comments (the target issue for
+  `authoring-owner`; the journal issue named in the record's own `journal`
+  field for `authoring-publication-intent`, which naturally also hides other
+  authoring sets' already superseded journal records on that shared journal
+  -- intentional, since the journal read path is the same paginated scan and
+  is unaffected either way) and minimize (classifier `OUTDATED`) every prior
+  comment from a trusted marker actor whose body is a byte-exact match of the
+  canonical rendered template for the same marker family.
+  `matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`, re-exported by
+  `protocol-helpers.mts`) implements that check: it parses the candidate,
+  re-renders the parsed fields with `renderAuthoringOwnerMarker` /
+  `renderAuthoringPublicationIntentMarker`, and requires the result to equal
+  the candidate's body exactly. A candidate that deviates from the template
+  in any way -- reordered or extra fields, altered spacing, trailing
+  content, a different visible note -- is never minimized; leave it visible
+  rather than guessing. Skip the just-posted comment itself and any
+  candidate whose `isMinimized` is already `true` (idempotent; the minimize
+  helper's own probe already enforces this).
+
+  Convert each eligible candidate's REST comment id to its GraphQL node id
+  (the paginated comment list already carries it as `node_id` -- no extra
+  fetch needed) and call the existing minimize helper -- reuse it rather
+  than reimplementing the mutation:
+
+  ```sh
+  node scripts/minimize-superseded-markers.mjs --subject-ids <id1,id2,...> \
+    --classifier OUTDATED --trusted-marker-logins <trusted-login-1,...> \
+    --apply
+  ```
+
+  Or, for npx/package-manager profiles, the equivalent
+  `idd-minimize-superseded-markers` command.
+
+  **Best-effort, never blocking.** A permission error, an unreadable
+  comment list, or an unavailable helper runtime (`instructions-only`
+  profile, or Node.js absent) skips this step silently and continues the
+  normal marker-posting flow unmodified -- this must never retry-loop or
+  fail the authoring flow. Mirrors `docs/idd-comment-minimization.md`'s
+  framing: this is UI cleanup only and never replaces the append-only
+  audit trail.
+
+  **Scope.** In scope: `authoring-owner` and `authoring-publication-intent`
+  only. Out of scope: `authoring-publication` -- a body-line token embedded
+  in the newly created issue's own body at creation time, not a comment, so
+  there is nothing to minimize -- and every marker family already covered
+  by the post-merge F4 cleanup driver (for example `claimed-by`,
+  `review-watermark`, `advisory-wait`; see `docs/idd-comment-minimization.md`).
+  Do not add `authoring-owner`, `authoring-publication-intent`, or
+  `authoring-publication` to `OPERATIONAL_MARKERS`, and do not fold this
+  step into the F4 driver: it is a separate, earlier-lifecycle,
+  hide-at-post-time behavior.
 - **Conflict check before every edit.** Immediately before each body or
   roadmap relationship update, re-fetch both the target and the set anchor
   (the same fresh snapshot serves both roles when the target is the anchor).
@@ -1476,14 +1585,16 @@ only approval boundary.
   `instructions-only` installs.
 - **Renew before every edit.** After that conflict check and immediately
   before the body or relationship mutation, append and verify a trusted
-  `mode=heartbeat` marker for the set anchor first, then re-fetch and verify
-  its current owner, set, anchor, and session. Only after the anchor renewal
+  `mode=heartbeat` marker for the set anchor first (or reuse one per the
+  heartbeat-coalescing rule above), then re-fetch and verify its current
+  owner, set, anchor, and session. Only after the anchor renewal
   succeeds, append and verify the edited target's heartbeat when it is a
-  distinct target, then re-fetch both and require each target's expected owner
-  token independently, plus the same set, anchor, owning session, and expected
-  target snapshot. If either heartbeat cannot be posted or verified, or a
-  newer owner appears, stop without editing. A heartbeat never starts a new
-  generation and never authorizes release.
+  distinct target (reuse applies here too), then re-fetch both and require
+  each target's expected owner token independently, plus the same set,
+  anchor, owning session, and expected target snapshot. If either
+  heartbeat cannot be posted/reused or verified, or a newer owner appears,
+  stop without editing. A heartbeat never starts a new generation and
+  never authorizes release.
 - A target already held by another set is unavailable. A later session may
   resume only when the invocation identifies the exact interrupted set and
   the hold is past `issueAuthoring.authoringStaleAge`; append a
@@ -1519,12 +1630,14 @@ only approval boundary.
   stop. The guard suppresses Discover for the whole set during the provisional
   label-removal window; it does not close the set. Then,
   immediately before each label removal, append and verify the set anchor's
-  `mode=heartbeat` first, re-fetching it and requiring its current owner, set,
-  anchor, and session. Only after that succeeds, append and verify the target
+  `mode=heartbeat` first (or reuse one per the heartbeat-coalescing rule
+  above), re-fetching it and requiring its current owner, set, anchor, and
+  session. Only after that succeeds, append and verify the target
   heartbeat when it is distinct (one marker serves both roles when they
-  coincide), then re-fetch both and require each target's expected owner token
-  independently, plus the shared set/anchor/session, recorded release-marker
-  comment, and expected label/body snapshot. Remove non-anchor labels one
+  coincide; reuse applies here too), then re-fetch both and require each
+  target's expected owner token independently, plus the shared
+  set/anchor/session, recorded release-marker comment, and expected
+  label/body snapshot. Remove non-anchor labels one
   target at a time and re-fetch each result. After the final anchor label
   removal is verified, re-fetch every target and verify its current release
   marker, absent label, and expected body snapshot; any drift leaves the set

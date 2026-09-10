@@ -23,6 +23,13 @@
   ],
   "fileSets": [
     {
+      "id": "claude-skills-idd-spec-audit-markdown-set",
+      "sourceGlob": "skills/idd-spec-audit/**/*.md",
+      "targetGlob": ".claude/skills/idd-spec-audit/**/*.md",
+      "match": "basename",
+      "requireSyncPairs": true
+    },
+    {
       "id": "claude-skills-issue-authoring-markdown-set",
       "sourceGlob": "skills/issue-authoring/**/*.md",
       "targetGlob": ".claude/skills/issue-authoring/**/*.md",
@@ -159,6 +166,18 @@
       ]
     },
     {
+      "id": "idd-spec-audit-companion-files",
+      "file": "idd-template/ONBOARDING.md",
+      "language": "text",
+      "sourceGlobs": [
+        "skills/idd-spec-audit/**"
+      ],
+      "paths": [
+        "skills/idd-spec-audit/SKILL.md",
+        "skills/idd-spec-audit/references/report-template.md"
+      ]
+    },
+    {
       "id": "idd-template-readme-core-files",
       "file": "idd-template/README.md",
       "language": "text",
@@ -179,6 +198,18 @@
         "skills/issue-authoring/references/contract.md",
         "skills/issue-authoring/references/draft-patterns.md",
         "skills/issue-authoring/references/workflow-boundary.md"
+      ]
+    },
+    {
+      "id": "idd-template-readme-idd-spec-audit-files",
+      "file": "idd-template/README.md",
+      "language": "text",
+      "sourceGlobs": [
+        "skills/idd-spec-audit/**"
+      ],
+      "paths": [
+        "skills/idd-spec-audit/SKILL.md",
+        "skills/idd-spec-audit/references/report-template.md"
       ]
     },
     {
@@ -241,6 +272,12 @@
       "stripPrefix": "skills/issue-authoring/"
     },
     {
+      "id": "idd-spec-audit-companion-gh-api-loop",
+      "file": "idd-template/docs/onboarding/template-distribution.md",
+      "generatedBlock": "idd-spec-audit-companion-files",
+      "stripPrefix": "skills/idd-spec-audit/"
+    },
+    {
       "id": "idd-template-core-curl-loop",
       "file": "idd-template/docs/onboarding/template-distribution.md",
       "generatedBlock": "idd-template-core-files"
@@ -250,6 +287,12 @@
       "file": "idd-template/docs/onboarding/template-distribution.md",
       "generatedBlock": "issue-authoring-companion-files",
       "stripPrefix": "skills/issue-authoring/"
+    },
+    {
+      "id": "idd-spec-audit-companion-curl-loop",
+      "file": "idd-template/docs/onboarding/template-distribution.md",
+      "generatedBlock": "idd-spec-audit-companion-files",
+      "stripPrefix": "skills/idd-spec-audit/"
     }
   ],
   "instructionSizeBudgets": [
@@ -270,36 +313,39 @@
   ],
   "bundleBudgets": [
     {
-      "id": "bundle-discovery",
-      "description": "Discovery path: idd-overview-core + idd-overview-appendix + idd-discover + idd-suitability + idd-claim",
+      "id": "bundle-core",
+      "description": "Shared core: idd-overview-core + idd-overview-appendix, always loaded alongside bundle-discovery-phase, bundle-resume-phase, or bundle-work-phase",
+      "files": [
+        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-overview-core.instructions.md"
+      ],
+      "limitBytes": 26000
+    },
+    {
+      "id": "bundle-discovery-phase",
+      "description": "Discovery path phase-specific files: idd-discover + idd-suitability + idd-claim (loaded with bundle-core)",
       "files": [
         ".github/instructions/idd-claim.instructions.md",
         ".github/instructions/idd-discover.instructions.md",
-        ".github/instructions/idd-overview-appendix.instructions.md",
-        ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-suitability.instructions.md"
       ],
-      "limitBytes": 109700
+      "limitBytes": 92300
     },
     {
-      "id": "bundle-resume",
-      "description": "Resume path: idd-overview-core + idd-overview-appendix + idd-resume",
+      "id": "bundle-resume-phase",
+      "description": "Resume path phase-specific files: idd-resume (loaded with bundle-core)",
       "files": [
-        ".github/instructions/idd-overview-appendix.instructions.md",
-        ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-resume.instructions.md"
       ],
-      "limitBytes": 45000
+      "limitBytes": 21800
     },
     {
-      "id": "bundle-work",
-      "description": "Work path: idd-overview-core + idd-overview-appendix + idd-work",
+      "id": "bundle-work-phase",
+      "description": "Work path phase-specific files: idd-work (loaded with bundle-core)",
       "files": [
-        ".github/instructions/idd-overview-appendix.instructions.md",
-        ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 52000
+      "limitBytes": 30100
     },
     {
       "id": "bundle-work-lite",
@@ -407,6 +453,18 @@
     ]
   },
   "syncPairs": [
+    {
+      "id": "claude-skills-idd-spec-audit-report-template",
+      "source": "skills/idd-spec-audit/references/report-template.md",
+      "target": ".claude/skills/idd-spec-audit/references/report-template.md",
+      "mode": "exact"
+    },
+    {
+      "id": "claude-skills-idd-spec-audit-skill",
+      "source": "skills/idd-spec-audit/SKILL.md",
+      "target": ".claude/skills/idd-spec-audit/SKILL.md",
+      "mode": "exact"
+    },
     {
       "id": "claude-skills-issue-authoring-contract",
       "source": "skills/issue-authoring/references/contract.md",

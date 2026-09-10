@@ -196,7 +196,19 @@ approval boundary that hands off to IDD execution.
   and matching prior owner token. A `release` marker must match the current
   owner and set, but remains provisional while its set release is in
   progress; an individual label removal never closes that target's
-  generation. Only after a fresh re-read verifies every target's release
+  generation. During the owning set's own Stage 2 (observed 2026-09-09,
+  kurone-kito/idd-skill#2791), the heartbeat renewal and the pre-removal
+  ownership recheck must treat that set's provisional `mode=release`
+  markers and the anchor's `mode=release-guard` as the expected state
+  rather than as a competing generation; the acquisition-time rule that
+  a target carrying a release marker cannot be re-acquired until that
+  release's `release-complete` is found applies to a later session's
+  fresh acquisition of the child, not to the releasing set's own
+  rechecks or to a resume of the exact interrupted set, which stays
+  the established recovery path when `release-complete` is missing;
+  the releasing set's own rechecks never change the current winner,
+  unlike a valid resume marker for that exact set, which does. Only
+  after a fresh re-read verifies every target's release
   marker and label removal and the anchor's `release-complete` marker does
   the set-level release close all target generations, after which a later
   `acquire` starts a new generation. The

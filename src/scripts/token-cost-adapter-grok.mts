@@ -426,6 +426,9 @@ export const grokAdapter: TokenCostVendorAdapter = {
       endedAt: timestamps.endedAt,
       vendorSessionId,
       toolCallCount: extractToolCallCount(signals),
+      // signals.json carries no turn boundary at all -- an explicit null
+      // (a known signal gap), never a counted 0 (#2769).
+      turnCount: null,
       includesSubagents: subagentUpdateRecords.length > 0,
     };
 

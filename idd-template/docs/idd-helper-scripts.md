@@ -1474,6 +1474,17 @@ Interpretation rules:
     (default `PT4H`), never an embedded timestamp.
   - `--record --covers <names> --outcome <pass|fail>`: renders and (with
     `--apply`) posts the evidence marker to the pull request.
+- **Hide-at-post-time (#2755).** After a successful `--record --apply`
+  POST, this helper also hides (classifier `OUTDATED`) prior
+  `idd-local-validation-evidence:` comments whose embedded HEAD SHA
+  differs from the one just recorded, grouped by embedded HEAD SHA
+  mismatch mirroring the `advisory-wait` AW3-H rule -- see
+  [Comment minimization](idd-comment-minimization.md#timing). Best-effort:
+  any failure there never blocks or retries the marker post that already
+  succeeded. `--trusted-marker-logins a,b` gates that step's trusted-author
+  check (falls back to `IDD_TRUSTED_MARKER_ACTORS` /
+  `.github/idd/config.json`'s `trustedMarkerActors`, the same ladder as
+  every other `minimize-superseded-markers.mjs` caller).
 - **Never a merge gate.** `pre-merge-readiness.mts` reports this
   helper's resolution as its own additive `localValidationEvidence`
   field; `computePreMergeReadinessBlockers` (protocol-helpers.mts) has

@@ -23,6 +23,9 @@ repository is `instructions-only`, use the standard work instructions instead.
 
 - The active claim is ambiguous, disputed, or lost.
 - The current directory is not the sibling worktree for the claimed branch.
+  For a harness whose file-read/edit tools stay bound to the launch
+  workspace (Grok Build observed), check those tools' own absolute-path
+  access, not a shell `cd`/`pwd`.
 - The claimed branch is not the current branch.
 - A required helper or validation command is unavailable, invalid, or disagrees
   with live state.
@@ -41,6 +44,9 @@ request, or other GitHub side effect, confirm all of the following:
    confirm it still wins (no later trusted marker for this claim id
    won the tie-break instead).
 3. The current directory is the sibling worktree for the claimed branch.
+   For a harness whose file-read/edit tools stay bound to the launch
+   workspace (Grok Build observed), use the sibling's absolute path for
+   those tools rather than a shell `cd`/`pwd`.
 4. `git branch --show-current` equals the claimed branch.
 5. Acquire the worktree-local claim lock with the profile-selected
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
@@ -90,38 +96,50 @@ worktree removal) behind the
     (`<base-branch>` is normally `main`).
 16. On Windows, use `git-wt switch --create -b <base-branch> <branch-name> -x true`,
     or the same `wt switch` form if `git-wt` is unavailable.
-17. Do not use `wt new`.
-18. If WorkTrunk uses a pre-start install hook, its first command must acquire
+17. If the `[pre-start]` hook's install command has not already been
+    approved, `wt switch --create` hangs non-interactively even with
+    `-x <noop>` (`Cannot prompt for approval in non-interactive
+    environment`). Before the first `wt switch --create` in such an
+    environment, run `wt config approvals add --yes` once from the
+    primary worktree to pre-approve it (issue `#2797`); this is scoped
+    to the git project, so sibling worktrees inherit it, and is
+    narrower than the global `-y`/`--yes` flag, which would also skip
+    approval for any other command WorkTrunk runs on that call.
+18. Do not use `wt new`.
+19. If WorkTrunk uses a pre-start install hook, its first command must acquire
     the worktree lock before it installs anything.
-19. If the hook cannot acquire the lock, create the worktree without the hook.
-20. If WorkTrunk is unavailable, use
+20. If the hook cannot acquire the lock, create the worktree without the hook.
+21. If WorkTrunk is unavailable, use
     `git worktree add <path> -b <branch-name> origin/main` for a fresh claim.
-21. If WorkTrunk is unavailable and this is a takeover, use
+22. If WorkTrunk is unavailable and this is a takeover, use
     `git worktree add <path> <branch-name>` with the local branch.
-22. If WorkTrunk is unavailable and only the remote branch exists, run
+23. If WorkTrunk is unavailable and only the remote branch exists, run
     `git fetch origin <branch-name>`.
-23. If WorkTrunk is unavailable and only the remote branch exists, use
+24. If WorkTrunk is unavailable and only the remote branch exists, use
     `git worktree add <path> -b <branch-name> origin/<branch-name>`.
-24. If WorkTrunk is unavailable and neither a local nor a remote branch
+25. If WorkTrunk is unavailable and neither a local nor a remote branch
     exists (rare), treat it as a fresh claim while preserving the inherited
     branch name.
-25. For manual `git worktree add` or WorkTrunk without a hook, acquire the
+26. For manual `git worktree add` or WorkTrunk without a hook, acquire the
     worktree lock with the profile-selected `claim-lock` helper immediately
     after creation and before any install or other mutation.
-26. Run `install-deps` on the manual/no-hook path.
-27. Verify the primary worktree's HEAD is still on `main`.
-28. Verify `git worktree list` shows the new path.
-29. Verify the current directory is the new sibling worktree.
-30. If any of steps 27-29 fails, the worktree-creation contract is violated:
+27. Run `install-deps` on the manual/no-hook path.
+28. Verify the primary worktree's HEAD is still on `main`.
+29. Verify `git worktree list` shows the new path.
+30. Verify the current directory is the new sibling worktree. For a
+    harness whose file-read/edit tools stay bound to the launch
+    workspace (Grok Build observed), use the sibling's absolute path
+    for those tools rather than a shell `cd`/`pwd`.
+31. If any of steps 28-30 fails, the worktree-creation contract is violated:
     stop, post a hold note naming the failed check, and do not continue to
     B2 from the primary worktree.
-31. Repair a contract violation by removing the misplaced branch from the
+32. Repair a contract violation by removing the misplaced branch from the
     primary worktree, after confirming no work is lost, then recreate the
     sibling worktree from step 12.
-32. If WorkTrunk reported `Cannot change directory — shell integration
+33. If WorkTrunk reported `Cannot change directory — shell integration
     installed but not active`, treat every later command's working
     directory as unverified until confirmed (e.g. `pwd`), not only at
-    steps 27-29.
+    steps 28-30.
 
 ## B2 — Create and refine plan
 

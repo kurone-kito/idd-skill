@@ -76,6 +76,9 @@ export function createFakeProviderAdapter(fixture) {
     getWorkItemTimeline(number) {
       return fixture.timelines?.[number] ?? [];
     },
+    getWorkItemUserContentEditTimestamps(number) {
+      return fixture.userContentEditTimestamps?.[number] ?? [];
+    },
     getWorkItemState(number) {
       return fixture.issueStates?.[number] ?? null;
     },

@@ -136,20 +136,51 @@ function computeUsagePercentiles(usages) {
   }
   return out;
 }
+/**
+ * Percentiles over an optional-per-sample count field (turnCount/
+ * toolCallCount, #2769): filters out `null`/`undefined` first, so a
+ * sample that offers no value for this metric contributes nothing rather
+ * than a fabricated `0`. Returns `undefined` (never a zero-valued object)
+ * when nothing remains -- "no vendor reported this" and "vendors
+ * reported zero" are different facts the snapshot must not conflate.
+ */
+function computeCountPercentiles(values) {
+  const present = values.filter((value) => typeof value === 'number');
+  return present.length > 0 ? computePercentiles(present) : undefined;
+}
 function computeStageUsage(samples) {
   const byStage = new Map();
+  const turnCountsByStage = new Map();
+  const toolCallCountsByStage = new Map();
   for (const sample of samples) {
     for (const stage of sample.stages) {
       const bucket = byStage.get(stage.id) ?? [];
       bucket.push(stage.usage);
       byStage.set(stage.id, bucket);
+      const turnBucket = turnCountsByStage.get(stage.id) ?? [];
+      turnBucket.push(stage.usage.turnCount);
+      turnCountsByStage.set(stage.id, turnBucket);
+      const toolCallBucket = toolCallCountsByStage.get(stage.id) ?? [];
+      toolCallBucket.push(stage.usage.toolCallCount);
+      toolCallCountsByStage.set(stage.id, toolCallBucket);
     }
   }
   const out = [];
   for (const id of TOKEN_COST_STAGE_IDS) {
     const usages = byStage.get(id);
     if (usages && usages.length > 0) {
-      out.push({ id, usage: computeUsagePercentiles(usages) });
+      const turnCount = computeCountPercentiles(
+        turnCountsByStage.get(id) ?? [],
+      );
+      const toolCallCount = computeCountPercentiles(
+        toolCallCountsByStage.get(id) ?? [],
+      );
+      out.push({
+        id,
+        usage: computeUsagePercentiles(usages),
+        ...(turnCount !== undefined ? { turnCount } : {}),
+        ...(toolCallCount !== undefined ? { toolCallCount } : {}),
+      });
     }
   }
   return out;
@@ -217,6 +248,12 @@ export function aggregateSnapshot(samples, now) {
   const totalUsage = computeUsagePercentiles(
     issueLoopSamples.map((sample) => sample.usage),
   );
+  const totalTurnCount = computeCountPercentiles(
+    issueLoopSamples.map((sample) => sample.turnCount),
+  );
+  const totalToolCallCount = computeCountPercentiles(
+    issueLoopSamples.map((sample) => sample.toolCallCount),
+  );
   const snapshot = {
     schemaVersion: 1,
     generatedAt: now.toISOString(),
@@ -227,6 +264,10 @@ export function aggregateSnapshot(samples, now) {
     vendors,
     asOf: now.toISOString().slice(0, 10),
     totalUsage,
+    ...(totalTurnCount !== undefined ? { turnCount: totalTurnCount } : {}),
+    ...(totalToolCallCount !== undefined
+      ? { toolCallCount: totalToolCallCount }
+      : {}),
     stageUsage: computeStageUsage(issueLoopSamples),
     compactionCount: computePercentiles(
       issueLoopSamples.map((sample) => sample.compactionCount),
@@ -363,6 +404,19 @@ export function renderDocsTableRegion(snapshot) {
       return `| ${field} | ${Math.round(p.p25)} | ${Math.round(p.p50)} | ${Math.round(p.p75)} |`;
     }),
     `| compactionCount | ${Math.round(snapshot.compactionCount.p25)} | ${Math.round(snapshot.compactionCount.p50)} | ${Math.round(snapshot.compactionCount.p75)} |`,
+    // turnCount/toolCallCount (#2769) are omitted entirely, not rendered
+    // as a zero-valued row, whenever no aggregated sample offers a value
+    // for that metric.
+    ...(snapshot.turnCount !== undefined
+      ? [
+          `| turnCount | ${Math.round(snapshot.turnCount.p25)} | ${Math.round(snapshot.turnCount.p50)} | ${Math.round(snapshot.turnCount.p75)} |`,
+        ]
+      : []),
+    ...(snapshot.toolCallCount !== undefined
+      ? [
+          `| toolCallCount | ${Math.round(snapshot.toolCallCount.p25)} | ${Math.round(snapshot.toolCallCount.p50)} | ${Math.round(snapshot.toolCallCount.p75)} |`,
+        ]
+      : []),
     '',
   ];
   if (snapshot.stageUsage.length > 0) {

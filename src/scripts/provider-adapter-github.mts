@@ -776,6 +776,61 @@ export function createGithubProviderAdapter(
       }) as ProviderTimelineEvent[];
     },
 
+    getWorkItemUserContentEditTimestamps(number: number): string[] {
+      const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      userContentEdits(last:100){
+        nodes { editedAt }
+      }
+    }
+  }
+}`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
+        data?: {
+          repository?: {
+            issue?: {
+              userContentEdits?: { nodes?: { editedAt?: unknown }[] } | null;
+            } | null;
+          } | null;
+        };
+        errors?: { message?: unknown }[];
+      };
+      assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
+      // Codex review, PR #2836: reject an absent connection/nodes array
+      // instead of defaulting to `[]` -- a null `issue` (deleted/
+      // inaccessible between the earlier REST fetch and this call), a
+      // null `userContentEdits`, or a payload missing `nodes` entirely
+      // are all genuine read failures, indistinguishable from "zero
+      // edits" if silently coerced to an empty array. Every caller of
+      // this method already treats a throw as "anchor unknown" and
+      // degrades accordingly (never falling back to a bare `created_at`
+      // anchor) -- swallowing this case here would silently reintroduce
+      // that exact failure mode one layer down.
+      const connection = parsed.data?.repository?.issue?.userContentEdits;
+      if (!connection || !Array.isArray(connection.nodes)) {
+        throw new Error(
+          'userContentEdits: issue, connection, or nodes is null/absent',
+        );
+      }
+      return connection.nodes
+        .map((node) => node?.editedAt)
+        .filter((value): value is string => typeof value === 'string');
+    },
+
     getWorkItemState(number: number): string | null {
       try {
         const state = deps.ghText(
@@ -1015,11 +1070,18 @@ export function createGithubProviderAdapter(
       return refs.map((entry) => String(entry.ref ?? ''));
     },
 
-    listWorkItemComments(number: number): ProviderComment[] {
+    listWorkItemComments(
+      number: number,
+      options?: { timeoutMs?: number },
+    ): ProviderComment[] {
       const rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
         paginate: true,
+        ...(options?.timeoutMs !== undefined
+          ? { timeout: options.timeoutMs }
+          : {}),
       }) as {
         id?: unknown;
+        node_id?: unknown;
         body?: unknown;
         created_at?: unknown;
         updated_at?: unknown;
@@ -1027,6 +1089,7 @@ export function createGithubProviderAdapter(
       }[];
       return rows.map((row) => ({
         id: Number(row.id),
+        nodeId: String(row.node_id ?? ''),
         body: String(row.body ?? ''),
         createdAt: String(row.created_at ?? ''),
         updatedAt: String(row.updated_at ?? row.created_at ?? ''),
@@ -1110,18 +1173,24 @@ export function createGithubProviderAdapter(
       }
     },
 
-    getChangeRequestHeadSha(number: number): string {
-      return deps.ghText([
-        'pr',
-        'view',
-        String(number),
-        '-R',
-        `${owner}/${repo}`,
-        '--json',
-        'headRefOid',
-        '--jq',
-        '.headRefOid',
-      ]);
+    getChangeRequestHeadSha(
+      number: number,
+      options?: { timeoutMs?: number },
+    ): string {
+      return deps.ghText(
+        [
+          'pr',
+          'view',
+          String(number),
+          '-R',
+          `${owner}/${repo}`,
+          '--json',
+          'headRefOid',
+          '--jq',
+          '.headRefOid',
+        ],
+        options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {},
+      );
     },
 
     listRequiredChecks(number: number): ProviderRequiredCheck[] {

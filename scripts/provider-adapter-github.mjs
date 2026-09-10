@@ -580,6 +580,51 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         extraArgs: ['-H', 'Accept: application/vnd.github+json'],
       });
     },
+    getWorkItemUserContentEditTimestamps(number) {
+      const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      userContentEdits(last:100){
+        nodes { editedAt }
+      }
+    }
+  }
+}`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
+      // Codex review, PR #2836: reject an absent connection/nodes array
+      // instead of defaulting to `[]` -- a null `issue` (deleted/
+      // inaccessible between the earlier REST fetch and this call), a
+      // null `userContentEdits`, or a payload missing `nodes` entirely
+      // are all genuine read failures, indistinguishable from "zero
+      // edits" if silently coerced to an empty array. Every caller of
+      // this method already treats a throw as "anchor unknown" and
+      // degrades accordingly (never falling back to a bare `created_at`
+      // anchor) -- swallowing this case here would silently reintroduce
+      // that exact failure mode one layer down.
+      const connection = parsed.data?.repository?.issue?.userContentEdits;
+      if (!connection || !Array.isArray(connection.nodes)) {
+        throw new Error(
+          'userContentEdits: issue, connection, or nodes is null/absent',
+        );
+      }
+      return connection.nodes
+        .map((node) => node?.editedAt)
+        .filter((value) => typeof value === 'string');
+    },
     getWorkItemState(number) {
       try {
         const state = deps.ghText(
@@ -769,12 +814,16 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       );
       return refs.map((entry) => String(entry.ref ?? ''));
     },
-    listWorkItemComments(number) {
+    listWorkItemComments(number, options) {
       const rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
         paginate: true,
+        ...(options?.timeoutMs !== undefined
+          ? { timeout: options.timeoutMs }
+          : {}),
       });
       return rows.map((row) => ({
         id: Number(row.id),
+        nodeId: String(row.node_id ?? ''),
         body: String(row.body ?? ''),
         createdAt: String(row.created_at ?? ''),
         updatedAt: String(row.updated_at ?? row.created_at ?? ''),
@@ -846,18 +895,21 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         throw error;
       }
     },
-    getChangeRequestHeadSha(number) {
-      return deps.ghText([
-        'pr',
-        'view',
-        String(number),
-        '-R',
-        `${owner}/${repo}`,
-        '--json',
-        'headRefOid',
-        '--jq',
-        '.headRefOid',
-      ]);
+    getChangeRequestHeadSha(number, options) {
+      return deps.ghText(
+        [
+          'pr',
+          'view',
+          String(number),
+          '-R',
+          `${owner}/${repo}`,
+          '--json',
+          'headRefOid',
+          '--jq',
+          '.headRefOid',
+        ],
+        options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {},
+      );
     },
     listRequiredChecks(number) {
       const args = [

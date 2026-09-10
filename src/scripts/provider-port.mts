@@ -75,13 +75,22 @@ export interface ProviderWorkItem {
  * shared shape rather than adding a competing method -- every #2266
  * consumer that ignores it is unaffected. `review-activity-snapshot.mts`
  * and `pre-merge-readiness.mts`'s disposition-evidence comment
- * normalization need it for their most-recent-activity computation. */
+ * normalization need it for their most-recent-activity computation.
+ * `nodeId` (#2754) is additive too, and OPTIONAL unlike `updatedAt`: the
+ * real adapter always populates it (REST also returns `node_id` on every
+ * comment response), but it stays optional on the type itself so the many
+ * existing test fixtures that construct a `ProviderComment` literal
+ * without it keep compiling unchanged. `post-idd-marker.mts`'s
+ * hide-at-post-time step is the one consumer that needs it, to pass a
+ * candidate comment's GraphQL node id to
+ * `minimize-superseded-markers.mts`'s `minimizeComment` mutation. */
 export interface ProviderComment {
   id: number;
   body: string;
   createdAt: string;
   updatedAt: string;
   authorLogin: string;
+  nodeId?: string;
 }
 
 /** Result of {@link ProviderPort.postWorkItemComment}. */
@@ -427,6 +436,24 @@ export interface ProviderPort {
   getWorkItemTimeline(number: number): ProviderTimelineEvent[];
 
   /**
+   * work-items (issues only -- see the file header's `getWorkItem*` vs
+   * `*ChangeRequest*` split; a pull request's own body-edit history is a
+   * separate, unimplemented surface, even though GraphQL's
+   * `userContentEdits` field is not itself issue-exclusive -- both
+   * `Issue` and `PullRequest` implement the underlying `UpdatableComment`
+   * interface). The GraphQL `Issue.userContentEdits { editedAt }`
+   * read (#2762) -- the only place GitHub records a body edit; a REST
+   * timeline `edited` event with a `changes.body` payload is never emitted
+   * for a real edit. Bounded to the most recent 100 edits (`last: 100`,
+   * not `first`, so a long edit history keeps the newest edits rather than
+   * the oldest -- callers only ever need the latest one). Returns the
+   * `editedAt` values in ascending order as GitHub itself returns them;
+   * throws on any `gh` failure, matching {@link getWorkItemTimeline}'s
+   * throw-on-failure contract rather than swallowing it.
+   */
+  getWorkItemUserContentEditTimestamps(number: number): string[];
+
+  /**
    * work-items. The distinct `gh issue view --json state --jq .state` call
    * shape -- GraphQL-resolved, NOT the REST `issues/{number}` shape
    * {@link getWorkItem} uses. Not interchangeable: empirically, `gh issue
@@ -502,8 +529,18 @@ export interface ProviderPort {
   /** work-items. Issue-branch ref scan (`git/matching-refs/heads/issue/`). */
   listIssueBranchRefs(): string[];
 
-  /** comments-and-labels. Paginated; the most repeated existing operation. */
-  listWorkItemComments(number: number): ProviderComment[];
+  /**
+   * comments-and-labels. Paginated; the most repeated existing operation.
+   *
+   * `options.timeoutMs`, when supplied, overrides the default paginated
+   * `gh --paginate` timeout (#2754, chatgpt-codex-connector review on PR
+   * #2788) -- same rationale as {@link ProviderPort.getChangeRequestHeadSha}'s
+   * own `options.timeoutMs`. Omit it to keep that default unchanged.
+   */
+  listWorkItemComments(
+    number: number,
+    options?: { timeoutMs?: number },
+  ): ProviderComment[];
 
   /**
    * comments-and-labels, write. Adapter posts via stdin-JSON (`--input -`),
@@ -534,8 +571,18 @@ export interface ProviderPort {
    * (this one throws on ANY failure, no 404-to-null mapping) -- pins
    * `headShaFromPr`'s existing no-try/catch-here contract. SHA-format
    * validation stays in the domain.
+   *
+   * `options.timeoutMs`, when supplied, overrides the default single-call
+   * `gh` timeout (#2754, chatgpt-codex-connector review on PR #2788) --
+   * lets a caller budgeting a larger best-effort step (e.g. a hide-at-
+   * post-time pass with its own overall deadline) bound this one call to
+   * whatever time remains, rather than always consuming the port's own
+   * default. Omit it to keep that default unchanged.
    */
-  getChangeRequestHeadSha(number: number): string;
+  getChangeRequestHeadSha(
+    number: number,
+    options?: { timeoutMs?: number },
+  ): string;
 
   /**
    * change-requests (minimal surface for resume-route-selection.mts). Two

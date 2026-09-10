@@ -24,10 +24,18 @@ function extractShellList(id: string): string {
   return TEMPLATE_DISTRIBUTION.slice(fenceStart, fenceEnd);
 }
 
-function assertNativeDestination(shell: string, label: string): void {
+function assertNativeDestination(
+  shell: string,
+  label: string,
+  skillId: string,
+): void {
+  const escapedId = skillId.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   assert.match(
     shell,
-    /SKILL_DEST="\$\{DEST\}\/\.agents\/skills\/issue-authoring"/u,
+    new RegExp(
+      `SKILL_DEST="\\$\\{DEST\\}\\/\\.agents\\/skills\\/${escapedId}"`,
+      'u',
+    ),
     `${label} must show the Codex native destination example`,
   );
   assert.match(
@@ -37,8 +45,8 @@ function assertNativeDestination(shell: string, label: string): void {
   );
   assert.doesNotMatch(
     shell,
-    /\$\{DEST\}\/skills\/issue-authoring/u,
-    `${label} must not fall back to target skills/issue-authoring`,
+    new RegExp(`\\$\\{DEST\\}\\/skills\\/${escapedId}`, 'u'),
+    `${label} must not fall back to target skills/${skillId}`,
   );
 }
 
@@ -50,7 +58,7 @@ test('remote companion fetches keep canonical source paths separate from the nat
     ['gh api', ghApi],
     ['curl', curl],
   ] as const) {
-    assertNativeDestination(shell, label);
+    assertNativeDestination(shell, label, 'issue-authoring');
   }
   assert.match(
     ghApi,
@@ -60,6 +68,28 @@ test('remote companion fetches keep canonical source paths separate from the nat
   assert.match(
     curl,
     /BASE="https:\/\/raw\.githubusercontent\.com\/kurone-kito\/idd-skill\/main\/skills\/issue-authoring"/u,
+    'curl must fetch from the canonical source bundle',
+  );
+});
+
+test('remote idd-spec-audit companion fetches keep canonical source paths separate from the native destination', () => {
+  const ghApi = extractShellList('idd-spec-audit-companion-gh-api-loop');
+  const curl = extractShellList('idd-spec-audit-companion-curl-loop');
+
+  for (const [label, shell] of [
+    ['gh api', ghApi],
+    ['curl', curl],
+  ] as const) {
+    assertNativeDestination(shell, label, 'idd-spec-audit');
+  }
+  assert.match(
+    ghApi,
+    /contents\/skills\/idd-spec-audit\/\$\{FILE\}/u,
+    'gh api must request the canonical source bundle',
+  );
+  assert.match(
+    curl,
+    /BASE="https:\/\/raw\.githubusercontent\.com\/kurone-kito\/idd-skill\/main\/skills\/idd-spec-audit"/u,
     'curl must fetch from the canonical source bundle',
   );
 });
@@ -132,6 +162,36 @@ test('the generated companion inventory remains canonical-source-only', () => {
     'skills/issue-authoring/references/contract.md',
     'skills/issue-authoring/references/draft-patterns.md',
     'skills/issue-authoring/references/workflow-boundary.md',
+  ]) {
+    assert.ok(
+      inventory.includes(path),
+      `missing canonical source path: ${path}`,
+    );
+  }
+  assert.doesNotMatch(inventory, /\.(?:agents|claude|opencode)\/skills/u);
+});
+
+test('the generated idd-spec-audit companion inventory remains canonical-source-only', () => {
+  const startMarker =
+    '<!-- audit:generated id=idd-spec-audit-companion-files -->';
+  const endMarker = '<!-- /audit:generated -->';
+  const start = ONBOARDING.indexOf(startMarker);
+  assert.notEqual(
+    start,
+    -1,
+    'missing idd-spec-audit companion generated block',
+  );
+  const end = ONBOARDING.indexOf(endMarker, start);
+  assert.notEqual(
+    end,
+    -1,
+    'unterminated idd-spec-audit companion generated block',
+  );
+  const inventory = ONBOARDING.slice(start, end);
+
+  for (const path of [
+    'skills/idd-spec-audit/SKILL.md',
+    'skills/idd-spec-audit/references/report-template.md',
   ]) {
     assert.ok(
       inventory.includes(path),

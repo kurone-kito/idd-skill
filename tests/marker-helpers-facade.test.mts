@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as direct from '../src/scripts/marker-helpers.mts';
 import * as facade from '../src/scripts/protocol-helpers.mts';
+
+/**
+ * The canonical source (`idd-template/`) for
+ * `docs/idd-comment-minimization.md` -- an exact-mode sync pair
+ * (`audit/sync-manifest.json`'s `idd-comment-minimization-doc` entry),
+ * so reading the `idd-template/` copy here is equivalent to reading the
+ * repo-root mirror but avoids depending on `sync-docs.mjs` having
+ * already run.
+ */
+const COMMENT_MINIMIZATION_DOC = readFileSync(
+  new URL('../idd-template/docs/idd-comment-minimization.md', import.meta.url),
+  'utf8',
+);
 
 // Wave 1 of the protocol-helpers split (#1209) moved every operational-marker
 // render/parse primitive into marker-helpers.mts and made protocol-helpers.mts
@@ -49,6 +63,9 @@ const SAMPLE_NAMES = [
   'hasReviewReplyStamp',
   'appendReviewReplyStamp',
   'isIddOriginatedReply',
+  'renderAuthoringOwnerMarker',
+  'renderAuthoringPublicationIntentMarker',
+  'matchCanonicalAuthoringMarkerFamily',
 ] as const;
 
 test('protocol-helpers re-exports every sampled marker-helpers name by identity', () => {
@@ -109,6 +126,138 @@ test('MARKER_HIDE_POLICY classifies every OPERATIONAL_MARKERS entry exactly once
       `${marker.label}: hide-policy entry must carry a non-empty reason`,
     );
   }
+});
+
+/**
+ * Extracts the prefix labels of one Markdown bullet list in
+ * `idd-comment-minimization.md`, starting from `anchorPhrase` (the
+ * prose line introducing the list). Scans line-by-line rather than
+ * filtering a pre-known label set, so a stale/renamed/unknown prefix
+ * left in the doc surfaces as an unexpected entry instead of being
+ * invisible (chatgpt-codex-connector review on PR for #2778: filtering
+ * `allLabels` by containment makes a doc entry outside the current
+ * `OPERATIONAL_MARKERS` set undetectable, and collapses duplicate
+ * bullets via `Set`). A line only contributes a label when the
+ * backtick is the line's first non-whitespace token, after an optional
+ * `- ` bullet marker -- this matches a bullet's own subject
+ * (`` - `<!-- claimed-by:` ``) and the second label of a
+ * two-label-per-bullet entry
+ * (`` `<!-- idd-provider-outage-advanced:` `` on its own continuation
+ * line), but never a backtick span embedded mid-sentence in a
+ * continuation line's reason text (e.g. `` `check:` `` inside the
+ * `<!-- idd-external-check-waiver:` bullet's own explanation) --
+ * `audit-code-span-wrap.mjs` guarantees, repo-wide via
+ * `pre-push-validate`, that a code span is never split mid-token
+ * across a line wrap, so a label's backtick-quoted form is always
+ * contiguous on the line where it starts. The scan starts capturing at
+ * the first bullet-start line found after `anchorPhrase` (skipping any
+ * intervening prose or blank lines) and stops at the first blank line
+ * once inside the list, so leading and trailing prose around the list
+ * never contributes entries.
+ */
+function extractBulletListLabels(
+  markdown: string,
+  anchorPhrase: string,
+): string[] {
+  const anchorIndex = markdown.indexOf(anchorPhrase);
+  assert.notStrictEqual(
+    anchorIndex,
+    -1,
+    `idd-comment-minimization.md must contain "${anchorPhrase}"`,
+  );
+  const labels: string[] = [];
+  let inList = false;
+  for (const line of markdown.slice(anchorIndex).split('\n')) {
+    const bulletMatch = /^-\s+`([^`]+)`/.exec(line);
+    if (bulletMatch) {
+      inList = true;
+      labels.push(bulletMatch[1]);
+      continue;
+    }
+    if (!inList) {
+      continue;
+    }
+    if (line.trim() === '') {
+      break;
+    }
+    const continuationMatch = /^\s+`([^`]+)`/.exec(line);
+    if (continuationMatch) {
+      labels.push(continuationMatch[1]);
+    }
+  }
+  return labels;
+}
+
+// #2778: guards the reconciliation between
+// `docs/idd-comment-minimization.md`'s (canonical `idd-template/` source's)
+// "## Candidate Rules" section and `MARKER_HIDE_POLICY`, mirroring the
+// #1705/#2752 `OPERATIONAL_MARKERS` vs `MARKER_HIDE_POLICY` drift guard
+// above. Before #2778, that doc's `OUTDATED` candidate-prefix list had
+// silently fallen behind `MARKER_HIDE_POLICY` (it listed only 6 of 11
+// non-`excluded` prefixes) -- an adopter following only the documented
+// manual/GraphQL fallback (no vendored helper scripts) would miss cleanup
+// for every marker family missing from that list. This reads the real doc
+// file rather than a hand-typed copy of its expected content, so a future
+// doc edit or a future new marker family fails this test instead of
+// drifting quietly again.
+test('idd-comment-minimization.md Candidate Rules list matches MARKER_HIDE_POLICY', () => {
+  const sectionStart = COMMENT_MINIMIZATION_DOC.indexOf('## Candidate Rules');
+  assert.notStrictEqual(
+    sectionStart,
+    -1,
+    'idd-comment-minimization.md must have a "## Candidate Rules" section',
+  );
+  const nextHeadingIndex = COMMENT_MINIMIZATION_DOC.indexOf(
+    '\n## ',
+    sectionStart + 1,
+  );
+  const section = COMMENT_MINIMIZATION_DOC.slice(
+    sectionStart,
+    nextHeadingIndex === -1 ? undefined : nextHeadingIndex,
+  );
+
+  const parsedCandidateLabels = extractBulletListLabels(
+    section,
+    'Candidate prefixes are:',
+  );
+  const parsedExcludedLabels = extractBulletListLabels(
+    section,
+    'Excluded from this list',
+  );
+
+  assert.strictEqual(
+    new Set(parsedCandidateLabels).size,
+    parsedCandidateLabels.length,
+    `idd-comment-minimization.md's "Candidate prefixes are:" list must not contain duplicate prefixes, found: ${parsedCandidateLabels.join(', ')}`,
+  );
+  assert.strictEqual(
+    new Set(parsedExcludedLabels).size,
+    parsedExcludedLabels.length,
+    `idd-comment-minimization.md's "Excluded from this list" note must not contain duplicate prefixes, found: ${parsedExcludedLabels.join(', ')}`,
+  );
+
+  const allLabels = direct.OPERATIONAL_MARKERS.map((marker) => marker.label);
+  const expectedCandidateLabels = new Set(
+    allLabels.filter(
+      (label) => direct.MARKER_HIDE_POLICY.get(label)?.policy !== 'excluded',
+    ),
+  );
+  const expectedExcludedLabels = new Set(
+    allLabels.filter(
+      (label) => direct.MARKER_HIDE_POLICY.get(label)?.policy === 'excluded',
+    ),
+  );
+
+  assert.deepStrictEqual(
+    new Set(parsedCandidateLabels),
+    expectedCandidateLabels,
+    'idd-comment-minimization.md\'s "Candidate prefixes are:" OUTDATED list must list exactly every non-excluded (wired or f4-only) OPERATIONAL_MARKERS prefix -- no missing, no stale, no extra, no unknown entries',
+  );
+  assert.deepStrictEqual(
+    new Set(parsedExcludedLabels),
+    expectedExcludedLabels,
+    'idd-comment-minimization.md\'s "Excluded from this list" note must document exactly every excluded OPERATIONAL_MARKERS prefix -- no missing, no stale, no extra, no unknown entries',
+  );
 });
 
 // #2759 (chatgpt-codex-connector review): a duplicate `label` in the source
@@ -247,5 +396,228 @@ test('MARKER_HIDE_POLICY does not leak the underlying map through inherited Obje
     typeof direct.MARKER_HIDE_POLICY.toString(),
     'string',
     'toString() must stay a harmless primitive, not expose the underlying map',
+  );
+});
+
+// #2750: renderAuthoringOwnerMarker / renderAuthoringPublicationIntentMarker
+// exist so a candidate comment's canonical rendering can be compared
+// byte-for-byte against its live body (matchCanonicalAuthoringMarkerFamily,
+// tested further below) -- these renderers themselves round-trip through
+// the existing parseAuthoringOwnerComment / parseAuthoringPublicationIntentComment
+// functions, and reject a payload missing/invalid fields the same way every
+// other renderer in this module does.
+
+const AUTHORING_OWNER_PAYLOAD = {
+  markerPrefix: 'idd-skill',
+  target: 'kurone-kito/idd-skill#2750',
+  anchor: 'kurone-kito/idd-skill#2750',
+  mode: 'acquire',
+  owner: 'owner-9ffa338d8a416b86',
+  set: 'set-1e23beadb3e60e42',
+  session: 'claude-idd3-5201e45ac16c',
+  bodySha256:
+    'f370d4b220dd04d2d896a6c1d7841ecb261a7825bed8e68f07452073972fe389',
+  snapshotSha256: 'none',
+  supersedes: 'none',
+} as const;
+
+const AUTHORING_PUBLICATION_INTENT_PAYLOAD = {
+  markerPrefix: 'idd-skill',
+  target: 'target-720705e9015f0dda',
+  anchor: 'target-720705e9015f0dda',
+  set: 'set-74bec4d0d29e21ae',
+  session: 'claude-idd1-9f3a2b7c1e4d',
+  token: 'pub-7e1361eb1b96bc36',
+  journal: 'kurone-kito/idd-skill#2674',
+  issue: 'none',
+  actor: 'kurone-kito',
+  state: 'pending',
+} as const;
+
+test('renderAuthoringOwnerMarker matches the live-posted canonical shape and round-trips through the parser', () => {
+  const body = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  assert.strictEqual(
+    body,
+    '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#2750; anchor=kurone-kito/idd-skill#2750; mode=acquire; owner=owner-9ffa338d8a416b86; set=set-1e23beadb3e60e42; session=claude-idd3-5201e45ac16c; body-sha256=f370d4b220dd04d2d896a6c1d7841ecb261a7825bed8e68f07452073972fe389; snapshot-sha256=none; supersedes=none -->\n' +
+      '_Issue-authoring ownership marker. Do not edit or delete._',
+  );
+  const parsed = direct.parseAuthoringOwnerComment(body, 'idd-skill');
+  assert.deepStrictEqual(parsed, {
+    target: AUTHORING_OWNER_PAYLOAD.target,
+    anchor: AUTHORING_OWNER_PAYLOAD.anchor,
+    mode: AUTHORING_OWNER_PAYLOAD.mode,
+    owner: AUTHORING_OWNER_PAYLOAD.owner,
+    set: AUTHORING_OWNER_PAYLOAD.set,
+    session: AUTHORING_OWNER_PAYLOAD.session,
+    bodySha256: AUTHORING_OWNER_PAYLOAD.bodySha256,
+    snapshotSha256: AUTHORING_OWNER_PAYLOAD.snapshotSha256,
+    supersedes: AUTHORING_OWNER_PAYLOAD.supersedes,
+  });
+});
+
+test('renderAuthoringOwnerMarker throws on a missing/invalid field', () => {
+  assert.throws(
+    () =>
+      direct.renderAuthoringOwnerMarker({
+        ...AUTHORING_OWNER_PAYLOAD,
+        mode: 'not-a-real-mode',
+      }),
+    /invalid authoring-owner marker payload.*invalid "mode"/s,
+  );
+  assert.throws(
+    () =>
+      direct.renderAuthoringOwnerMarker({
+        ...AUTHORING_OWNER_PAYLOAD,
+        target: undefined,
+      }),
+    /invalid authoring-owner marker payload.*missing "target"/s,
+  );
+});
+
+test('renderAuthoringPublicationIntentMarker matches the live-posted canonical shape and round-trips through the parser', () => {
+  const body = direct.renderAuthoringPublicationIntentMarker(
+    AUTHORING_PUBLICATION_INTENT_PAYLOAD,
+  );
+  assert.strictEqual(
+    body,
+    '<!-- idd-skill-authoring-publication-intent: target=target-720705e9015f0dda; anchor=target-720705e9015f0dda; set=set-74bec4d0d29e21ae; session=claude-idd1-9f3a2b7c1e4d; token=pub-7e1361eb1b96bc36; journal=kurone-kito/idd-skill#2674; issue=none; actor=kurone-kito; state=pending -->\n' +
+      '_Issue-authoring publication-intent record. Do not edit or delete._',
+  );
+  const parsed = direct.parseAuthoringPublicationIntentComment(
+    body,
+    'idd-skill',
+  );
+  assert.deepStrictEqual(parsed, {
+    target: AUTHORING_PUBLICATION_INTENT_PAYLOAD.target,
+    anchor: AUTHORING_PUBLICATION_INTENT_PAYLOAD.anchor,
+    set: AUTHORING_PUBLICATION_INTENT_PAYLOAD.set,
+    session: AUTHORING_PUBLICATION_INTENT_PAYLOAD.session,
+    token: AUTHORING_PUBLICATION_INTENT_PAYLOAD.token,
+    journal: AUTHORING_PUBLICATION_INTENT_PAYLOAD.journal,
+    issue: AUTHORING_PUBLICATION_INTENT_PAYLOAD.issue,
+    actor: AUTHORING_PUBLICATION_INTENT_PAYLOAD.actor,
+    state: AUTHORING_PUBLICATION_INTENT_PAYLOAD.state,
+  });
+});
+
+test('renderAuthoringPublicationIntentMarker throws on a missing/invalid field', () => {
+  assert.throws(
+    () =>
+      direct.renderAuthoringPublicationIntentMarker({
+        ...AUTHORING_PUBLICATION_INTENT_PAYLOAD,
+        state: 'not-a-real-state',
+      }),
+    /invalid authoring-publication-intent marker payload.*invalid "state"/s,
+  );
+});
+
+// #2750: matchCanonicalAuthoringMarkerFamily is the exact-template-match
+// primitive the issue-authoring contract's hide-on-supersede step relies
+// on -- a byte-exact canonical marker body is a positive match; the same
+// body with one appended or altered character is a negative match (never
+// minimized).
+test('matchCanonicalAuthoringMarkerFamily: byte-exact canonical bodies match their own family', () => {
+  const ownerBody = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(ownerBody, 'idd-skill'),
+    'authoring-owner',
+  );
+
+  const intentBody = direct.renderAuthoringPublicationIntentMarker(
+    AUTHORING_PUBLICATION_INTENT_PAYLOAD,
+  );
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(intentBody, 'idd-skill'),
+    'authoring-publication-intent',
+  );
+});
+
+test('matchCanonicalAuthoringMarkerFamily: an appended character is a negative match', () => {
+  const ownerBody = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(`${ownerBody}x`, 'idd-skill'),
+    null,
+  );
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(`${ownerBody}\n`, 'idd-skill'),
+    null,
+    'a trailing newline is still an appended character, not a match',
+  );
+});
+
+test('matchCanonicalAuthoringMarkerFamily: an altered field value is a negative match', () => {
+  const ownerBody = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  const altered = ownerBody.replace('mode=acquire', 'mode=acquire ');
+  assert.notStrictEqual(altered, ownerBody);
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(altered, 'idd-skill'),
+    null,
+  );
+});
+
+// #2750 (independent critique pass, PR #2821): the separator/note-text
+// pairing genuinely drifted across past posting sessions before this issue
+// pinned a canonical shape -- a live blank-line-separated authoring-owner
+// comment (kurone-kito/idd-skill#2706, comment id 5580125588, fetched
+// verbatim) predates the pin and never byte-exact-matches the newly-pinned
+// single-newline template. This is the fail-closed behavior the contract
+// documents (skills/issue-authoring/references/contract.md), not a defect:
+// a historical comment in the old shape is correctly left visible rather
+// than guessed at.
+test('matchCanonicalAuthoringMarkerFamily: a real pre-pin blank-line-separated comment is a negative match (fail-closed, not retroactive cleanup)', () => {
+  const legacyBlankLineBody =
+    '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#2706; anchor=kurone-kito/idd-skill#2706; mode=acquire; owner=owner-7f0bdd05cfcb6f75; set=set-5f974e50cf506b08; session=claude-idd1-35ad1f618a3a; body-sha256=2633e24463dbbabf260232d64f267cfd35b452d59c57df0955f24d5c6d60af69; snapshot-sha256=none; supersedes=none -->\n' +
+    '\n' +
+    '_Issue-authoring ownership marker. Do not edit or delete._';
+  assert.ok(
+    direct.parseAuthoringOwnerComment(legacyBlankLineBody, 'idd-skill'),
+    'the legacy body must still parse (sanity check for this test itself)',
+  );
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(
+      legacyBlankLineBody,
+      'idd-skill',
+    ),
+    null,
+  );
+});
+
+test('matchCanonicalAuthoringMarkerFamily: a different marker prefix is a negative match', () => {
+  const ownerBody = direct.renderAuthoringOwnerMarker(AUTHORING_OWNER_PAYLOAD);
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(ownerBody, 'other-prefix'),
+    null,
+  );
+});
+
+test('matchCanonicalAuthoringMarkerFamily: non-marker prose is a negative match', () => {
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(
+      'Just a regular comment.',
+      'idd-skill',
+    ),
+    null,
+  );
+});
+
+// A field value carrying an embedded space parses successfully (the
+// semicolon/equals splitter only trims leading/trailing whitespace) but
+// fails renderAuthoringOwnerMarker's own stricter no-internal-whitespace
+// validation -- matchCanonicalAuthoringMarkerFamily must treat that thrown
+// render error as a non-match (fail closed) rather than propagating it.
+test('matchCanonicalAuthoringMarkerFamily: a parsed field that cannot be re-rendered is a negative match, not a thrown error', () => {
+  const body =
+    '<!-- idd-skill-authoring-owner: target=kurone-kito/idd-skill#2750 extra; anchor=kurone-kito/idd-skill#2750; mode=acquire; owner=owner-9ffa338d8a416b86; set=set-1e23beadb3e60e42; session=claude-idd3-5201e45ac16c; body-sha256=f370d4b220dd04d2d896a6c1d7841ecb261a7825bed8e68f07452073972fe389; snapshot-sha256=none; supersedes=none -->\n' +
+    '_Issue-authoring ownership marker. Do not edit or delete._';
+  assert.ok(
+    direct.parseAuthoringOwnerComment(body, 'idd-skill'),
+    'the malformed target value must still parse (sanity check for this test itself)',
+  );
+  assert.doesNotThrow(() =>
+    direct.matchCanonicalAuthoringMarkerFamily(body, 'idd-skill'),
+  );
+  assert.strictEqual(
+    direct.matchCanonicalAuthoringMarkerFamily(body, 'idd-skill'),
+    null,
   );
 });

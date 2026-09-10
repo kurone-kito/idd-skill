@@ -605,6 +605,159 @@ test('required-headings does not tolerate 4+ leading spaces on an ATX heading', 
   assert.match(finding?.detail ?? '', /Proposed change/);
 });
 
+// --- roadmap-tracks-parse (#2765) ---
+
+test('roadmap-tracks-parse passes when every Tracks checkbox line resolves to a reference', () => {
+  // roadmapBody()'s default Tracks section is `- [ ] #100`, which already
+  // resolves via the leading-form parser.
+  const report = auditAuthoredIssue(roadmapBody(), { shape: 'roadmap' });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.severity, undefined);
+});
+
+test('roadmap-tracks-parse passes on the trailing (#N) shape (#2765)', () => {
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: some description (#100)',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+});
+
+test('roadmap-tracks-parse passes on an empty Tracks section (no checkbox lines yet, #2765)', () => {
+  // The issue-authoring contract explicitly allows a roadmap shell to
+  // publish with an empty `## Tracks` section until child issue numbers
+  // exist (skills/issue-authoring/references/workflow-boundary.md); this
+  // must never fail as if it were an unresolved checkbox line.
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '_No tracks published yet._',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, undefined);
+});
+
+test('roadmap-tracks-parse still slices the Tracks section when it is the last content in the body, no trailing heading (#2765)', () => {
+  const body = [
+    '## Goal',
+    '',
+    'Ship the initiative.',
+    '',
+    '## Background',
+    '',
+    'Why this exists.',
+    '',
+    '## Tracks',
+    '',
+    '- [ ] Track 1: no reference here at all',
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /no reference here at all/);
+});
+
+test('roadmap-tracks-parse fails when every Tracks checkbox line carries no issue reference at all (#2765)', () => {
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: no reference here at all',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /no reference here at all/);
+});
+
+test('roadmap-tracks-parse warns (does not fail) when only some Tracks checkbox lines resolve (#2765)', () => {
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    ['- [ ] #100', '- [ ] Track 2: no reference here at all'].join('\n'),
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /no reference here at all/);
+  // A warning-severity finding must never flip the overall report to failed.
+  assert.equal(report.passed, true);
+});
+
+test('roadmap-tracks-parse treats a qualified owner/repo#N reference as unverifiable, not malformed, when no --current-repo context is passed (#2765 review, Codex)', () => {
+  // The documented local CLI invocation never passes --current-repo, and
+  // $GITHUB_REPOSITORY is only set by GitHub Actions, so `currentRepo` is
+  // commonly undefined outside CI. A well-formed roadmap using the
+  // qualified trailing form must not hard-fail just because this run
+  // lacks repo context to verify the reference.
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: some description (kurone-kito/idd-skill#100)',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, undefined);
+});
+
+test('roadmap-tracks-parse still resolves a qualified owner/repo#N reference normally when --current-repo IS passed (#2765)', () => {
+  const body = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: some description (kurone-kito/idd-skill#100)',
+  );
+  const report = auditAuthoredIssue(body, {
+    shape: 'roadmap',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+  // A cross-repo qualified reference is still correctly rejected (not
+  // "unverifiable") once repo context IS available.
+  const crossRepoBody = roadmapBody().replace(
+    '- [ ] #100',
+    '- [ ] Track 1: some description (other/repo#100)',
+  );
+  const crossRepoReport = auditAuthoredIssue(crossRepoBody, {
+    shape: 'roadmap',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const crossRepoFinding = crossRepoReport.findings.find(
+    (entry) => entry.id === 'roadmap-tracks-parse',
+  );
+  assert.equal(crossRepoFinding?.result, 'fail');
+});
+
+test('roadmap-tracks-parse is not applicable outside the roadmap shape', () => {
+  const report = auditAuthoredIssue(orphanBody(), { shape: 'orphan' });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+});
+
+test('roadmap-tracks-parse is not applicable during a bucket audit', () => {
+  const body = [
+    '<!-- idd-skill-authoring-bucket: needs-decision -->',
+    '## Background',
+    '',
+    'Some background text needing a maintainer decision.',
+  ].join('\n');
+  const report = auditAuthoredIssue(body, {
+    shape: 'roadmap',
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  assert.equal(findingResult(report, 'roadmap-tracks-parse'), 'pass');
+});
+
 // --- dependency-marker-rule ---
 
 test('dependency-marker-rule fails when a child issue carries a roadmap-id marker', () => {

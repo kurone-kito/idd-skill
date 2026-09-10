@@ -10,6 +10,11 @@ import {
   buildMarkerBody,
   describeUnaddressedActivity,
   FROM_PR_MARKER_TYPES,
+  findSupersededCopilotUnavailableSubjects,
+  findSupersededReviewAckSubjects,
+  HIDE_AT_POST_TIME_MARKER_TYPES,
+  hideSupersededPostTimeMarkers,
+  isHideAtPostTimeMarkerType,
   MARKER_TYPES,
   parseArgs,
   watermarkFieldsFromSnapshot,
@@ -21,6 +26,7 @@ import {
   parseClaimComment,
   parseCopilotUnavailableComment,
   parseReleaseComment,
+  parseReviewAckComment,
   parseReviewWatermarkComment,
 } from '../src/scripts/protocol-helpers.mts';
 import {
@@ -1912,4 +1918,1147 @@ test('--help marks every REQUIRED_FIELDS_BY_TYPE field as required and every del
     output,
     /watermark\s+--agent-id --claim-id --head-sha \[--max-activity-at] --total-item-count \[--ci-completed-at]/,
   );
+});
+
+test('parseReviewAckComment round-trips renderReviewAckMarker output', () => {
+  const body = buildMarkerBody('review-ack', {
+    'agent-id': 'a',
+    'head-sha': SHA,
+    timestamp: TS,
+  });
+  assert.deepEqual(parseReviewAckComment(body, TS), {
+    agentId: 'a',
+    headSha: SHA,
+    timestamp: TS,
+    createdAt: TS,
+  });
+});
+
+test('parseReviewAckComment returns null for a non-review-ack / malformed body', () => {
+  assert.equal(parseReviewAckComment('not a marker', TS), null);
+  assert.equal(
+    parseReviewAckComment(
+      `copilot-unavailable: a ${SHA} ${TS} claim:c attempt:1`,
+      TS,
+    ),
+    null,
+  );
+});
+
+// --- #2754: hide-at-post-time for review-ack / copilot-unavailable --------
+
+test('HIDE_AT_POST_TIME_MARKER_TYPES lists exactly review-ack and copilot-unavailable', () => {
+  assert.deepEqual(HIDE_AT_POST_TIME_MARKER_TYPES, [
+    'review-ack',
+    'copilot-unavailable',
+  ]);
+});
+
+test('isHideAtPostTimeMarkerType recognizes only the two hide-at-post-time types', () => {
+  assert.equal(isHideAtPostTimeMarkerType('review-ack'), true);
+  assert.equal(isHideAtPostTimeMarkerType('copilot-unavailable'), true);
+  assert.equal(isHideAtPostTimeMarkerType('claim'), false);
+  assert.equal(isHideAtPostTimeMarkerType('advisory-wait'), false);
+});
+
+function candidateComment(
+  overrides: Partial<{
+    id: number;
+    nodeId: string;
+    body: string;
+    authorLogin: string;
+  }> = {},
+) {
+  return {
+    id: 1,
+    nodeId: 'IC_default',
+    body: '',
+    authorLogin: 'kurone-kito',
+    ...overrides,
+  };
+}
+
+const OTHER_SHA = 'fedcba9876543210fedcba9876543210fedcba90';
+
+test('findSupersededReviewAckSubjects hides a prior review-ack whose HEAD SHA differs from the new one', () => {
+  const stale = candidateComment({
+    id: 1,
+    nodeId: 'IC_stale',
+    body: `review-ack: a ${OTHER_SHA} ${TS}`,
+  });
+  assert.deepEqual(findSupersededReviewAckSubjects([stale], SHA), ['IC_stale']);
+});
+
+test('findSupersededReviewAckSubjects never hides a review-ack matching the new HEAD SHA (current-HEAD protection)', () => {
+  const current = candidateComment({
+    id: 2,
+    nodeId: 'IC_current',
+    body: `review-ack: a ${SHA} ${TS}`,
+  });
+  assert.deepEqual(findSupersededReviewAckSubjects([current], SHA), []);
+});
+
+test('findSupersededReviewAckSubjects ignores a non-review-ack comment and one with no node id', () => {
+  const unrelated = candidateComment({
+    id: 3,
+    nodeId: 'IC_unrelated',
+    body: 'just a regular comment',
+  });
+  const noNodeId = candidateComment({
+    id: 4,
+    nodeId: '',
+    body: `review-ack: a ${OTHER_SHA} ${TS}`,
+  });
+  assert.deepEqual(
+    findSupersededReviewAckSubjects([unrelated, noNodeId], SHA),
+    [],
+  );
+});
+
+const CLAIM_A = 'claim-aaaa';
+const CLAIM_B = 'claim-bbbb';
+
+test('findSupersededCopilotUnavailableSubjects hides a prior comment carrying the SAME claim: value and a LOWER attempt', () => {
+  const sameClaimEarlierAttempt = candidateComment({
+    id: 5,
+    nodeId: 'IC_same_claim',
+    body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:1`,
+  });
+  assert.deepEqual(
+    findSupersededCopilotUnavailableSubjects(
+      [sameClaimEarlierAttempt],
+      CLAIM_A,
+      2,
+    ),
+    ['IC_same_claim'],
+  );
+});
+
+test('findSupersededCopilotUnavailableSubjects never hides a comment whose claim: value differs (foreign-claim protection)', () => {
+  const foreignClaim = candidateComment({
+    id: 6,
+    nodeId: 'IC_foreign_claim',
+    body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_B} attempt:1`,
+  });
+  assert.deepEqual(
+    findSupersededCopilotUnavailableSubjects([foreignClaim], CLAIM_A, 2),
+    [],
+  );
+});
+
+test('findSupersededCopilotUnavailableSubjects never hides a same-claim comment whose attempt is >= the new one (#2754, round 5: attempt-ordering protection)', () => {
+  // Two same-claim sessions racing on the SAME HEAD (no HEAD drift needed)
+  // can still POST out of attempt order -- e.g. attempt 2 lands with a
+  // LOWER REST id while a stalled attempt 1 lands with the next one. An
+  // attempt-blind filter would let that delayed, regressive attempt 1
+  // hide the more advanced attempt 2. A same-attempt candidate (a bare
+  // retry of this exact attempt number) is also left alone rather than
+  // guessing whether it is a true duplicate -- current-attempt protection,
+  // mirroring the live-HEAD gate's own "when ambiguous, never hide" policy
+  // for a same-embedded-HEAD review-ack.
+  const higherAttempt = candidateComment({
+    id: 9,
+    nodeId: 'IC_higher_attempt',
+    body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:3`,
+  });
+  const sameAttempt = candidateComment({
+    id: 10,
+    nodeId: 'IC_same_attempt',
+    body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:2`,
+  });
+  assert.deepEqual(
+    findSupersededCopilotUnavailableSubjects(
+      [higherAttempt, sameAttempt],
+      CLAIM_A,
+      2,
+    ),
+    [],
+  );
+});
+
+test('findSupersededCopilotUnavailableSubjects trims newClaimId before comparing (#2754, Copilot review on PR #2788)', () => {
+  // renderCopilotUnavailableMarker trims claimId before posting, so a
+  // caller passing --claim-id with surrounding whitespace still posts the
+  // trimmed form -- this finder must trim its own newClaimId the same way,
+  // or it would never match the very comment it just posted's own claim.
+  const sameClaim = candidateComment({
+    id: 5,
+    nodeId: 'IC_same_claim_untrimmed',
+    body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:1`,
+  });
+  assert.deepEqual(
+    findSupersededCopilotUnavailableSubjects([sameClaim], `  ${CLAIM_A}  `, 2),
+    ['IC_same_claim_untrimmed'],
+  );
+});
+
+test('findSupersededCopilotUnavailableSubjects ignores a non-copilot-unavailable comment and one with no node id', () => {
+  const unrelated = candidateComment({
+    id: 7,
+    nodeId: 'IC_unrelated2',
+    body: 'just a regular comment',
+  });
+  const noNodeId = candidateComment({
+    id: 8,
+    nodeId: '',
+    body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:1`,
+  });
+  assert.deepEqual(
+    findSupersededCopilotUnavailableSubjects([unrelated, noNodeId], CLAIM_A, 2),
+    [],
+  );
+});
+
+/**
+ * Stub `gh` on PATH so a full `--apply --type review-ack` or
+ * `--apply --type copilot-unavailable` run resolves offline (#2754):
+ * dispatches on argv shape across the four distinct `gh` calls this path
+ * can issue -- the prior-comments listing (`api .../comments --paginate`),
+ * the new marker's own POST (`api --method POST ... --input -`), the
+ * minimize-superseded-markers.mts GraphQL probe (`api graphql` with an
+ * `id=` variable and no `classifier=`), and its GraphQL mutation (`api
+ * graphql` with both `id=` and `classifier=`). `priorComments` seeds the
+ * first call's NDJSON response; `probeIndex` (keyed by node id) seeds the
+ * probe's per-subject `isMinimized` / `viewerCanMinimize` / `author`
+ * fields; `failMutationFor` names node ids whose mutation call exits
+ * non-zero (simulating a permission failure) instead of succeeding.
+ *
+ * Every `graphql` call (probe or mutation) appends one `{id, mutation}`
+ * JSON line to `mutationLogFile`, so a test can assert the EXACT set of
+ * node ids the mutation actually ran for -- proving a spared or
+ * already-minimized candidate never reached `minimizeComment`, not just
+ * that the CLI happened to exit 0.
+ */
+function withHideAtPostTimeGhStub(options: {
+  priorComments: {
+    id: number;
+    node_id: string;
+    body: string;
+    user: { login: string };
+  }[];
+  probeIndex: Record<
+    string,
+    { isMinimized?: boolean; viewerCanMinimize?: boolean; author?: string }
+  >;
+  mutationLogFile: string;
+  failMutationFor?: string[];
+  newCommentId?: number;
+  /**
+   * The `headRefOid` a `gh pr view --json headRefOid --jq .headRefOid` call
+   * resolves to (#2754, chatgpt-codex-connector review on PR #2788) --
+   * `hideSupersededPostTimeMarkers`'s pre-scan live-HEAD re-read for
+   * `review-ack`. Defaults to `SHA` (matching every review-ack test's own
+   * `--head-sha`), so existing callers exercising the hide-and-spare /
+   * race-condition / permission-failure paths keep passing without a
+   * mismatch short-circuiting them.
+   */
+  liveHeadSha?: string;
+  /**
+   * `user.login` for the marker comment this call itself just "posted"
+   * (`newCommentId`) once it reappears in the post-POST `--paginate`
+   * listing (#2754, chatgpt-codex-connector review on PR #2788):
+   * `hideSupersededPostTimeMarkers` now re-reads this comment's own author
+   * and requires it to be in `trustedSet` before scanning for anything to
+   * hide. Defaults to `'kurone-kito'` (the sole trusted login every
+   * existing hide-and-spare / race-condition / permission-failure test
+   * already passes via `--trusted-marker-logins`), so those callers keep
+   * passing without this new gate short-circuiting them.
+   */
+  postedAuthorLogin?: string;
+}): () => void {
+  const failMutationFor = options.failMutationFor ?? [];
+  const newCommentId = options.newCommentId ?? 9999;
+  const postedAuthorLogin = options.postedAuthorLogin ?? 'kurone-kito';
+  const listedComments = [
+    ...options.priorComments,
+    {
+      id: newCommentId,
+      node_id: 'IC_posted_self',
+      body: '(the marker this call itself just posted)',
+      user: { login: postedAuthorLogin },
+    },
+  ];
+  return stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const priorComments = ${JSON.stringify(listedComments)};
+const probeIndex = ${JSON.stringify(options.probeIndex)};
+const failMutationFor = ${JSON.stringify(failMutationFor)};
+const newCommentId = ${JSON.stringify(newCommentId)};
+const mutationLogFile = ${JSON.stringify(options.mutationLogFile)};
+const liveHeadSha = ${JSON.stringify(options.liveHeadSha ?? SHA)};
+function out(s) { fs.writeSync(1, s); process.exit(0); }
+function fail(s) { fs.writeSync(2, s); process.exit(1); }
+if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && args.includes('.headRefOid')) {
+  out(liveHeadSha + '\\n');
+} else if (args[0] === 'api' && typeof args[1] === 'string' && args[1].indexOf('/comments') !== -1 && args.indexOf('--paginate') !== -1) {
+  out(priorComments.map((c) => JSON.stringify(c)).join('\\n') + '\\n');
+} else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
+  fs.readFileSync(0, 'utf8');
+  out(JSON.stringify({ id: newCommentId, html_url: 'https://github.com/o/r/issues/1#issuecomment-' + newCommentId }));
+} else if (args[0] === 'api' && args[1] === 'graphql') {
+  const fValues = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '-f') fValues.push(args[i + 1]);
+  }
+  const idEntry = fValues.find((v) => v.indexOf('id=') === 0);
+  const classifierEntry = fValues.find((v) => v.indexOf('classifier=') === 0);
+  const id = idEntry ? idEntry.slice('id='.length) : '';
+  fs.appendFileSync(mutationLogFile, JSON.stringify({ id, mutation: Boolean(classifierEntry) }) + '\\n');
+  if (classifierEntry) {
+    if (failMutationFor.indexOf(id) !== -1) {
+      fail('mutation-error: permission denied');
+    }
+    out(JSON.stringify({ data: { minimizeComment: { minimizedComment: { __typename: 'IssueComment', isMinimized: true } } } }));
+  } else {
+    const info = probeIndex[id];
+    if (!info) {
+      out(JSON.stringify({ data: { node: null } }));
+    } else {
+      out(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-' + id, isMinimized: info.isMinimized || false, viewerCanMinimize: info.viewerCanMinimize !== false, author: { login: info.author || 'kurone-kito' } } } }));
+    }
+  }
+} else {
+  fail('unexpected gh invocation: ' + args.join(' '));
+}
+`,
+  );
+}
+
+/** Read `logFile`'s `{id, mutation}` JSONL lines and return the SET of node
+ * ids that actually reached a `minimizeComment` mutation call (`mutation:
+ * true`), deduplicated. Missing file (no `graphql` call at all) reads as
+ * empty rather than throwing. */
+function readMutatedSubjectIds(logFile: string): string[] {
+  let raw: string;
+  try {
+    raw = readFileSync(logFile, 'utf8');
+  } catch {
+    return [];
+  }
+  const ids = new Set<string>();
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) {
+      continue;
+    }
+    const entry = JSON.parse(line) as { id: string; mutation: boolean };
+    if (entry.mutation) {
+      ids.add(entry.id);
+    }
+  }
+  return [...ids].sort();
+}
+
+test('--apply --type review-ack hides a stale prior review-ack and spares the current-HEAD one (#2754)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-hide-at-post-review-ack-'));
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [
+      {
+        id: 100,
+        node_id: 'IC_stale_review_ack',
+        body: `review-ack: a ${OTHER_SHA} ${TS}`,
+        user: { login: 'kurone-kito' },
+      },
+      {
+        id: 101,
+        node_id: 'IC_current_review_ack',
+        body: `review-ack: a ${SHA} ${TS}`,
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    probeIndex: {
+      IC_stale_review_ack: { author: 'kurone-kito' },
+      IC_current_review_ack: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9500,
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    // The marker's own POST result is unaffected by the hide step -- it
+    // still succeeds and reports the newly created comment.
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'review-ack',
+      target: 'pr',
+      number: 1200,
+      commentId: 9500,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9500',
+    });
+    // The GraphQL mutation actually ran ONLY for the stale (differing-HEAD)
+    // comment -- IC_current_review_ack (current-HEAD protection) was never
+    // fed to minimizeComment, even though it has a probeIndex entry and
+    // would otherwise happily minimize.
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), [
+      'IC_stale_review_ack',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type review-ack never hides a differing-HEAD-SHA comment created AFTER the marker just posted (#2754, race condition)', () => {
+  // Simulates a concurrent session's review-ack landing in the window
+  // between this call's own POST and its comments-listing fetch: that
+  // comment's REST id is HIGHER than the id this call's own marker just
+  // received, even though it surfaces in the same --paginate response.
+  // An inequality-only "not this exact comment" filter would wrongly treat
+  // it as a prior, superseded candidate purely because its HEAD SHA
+  // differs; the `id < postedCommentId` restriction must exclude it
+  // regardless.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-review-ack-race-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [
+      {
+        id: 9999,
+        node_id: 'IC_newer_review_ack',
+        body: `review-ack: a ${OTHER_SHA} ${TS}`,
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    probeIndex: {
+      IC_newer_review_ack: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9500,
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.equal(JSON.parse(output).commentId, 9500);
+    // The higher-id comment (9999 > 9500) was never mutated, even though
+    // it has a differing HEAD SHA and a probeIndex entry that would
+    // otherwise happily minimize it.
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), []);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type review-ack self-minimizes the just-posted marker when the live PR HEAD no longer matches it (#2754, round 5, chatgpt-codex-connector review)', () => {
+  // Simulates the branch advancing between --from-pr's own headRefOid read
+  // (embedded in the marker body as SHA) and this call reaching the
+  // hide-at-post-time step: a live re-read now reports OTHER_SHA. The
+  // `id <` ordering restriction alone cannot tell a stale marker from a
+  // fresh one once both are "prior" by id, so scanning for OTHER
+  // candidates while stale risks minimizing a genuinely newer, current-
+  // HEAD acknowledgement. Round 5 (this test) asserts the step instead
+  // self-minimizes the marker THIS call itself just posted -- mirroring
+  // sibling #2755's self-minimize behavior for
+  // `idd-local-validation-evidence:` -- rather than abandoning it
+  // expanded forever (rounds 3-4's behavior, now superseded).
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-review-ack-stale-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [],
+    probeIndex: {
+      IC_posted_self: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9550,
+    liveHeadSha: OTHER_SHA,
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    // The marker's own POST result is unaffected: it still succeeds and
+    // reports the newly created comment, even though that same comment is
+    // then self-minimized as stale (best-effort, #2754).
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'review-ack',
+      target: 'pr',
+      number: 1200,
+      commentId: 9550,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9550',
+    });
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), [
+      'IC_posted_self',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type copilot-unavailable also self-minimizes the just-posted marker when the live PR HEAD no longer matches it (#2754, round 5, chatgpt-codex-connector review)', () => {
+  // Same stale-HEAD race as the review-ack test above, but for
+  // copilot-unavailable: a delayed, stale-HEAD same-claim poster (e.g. a
+  // stalled pre-handoff session finally completing its retry) must not
+  // treat an earlier, CURRENT-HEAD same-claim comment as "superseded"
+  // purely because findSupersededCopilotUnavailableSubjects matches on
+  // claim: equality alone, with no HEAD comparison of its own. The
+  // live-HEAD gate, unconditional for both types, now self-minimizes
+  // THIS call's own just-posted marker instead of scanning for other
+  // candidates while stale.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-copilot-unavailable-stale-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [],
+    probeIndex: {
+      IC_posted_self: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9560,
+    liveHeadSha: OTHER_SHA,
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'copilot-unavailable',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--claim-id',
+        CLAIM_A,
+        '--head-sha',
+        SHA,
+        '--attempt',
+        '1',
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'copilot-unavailable',
+      target: 'pr',
+      number: 1200,
+      commentId: 9560,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9560',
+    });
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), [
+      'IC_posted_self',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type review-ack never self-minimizes a stale just-posted marker whose own author is untrusted (#2754, round 5)', () => {
+  // The trust gate on postedComment applies to the self-minimize path
+  // exactly as it already does to the scan-for-others path: an untrusted
+  // poster must not trigger ANY mutation, including of its own comment.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-review-ack-stale-untrusted-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [],
+    probeIndex: {
+      IC_posted_self: { author: 'some-random-bot' },
+    },
+    mutationLogFile,
+    newCommentId: 9551,
+    liveHeadSha: OTHER_SHA,
+    postedAuthorLogin: 'some-random-bot',
+  });
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), []);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type copilot-unavailable hides a prior same-claim comment, spares a foreign-claim one, and is idempotent on an already-minimized candidate (#2754)', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-copilot-unavailable-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [
+      {
+        id: 200,
+        node_id: 'IC_same_claim_attempt1',
+        body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:1`,
+        user: { login: 'kurone-kito' },
+      },
+      {
+        id: 201,
+        node_id: 'IC_already_minimized',
+        body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:2`,
+        user: { login: 'kurone-kito' },
+      },
+      {
+        id: 202,
+        node_id: 'IC_foreign_claim',
+        body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_B} attempt:1`,
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    probeIndex: {
+      IC_same_claim_attempt1: { author: 'kurone-kito' },
+      // Already minimized: runMinimize's own probe reports isMinimized
+      // true, so this candidate must be skipped (idempotent) -- probed, but
+      // never reaches the actual minimizeComment mutation.
+      IC_already_minimized: { author: 'kurone-kito', isMinimized: true },
+      IC_foreign_claim: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9600,
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'copilot-unavailable',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--claim-id',
+        CLAIM_A,
+        '--head-sha',
+        SHA,
+        '--attempt',
+        '3',
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'copilot-unavailable',
+      target: 'pr',
+      number: 1200,
+      commentId: 9600,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9600',
+    });
+    // The mutation actually ran ONLY for the same-claim, not-yet-minimized
+    // candidate -- IC_already_minimized was probed (its isMinimized: true
+    // is how runMinimize decides to skip it) but never reached
+    // minimizeComment, and IC_foreign_claim (differing claim:) was never a
+    // candidate at all.
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), [
+      'IC_same_claim_attempt1',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type copilot-unavailable never hides a same-claim comment carrying a HIGHER attempt than the one just posted (#2754, round 5, chatgpt-codex-connector review)', () => {
+  // Simulates attempt 2 landing FIRST (lower REST id) while a stalled
+  // attempt 1 finally lands second (higher id): the `id <` ordering
+  // restriction alone would treat attempt 2 as "prior" and, without an
+  // attempt-aware filter, this delayed attempt-1 post would hide the more
+  // advanced attempt 2, leaving the regressive attempt 1 as the only
+  // marker expanded.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-copilot-unavailable-attempt-order-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [
+      {
+        id: 300,
+        node_id: 'IC_higher_attempt_earlier_post',
+        body: `copilot-unavailable: a ${SHA} ${TS} claim:${CLAIM_A} attempt:2`,
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    probeIndex: {
+      IC_higher_attempt_earlier_post: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9650,
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'copilot-unavailable',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--claim-id',
+        CLAIM_A,
+        '--head-sha',
+        SHA,
+        '--attempt',
+        '1',
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'copilot-unavailable',
+      target: 'pr',
+      number: 1200,
+      commentId: 9650,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9650',
+    });
+    // The higher-attempt candidate was never mutated, even though it has
+    // a lower id (so it passes the ordering filter) and a probeIndex
+    // entry that would otherwise happily minimize it.
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), []);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type review-ack: a minimize-mutation permission failure never blocks the marker post itself (#2754)', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-permission-failure-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [
+      {
+        id: 300,
+        node_id: 'IC_permission_denied',
+        body: `review-ack: a ${OTHER_SHA} ${TS}`,
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    probeIndex: {
+      IC_permission_denied: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    failMutationFor: ['IC_permission_denied'],
+    newCommentId: 9700,
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    // The mutation "failed" (simulated permission denial) inside the
+    // best-effort hide step, but the CLI still exits 0 and reports the
+    // marker's own successful POST -- proving the failure never propagated.
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'review-ack',
+      target: 'pr',
+      number: 1200,
+      commentId: 9700,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9700',
+    });
+    // The mutation was genuinely attempted (and failed) for the candidate --
+    // proving this is a real permission-failure path, not a candidate list
+    // that silently came back empty.
+    const mutationAttempts = readFileSync(mutationLogFile, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { id: string; mutation: boolean });
+    assert.deepEqual(
+      mutationAttempts.filter((entry) => entry.mutation),
+      [{ id: 'IC_permission_denied', mutation: true }],
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type review-ack never scans for candidates when the just-posted marker is itself untrusted (#2754, chatgpt-codex-connector review on PR #2788)', () => {
+  // An untrusted poster's own new marker is already ignored by downstream
+  // trust-filtered consumers -- but without this gate, its mere presence
+  // would still drive this scan, and the OLDER trusted candidate below
+  // (differing HEAD SHA, so it would otherwise qualify) would still get
+  // minimized purely because ITS OWN author is trusted: collapsing the
+  // one copy of the marker consumers actually rely on.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-hide-at-post-untrusted-poster-'),
+  );
+  const mutationLogFile = join(tempRoot, 'mutations.jsonl');
+  const restore = withHideAtPostTimeGhStub({
+    priorComments: [
+      {
+        id: 100,
+        node_id: 'IC_trusted_stale_review_ack',
+        body: `review-ack: a ${OTHER_SHA} ${TS}`,
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    probeIndex: {
+      IC_trusted_stale_review_ack: { author: 'kurone-kito' },
+    },
+    mutationLogFile,
+    newCommentId: 9800,
+    postedAuthorLogin: 'untrusted-stranger',
+  });
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'review-ack',
+        '--target',
+        'pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--head-sha',
+        SHA,
+        '--timestamp',
+        TS,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    // The marker's own POST result is unaffected: it still succeeds and
+    // reports the newly created comment, even though the hide step bailed
+    // out entirely (best-effort, #2754) because ITS OWN author is
+    // untrusted.
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'apply',
+      type: 'review-ack',
+      target: 'pr',
+      number: 1200,
+      commentId: 9800,
+      url: 'https://github.com/o/r/issues/1#issuecomment-9800',
+    });
+    // No graphql call reached the probe/mutation stage at all: the trusted
+    // stale candidate (which has a valid probeIndex entry and would
+    // otherwise happily minimize) was never touched.
+    assert.deepEqual(readMutatedSubjectIds(mutationLogFile), []);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// --- #2754, chatgpt-codex-connector review round 3 on PR #2788: the whole
+// --- step's own HIDE_STEP_DEADLINE_MS budget, not just runMinimize's pass ---
+//
+// Round 2 gave runMinimize an internal deadlineMs, but that clock only
+// started at ITS OWN entry -- every network call BEFORE it (the review-ack
+// live-HEAD re-check, and the comments listing every type makes) stayed
+// outside the budget, bounded only by gh-exec.mts's own defaults (30s for
+// the HEAD re-check, 120s for the paginated comments listing). These tests
+// call the now-exported hideSupersededPostTimeMarkers directly (no CLI
+// subprocess spawn) so a real, enforced execFileSync timeout can be
+// exercised in well under a second instead of needing 45+ real seconds to
+// elapse.
+
+test('hideSupersededPostTimeMarkers makes no gh call at all when deadlineMs is already exhausted at entry (#2754, round 3)', () => {
+  const restore = stubExecutable(
+    'gh',
+    `process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+process.exit(1);
+`,
+  );
+  try {
+    assert.doesNotThrow(() => {
+      hideSupersededPostTimeMarkers(
+        'copilot-unavailable',
+        { 'claim-id': CLAIM_A },
+        'o',
+        'r',
+        1200,
+        9999,
+        'kurone-kito',
+        0,
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('hideSupersededPostTimeMarkers (review-ack) makes no gh call at all when deadlineMs is already exhausted at entry (#2754, round 3)', () => {
+  // Unlike runMinimize's entry check (which always lets the first
+  // candidate's OWN probe through so the pass makes forward progress),
+  // this step's own budget check has no such exemption for its live-HEAD
+  // re-check: an already-exhausted budget must skip everything, review-ack
+  // included.
+  const restore = stubExecutable(
+    'gh',
+    `process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+process.exit(1);
+`,
+  );
+  try {
+    assert.doesNotThrow(() => {
+      hideSupersededPostTimeMarkers(
+        'review-ack',
+        { 'head-sha': SHA },
+        'o',
+        'r',
+        1200,
+        9999,
+        'kurone-kito',
+        0,
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('hideSupersededPostTimeMarkers enforces its remaining budget on the comments listing itself, not just on runMinimize (#2754, round 3)', () => {
+  // The stubbed gh process answers the live-HEAD re-check (now unconditional
+  // for both marker types, round 4) instantly with a matching SHA, then
+  // sleeps a full real second before answering the --paginate call; a
+  // correctly-threaded ~150ms remainder must kill the LATTER call long
+  // before that, proving the budget bounds this READ, not merely the later
+  // mutation pass (which round 2 already covered).
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+function fail(s) { fs.writeSync(2, s); process.exit(1); }
+if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && args.includes('.headRefOid')) {
+  fs.writeSync(1, '${SHA}\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && typeof args[1] === 'string' && args[1].indexOf('/comments') !== -1 && args.indexOf('--paginate') !== -1) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+  process.stdout.write('');
+  process.exit(0);
+}
+fail('unexpected gh invocation: ' + args.join(' '));
+`,
+  );
+  const start = Date.now();
+  try {
+    assert.doesNotThrow(() => {
+      hideSupersededPostTimeMarkers(
+        'copilot-unavailable',
+        { 'claim-id': CLAIM_A, 'head-sha': SHA },
+        'o',
+        'r',
+        1200,
+        9999,
+        'kurone-kito',
+        150,
+      );
+    });
+    const elapsed = Date.now() - start;
+    assert.ok(
+      elapsed < 900,
+      `expected the ~150ms timeout to cut off the 1s stub sleep, took ${elapsed}ms`,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('--apply for a marker type outside HIDE_AT_POST_TIME_MARKER_TYPES never lists prior comments (#2754)', () => {
+  // A `claim` POST must not trigger the hide-at-post-time comment scan at
+  // all -- proven by never invoking the `--paginate` branch this stub would
+  // otherwise need to answer (any comments-listing call here falls through
+  // to the catch-all "unexpected gh invocation" failure).
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+function out(s) { fs.writeSync(1, s); process.exit(0); }
+function fail(s) { fs.writeSync(2, s); process.exit(1); }
+if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
+  fs.readFileSync(0, 'utf8');
+  out(JSON.stringify({ id: 9800, html_url: 'https://github.com/o/r/issues/1#issuecomment-9800' }));
+} else {
+  fail('unexpected gh invocation: ' + args.join(' '));
+}
+`,
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'claim',
+        '--target',
+        'issue',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--claim-id',
+        'c',
+        '--supersedes',
+        'none',
+        '--timestamp',
+        TS,
+        '--branch',
+        'issue/1200-foo',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    assert.equal(JSON.parse(output).commentId, 9800);
+  } finally {
+    restore();
+  }
 });

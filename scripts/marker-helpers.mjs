@@ -273,15 +273,15 @@ const MARKER_HIDE_POLICY_ENTRIES = [
   },
   {
     label: 'review-ack:',
-    policy: 'f4-only',
+    policy: 'wired',
     reason:
-      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 2 (#2754).',
+      'review-ack family, grouped by embedded HEAD SHA mismatch. Hidden at post time by post-idd-marker.mjs itself (code-automated, not an agent-followed instruction step, unlike the other wired families above); requires a helper runtime, so an instructions-only manual post gets no equivalent hide step yet -- roadmap #2751 Track 2 (#2754).',
   },
   {
     label: 'copilot-unavailable:',
-    policy: 'f4-only',
+    policy: 'wired',
     reason:
-      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 2 (#2754).',
+      'copilot-unavailable family, grouped by same claim: value and a strictly lower attempt: number (a same-or-higher attempt is left alone). Hidden at post time by post-idd-marker.mjs itself (code-automated, not an agent-followed instruction step, unlike the other wired families above); requires a helper runtime, so an instructions-only manual post gets no equivalent hide step yet -- roadmap #2751 Track 2 (#2754).',
   },
   {
     label: '<!-- forced-handoff:',
@@ -315,9 +315,9 @@ const MARKER_HIDE_POLICY_ENTRIES = [
   },
   {
     label: '<!-- idd-local-validation-evidence:',
-    policy: 'f4-only',
+    policy: 'wired',
     reason:
-      'No hide-at-post-time wiring yet; only the post-merge F4 cleanup batch cleans it up today. Flipped to wired by roadmap #2751 Track 3 (#2755).',
+      'idd-local-validation-evidence family, grouped by embedded HEAD SHA mismatch (mirroring the shipped advisory-wait AW3-H rule). Hidden at post time by local-validation-evidence.mts itself (code-automated, right after its own --record --apply POST succeeds) -- roadmap #2751 Track 3 (#2755).',
   },
 ];
 /**
@@ -1283,6 +1283,190 @@ export function parseAuthoringPublicationIntentComment(body, markerPrefix) {
     state: state,
   };
 }
+/**
+ * Render the canonical `authoring-owner` marker body (#2750): HTML-comment
+ * token + the fixed visible note, joined by a single newline -- this pair
+ * carries **no** blank line between them, unlike the `claimed-by`-family
+ * renderers below. This is the format the issue-authoring contract
+ * (`skills/issue-authoring/references/contract.md`) now pins as canonical,
+ * matching the most recently posted live instances; a real historical
+ * comment from before that pin can instead use a blank-line separator
+ * (confirmed live, e.g. kurone-kito/idd-skill#2706) and will correctly fail
+ * to byte-exact-match -- fail-closed, not a defect (independent critique
+ * pass, PR #2821). `markerPrefix` is the same value
+ * `parseAuthoringOwnerComment` takes as its second argument; every other
+ * field mirrors {@link ParsedAuthoringOwnerMarker}. Throws on an invalid
+ * payload, matching every other renderer in this module.
+ */
+export function renderAuthoringOwnerMarker(payload) {
+  const markerPrefix = normalizeNonWhitespaceToken(payload?.markerPrefix);
+  const target = normalizeNonWhitespaceToken(payload?.target);
+  const anchor = normalizeNonWhitespaceToken(payload?.anchor);
+  const mode = normalizeNonWhitespaceToken(payload?.mode);
+  const modeValid = AUTHORING_OWNER_MODES.has(mode);
+  const owner = normalizeNonWhitespaceToken(payload?.owner);
+  const set = normalizeNonWhitespaceToken(payload?.set);
+  const session = normalizeNonWhitespaceToken(payload?.session);
+  const bodySha256 = normalizeNonWhitespaceToken(payload?.bodySha256);
+  const bodySha256Valid = AUTHORING_OWNER_DIGEST_PATTERN.test(bodySha256);
+  const snapshotSha256 = normalizeNonWhitespaceToken(payload?.snapshotSha256);
+  const snapshotSha256Valid =
+    AUTHORING_OWNER_DIGEST_PATTERN.test(snapshotSha256);
+  const supersedes = normalizeNonWhitespaceToken(payload?.supersedes);
+  if (
+    !markerPrefix ||
+    !target ||
+    !anchor ||
+    !modeValid ||
+    !owner ||
+    !set ||
+    !session ||
+    !bodySha256Valid ||
+    !snapshotSha256Valid ||
+    !supersedes
+  ) {
+    throw new Error(
+      'invalid authoring-owner marker payload' +
+        describeInvalidMarkerFields([
+          {
+            name: 'markerPrefix',
+            raw: payload?.markerPrefix,
+            failed: !markerPrefix,
+          },
+          { name: 'target', raw: payload?.target, failed: !target },
+          { name: 'anchor', raw: payload?.anchor, failed: !anchor },
+          { name: 'mode', raw: payload?.mode, failed: !modeValid },
+          { name: 'owner', raw: payload?.owner, failed: !owner },
+          { name: 'set', raw: payload?.set, failed: !set },
+          { name: 'session', raw: payload?.session, failed: !session },
+          {
+            name: 'bodySha256',
+            raw: payload?.bodySha256,
+            failed: !bodySha256Valid,
+          },
+          {
+            name: 'snapshotSha256',
+            raw: payload?.snapshotSha256,
+            failed: !snapshotSha256Valid,
+          },
+          { name: 'supersedes', raw: payload?.supersedes, failed: !supersedes },
+        ]),
+    );
+  }
+  return [
+    `<!-- ${markerPrefix}-authoring-owner: target=${target}; anchor=${anchor}; mode=${mode}; owner=${owner}; set=${set}; session=${session}; body-sha256=${bodySha256}; snapshot-sha256=${snapshotSha256}; supersedes=${supersedes} -->`,
+    '_Issue-authoring ownership marker. Do not edit or delete._',
+  ].join('\n');
+}
+/**
+ * Render the canonical `authoring-publication-intent` marker body (#2750),
+ * mirroring {@link renderAuthoringOwnerMarker}'s contract (single-newline
+ * join, `markerPrefix` as the resolved target prefix, one field per
+ * {@link ParsedAuthoringPublicationIntentMarker}). Before this issue, the
+ * contract documented no visible note at all for this marker family, and
+ * live comments on the authoring journal (kurone-kito/idd-skill#2674)
+ * drifted across three shapes in practice: no note, a blank-line-separated
+ * note, and a single-newline-separated note with different wording
+ * (confirmed live; independent critique pass, PR #2821). This renderer's
+ * shape is the one the contract now pins as canonical going forward; none
+ * of the pre-pin variants will byte-exact-match it, by design (fail-closed,
+ * not retroactive cleanup). Throws on an invalid payload.
+ */
+export function renderAuthoringPublicationIntentMarker(payload) {
+  const markerPrefix = normalizeNonWhitespaceToken(payload?.markerPrefix);
+  const target = normalizeNonWhitespaceToken(payload?.target);
+  const anchor = normalizeNonWhitespaceToken(payload?.anchor);
+  const set = normalizeNonWhitespaceToken(payload?.set);
+  const session = normalizeNonWhitespaceToken(payload?.session);
+  const token = normalizeNonWhitespaceToken(payload?.token);
+  const journal = normalizeNonWhitespaceToken(payload?.journal);
+  const issue = normalizeNonWhitespaceToken(payload?.issue);
+  const actor = normalizeNonWhitespaceToken(payload?.actor);
+  const state = normalizeNonWhitespaceToken(payload?.state);
+  const stateValid = AUTHORING_PUBLICATION_INTENT_STATES.has(state);
+  if (
+    !markerPrefix ||
+    !target ||
+    !anchor ||
+    !set ||
+    !session ||
+    !token ||
+    !journal ||
+    !issue ||
+    !actor ||
+    !stateValid
+  ) {
+    throw new Error(
+      'invalid authoring-publication-intent marker payload' +
+        describeInvalidMarkerFields([
+          {
+            name: 'markerPrefix',
+            raw: payload?.markerPrefix,
+            failed: !markerPrefix,
+          },
+          { name: 'target', raw: payload?.target, failed: !target },
+          { name: 'anchor', raw: payload?.anchor, failed: !anchor },
+          { name: 'set', raw: payload?.set, failed: !set },
+          { name: 'session', raw: payload?.session, failed: !session },
+          { name: 'token', raw: payload?.token, failed: !token },
+          { name: 'journal', raw: payload?.journal, failed: !journal },
+          { name: 'issue', raw: payload?.issue, failed: !issue },
+          { name: 'actor', raw: payload?.actor, failed: !actor },
+          { name: 'state', raw: payload?.state, failed: !stateValid },
+        ]),
+    );
+  }
+  return [
+    `<!-- ${markerPrefix}-authoring-publication-intent: target=${target}; anchor=${anchor}; set=${set}; session=${session}; token=${token}; journal=${journal}; issue=${issue}; actor=${actor}; state=${state} -->`,
+    '_Issue-authoring publication-intent record. Do not edit or delete._',
+  ].join('\n');
+}
+/**
+ * Determine whether `body` is a byte-exact canonical rendering of an
+ * `authoring-owner` or `authoring-publication-intent` marker for the given
+ * `markerPrefix` (#2750): parse it with {@link parseAuthoringOwnerComment} /
+ * {@link parseAuthoringPublicationIntentComment}, re-render the parsed
+ * fields with the matching renderer above, and require the result to equal
+ * `body` exactly. A body that fails to parse, or that parses but whose
+ * canonical re-rendering differs in any way -- reordered or extra fields,
+ * altered spacing, trailing content, a different visible note -- is a
+ * **non-match**: this function never guesses, matching the "exact-template
+ * match only, fail closed" rule the hide-on-supersede step relies on. Tried
+ * in `authoring-owner` then `authoring-publication-intent` order; a body
+ * cannot validly match both, since each requires a different fixed marker
+ * label.
+ *
+ * Returns the matched family name, or `null` when neither matches.
+ */
+export function matchCanonicalAuthoringMarkerFamily(body, markerPrefix) {
+  const owner = parseAuthoringOwnerComment(body, markerPrefix);
+  if (owner) {
+    try {
+      if (renderAuthoringOwnerMarker({ markerPrefix, ...owner }) === body) {
+        return 'authoring-owner';
+      }
+    } catch {
+      // A parsed field failed the renderer's own stricter validation (for
+      // example internal whitespace the parser's plain trim() does not
+      // reject) -- a body that cannot be reconstructed is never a safe
+      // match.
+    }
+  }
+  const intent = parseAuthoringPublicationIntentComment(body, markerPrefix);
+  if (intent) {
+    try {
+      if (
+        renderAuthoringPublicationIntentMarker({ markerPrefix, ...intent }) ===
+        body
+      ) {
+        return 'authoring-publication-intent';
+      }
+    } catch {
+      // Same rationale as the authoring-owner branch above.
+    }
+  }
+  return null;
+}
 // --- Per-cycle marker body renderers (#900) ---
 //
 // Pure, network-free renderers for the three operational markers an agent
@@ -1666,6 +1850,29 @@ export function renderReviewAckMarker(payload) {
     );
   }
   return `review-ack: ${agentId} ${headSha} ${timestamp}`;
+}
+/**
+ * Parse a `review-ack:` marker (#2754). Returns `null` on any structural
+ * mismatch (including a `copilot-unavailable:`-shaped bound body, which this
+ * plain 3-field pattern never matches). Used by `post-idd-marker.mts`'s
+ * hide-at-post-time step to find prior `review-ack:` comments whose
+ * embedded HEAD SHA differs from a freshly posted one.
+ */
+export function parseReviewAckComment(body, createdAt) {
+  const match = body
+    .trimEnd()
+    .match(
+      /^review-ack:\s+(\S+)\s+([0-9a-f]{40})\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/,
+    );
+  if (!match) {
+    return null;
+  }
+  return {
+    agentId: match[1],
+    headSha: match[2].toLowerCase(),
+    timestamp: match[3],
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
 }
 // #1905: the grammar's positional claim-id field
 // (`{agent-id} {claim-id|none} {head-sha} ...`) already accepts an

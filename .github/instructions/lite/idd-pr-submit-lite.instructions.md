@@ -242,6 +242,17 @@ loop instead of returning to this D1 rebase path.
    create` (or the REST issues API) yourself. Recommended follow-ups
    stay in the PR body prose above; if one is important enough to file
    now, invoke the `issue-authoring` skill instead.
+9. **Live-operator-directed immediate-fix carve-out**: a live operator
+   may direct an immediate fix for a blocking bug unrelated to the
+   claimed work instead of routing it through `issue-authoring` first.
+   Cross-reference the originating claimed issue in the side-fix PR
+   body with a non-closing reference (`Refs #N`, never
+   `Closes`/`Fixes`/`Resolves`) — D3.5 below applies only to the
+   side-fix's own linked issue, if any, never to the originating one.
+   How the session obtains a branch/worktree/claim for the side-fix,
+   and how its own completion avoids releasing the originating claim,
+   is not yet defined (see `idd-pr-submit.instructions.md`'s matching
+   carve-out).
 
 ### D3.5 — Verify closing keyword detection
 
@@ -411,17 +422,20 @@ than the run it supersedes. Once both have completed, the later
      read-only) to classify every instance and print the exact `gh run
      rerun` command for the rerun-eligible one, run that command
      verbatim, then resume step 6's polling for this one check.
-   - If a maintainer has posted a valid external-check waiver for this
-     exact HEAD: rerun the `idd-advisory-convergence` check once (`gh
-     run rerun --failed <run-id>`, using the run id from `checks[]`'s
-     entry for it) so it re-evaluates and reflects the waiver, then
-     resume step 6's normal polling for this one check instead of
-     reading `requiredChecks.status` a single time immediately — a
-     fresh rerun is asynchronous and commonly still `pending` right
-     after it starts. If it settles to `success`, go to step 7. If
-     step 6's own timeout elapses while it is still non-passing, stop
-     per the condition above — do not rerun a second time.
-   - Absent a valid waiver for this HEAD: exit CI-wait now and proceed
-     directly to E1. This never relaxes the
-     merge gate: the check stays required, and F2 re-verifies it
-     independently before merge.
+   - If a maintainer has posted a valid **and effective** external-check
+     waiver for this exact HEAD (effective per
+     `idd-pr-submit.instructions.md` D4: `deadline.passed` is true or
+     `terminal.state` is `COPILOT_UNAVAILABLE`): rerun the
+     `idd-advisory-convergence` check once (`gh run rerun --failed
+     <run-id>`, using the run id from `checks[]`'s entry for it) so it
+     re-evaluates and reflects the waiver, then resume step 6's normal
+     polling for this one check instead of reading
+     `requiredChecks.status` a single time immediately — a fresh rerun
+     is asynchronous and commonly still `pending` right after it
+     starts. If it settles to `success`, go to step 7. If step 6's own
+     timeout elapses while it is still non-passing, stop per the
+     condition above — do not rerun a second time.
+   - Absent an effective waiver for this HEAD: exit CI-wait now and
+     proceed directly to E1. This never relaxes the merge gate: the
+     check stays required, and F2 re-verifies it independently before
+     merge.

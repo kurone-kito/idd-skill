@@ -52,6 +52,10 @@ test('a total_token_usage snapshot maps to a schema-valid sample with reasoning'
   assert.equal(sample.compactionCount, 0);
   assert.equal(sample.startedAt, '2026-08-20T10:00:00.000Z');
   assert.equal(sample.endedAt, '2026-08-20T10:10:00.000Z');
+  // One turn_context record; Codex has no fixture-provable tool-call
+  // signal, so toolCallCount stays an explicit null (not a counted 0).
+  assert.equal(sample.turnCount, 1);
+  assert.equal(sample.toolCallCount, null);
   // The fixture cwd basename ("idd-skill") carries no issue-<n> suffix.
   assert.equal(joinHints, undefined);
   assert.doesNotMatch(JSON.stringify(sample), /ghq|\/home\//);
@@ -72,6 +76,16 @@ test('input_tokens below cacheRead+cacheCreation is already exclusive of cache',
     output: 150,
     reasoning: 40,
   });
+});
+
+test('two turn_context records yield turnCount 2 and toolCallCount stays null', () => {
+  const { sample } = harvestFixture('rollout-two-turns.jsonl');
+  assert.equal(sample.turnCount, 2);
+  assert.equal(sample.toolCallCount, null);
+  assert.deepEqual(
+    validate(sample, loadJson('schemas/token-cost-sample.schema.json')),
+    [],
+  );
 });
 
 test('three compacted records yield compactionCount 3', () => {

@@ -49,9 +49,10 @@ you are reading this guide first, start at step 1.
 | Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                            | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file; see [B1's harness-native worktree tool caveat](../.github/instructions/idd-work.instructions.md#worktree-creation) before using `EnterWorktree` |
 | Antigravity CLI         | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file                                                                                                                                                  |
 
-When the `issue-authoring` companion bundle is installed under
-`.claude/skills/` in a target repository, OpenCode and Grok Build also
-discover it there through `.claude/skills/` compatibility.
+When the `issue-authoring` or `idd-spec-audit` companion bundle is
+installed under `.claude/skills/` in a target repository, OpenCode and
+Grok Build also discover it there through `.claude/skills/`
+compatibility.
 
 During IDD, do not call Grok Build's `enter_plan_mode` (it blocks
 non-plan-file edits). Do not let the bundled `review`, `pr-babysit`, or
@@ -590,7 +591,12 @@ Groom hearing, <date>): <resolution text>` -- the shape
 decision
 ([kurone-kito/idd-skill#2661](https://github.com/kurone-kito/idd-skill/issues/2661)
 in the source repository); a comment may additionally note the
-decision, but the body itself is what re-triage reads. The next
+decision, but the body itself is what re-triage reads. This exact line
+is also exempt from A4's own `autonomous_completion` gate
+(`discover-viability-gate.mjs`,
+[kurone-kito/idd-skill#2763](https://github.com/kurone-kito/idd-skill/issues/2763)
+in the source repository), so a re-groomed issue is not discarded
+before Check 7 ever sees it. The next
 ordinary Discover pass then
 picks the issue up normally -- grooming itself never claims or works
 the issue (see
@@ -783,6 +789,53 @@ Running this variant safely requires:
   `gh pr view <n> --json mergeable,mergeStateStatus`) or an orphaned
   claim before dispatching further workers, rather than assuming success
   or failure either way.
+
+### Discover re-run cadence
+
+Re-running the full Discover enumeration this session established
+(`discover-roadmap-graph`, and `discover-orphan-filter` when A0/A0-O
+routes there) after every delegated-worker completion is too
+expensive; a 2026-09-09 hearing decided to document a re-run cadence
+instead (kurone-kito/idd-skill#2706). A re-run always repeats the mode
+and routing already in force for this session — A1's single-root or
+cross-roadmap choice, and A0/A0-O's own `issue-scope` and
+`orphan-first-policy` routing — refreshing the same search, never
+widening it to a broader mode this session never selected.
+
+- **Do not re-run** Discover after every delegated-worker completion.
+  Dispatch the next worker from the previously enumerated graph
+  instead, after a fresh target-local A3 readiness check for that
+  specific candidate (the configured authoring label, and any
+  newly-added open dependency) — the per-delegation A4/A4.5/A5 gates
+  above do not repeat A3's own exclusions, so a candidate that became
+  blocked only after the graph was built would otherwise slip through
+  uncaught.
+- **Do re-run** on any of the following: a worker reports exhaustion
+  or no startable candidate remains in the graph already in hand, or
+  that graph is stale enough that the orchestrator no longer trusts it
+  for the next dispatch — for example when a completed issue may have
+  unblocked a dependent still listed as not-ready. A worker merely
+  finishing the issue it was dispatched for is not by itself a reason
+  to re-run: that happens on every successful dispatch, so treating it
+  as a trigger would collapse straight back into the every-completion
+  cadence the first bullet rules out. Wait for the helper's own
+  process exit before parsing its output — never a mid-run stdout
+  read — per
+  [A2's helper read timing note](../.github/instructions/idd-discover.instructions.md#a2--enumerate-sub-issues).
+- **On a caller-side tool timeout** during the Discover invocation —
+  the orchestrator's own tool-invocation wrapper (for example a
+  bounded Bash-tool or subprocess timeout) elapsing while the helper
+  process may still be running to completion, not the helper itself
+  erroring or exiting non-zero — give that same invocation one more
+  attempt with a longer time budget (re-attach to the still-running
+  process when the tool only stopped waiting rather than killing it;
+  otherwise reissue the command) before concluding anything failed.
+  Only a second timeout under the longer budget counts as an A2
+  enumeration failure, unchanged from today's A2 rule; a helper that
+  actually errors or exits non-zero is already an A2 enumeration
+  failure on the first occurrence.
+- **No caching layer or change-detection pre-check**: this section
+  documents a cadence, not a cache.
 
 ## Live Status Digests
 
@@ -1026,17 +1079,35 @@ produces a list of issues with severity, correctness, and coverage
 assessment. The goal and expected output are the same regardless of
 agent; only the mechanism differs.
 
-| Agent           | How to run a critique pass                                                                                                                                                                                                 |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                                                                                                  |
-| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                                                                                                       |
-| Codex CLI       | Use one bounded read-only native subagent review when supported and suitable; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, disabled, unsuitable, or fails. |
-| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism                                                                                 |
-| Grok Build      | Independent `spawn_subagent` with the calling phase's critique checklist                                                                                                                                                   |
-| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                           |
+| Agent           | How to run a critique pass                                                                                                                                                                                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                                                                                                                                                                                                                        |
+| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                                                                                                                                                                                                                             |
+| Codex CLI       | Use one bounded read-only native subagent review when supported and suitable; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, disabled, unsuitable, or fails.                                                                                                                       |
+| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism                                                                                                                                                                                                       |
+| Grok Build      | Independent `spawn_subagent` with the calling phase's critique checklist. Fallback: structured self-critique when delegation is unavailable, unsuitable, or fails (unsuitable: the subagent returns no findings list, or its search beyond the named scope is open-ended rather than a targeted trace of code the change depends on or affects). |
+| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                                                                                                                                                 |
 
 For Codex delegation, the parent collects the reviewer result before
 continuing; if delegation fails, use the structured fallback.
+
+For Grok Build, the critique brief must give the subagent the actual
+artifact under review (file references by their sibling-worktree
+absolute paths, never a relative path or a bare `cd`; a diff by an
+absolute-worktree diff command or revision range; or a plan by its
+literal text), the issue's requirements or acceptance criteria in
+every case — even when the calling phase's own checklist wording
+does not name them explicitly, since a correctness assessment is
+meaningless without them — and any other checklist input the calling
+phase names, such as the E9 findings under verification for E10.
+Instruct the subagent to stay within that scope except for a targeted
+trace of code the change depends on or affects — `spawn_subagent`'s
+working-directory parameter does not rebind Grok's
+file tools (that rebind gap is kurone-kito/idd-skill#2819). This
+constrains the pass prospectively but does not guarantee compliance —
+the unsuitable fallback above still applies when the subagent wanders
+past it
+anyway.
 
 When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique

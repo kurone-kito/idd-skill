@@ -182,6 +182,60 @@ test('hook honors a custom worktreeGuard.branchPatterns override', () => {
   }
 });
 
+test('hook blocks a base-branch commit in the primary worktree when refuseBaseBranchCommits is enabled (#2801)', () => {
+  const repo = setupRepo({
+    worktreeGuard: { enabled: true, refuseBaseBranchCommits: true },
+    developmentBranch: 'main',
+  });
+  try {
+    // setupRepo's init commit already leaves HEAD on "main".
+    assert.equal(runHook(repo, 'pre-commit'), 1);
+    assert.equal(runHook(repo, 'pre-push'), 1);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('hook leaves base-branch commits allowed when refuseBaseBranchCommits is absent (default off)', () => {
+  const repo = setupRepo({
+    worktreeGuard: { enabled: true },
+    developmentBranch: 'main',
+  });
+  try {
+    assert.equal(runHook(repo, 'pre-commit'), 0);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('hook leaves base-branch commits allowed when refuseBaseBranchCommits is true but developmentBranch is unset', () => {
+  // developmentBranch absent: the hook has no network access to resolve
+  // the live GitHub default branch the way idd-work.instructions.md's
+  // B1 does, so this stricter check is documented to no-op rather than
+  // guessing.
+  const repo = setupRepo({
+    worktreeGuard: { enabled: true, refuseBaseBranchCommits: true },
+  });
+  try {
+    assert.equal(runHook(repo, 'pre-commit'), 0);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('hook still allows a non-base, non-pattern-matched branch when refuseBaseBranchCommits is enabled', () => {
+  const repo = setupRepo({
+    worktreeGuard: { enabled: true, refuseBaseBranchCommits: true },
+    developmentBranch: 'main',
+  });
+  try {
+    git(repo, ['checkout', '-q', '-b', 'feature-not-guarded']);
+    assert.equal(runHook(repo, 'pre-commit'), 0);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test('hook allows a detached HEAD in the primary worktree when enabled', () => {
   const repo = setupRepo({ worktreeGuard: { enabled: true } });
   try {

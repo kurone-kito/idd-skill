@@ -672,6 +672,148 @@ test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)
   ]);
 });
 
+test('extractTaskListReferences accepts a trailing (#N) reference on the checkbox line itself (#2765)', () => {
+  const line = '- [ ] Track 1: text (#2752)';
+  assert.deepEqual(extractTaskListReferences(line), [
+    { target: 2752, relationship: 'task-list', evidence: line },
+  ]);
+});
+
+test('extractTaskListReferences accepts a trailing (#N) reference soft-wrapped onto an indented continuation line (#2765)', () => {
+  const body = [
+    '- [ ] Track 1: operational-marker hide-policy enumeration guard +',
+    '      minimization timing doc fix (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(body), [
+    {
+      target: 2752,
+      relationship: 'task-list',
+      evidence:
+        '- [ ] Track 1: operational-marker hide-policy enumeration guard +',
+    },
+  ]);
+});
+
+test('extractTaskListReferences accepts a bare trailing #N reference with no parens (#2765)', () => {
+  const line = '- [ ] text #2752';
+  assert.deepEqual(extractTaskListReferences(line), [
+    { target: 2752, relationship: 'task-list', evidence: line },
+  ]);
+});
+
+test('extractTaskListReferences ignores a trailing-reference checkbox item quoted inside a fence (#2765)', () => {
+  const fenced = ['```md', '- [ ] Track 1: text (#2752)', '```'].join('\n');
+  assert.deepEqual(extractTaskListReferences(fenced), []);
+});
+
+test('extractTaskListReferences requires whitespace (or end-of-line) after the checkbox marker, not just "- [ ]" (#2765 review, Copilot)', () => {
+  // "- [ ]foo" (no space after "]") is not valid GFM task-list syntax --
+  // GitHub renders it as plain list-item text, not a checkbox. Before the
+  // whitespace requirement, the trailing-reference fallback could still
+  // misclassify a line shaped this way as a real task-list item merely
+  // because it starts with the exact "- [ ]" character sequence.
+  const line = '- [ ]foo bar (#2752)';
+  assert.deepEqual(extractTaskListReferences(line), []);
+  // The equivalent line WITH the required space still resolves normally.
+  const validLine = '- [ ] foo bar (#2752)';
+  assert.deepEqual(extractTaskListReferences(validLine), [
+    { target: 2752, relationship: 'task-list', evidence: validLine },
+  ]);
+  // A checkbox marker at the very end of the line (empty item text) is
+  // still a valid checkbox line under this bound (end-of-line counts).
+  assert.deepEqual(extractTaskListReferences('- [ ]'), []);
+});
+
+test('extractTaskListReferences requires whitespace between the bullet and the checkbox, not just "-[ ]" (#2765 review, Codex)', () => {
+  // "-[ ] text (#2752)" (no space between "-" and "[") is not a real
+  // CommonMark list item at all -- a list marker requires at least one
+  // following space to open a list item. Without this bound, the
+  // trailing-reference fallback could attach an unrelated "(#N)" to a
+  // mistyped bullet line.
+  const line = '-[ ] Track 1: text (#2752)';
+  assert.deepEqual(extractTaskListReferences(line), []);
+  // The equivalent, correctly-spaced line still resolves normally.
+  const validLine = '- [ ] Track 1: text (#2752)';
+  assert.deepEqual(extractTaskListReferences(validLine), [
+    { target: 2752, relationship: 'task-list', evidence: validLine },
+  ]);
+});
+
+test('extractTaskListReferences trailing-reference form stops the continuation span at an EMPTY list item or heading marker too (#2765 review, Codex)', () => {
+  // A bare "-" (or "1.", or "#") with no trailing whitespace is still a
+  // valid CommonMark empty list item / heading and must still terminate
+  // the continuation span -- otherwise the scan absorbs it and any
+  // following text, including an unrelated trailing "(#N)", into the
+  // preceding checkbox item.
+  const emptyBullet = [
+    '- [ ] Track 1: no reference here',
+    '-',
+    'Unrelated prose mentioning (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(emptyBullet), []);
+
+  const emptyOrdered = [
+    '- [ ] Track 1: no reference here',
+    '1.',
+    'Unrelated prose mentioning (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(emptyOrdered), []);
+
+  const emptyHeading = [
+    '- [ ] Track 1: no reference here',
+    '#',
+    'Unrelated prose mentioning (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(emptyHeading), []);
+});
+
+test('extractTaskListReferences trailing-reference form respects the current-repo scope for owner/repo#N (#2765)', () => {
+  const line = '- [ ] Track 1: text kurone-kito/idd-skill#2752';
+  assert.deepEqual(
+    extractTaskListReferences(line, {
+      currentRepoRef: 'kurone-kito/idd-skill',
+    }),
+    [{ target: 2752, relationship: 'task-list', evidence: line }],
+  );
+  // A cross-repo trailing reference is never counted as a local edge.
+  assert.deepEqual(
+    extractTaskListReferences(line, { currentRepoRef: 'other/repo' }),
+    [],
+  );
+});
+
+test('extractTaskListReferences trailing-reference form stops the continuation span at the next list item, blank line, or heading (#2765)', () => {
+  // The next checkbox item is a separate list item and must not be
+  // absorbed into the first item's continuation span, nor treated as a
+  // reference source for the first (unresolved) item.
+  const twoItems = [
+    '- [ ] Track 1: no reference here',
+    '- [ ] Track 2 (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(twoItems), [
+    {
+      target: 2752,
+      relationship: 'task-list',
+      evidence: '- [ ] Track 2 (#2752)',
+    },
+  ]);
+
+  // A blank line also stops the continuation span.
+  const blankSeparated = [
+    '- [ ] Track 1: no reference here',
+    '',
+    'Track 1 continues in prose (#2752), unrelated to the checkbox item.',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(blankSeparated), []);
+
+  // A heading also stops the continuation span.
+  const headingSeparated = [
+    '- [ ] Track 1: no reference here',
+    '## Next section (#2752)',
+  ].join('\n');
+  assert.deepEqual(extractTaskListReferences(headingSeparated), []);
+});
+
 test('graph traversal creates no phantom edges from code-quoted refs in a child body (#1204)', async () => {
   // Reproduces the #1142/#1143 audit false-positive at the graph level: a
   // completed child that documents the dependency parser quotes example
@@ -1041,7 +1183,7 @@ test('keeps a back-edge from a closed ROADMAP node as a blocking cycle', async (
   ]);
 });
 
-test('counts exact duplicate references from the same issue body', async () => {
+test('collapses exact same-triple mentions from the same issue body', async () => {
   const issues = new Map([
     [320, roadmapIssue(320, '- [ ] #321\n- [ ] #321', 'root-roadmap')],
     [321, executionIssue(321, 'leaf execution')],
@@ -1059,15 +1201,65 @@ test('counts exact duplicate references from the same issue body', async () => {
       evidence: '- [ ] #321',
     },
   ]);
-  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('collapses same-body Blocked-by prose and standalone line to one dependency', async () => {
+  // #2799: issue-authoring routinely narrates why a dependency exists and
+  // restates it as a standalone `Blocked by #N` line. Both are `dependency`
+  // with different evidence; that must not emit duplicateReferences.
+  const issues = new Map([
+    [330, roadmapIssue(330, '- [ ] #331', 'blocked-by-double-mention-roadmap')],
+    [
+      331,
+      executionIssue(
+        331,
+        'sessions follow when they hit the condition (Blocked by #332)\n\nBlocked by #332',
+      ),
+    ],
+    [332, executionIssue(332, 'closed dependency', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(330, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  const dependencyEdges = graph.edges.filter(
+    (edge) =>
+      edge.source === 331 &&
+      edge.target === 332 &&
+      edge.relationship === 'dependency',
+  );
+  assert.deepEqual(dependencyEdges, [
     {
-      source: 320,
-      target: 321,
-      relationship: 'task-list',
-      evidence: '- [ ] #321',
-      firstSeenFrom: 320,
+      source: 331,
+      target: 332,
+      relationship: 'dependency',
+      evidence: 'sessions follow when they hit the condition (Blocked by #332)',
     },
   ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('does not flag two sources that share a Blocked-by target as a duplicate', async () => {
+  const issues = new Map([
+    [340, roadmapIssue(340, '- [ ] #341\n- [ ] #342', 'blocked-by-diamond')],
+    [341, executionIssue(341, 'Blocked by #343')],
+    [342, executionIssue(342, 'Blocked by #343')],
+    [343, executionIssue(343, 'shared dependency', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(340, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.equal(
+    graph.edges.filter(
+      (edge) => edge.target === 343 && edge.relationship === 'dependency',
+    ).length,
+    2,
+  );
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
 });
 
 test('keeps traversing descendants when a shared node is reached through multiple paths', async () => {

@@ -17,5 +17,9 @@ directly in this file.
   canonical [issue-authoring skill](AGENTS.md#issue-authoring-skill-dogfooded)
   bundle's Markdown files (byte-identical per file), so Claude Code
   auto-discovers the skill in this repository.
+- `.claude/skills/idd-spec-audit/` is likewise a generated mirror of
+  the canonical [idd-spec-audit skill](AGENTS.md#issue-authoring-skill-dogfooded)
+  bundle at `skills/idd-spec-audit/`, so Claude Code auto-discovers
+  that skill here too.
 - See [docs/idd-workflow.md](docs/idd-workflow.md) for the cross-agent
   entry path and phase routing this loop follows.

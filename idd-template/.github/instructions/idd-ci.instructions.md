@@ -335,11 +335,24 @@ condition below accounts for this.
   completion, or background only if the topology is confirmed to route
   completion back to this turn; otherwise wait synchronously — block
   with `gh pr checks <pr-number> --watch --required` (works on a
-  fine-grained PAT; `gh run watch <run-id> --exit-status` does not).
-  Both only block, never decide: required-only scoping, duplicate-name
-  collapse, the no-required-checks route, and the
-  `ciWait.runningTimeout`/`generationTimeout` bound all stay with the
-  algorithm above — track elapsed time and apply its rerun-or-hold
+  fine-grained PAT; `gh run watch <run-id> --exit-status` does not) —
+  **but only once** [Required-check discovery](#required-check-discovery)
+  has resolved `noRequiredChecksConfigured: false`. When Required-check
+  discovery has instead resolved `noRequiredChecksConfigured: true`,
+  `--watch --required` returns immediately, non-blocking, printing a
+  "no required checks
+  reported" message even while real CI is still running — block with
+  the bare `gh pr checks <pr-number> --watch` (no `--required`)
+  instead. That bare form still returns once every visible check
+  reaches a terminal GitHub state, which is not the same as "safe to
+  proceed" — a lone `CANCELLED` check with no same-producer successor
+  is one such terminal-but-`pending` case (#2714). None of the three
+  watch forms above decides anything by itself — required-only
+  scoping, duplicate-name collapse, the no-required-checks route, and
+  the `ciWait.runningTimeout`/`generationTimeout` bound are all
+  interpretation-time concerns that stay with the algorithm above
+  regardless of which form blocked the wait — track elapsed time and
+  apply its rerun-or-hold
   decision if a watch outlasts it. Issue that blocking call with an
   execution-timeout override set at or near the calling tool's own
   execution-timeout ceiling, not the tool's default, which can
@@ -347,10 +360,21 @@ condition below accounts for this.
   tool-timeout kill of the watch call is not a CI verdict — re-issue
   the same blocking watch, keep accumulating elapsed time against the
   bound above, and do not fall back to `run_in_background` or another
-  detached/backgrounded mechanism just because of the kill. Neither
-  watches Copilot review state — see
-  `idd-advisory-wait.instructions.md`. A bare `sleep` may
-  be sandboxed or blocked in some runtimes (preventive; no observed
+  detached/backgrounded mechanism just because of the kill. This
+  reissue-on-timeout guidance is scoped to an idempotent, read-only
+  remote poll like the watch call above. Never blindly re-issue a
+  heavy local command (a full build, test, or lint run) that
+  auto-backgrounds past the tool's default timeout — being idempotent
+  does not make it safe to run twice at once; two concurrent instances
+  can still collide on shared output (e.g. a `coverage/` directory).
+  Check whether the prior invocation is still running first (e.g. via
+  the calling tool's own background-task listing or equivalent), then
+  await/reap it or reuse its eventual result rather than starting a
+  second concurrent instance. No watch form above watches Copilot
+  review state either — see
+  `idd-advisory-wait.instructions.md`, whose Scope section also covers
+  why a non-primary bot's review must not gate a custom wait either. A
+  bare `sleep` may be sandboxed or blocked in some runtimes (preventive; no observed
   incident yet); a `run_in_background` Bash task or other
   detached/backgrounded mechanism must not be used for this wait
   unless the topology-safety condition above is confirmed. Never

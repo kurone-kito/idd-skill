@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import {
   type CommentLike,
   evaluateLocalValidationEvidenceRecovery,
+  findSupersededLocalValidationEvidenceSubjects,
+  hideSupersededLocalValidationEvidenceMarkers,
   parseArgs,
   renderText,
   resolveLocalValidationEvidence,
@@ -25,6 +27,7 @@ function evidenceComment(overrides: {
   outcome?: string;
   createdAt?: string;
   authorLogin?: string;
+  nodeId?: string;
 }): CommentLike {
   const body = renderLocalValidationEvidenceComment({
     actor: overrides.actor ?? 'kurone-kito',
@@ -39,6 +42,7 @@ function evidenceComment(overrides: {
     author: {
       login: overrides.authorLogin ?? overrides.actor ?? 'kurone-kito',
     },
+    node_id: overrides.nodeId ?? 'IC_default',
   };
 }
 
@@ -400,4 +404,280 @@ test('parseArgs: default mode is resolve', () => {
   const parsed = parseArgs(['--pr', '123', '--head-sha', HEAD]);
   assert.equal(parsed.mode, 'resolve');
   assert.equal(parsed.service, 'ci-actions');
+});
+
+// --- #2755: hide-at-post-time for idd-local-validation-evidence ----------
+
+test('findSupersededLocalValidationEvidenceSubjects hides a prior marker whose HEAD SHA differs from the new one', () => {
+  const stale = evidenceComment({ headSha: OTHER_HEAD, nodeId: 'IC_stale' });
+  assert.deepEqual(
+    findSupersededLocalValidationEvidenceSubjects([stale], HEAD),
+    ['IC_stale'],
+  );
+});
+
+test('findSupersededLocalValidationEvidenceSubjects never hides a marker matching the new HEAD SHA (current-HEAD protection)', () => {
+  const current = evidenceComment({ headSha: HEAD, nodeId: 'IC_current' });
+  assert.deepEqual(
+    findSupersededLocalValidationEvidenceSubjects([current], HEAD),
+    [],
+  );
+});
+
+test('findSupersededLocalValidationEvidenceSubjects ignores a non-marker comment and one with no node id', () => {
+  const unrelated: CommentLike = {
+    body: 'just a regular comment',
+    created_at: '2026-09-01T05:00:00Z',
+    node_id: 'IC_unrelated',
+  };
+  const noNodeId = evidenceComment({ headSha: OTHER_HEAD, nodeId: '' });
+  assert.deepEqual(
+    findSupersededLocalValidationEvidenceSubjects([unrelated, noNodeId], HEAD),
+    [],
+  );
+});
+
+const HIDE_TARGET = { owner: 'kurone-kito', repo: 'idd-skill', prNumber: 123 };
+const POSTED_ID = 1000;
+
+function baseHideOptions(
+  overrides: Partial<
+    Parameters<typeof hideSupersededLocalValidationEvidenceMarkers>[0]
+  > = {},
+) {
+  return {
+    ...HIDE_TARGET,
+    newHeadSha: HEAD,
+    postedCommentId: POSTED_ID,
+    postedCommentNodeId: 'IC_posted',
+    trustedMarkerLoginsFlag: 'kurone-kito',
+    rawConfig: {},
+    fetchLiveHeadSha: () => HEAD,
+    fetchPriorComments: () => [],
+    resolveTrustedActorsFn: () => ({
+      actors: TRUSTED,
+      source: 'flag' as const,
+    }),
+    ...overrides,
+  };
+}
+
+test('hideSupersededLocalValidationEvidenceMarkers calls runMinimizeFn with every superseded subject id', () => {
+  const stale = evidenceComment({
+    headSha: OTHER_HEAD,
+    nodeId: 'IC_stale',
+  });
+  const current = evidenceComment({ headSha: HEAD, nodeId: 'IC_current' });
+  const calls: unknown[] = [];
+  hideSupersededLocalValidationEvidenceMarkers(
+    baseHideOptions({
+      fetchPriorComments: () => [
+        { ...stale, id: 1 },
+        { ...current, id: 2 },
+      ],
+      runMinimizeFn: (input) => {
+        calls.push(input);
+        return {
+          mode: 'apply',
+          classifier: 'OUTDATED',
+          counts: {
+            eligible: 1,
+            alreadyMinimized: 0,
+            cannotMinimize: 0,
+            untrusted: 0,
+            unsupportedType: 0,
+            applied: 1,
+            failed: 0,
+          },
+          items: [],
+        };
+      },
+    }),
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual((calls[0] as { subjectIds: string[] }).subjectIds, [
+    'IC_stale',
+  ]);
+});
+
+test('hideSupersededLocalValidationEvidenceMarkers never calls runMinimizeFn when nothing is superseded', () => {
+  const current = evidenceComment({ headSha: HEAD, nodeId: 'IC_current' });
+  let called = false;
+  hideSupersededLocalValidationEvidenceMarkers(
+    baseHideOptions({
+      fetchPriorComments: () => [{ ...current, id: 1 }],
+      runMinimizeFn: () => {
+        called = true;
+        throw new Error('should never be called');
+      },
+    }),
+  );
+  assert.equal(called, false);
+});
+
+test("hideSupersededLocalValidationEvidenceMarkers passes an already-minimized-reporting runMinimizeFn call through unmodified (the skip itself is runMinimize's own pre-existing, unmodified logic; this wrapper never inspects the report)", () => {
+  const stale = evidenceComment({ headSha: OTHER_HEAD, nodeId: 'IC_stale' });
+  assert.doesNotThrow(() => {
+    hideSupersededLocalValidationEvidenceMarkers(
+      baseHideOptions({
+        fetchPriorComments: () => [{ ...stale, id: 1 }],
+        runMinimizeFn: () => ({
+          mode: 'apply',
+          classifier: 'OUTDATED',
+          counts: {
+            eligible: 1,
+            alreadyMinimized: 1,
+            cannotMinimize: 0,
+            untrusted: 0,
+            unsupportedType: 0,
+            applied: 0,
+            failed: 0,
+          },
+          items: [
+            {
+              subjectId: 'IC_stale',
+              status: 'skipped',
+              reason: 'already-minimized',
+            },
+          ],
+        }),
+      }),
+    );
+  });
+});
+
+test('hideSupersededLocalValidationEvidenceMarkers swallows a runMinimizeFn failure (permission error) without throwing or blocking', () => {
+  const stale = evidenceComment({ headSha: OTHER_HEAD, nodeId: 'IC_stale' });
+  assert.doesNotThrow(() => {
+    hideSupersededLocalValidationEvidenceMarkers(
+      baseHideOptions({
+        fetchPriorComments: () => [{ ...stale, id: 1 }],
+        runMinimizeFn: () => {
+          throw new Error('gh: permission denied');
+        },
+      }),
+    );
+  });
+});
+
+test('hideSupersededLocalValidationEvidenceMarkers swallows a resolveTrustedActorsFn failure without throwing', () => {
+  const stale = evidenceComment({ headSha: OTHER_HEAD, nodeId: 'IC_stale' });
+  assert.doesNotThrow(() => {
+    hideSupersededLocalValidationEvidenceMarkers(
+      baseHideOptions({
+        fetchPriorComments: () => [{ ...stale, id: 1 }],
+        resolveTrustedActorsFn: () => {
+          throw new Error('config read failed');
+        },
+      }),
+    );
+  });
+});
+
+test('hideSupersededLocalValidationEvidenceMarkers self-minimizes the just-posted marker (never scanning prior comments) when the live HEAD no longer matches the just-recorded HEAD (#2755, Codex review on PR #2792)', () => {
+  let fetchedComments = false;
+  const calls: unknown[] = [];
+  hideSupersededLocalValidationEvidenceMarkers(
+    baseHideOptions({
+      fetchLiveHeadSha: () => OTHER_HEAD,
+      fetchPriorComments: () => {
+        fetchedComments = true;
+        return [];
+      },
+      runMinimizeFn: (input) => {
+        calls.push(input);
+        return {
+          mode: 'apply',
+          classifier: 'OUTDATED',
+          counts: {
+            eligible: 1,
+            alreadyMinimized: 0,
+            cannotMinimize: 0,
+            untrusted: 0,
+            unsupportedType: 0,
+            applied: 1,
+            failed: 0,
+          },
+          items: [],
+        };
+      },
+    }),
+  );
+  assert.equal(fetchedComments, false);
+  assert.equal(calls.length, 1);
+  assert.deepEqual((calls[0] as { subjectIds: string[] }).subjectIds, [
+    'IC_posted',
+  ]);
+});
+
+test('hideSupersededLocalValidationEvidenceMarkers never calls runMinimizeFn on a live-HEAD mismatch when postedCommentNodeId is empty', () => {
+  let called = false;
+  hideSupersededLocalValidationEvidenceMarkers(
+    baseHideOptions({
+      postedCommentNodeId: '',
+      fetchLiveHeadSha: () => OTHER_HEAD,
+      runMinimizeFn: () => {
+        called = true;
+        throw new Error('should never be called');
+      },
+    }),
+  );
+  assert.equal(called, false);
+});
+
+test('hideSupersededLocalValidationEvidenceMarkers excludes a re-fetched comment whose id is not strictly older than postedCommentId (#2755, Codex review on PR #2792)', () => {
+  const staleOlder = evidenceComment({
+    headSha: OTHER_HEAD,
+    nodeId: 'IC_older',
+  });
+  const staleConcurrentNewer = evidenceComment({
+    headSha: OTHER_HEAD,
+    nodeId: 'IC_newer_concurrent',
+  });
+  const calls: unknown[] = [];
+  hideSupersededLocalValidationEvidenceMarkers(
+    baseHideOptions({
+      fetchPriorComments: () => [
+        { ...staleOlder, id: POSTED_ID - 1 },
+        { ...staleConcurrentNewer, id: POSTED_ID + 1 },
+      ],
+      runMinimizeFn: (input) => {
+        calls.push(input);
+        return {
+          mode: 'apply',
+          classifier: 'OUTDATED',
+          counts: {
+            eligible: 1,
+            alreadyMinimized: 0,
+            cannotMinimize: 0,
+            untrusted: 0,
+            unsupportedType: 0,
+            applied: 1,
+            failed: 0,
+          },
+          items: [],
+        };
+      },
+    }),
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual((calls[0] as { subjectIds: string[] }).subjectIds, [
+    'IC_older',
+  ]);
+});
+
+test('hideSupersededLocalValidationEvidenceMarkers never calls runMinimizeFn when no trusted actor resolves (#2755, Copilot review on PR #2792)', () => {
+  const stale = evidenceComment({ headSha: OTHER_HEAD, nodeId: 'IC_stale' });
+  let called = false;
+  hideSupersededLocalValidationEvidenceMarkers(
+    baseHideOptions({
+      fetchPriorComments: () => [{ ...stale, id: 1 }],
+      resolveTrustedActorsFn: () => ({ actors: [], source: 'none' as const }),
+      runMinimizeFn: () => {
+        called = true;
+        throw new Error('should never be called');
+      },
+    }),
+  );
+  assert.equal(called, false);
 });

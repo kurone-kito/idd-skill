@@ -115,9 +115,20 @@ needs-decision, blocked-by-human, and out-of-scope.
      child; do not acquire children independently, and stop all edits if any
      target cannot join that anchor's verified set
    - before each child acquisition or resume, append and verify a same-owner
-     anchor heartbeat, re-fetch the anchor's paginated log, then append the
-     child marker and immediately re-fetch both anchor and child. Stop with
-     the label in place if anchor ownership changed between those reads
+     anchor heartbeat (or reuse one — see the heartbeat-coalescing rule
+     below), re-fetch the anchor's paginated log, then append the child
+     marker and immediately re-fetch both anchor and child. Stop with the
+     label in place if anchor ownership changed between those reads
+   - **Heartbeat coalescing** (`issueAuthoring.heartbeatCoalesceWindow`,
+     default `PT2M`): before appending a heartbeat, replay the target's
+     paginated log; reuse the latest trusted marker instead of appending
+     when it is the same owner/set/session, its mode is
+     `acquire`/`bootstrap`/`resume`/`heartbeat`, it is younger than the
+     window, and its `body-sha256` matches the just-fetched body — re-fetch
+     and verify the reused marker exactly as a fresh one. This window never
+     applies to `acquire`, `bootstrap`, `resume`, `release`,
+     `release-guard`, or `release-complete` appends themselves — only a
+     `heartbeat` append may be skipped
    - persist the anchor's canonical repository/issue identity in every owner
      marker for the set; the anchor marker points to itself, and a resume must
      stop if the interrupted set's anchor cannot be proven
@@ -127,8 +138,8 @@ needs-decision, blocked-by-human, and out-of-scope.
      require an unchanged expected target snapshot before editing
    - immediately before that edit, renew both generations with a trusted
      same-owner-per-target heartbeat marker (one marker when target and anchor
-     coincide), re-fetch and verify both, and stop if renewal or ownership
-     verification fails
+     coincide; reuse applies here too), re-fetch and verify both, and stop if
+     renewal or ownership verification fails
    - create new issues only through a capability-checked publication command
      that applies the authoring label atomically and carries an exact hidden
      publication token for target, anchor, set, and session; if that operation
@@ -231,10 +242,11 @@ needs-decision, blocked-by-human, and out-of-scope.
      anchor held, and remove it last. Recheck
      each target's expected owner token independently, plus the shared
      set/anchor/session, recorded marker, and expected snapshot immediately
-     before each removal. Renew and verify the set anchor heartbeat first,
-     re-fetching its current owner, set, anchor, and session; only then renew
-     and verify the target heartbeat when distinct (one marker when they
-     coincide). Remove non-anchor labels one at a time and
+     before each removal. Renew and verify the set anchor heartbeat first
+     (reuse applies here too), re-fetching its current owner, set, anchor,
+     and session; only then renew and verify the target heartbeat when
+     distinct (one marker when they coincide; reuse applies here too).
+     Remove non-anchor labels one at a time and
      verify the whole set. After the final anchor label removal is verified,
      reuse or append the anchor-only `mode=release-complete` marker and record
      its comment ID. Reconcile that ID and the paginated anchor log with

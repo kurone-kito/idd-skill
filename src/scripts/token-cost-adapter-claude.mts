@@ -443,6 +443,45 @@ function extractIncludesSubagents(records: readonly unknown[]): boolean {
   return records.some((record) => isSidechainRecord(record));
 }
 
+/** An assistant message's `message.content`, when it is an array of content blocks (tool calls, text, etc.); `[]` for a plain-string `content` or a missing message. */
+function getContentBlocks(record: unknown): readonly unknown[] {
+  const content = getMessage(record)?.content;
+  return Array.isArray(content) ? content : [];
+}
+
+/** Count of `type: "tool_use"` blocks in one assistant record's `message.content` array. */
+function countToolUseBlocksInRecord(record: unknown): number {
+  let count = 0;
+  for (const block of getContentBlocks(record)) {
+    if (isPlainObject(block) && block.type === 'tool_use') {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** Every `type: "assistant"` record is one turn, matching {@link extractUsage}'s own inclusive convention (sidechain/subagent turns count too). */
+function extractTurnCount(records: readonly unknown[]): number {
+  let count = 0;
+  for (const record of records) {
+    if (isAssistantRecord(record)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** Sum of `tool_use` blocks across every assistant record. */
+function extractToolCallCount(records: readonly unknown[]): number {
+  let count = 0;
+  for (const record of records) {
+    if (isAssistantRecord(record)) {
+      count += countToolUseBlocksInRecord(record);
+    }
+  }
+  return count;
+}
+
 function asClaudeHarvestInput(input: unknown): ClaudeHarvestInput {
   if (!isPlainObject(input) || !Array.isArray(input.records)) {
     throw new Error(
@@ -520,6 +559,8 @@ export const claudeAdapter: TokenCostVendorAdapter = {
       endedAt: timestamps.endedAt,
       vendorSessionId,
       includesSubagents: extractIncludesSubagents(records),
+      turnCount: extractTurnCount(records),
+      toolCallCount: extractToolCallCount(records),
     };
 
     const redacted = redactTokenCostRecord(sample) as TokenCostSessionSample;

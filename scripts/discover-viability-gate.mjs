@@ -9,6 +9,7 @@ import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
+import { findInlineResolvedDecisionSpans } from './resolved-decision.mjs';
 
 const CRITERIA = [
   {
@@ -651,14 +652,32 @@ function isFollowedByGenericMentionNoun(corpus, matchIndex, matchEnd) {
   );
 }
 /**
+ * True when `index` (an EXTERNAL_COORDINATION_PATTERN match start) falls
+ * inside a genuine resolved-decision line -- #2763: `docs/idd-workflow.md`'s
+ * Groom-pass workflow tells an operator to record a resolved hearing
+ * outcome as `Maintainer decision (<provenance>, <date>): <resolution>`,
+ * the exact shape `resolved-decision.mts`'s `findInlineResolvedDecisionSpans`
+ * recognizes (single-sourced with suitability-triage.mts's Check 7, #2661)
+ * so this file's own gate does not fail an issue groomed exactly as
+ * documented, before Check 7 ever gets to honor it. `spans` is precomputed
+ * once per `corpus` by the caller, not per match, since it always scans the
+ * whole corpus regardless of which EXTERNAL_COORDINATION_PATTERN match is
+ * currently being checked.
+ */
+function isWithinResolvedDecisionSpan(spans, index) {
+  return spans.some((span) => index >= span.start && index < span.end);
+}
+/**
  * Finds the first EXTERNAL_COORDINATION_PATTERN occurrence that survives
  * every exclusion check (#2738): a match inside a code span, governed by a
  * negation cue, inside a quoted/cited example, described as an
- * already-completed investigation, or naming a generic pattern rather than
- * an asserted requirement does not describe this issue's own remaining
- * completion blocker and is skipped.
+ * already-completed investigation, naming a generic pattern rather than an
+ * asserted requirement, or opening a genuine resolved-decision line (#2763)
+ * does not describe this issue's own remaining completion blocker and is
+ * skipped.
  */
 function findUnexcludedExternalCoordinationMatch(corpus) {
+  const resolvedDecisionSpans = findInlineResolvedDecisionSpans(corpus);
   for (const match of corpus.matchAll(EXTERNAL_COORDINATION_PATTERN)) {
     const index = match.index;
     const end = index + match[0].length;
@@ -667,7 +686,8 @@ function findUnexcludedExternalCoordinationMatch(corpus) {
       isInsideQuotedExample(corpus, index, end) ||
       isGovernedByNegation(corpus, index) ||
       isDescribedByPastInvestigation(corpus, index, end) ||
-      isFollowedByGenericMentionNoun(corpus, index, end)
+      isFollowedByGenericMentionNoun(corpus, index, end) ||
+      isWithinResolvedDecisionSpan(resolvedDecisionSpans, index)
     ) {
       continue;
     }
@@ -683,8 +703,13 @@ export function evaluateAutonomousCompletion(issue) {
   // like "No credential changes" must not suppress a genuine body blocker
   // -- Codex review round 2, PR #2757). An ordinary soft-wrapped line
   // inside the body is still a single "\n" and remains ungoverned by this
-  // rule, per #2711's own wrapped-quotation requirement.
-  const corpus = `${issue.title}\n\n${issue.body}`;
+  // rule, per #2711's own wrapped-quotation requirement. `\r\n` is
+  // normalized to `\n` (#2763) so this corpus's offsets share the same
+  // 1-char line separator `findInlineResolvedDecisionSpans` normalizes to
+  // internally -- without it, a CRLF issue body would drift the two
+  // functions' coordinate spaces apart by one byte per CRLF line, the same
+  // #2531-class risk `resolved-decision.mts` itself defends against.
+  const corpus = `${issue.title}\n\n${issue.body}`.replace(/\r\n/g, '\n');
   const match = findUnexcludedExternalCoordinationMatch(corpus);
   if (match !== null) {
     return {

@@ -165,6 +165,7 @@ stop rules を仕組みとして設計する考え方(Anthropic のいう
 | 自分のリポジトリに IDD を導入したい                               | [`idd-template/ONBOARDING.md`](idd-template/ONBOARDING.md)                                                                                                                        |
 | このリポジトリでエージェントを動かしたい                          | [`AGENTS.md`](AGENTS.md) (正典ガイド) と、アダプタである [`CLAUDE.md`](CLAUDE.md)、[`GEMINI.md`](GEMINI.md)、[`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
 | ループの前に AI 向け issue を整備したい                           | [`skills/issue-authoring/SKILL.md`](skills/issue-authoring/SKILL.md)                                                                                                              |
+| 指示コーパスの意味的なずれを監査したい                            | [`skills/idd-spec-audit/SKILL.md`](skills/idd-spec-audit/SKILL.md)                                                                                                                |
 | review・merge・CI・ブランチ構成・discovery のポリシーを調整したい | [`docs/customization.md`](docs/customization.md)                                                                                                                                  |
 | それ以外のすべて — 完全なリファレンスマニュアル                   | [`docs/index.md`](docs/index.md)                                                                                                                                                  |
 

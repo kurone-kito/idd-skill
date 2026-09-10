@@ -90,19 +90,25 @@ other GitHub side effect, confirm all of the following:
 
 ## E9 — Fix accepted issues
 
-1. Fix every Accepted PATH A item from the current ReviewItems_snapshot.
-2. Run `fix-validate`.
-3. Commit fixes atomically — one logical change per commit.
-4. When an accepted finding is one instance of a systemic class, sweep
+1. PATH A/PATH B (from `idd-review-triage.instructions.md` E4): PATH A
+   is actionable feedback needing a code change or maintainer decision
+   (human reviewer threads, regular comments, `CHANGES_REQUESTED`
+   bodies, critique-pass findings); PATH B is Copilot and CI advisory
+   bot comments included for traceability, even when they do not
+   require a code change.
+2. Fix every Accepted PATH A item from the current ReviewItems_snapshot.
+3. Run `fix-validate`.
+4. Commit fixes atomically — one logical change per commit.
+5. When an accepted finding is one instance of a systemic class, sweep
    the current diff and adjacent touched sections and fix every
    instance in the same commit.
-5. When a fix introduces a precision (a name, value, path, or described
+6. When a fix introduces a precision (a name, value, path, or described
    behavior) to satisfy a reviewer, verify it against the actual
    implementation before committing.
-6. If an Accepted item is already fixed by a prior commit in this same
+7. If an Accepted item is already fixed by a prior commit in this same
    round, do not duplicate the fix. Confirm the existing commit
    addresses it and let E13 cite that SHA.
-7. Do not push yet. All of this round's fixes push together at E12.
+8. Do not push yet. All of this round's fixes push together at E12.
 
 ## E10 — Validate fixes with critique pass
 
@@ -236,11 +242,12 @@ other GitHub side effect, confirm all of the following:
    bot re-posted the same summary. Only disposition it again if the bot
    replaced the notice with an actual completed review of the current
    HEAD.
-6. After all replies and resolutions in this step are complete, update
-   the PR live status digest: `Phase` to `E13 feedback replied`, `Open
-   blockers` to any remaining reviewer, advisory, or CI wait, `Next
-   action` to E14 or E15, and `Authoritative by` to the replies,
-   resolved threads, current HEAD, and verified claim.
+6. After all replies and resolutions complete, update the PR live
+   status digest if the next route is still review-fix or CI wait:
+   `Phase` to `E13 feedback replied`, `Open blockers` to any
+   remaining reviewer, advisory, or CI wait, `Next action` to E14 or
+   E15, and `Authoritative by` to the replies, resolved threads,
+   current HEAD, and verified claim.
 
 ## E14 — Re-review request
 

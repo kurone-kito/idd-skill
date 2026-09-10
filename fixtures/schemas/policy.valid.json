@@ -84,7 +84,8 @@
   "issueAuthoring": {
     "maxClarificationRounds": 3,
     "authoringLabelName": "status:authoring",
-    "authoringStaleAge": "PT4H"
+    "authoringStaleAge": "PT4H",
+    "heartbeatCoalesceWindow": "PT2M"
   },
   "autopilotSuitability": {
     "floor": 3,

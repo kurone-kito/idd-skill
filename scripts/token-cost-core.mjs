@@ -183,6 +183,19 @@ function assertUsagePercentileOrder(label, usage) {
     assertPercentileOrder(`${label}.${field}`, usage[field]);
   }
 }
+/**
+ * turnCount/toolCallCount percentiles are optional at both the total and
+ * per-stage level (#2769) -- absent whenever no aggregated sample offered
+ * a value for that metric, so only validate order when actually present.
+ */
+function assertCountPercentileOrder(label, turnCount, toolCallCount) {
+  if (turnCount !== undefined) {
+    assertPercentileOrder(`${label}.turnCount`, turnCount);
+  }
+  if (toolCallCount !== undefined) {
+    assertPercentileOrder(`${label}.toolCallCount`, toolCallCount);
+  }
+}
 function assertRateInUnitInterval(label, rate) {
   if (!(rate.rate >= 0 && rate.rate <= 1)) {
     throw new Error(`snapshot ${label} rate must be in [0, 1]`);
@@ -232,6 +245,11 @@ export function assertTokenCostSnapshot(snapshot) {
   }
   assertUtcCalendarDate(snapshot.asOf);
   assertUsagePercentileOrder('totalUsage', snapshot.totalUsage);
+  assertCountPercentileOrder(
+    'total',
+    snapshot.turnCount,
+    snapshot.toolCallCount,
+  );
   const seenStageIds = new Set();
   for (const stage of snapshot.stageUsage) {
     if (seenStageIds.has(stage.id)) {
@@ -241,6 +259,11 @@ export function assertTokenCostSnapshot(snapshot) {
     }
     seenStageIds.add(stage.id);
     assertUsagePercentileOrder(`stageUsage[${stage.id}].usage`, stage.usage);
+    assertCountPercentileOrder(
+      `stageUsage[${stage.id}]`,
+      stage.turnCount,
+      stage.toolCallCount,
+    );
   }
   assertPercentileOrder('compactionCount', snapshot.compactionCount);
   if (!(snapshot.cacheHitRatio >= 0 && snapshot.cacheHitRatio <= 1)) {

@@ -160,6 +160,7 @@ const WORD_CHAR_PATTERN = /[A-Za-z0-9]/;
 
 /** Reasons that keep an issue out of the orphan candidate list. */
 export type OrphanFilteredReason =
+  | 'provider_outage_target'
   | 'roadmap_marker'
   | 'blocked_by_marker'
   | 'blocked_label'
@@ -180,6 +181,7 @@ export type OrphanClassification =
   | {
       orphan: false;
       reason:
+        | 'provider_outage_target'
         | 'roadmap_marker'
         | 'blocked_by_marker'
         | 'runtime_observation_precondition';
@@ -218,6 +220,15 @@ interface ClassifyIssueOptions {
   needsDecisionLabelName?: unknown;
   roadmapLabelName?: unknown;
   /**
+   * The configured `providerOutage.declarationTarget` issue number
+   * (#2800), or `null`/absent when unconfigured. That issue is a
+   * permanent, adopter-authored coordination issue meant to stay open
+   * indefinitely, carrying no roadmap/blocked markers or blocking
+   * labels of its own — so it is excluded by number, ahead of every
+   * marker/label check below, rather than relying on any of them.
+   */
+  providerOutageDeclarationTarget?: number | null;
+  /**
    * Lookup used **only** to resolve an open `Depends on #NNN` / task-list
    * dependency reference's title/labels for the parent-epic exemption
    * (#1536) — never for `Blocked by` references, which have no exemption,
@@ -237,6 +248,8 @@ interface FilterOrphanIssuesOptions {
   blockedByHumanLabelName?: unknown;
   needsDecisionLabelName?: unknown;
   roadmapLabelName?: unknown;
+  /** See {@link ClassifyIssueOptions.providerOutageDeclarationTarget}. */
+  providerOutageDeclarationTarget?: number | null;
   authoringStaleAgeMs?: number;
   autopilotSuitabilityFloor?: number;
   autopilotSuitabilityEnabled?: boolean;
@@ -269,6 +282,17 @@ interface FilterOrphanIssuesOptions {
    * when omitted, which only widens the staleness window (never narrows
    * it), so an absent fetcher cannot itself cause a wrongful skip. */
   fetchTimelineByIssueNumber?: (issueNumber: number) => unknown[];
+  /** #2762: per-candidate GraphQL `userContentEdits.editedAt` fetch for the
+   * same staleness anchor -- the only place GitHub records a body edit (a
+   * REST timeline `edited` event with a `changes.body` payload is never
+   * emitted for a real edit). Defaults to "no timestamps" when omitted,
+   * which only widens the staleness window like
+   * {@link fetchTimelineByIssueNumber} above, never narrows it. Called
+   * inside the same try/catch as the timeline fetch below, so a failure
+   * here degrades the whole anchor to `null` ("unknown") rather than
+   * silently falling back to a partial computation -- never the bare
+   * `created_at` anchor #2762 fixes. */
+  fetchUserContentEditsByIssueNumber?: (issueNumber: number) => unknown[];
   /** #2243: trust-actor allowlist for the triage-verdict marker scan, same
    * semantics as `idd-claim.instructions.md`'s trusted marker actors. */
   trustedMarkerLogins?: string[];
@@ -593,6 +617,16 @@ export function classifyIssue(
   issue: OrphanIssueInput,
   options: ClassifyIssueOptions,
 ): OrphanClassification {
+  // #2800: checked first, ahead of every marker/label check below — the
+  // declaration target is deliberately marker-less and label-less, so
+  // none of those checks would ever catch it on their own.
+  if (
+    options.providerOutageDeclarationTarget != null &&
+    Number(issue.number) === options.providerOutageDeclarationTarget
+  ) {
+    return { orphan: false, reason: 'provider_outage_target' };
+  }
+
   const labels = new Set(normalizeLabels(issue.labels));
   const body = String(issue.body ?? '');
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
@@ -751,6 +785,7 @@ export async function filterOrphanIssues(
       ? options.fetchIssueStateByNumber
       : () => 'UNRESOLVABLE';
   const filtered: Record<OrphanFilteredReason, FilteredIssueEntry[]> = {
+    provider_outage_target: [],
     roadmap_marker: [],
     blocked_by_marker: [],
     blocked_label: [],
@@ -800,6 +835,7 @@ export async function filterOrphanIssues(
       blockedByHumanLabelName: options.blockedByHumanLabelName,
       needsDecisionLabelName: options.needsDecisionLabelName,
       roadmapLabelName: options.roadmapLabelName,
+      providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       openIssueDetailsByNumber,
     });
 
@@ -884,6 +920,10 @@ export async function filterOrphanIssues(
       typeof options.fetchTimelineByIssueNumber === 'function'
         ? options.fetchTimelineByIssueNumber
         : () => [];
+    const fetchUserContentEdits =
+      typeof options.fetchUserContentEditsByIssueNumber === 'function'
+        ? options.fetchUserContentEditsByIssueNumber
+        : () => [];
     const trustedMarkerLogins = options.trustedMarkerLogins;
     const markerPrefix =
       typeof options.markerPrefix === 'string'
@@ -908,10 +948,17 @@ export async function filterOrphanIssues(
       }
       let editedAt: string | null = null;
       if (record?.markerOutcome) {
+        // Both fetches evaluate inside this one try block (#2762): a
+        // failure from EITHER the timeline or the userContentEdits read
+        // degrades the whole anchor to null ("unknown") rather than
+        // computing a partial result from whichever fetch happened to
+        // succeed -- a partial result could still collapse to the bare
+        // `created_at` anchor this issue fixes.
         try {
           editedAt = resolveLatestSubstantiveIssueEditAt(
             issueCreatedAtByNumber.get(orphan.number),
             fetchTimeline(orphan.number),
+            fetchUserContentEdits(orphan.number),
           );
         } catch {
           editedAt = null;
@@ -1057,6 +1104,8 @@ async function runCli() {
       fetchIssueCommentsForTriageVerdict(port, issueNumber),
     fetchTimelineByIssueNumber: (issueNumber) =>
       port.getWorkItemTimeline(issueNumber),
+    fetchUserContentEditsByIssueNumber: (issueNumber) =>
+      port.getWorkItemUserContentEditTimestamps(issueNumber),
     trustedMarkerLogins,
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
@@ -1064,6 +1113,7 @@ async function runCli() {
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
     roadmapLabelName: policy.roadmapLabelName,
+    providerOutageDeclarationTarget: policy.providerOutageDeclarationTarget,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
     autopilot: args.autopilot,
@@ -1188,6 +1238,7 @@ Output schema:
   "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "filtered": {
+    "provider_outage_target": [...],
     "roadmap_marker": [...],
     "blocked_by_marker": [...],
     "blocked_label": [...],
@@ -1202,6 +1253,14 @@ Output schema:
   "warnings": [{"issueNumber": 1, "message": "Warning: ..."}],
   "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0}
 }
+
+"filtered.provider_outage_target" (#2800) excludes the exact issue named by
+the configured "providerOutage.declarationTarget" -- a permanent,
+adopter-authored coordination issue documented to stay open indefinitely,
+never claimed, never closed, and carrying no roadmap/blocked marker or
+blocking label of its own. Checked by issue number alone, ahead of every
+marker/label check above, since none of them would otherwise catch it.
+Absent config leaves this filter a no-op.
 
 "filtered.runtime_observation_precondition" (#2467) excludes an issue whose
 body names a runtime/production-observation precondition in prose --
@@ -1243,7 +1302,10 @@ configured, this check is a no-op and makes no extra GitHub API call.
 Staleness-checked (fail-closed toward NOT excluding): the marker only
 excludes when the rejection comment is at or after the issue's latest
 substantive (title/body) edit, so an issue legitimately improved after
-being rejected stays selectable.
+being rejected stays selectable -- a title edit is a timeline "renamed"
+event, and a body edit is a GraphQL "userContentEdits.editedAt" value
+(#2762); a failed GraphQL read degrades the anchor to unknown rather than
+falling back to created_at.
 
 --with-claim-state (opt-in) annotates each candidate in "orphans" and
 "routed_to_human" with active-claim eligibility, exactly mirroring
@@ -1283,7 +1345,8 @@ function loadPolicy(policyPath: string) {
     trustedMarkerActors?: unknown;
   };
   const authoringPolicy = resolveAuthoringGuardPolicy(config);
-  const labelsPolicy = normalizePolicyConfig(config).labels;
+  const normalizedPolicy = normalizePolicyConfig(config);
+  const labelsPolicy = normalizedPolicy.labels;
   return {
     source,
     orphanFirstPolicy: getOrphanFirstPolicy(config),
@@ -1294,6 +1357,12 @@ function loadPolicy(policyPath: string) {
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     roadmapLabelName: labelsPolicy.roadmapLabelName,
+    // #2800: own-property-omitted when unconfigured or invalid, matching
+    // normalizePolicyConfig's own absence semantics -- resolved to
+    // `null` below so downstream callers get a stable, always-present
+    // field instead of testing for key presence.
+    providerOutageDeclarationTarget:
+      normalizedPolicy.providerOutage.declarationTarget ?? null,
     autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
     autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
     // Passed through verbatim (raw, un-normalized) for

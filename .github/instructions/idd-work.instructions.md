@@ -133,6 +133,22 @@ Non-interactive/automation: append `-x <noop>` (e.g. `-x true`) so
 WorkTrunk creates, runs the pre-start hook, and exits without
 changing the caller's directory.
 
+**Pre-start hook approval hang** (confirmed live 2026-09-09, issue
+`#2797`): even with `-x <noop>`, `wt switch --create` still hangs
+non-interactively when the `[pre-start]` hook's own install command has
+not already been approved — WorkTrunk's own `approvals.toml` mechanism
+prompts for command approval on first run and fails outright outside a
+TTY, with `Cannot prompt for approval in non-interactive environment. To
+skip prompts in CI/CD, add --yes`. Before the first `wt switch --create`
+in such an environment, run `wt config approvals add --yes` once from
+the primary worktree to pre-approve the project's hook and alias
+commands (stored in `~/.config/worktrunk/approvals.toml`, scoped to the
+git project so the approval carries over to every sibling worktree).
+This one-time pre-approval step is narrower than adding the global
+`-y`/`--yes` flag to every `wt switch` call, which would also silently
+skip approval for any other command WorkTrunk runs on that invocation —
+prefer the pre-approval step for that reason.
+
 If WorkTrunk is unavailable, choose the correct case:
 
 <!-- dprint-ignore-start -->
@@ -197,13 +213,23 @@ Before continuing to B2, verify all of the following:
   `main`.
 - `git worktree list` includes the new sibling worktree path.
 - The agent's current working directory is the new sibling worktree
-  path, not the primary worktree.
+  path, not the primary worktree; a launch-workspace-bound file-tool
+  harness (Grok Build observed) needs this absolute path, not
+  `cd`/`pwd`.
 
 If any check fails, the B1 worktree-creation contract has been
 violated: stop, post a hold note describing which check failed, and do
 not continue to B2 from the primary worktree. Repair by removing the
 misplaced branch (after confirming no work is lost) and recreating the
 sibling worktree through the Worktree creation steps above.
+
+The optional local `_idd-worktree-guard.sh` hook (enabled via
+`worktreeGuard.enabled: true`) automates part of this self-check by
+refusing a commit/push from the primary worktree while HEAD matches an
+implementation-branch pattern (default `issue/*`, `roadmap-audit/*`).
+It does **not** catch skipping B1 and committing on the base
+branch — set `worktreeGuard.refuseBaseBranchCommits: true` (#2801) to
+also refuse that case.
 
 If WorkTrunk reports its `Cannot change directory — shell integration
 installed but not active` diagnostic, re-verify the current working

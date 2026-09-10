@@ -54,6 +54,21 @@ interface TimelineState {
   events: TimelineEvent[];
 }
 
+/** #2762: GraphQL `userContentEdits.editedAt` values -- the only place
+ * GitHub records a body edit (a REST timeline `edited` event with a
+ * `changes.body` payload is never emitted for a real edit). Deliberately
+ * asymmetric with {@link TimelineState}: an omitted `userContentEdits`
+ * input normalizes to `known: true, timestamps: []` ("this caller doesn't
+ * supply the new signal"), not `known: false`, so every existing 2-field
+ * caller keeps its current freshness behavior unchanged. Only an explicit
+ * non-array value (the CLI's failure sentinel on a failed GraphQL read)
+ * normalizes to `known: false`, matching this gate's documented
+ * fail-closed posture for a genuine read failure. */
+interface UserContentEditsState {
+  known: boolean;
+  timestamps: string[];
+}
+
 interface PolicyState {
   skipIssueAuthorApprovalGate: boolean;
   maintainerApprovalActorPolicy: string;
@@ -85,6 +100,10 @@ interface EvaluateInput {
   issue?: unknown;
   comments?: unknown;
   timeline?: unknown;
+  /** #2762: GraphQL `userContentEdits.editedAt` values (see
+   * {@link UserContentEditsState}'s doc comment for the normalization
+   * contract). */
+  userContentEdits?: unknown;
   policy?: unknown;
   generatedPlanUpdatedAt?: unknown;
 }
@@ -122,6 +141,9 @@ export function evaluateClaimApprovalGate(
   const issue = normalizeIssue(input.issue);
   const comments = normalizeComments(input.comments);
   const timelineState = normalizeTimeline(input.timeline);
+  const userContentEditsState = normalizeUserContentEdits(
+    input.userContentEdits,
+  );
   const policyState = normalizePolicy(input.policy);
   const generatedPlanState = detectGeneratedPlanUpdateAt({
     comments,
@@ -197,6 +219,7 @@ export function evaluateClaimApprovalGate(
   const latestSubstantiveEditAt = resolveLatestSubstantiveEditAt(
     issue,
     timelineState,
+    userContentEditsState,
   );
   const freshnessAnchor = maxTimestamp(
     latestSubstantiveEditAt,
@@ -254,6 +277,9 @@ export function evaluateClaimApprovalGate(
   const timelineKnown = timelineState.known;
   if (!timelineKnown) {
     ambiguity.push('issue-timeline-unavailable');
+  }
+  if (!userContentEditsState.known) {
+    ambiguity.push('issue-user-content-edits-unavailable');
   }
   if (!generatedPlanState.known) {
     ambiguity.push('generated-plan-freshness-unavailable');
@@ -348,6 +374,16 @@ function runCli(): void {
     created_at: c.createdAt,
   }));
   const timelineState = fetchIssueTimeline(port, args.issue ?? 0);
+  // #2762: the raw fetch result (string[] on success, or the `null`
+  // failure sentinel) is passed straight through as `userContentEdits`
+  // below -- never flattened to a bare array the way `timeline:
+  // timelineState.events` above discards its own `known` flag. Flattening
+  // this one the same way would silently collapse a failed GraphQL read
+  // back to "known-empty" and reintroduce the bug this issue fixes.
+  const userContentEditsState = fetchIssueUserContentEdits(
+    port,
+    args.issue ?? 0,
+  );
   const policy = loadPolicy(args.policy);
   const permissionCache = new Map<string, PermissionResult>();
   const resolvePermission: ResolvePermission = (login) =>
@@ -363,6 +399,9 @@ function runCli(): void {
       issue,
       comments,
       timeline: timelineState.events,
+      userContentEdits: userContentEditsState.known
+        ? userContentEditsState.timestamps
+        : null,
       policy: policy.config,
       generatedPlanUpdatedAt: args.generatedPlanUpdatedAt,
     },
@@ -390,6 +429,7 @@ function runCli(): void {
         })),
     timelineAvailable: timelineState.known,
     timelineParseError: timelineState.parseError,
+    userContentEditsAvailable: userContentEditsState.known,
   };
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -505,8 +545,11 @@ Output schema:
   "gateEnabled": true,
   "policy": {"skipIssueAuthorApprovalGate": false, "maintainerApprovalActorPolicy": "owners-and-maintainers-only", "approvalSignals": {"readyLabelName": "idd:ready", "labelFreshnessMode": "presence-only"}, "source": ".github/idd/config.json"},
   "checks": [{"id":"gate_enabled","name":"Issue-author gate enabled","result":"pass|fail","evidence":"..."}],
-  "timelineAvailable": true
+  "timelineAvailable": true,
+  "userContentEditsAvailable": true
 }
+
+#2762: the freshness anchor behind "ready_label_present" / "ready_comment_fresh" now also recognizes a timeline "renamed" event (a title edit) and GraphQL "userContentEdits.editedAt" (a body edit) -- the only place GitHub records either kind of real edit. "userContentEditsAvailable" reports whether that second GraphQL read succeeded; a failed read degrades the anchor to unknown ("freshness-undetermined") rather than falling back to the issue's own created_at.
 `);
 }
 
@@ -697,19 +740,57 @@ function detectGeneratedPlanUpdateAt({
   return { known: true, updatedAt: maxTimestamp(...generatedPlanComments) };
 }
 
+/**
+ * Duplicates `supersession-detection.mts`'s
+ * `resolveLatestSubstantiveIssueEditAt` by design (see this file's module
+ * header note near that function's #2243 usage) rather than importing it,
+ * so this file's dependency surface stays unchanged. #2762 extends both in
+ * lockstep: a `renamed` timeline event counts as a title edit with no
+ * `changes` payload required (the real shape GitHub emits for a rename),
+ * and `userContentEditsState.timestamps` (GraphQL body-edit timestamps)
+ * feed the same anchor. Returns `null` when either source is unknown --
+ * see {@link UserContentEditsState}'s doc comment for why an *omitted*
+ * `userContentEdits` input does not count as "unknown" here.
+ */
 function resolveLatestSubstantiveEditAt(
   issue: NormalizedIssue,
   timelineState: TimelineState,
+  userContentEditsState: UserContentEditsState,
 ): string | null {
-  if (!timelineState.known) {
+  if (!timelineState.known || !userContentEditsState.known) {
     return null;
   }
   const editedAt = timelineState.events
-    .filter((event) => String(event?.event ?? '') === 'edited')
-    .filter((event) => event?.changes?.title || event?.changes?.body)
+    .filter((event) => {
+      const eventType = String(event?.event ?? '');
+      return (
+        eventType === 'renamed' ||
+        (eventType === 'edited' &&
+          Boolean(event?.changes?.title || event?.changes?.body))
+      );
+    })
     .map((event) => normalizeIso(event?.created_at))
     .filter(Boolean);
-  return maxTimestamp(issue.createdAt, ...editedAt);
+  return maxTimestamp(
+    issue.createdAt,
+    ...editedAt,
+    ...userContentEditsState.timestamps,
+  );
+}
+
+function normalizeUserContentEdits(edits: unknown): UserContentEditsState {
+  if (edits === undefined) {
+    return { known: true, timestamps: [] };
+  }
+  if (!Array.isArray(edits)) {
+    return { known: false, timestamps: [] };
+  }
+  return {
+    known: true,
+    timestamps: edits
+      .map((value) => normalizeIso(value))
+      .filter((value): value is string => value !== null),
+  };
 }
 
 interface NormalizedLabelEvent {
@@ -953,6 +1034,26 @@ function fetchIssueTimeline(
     // being indistinguishable from "no timeline data".
     const parseError = error instanceof SyntaxError ? error.message : '';
     return { known: false, events: [], parseError };
+  }
+}
+
+/** #2762: mirrors {@link fetchIssueTimeline}'s try/catch shape. The CLI
+ * call site below reads `known` before forwarding `timestamps` to
+ * `evaluateClaimApprovalGate` -- unlike `timeline: timelineState.events`
+ * above, which forwards `events` unconditionally and silently loses its
+ * own `known: false` on failure -- so a genuine fetch failure here reaches
+ * the evaluator as the `null` sentinel, never a flattened empty array. */
+function fetchIssueUserContentEdits(
+  port: ProviderPort,
+  issueNumber: number,
+): { known: boolean; timestamps: string[] } {
+  try {
+    return {
+      known: true,
+      timestamps: port.getWorkItemUserContentEditTimestamps(issueNumber),
+    };
+  } catch {
+    return { known: false, timestamps: [] };
   }
 }
 

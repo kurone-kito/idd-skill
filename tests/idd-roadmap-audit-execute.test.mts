@@ -771,6 +771,62 @@ test('a childless roadmap (no edges) is reported, never closed', () => {
   );
 });
 
+test('a roadmap whose only edges are non-blocking-reference is childless, not ready (#2765)', () => {
+  // A `Refs #N (non-blocking)` breadcrumb is informational, never a child —
+  // an edge list containing only that relationship kind must still report
+  // `childless`, the same as an empty edge list.
+  const report = readyReport();
+  report.nodes = [
+    node({ number: ROADMAP, classification: 'roadmap', state: 'OPEN' }),
+  ];
+  report.edges = [
+    {
+      source: ROADMAP,
+      target: 9999,
+      relationship: 'non-blocking-reference',
+      evidence: 'Refs #9999 (non-blocking)',
+    },
+  ];
+  report.executionCandidates = [];
+  report.provenancePaths = [{ target: ROADMAP, path: [ROADMAP] }];
+  const blockers = evaluateRoadmapAuditGates(report);
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['childless'],
+  );
+});
+
+test('a roadmap whose only edge is a plain reference (no non-blocking annotation) is NOT childless (#2765 review, Codex)', () => {
+  // A2's own "Allowed traversal sources" name `Refs #NNN` and explicit
+  // sub-issue lines alongside task-list entries as valid child-work
+  // signals; only the `(non-blocking)`-annotated form is purely
+  // informational. A plain `reference` edge (and, by the same logic, a
+  // `sub-issue-reference` edge) must count as explicit child work here.
+  const report = readyReport();
+  report.nodes = [
+    node({ number: ROADMAP, classification: 'roadmap', state: 'CLOSED' }),
+    node({ number: 9999, classification: 'execution', state: 'CLOSED' }),
+  ];
+  report.edges = [
+    {
+      source: ROADMAP,
+      target: 9999,
+      relationship: 'reference',
+      evidence: 'Refs #9999',
+    },
+  ];
+  report.executionCandidates = [];
+  report.provenancePaths = [
+    { target: ROADMAP, path: [ROADMAP] },
+    { target: 9999, path: [ROADMAP, 9999] },
+  ];
+  const blockers = evaluateRoadmapAuditGates(report);
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    [],
+  );
+});
+
 test('a human-gate label on the roadmap root blocks the close', () => {
   const report = readyReport();
   report.nodes = report.nodes.map((entry) =>

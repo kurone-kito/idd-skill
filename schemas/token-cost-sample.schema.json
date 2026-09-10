@@ -144,7 +144,7 @@
               "output",
               "reasoning"
             ],
-            "description": "Token usage for this stage.",
+            "description": "Token usage for this stage, plus optional per-stage turn/tool-call counts.",
             "properties": {
               "inputUncached": {
                 "type": "integer",
@@ -170,6 +170,16 @@
                 "type": "integer",
                 "minimum": 0,
                 "description": "Reasoning tokens."
+              },
+              "turnCount": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Turn count for this stage when the vendor reports one. Omitted (never null) when this stage has no count activity to report."
+              },
+              "toolCallCount": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Tool-call count for this stage when the vendor reports one. Omitted (never null) when this stage has no count activity to report or the vendor does not track tool calls."
               }
             }
           }
