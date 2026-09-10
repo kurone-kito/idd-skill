@@ -755,6 +755,59 @@ individually threaded) carry neither collapsible-section heading, so
 this parser naturally returns no findings for them — no separate
 format-detection branch needed.
 
+### E4/E5 round-count defer cutoff
+
+E4/E5 scored each PATH A item Low/Medium/High with no ceiling on how
+many review-fix loop rounds (E1-E15) a PR could cycle through while new
+Low-severity findings kept arriving. `critiqueLoop.e10NoProgressHoldAfter`
+only fires when the **same** Accepted finding recurs without progress
+across consecutive E10 passes — its own "meaningful progress" carve-out
+explicitly does not fire when each round surfaces a genuinely new
+finding, since that is convergence, not stagnation, by its own
+definition. A PR where successive rounds each raise a different, real
+Low-severity finding (one advisory bot converges, then a second bot's
+own first review arrives after the first bot's findings are fixed,
+itself finding something new) triggered no existing guard while
+extending indefinitely.
+
+Live-observed cost evidence motivating `critiqueLoop.deferAfterRounds`
+(issue #2863, dated 2026-09-10; checkable via `gh api
+repos/kurone-kito/idd-skill/pulls/<n>/reviews`,
+`user.login == copilot-pull-request-reviewer[bot]`): Copilot
+review-submission counts of 11-59 per PR were observed on issue #2018,
+issue #2255, issue #2264, issue #2368, issue #2403, and issue #2840.
+Each review-submission count tracks one full E1-E15 loop iteration,
+since E14 requests a fresh review after every push, regardless of
+reviewer state.
+
+Repository-owner-confirmed scope (2026-09-10, before #2863 was
+drafted): only Low-severity PATH A items are eligible for the deferral
+disposition — Medium and High stay fully blocking, matching
+`e10NoProgressHoldAfter`'s own precedent ("unresolved High/Medium
+findings remain blockers until fixed or explicitly redirected by a
+maintainer"). The default threshold (`15`) is an explicit starting
+point the repository owner expects to tune once real usage data
+exists, not a final calibration.
+
+`Reject (defer)` reuses the existing `**Rejected**`-prefixed reply
+format instead of introducing a new top-level disposition category:
+`isDispositionComment` already parses "starts with `**Rejected**`," and
+F2/F3 pair dispositions to advisory comments 1:1 by count — a new
+category would require touching that parser and gate for no functional
+gain, since a deferred item's terminal state (rejected, with a reason
+and a linked follow-up) is identical in shape to an ordinary rejection.
+
+### review-ack worked example
+
+A review posts a regular-comment finding plus a suppressed one.
+Disposition the regular-comment finding normally (`**Rejected** —
+verified placeholders-only`), then also post `review-ack:
+claude-code-1a2b3c4d 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+2026-08-19T00:10:00Z` (plain text, no HTML comment) to cover the
+suppressed one — the regular-comment rejection alone never sets
+`converged`, and this is not a license to skip **AW6** or the fix flow
+when the suppressed finding needs a code change.
+
 ## Advisory wait
 
 ### AW3-S vs AW3-R: why two recovery paths

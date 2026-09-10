@@ -289,6 +289,7 @@ export const POLICY_DEFAULTS = Object.freeze({
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
+    deferAfterRounds: 15,
   }),
   reviewEscalation: Object.freeze({
     changesRequestedFirstEscalation: 'PT24H',
@@ -458,6 +459,10 @@ export function normalizePolicyConfig(config) {
     e10NoProgressHoldAfter: parsePositiveInteger(
       c?.critiqueLoop?.e10NoProgressHoldAfter,
       POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
+    ),
+    deferAfterRounds: parsePositiveInteger(
+      c?.critiqueLoop?.deferAfterRounds,
+      POLICY_DEFAULTS.critiqueLoop.deferAfterRounds,
     ),
   };
   // Own-property omitted (not set to `undefined`) when no delegate is

@@ -623,6 +623,11 @@
           "minimum": 1,
           "description": "Number of consecutive E10 review-fix critique passes without meaningful progress before the auto-loop stops and posts a hold for a maintainer decision. Optional; defaults to `3`."
         },
+        "deferAfterRounds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Review-fix loop round-count threshold (counted from same-claim `review-watermark` comments) after which E4/E5 dispositions a still-undispositioned Low-severity PATH A item `Reject (defer)` into a bundled follow-up issue instead of the normal Accept/Reject judgment. Never affects Medium/High-severity items or an item already Accepted and mid-fix from an earlier round (see `e10NoProgressHoldAfter` above). Optional; defaults to `15` — an explicit starting point expected to be recalibrated once real usage data exists, not a settled value."
+        },
         "delegate": {
           "type": ["object", "null"],
           "additionalProperties": false,
