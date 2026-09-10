@@ -211,9 +211,13 @@ interface Context {
    */
   highConfidenceCollectionDegraded?: boolean;
   /** #2767: pre-computed structural-evidence signal, read only by Checks
-   * 5/6/7 (`checkActionability`/`checkAutonomy`/`checkVerifiability`) to
-   * decide whether one of their own specific lexical-fail branches
-   * demotes to a warned pass. `undefined` (the default for every
+   * 6/7 (`checkAutonomy`/`checkVerifiability`) to decide whether one of
+   * their own specific lexical-fail branches demotes to a warned pass.
+   * `checkActionability` (Check 5) does not read this field (round 17,
+   * Codex review, PR #2840): its own `hasAcceptance` condition is almost
+   * always a strict superset of what `verificationCommand` requires, so a
+   * demotion branch there was realistically unreachable in production --
+   * see that function's own comment. `undefined` (the default for every
    * pre-#2767 caller/test, and for `evaluateSuitabilityLocal`'s
    * `--body-file`/`--stdin` mode, which has no live author/editors to
    * trust) means `hasAllStructuralSignals` is false, so behavior is
@@ -2348,18 +2352,27 @@ export function checkActionability(context: Context): CheckOutcome {
     };
   }
 
-  // #2767: this check's one fail branch is exactly the shape the
-  // structural-evidence demotion targets -- demote to a warned pass only
-  // when every signal holds; otherwise behave exactly as before.
-  if (hasAllStructuralSignals(context.structuralEvidence)) {
-    return {
-      pass: true,
-      demoted: true,
-      evidence:
-        'Issue lacks concrete actionable scope or acceptance detail (demoted: structural evidence present).',
-    };
-  }
-
+  // #2767 round 17 (Codex review, PR #2840): this check has no
+  // realistically reachable structural-evidence demotion branch, unlike
+  // Checks 6/7 -- `hasAcceptance` above already matches the bare phrase
+  // "Acceptance Criteria" (or "Output"/"Deliverables") ANYWHERE in the
+  // body, which `verificationCommand`'s own heading requirement
+  // (`ACCEPTANCE_CRITERIA_HEADING_PATTERN`, a real ATX/Setext heading
+  // containing that same phrase) almost always also satisfies -- any body
+  // with a normally-written "## Acceptance Criteria" heading has already
+  // returned `pass: true` above, before this check ever reaches its own
+  // fail branch. (One contrived exception exists: a heading with extra
+  // whitespace between the two words, e.g. "##  Acceptance    Criteria",
+  // matches the heading pattern's `[ \t]+` gap but not `hasAcceptance`'s
+  // literal single space -- verified via `gh api /markdown` as a real
+  // heading. Not a realistic authoring pattern, and not worth preserving
+  // a demotion branch for.) A `hasAllStructuralSignals` branch here fired
+  // almost exclusively for a synthetic evidence value injected directly
+  // into `evaluateSuitability` (bypassing `computeLiveStructuralEvidence`'s
+  // real body-derived computation), never for the live CLI's own real
+  // evidence on realistic content. Removed (previously demoted here)
+  // rather than left as effectively-dead code; the PR's own scope is
+  // Checks 6/7 for this reason.
   return {
     pass: false,
     evidence: 'Issue lacks concrete actionable scope or acceptance detail.',
@@ -3489,14 +3502,16 @@ function runCli(): void {
     highConfidenceCollectionDegraded: collectionWarnings.length > 0,
   };
   let result = evaluateSuitability(issue, suitabilityOptions);
-  // #2767: only Checks 5-7 (actionability/autonomy/verifiability) ever
-  // demote, and an issue that already passes on wording alone never needs
-  // the demotion path -- fetch structural evidence (an extra network round
-  // trip: editor logins plus a live collaborator-permission check) only
-  // when the plain evaluation already failed on one of those three.
+  // #2767: only Checks 6-7 (autonomy/verifiability) ever demote (Check 5,
+  // actionability, has no realistically reachable demotion branch --
+  // removed round 17, see `checkActionability`'s own comment), and an
+  // issue that already passes on wording alone never needs the demotion
+  // path -- fetch structural evidence (an extra network round trip: editor
+  // logins plus a live collaborator-permission check) only when the plain
+  // evaluation already failed on one of those two.
   //
   // That check-id test alone is not sufficient (Codex review, PR #2840,
-  // round 9): several of Checks 5-7's own failure branches are documented
+  // round 9): several of Checks 6-7's own failure branches are documented
   // as "never demote" regardless of evidence -- e.g. Check 6's
   // blocked-by-human label/marker branches, Check 7's escape-hatch branch
   // -- so a fetch still ran for a failure that no amount of real structural
@@ -3532,8 +3547,7 @@ function runCli(): void {
   };
   const wouldDemoteWithFullEvidence =
     !result.passed &&
-    (result.failedCheck === 'actionability' ||
-      result.failedCheck === 'autonomy' ||
+    (result.failedCheck === 'autonomy' ||
       result.failedCheck === 'verifiability') &&
     evaluateSuitability(issue, {
       ...suitabilityOptions,

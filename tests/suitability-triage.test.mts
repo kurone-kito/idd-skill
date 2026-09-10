@@ -236,7 +236,18 @@ test('evaluateSuitability returns pass when all checks pass', () => {
   assert.equal(result.failedCheck, null);
 });
 
-test('#2767: evaluateSuitability demotes a would-be actionability fail to warn and reports the issue as ready', () => {
+test('#2767 round 17: evaluateSuitability never demotes an actionability fail, even with all structural signals present', () => {
+  // Round 9 originally asserted the opposite (demotion) here, injecting
+  // structuralEvidence directly into evaluateSuitability alongside a body
+  // with no Acceptance Criteria/Output/Deliverables phrase at all -- a
+  // combination computeLiveStructuralEvidence's real, body-derived
+  // computation can never produce (Codex review, PR #2840, round 17):
+  // verificationCommand requires a real ATX/Setext heading containing that
+  // same phrase, which checkActionability's own hasAcceptance condition
+  // (a bare phrase-anywhere test) almost always already matches on its
+  // own -- see checkActionability's own comment for the one contrived
+  // exception. Removed the dead demotion branch; this test now pins the
+  // invariant the removal relies on.
   const issue = {
     ...BASE_ISSUE,
     body: 'This needs work but nothing formal is specified.',
@@ -258,13 +269,12 @@ test('#2767: evaluateSuitability demotes a would-be actionability fail to warn a
       trustedEditor: true,
     },
   });
-  assert.equal(withEvidence.passed, true);
-  assert.equal(withEvidence.outcome, 'ready');
-  assert.equal(withEvidence.failedCheck, null);
+  assert.equal(withEvidence.passed, false);
+  assert.equal(withEvidence.failedCheck, 'actionability');
   const actionability = withEvidence.checks.find(
     (c) => c.id === 'actionability',
   );
-  assert.equal(actionability?.result, 'warn');
+  assert.equal(actionability?.result, 'fail');
 });
 
 test('#2767: evaluateSuitability never demotes a genuine Check 3 (trust/safety) fail, even with all structural signals present', () => {
@@ -3406,7 +3416,9 @@ const ALL_STRUCTURAL_SIGNALS: StructuralEvidence = {
   trustedEditor: true,
 };
 
-test('#2767: checkActionability demotes its one fail branch to warn when all structural signals hold', () => {
+test('#2767 round 17: checkActionability has no reachable demotion branch, even with all structural signals present', () => {
+  // Round 9 originally asserted demotion here (see the evaluateSuitability
+  // sibling test above for the full invariant this removal relies on).
   const issue = {
     ...BASE_ISSUE,
     body: 'This needs work but nothing formal is specified.',
@@ -3420,8 +3432,26 @@ test('#2767: checkActionability demotes its one fail branch to warn when all str
     issue,
     structuralEvidence: ALL_STRUCTURAL_SIGNALS,
   } as Context);
-  assert.equal(withEvidence.pass, true);
-  assert.equal(withEvidence.demoted, true);
+  assert.equal(withEvidence.pass, false);
+  assert.equal(withEvidence.demoted, undefined);
+});
+
+test('#2767 round 17: checkActionability cannot realistically demote because verificationCommand implies hasAcceptance', () => {
+  // The invariant itself, proven directly: a body whose Acceptance Criteria
+  // section satisfies verificationCommand's own heading requirement has
+  // already satisfied checkActionability's own (looser) hasAcceptance
+  // phrase-anywhere test, so it passes above the demotion branch this file
+  // removed regardless of what structuralEvidence claims.
+  const issue = {
+    ...BASE_ISSUE,
+    body: '## Acceptance Criteria\n\n- [ ] one\n- [ ] two\n',
+  };
+  const result = checkActionability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(result.pass, true);
+  assert.equal(result.demoted, undefined);
 });
 
 test('#2767: checkActionability keeps failing when any one structural signal is false', () => {
@@ -6124,8 +6154,26 @@ test('runCli: the live structural-evidence fetch is gated behind an all-true sen
   );
   assert.match(
     source,
-    /const allTrueStructuralEvidence: StructuralEvidence = \{\s*\n\s*verificationCommand: true,\s*\n\s*candidateFilesExist: true,\s*\n\s*trustedEditor: true,\s*\n\s*\};\s*\n\s*const wouldDemoteWithFullEvidence =\s*\n\s*!result\.passed &&\s*\n\s*\(result\.failedCheck === 'actionability' \|\|\s*\n\s*result\.failedCheck === 'autonomy' \|\|\s*\n\s*result\.failedCheck === 'verifiability'\) &&\s*\n\s*evaluateSuitability\(issue, \{\s*\n\s*\.\.\.suitabilityOptions,\s*\n\s*structuralEvidence: allTrueStructuralEvidence,\s*\n\s*\}\)\.checks\.some\(\s*\n\s*\(check\) => check\.id === result\.failedCheck && check\.result === 'warn',\s*\n\s*\);\s*\n\s*if \(wouldDemoteWithFullEvidence\) \{/,
+    /const allTrueStructuralEvidence: StructuralEvidence = \{\s*\n\s*verificationCommand: true,\s*\n\s*candidateFilesExist: true,\s*\n\s*trustedEditor: true,\s*\n\s*\};\s*\n\s*const wouldDemoteWithFullEvidence =\s*\n\s*!result\.passed &&\s*\n\s*\(result\.failedCheck === 'autonomy' \|\|\s*\n\s*result\.failedCheck === 'verifiability'\) &&\s*\n\s*evaluateSuitability\(issue, \{\s*\n\s*\.\.\.suitabilityOptions,\s*\n\s*structuralEvidence: allTrueStructuralEvidence,\s*\n\s*\}\)\.checks\.some\(\s*\n\s*\(check\) => check\.id === result\.failedCheck && check\.result === 'warn',\s*\n\s*\);\s*\n\s*if \(wouldDemoteWithFullEvidence\) \{/,
   );
+});
+
+// #2767 round 17 (Codex review, PR #2840): `checkActionability` (Check 5)
+// no longer accepts `'actionability'` into the sentinel's failed-check
+// list above -- its own demotion branch was removed as realistically
+// unreachable. Pins that the id is genuinely gone from the source, not
+// merely reordered or renamed, so a future edit cannot silently
+// reintroduce the wasted fetch this round's fix removed.
+test('runCli: the live structural-evidence sentinel no longer names actionability (#2767 round 17)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  const sentinelSection = source.slice(
+    source.indexOf('const allTrueStructuralEvidence: StructuralEvidence'),
+    source.indexOf('if (wouldDemoteWithFullEvidence) {'),
+  );
+  assert.equal(sentinelSection.includes("'actionability'"), false);
 });
 
 // #2767 round 12 (Codex review, PR #2840): the `wouldDemoteWithFullEvidence`
