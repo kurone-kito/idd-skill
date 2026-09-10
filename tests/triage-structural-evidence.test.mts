@@ -120,6 +120,44 @@ test('hasVerificationCommandSignal: a trailing checklist item followed by a them
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: a genuine 1-3-space-indented Setext heading right after a blank line still ends the section (Codex review, PR #2840, round 16)', () => {
+  // Round 15's blanket "zero indentation required" heuristic went the
+  // dangerous direction here: a genuine, CommonMark-legal indented Setext
+  // heading right after a blank line (not a list-item continuation --
+  // there is nothing to continue) was wrongly excluded, letting the
+  // section read past it and pick up a later section's own command.
+  // `gh api /markdown` confirms " Notes\n -----" renders as a real <h2>
+  // heading here.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '- [ ] Only one thing',
+    '',
+    ' Notes',
+    ' -----',
+    '',
+    '- `node --test tests/foo.test.mts`',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: a continuation-of-a-continuation before a thematic break still counts (Codex review, PR #2840, round 16)', () => {
+  // The round-16 fix's continuation lookbehind must also catch a SECOND
+  // indented line whose own preceding line is itself indented (not
+  // marker-led), not just a continuation's direct marker-led opener.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '- Run:',
+    '  one',
+    '  `node --test tests/foo.test.mts`',
+    '---',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: a heading with no space after the # run is not a real ATX heading (Codex review, PR #2840)', () => {
   // CommonMark requires a space/tab (or end of line) after the ATX `#`
   // run -- `##Acceptance criteria` renders as ordinary paragraph text,

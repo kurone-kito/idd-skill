@@ -115,29 +115,41 @@ const CHECKBOX_ITEM_PATTERN =
  *   either) and leaking a later section's content the same way an
  *   entirely-missed ATX boundary would have.
  *
- * A third fix (Codex review, PR #2840, round 15): the content line must
- * start with zero leading indentation, not the previous `[ \t]*` (any
- * amount). An indented continuation line of a list item (e.g. `- Run:`
- * followed by a two-space-indented `` `node --test ...` `` line) is not a
+ * A third fix (Codex review, PR #2840, round 15, corrected round 16): an
+ * indented continuation line of a list item (e.g. `- Run:` followed by a
+ * two-space-indented `` `node --test ...` `` line) is not a
  * candidate-files-boundary-eligible top-level Setext heading content line
  * even though it starts with neither a marker nor `>` -- it belongs to
  * the enclosing list item, a different container level, and a dedented
  * `---` right after it is CommonMark's own thematic break, not a Setext
  * underline over that indented line. `gh api /markdown` confirms this
  * renders as a real list-item continuation plus a real `<hr>`, not a
- * heading. Without this, the boundary truncated the section right before
- * that indented line, discarding its own real verification command.
- * Mirrors the identical blanket "any indented line is Setext-ineligible"
- * heuristic `discover-shared-file-overlap.mts`'s own
- * `SETEXT_INELIGIBLE_PRECEDING_LINE_PATTERN` already applies for this
- * exact question (its `^[ \t]+\S` alternative) -- deliberately giving up
- * detecting a genuine 1-3-space-indented top-level Setext heading in
- * exchange for never truncating a list item's own indented content,
- * the same false-negative-over-false-positive trade-off already made
- * there.
+ * heading.
+ *
+ * Round 15 fixed this by requiring the content line to carry zero leading
+ * indentation, mirroring `discover-shared-file-overlap.mts`'s own blanket
+ * "any indented line is Setext-ineligible" heuristic -- but a fresh
+ * finding (round 16) showed that heuristic goes the *dangerous* direction
+ * for this module's purpose: a genuine, CommonMark-legal 1-3-space-indented
+ * Setext heading (e.g. `" Notes\n -----"` right after a blank line) was
+ * then wrongly excluded too, letting the section read past it and pick up
+ * an unrelated later section's own command/checkboxes as if they were the
+ * Acceptance-criteria section's own. `gh api /markdown` confirms that
+ * heading renders as real structure.
+ *
+ * The precise rule (matching `discover-shared-file-overlap.mts`'s own
+ * `isSetextIneligiblePrecedingLine` line-array helper, translated to a
+ * lookbehind since this function works on `rest.search()` over a single
+ * string rather than a `lines` array): an indented content line is only
+ * Setext-ineligible when it is itself a *continuation* -- the line
+ * immediately before it is marker/blockquote-led or itself indented and
+ * non-blank. A negative lookbehind checks that preceding line's shape
+ * directly (V8 supports variable-length lookbehind). ` {0,3}` (space-only,
+ * bounded) restores CommonMark's own real indent tolerance for the
+ * content line itself, replacing round 15's zero-indent requirement.
  */
 const NEXT_ATX_HEADING_PATTERN =
-  /\n(?: {0,3}#{1,6}\s|(?=(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
+  /\n(?: {0,3}#{1,6}\s|(?=(?<!(?:^|\n)(?: {0,3}[-*+][ \t]+| {0,3}\d{1,9}[.)][ \t]+| {0,3}>|[ \t]+\S)[^\r\n]*\r?\n) {0,3}(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
 
 /** Matches the `## Acceptance criteria` heading (any ATX level, any of
  * the two capitalization conventions used across this repository's own

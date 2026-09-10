@@ -259,6 +259,42 @@ test('parseCandidateFiles does not mistake an indented wrapped continuation line
   assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
 });
 
+test('parseCandidateFiles stops at a genuine 1-3-space-indented Setext heading right after a blank line (Codex review, PR #2840, round 16)', () => {
+  // Round 9's blanket "any indented line is Setext-ineligible" heuristic
+  // went the dangerous direction here: a genuine, CommonMark-legal
+  // indented Setext heading right after a blank line (not a list-item
+  // continuation -- there is nothing to continue) was wrongly excluded,
+  // letting the section read past it and pick up an unrelated later
+  // section's own path. `gh api /markdown` confirms " Notes\n -----"
+  // renders as a real <h2> heading here.
+  const body = [
+    '## Candidate files',
+    '',
+    '- `scripts/a.mts`',
+    '',
+    ' Notes',
+    ' -----',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mts']);
+});
+
+test('parseCandidateFiles does not mistake a continuation-of-a-continuation line before a thematic break for a Setext heading (Codex review, PR #2840, round 16)', () => {
+  // The round-16 fix's continuation check must also catch a SECOND
+  // indented line whose own preceding line is itself indented (not
+  // marker-led), not just a continuation's direct marker-led opener.
+  const body = [
+    '## Candidate files',
+    '',
+    '- Run:',
+    '  `src/one.mts`',
+    '  `src/two.mts`',
+    '---',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/one.mts', 'src/two.mts']);
+});
+
 test('parseCandidateFiles rejects a tab-indented "## Candidate files" heading -- CommonMark renders it as an indented code block, not a heading (Codex review, PR #2840, round 11)', () => {
   // Verified against GitHub's own renderer (gh api /markdown): a tab
   // advances to the next 4-column tab stop, past the 0-3-space ATX

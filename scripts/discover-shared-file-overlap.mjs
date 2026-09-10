@@ -60,30 +60,62 @@ const SETEXT_UNDERLINE_PATTERN = /^ {0,3}(?:=+|-+)[ \t]*$/;
  * #2840, round 2). A `- \`src/a.mts\`` bullet directly followed by a `---`
  * thematic break is not a Setext heading over that bullet -- the `---`
  * ends the list instead -- so treating it as one dropped the list's own
- * final (and, for a one-item list, only) candidate path.
- *
- * Also excludes an indented line generally (Codex review, PR #2840, round
- * 9): the bullet-marker alternative above only matches a *direct* marker
- * line, not an indented *wrapped continuation* line of a multi-line bullet
- * -- e.g. `- change:\n  \`src/a.mts\`\n---`, where the second line (the
- * one actually carrying the candidate path) is indented past the marker
- * but starts with a backtick, not a marker, so it fell through to being
- * read as ordinary Setext-heading-eligible content and the section was
- * wrongly truncated one line before its own real path. Heuristic, scoped
- * to this section only: a genuine 1-3-space-indented Setext heading
- * inside a `## Candidate files` list is a contrived, unrealistic shape;
- * an indented wrapped continuation line is this repository's own
- * documented multi-line-bullet convention. Trading the former's
- * correctness for the latter's is the safer direction here.
- *
- * The marker-line alternative's own leading indent is `{0,3}` *spaces*,
- * not `[ \t]`, for the same reason as {@link SETEXT_UNDERLINE_PATTERN}
- * (Codex review, PR #2840, round 11) -- kept separate from the second
- * (wrapped-continuation) alternative's own `[ \t]+`, which is
- * deliberately broad regardless of tab-vs-space.
+ * final (and, for a one-item list, only) candidate path. The marker-line
+ * alternative's own leading indent is `{0,3}` *spaces*, not `[ \t]`, for
+ * the same reason as {@link SETEXT_UNDERLINE_PATTERN} (Codex review, PR
+ * #2840, round 11).
  */
-const SETEXT_INELIGIBLE_PRECEDING_LINE_PATTERN =
-  /^ {0,3}(?:[-*+][ \t]+|\d+[.)][ \t]+|>)|^[ \t]+\S/;
+const SETEXT_MARKER_LED_LINE_PATTERN = /^ {0,3}(?:[-*+][ \t]+|\d+[.)][ \t]+|>)/;
+/**
+ * Any line indented at all (deliberately broad regardless of tab-vs-space,
+ * matching {@link SETEXT_MARKER_LED_LINE_PATTERN}'s own indent-tolerance
+ * looseness), used by {@link isSetextIneligiblePrecedingLine} both as its
+ * own indent test and to detect a *continuation* two lines up.
+ */
+const INDENTED_NONBLANK_LINE_PATTERN = /^[ \t]+\S/;
+/**
+ * True when `lines[contentIndex]` -- a line immediately followed (no
+ * blank line between) by an underline-shaped line -- is not eligible to
+ * be read as that Setext heading's own content, per CommonMark. Two
+ * disqualifiers:
+ *
+ * 1. A list-item bullet/ordered marker or blockquote marker (Codex
+ *    review, PR #2840, round 2): see {@link SETEXT_MARKER_LED_LINE_PATTERN}.
+ * 2. An indented line that is itself a *continuation* -- the line
+ *    immediately before it (`lines[contentIndex - 1]`) is marker-led or
+ *    itself indented and non-blank (Codex review, PR #2840, round 16;
+ *    corrects round 9's blanket "any indented line is ineligible"
+ *    heuristic, which a fresh finding showed goes the *dangerous*
+ *    direction for this file's purpose: missing a genuine Setext boundary
+ *    means the `## Candidate files` section reads too far, picking up an
+ *    unrelated later section's own path as if it were a real candidate).
+ *    An indented *wrapped continuation* line of a multi-line bullet --
+ *    e.g. `- change:\n  \`src/a.mts\`\n---`, where the second line
+ *    carries the real candidate path but starts with a backtick, not a
+ *    marker -- is still correctly excluded this way, since the line
+ *    before it (`- change:`) is marker-led; a continuation-of-a-
+ *    continuation (`- Run:\n  one\n  two\n---`) is also still excluded,
+ *    since the line before its own last indented line is itself indented
+ *    and non-blank. A genuine 1-3-space-indented top-level Setext heading
+ *    (CommonMark-legal, e.g. ` Notes\n -----` right after a blank line)
+ *    is no longer wrongly excluded just for carrying that indentation.
+ *    `gh api /markdown` confirms both shapes' real rendering.
+ */
+function isSetextIneligiblePrecedingLine(lines, contentIndex) {
+  const line = lines[contentIndex] ?? '';
+  if (SETEXT_MARKER_LED_LINE_PATTERN.test(line)) {
+    return true;
+  }
+  if (!INDENTED_NONBLANK_LINE_PATTERN.test(line)) {
+    return false;
+  }
+  const previous = lines[contentIndex - 1];
+  return (
+    previous !== undefined &&
+    (SETEXT_MARKER_LED_LINE_PATTERN.test(previous) ||
+      INDENTED_NONBLANK_LINE_PATTERN.test(previous))
+  );
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `candidate:`): tests/flag-name-matrix.test.mts scans this file's
 // *compiled* .mjs source text for quoted flag literals such as the
@@ -186,7 +218,7 @@ export function parseCandidateFileEntries(body) {
       start !== -1 &&
       index > start &&
       lines[index - 1].trim() !== '' &&
-      !SETEXT_INELIGIBLE_PRECEDING_LINE_PATTERN.test(lines[index - 1]) &&
+      !isSetextIneligiblePrecedingLine(lines, index - 1) &&
       SETEXT_UNDERLINE_PATTERN.test(lines[index])
     ) {
       end = index - 1;
