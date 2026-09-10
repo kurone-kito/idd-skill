@@ -1464,10 +1464,11 @@ test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback append
 });
 
 test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback sandwiched between two "<details>" blocks (regression guard, #2858)', () => {
-  // The details-block sub-pattern uses a LAZY `[\s\S]*?` so it stops at
+  // The details-block sub-pattern forbids consuming past the first
+  // "</details>" via a per-character negative lookahead, so it stops at
   // the first "</details>" rather than the last -- confirms a second,
   // unrelated details block later in the tail cannot be used to smuggle
-  // prose past the lazy match by making the whole tail look like "one
+  // prose past the match by making the whole tail look like "one
   // details block" when it is actually two with substantive text between
   // them.
   const thread = {
