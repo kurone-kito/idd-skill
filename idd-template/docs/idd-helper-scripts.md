@@ -1341,15 +1341,25 @@ Interpretation rules:
 A narrow, documented exception to "human maintainer only" above: when a
 PR's own diff touches `idd-advisory-convergence`'s committed trigger-file
 allowlist (the check's own source, its policy inputs, or its workflow
-files -- a fixed, committed set of paths, never derived from imports;
-this source repository's own copy lists exactly seven `.mts`/workflow
-paths, and the distributed `idd-template/` copy resolves a
-profile-appropriate set instead -- compiled `scripts/*.mjs` paths for
-`vendored-node`, the dependency manifest and lockfile for
-`package-manager`, since neither ships this source repository's own
-`src/scripts/*.mts` files), that PR cannot benefit from its own fix to
-the checker while still unmerged. `idd-advisory-convergence.yml` detects
-this from a
+files -- a fixed, committed set of paths, never derived from imports),
+that PR cannot benefit from its own fix to the checker while still
+unmerged. This source repository's own copy of the allowlist -- checked
+both by its own top-level workflow's posting step and, at consume time,
+by `resolveSelfReferentialTriggerFiles` recognizing this exact
+repository -- lists exactly seven `.mts`/workflow paths, its real checker
+files, regardless of its own configured `helperRuntime.profile`
+(`package-manager`, chosen for its own IDD dependency, unrelated to this
+workflow's own file layout). For every other repository, both the
+distributed `idd-template/` posting step and `resolveSelfReferentialTriggerFiles`
+independently derive a profile-appropriate set instead: compiled
+`scripts/*.mjs` paths for `vendored-node`, the dependency manifest and
+lockfiles for `package-manager`, and only the two workflow paths for any
+other profile -- since a `vendored-node`/`package-manager` adopter never
+ships this source repository's own `src/scripts/*.mts` files, an
+unconditional match against them left the mechanism both non-functional
+for adopters and gameable via a PR touching a path that does not exist in
+their own checkout at all. `idd-advisory-convergence.yml` detects this
+from a
 separate job with `issues: write` as its only write permission (the
 verdict job stays read-only; it additionally gains `actions: read`,
 required for the run-id trust verification's own

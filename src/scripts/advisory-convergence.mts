@@ -201,10 +201,22 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * the narrow trigger set the Background section requires (an
  * import-derived set would auto-waive most PRs, since this gate's own
  * script transitively imports several of the most-edited files in the
- * repository). Exactly the seven paths the hearing pinned; widening this
- * set is a reviewed edit to the constant, never automatic. Exported so
- * the posting-side workflow step and its own tests can both reference the
- * single source of truth. */
+ * repository). Exactly the seven paths the hearing pinned, and exactly
+ * this SOURCE REPOSITORY's own trigger set: this repository's own
+ * top-level `.github/workflows/idd-advisory-convergence.yml` hardcodes
+ * these same seven paths directly (its own checker files are these exact
+ * `.mts` sources, regardless of its own configured
+ * `helperRuntime.profile`), and {@link resolveSelfReferentialTriggerFiles}
+ * below returns this constant only when `repositoryFullName` resolves to
+ * this repository. Every other repository resolves a profile-derived
+ * set instead (Codex + Copilot review, PR #2895): this repository's own
+ * `src/scripts/*.mts` sources are never vended to a `vendored-node`/
+ * `package-manager` adopter, so using this list unconditionally for the
+ * DISTRIBUTED `idd-template/` copy left the mechanism both
+ * non-functional (a genuine checker upgrade could never match a path
+ * that never exists in the adopter's own checkout) and gameable (a PR
+ * could touch that nonexistent path purely to satisfy the string match).
+ * Widening this set is a reviewed edit to the constant, never automatic. */
 export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   'src/scripts/advisory-convergence.mts',
   'src/scripts/advisory-wait-state.mts',
@@ -214,6 +226,70 @@ export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   '.github/workflows/idd-advisory-convergence.yml',
   '.github/workflows/idd-advisory-convergence-comment.yml',
 ] as const;
+
+/** kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895): the
+ * source repository's own identity, used ONLY to select
+ * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} as-is for this
+ * repository's own required check instead of a profile-derived set --
+ * this repository's checker files are its own `.mts` sources regardless
+ * of its configured `helperRuntime.profile` (`package-manager`, chosen
+ * for its own IDD dependency, not for this workflow's own file layout).
+ * A literal repository-identity check inside otherwise-generic
+ * distributed code is an intentional, narrow exception, not a pattern to
+ * extend -- every other repository-specific behavior in this codebase is
+ * config-driven, never an identity check. */
+const SELF_REFERENTIAL_ALLOWLIST_ORIGIN_REPOSITORY = 'kurone-kito/idd-skill';
+
+/** kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895): the
+ * trigger-file allowlist a given repository/profile pair actually
+ * verifies against at consume time, mirroring the derivation the
+ * distributed `idd-template/` copy of `idd-advisory-convergence.yml`'s
+ * own posting-side bash step performs (kept in sync by hand across the
+ * two languages/files, the same convention already used for
+ * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} itself). The two
+ * workflow paths are profile-invariant -- every profile's own checker
+ * version pin lives in one of them or in the profile-specific paths
+ * below. Granularity is deliberately whole-file, matching this
+ * repository's own `.mts`-based allowlist: a `package.json` touch for
+ * any reason (not only an `idd-skill` dependency bump) satisfies the
+ * `package-manager` case, exactly as an unrelated `.mts` edit already
+ * satisfies this repository's own case today. */
+export function resolveSelfReferentialTriggerFiles(
+  helperRuntimeProfile: string | undefined,
+  repositoryFullName: string | undefined,
+): readonly string[] {
+  if (
+    String(repositoryFullName ?? '').toLowerCase() ===
+    SELF_REFERENTIAL_ALLOWLIST_ORIGIN_REPOSITORY
+  ) {
+    return SELF_REFERENTIAL_WAIVER_TRIGGER_FILES;
+  }
+  const workflowPaths = [
+    '.github/workflows/idd-advisory-convergence.yml',
+    '.github/workflows/idd-advisory-convergence-comment.yml',
+  ];
+  switch (helperRuntimeProfile) {
+    case 'vendored-node':
+      return [
+        'scripts/advisory-convergence.mjs',
+        'scripts/advisory-wait-state.mjs',
+        'scripts/advisory-wait-policy.mjs',
+        'scripts/rerun-advisory-convergence.mjs',
+        'scripts/external-check-waiver.mjs',
+        ...workflowPaths,
+      ];
+    case 'package-manager':
+      return [
+        'package.json',
+        'package-lock.json',
+        'pnpm-lock.yaml',
+        'yarn.lock',
+        ...workflowPaths,
+      ];
+    default:
+      return workflowPaths;
+  }
+}
 
 /** kurone-kito/idd-skill#2657: this gate's own workflow file path, as
  * reported by the GitHub Actions runs API's `path` field -- the value a
@@ -686,6 +762,17 @@ export interface AdvisoryConvergenceOptions {
    * itself. Omitted/empty fails that check closed (no auto-waiver can
    * ever validate), the safe default. */
   repositoryFullName?: string;
+  /** kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895): this
+   * repository's own configured `helperRuntime.profile`
+   * (`.github/idd/config.json`), used only by
+   * {@link resolveSelfReferentialTriggerFiles} to derive a
+   * profile-appropriate self-referential-bootstrap-auto trigger-file
+   * allowlist for a repository other than this source repository (which
+   * always uses its own fixed
+   * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} list regardless of this
+   * value). Omitted/unrecognized resolves to the two workflow paths
+   * only, the safe default (never widens). */
+  helperRuntimeProfile?: string;
   /** #2353: whether an active `providerOutage.declarationTarget`
    * declaration exists for THIS gate's own selector, already resolved by
    * the caller (fetch, validity, actor authority -- see
@@ -1594,11 +1681,12 @@ export function computeAdvisoryConvergenceVerdict(
   // doc comment for the exact bypass this closes. This is a hard
   // precondition on `autoWaiverValid` below, independent of the four
   // run-id trust conditions.
+  const selfReferentialTriggerFiles = resolveSelfReferentialTriggerFiles(
+    options.helperRuntimeProfile,
+    autoWaiverRepositoryFullName,
+  );
   const touchesSelfReferentialAllowlist = (inputs.changedFilePaths ?? []).some(
-    (path) =>
-      (SELF_REFERENTIAL_WAIVER_TRIGGER_FILES as readonly string[]).includes(
-        path,
-      ),
+    (path) => selfReferentialTriggerFiles.includes(path),
   );
   // Defense in depth: the trust-set extension above already scopes the
   // call to one login, but a marker's `reason`/`runId` are still
@@ -2577,6 +2665,20 @@ export function collectFromGitHub(
   // pattern) -- re-declaring the shape here would silently stop tracking
   // that source of truth on drift.
   const policy = normalizePolicyConfig(rawConfig);
+  // kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895): read
+  // directly from the already-loaded `rawConfig` rather than a second
+  // `.github/idd/config.json` read (see the reviewPolicy read below for
+  // the same convention) -- `normalizePolicyConfig` does not carry
+  // `helperRuntime` through its own normalized shape, since that section
+  // is validated (not defaulted) elsewhere (`policy-helpers.mts`).
+  const rawHelperRuntime = (rawConfig as { helperRuntime?: unknown } | null)
+    ?.helperRuntime;
+  const helperRuntimeProfile =
+    rawHelperRuntime &&
+    typeof rawHelperRuntime === 'object' &&
+    typeof (rawHelperRuntime as { profile?: unknown }).profile === 'string'
+      ? (rawHelperRuntime as { profile: string }).profile
+      : undefined;
 
   // Resolved once and reused below AND in the returned `options.now` --
   // #2353 (Codex review on PR #2370): the declaration-validity read must
@@ -2851,6 +2953,7 @@ export function collectFromGitHub(
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
       repositoryFullName: owner && repo ? `${owner}/${repo}` : '',
+      helperRuntimeProfile,
       outageDeclarationActive,
       sameHeadRerollCap,
       pendingWindowMinutes,

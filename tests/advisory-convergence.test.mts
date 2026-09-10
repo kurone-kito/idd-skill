@@ -29,6 +29,7 @@ import {
   pickResolvingClaimEvents,
   readCopilotReviewPollPolicy,
   resolveClaimEvidence,
+  resolveSelfReferentialTriggerFiles,
   retryTransientGhFailure,
   reviewPolicyNotApplicableReason,
   runAdvisoryConvergence,
@@ -3635,6 +3636,203 @@ test('ADVISORY_CONVERGENCE_WORKFLOW_PATH stays a member of SELF_REFERENTIAL_WAIV
       ADVISORY_CONVERGENCE_WORKFLOW_PATH,
     ),
   );
+});
+
+test('resolveSelfReferentialTriggerFiles: this source repository always resolves its own fixed list, regardless of profile (Codex + Copilot review, PR #2895)', () => {
+  for (const profile of [undefined, 'vendored-node', 'package-manager']) {
+    assert.deepEqual(
+      resolveSelfReferentialTriggerFiles(profile, REPO_FULL_NAME),
+      SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
+    );
+    // Case-insensitive, matching every other repository-identity
+    // comparison in this codebase.
+    assert.deepEqual(
+      resolveSelfReferentialTriggerFiles(profile, 'Kurone-Kito/IDD-Skill'),
+      SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
+    );
+  }
+});
+
+test('resolveSelfReferentialTriggerFiles: a vendored-node adopter resolves the compiled .mjs paths it actually vends', () => {
+  const resolved = resolveSelfReferentialTriggerFiles(
+    'vendored-node',
+    'someone-else/adopter-repo',
+  );
+  assert.deepEqual(resolved, [
+    'scripts/advisory-convergence.mjs',
+    'scripts/advisory-wait-state.mjs',
+    'scripts/advisory-wait-policy.mjs',
+    'scripts/rerun-advisory-convergence.mjs',
+    'scripts/external-check-waiver.mjs',
+    ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    '.github/workflows/idd-advisory-convergence-comment.yml',
+  ]);
+  // Never this source repository's own .mts sources, which that profile
+  // never vends.
+  for (const mtsPath of SELF_REFERENTIAL_WAIVER_TRIGGER_FILES) {
+    if (mtsPath.endsWith('.mts')) {
+      assert.ok(!resolved.includes(mtsPath));
+    }
+  }
+});
+
+test('resolveSelfReferentialTriggerFiles: a package-manager adopter resolves its dependency manifest and lockfiles', () => {
+  const resolved = resolveSelfReferentialTriggerFiles(
+    'package-manager',
+    'someone-else/adopter-repo',
+  );
+  assert.deepEqual(resolved, [
+    'package.json',
+    'package-lock.json',
+    'pnpm-lock.yaml',
+    'yarn.lock',
+    ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    '.github/workflows/idd-advisory-convergence-comment.yml',
+  ]);
+});
+
+test('resolveSelfReferentialTriggerFiles: an unrecognized or absent profile resolves only the profile-invariant workflow paths', () => {
+  for (const profile of [undefined, 'ephemeral-npx', 'instructions-only']) {
+    assert.deepEqual(
+      resolveSelfReferentialTriggerFiles(profile, 'someone-else/adopter-repo'),
+      [
+        ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+        '.github/workflows/idd-advisory-convergence-comment.yml',
+      ],
+    );
+  }
+});
+
+test('self-referential-bootstrap-auto: a vendored-node adopter touching its own compiled .mjs checker is accepted (Codex + Copilot review, PR #2895)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: 'someone-else/adopter-repo',
+        },
+      },
+      changedFilePaths: ['scripts/advisory-convergence.mjs'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: 'someone-else/adopter-repo',
+      helperRuntimeProfile: 'vendored-node',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: a package-manager adopter touching package.json is accepted (Codex + Copilot review, PR #2895)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: 'someone-else/adopter-repo',
+        },
+      },
+      changedFilePaths: ['package.json'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: 'someone-else/adopter-repo',
+      helperRuntimeProfile: 'package-manager',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test("self-referential-bootstrap-auto: a non-origin repository touching this source repository's own .mts path is rejected (no cross-profile union, Codex + Copilot review, PR #2895)", () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          // Matches the run/repository the four trust conditions check --
+          // isolating the allowlist check as the ONLY reason this is
+          // rejected, not a coincidental repository mismatch too.
+          repositoryFullName: 'someone-else/adopter-repo',
+        },
+      },
+      // Only this source repository's own .mts path -- never a member of
+      // a vendored-node adopter's profile-derived list.
+      changedFilePaths: ['src/scripts/advisory-convergence.mts'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: 'someone-else/adopter-repo',
+      helperRuntimeProfile: 'vendored-node',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: this source repository ignores its own configured package-manager profile and keeps its fixed .mts list (Codex + Copilot review, PR #2895)', () => {
+  // This source repository's own `.github/idd/config.json` declares
+  // `helperRuntime.profile: "package-manager"` for its IDD dependency,
+  // but its OWN required check's trigger files are its `.mts` sources
+  // regardless -- a package.json touch must never satisfy it.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: ['package.json'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+      helperRuntimeProfile: 'package-manager',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
 });
 
 // --- #1570 AC6: no code path this issue adds ever invokes `gh pr merge
