@@ -3249,6 +3249,39 @@ test('computeRefreshLatestPlan: a run-lookup failure (matching its real runEvent
   assert.match(plan.reason, /could not be fetched/);
 });
 
+// Copilot review (PR #2855, round 11, "previously missed"): a run that
+// resolved successfully (runId set, runLookupFailed: false) can still
+// carry an empty runEvent -- the run lookup itself succeeded, but
+// GitHub's own `event` field on that run came back unset. This is
+// distinct from the two unresolvable shapes above (runId: null,
+// runLookupFailed: true), which both already carry runEvent: null as a
+// SIDE EFFECT of the failed/missing lookup -- here the lookup worked and
+// the event is what's genuinely missing. Must fail closed like those
+// cases, not fall into the "genuinely different, known event" bucket.
+test('computeRefreshLatestPlan: a resolved run whose own event field is empty is reported as unresolvable, not as a genuinely different event', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          runId: '5001',
+          runLookupFailed: false,
+          runEvent: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
+  assert.match(plan.reason, /triggering event could not be determined/);
+  assert.doesNotMatch(
+    plan.reason,
+    /nothing has triggered|check-run instance exists yet/,
+    'a resolved-but-unlabeled run must not be reported as though this HEAD has no check-run instance at all',
+  );
+  assert.equal(plan.unresolvedInstanceCount, 1);
+});
+
 test('computeRefreshLatestPlan: every instance resolving to a genuinely different event names that event in the reason', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({

@@ -663,11 +663,29 @@ export function computeRefreshLatestPlan(input, options) {
     const resolvedRunEvent = String(instance.runEvent ?? '')
       .trim()
       .toLowerCase();
+    if (!resolvedRunEvent) {
+      // Fail closed (Copilot, PR #2855 review, "previously missed"): the
+      // run id resolved and its lookup succeeded (both checked above), but
+      // the run's own `event` field still came back empty/unset -- a
+      // genuinely UNKNOWN triggering event, not a genuinely DIFFERENT,
+      // identified one. Treating this the same as the `nonFamilyEvents`
+      // case below would silently drop the sole instance for a HEAD into
+      // "nothing has triggered yet", the exact false reassurance the
+      // doc comment above this loop already guards against for the
+      // runId/runLookupFailed cases -- this closes the same gap for a
+      // resolved-but-unlabeled run. Mirrors classifyInstance step 6's
+      // "unknown triggering event => unresolved/inspect manually" for the
+      // ordinary --apply path.
+      unresolvableReasons.push(
+        `check-run ${instance.checkRunId} resolved to run id ${instance.runId} but its triggering event could not be determined`,
+      );
+      continue;
+    }
     if (!PULL_REQUEST_FAMILY_EVENTS.has(resolvedRunEvent)) {
       // Resolved, but genuinely a different (non-family) trigger for
       // this same check-run name -- not ours to touch, and not
       // unresolvable either.
-      nonFamilyEvents.add(resolvedRunEvent || '(unknown)');
+      nonFamilyEvents.add(resolvedRunEvent);
       continue;
     }
     const status = String(instance.status ?? '')
