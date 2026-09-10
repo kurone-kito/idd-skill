@@ -135,6 +135,33 @@ test('listOpenWorkItems maps REST created_at into createdAt, like getWorkItem', 
   assert.equal(item.createdAt, '2026-08-01T00:00:00Z');
 });
 
+// #2767 (CodeRabbit review, PR #2840): same gap, same shape, for `user` --
+// getWorkItem already mapped REST's `user` into ProviderWorkItem's `user`
+// field, but listOpenWorkItems's own row mapping omitted it too.
+// discover-orphan-filter.mts's live CLI wiring reads the author login for
+// the `trustedEditor` structural-evidence signal straight off this bulk
+// result, so the gap silently made that signal fail closed for every live
+// orphan candidate, while every test using a hand-built fixture (bypassing
+// this REST-shape mapping) stayed green.
+test('listOpenWorkItems maps REST user into user, like getWorkItem', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          number: 901,
+          title: 'issue 901',
+          state: 'open',
+          user: { login: 'alice' },
+        },
+      ],
+    }),
+  );
+  const [item] = port.listOpenWorkItems();
+  assert.deepEqual(item.user, { login: 'alice' });
+});
+
 // ---------------------------------------------------------------------------
 // listRequiredChecks (#2266): the pre-migration ghJson/
 // recoverJsonFromGhFailure recovery this method replaces, verified through
@@ -445,6 +472,46 @@ test('getWorkItemUserContentEditTimestamps returns an empty array for a genuinel
   assert.deepEqual(port.getWorkItemUserContentEditTimestamps(2738), []);
 });
 
+test('getWorkItemUserContentEditTimestamps fetches only a single bounded page even when hasPreviousPage is true (Codex review, PR #2840, round 12)', () => {
+  // The newest edit is always present in the newest `last:100` page,
+  // regardless of total edit count, and every real caller only needs the
+  // maximum timestamp -- delegating to the full backward-paginated
+  // getWorkItemUserContentEdits (added for the trustedEditor signal,
+  // which genuinely needs every editor) previously multiplied GraphQL
+  // cost for a large edit history and could throw past 1,000 edits for a
+  // read that only ever needed one timestamp.
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: (args) => {
+        call += 1;
+        assert.ok(
+          !args.some((arg) => String(arg).startsWith('before=')),
+          'the single page must not send a before cursor',
+        );
+        return JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: { hasPreviousPage: true, startCursor: 'CURSOR_1' },
+                  nodes: [{ editedAt: '2026-09-09T01:08:31Z' }],
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  assert.deepEqual(port.getWorkItemUserContentEditTimestamps(2738), [
+    '2026-09-09T01:08:31Z',
+  ]);
+  assert.equal(call, 1, 'must fetch exactly one page, never paginate');
+});
+
 test('getWorkItemUserContentEditTimestamps throws when the issue node is null/absent', () => {
   const port = createGithubProviderAdapter(
     'kurone-kito',
@@ -490,6 +557,189 @@ test('getWorkItemUserContentEditTimestamps throws when nodes is missing from an 
   assert.throws(
     () => port.getWorkItemUserContentEditTimestamps(2738),
     /connection, or nodes is null\/absent/,
+  );
+});
+
+// #2767 (Codex/CodeRabbit review, PR #2840): a single `last:100` page
+// silently dropped an untrusted editor beyond the most recent 100 edits --
+// exactly the laundering path the `trustedEditor` signal exists to block.
+// getWorkItemUserContentEdits now pages backward via
+// `before`/`hasPreviousPage` until the full connection is read.
+
+test('getWorkItemUserContentEdits pages backward across multiple pages and aggregates every editor', () => {
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: (args) => {
+        call += 1;
+        // First call omits the `before` variable entirely; the second
+        // call must carry the first page's startCursor forward.
+        if (call === 1) {
+          assert.ok(
+            !args.some((arg) => String(arg).startsWith('before=')),
+            'first page must not send a before cursor',
+          );
+          return JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  userContentEdits: {
+                    pageInfo: {
+                      hasPreviousPage: true,
+                      startCursor: 'CURSOR_1',
+                    },
+                    nodes: [
+                      {
+                        editedAt: '2026-09-08T00:00:00Z',
+                        editor: { login: 'trusted-actor' },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          });
+        }
+        assert.equal(call, 2);
+        assert.ok(
+          args.includes('before=CURSOR_1'),
+          "second page must carry the first page's startCursor",
+        );
+        return JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: { hasPreviousPage: false, startCursor: null },
+                  nodes: [
+                    {
+                      editedAt: '2026-01-01T00:00:00Z',
+                      editor: { login: 'untrusted-actor' },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  const edits = port.getWorkItemUserContentEdits(2840);
+  assert.equal(call, 2);
+  assert.deepEqual(edits.map((edit) => edit.editorLogin).sort(), [
+    'trusted-actor',
+    'untrusted-actor',
+  ]);
+});
+
+test('getWorkItemUserContentEdits returns edits in ascending editedAt order even though the newer page is fetched first (Copilot review, PR #2840)', () => {
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        call += 1;
+        // Page 1 (fetched first) holds the NEWER edit; page 2 (fetched
+        // second, via `before:`) holds the OLDER one -- backward
+        // pagination visits pages newest-first, so a naive
+        // `allNodes.push(...page.nodes)` per page would append the older
+        // page after the newer one, leaving the overall array
+        // newest-first rather than ascending.
+        if (call === 1) {
+          return JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  userContentEdits: {
+                    pageInfo: {
+                      hasPreviousPage: true,
+                      startCursor: 'CURSOR_1',
+                    },
+                    nodes: [{ editedAt: '2026-09-08T00:00:00Z' }],
+                  },
+                },
+              },
+            },
+          });
+        }
+        return JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: { hasPreviousPage: false, startCursor: null },
+                  nodes: [{ editedAt: '2026-01-01T00:00:00Z' }],
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  const edits = port.getWorkItemUserContentEdits(2840);
+  assert.deepEqual(
+    edits.map((edit) => edit.editedAt),
+    ['2026-01-01T00:00:00Z', '2026-09-08T00:00:00Z'],
+  );
+});
+
+test('getWorkItemUserContentEdits throws when hasPreviousPage is true but startCursor is absent', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: { hasPreviousPage: true, startCursor: null },
+                  nodes: [{ editedAt: '2026-09-08T00:00:00Z' }],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemUserContentEdits(2840),
+    /hasPreviousPage is true but startCursor is absent/,
+  );
+});
+
+test('getWorkItemUserContentEdits fails closed after exceeding the max page count', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: {
+                    hasPreviousPage: true,
+                    startCursor: 'ALWAYS_MORE',
+                  },
+                  nodes: [{ editedAt: '2026-09-08T00:00:00Z' }],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemUserContentEdits(2840),
+    /exceeded \d+ pages/,
   );
 });
 

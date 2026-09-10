@@ -44,6 +44,7 @@ import type {
   ProviderReviewThreadWithComments,
   ProviderTimelineEvent,
   ProviderTraversalIssueLookup,
+  ProviderUserContentEdit,
   ProviderWorkItem,
 } from './provider-port.mts';
 
@@ -72,8 +73,15 @@ export interface FakeProviderFixture {
   >;
   timelines?: Record<number, ProviderTimelineEvent[]>;
   /** Backs {@link ProviderPort.getWorkItemUserContentEditTimestamps}
-   * (#2762): GraphQL `userContentEdits.editedAt` values per issue number. */
+   * (#2762): GraphQL `userContentEdits.editedAt` values per issue number.
+   * Superseded by `userContentEdits` below (#2767) for a fixture that also
+   * needs editor identity; a fixture may set either or both -- when both
+   * are set for the same issue number, `userContentEdits` wins. */
   userContentEditTimestamps?: Record<number, string[]>;
+  /** Backs {@link ProviderPort.getWorkItemUserContentEdits} (#2767):
+   * GraphQL `userContentEdits { editedAt editor { login } }` records per
+   * issue number. */
+  userContentEdits?: Record<number, ProviderUserContentEdit[]>;
   comments?: Record<number, ProviderComment[]>;
   closingPullRequestPages?: Record<number, ProviderClosingPullRequestsPage[]>;
   connectedPrEventsSingle?: Record<number, ProviderConnectedPrEvent[]>;
@@ -257,6 +265,27 @@ export interface FakeProviderFixture {
   capabilityDeclarations?: ProviderCapabilityDeclaration[];
 }
 
+/**
+ * Backs both {@link ProviderPort.getWorkItemUserContentEdits} and
+ * {@link ProviderPort.getWorkItemUserContentEditTimestamps} (#2767):
+ * `fixture.userContentEdits` wins when set for `number`; otherwise falls
+ * back to `fixture.userContentEditTimestamps` (the #2762 shape), reporting
+ * `editorLogin: null` for every entry -- a fixture written before #2767
+ * keeps working unchanged, just with no editor-identity signal.
+ */
+function resolveFixtureUserContentEdits(
+  fixture: FakeProviderFixture,
+  number: number,
+): ProviderUserContentEdit[] {
+  const withEditors = fixture.userContentEdits?.[number];
+  if (withEditors) {
+    return withEditors;
+  }
+  return (fixture.userContentEditTimestamps?.[number] ?? []).map(
+    (editedAt) => ({ editedAt, editorLogin: null }),
+  );
+}
+
 export function createFakeProviderAdapter(
   fixture: FakeProviderFixture,
 ): ProviderPort {
@@ -337,8 +366,14 @@ export function createFakeProviderAdapter(
       return fixture.timelines?.[number] ?? [];
     },
 
+    getWorkItemUserContentEdits(number: number): ProviderUserContentEdit[] {
+      return resolveFixtureUserContentEdits(fixture, number);
+    },
+
     getWorkItemUserContentEditTimestamps(number: number): string[] {
-      return fixture.userContentEditTimestamps?.[number] ?? [];
+      return resolveFixtureUserContentEdits(fixture, number).map(
+        (edit) => edit.editedAt,
+      );
     },
 
     getWorkItemState(number: number): string | null {

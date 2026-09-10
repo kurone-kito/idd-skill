@@ -250,10 +250,6 @@ umbrella, or configure **`discover.legacyRoots`** (issue numbers,
 deduped against label/marker roots; invalid fails safe to none). See
 `docs/idd-helper-scripts.md`.
 
-**Note**: Repo-wide or label-based issue queries are permitted only in
-the scoped contexts A2 enumerates below (**A0-T**, **A0-O**, **A1**,
-**A1.5**, **A3**, **A4.5**); outside those, they are prohibited.
-
 ## A1.5 — Audit completed roadmaps
 
 After A1 selects an open roadmap, read
@@ -526,6 +522,10 @@ criteria. Fail any one → discard the issue.
   **complete** the work. Fail: requires operator to provide
   credentials; requires a product decision before the work can finish.
 
+**Structural-evidence demotion (#2767)**: Limited scope / Autonomous
+completion (never Clear verification) may demote to `warn` per
+`idd-suitability.instructions.md`'s matching edge case.
+
 If **no issue** survives the gate:
 
 - if the approval-needed fallback bucket from A3.5 is non-empty, apply
@@ -685,30 +685,26 @@ mutation policy, coordination rules, decision flow, and edge cases.
 Two hidden HTML comment markers are used in issue bodies to support the
 discover phase:
 
-- **Roadmap identity** (`idd-skill-roadmap-id`): placed in
-  the roadmap issue body; A3 uses it to resolve `blocked-by` dependency
-  lookups. A1 identifies the roadmap by its configured label or umbrella
-  structure, not by this marker.
-- **Sequential dependency** (`idd-skill-blocked-by`): placed
-  in an issue body to express a hard dependency — this issue **cannot
-  start until** the roadmap with the matching `roadmap-id` is closed.
+- **Roadmap identity** (`idd-skill-roadmap-id`): in the
+  roadmap issue body; A3 uses it for `blocked-by` lookups. A1 finds the
+  roadmap by its label or umbrella structure, not this marker.
+- **Sequential dependency** (`idd-skill-blocked-by`): in an
+  issue body — this issue **cannot start until** the roadmap with the
+  matching `roadmap-id` is closed.
 
 **Do not use `idd-skill-blocked-by` to group sub-tasks under
-an active roadmap.** Sub-tasks that should be worked on while the
-roadmap is open belong in the roadmap's task list as `- [ ] #NNN`
-entries; `blocked-by` is reserved for issues that must wait for a
-separate, prior roadmap to close (cross-phase sequential dependency) —
-see the
+an active roadmap** — those belong in the roadmap's task list as
+`- [ ] #NNN` entries. `blocked-by` is only for a separate, prior
+roadmap that must close first; see the
 [A3 diagnostic](../../docs/idd-design-rationale.md#a3--diagnostic-all-candidates-blocked-by-an-open-roadmap)
-for the resulting deadlock pattern.
+for the deadlock this prevents.
 
 ## Scope invariant (summary)
 
-Do not widen issue-selection scope beyond the roadmap traversal except
-for the explicit query allowlist already defined in A0-T, A0-O, A1,
-A1.5, A3, and A4.5, or for a same-run operator opt-in per A3 step 5
-(never inferred from prior or standing instructions). A single explicit
-target authorizes only that issue, except when A0-T step 2 classifies it
-as a roadmap node: then it authorizes normal selection scoped to that
+Do not widen issue-selection scope beyond A2's query allowlist (A0-T,
+A0-O, A1, A1.5, A3, A4.5) or a same-run operator opt-in per A3 step 5
+(never inferred from standing instructions). An explicit target
+authorizes only that issue, except when A0-T step 2 classifies it as a
+roadmap node: then it authorizes normal selection scoped to that
 roadmap's own descendants only, never an unrelated orphan issue (A0-O
 stays excluded, per A0-T step 2).

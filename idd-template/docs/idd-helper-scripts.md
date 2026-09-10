@@ -616,10 +616,17 @@ one or more issues.
 - **Inputs**: `--issue <number>` (repeatable) or `--issues <n1,n2,...>`,
   with optional `--csv`, `--owner <owner>`, and `--repo <repo>`.
 - **JSON output**:
-  - `viable`: `[{ number: number, title: string }]`
+  - `viable`: `[{ number: number, title: string, criteria?: [{ id: string,`
+    `name: string, result: "pass" | "warn" | "fail", evidence: string }] }]`
+    -- `criteria` is present only when at least one criterion was
+    structural-evidence-**demoted** (`#2767`: a lexical `fail` that all
+    three structural signals -- `verificationCommand`,
+    `candidateFilesExist`, `trustedEditor` -- demote to a `warn`-annotated
+    pass); an ordinary fully-passed issue keeps the pre-`#2767` two-field
+    shape, `criteria` omitted entirely, not an empty array.
   - `discarded`: `[{ number: number, title: string,`
     `failedCriteria: string[], criteria?: [{ id: string, name: string,`
-    `result: "pass" | "fail", evidence: string }] }]`
+    `result: "pass" | "warn" | "fail", evidence: string }] }]`
   - `summary`: `{ total: number, viableCount: number,`
     `discardedCount: number, discardedByCriterion: Record<string, number> }`
 - **Error conditions**: missing issue arguments or unknown flags throw;
@@ -630,9 +637,23 @@ one or more issues.
 
   ```json
   {
-    "viable": [{ "number": 123, "title": "trim helper docs" }],
+    "viable": [
+      { "number": 123, "title": "trim helper docs" },
+      {
+        "number": 125,
+        "title": "add retry to flaky helper",
+        "criteria": [
+          {
+            "id": "limited_scope",
+            "name": "Limited scope",
+            "result": "warn",
+            "evidence": "Structural evidence (verification command, candidate file, trusted editor) demotes an otherwise-failing lexical scan."
+          }
+        ]
+      }
+    ],
     "discarded": [{ "number": 124, "title": "rewrite workflow", "failedCriteria": ["limited_scope", "autonomous_completion"] }],
-    "summary": { "total": 2, "viableCount": 1, "discardedCount": 1, "discardedByCriterion": { "limited_scope": 1, "autonomous_completion": 1 } }
+    "summary": { "total": 3, "viableCount": 2, "discardedCount": 1, "discardedByCriterion": { "limited_scope": 1, "autonomous_completion": 1 } }
   }
   ```
 
@@ -1525,6 +1546,12 @@ Interpretation rules:
 
 - Stable fields consumed by A4: `viable[].number`, `discarded[].number`,
   `discarded[].failedCriteria`, and `summary.viableCount`
+- `viable[]` entries also carry an optional `criteria` array (`#2767`,
+  same shape as `discarded[].criteria`) whenever structural evidence
+  demoted a criterion to a `warn`-annotated pass; omitted for an
+  ordinarily fully-passed issue, so this stays additive to the stable
+  two-field shape above -- see the Discover Viability Gate Contract
+  section for the full `criteria` shape and a worked example.
 - The helper evaluates the three A4 viability criteria (limited scope, clear
   verification, autonomous completion) against fetched issue bodies; it does
   not post claims or mutate any state

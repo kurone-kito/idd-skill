@@ -57,6 +57,7 @@ import type {
   ProviderReviewThreadWithComments,
   ProviderTimelineEvent,
   ProviderTraversalIssueLookup,
+  ProviderUserContentEdit,
   ProviderWorkItem,
 } from './provider-port.mts';
 
@@ -146,6 +147,184 @@ function assertNoGraphqlErrors(payload: unknown, context: string): void {
         .slice(0, 200)}`,
     );
   }
+}
+
+/**
+ * Backs {@link ProviderPort.getWorkItemUserContentEdits} (via
+ * {@link fetchWorkItemUserContentEdits}'s full backward-pagination loop
+ * over this single-page fetch) and, directly (one call, no pagination --
+ * Codex review, PR #2840, round 12; previously a thin `.map` over the
+ * former's full result, which paginated the entire history just to read
+ * one timestamp), {@link ProviderPort.getWorkItemUserContentEditTimestamps}.
+ * Extracted to a standalone function, rather than one method calling the
+ * other via `this`, since every other method on the returned adapter
+ * object is a plain closure over `deps`/`owner`/`repo` with no `this`
+ * usage anywhere else in this file.
+ *
+ * #2767: widened from #2762's original `editedAt`-only query to also
+ * select `editor { login }`, so a caller can evaluate WHO made each edit
+ * (a `trustedEditor` structural-evidence signal) as well as WHEN.
+ * `editor` resolves to `null` for a deleted/ghost account -- GitHub still
+ * records the edit itself.
+ */
+/** Bounds the backward-pagination loop in {@link fetchWorkItemUserContentEdits}
+ * below: 10 pages of 100 edits each (1,000 total) is far beyond any
+ * realistic issue's edit history, so hitting it indicates a runaway
+ * connection (or a malicious/corrupted response) rather than a genuine
+ * long-lived issue -- fail closed (throw) past this rather than silently
+ * truncating the trust-relevant editor set the way the un-paginated
+ * `last:100` query already did. */
+const USER_CONTENT_EDITS_MAX_PAGES = 10;
+
+function fetchWorkItemUserContentEditsPage(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  number: number,
+  before: string | null,
+): {
+  nodes: { editedAt?: unknown; editor?: { login?: unknown } | null }[];
+  hasPreviousPage: boolean;
+  startCursor: string | null;
+} {
+  const query = `query($owner:String!,$repo:String!,$number:Int!,$before:String){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      userContentEdits(last:100, before:$before){
+        pageInfo { hasPreviousPage startCursor }
+        nodes { editedAt editor { login } }
+      }
+    }
+  }
+}`;
+  const apiArgs = [
+    'api',
+    'graphql',
+    ...graphqlHostnameArgs(),
+    '-f',
+    `query=${query}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${number}`,
+  ];
+  // Omit the `before` variable entirely on the first page (rather than
+  // passing an empty-string `-f before=`, which GraphQL would treat as a
+  // literal empty-string cursor, not "unset") -- mirrors
+  // getWorkItemClosingPullRequestsPage's own `after` handling below.
+  if (before) {
+    apiArgs.push('-f', `before=${before}`);
+  }
+  const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
+    data?: {
+      repository?: {
+        issue?: {
+          userContentEdits?: {
+            pageInfo?: {
+              hasPreviousPage?: unknown;
+              startCursor?: unknown;
+            } | null;
+            nodes?:
+              | { editedAt?: unknown; editor?: { login?: unknown } | null }[]
+              | null;
+          } | null;
+        } | null;
+      } | null;
+    };
+    errors?: { message?: unknown }[];
+  };
+  assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
+  // Codex review, PR #2836: reject an absent connection/nodes array
+  // instead of defaulting to `[]` -- a null `issue` (deleted/
+  // inaccessible between the earlier REST fetch and this call), a null
+  // `userContentEdits`, or a payload missing `nodes` entirely are all
+  // genuine read failures, indistinguishable from "zero edits" if
+  // silently coerced to an empty array. Every caller of this method
+  // already treats a throw as "anchor unknown" and degrades accordingly
+  // (never falling back to a bare `created_at` anchor) -- swallowing
+  // this case here would silently reintroduce that exact failure mode
+  // one layer down.
+  const connection = parsed.data?.repository?.issue?.userContentEdits;
+  if (!connection || !Array.isArray(connection.nodes)) {
+    throw new Error(
+      'userContentEdits: issue, connection, or nodes is null/absent',
+    );
+  }
+  return {
+    nodes: connection.nodes,
+    hasPreviousPage: connection.pageInfo?.hasPreviousPage === true,
+    startCursor:
+      typeof connection.pageInfo?.startCursor === 'string'
+        ? connection.pageInfo.startCursor
+        : null,
+  };
+}
+
+/** #2767 (Codex/CodeRabbit review, PR #2840): the `trustedEditor` signal
+ * requires every recorded editor to be trusted, so a single `last:100`
+ * page silently dropped an untrusted editor beyond the most recent 100
+ * edits -- exactly the laundering path the signal exists to block. Pages
+ * backward via `before:`/`hasPreviousPage` until the full connection is
+ * read, bounded by {@link USER_CONTENT_EDITS_MAX_PAGES}. Each individual
+ * page is itself chronologically ascending (GitHub's own connection
+ * order), but backward pagination reads the *newest* page first --
+ * appending each successively older page after the previous one would
+ * leave the newest edits first and the oldest last overall, breaking
+ * {@link ProviderPort.getWorkItemUserContentEdits}'s documented ascending
+ * contract (Copilot review, PR #2840); sort by `editedAt` below rather
+ * than weaken that contract to match the pagination order. */
+function fetchWorkItemUserContentEdits(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  number: number,
+): ProviderUserContentEdit[] {
+  const allNodes: {
+    editedAt?: unknown;
+    editor?: { login?: unknown } | null;
+  }[] = [];
+  let before: string | null = null;
+  for (let page = 0; page < USER_CONTENT_EDITS_MAX_PAGES; page += 1) {
+    const result = fetchWorkItemUserContentEditsPage(
+      deps,
+      owner,
+      repo,
+      number,
+      before,
+    );
+    allNodes.push(...result.nodes);
+    if (!result.hasPreviousPage) {
+      return allNodes
+        .filter(
+          (
+            node,
+          ): node is {
+            editedAt: string;
+            editor?: { login?: unknown } | null;
+          } => typeof node?.editedAt === 'string',
+        )
+        .map((node) => ({
+          editedAt: node.editedAt,
+          editorLogin:
+            typeof node.editor?.login === 'string' ? node.editor.login : null,
+        }))
+        .sort(
+          (left, right) =>
+            Date.parse(left.editedAt) - Date.parse(right.editedAt),
+        );
+    }
+    if (!result.startCursor) {
+      throw new Error(
+        'userContentEdits: hasPreviousPage is true but startCursor is absent',
+      );
+    }
+    before = result.startCursor;
+  }
+  throw new Error(
+    `userContentEdits: exceeded ${USER_CONTENT_EDITS_MAX_PAGES} pages without reaching the start of the connection`,
+  );
 }
 
 /**
@@ -737,6 +916,13 @@ export function createGithubProviderAdapter(
           htmlUrl:
             row.html_url === undefined ? undefined : String(row.html_url),
           milestone: row.milestone,
+          // #2767 (CodeRabbit review, PR #2840): populate user like
+          // getWorkItem() above already does -- discover-orphan-filter.mts's
+          // structural-evidence trustedEditor signal reads the author login
+          // straight off the bulk listOpenWorkItems() result (no secondary
+          // per-issue fetch), so an absent value here silently made the
+          // author check fail closed for every live orphan candidate.
+          user: row.user,
           // #2243 (Copilot review, PR #2557): populate createdAt like
           // getWorkItem() above already does -- discover-orphan-filter.mts's
           // triage-verdict staleness anchor reads this field straight off
@@ -776,59 +962,42 @@ export function createGithubProviderAdapter(
       }) as ProviderTimelineEvent[];
     },
 
+    getWorkItemUserContentEdits(number: number): ProviderUserContentEdit[] {
+      return fetchWorkItemUserContentEdits(deps, owner, repo, number);
+    },
+
     getWorkItemUserContentEditTimestamps(number: number): string[] {
-      const query = `query($owner:String!,$repo:String!,$number:Int!){
-  repository(owner:$owner,name:$repo){
-    issue(number:$number){
-      userContentEdits(last:100){
-        nodes { editedAt }
-      }
-    }
-  }
-}`;
-      const apiArgs = [
-        'api',
-        'graphql',
-        ...graphqlHostnameArgs(),
-        '-f',
-        `query=${query}`,
-        '-f',
-        `owner=${owner}`,
-        '-f',
-        `repo=${repo}`,
-        '-F',
-        `number=${number}`,
-      ];
-      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
-        data?: {
-          repository?: {
-            issue?: {
-              userContentEdits?: { nodes?: { editedAt?: unknown }[] } | null;
-            } | null;
-          } | null;
-        };
-        errors?: { message?: unknown }[];
-      };
-      assertNoGraphqlErrors(parsed, 'userContentEdits lookup');
-      // Codex review, PR #2836: reject an absent connection/nodes array
-      // instead of defaulting to `[]` -- a null `issue` (deleted/
-      // inaccessible between the earlier REST fetch and this call), a
-      // null `userContentEdits`, or a payload missing `nodes` entirely
-      // are all genuine read failures, indistinguishable from "zero
-      // edits" if silently coerced to an empty array. Every caller of
-      // this method already treats a throw as "anchor unknown" and
-      // degrades accordingly (never falling back to a bare `created_at`
-      // anchor) -- swallowing this case here would silently reintroduce
-      // that exact failure mode one layer down.
-      const connection = parsed.data?.repository?.issue?.userContentEdits;
-      if (!connection || !Array.isArray(connection.nodes)) {
-        throw new Error(
-          'userContentEdits: issue, connection, or nodes is null/absent',
-        );
-      }
-      return connection.nodes
-        .map((node) => node?.editedAt)
-        .filter((value): value is string => typeof value === 'string');
+      // #2767 round 12 (Codex review, PR #2840): a single bounded page --
+      // GraphQL's own `last:100`, no `before` cursor -- is enough for
+      // every existing timestamp-only consumer (discover-readiness-check.mts,
+      // discover-orphan-filter.mts, claim-approval-gate.mts, all via
+      // resolveLatestSubstantiveIssueEditAt or an equivalent max-of-array
+      // read): the true newest edit is always among the newest page,
+      // regardless of total edit count, and none of them assume any
+      // particular ordering. Delegating to fetchWorkItemUserContentEdits
+      // (the full backward-paginated fetch #2767 added so the
+      // trustedEditor signal sees EVERY editor, not just the most recent
+      // 100) previously multiplied GraphQL cost by up to
+      // USER_CONTENT_EDITS_MAX_PAGES for an issue with a large edit
+      // history, and its 1,000-edit throw turned a freshness-only read
+      // into a hard failure -- discover-orphan-filter.mts's own
+      // freshness-anchor logic treats a thrown fetch as "anchor unknown"
+      // and retains a candidate despite an actual, current trusted
+      // rejection. getWorkItemUserContentEdits itself is unchanged: it
+      // still needs the full paginated history.
+      const page = fetchWorkItemUserContentEditsPage(
+        deps,
+        owner,
+        repo,
+        number,
+        null,
+      );
+      return page.nodes
+        .filter(
+          (node): node is { editedAt: string } =>
+            typeof node?.editedAt === 'string',
+        )
+        .map((node) => node.editedAt);
     },
 
     getWorkItemState(number: number): string | null {

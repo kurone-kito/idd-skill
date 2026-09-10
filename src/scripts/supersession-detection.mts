@@ -140,6 +140,14 @@ export interface CheckOutcome {
   pass: boolean;
   evidence: string;
   tier?: 'high-confidence' | 'weak';
+  /** #2767: set by a check function itself -- never by its caller -- only
+   * when it converted one of its own specific lexical-pattern `fail`
+   * branches into `pass: true` because every `triage-structural-evidence.mts`
+   * signal held. The caller renders this as `result: 'warn'` instead of
+   * `'pass'` so a human reviewer still sees what matched, without
+   * affecting the overall pass/fail rollup (which already sees
+   * `pass: true`). Absent or `false` on every ordinary pass or fail. */
+  demoted?: boolean;
 }
 
 /**

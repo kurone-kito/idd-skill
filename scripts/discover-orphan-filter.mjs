@@ -4,6 +4,7 @@
 // The scripts/discover-orphan-filter.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { existsSync } from 'node:fs';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -15,6 +16,7 @@ import {
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
+import { collaboratorPermission } from './collaborator-permission.mjs';
 import {
   extractBlockedByIssueNumbers,
   extractDependencyIssueNumbers,
@@ -39,6 +41,13 @@ import {
   isSuitabilityTriageVerdictCurrent,
   resolveLatestSubstantiveIssueEditAt,
 } from './supersession-detection.mjs';
+import {
+  buildTrustedLoginPredicate,
+  candidateFilesExistOnDisk,
+  evaluateStructuralEvidence,
+  hasAllStructuralSignals,
+  hasVerificationCommandSignal,
+} from './triage-structural-evidence.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // A runtime/production-observation precondition (#2467) carries no
@@ -433,9 +442,21 @@ export function classifyIssue(issue, options) {
   // production-observation precondition has no issue-number reference to
   // resolve, so it must still hold even when every numbered reference below
   // is absent or already closed.
+  //
+  // #2767: a hit demotes to a warned orphan (fall through, don't return)
+  // only when every structural-evidence signal holds; otherwise this
+  // remains a hard filter exactly as before.
+  let runtimeObservationDemoted = false;
   if (detectRuntimeObservationPrecondition(body, Number(issue.number))) {
-    return { orphan: false, reason: 'runtime_observation_precondition' };
+    if (hasAllStructuralSignals(options.structuralEvidence)) {
+      runtimeObservationDemoted = true;
+    } else {
+      return { orphan: false, reason: 'runtime_observation_precondition' };
+    }
   }
+  const demotionWarning = runtimeObservationDemoted
+    ? { warning: 'runtime_observation_precondition_demoted' }
+    : {};
   // Two independent reference families, matching A3's own dependency check
   // in `discover-readiness-check.mts` (#1536): visible `Blocked by #NNN`
   // lines (a hard sequential dependency, no exemption) and `Depends on
@@ -451,7 +472,7 @@ export function classifyIssue(issue, options) {
   const blockedRefs = extractBlockedByReferences(body);
   const dependencyRefs = extractDependencyIssueNumbers(body);
   if (blockedRefs.length === 0 && dependencyRefs.length === 0) {
-    return { orphan: true, reason: 'orphan' };
+    return { orphan: true, reason: 'orphan', ...demotionWarning };
   }
   const unresolved = [];
   for (const ref of blockedRefs) {
@@ -502,7 +523,11 @@ export function classifyIssue(issue, options) {
   // earlier both-empty check already returned `orphan`) and every ref
   // resolved to a non-open, non-unresolvable state (closed, or an
   // exempt open parent epic) -- never "no refs at all" again.
-  return { orphan: true, reason: 'blocked_references_closed' };
+  return {
+    orphan: true,
+    reason: 'blocked_references_closed',
+    ...demotionWarning,
+  };
 }
 /**
  * Resolve whether an **open** dependency reference is exempt as a parent
@@ -547,6 +572,15 @@ export async function filterOrphanIssues(issues, options = {}) {
   const orphans = [];
   const unresolvable = [];
   const warnings = [];
+  // #2767 (CodeRabbit review, PR #2840): collected here, not pushed
+  // immediately -- a candidate can still be excluded from the final
+  // `orphans` list below (the triage-verdict-rejected filter, or
+  // autopilot's below-floor `routed_to_human` routing), and this warning's
+  // own text asserts "it stays listed as an orphan," which would be wrong
+  // for an issue that does not survive to the final partition. Emitted
+  // only for numbers still present in `ranked` at the end of this
+  // function.
+  const demotedOrphanNumbers = new Set();
   // Self-batch lookup for the dependency parent-epic exemption (#1536): in
   // the CLI wiring `issues` is always the full open-issue batch
   // (`fetchOpenIssues`), so any `Depends on` / task-list reference that
@@ -565,8 +599,15 @@ export async function filterOrphanIssues(issues, options = {}) {
   const issueCreatedAtByNumber = new Map(
     issues.map((candidate) => [candidate.number, candidate.createdAt]),
   );
+  // #2767: built once for the whole batch (not per-candidate) -- the
+  // static trustedMarkerLogins check is cheap, and isTrustedCollaborator
+  // (when supplied) already caches its own live lookups.
+  const isTrustedLogin = buildTrustedLoginPredicate(
+    options.trustedMarkerLogins ?? [],
+    options.isTrustedCollaborator ?? (() => false),
+  );
   for (const issue of issues) {
-    const result = classifyIssue(issue, {
+    const classifyOptions = {
       issueStateByNumber,
       fetchIssueStateByNumber,
       markerPrefix: options.markerPrefix,
@@ -576,7 +617,64 @@ export async function filterOrphanIssues(issues, options = {}) {
       roadmapLabelName: options.roadmapLabelName,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       openIssueDetailsByNumber,
-    });
+    };
+    let result = classifyIssue(issue, classifyOptions);
+    // #2767: only a `runtime_observation_precondition` filter can ever be
+    // demoted, and computing structural evidence costs a network fetch
+    // (editor logins plus a live collaborator-permission check) -- pay it
+    // only for a candidate that plain classification already filtered on
+    // exactly this reason, and only when the caller actually wired the
+    // editor-login fetch (absent means "never demotes", the prior
+    // byte-stable behavior).
+    if (
+      result.reason === 'runtime_observation_precondition' &&
+      typeof options.fetchUserContentEditorsByIssueNumber === 'function'
+    ) {
+      // Codex review, PR #2840 (round 15): check the two local-only
+      // signals first -- both read only the already-loaded issue body, no
+      // network call -- and skip `fetchUserContentEditorsByIssueNumber` (a
+      // paginated GraphQL round trip) plus the live collaborator-
+      // permission check entirely when either is already false. Demotion
+      // requires all three signals together, so a false
+      // verificationCommand/candidateFilesExist makes the live
+      // trustedEditor signal moot regardless of what it would resolve to
+      // -- the same short-circuit `discover-viability-gate.mts` and
+      // `suitability-triage.mts`'s own `computeLiveStructuralEvidence`
+      // already apply for this identical reason.
+      const body = String(issue.body ?? '');
+      const existsAt = options.existsAt ?? existsSync;
+      const verificationCommand = hasVerificationCommandSignal(body);
+      const candidateFilesExist = candidateFilesExistOnDisk(body, existsAt);
+      if (verificationCommand && candidateFilesExist) {
+        // CodeRabbit review, PR #2557 (same fail-open contract this file
+        // already applies below to its other opportunistic per-candidate
+        // fetches): a transient GitHub API failure from either the editor
+        // fetch or the live collaborator-permission check must not abort
+        // the whole default-on discover pass. Degrade to "no structural
+        // evidence available" -- keep the plain `result` computed above
+        // unchanged -- rather than crashing or guessing a trust verdict.
+        try {
+          const authorLogin = issue.user?.login;
+          const structuralEvidence = evaluateStructuralEvidence({
+            body,
+            author: typeof authorLogin === 'string' ? authorLogin : '',
+            editorLogins: options.fetchUserContentEditorsByIssueNumber(
+              issue.number,
+            ),
+            isTrustedLogin,
+            existsAt,
+          });
+          result = classifyIssue(issue, {
+            ...classifyOptions,
+            structuralEvidence,
+          });
+        } catch {
+          // Keep the original `result` (still filtered under
+          // runtime_observation_precondition, the prior byte-stable
+          // behavior).
+        }
+      }
+    }
     if (result.reason === 'unresolvable_reference') {
       for (const number of result.details ?? []) {
         unresolvable.push({
@@ -602,6 +700,9 @@ export async function filterOrphanIssues(issues, options = {}) {
       }
     }
     if (result.orphan) {
+      if (result.warning === 'runtime_observation_precondition_demoted') {
+        demotedOrphanNumbers.add(issue.number);
+      }
       orphans.push({
         number: issue.number,
         title: issue.title,
@@ -755,6 +856,26 @@ export async function filterOrphanIssues(issues, options = {}) {
       getScore: (orphan) => orphan.autopilotSuitability,
     },
   );
+  // #2767 (CodeRabbit review, PR #2840): emit the demotion warning only
+  // for a candidate that actually survives to the final `ranked` orphans
+  // list -- the triage-verdict filter above and the routing split just
+  // above can both remove a candidate from that final partition, and the
+  // warning's own text asserts it stays listed as an orphan.
+  if (demotedOrphanNumbers.size > 0) {
+    const rankedNumbers = new Set(ranked.map((orphan) => orphan.number));
+    for (const issueNumber of demotedOrphanNumbers) {
+      if (!rankedNumbers.has(issueNumber)) {
+        continue;
+      }
+      warnings.push({
+        issueNumber,
+        reason: 'runtime_observation_precondition_demoted',
+        message:
+          `Warning: Issue #${issueNumber} names a runtime/production-observation ` +
+          'precondition, but every structural-evidence signal held, so it stays listed as an orphan.',
+      });
+    }
+  }
   const counts = {
     scanned: issues.length,
     orphans: ranked.length,
@@ -817,6 +938,9 @@ async function runCli() {
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
     config: { trustedMarkerActors: policy.trustedMarkerActors },
   });
+  // #2767: shared across every isTrustedCollaborator call below, so a
+  // repeated editor login across candidates costs one live lookup.
+  const collaboratorPermissionCache = new Map();
   const result = await filterOrphanIssues(openIssues, {
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) =>
@@ -829,6 +953,22 @@ async function runCli() {
       port.getWorkItemTimeline(issueNumber),
     fetchUserContentEditsByIssueNumber: (issueNumber) =>
       port.getWorkItemUserContentEditTimestamps(issueNumber),
+    // #2767: only ever called for a candidate plain classification already
+    // filtered as runtime_observation_precondition -- see
+    // filterOrphanIssues's own lazy-retry comment.
+    fetchUserContentEditorsByIssueNumber: (issueNumber) =>
+      port
+        .getWorkItemUserContentEdits(issueNumber)
+        .map((edit) => edit.editorLogin),
+    isTrustedCollaborator: (login) => {
+      const { permission } = collaboratorPermission(
+        owner,
+        repo,
+        login,
+        collaboratorPermissionCache,
+      );
+      return permission === 'admin' || permission === 'write';
+    },
     trustedMarkerLogins,
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
@@ -986,6 +1126,17 @@ body names a runtime/production-observation precondition in prose --
 issue-number reference to resolve, so it stays excluded even once every
 numbered "Blocked by"/"Depends on" reference is closed.
 
+A "runtime_observation_precondition" hit demotes to a warned orphan
+(#2767) instead -- kept in "orphans" with "reason": "orphan" and a
+"warnings[]" entry carrying "reason":
+"runtime_observation_precondition_demoted" -- only when every
+structural-evidence signal (triage-structural-evidence.mts: a runnable
+verification command, an existing candidate file, a fully trusted
+author+editor set) holds for that issue. Requires
+"fetchUserContentEditorsByIssueNumber" to be wired (the live CLI always
+wires it); absent, this never demotes, matching the pre-#2767 behavior
+exactly.
+
 "filtered.open_dependency_reference" (#1536) mirrors A3's own dependency
 check in discover-readiness-check.mjs: a candidate whose body contains an
 open "Depends on #NNN" line or an open task-list "- [ ] #NNN" reference is
@@ -1110,6 +1261,11 @@ function normalizeIssue(issue) {
     url: issue.url ?? issue.html_url ?? '',
     milestone: issue.milestone,
     createdAt: issue.createdAt,
+    // #2767 (CodeRabbit review, PR #2840): carried through so the live CLI
+    // wiring below can read the author login for the `trustedEditor`
+    // structural-evidence signal -- omitting it here silently made that
+    // signal fail closed for every live orphan candidate.
+    user: issue.user,
   };
 }
 /**
@@ -1227,7 +1383,12 @@ function normalizeRoadmapLabelName(labelName) {
     ? labelName
     : POLICY_DEFAULTS.labels.roadmapLabelName;
 }
-function fetchOpenIssues(port) {
+/** Exported for `tests/discover-orphan-filter.test.mts`'s #2767 regression
+ * (CodeRabbit review, PR #2840): a direct `OrphanIssueInput` fixture in a
+ * test bypasses this function and `normalizeIssue` entirely, which is
+ * exactly how the live CLI's `user`-propagation gap went uncaught -- a
+ * test must go through this function to actually exercise it. */
+export function fetchOpenIssues(port) {
   // listOpenWorkItems() already excludes pull requests -- no re-filtering
   // needed here.
   return port.listOpenWorkItems().map((item) =>
@@ -1241,6 +1402,7 @@ function fetchOpenIssues(port) {
       html_url: item.htmlUrl,
       milestone: item.milestone,
       createdAt: item.createdAt,
+      user: item.user,
     }),
   );
 }
