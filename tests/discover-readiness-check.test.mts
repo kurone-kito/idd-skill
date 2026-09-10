@@ -274,6 +274,29 @@ test('extractReviewFixLoopCutoffRefsIssueNumbers reports ambiguous when the sole
   );
 });
 
+test('extractReviewFixLoopCutoffRefsIssueNumbers reports ambiguous when a second reference hides in trailing prose (#2877 review fix round 4, Codex P2)', () => {
+  // `consumeDependencyRefList` stops at the first non-ref-list token and
+  // discards the rest -- correct for the generic `Blocked by` extractor,
+  // where trailing prose is deliberately not a blocker, but this hides a
+  // genuine second local reference from the ambiguity check above if left
+  // unexamined.
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers(
+      'Refs #900 (background; originating issue #410)',
+    ),
+    { numbers: [], ambiguous: true },
+  );
+  // A cross-repo mention in the same trailing prose must NOT trigger this
+  // check -- `other/repo#20` names an issue in a different repository, not
+  // a second local reference.
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers(
+      'Refs #900 (see other/repo#20 for prior art)',
+    ),
+    { numbers: [900], ambiguous: false },
+  );
+});
+
 test('extractReviewFixLoopCutoffRefsIssueNumbers reports ambiguous when more than one genuine Refs line exists (#2877 review fix round 2, Codex P2)', () => {
   // Both lines start with the `Refs` keyword, so nothing in the body text
   // distinguishes the true origin from an unrelated citation -- D3 requires

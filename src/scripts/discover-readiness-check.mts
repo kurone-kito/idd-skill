@@ -57,6 +57,17 @@ const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?`;
  * `hasReviewFixLoopCutoffDeferMarker` recognizes. */
 const REVIEW_FIX_LOOP_CUTOFF_DEFER_SOURCE = 'review-fix-loop-cutoff';
 
+// Declared here (same TDZ reason as the two constants above) for
+// `extractReviewFixLoopCutoffRefsIssueNumbers`'s trailing-reference check
+// (#2877 review fix round 4, Codex P2): matches a bare local `#N` NOT
+// immediately preceded by a word character, `/`, or `-` -- so
+// `other/repo#20` (a cross-repo mention) and a hyphen-joined token do not
+// match, but an ordinary prose reference like `#410` in
+// `(background; originating issue #410)` does. Deliberately not global
+// (`.test()` on a match-only, non-`g` regex is stateless); only existence
+// matters here, not position or count.
+const TRAILING_LOCAL_ISSUE_REF_PATTERN = /(?<![\w/-])#\d+\b/;
+
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
@@ -924,10 +935,18 @@ export interface ReviewFixLoopCutoffRefsResult {
  * cannot tell which of the two is the real origin -- so more than one
  * extracted number (across the keyword line and any wrapped continuation
  * lines together) is *also* ambiguous, not a multi-target blocker (#2877
- * review fix round 3, Codex P2). A `Refs` mention that does not start its
- * own line (ordinary prose citing an issue mid-sentence, like
+ * review fix round 3, Codex P2). The same check also inspects the text
+ * `consumeDependencyRefList` leaves unconsumed on the keyword line itself:
+ * that helper stops at the first non-ref-list token and discards the rest
+ * (by design, for the generic `Blocked by`/`Depends on` extractors, where
+ * trailing prose is deliberately not a blocker), so a line like
+ * `Refs #900 (background; originating issue #410)` would otherwise report
+ * the unambiguous single target `[900]` while silently hiding `#410` in
+ * the discarded remainder -- also ambiguous, not a hidden second number
+ * (#2877 review fix round 4, Codex P2). A `Refs` mention that does not
+ * start its own line (ordinary prose citing an issue mid-sentence, like
  * `See also Refs #900 (non-blocking) for background.`) is not a keyword
- * line at all and never counts toward either check. See
+ * line at all and never counts toward any of this. See
  * {@link hasReviewFixLoopCutoffDeferMarker} for how the caller decides
  * whether any of this is blocking in the first place.
  */
@@ -947,13 +966,25 @@ export function extractReviewFixLoopCutoffRefsIssueNumbers(
     return { numbers: [], ambiguous: true };
   }
   const [match] = lineMatches;
-  const { numbers } = consumeDependencyRefList(match[1]);
+  const { numbers, remaining } = consumeDependencyRefList(match[1]);
   const continuationNumbers = consumeContinuationRefLines(
     stripped,
     (match.index ?? 0) + match[0].length,
   );
   const allNumbers = dedupeNumbers([...numbers, ...continuationNumbers]);
-  if (allNumbers.length > 1) {
+  // Round-4 review fix (Codex P2): `consumeDependencyRefList` only consumes
+  // a *contiguous* leading ref-list and silently discards everything after
+  // the first non-separator token -- by design for the generic
+  // `Blocked by`/`Depends on` extractors, where trailing prose is
+  // deliberately not a blocker. For this specific marker's single-origin
+  // requirement, a second local reference hiding in that discarded prose
+  // (e.g. `Refs #900 (background; originating issue #410)`) is just as
+  // disqualifying as a second comma-separated number would be -- checking
+  // only `allNumbers.length` above would miss it entirely.
+  if (
+    allNumbers.length > 1 ||
+    TRAILING_LOCAL_ISSUE_REF_PATTERN.test(remaining)
+  ) {
     return { numbers: [], ambiguous: true };
   }
   return { numbers: allNumbers, ambiguous: false };
