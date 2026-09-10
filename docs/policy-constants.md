@@ -592,7 +592,7 @@ default and **prefer trimming or splitting the net addition over another
 ratchet bump**. The trade-off inverts only here, at the top of the range:
 below the band, the churn and terminology-drift cost of trimming outweighs a
 small raise; near the ceiling, each further bump raises the
-**always-resident review/merge instruction floor** — the
+**always-resident review/merge instruction floor** — the `bundle-core`,
 `bundle-review-triage-phase`, `bundle-review-fix-phase`, and
 `bundle-merge-phase` members load on every F-phase session — which is the scarcest
 budget for smaller-context models. Read the two as one policy: raise by
