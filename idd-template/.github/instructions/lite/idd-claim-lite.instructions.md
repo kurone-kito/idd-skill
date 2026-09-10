@@ -284,7 +284,7 @@ differently for step 5:
    inheritable match → use the name pre-check (e) computed.
 2. **`{claim-id}`**: generate a fresh opaque token — **except**
    forced-handoff adopt-verbatim, which reuses the marker's
-   `newClaimId` instead.
+   `newClaimId` instead. Record it (`--record-tokens`) before step 4.
 3. **`{prior-claim-id}` / `supersedes:`**: `none` for a fresh claim or
    legacy migration; the active claim's `{claim-id}` for a stale
    takeover. Not applicable to forced-handoff (step 4 is skipped
@@ -319,7 +319,8 @@ differently for step 5:
 
 5. **Every fresh activation** (fresh claim, takeover, legacy migration,
    or forced-handoff adopt-verbatim) also posts an activation-nonce —
-   never for a plain heartbeat:
+   never for a plain heartbeat. Record it (`--record-tokens --nonce
+   <nonce>`) first:
 
    ```sh
    node scripts/post-idd-marker.mjs --type activation-nonce \
@@ -420,6 +421,10 @@ Once the B1 worktree exists, before every mutation:
 node scripts/claim-lock.mjs --acquire --worktree <path> \
   --agent-id <agent-id> --claim-id <claim-id>
 ```
+
+Also confirm `--read-tokens` finds `{claim-id}` recorded before
+trusting it; absent or malformed → stop. See
+`docs/idd-helper-scripts.md`.
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
 `{claim-id}` is always a collision — re-run pre-check (c) (`--claim-id`

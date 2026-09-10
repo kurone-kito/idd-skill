@@ -79,7 +79,8 @@ following:
    the package-manager-profile `idd:claim-lock` command with the same
    arguments — resolve the exact command from
    `docs/idd-helper-scripts.md` if unsure). A `collision` result is
-   fail-closed: stop rather than proceed.
+   fail-closed: stop rather than proceed. Also confirm `--read-tokens`
+   finds this `{claim-id}` recorded; absent or malformed → stop.
 6. If any check fails, stop.
 
 ## D1 — Sync main before first push

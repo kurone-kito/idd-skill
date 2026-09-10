@@ -60,7 +60,8 @@ GitHub side effect, confirm all of the following:
    the package-manager-profile `idd:claim-lock` command with the same
    arguments — resolve the exact command from
    `docs/idd-helper-scripts.md` if unsure). A `collision` result is
-   fail-closed: stop rather than proceed.
+   fail-closed: stop rather than proceed. Also confirm `--read-tokens`
+   finds this `{claim-id}` recorded; absent or malformed → stop.
 6. If any check fails, stop.
 
 ## E1 — Fetch review items into ReviewItems_snapshot
