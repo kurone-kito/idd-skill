@@ -2994,6 +2994,128 @@ function waitForRunCompletion(
   }
 }
 
+/** One command `applyRefreshLatestPlan` could not execute -- the run it
+ * targeted either errored (network/permission/transient `gh` failure, or
+ * {@link waitForRunCompletion}'s own timeout) or was itself a still-
+ * pending instance that never reached a terminal state within budget. */
+export interface RefreshLatestApplyFailure {
+  command: RerunPlanCommand;
+  error: string;
+}
+
+/** Result of {@link applyRefreshLatestPlan}. */
+export interface RefreshLatestApplyResult {
+  /** Commands that were rerun successfully (their own `rerunAndWait`
+   * returned without throwing). */
+  executed: RerunPlanCommand[];
+  /** Commands skipped because the PR's HEAD had moved by the time this
+   * command's turn came (see `fetchCurrentHead` below) -- not a failure,
+   * since a fresh trigger already fired for the new HEAD on its own. */
+  skippedStaleHead: RerunPlanCommand[];
+  /** Commands whose wait or rerun threw. Non-empty means at least one
+   * instance for this HEAD was NOT refreshed and may still need manual
+   * attention -- see the CLI's own exit-code handling. */
+  failed: RefreshLatestApplyFailure[];
+}
+
+/** Dependencies injected by tests; production defaults perform real I/O
+ * (see the `import.meta.main` wiring below). Mirrors {@link
+ * RerunApplyDeps}'s DI pattern. */
+export interface RefreshLatestApplyDeps {
+  /** Blocks until `runId` reaches a terminal state (see {@link
+   * waitForRunCompletion}); throws on timeout or a propagated `gh`
+   * error. */
+  waitForRunCompletion: (runId: string) => void;
+  /** Returns the PR's CURRENT head SHA (lowercased), fetched fresh --
+   * never a cached/boolean comparison, so a test can assert exactly what
+   * SHA this function observed. */
+  fetchCurrentHead: () => string;
+  /** Executes one command and blocks until its run reaches a terminal
+   * state, regardless of its own conclusion (matches {@link
+   * RerunApplyDeps.rerunAndWait}). */
+  rerunAndWait: (command: RerunPlanCommand) => void;
+  /** Human-readable progress line, written to stderr in production. */
+  log: (message: string) => void;
+}
+
+/**
+ * Execute every command in `plan.pendingCommands` (waiting for each to
+ * reach a terminal state first) then every command in `plan.commands`,
+ * isolating one command's failure from the rest (CodeRabbit, PR #2855
+ * review): `plan.commands`/`plan.pendingCommands` are INDEPENDENT
+ * instances (typically `pull_request` and `pull_request_target` under
+ * #2764 Phase 1) whose own rerun outcome has no bearing on any other
+ * entry's -- unlike {@link applyRerunPlan}'s single evolving target,
+ * where a thrown error aborting the whole loop is the correct behavior.
+ * A HEAD re-check immediately precedes every individual rerun (Codex P1,
+ * PR #2855 review): both `waitForRunCompletion` and `rerunAndWait`
+ * themselves can take several minutes, during which the PR can advance
+ * to a new HEAD -- `gh run rerun` on a now-stale run would still fire,
+ * and the required gate's own concurrency group has
+ * `cancel-in-progress: true` keyed by PR number alone, so a stale rerun
+ * could CANCEL a legitimate, already-running gate instance for the new
+ * HEAD. Pure aside from the injected `deps` (no direct I/O of its own),
+ * mirroring {@link applyRerunPlan}'s own separation of policy from I/O.
+ */
+export function applyRefreshLatestPlan(
+  plan: RefreshLatestPlan,
+  deps: RefreshLatestApplyDeps,
+): RefreshLatestApplyResult {
+  const executed: RerunPlanCommand[] = [];
+  const skippedStaleHead: RerunPlanCommand[] = [];
+  const failed: RefreshLatestApplyFailure[] = [];
+
+  const headStillMatches = (command: RerunPlanCommand): boolean => {
+    const currentHeadSha = deps.fetchCurrentHead().toLowerCase();
+    if (currentHeadSha === plan.prHeadSha) {
+      return true;
+    }
+    deps.log(
+      `\n--refresh-latest --apply: the PR HEAD moved from ${plan.prHeadSha} to ${currentHeadSha} -- skipping the now-stale rerun of ${command.command} (a fresh trigger already fired for the new HEAD).\n`,
+    );
+    skippedStaleHead.push(command);
+    return false;
+  };
+
+  for (const pendingCommand of plan.pendingCommands) {
+    try {
+      deps.waitForRunCompletion(pendingCommand.runId);
+      if (!headStillMatches(pendingCommand)) {
+        continue;
+      }
+      deps.rerunAndWait(pendingCommand);
+      executed.push(pendingCommand);
+      deps.log(
+        `\n--refresh-latest --apply: executed ${pendingCommand.command} after it reached a terminal state.\n`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      deps.log(
+        `\n--refresh-latest --apply: ${pendingCommand.command} failed -- ${message} -- continuing with the remaining instances.\n`,
+      );
+      failed.push({ command: pendingCommand, error: message });
+    }
+  }
+  for (const command of plan.commands) {
+    try {
+      if (!headStillMatches(command)) {
+        continue;
+      }
+      deps.rerunAndWait(command);
+      executed.push(command);
+      deps.log(`\n--refresh-latest --apply: executed ${command.command}.\n`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      deps.log(
+        `\n--refresh-latest --apply: ${command.command} failed -- ${message} -- continuing with the remaining instances.\n`,
+      );
+      failed.push({ command, error: message });
+    }
+  }
+
+  return { executed, skippedStaleHead, failed };
+}
+
 /** Resolves `{owner, repo}` the same way {@link collectFromGitHub} does
  * (explicit `--owner`/`--repo` first, else `gh repo view` auto-detection)
  * -- duplicated as these two lines rather than extracted into a shared
@@ -3105,73 +3227,48 @@ if (import.meta.main) {
       if (args.apply) {
         const { owner, repo } = resolveOwnerRepo(args);
         const applyDeps = buildProductionApplyDeps(args);
-        // Re-checks the PR's current HEAD immediately before firing a
-        // rerun (Codex P1, PR #2855 review): both `waitForRunCompletion`
-        // and `rerunAndWait` itself can take several minutes, during
-        // which the PR can advance to a new HEAD. `gh run rerun` on a
-        // now-stale run would still fire -- and the required gate's own
-        // concurrency group has `cancel-in-progress: true` keyed by PR
-        // number alone, so a stale rerun could CANCEL a legitimate,
-        // already-running gate instance for the new HEAD, leaving it
-        // without a passing required check and no guaranteed later
-        // refresh. Checked before EACH command below, not once for the
-        // whole batch -- every wait is its own multi-minute window the
-        // HEAD can move within. Skips just that one command instead of
-        // aborting the batch: a HEAD change means a fresh
-        // pull_request/pull_request_target trigger already fired for the
-        // new HEAD on its own, independent of this refresh.
-        const headStillMatches = (command: RerunPlanCommand): boolean => {
-          const currentHeadSha = ghText(
-            [
-              'pr',
-              'view',
-              String(args.prNumber),
-              '-R',
-              `${owner}/${repo}`,
-              '--json',
-              'headRefOid',
-              '--jq',
-              '.headRefOid',
-            ],
-            GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-          ).toLowerCase();
-          if (currentHeadSha === refreshLatestPlan.prHeadSha) {
-            return true;
-          }
-          process.stderr.write(
-            `\n--refresh-latest --apply: the PR HEAD moved from ${refreshLatestPlan.prHeadSha} to ${currentHeadSha} -- skipping the now-stale rerun of ${command.command} (a fresh trigger already fired for the new HEAD).\n`,
-          );
-          return false;
-        };
-        // Pending instances first, one at a time: each must reach a
-        // terminal state before it is safe to rerun without cancelling
-        // it. Sequential, not parallel -- `waitForRunCompletion` and
+        const refreshResult = applyRefreshLatestPlan(refreshLatestPlan, {
+          waitForRunCompletion: (runId) =>
+            waitForRunCompletion(owner, repo, runId),
+          fetchCurrentHead: () =>
+            ghText(
+              [
+                'pr',
+                'view',
+                String(args.prNumber),
+                '-R',
+                `${owner}/${repo}`,
+                '--json',
+                'headRefOid',
+                '--jq',
+                '.headRefOid',
+              ],
+              GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+            ),
+          rerunAndWait: applyDeps.rerunAndWait,
+          log: (message) => process.stderr.write(message),
+        });
+        // Sequential, not parallel (both loops inside
+        // applyRefreshLatestPlan) -- `waitForRunCompletion` and
         // `rerunAndWait` both poll synchronously, and this file's own
         // `planCaveat` already documents why a rerun burst must stay
         // serialized rather than racing multiple `gh run rerun` calls
         // against the same PR's shared concurrency group.
-        for (const pendingCommand of refreshLatestPlan.pendingCommands) {
-          waitForRunCompletion(owner, repo, pendingCommand.runId);
-          if (!headStillMatches(pendingCommand)) {
-            continue;
-          }
-          applyDeps.rerunAndWait(pendingCommand);
-          process.stderr.write(
-            `\n--refresh-latest --apply: executed ${pendingCommand.command} after it reached a terminal state.\n`,
-          );
-        }
-        // Every already-terminal instance next (Codex P1, PR #2855
-        // review) rather than guessing which one controls the required
-        // rollup -- see this file's own #1381 recovery guidance cited
-        // above `computeRefreshLatestPlan`.
-        for (const command of refreshLatestPlan.commands) {
-          if (!headStillMatches(command)) {
-            continue;
-          }
-          applyDeps.rerunAndWait(command);
-          process.stderr.write(
-            `\n--refresh-latest --apply: executed ${command.command}.\n`,
-          );
+        //
+        // A non-empty `failed` means at least one independent instance
+        // for this HEAD was NOT refreshed despite --apply having run
+        // (CodeRabbit, PR #2855 review) -- exit non-zero so the
+        // companion job surfaces that instead of reporting green while
+        // the required gate may still be stuck. Deliberately NOT the
+        // same convention as the ordinary --apply path below (which
+        // always exits 0, even when its own budget is exhausted
+        // unresolved): that path's "not yet resolved" is an expected,
+        // bounded policy limit with its own recovery text, whereas a
+        // `failed` entry here is an actual thrown error (network/gh
+        // failure, or a wait timeout) on an otherwise-independent
+        // instance -- a different, more actionable severity.
+        if (refreshResult.failed.length > 0) {
+          process.exitCode = 1;
         }
       }
     }
@@ -3246,5 +3343,12 @@ if (import.meta.main) {
   // before a large stdout write finishes flushing through a pipe (a
   // well-established Node.js footgun, confirmed empirically during
   // review), silently truncating the emitted JSON or recovery plan.
-  process.exitCode = 0;
+  // Guarded (CodeRabbit, PR #2855 review): the --refresh-latest --apply
+  // branch above may already have set exitCode to 1 for a genuine
+  // per-instance failure -- this default must not clobber that back to
+  // 0. Every other path never sets exitCode before reaching here, so
+  // this preserves that path's existing always-0 behavior unchanged.
+  if (process.exitCode === undefined) {
+    process.exitCode = 0;
+  }
 }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  applyRefreshLatestPlan,
   applyRerunPlan,
   buildCheckRunsForRefArgs,
   buildRerunPlanTextSections,
@@ -2993,6 +2994,168 @@ test('computeRefreshLatestPlan: -R owner/repo is embedded in every generated com
     plan.commands[0]?.command,
     'gh run rerun 5001 -R kurone-kito/idd-skill',
   );
+});
+
+// --- applyRefreshLatestPlan (CodeRabbit, PR #2855 review) ------------------
+//
+// computeRefreshLatestPlan's `commands`/`pendingCommands` are INDEPENDENT
+// instances (typically `pull_request` and `pull_request_target` under
+// #2764 Phase 1): one instance's wait/rerun failing must not prevent the
+// OTHER instance from still being refreshed, unlike applyRerunPlan's
+// single evolving target where an uncaught error aborting the whole loop
+// is correct.
+
+function refreshLatestPlan(
+  overrides: Partial<
+    Pick<
+      ReturnType<typeof computeRefreshLatestPlan>,
+      'commands' | 'pendingCommands' | 'prHeadSha'
+    >
+  > = {},
+) {
+  return {
+    protocolVersion: '1' as const,
+    prNumber: 1431,
+    prHeadSha: HEAD,
+    checkName: RERUN_PLAN_CHECK_NAME,
+    now: NOW,
+    commands: [],
+    pendingCommands: [],
+    reason: '',
+    ...overrides,
+  };
+}
+
+test('applyRefreshLatestPlan: a thrown wait failure on one pending instance does not block the rest of the batch', () => {
+  const failing = {
+    runId: '5001',
+    command: 'gh run rerun 5001',
+    checkRunIds: ['1001'],
+    startedAt: '',
+  };
+  const okPending = {
+    runId: '5002',
+    command: 'gh run rerun 5002',
+    checkRunIds: ['1002'],
+    startedAt: '',
+  };
+  const okTerminal = {
+    runId: '5003',
+    command: 'gh run rerun 5003',
+    checkRunIds: ['1003'],
+    startedAt: '',
+  };
+  const waited: string[] = [];
+  const reran: string[] = [];
+  const result = applyRefreshLatestPlan(
+    refreshLatestPlan({
+      pendingCommands: [failing, okPending],
+      commands: [okTerminal],
+    }),
+    {
+      waitForRunCompletion: (runId) => {
+        waited.push(runId);
+        if (runId === failing.runId) {
+          throw new Error('timed out waiting for run 5001 to complete');
+        }
+      },
+      fetchCurrentHead: () => HEAD,
+      rerunAndWait: (command) => {
+        reran.push(command.runId);
+      },
+      log: () => {},
+    },
+  );
+  assert.deepEqual(waited, ['5001', '5002']);
+  assert.deepEqual(reran, ['5002', '5003']);
+  assert.deepEqual(result.executed, [okPending, okTerminal]);
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.failed[0]?.command.runId, '5001');
+  assert.match(result.failed[0]?.error ?? '', /timed out waiting/);
+});
+
+test('applyRefreshLatestPlan: a rerunAndWait failure on a terminal instance is isolated the same way', () => {
+  const okTerminal = {
+    runId: '5001',
+    command: 'gh run rerun 5001',
+    checkRunIds: ['1001'],
+    startedAt: '',
+  };
+  const failingTerminal = {
+    runId: '5002',
+    command: 'gh run rerun 5002',
+    checkRunIds: ['1002'],
+    startedAt: '',
+  };
+  const result = applyRefreshLatestPlan(
+    refreshLatestPlan({ commands: [okTerminal, failingTerminal] }),
+    {
+      waitForRunCompletion: () => {},
+      fetchCurrentHead: () => HEAD,
+      rerunAndWait: (command) => {
+        if (command.runId === failingTerminal.runId) {
+          throw new Error('gh: request failed');
+        }
+      },
+      log: () => {},
+    },
+  );
+  assert.deepEqual(result.executed, [okTerminal]);
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.failed[0]?.command.runId, '5002');
+  assert.match(result.failed[0]?.error ?? '', /gh: request failed/);
+});
+
+test('applyRefreshLatestPlan: skips a command whose HEAD moved, without treating it as a failure', () => {
+  const command = {
+    runId: '5001',
+    command: 'gh run rerun 5001',
+    checkRunIds: ['1001'],
+    startedAt: '',
+  };
+  const rerunCalls: string[] = [];
+  const result = applyRefreshLatestPlan(
+    refreshLatestPlan({ commands: [command] }),
+    {
+      waitForRunCompletion: () => {},
+      fetchCurrentHead: () => '2222222222222222222222222222222222222222',
+      rerunAndWait: (c) => {
+        rerunCalls.push(c.runId);
+      },
+      log: () => {},
+    },
+  );
+  assert.deepEqual(rerunCalls, []);
+  assert.deepEqual(result.executed, []);
+  assert.deepEqual(result.skippedStaleHead, [command]);
+  assert.deepEqual(result.failed, []);
+});
+
+test('applyRefreshLatestPlan: a fully successful batch has no failures and no stale skips', () => {
+  const pending = {
+    runId: '5001',
+    command: 'gh run rerun 5001',
+    checkRunIds: ['1001'],
+    startedAt: '',
+  };
+  const terminal = {
+    runId: '5002',
+    command: 'gh run rerun 5002',
+    checkRunIds: ['1002'],
+    startedAt: '',
+  };
+  const result = applyRefreshLatestPlan(
+    refreshLatestPlan({ pendingCommands: [pending], commands: [terminal] }),
+    {
+      waitForRunCompletion: () => {},
+      fetchCurrentHead: () => HEAD,
+      rerunAndWait: () => {},
+      log: () => {},
+    },
+  );
+  assert.deepEqual(result.executed, [pending, terminal]);
+  assert.deepEqual(result.skippedStaleHead, []);
+  assert.deepEqual(result.failed, []);
 });
 
 // --- runRerunAdvisoryConvergence: --refresh-latest ------------------------
