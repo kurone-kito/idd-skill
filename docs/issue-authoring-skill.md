@@ -1215,8 +1215,18 @@ retrieved, plus the publication-intent log for the journal named in this
 session's own records, and minimize (classifier `OUTDATED`, via the
 existing `minimize-superseded-markers.mjs`, reusing
 `matchCanonicalAuthoringMarkerFamily` unchanged) every byte-exact
-canonical match that is not the newest for its family, exactly as the
-opportunistic per-post step above does. Attempt this once per target
+canonical match that is not the newest **trusted-actor** match for its
+family, exactly as the opportunistic per-post step above does. Determine
+"newest" only among candidates from a trusted marker actor (#2896
+review, Codex), never from every structural match indiscriminately --
+an untrusted actor's byte-exact canonical comment posted after the real
+newest trusted one must never be treated as the thing to keep visible:
+`minimize-superseded-markers.mjs` itself refuses to minimize any comment
+outside `--trusted-marker-logins` regardless of this selection, so
+naively treating the untrusted comment as newest would instead select
+the legitimate trusted marker for minimization -- exactly backwards.
+This mirrors `checkAuthoringMarkerMinimizationBacklog`'s own audit-side
+fix; keep the two in sync. Attempt this once per target
 here, and once more on the anchor immediately before the release-complete
 preflight below; this is the sweep the contract depends on, but
 "mandatory" means **attempted**, not blocking -- a failed attempt
@@ -1319,6 +1329,19 @@ set to the same trusted actors the sweep itself used, so the check's own
 eligibility rule matches what the sweep could actually clear; omitting
 it makes the count overstate the real backlog by including
 untrusted-authored matches the sweep was never going to touch.
+
+**Normalize the author field before writing the comments-file JSON**
+(#2896 review, Codex): the paginated GitHub REST/GraphQL response this
+section already fetches exposes a comment's author nested as
+`user.login` (REST) or `author.login` (GraphQL), never as a flat
+`author` string -- write each entry's `--comments-file`/
+`--journal-comments-file` JSON with `author` set to that nested login,
+not passed through unmapped. Skipping this normalization does not
+error: every comment silently loses its author, the trust filter above
+then excludes every candidate as unknown-author, and the count falsely
+reports zero backlog even when the sweep was skipped or failed entirely
+-- the opposite failure mode from omitting `--trusted-marker-logins`
+(that overstates; this understates to nothing).
 
 **Feed it the sweep's own post-mutation result, never the pre-mutation
 snapshot the sweep read.** The minimize helper mutates GitHub directly;
