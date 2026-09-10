@@ -2220,6 +2220,25 @@ const CODERABBIT_ACK_HEDGE_WORDS_SOURCE =
 const CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE =
   'partial|temporary|interim|provisional|tentative|preliminary|stopgap|incomplete';
 
+// A THIRD, semantically distinct closed enumeration (Codex review, PR
+// #2868, round 10): hedge words (adverb and adjective forms above) say
+// something was done to a DEGREE; negation words say it was NOT done at
+// all -- a strictly stronger, more severe inversion, not a variant of
+// hedging. "The fix never addresses the security concern.\n\n🐇 ✓"
+// matched: "never" sits immediately before "addresses" the same way a
+// hedge adverb would, but neither hedge enumeration includes it (hedging
+// and negating are different speech acts), so the lookbehind below
+// passed it through untouched. English negation adverbs occurring
+// directly before a verb are a small, well-known closed class -- the
+// same narrow-enumeration standard as the two hedge lists above, not the
+// open-ended contrastive-adjective problem (residual gap (a)): negation
+// is a grammatical function word category, not free descriptive
+// vocabulary. `no\s+longer` is included as a two-word negation idiom;
+// `barely` is deliberately NOT duplicated here since it is already in
+// the hedge-adverb list above (a "small degree," not "zero," semantic).
+const CODERABBIT_ACK_NEGATION_WORDS_SOURCE =
+  'never|not|nor|hardly|scarcely|rarely|no\\s+longer';
+
 // CodeRabbit review, PR #2868, round 4: two mechanical bypasses in the
 // pattern below, both closed by widening two sub-patterns from singular-
 // only to also accept the plural/multi-space form, exactly the same
@@ -2368,9 +2387,9 @@ const CODERABBIT_ACK_CLOSURE_TAIL_SOURCE =
 // and is raised as a design question on issue #2858 rather than chased
 // with an open-ended list here.
 const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
-  `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE})\\s+)` +
+  `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE})\\s+)` +
     '\\baddresses\\s+the\\b' +
-    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE})\\b)[\\w-]+){0,3}` +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE})\\b)[\\w-]+){0,3}` +
     '\\s+\\b(?:concerns?|findings?)\\b\\.\\s*' +
     CODERABBIT_ACK_CLOSURE_TAIL_SOURCE,
   'i',
@@ -2465,11 +2484,27 @@ const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
 //    ("partially") -- the first attempt at this fix reused only the
 //    adverb list and still let "partial"/"temporary" straight through,
 //    caught empirically before this ever reached review.
+// 8. **Negation words excluded everywhere a free token or a hedge
+//    lookbehind already exists** (Codex review, PR #2868, round 10):
+//    hedge words (guards 5 and 7) say something was done to a DEGREE;
+//    negation words say it was NOT done at all -- a stronger, more
+//    severe inversion, not a hedging variant, so it is its own
+//    enumeration (`CODERABBIT_ACK_NEGATION_WORDS_SOURCE` above) rather
+//    than folded into either hedge list. "`@user`, confirmed. The fix
+//    never addresses the security concern.\n\n🐇 ✓" matched: "never"
+//    sits immediately before "addresses" the same way a hedge adverb
+//    would, but neither hedge enumeration includes negation words, so
+//    every guard passed it through untouched. Wired into all three
+//    locations a hedge check already exists -- the lookbehind
+//    immediately before "addresses" (guard 5), the internal gap's
+//    per-token exclusion (guard 5), and the lead-in's per-token
+//    exclusion (guard 7) -- for the same defense-in-depth reasoning as
+//    guard 7's own dual adverb/adjective exclusion above.
 const CODERABBIT_ACK_CLOSURE_LEADIN_RE = new RegExp(
   '^[.!]\\s+(?:' +
     'this|that|it|' +
-    `the\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE})\\b)[\\w-]+` +
-    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE})\\b)[\\w-]+){0,1}|` +
+    `the\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE})\\b)[\\w-]+` +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE})\\b)[\\w-]+){0,1}|` +
     'commit\\s+`[0-9a-f]{7,40}`' +
     ')\\s+$',
   'i',

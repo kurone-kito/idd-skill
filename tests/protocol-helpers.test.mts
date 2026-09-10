@@ -2007,6 +2007,88 @@ test('classifyThreadAckOnlyPostDisposition safely rejects the "Thanks for the fi
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects a negation adverb immediately before "addresses" in the lead-in (Codex round 10, #2868)', () => {
+  // Codex's round-10 finding on PR #2868: hedge words (guards 5, 7) say
+  // something was done to a DEGREE; negation words say it was NOT done
+  // at all -- a stronger inversion, not a hedging variant. "The fix
+  // never addresses the security concern.\n\n🐇 ✓" matched: "never" sits
+  // immediately before "addresses" the same way a hedge adverb would,
+  // but neither hedge enumeration includes negation words, so every
+  // guard passed it through untouched. This is Codex's exact
+  // adversarial example.
+  const thread = {
+    id: 'thread-negation-never-addresses',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'NV-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'NV-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. The fix never addresses the ' +
+            'security concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a "does not address" negation immediately before "addresses" (regression guard, #2858)', () => {
+  // Same class as the round-10 finding, with a different negation word
+  // ("not") to confirm the fix is not overfit to "never" alone.
+  const thread = {
+    id: 'thread-negation-not-addresses',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'NT-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'NT-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This does not addresses the ' +
+            'wording concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 
