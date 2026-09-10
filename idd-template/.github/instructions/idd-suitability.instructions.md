@@ -17,8 +17,7 @@ footer is a **discovery-time** ranking/routing hint consumed in
 `autopilotSuitability.floor`, default `3`; see also
 `docs/policy-constants.md`). It is **not** one of the seven checks: A4.5
 PASS/FAIL is decided solely by the qualitative checks, never by the
-score. A low or missing score never fails this gate; a high score never
-bypasses it.
+score.
 
 When helper support is enabled, use helper scripts from
 `docs/idd-helper-scripts.md` first for A4.5 evidence.
@@ -178,10 +177,11 @@ outcome (trust/safety concerns require human review):
 | `invalid` | Trust/safety concern or defect | Fresh: report, stop (do not retry). Reconfirmed (`existingRejection`: `outcome: invalid`): exclude, post nothing, loop |
 <!-- dprint-ignore-end -->
 
-Applying the `status:needs-decision` / `status:blocked-by-human` label
-uses the **Needs-decision claim release** rule in
-`idd-overview-appendix.instructions.md` (Hold / suspend) — a held
-claim is required first.
+Applying either label happens while holding the claim, per
+`idd-overview-appendix.instructions.md` (Hold / suspend) — the
+**Needs-decision claim release** sub-rule covers
+`status:needs-decision` specifically; `status:blocked-by-human` follows
+the same shape.
 
 ## Mutation Policy and Coordination Rule
 
@@ -217,9 +217,9 @@ convention:
 ```
 
 Never emit this marker for `needs-decision` or `blocked-by-human`: those
-two already carry a stable label (via **Needs-decision claim release**
-in `idd-overview-appendix.instructions.md`, Hold / suspend) and need no
-second signal. Discover's own
+two already carry a stable label (applied while holding the claim, per
+`idd-overview-appendix.instructions.md`'s Hold / suspend section above)
+and need no second signal. Discover's own
 candidate-selection pass (`idd-discover.instructions.md`) reads this
 marker to skip a previously-rejected candidate without a full manual
 comment-history read, applying the same staleness rule as every other
