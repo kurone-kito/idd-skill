@@ -470,12 +470,22 @@ export interface ProviderPort {
   getWorkItemUserContentEdits(number: number): ProviderUserContentEdit[];
 
   /**
-   * work-items (issues only). Thin convenience wrapper over
-   * {@link getWorkItemUserContentEdits} that keeps returning just the
-   * `editedAt` values (#2762's original shape) for the callers that only
-   * ever needed timestamps -- `discover-readiness-check.mts`,
-   * `discover-orphan-filter.mts`, `claim-approval-gate.mts` -- so none of
-   * them needed a call-site change when #2767 added editor identity.
+   * work-items (issues only). Keeps returning just the `editedAt` values
+   * (#2762's original shape) for the callers that only ever needed
+   * timestamps -- `discover-readiness-check.mts`,
+   * `discover-orphan-filter.mts`, `claim-approval-gate.mts`, all of which
+   * only need the *newest* edit's timestamp (they compute the maximum
+   * over the returned array themselves; none assumes a particular
+   * order) -- so none of them needed a call-site change when #2767 added
+   * editor identity. Deliberately NOT a thin wrapper over
+   * {@link getWorkItemUserContentEdits} (Codex review, PR #2840, round
+   * 12; it was for one round before this fix): that method's full
+   * backward pagination (needed so the `trustedEditor` signal sees every
+   * editor) is unnecessary and actively harmful here -- the true newest
+   * edit is always present in a single bounded `last:100` page
+   * regardless of total edit count, so paginating further only adds
+   * GraphQL cost, and that method's 1,000-edit page-cap throw would turn
+   * a freshness-only read into a hard failure for a large edit history.
    */
   getWorkItemUserContentEditTimestamps(number: number): string[];
 

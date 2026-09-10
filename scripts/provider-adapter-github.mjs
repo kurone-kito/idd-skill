@@ -89,9 +89,13 @@ function assertNoGraphqlErrors(payload, context) {
   }
 }
 /**
- * Backs {@link ProviderPort.getWorkItemUserContentEdits} and (as a thin
- * `.map`) {@link ProviderPort.getWorkItemUserContentEditTimestamps} --
- * extracted to a standalone function, rather than one method calling the
+ * Backs {@link ProviderPort.getWorkItemUserContentEdits} (via
+ * {@link fetchWorkItemUserContentEdits}'s full backward-pagination loop
+ * over this single-page fetch) and, directly (one call, no pagination --
+ * Codex review, PR #2840, round 12; previously a thin `.map` over the
+ * former's full result, which paginated the entire history just to read
+ * one timestamp), {@link ProviderPort.getWorkItemUserContentEditTimestamps}.
+ * Extracted to a standalone function, rather than one method calling the
  * other via `this`, since every other method on the returned adapter
  * object is a plain closure over `deps`/`owner`/`repo` with no `this`
  * usage anywhere else in this file.
@@ -720,11 +724,34 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       return fetchWorkItemUserContentEdits(deps, owner, repo, number);
     },
     getWorkItemUserContentEditTimestamps(number) {
-      // #2767: thin delegate over getWorkItemUserContentEdits so this
-      // shape (#2762's original contract) needs no call-site changes.
-      return fetchWorkItemUserContentEdits(deps, owner, repo, number).map(
-        (edit) => edit.editedAt,
+      // #2767 round 12 (Codex review, PR #2840): a single bounded page --
+      // GraphQL's own `last:100`, no `before` cursor -- is enough for
+      // every existing timestamp-only consumer (discover-readiness-check.mts,
+      // discover-orphan-filter.mts, claim-approval-gate.mts, all via
+      // resolveLatestSubstantiveIssueEditAt or an equivalent max-of-array
+      // read): the true newest edit is always among the newest page,
+      // regardless of total edit count, and none of them assume any
+      // particular ordering. Delegating to fetchWorkItemUserContentEdits
+      // (the full backward-paginated fetch #2767 added so the
+      // trustedEditor signal sees EVERY editor, not just the most recent
+      // 100) previously multiplied GraphQL cost by up to
+      // USER_CONTENT_EDITS_MAX_PAGES for an issue with a large edit
+      // history, and its 1,000-edit throw turned a freshness-only read
+      // into a hard failure -- discover-orphan-filter.mts's own
+      // freshness-anchor logic treats a thrown fetch as "anchor unknown"
+      // and retains a candidate despite an actual, current trusted
+      // rejection. getWorkItemUserContentEdits itself is unchanged: it
+      // still needs the full paginated history.
+      const page = fetchWorkItemUserContentEditsPage(
+        deps,
+        owner,
+        repo,
+        number,
+        null,
       );
+      return page.nodes
+        .filter((node) => typeof node?.editedAt === 'string')
+        .map((node) => node.editedAt);
     },
     getWorkItemState(number) {
       try {

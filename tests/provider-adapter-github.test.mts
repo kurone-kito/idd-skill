@@ -472,6 +472,46 @@ test('getWorkItemUserContentEditTimestamps returns an empty array for a genuinel
   assert.deepEqual(port.getWorkItemUserContentEditTimestamps(2738), []);
 });
 
+test('getWorkItemUserContentEditTimestamps fetches only a single bounded page even when hasPreviousPage is true (Codex review, PR #2840, round 12)', () => {
+  // The newest edit is always present in the newest `last:100` page,
+  // regardless of total edit count, and every real caller only needs the
+  // maximum timestamp -- delegating to the full backward-paginated
+  // getWorkItemUserContentEdits (added for the trustedEditor signal,
+  // which genuinely needs every editor) previously multiplied GraphQL
+  // cost for a large edit history and could throw past 1,000 edits for a
+  // read that only ever needed one timestamp.
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: (args) => {
+        call += 1;
+        assert.ok(
+          !args.some((arg) => String(arg).startsWith('before=')),
+          'the single page must not send a before cursor',
+        );
+        return JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: { hasPreviousPage: true, startCursor: 'CURSOR_1' },
+                  nodes: [{ editedAt: '2026-09-09T01:08:31Z' }],
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  assert.deepEqual(port.getWorkItemUserContentEditTimestamps(2738), [
+    '2026-09-09T01:08:31Z',
+  ]);
+  assert.equal(call, 1, 'must fetch exactly one page, never paginate');
+});
+
 test('getWorkItemUserContentEditTimestamps throws when the issue node is null/absent', () => {
   const port = createGithubProviderAdapter(
     'kurone-kito',
