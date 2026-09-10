@@ -1310,33 +1310,49 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 // blocklist was tried here and reverted (see above) precisely because it
 // cannot keep up with natural language, so this shape is instead
 // recognized the same way as the other two -- a structural fingerprint of
-// CodeRabbit's own reply template, not a semantic read of the prose.
-// Requiring the closure sentence to end in a period immediately followed
-// by known CodeRabbit reply boilerplate (the 🐇 sign-off, the `---` +
-// Learnings-used separator, the auto-generated-reply marker, or the
-// "You are interacting with an AI system" disclaimer) or the end of the
-// body rejects a reply that goes on to raise a new, unrelated concern in
-// the next sentence (e.g. "...addresses the concern, but also X" has no
-// period before "but", so it never reaches the tail check) while still
-// matching both real observed replies, where the closure sentence is
-// immediately followed by that same boilerplate.
+// CodeRabbit's own reply template, not a semantic read of the prose. Two
+// structural constraints, both narrowed further after Codex review found
+// concrete false-positive constructions in this same PR (#2858):
+//
+// 1. The gap between "addresses the" and "concern"/"finding" excludes
+//    sentence-terminating punctuation (`[^.!?]`), not just any character.
+//    A plain `[\s\S]` gap let the match cross a sentence boundary
+//    entirely -- "This addresses the requested change. However, I still
+//    have a concern." has its own genuinely new, unrelated concern in a
+//    SECOND sentence, but the un-narrowed gap could reach that later
+//    "concern" anyway, since nothing stopped it from skipping the period
+//    in between. Excluding `.!?` from the gap forces "concern"/"finding"
+//    to appear in the SAME sentence as "addresses the", as in both real
+//    observed replies.
+// 2. The closure sentence must end in a period immediately followed by
+//    known CodeRabbit reply boilerplate (the 🐇 sign-off, the `---` +
+//    Learnings-used separator, the auto-generated-reply marker, or the
+//    "You are interacting with an AI system" disclaimer) -- no bare
+//    end-of-body fallback. Every sampled reply (all 20: the original 18
+//    plus these 2) carries real trailing boilerplate, so requiring it
+//    unconditionally costs no real match; dropping the end-of-body
+//    fallback closes a single-sentence reply with nothing following it,
+//    such as "`@user`, confirmed. This partially addresses the concern."
+//    with no footer at all -- a hedged, non-committal acknowledgment that
+//    would otherwise pass on structure alone. This also independently
+//    keeps out the cross-sentence example above, since "However, ..." is
+//    not one of the known boilerplate forms.
 //
 // Residual risk, stated rather than papered over -- NOT the same class as
 // the two forms above: those report CodeRabbit's own resolve-attempt
 // DECISION, which by this file's own reasoning cannot co-occur with a new
 // substantive concern in the same reply. This third form reads prose with
-// no such structural barrier, so it is strictly weaker: a reply that
-// raises a new concern and ends that exact sentence with a period
-// immediately before CodeRabbit's own boilerplate (e.g. "...addresses the
-// concern. However, X is still unresolved.<!-- auto-generated reply -->")
-// would still misclassify. No sampled reply has done this, and the tail
-// anchor above already closes the two adversarial shapes actually tried
-// against it (a trailing clause joined by a comma, and a genuinely new
-// concern anywhere within the 80-character locality bound) -- only the
-// narrower period-immediately-before-boilerplate combination remains
-// open.
+// no such structural barrier, so it is strictly weaker: a reply whose
+// SAME sentence both hedges ("partially", "mostly", ...) or raises a
+// concern and still ends with a period immediately before genuine
+// CodeRabbit boilerplate (e.g. "This addresses the concern, mostly.
+// <!-- auto-generated reply -->") would still misclassify. No sampled
+// reply has done this. An enumerated hedge-word guard was considered and
+// rejected for the same reason the new-concern blocklist above was: it
+// does not generalize, and this file's own philosophy prefers a stated,
+// bounded residual risk over an unbounded semantic blocklist.
 const CODERABBIT_ACK_CLOSURE_RE =
-  /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform|\baddresses\s+the\b[\s\S]{0,80}?\b(?:concern|finding)\b\.\s*(?:🐇|---|<details|<!--|_You are interacting|$)/i;
+  /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform|\baddresses\s+the\b[^.!?]{0,80}?\b(?:concern|finding)\b\.\s*(?:🐇|---|<details|<!--|_You are interacting)/i;
 // Explicit `isCodeRabbitLogin` author check (Copilot review, #2649,
 // round 4): the closure phrase is CodeRabbit's own resolution decision in
 // practice, but it is still literal text a differently-configured

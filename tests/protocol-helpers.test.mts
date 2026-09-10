@@ -970,6 +970,93 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+// Codex review findings on this PR (#2858), both verified against source
+// before accepting: a legitimate structural gap, not the semantic
+// "new concern" phrasing this file already documents as out of scope.
+
+test('classifyThreadAckOnlyPostDisposition rejects a hedged closure sentence with no trailing boilerplate at all (Codex P1, #2858)', () => {
+  // Codex's exact adversarial example: a single-sentence reply --
+  // "confirmed. This partially addresses the concern." -- with nothing
+  // following it. Every sampled real reply (20/20) carries genuine
+  // trailing boilerplate, so the tail anchor no longer accepts a bare
+  // end-of-body as a substitute; a hedged, non-committal acknowledgment
+  // with no footer at all must not pass on structure alone.
+  const thread = {
+    id: 'thread-hedged-no-boilerplate',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'HN-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'HN-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, confirmed. This partially addresses the concern.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a genuinely new concern in a second sentence, even though "concern" itself is not in the first sentence (Codex P1, #2858)', () => {
+  // Codex's second adversarial example: "This addresses the requested
+  // change. However, I still have a concern." -- the first sentence has
+  // no "concern"/"finding" word at all, so an un-narrowed gap could still
+  // reach the word "concern" in the unrelated SECOND sentence, since
+  // nothing stopped it from skipping the period in between. The gap must
+  // exclude sentence-terminating punctuation so "concern"/"finding" is
+  // required to appear in the SAME sentence as "addresses the".
+  const thread = {
+    id: 'thread-cross-sentence-unrelated-concern',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'CX-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'CX-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed. This addresses the requested ' +
+            'change. However, I still have a concern.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 
