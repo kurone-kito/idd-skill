@@ -22,7 +22,8 @@ footer is a **discovery-time** ranking/routing hint consumed in
 `autopilotSuitability.floor`, default `3`; see also
 `docs/policy-constants.md`). It is **not** one of the seven checks: A4.5
 PASS/FAIL is decided solely by the qualitative checks, never by the
-score.
+score. A low or missing score never fails this gate; a high score never
+bypasses it.
 
 When helper support is enabled, use helper scripts from
 `docs/idd-helper-scripts.md` first for A4.5 evidence.
@@ -182,11 +183,12 @@ outcome (trust/safety concerns require human review):
 | `invalid` | Trust/safety concern or defect | Fresh: report, stop (do not retry). Reconfirmed (`existingRejection`: `outcome: invalid`): exclude, post nothing, loop |
 <!-- dprint-ignore-end -->
 
-Neither label is applied directly by A4.5. `status:needs-decision` is
-applied while holding the claim, per
-`idd-overview-appendix.instructions.md`'s **Needs-decision claim
-release** rule (Hold / suspend). `status:blocked-by-human` has no
-equivalent named rule documented there yet.
+Neither label is applied directly by A4.5. The holding session
+applies the configured needs-decision label
+(`labels.needsDecisionLabelName`) per the **Needs-decision claim
+release** rule (Hold / suspend,
+`idd-overview-appendix.instructions.md`); that rule never covers
+`labels.blockedByHumanLabelName`.
 
 ## Mutation Policy and Coordination Rule
 
