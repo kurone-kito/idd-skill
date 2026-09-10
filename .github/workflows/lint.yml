@@ -65,3 +65,29 @@ jobs:
         run: node --test tests/*.test.mts
       - name: Run workshop integrity check
         run: node scripts/verify-workshop-integrity.mjs --format table
+  lint-windows:
+    name: Critique telemetry hook (Windows)
+    runs-on: windows-latest
+    # Regression coverage for kurone-kito/idd-skill#2892: only
+    # idd-critique-telemetry-hook.mts combines `shell: true` with
+    # `detached: true`, which orphaned a grandchild process (and its own
+    # console window) on native Windows because `process.kill(-pid, ...)`
+    # is meaningless there. Pre-fix, this suite's own hang/timeout
+    # fixtures hung indefinitely on native Windows instead of completing,
+    # so this bound is deliberately generous rather than tuned to an
+    # observed duration.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Unlike the `lint` job's `ubuntu-slim` runner, this repository has
+      # no established preinstalled-Node contract for `windows-latest` --
+      # pin explicitly rather than relying on whatever ships in the image.
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          check-latest: true
+          node-version: 24.x
+      - name: Run critique telemetry hook tests
+        run: node --test tests/idd-critique-telemetry-hook.test.mts
