@@ -1054,6 +1054,74 @@ test("invokeCritiqueTelemetryHook attaches an 'error' listener to the watchdog, 
   }
 });
 
+test("invokeCritiqueTelemetryHook's onWatchdogArmed waits for the watchdog's own 'spawn' confirmation, not the synchronous spawnFn() return (kurone-kito/idd-skill#2897 CI finding)", async () => {
+  // Regression fixture: a real `windows-latest` CI run showed --invoke's
+  // near-immediate process.exit() could race ahead of the watchdog's own
+  // OS process creation actually finishing, silently discarding it before
+  // it ever existed -- see onWatchdogArmed's own doc comment for the full
+  // evidence. This simulates that race deterministically instead of
+  // relying on real Windows timing: a fake watchdog spawnFn returns an
+  // `EventEmitter` standing in for the real `ChildProcess`, and only
+  // emits `'spawn'` after a queued microtask -- never synchronously --
+  // so `onWatchdogArmed` firing before that emit would prove the callback
+  // is wired to the wrong signal (e.g. spawnFn's own synchronous return,
+  // which is exactly what let the real race through). `.kill`/`.unref`
+  // stubs are required: cancelWatchdog (invoked once the quick-exiting
+  // primary hook below settles) calls both on whatever `spawnWatchdog`
+  // returned, real `ChildProcess` or not.
+  let armedCallCount = 0;
+  let watchdogSpawnEmitted = false;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    if (args[0] === WATCHDOG_BINARY) {
+      const fakeWatchdog = new EventEmitter() as unknown as ReturnType<
+        typeof spawn
+      >;
+      const fakeWatchdogHandle = fakeWatchdog as unknown as {
+        unref: () => void;
+        kill: () => boolean;
+      };
+      fakeWatchdogHandle.unref = () => {};
+      fakeWatchdogHandle.kill = () => true;
+      queueMicrotask(() => {
+        watchdogSpawnEmitted = true;
+        fakeWatchdog.emit('spawn');
+      });
+      return fakeWatchdog;
+    }
+    return spawn(...args);
+  }) as typeof spawn;
+
+  const restore = stubExecutable(
+    'idd-telemetry-hook-quick-exit-armed',
+    'process.exit(0);\n',
+  );
+  try {
+    const result = await invokeCritiqueTelemetryHook(
+      'idd-telemetry-hook-quick-exit-armed',
+      samplePayload(),
+      {
+        timeoutMs: 30_000,
+        spawnFn,
+        onWatchdogArmed: () => {
+          armedCallCount += 1;
+          assert.ok(
+            watchdogSpawnEmitted,
+            "expected onWatchdogArmed to fire only after the watchdog's own 'spawn' event, not before",
+          );
+        },
+      },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    assert.equal(
+      armedCallCount,
+      1,
+      'expected onWatchdogArmed to fire exactly once',
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('invokeCritiqueTelemetryHook falls back to the default timeout for a non-finite timeoutMs (#2685 review, Copilot)', async () => {
   // `?? DEFAULT_INVOKE_TIMEOUT_MS` alone only substitutes for
   // `null`/`undefined` -- a caller-supplied `NaN` would otherwise pass

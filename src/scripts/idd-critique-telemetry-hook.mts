@@ -233,6 +233,36 @@ export interface InvokeCritiqueTelemetryHookOptions {
    */
   onPayloadDelivered?: () => void;
   /**
+   * Called once (at most) as soon as the backup watchdog's own OS process
+   * has either been confirmed spawned (its `'spawn'` event) or has failed
+   * to spawn (`'error'`, or synchronously via {@link spawnWatchdog}
+   * returning `null`) -- kurone-kito/idd-skill#2892, a `windows-latest` CI
+   * finding on PR #2897. `spawnFn(...)` returning a `ChildProcess`
+   * synchronously does not mean the underlying OS process creation has
+   * actually finished: on Windows in particular, that work can still be
+   * in flight on libuv's threadpool. `--invoke` (below) calls
+   * `process.exit()` within roughly a millisecond of spawning today,
+   * with no signal previously gating that exit on the watchdog's OS
+   * process actually existing yet -- a real `windows-latest` CI run
+   * showed the exact symptom this predicts: the watchdog's target
+   * process was still running, completely untouched (not even its
+   * `cmd.exe` wrapper), long after both the watchdog's own sleep window
+   * and the test's patience had elapsed, while the separately exercised,
+   * directly-awaited (non-`--invoke`) watchdog path passed cleanly in
+   * the same run -- consistent with the watchdog process itself never
+   * having been created on the `--invoke` path, rather than a failure in
+   * whatever it would have run once alive. Rewriting the watchdog's own
+   * kill-step script (Start-Process vs. a direct .NET Process call) had
+   * no effect on the failure, further narrowing the cause to before that
+   * script ever gets a chance to run.
+   * Waiting for this callback (bounded by the same short timeout
+   * {@link InvokeCritiqueTelemetryHookOptions.onPayloadDelivered} already
+   * uses) closes that race for `--invoke`'s fire-and-forget path without
+   * meaningfully slowing it down in the ordinary case, where a spawn
+   * confirms in low single-digit milliseconds.
+   */
+  onWatchdogArmed?: () => void;
+  /**
    * Injectable for tests, mirroring {@link spawnFn}: overrides
    * `process.platform` for this invocation's win32-vs-POSIX kill/watchdog
    * branching (kurone-kito/idd-skill#2892) so the exact `taskkill`/
@@ -399,6 +429,28 @@ export function invokeCritiqueTelemetryHook(
       typeof child.pid === 'number' && child.pid > 0
         ? spawnWatchdog(spawnFn, child.pid, timeoutMs, platform)
         : null;
+    // See InvokeCritiqueTelemetryHookOptions.onWatchdogArmed's own doc
+    // comment: closes the race where `--invoke` exits before the
+    // watchdog's underlying OS process creation has actually finished.
+    let watchdogArmedNotified = false;
+    const notifyWatchdogArmed = () => {
+      if (watchdogArmedNotified) {
+        return;
+      }
+      watchdogArmedNotified = true;
+      options?.onWatchdogArmed?.();
+    };
+    if (watchdog) {
+      watchdog.once('spawn', notifyWatchdogArmed);
+      // A spawn failure means there is nothing further to wait for either
+      // -- the watchdog's own 'error' listener (spawnWatchdogPosix /
+      // spawnWatchdogWindows) already absorbs this for its "never throws"
+      // contract; this is a second, independent listener for the same
+      // event, purely to unblock a caller waiting on this callback.
+      watchdog.once('error', notifyWatchdogArmed);
+    } else {
+      notifyWatchdogArmed();
+    }
 
     const timer = setTimeout(() => {
       killProcessGroup(child, spawnFn, platform);
@@ -898,13 +950,22 @@ function runCli(): void {
 }
 
 /**
- * Fire off {@link invokeCritiqueTelemetryHook} and resolve as soon as the
- * payload has reached the child's stdin -- via
- * {@link InvokeCritiqueTelemetryHookOptions.onPayloadDelivered} -- or after
- * {@link PAYLOAD_DELIVERY_TIMEOUT_MS} elapses, whichever comes first.
- * Deliberately does **not** wait for the hook itself to settle (exit,
- * error, or its own much longer `timeoutMs`) -- only for the much smaller
- * "the write happened" signal (#2685 review, CodeRabbit). The
+ * Fire off {@link invokeCritiqueTelemetryHook} and resolve once BOTH the
+ * payload has reached the child's stdin (via
+ * {@link InvokeCritiqueTelemetryHookOptions.onPayloadDelivered}) AND the
+ * backup watchdog's own OS process creation has been confirmed one way or
+ * the other (via
+ * {@link InvokeCritiqueTelemetryHookOptions.onWatchdogArmed}) -- or after
+ * {@link PAYLOAD_DELIVERY_TIMEOUT_MS} elapses regardless, whichever comes
+ * first. The watchdog half closes a real `windows-latest` CI finding
+ * (kurone-kito/idd-skill#2892, PR #2897): without it, `runInvoke`'s
+ * near-immediate `process.exit()` could race ahead of the watchdog's own
+ * spawn, discarding it before its underlying OS process ever finished
+ * being created -- see {@link InvokeCritiqueTelemetryHookOptions
+ * .onWatchdogArmed}'s own doc comment for the full evidence. Deliberately
+ * does **not** wait for the hook itself to settle (exit, error, or its
+ * own much longer `timeoutMs`) -- only for these two much smaller signals
+ * (#2685 review, CodeRabbit; #2897 review-fix). The
  * `invokeCritiqueTelemetryHook` promise itself is not returned/awaited
  * here; it keeps running in the background exactly as before (its own
  * timeout + watchdog still apply) after this function's own promise
@@ -916,19 +977,32 @@ function invokeAndWaitForDelivery(
 ): Promise<void> {
   return new Promise((resolve) => {
     let settled = false;
-    const settle = () => {
+    let payloadDelivered = false;
+    let watchdogArmed = false;
+    const maybeSettle = () => {
+      if (settled || !payloadDelivered || !watchdogArmed) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
       if (settled) {
         return;
       }
       settled = true;
       resolve();
-    };
-    const timer = setTimeout(settle, PAYLOAD_DELIVERY_TIMEOUT_MS);
+    }, PAYLOAD_DELIVERY_TIMEOUT_MS);
     timer.unref?.();
     invokeCritiqueTelemetryHook(command, payload, {
       onPayloadDelivered: () => {
-        clearTimeout(timer);
-        settle();
+        payloadDelivered = true;
+        maybeSettle();
+      },
+      onWatchdogArmed: () => {
+        watchdogArmed = true;
+        maybeSettle();
       },
     }).catch(() => undefined);
   });
