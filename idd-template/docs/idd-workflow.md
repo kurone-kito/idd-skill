@@ -1206,7 +1206,9 @@ advance to PR submission on that vacuous result. A delegate that trips
 one of the conditions above but still emitted a readable findings list
 has produced critique — those findings are the pass's output and C1
 continues to C3 scoring on them. `fallback`'s fall-through to the
-per-agent mechanism is unchanged.
+per-agent mechanism is unchanged. (Written here in C1's own step
+vocabulary — `C2`/`C3`; see "E10 delegate support" below for the same
+hold applied in E10's own vocabulary.)
 
 The hold turns on a **missing or unreadable** findings list, never on
 an empty one. A delegate that succeeded and reported no issues has
