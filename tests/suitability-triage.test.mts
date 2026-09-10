@@ -25,6 +25,7 @@ import {
   resolveInputMode,
   splitLocalDraftTitleAndBody,
 } from '../src/scripts/suitability-triage.mts';
+import type { StructuralEvidence } from '../src/scripts/triage-structural-evidence.mts';
 import { stubExecutable } from './test-utils.mts';
 
 // Stub `gh` on PATH with an invocation counter (the discover-roadmap-graph.
@@ -219,6 +220,10 @@ Implement helper behavior.
   // never trips TypeScript's "insufficient overlap" cast-safety check.
   createdAt: '2026-01-01T00:00:00Z',
   url: 'https://example.com/issues/1',
+  // #2767: NormalizedIssue.author is required; empty is fine here -- none
+  // of the check functions read it directly (only the live CLI's
+  // structural-evidence computation does, outside this fixture's scope).
+  author: '',
 };
 
 test('evaluateSuitability returns pass when all checks pass', () => {
@@ -229,6 +234,72 @@ test('evaluateSuitability returns pass when all checks pass', () => {
   assert.equal(result.passed, true);
   assert.equal(result.outcome, 'ready');
   assert.equal(result.failedCheck, null);
+});
+
+test('#2767 round 17: evaluateSuitability never demotes an actionability fail, even with all structural signals present', () => {
+  // Round 9 originally asserted the opposite (demotion) here, injecting
+  // structuralEvidence directly into evaluateSuitability alongside a body
+  // with no Acceptance Criteria/Output/Deliverables phrase at all -- a
+  // combination computeLiveStructuralEvidence's real, body-derived
+  // computation can never produce (Codex review, PR #2840, round 17):
+  // verificationCommand requires a real ATX/Setext heading containing that
+  // same phrase, which checkActionability's own hasAcceptance condition
+  // (a bare phrase-anywhere test) almost always already matches on its
+  // own -- see checkActionability's own comment for the one contrived
+  // exception. Removed the dead demotion branch; this test now pins the
+  // invariant the removal relies on.
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'This needs work but nothing formal is specified.',
+  };
+
+  const withoutEvidence = evaluateSuitability(issue, {
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    duplicateCandidates: [{ number: 1, title: issue.title }],
+  });
+  assert.equal(withoutEvidence.passed, false);
+  assert.equal(withoutEvidence.failedCheck, 'actionability');
+
+  const withEvidence = evaluateSuitability(issue, {
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    duplicateCandidates: [{ number: 1, title: issue.title }],
+    structuralEvidence: {
+      verificationCommand: true,
+      candidateFilesExist: true,
+      trustedEditor: true,
+    },
+  });
+  assert.equal(withEvidence.passed, false);
+  assert.equal(withEvidence.failedCheck, 'actionability');
+  const actionability = withEvidence.checks.find(
+    (c) => c.id === 'actionability',
+  );
+  assert.equal(actionability?.result, 'fail');
+});
+
+test('#2767: evaluateSuitability never demotes a genuine Check 3 (trust/safety) fail, even with all structural signals present', () => {
+  // #2734 regression-guard corpus (see "trust safety still rejects an
+  // existing double-dash flag..." above): reused here per this issue's own
+  // acceptance criteria, rather than a fresh synthetic body.
+  const issue = {
+    ...BASE_ISSUE,
+    body: `${BASE_ISSUE.body}\nRun with --skip-checks to bypass the repository gate.`,
+  };
+
+  const result = evaluateSuitability(issue, {
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    duplicateCandidates: [{ number: 1, title: issue.title }],
+    structuralEvidence: {
+      verificationCommand: true,
+      candidateFilesExist: true,
+      trustedEditor: true,
+    },
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.outcome, 'invalid');
+  assert.equal(result.failedCheck, 'trust_safety');
+  const trustSafety = result.checks.find((c) => c.id === 'trust_safety');
+  assert.equal(trustSafety?.result, 'fail');
 });
 
 test('repository fit failure maps to out-of-scope', () => {
@@ -2713,6 +2784,41 @@ test('trust safety still flags a supplied-content noun after an abbreviation per
   assert.equal(result.pass, false);
 });
 
+// #2767 round 4 (Codex review, PR #2840, on the sibling
+// triage-structural-evidence.mts pattern this one was copied from):
+// ACCEPTANCE_CRITERIA_PATTERN required only `\s*` (zero-or-more) between
+// the ATX `#` run and "Acceptance", so a malformed "##Acceptance
+// Criteria" line -- which CommonMark renders as plain paragraph text, not
+// a heading, since a real ATX heading requires that whitespace -- still
+// matched. Every content shape tried empirically routes to the same
+// pass/fail outcome either way here (checkVerifiability's whole-body
+// "Alternative" fallback independently recognizes the same objective
+// content when the primary AC-section gate does not fire), so this is a
+// source-text structural pin on the corrected pattern itself, the same
+// convention this file already uses for an internal not otherwise
+// observable through a behavioral difference.
+test('ACCEPTANCE_CRITERIA_PATTERN requires whitespace after the ATX # run, matching CommonMark (#2767)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  // #2767 round 7 (Codex review, PR #2840): also pins the *interior* gap
+  // between "Acceptance" and "Criteria" as `[ \t]+`, not `\s+` -- `\s`
+  // also matches a newline, so "## Acceptance\nCriteria" (two separate
+  // lines, only the first of which Markdown renders as the actual heading
+  // text) previously still matched as one combined heading, since an ATX
+  // heading is inherently single-line.
+  // #2767 round 9 (advisor review, PR #2840): also pins the up-to-three-
+  // leading-space allowance and the optional whitespace-preceded closing
+  // `#` sequence, both real CommonMark ATX-heading shapes this pattern
+  // previously missed (e.g. "   ## Acceptance Criteria" or
+  // "## Acceptance Criteria ##").
+  assert.match(
+    source,
+    /const ACCEPTANCE_CRITERIA_PATTERN =\s*\n\s*\/\^ \{0,3\}#\+\[ \\t\]\+Acceptance\[ \\t\]\+Criteria\(\?:\[ \\t\]\+#\+\)\?\[ \\t\]\*\$\/im/,
+  );
+});
+
 test('verifiability passes a resolved-decision issue with objective criteria', () => {
   // Check 7 false-positive that now passes: the body describes a resolved
   // maintainer decision and carries objective acceptance criteria.
@@ -3300,6 +3406,271 @@ test('actionability accepts checklist without Scope/Purpose headings', () => {
     },
   } as Context);
   assert.equal(result.pass, true);
+});
+
+// --- #2767: structural-evidence demotion ------------------------------------
+
+const ALL_STRUCTURAL_SIGNALS: StructuralEvidence = {
+  verificationCommand: true,
+  candidateFilesExist: true,
+  trustedEditor: true,
+};
+
+test('#2767 round 17: checkActionability has no reachable demotion branch, even with all structural signals present', () => {
+  // Round 9 originally asserted demotion here (see the evaluateSuitability
+  // sibling test above for the full invariant this removal relies on).
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'This needs work but nothing formal is specified.',
+  };
+
+  const withoutEvidence = checkActionability({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+  assert.equal(withoutEvidence.demoted, undefined);
+
+  const withEvidence = checkActionability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, false);
+  assert.equal(withEvidence.demoted, undefined);
+});
+
+test('#2767 round 17: checkActionability cannot realistically demote because verificationCommand implies hasAcceptance', () => {
+  // The invariant itself, proven directly: a body whose Acceptance Criteria
+  // section satisfies verificationCommand's own heading requirement has
+  // already satisfied checkActionability's own (looser) hasAcceptance
+  // phrase-anywhere test, so it passes above the demotion branch this file
+  // removed regardless of what structuralEvidence claims.
+  const issue = {
+    ...BASE_ISSUE,
+    body: '## Acceptance Criteria\n\n- [ ] one\n- [ ] two\n',
+  };
+  const result = checkActionability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(result.pass, true);
+  assert.equal(result.demoted, undefined);
+});
+
+test('#2767: checkActionability keeps failing when any one structural signal is false', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'This needs work but nothing formal is specified.',
+  };
+  for (const key of Object.keys(
+    ALL_STRUCTURAL_SIGNALS,
+  ) as (keyof StructuralEvidence)[]) {
+    const result = checkActionability({
+      issue,
+      structuralEvidence: { ...ALL_STRUCTURAL_SIGNALS, [key]: false },
+    } as Context);
+    assert.equal(result.pass, false, `expected fail with ${key}: false`);
+  }
+});
+
+test('#2767: checkAutonomy demotes an either/or unresolved-choice fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'Either add validation, or TBD -- not yet decided.',
+  };
+
+  const withoutEvidence = checkAutonomy({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const withEvidence = checkAutonomy({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+  assert.match(withEvidence.evidence, /TBD|not yet decided/i);
+});
+
+test('#2767: checkAutonomy demotes a stakeholder-coordination fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'Requires stakeholder sign-off before this can proceed.',
+  };
+
+  const withoutEvidence = checkAutonomy({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const withEvidence = checkAutonomy({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+  assert.match(withEvidence.evidence, /stakeholder sign-?off/i);
+});
+
+test('#2767: checkAutonomy demotes a standalone unresolved-choice fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'The exact retry count is TBD.',
+  };
+
+  const withoutEvidence = checkAutonomy({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const withEvidence = checkAutonomy({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+  assert.match(withEvidence.evidence, /TBD/);
+});
+
+test('#2767: checkAutonomy never demotes a blocked-by-human label fail (never-demote list)', () => {
+  const result = checkAutonomy({
+    issue: { ...BASE_ISSUE, labels: ['status:blocked-by-human'] },
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.demoted, undefined);
+});
+
+test('#2767: checkAutonomy never demotes a blocked-by-human title-prefix fail (never-demote list)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'blocked-by-human: needs a maintainer call',
+    },
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.demoted, undefined);
+});
+
+// #2767 round 9 (Codex review, PR #2840): `runCli`'s own live-fetch gate
+// (unexported, see the source-text pin below) originally tested only
+// `failedCheck === 'autonomy' | 'actionability' | 'verifiability'`, not
+// whether THIS issue's specific failure branch is one the never-demote
+// list above excludes -- wasting a live editor-history + collaborator-
+// permission fetch for a failure no evidence could ever flip. The fix
+// re-evaluates locally with all three signals forced `true` (the
+// strongest possible evidence) and only fetches when that still passes.
+// This test proves the premise the fix relies on at the exact
+// `evaluateSuitability` abstraction level `runCli` itself calls it at
+// (not just `checkAutonomy` in isolation, already proven above): a
+// blocked-by-human autonomy fail keeps `evaluateSuitability(...).passed`
+// `false` even when every structural signal is `true`.
+test('#2767: evaluateSuitability never demotes a blocked-by-human autonomy fail, even with all structural signals present (round 9 sentinel premise)', () => {
+  const issue = { ...BASE_ISSUE, labels: ['status:blocked-by-human'] };
+  const result = evaluateSuitability(issue, {
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    duplicateCandidates: [{ number: 1, title: issue.title }],
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.failedCheck, 'autonomy');
+});
+
+// #2767 round 13 (Codex review, PR #2840): evaluateSuitability is
+// fail-fast (the CHECKS loop returns at the first `!pass`), so when the
+// CURRENT failure is demotable but an independent LATER check also fails
+// on its own (non-demotable) grounds -- an autonomy fail here, followed
+// by Check 7's escape-hatch branch, once autonomy demotes to `warn` and
+// the loop continues -- the all-true re-run's aggregate `.passed` stays
+// `false`. Gating the live fetch on `.passed` (round 9's original form)
+// would skip it here even though the fetch is worth making: `runCli`'s
+// own `output.checks` reports every check's own `result` regardless of
+// the overall verdict, so demoting the CURRENT check to `warn` is real,
+// useful output even when a later check still blocks overall `passed`.
+// This test proves the underlying premise the round-13 fix
+// (`checks.some(check => check.id === result.failedCheck && check.result
+// === 'warn')`, replacing the bare `.passed` check) relies on.
+test('#2767: evaluateSuitability demotes the current autonomy fail to warn even though an independent later verifiability escape-hatch fail still blocks overall passed (round 13 sentinel premise)', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: `Either add validation, or TBD -- not yet decided.
+
+## Acceptance Criteria
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+- tests pass
+`,
+  };
+  const opts = {
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    duplicateCandidates: [{ number: 1, title: issue.title }],
+  };
+
+  const plain = evaluateSuitability(issue, opts);
+  assert.equal(plain.passed, false);
+  assert.equal(plain.failedCheck, 'autonomy');
+
+  const withEvidence = evaluateSuitability(issue, {
+    ...opts,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  });
+  assert.equal(withEvidence.passed, false);
+  assert.equal(withEvidence.failedCheck, 'verifiability');
+  const autonomy = withEvidence.checks.find((c) => c.id === 'autonomy');
+  assert.equal(autonomy?.result, 'warn');
+});
+
+test('#2767: checkVerifiability demotes a missing-objective-signal fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'Ship it in a way that is fine.',
+  };
+
+  const withoutEvidence = checkVerifiability({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const withEvidence = checkVerifiability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+});
+
+test('#2767: checkVerifiability demotes a subjective-approval fail to warn', () => {
+  const issue = {
+    ...BASE_ISSUE,
+    body: 'Final approval depends on maintainer preference, though tests must also pass.',
+  };
+
+  const withoutEvidence = checkVerifiability({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+  assert.match(withoutEvidence.evidence, /subjective approval or judgment/i);
+
+  const withEvidence = checkVerifiability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(withEvidence.pass, true);
+  assert.equal(withEvidence.demoted, true);
+  assert.match(withEvidence.evidence, /maintainer preference/i);
+});
+
+test('#2767: checkVerifiability never demotes the escape-hatch either/or fail (deliberately out of scope)', () => {
+  // #2709's own reproduction corpus (see "verifiability rejects an
+  // either/or escape-hatch bullet whose documentation branch names no
+  // checkable content" above), reused per this issue's own acceptance
+  // criteria. Its "tests pass" bullet clears the objective-signal screen
+  // so the escape-hatch scan below is actually reached, rather than an
+  // earlier, demotable branch failing first.
+  const issue = {
+    ...BASE_ISSUE,
+    body: `## Acceptance Criteria
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+- tests pass
+`,
+  };
+  const withoutEvidence = checkVerifiability({ issue } as Context);
+  assert.equal(withoutEvidence.pass, false);
+
+  const result = checkVerifiability({
+    issue,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.demoted, undefined);
 });
 
 test('verifiability accepts objective acceptance criteria without test keywords', () => {
@@ -5770,6 +6141,77 @@ test('runCli: the issue-comments fetch is skipped entirely with zero trusted mar
   );
 });
 
+// #2767 round 9 (Codex review, PR #2840): runCli isn't unit-tested for the
+// same reason as the pins above (real gh I/O) -- this pins that the live
+// `computeLiveStructuralEvidence` fetch is gated behind a sentinel
+// `evaluateSuitability` re-check with every signal forced `true`, not just
+// the bare check-id test the fetch previously ran behind. The behavioral
+// premise this sentinel relies on (a per-branch never-demote fail keeps
+// `evaluateSuitability(...).passed` false even with all-true evidence) is
+// proven directly above ("evaluateSuitability never demotes a
+// blocked-by-human autonomy fail...").
+test('runCli: the live structural-evidence fetch is gated behind an all-true sentinel re-check, not just the failedCheck id (#2767 round 9)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /const allTrueStructuralEvidence: StructuralEvidence = \{\s*\n\s*verificationCommand: true,\s*\n\s*candidateFilesExist: true,\s*\n\s*trustedEditor: true,\s*\n\s*\};\s*\n\s*const wouldDemoteWithFullEvidence =\s*\n\s*!result\.passed &&\s*\n\s*\(result\.failedCheck === 'autonomy' \|\|\s*\n\s*result\.failedCheck === 'verifiability'\) &&\s*\n\s*evaluateSuitability\(issue, \{\s*\n\s*\.\.\.suitabilityOptions,\s*\n\s*structuralEvidence: allTrueStructuralEvidence,\s*\n\s*\}\)\.checks\.some\(\s*\n\s*\(check\) => check\.id === result\.failedCheck && check\.result === 'warn',\s*\n\s*\);\s*\n\s*if \(wouldDemoteWithFullEvidence\) \{/,
+  );
+});
+
+// #2767 round 17 (Codex review, PR #2840): `checkActionability` (Check 5)
+// no longer accepts `'actionability'` into the sentinel's failed-check
+// list above -- its own demotion branch was removed as realistically
+// unreachable. Pins that the id is genuinely gone from the source, not
+// merely reordered or renamed, so a future edit cannot silently
+// reintroduce the wasted fetch this round's fix removed.
+test('runCli: the live structural-evidence sentinel no longer names actionability (#2767 round 17)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  const sentinelSection = source.slice(
+    source.indexOf('const allTrueStructuralEvidence: StructuralEvidence'),
+    source.indexOf('if (wouldDemoteWithFullEvidence) {'),
+  );
+  assert.equal(sentinelSection.includes("'actionability'"), false);
+});
+
+// #2767 round 12 (Codex review, PR #2840): the `wouldDemoteWithFullEvidence`
+// sentinel above only gates whether computeLiveStructuralEvidence is called
+// at all (is demotion *ever* possible for this failure branch); it says
+// nothing about whether the issue's REAL body actually satisfies the two
+// local-only signals. computeLiveStructuralEvidence itself (unexported live
+// I/O wiring, not unit-testable via mocked ghJson -- same reason as the
+// other source-text pins in this file) must check those first and skip the
+// userContentEditors fetch when either is false, mirroring the fix already
+// applied to discover-viability-gate.mts's own computeLiveStructuralEvidence
+// (commit fb7efc8f). The behavioral premise (a false local signal keeps
+// hasAllStructuralSignals false regardless of trustedEditor) is proven
+// directly in triage-structural-evidence.test.mts's own
+// hasAllStructuralSignals suite.
+test('computeLiveStructuralEvidence skips the live fetchUserContentEditors fetch when a local-only signal is already false (#2767 round 12)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /const verificationCommand = hasVerificationCommandSignal\(body\);\s*\n\s*const candidateFilesExist = candidateFilesExistOnDisk\(body, existsSync\);\s*\n\s*if \(!verificationCommand \|\| !candidateFilesExist\) \{\s*\n\s*return \{ verificationCommand, candidateFilesExist, trustedEditor: false \};\s*\n\s*\}/,
+  );
+  // The early-return check must run before the fetchUserContentEditors
+  // call, not merely exist somewhere in the function -- pin the ordering.
+  const earlyReturnIndex = source.indexOf(
+    'if (!verificationCommand || !candidateFilesExist)',
+  );
+  const fetchIndex = source.lastIndexOf('fetchUserContentEditors(');
+  assert.notEqual(earlyReturnIndex, -1);
+  assert.notEqual(fetchIndex, -1);
+  assert.equal(earlyReturnIndex < fetchIndex, true);
+});
+
 // C1 self-review finding (#1815): the structural pins above prove
 // `shouldCollectEvidence` is wired to these three checks, but not that the
 // minimal `preEvidenceContext` runCli builds (issue + repository only,
@@ -6235,4 +6677,24 @@ test('evaluateSuitabilityLocal honors configured blocked/needs-decision label na
   });
   const autonomyCheck = result.checks.find((check) => check.id === 'autonomy');
   assert.equal(autonomyCheck?.result, 'pass');
+});
+
+// --- #2767 (Codex review, PR #2840): fetchUserContentEditors rejects a
+// partial GraphQL errors response, mirroring fetchClosedByMergedPrNumbers's
+// own established check. Neither function is unit-tested by mocking
+// `ghJson` (real gh I/O, same rationale as the two `shouldCollectEvidence`
+// wiring checks above), so this is the same source-text structural pin
+// pattern: prove the `errors` check runs, and runs before the
+// connection/nodes null check could otherwise mask it by throwing first
+// for a different reason.
+
+test('fetchUserContentEditors rejects a non-empty top-level GraphQL errors array before trusting a partial connection (#2767)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /if \(Array\.isArray\(parsed\.errors\) && parsed\.errors\.length > 0\) \{\s*\n\s*throw new Error\(\s*\n\s*`userContentEdits GraphQL response returned errors:[\s\S]*?const connection = parsed\.data\?\.repository\?\.issue\?\.userContentEdits;/,
+  );
 });

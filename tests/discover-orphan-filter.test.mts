@@ -9,9 +9,11 @@ import { fileURLToPath } from 'node:url';
 import {
   classifyIssue,
   extractBlockedByReferences,
+  fetchOpenIssues,
   filterOrphanIssues,
   getOrphanFirstPolicy,
 } from '../src/scripts/discover-orphan-filter.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -249,6 +251,254 @@ test('filterOrphanIssues excludes blocked labels and open blockers', async () =>
   assert.equal(result.filtered.blocked_label.length, 1);
 });
 
+test('#2767: filterOrphanIssues demotes a runtime-observation-precondition candidate via fetchUserContentEditorsByIssueNumber and warns', async () => {
+  const issues = [
+    {
+      number: 30,
+      title: 'demoted candidate',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`',
+      url: 'https://example.com/30',
+      user: { login: 'alice' },
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => ['alice'],
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+  });
+
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.orphans[0].number, 30);
+  assert.equal(result.filtered.runtime_observation_precondition.length, 0);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(
+    (result.warnings[0] as { reason: string }).reason,
+    'runtime_observation_precondition_demoted',
+  );
+});
+
+test('#2767: filterOrphanIssues never demotes when fetchUserContentEditorsByIssueNumber is not supplied (byte-stable default)', async () => {
+  const issues = [
+    {
+      number: 31,
+      title: 'still filtered',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.',
+      url: 'https://example.com/31',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.runtime_observation_precondition.length, 1);
+  assert.equal(result.warnings.length, 0);
+});
+
+test('#2767: filterOrphanIssues degrades to the plain (filtered) result when fetchUserContentEditorsByIssueNumber throws', async () => {
+  const issues = [
+    {
+      number: 32,
+      title: 'still filtered after a throwing fetch',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`',
+      url: 'https://example.com/32',
+      user: { login: 'alice' },
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => {
+      throw new Error('gh api graphql ... failed: rate limited (HTTP 429)');
+    },
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.runtime_observation_precondition.length, 1);
+  assert.equal(result.warnings.length, 0);
+});
+
+test('#2767: filterOrphanIssues skips fetchUserContentEditorsByIssueNumber entirely when a local structural signal is already false (Codex review, PR #2840, round 15)', async () => {
+  let fetchCalls = 0;
+  const issues = [
+    {
+      number: 33,
+      title: 'no Acceptance criteria or Candidate files section at all',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.',
+      url: 'https://example.com/33',
+      user: { login: 'alice' },
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => {
+      fetchCalls += 1;
+      return ['alice'];
+    },
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: () => false,
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.runtime_observation_precondition.length, 1);
+  assert.equal(result.warnings.length, 0);
+});
+
+// #2767 (CodeRabbit review, PR #2840): a fixture that builds an
+// `OrphanIssueInput` by hand (every test above) bypasses `fetchOpenIssues`/
+// `normalizeIssue` entirely, which is exactly how the live CLI's `user`
+// field silently never reached the `trustedEditor` signal -- this test goes
+// through the real function instead.
+test('#2767: fetchOpenIssues carries the provider user field through to the normalized issue', () => {
+  const port = createFakeProviderAdapter({
+    workItems: {
+      33: {
+        number: 33,
+        title: 'demotable candidate',
+        body: 'body',
+        state: 'open',
+        user: { login: 'alice' },
+      },
+    },
+  });
+  const [issue] = fetchOpenIssues(port);
+  assert.deepEqual(issue?.user, { login: 'alice' });
+});
+
+test('#2767: filterOrphanIssues demotes a runtime-observation-precondition candidate reached through fetchOpenIssues (not a hand-built fixture)', async () => {
+  const port = createFakeProviderAdapter({
+    workItems: {
+      34: {
+        number: 34,
+        title: 'demoted candidate via fetchOpenIssues',
+        body:
+          'Do this only after the prior fix has merged and is confirmed to ' +
+          'take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`',
+        state: 'open',
+        user: { login: 'alice' },
+      },
+    },
+  });
+  const issues = fetchOpenIssues(port);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => ['alice'],
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+  });
+
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.orphans[0].number, 34);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(
+    (result.warnings[0] as { reason: string }).reason,
+    'runtime_observation_precondition_demoted',
+  );
+});
+
+// #2767 (CodeRabbit review, PR #2840): the demotion warning must not be
+// emitted for a candidate that does not survive to the final `orphans`
+// partition -- verified against both removal paths below.
+test('#2767: filterOrphanIssues suppresses the demotion warning when the candidate is later excluded by the triage-verdict filter', async () => {
+  const issues = [
+    {
+      number: 35,
+      title: 'demoted then triage-verdict-rejected',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`',
+      url: 'https://example.com/35',
+      user: { login: 'alice' },
+      createdAt: '2026-01-01T00:00:00Z',
+    },
+  ];
+
+  const rejectionComment = {
+    body: `${SUITABILITY_REJECTION_PREFIX} — Check 2 (Coherence): reason.\n\n<!-- idd-skill-triage-verdict: unclear -->`,
+    created_at: '2026-06-01T00:00:00Z',
+    user: { login: 'alice' },
+  };
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => ['alice'],
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+    fetchCommentsByIssueNumber: () => [rejectionComment],
+    fetchTimelineByIssueNumber: () => [],
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 1);
+  assert.equal(
+    result.warnings.length,
+    0,
+    'no demotion warning for a candidate excluded by the triage-verdict filter',
+  );
+});
+
+test('#2767: filterOrphanIssues suppresses the demotion warning when the candidate is routed to routed_to_human', async () => {
+  const issues = [
+    {
+      number: 36,
+      title: 'demoted then routed below the autopilot floor',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'Do this only after the prior fix has merged and is confirmed to ' +
+        'take effect in production.\n\n## Acceptance criteria\n- `node --test tests/foo.test.mts` passes\n\n## Candidate files\n- `src/scripts/foo.mts`\n\n<!-- idd-skill-autopilot-suitability: 1 -->',
+      url: 'https://example.com/36',
+      user: { login: 'alice' },
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => ['alice'],
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+    autopilot: true,
+    autopilotSuitabilityFloor: 3,
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.routed_to_human.length, 1);
+  assert.equal(
+    result.warnings.length,
+    0,
+    'no demotion warning for a candidate routed to routed_to_human',
+  );
+});
+
 test('filterOrphanIssues excludes providerOutage.declarationTarget end-to-end (#2800)', async () => {
   const issues = [
     {
@@ -353,7 +603,10 @@ test('filterOrphanIssues excludes custom authoring label and warns when stale', 
   assert.equal(result.orphans.length, 0);
   assert.equal(result.filtered.authoring_label.length, 1);
   assert.equal(result.filtered.authoring_label[0].details, 'status:drafting');
-  assert.equal(result.warnings[0].status, 'stale');
+  // #2767: `warnings[]` is now a union with `StructuralEvidenceDemotionWarning`
+  // (which carries no `status` field); this fixture only ever produces the
+  // authoring-label warning shape.
+  assert.equal((result.warnings[0] as { status: string }).status, 'stale');
   assert.match(
     result.warnings[0].message,
     /Issue #21 has carried the authoring label for 5h/,
@@ -1178,6 +1431,67 @@ test('classifyIssue routes runtime/production-observation prose to runtime_obser
       },
     );
     assert.equal(result.reason, 'runtime_observation_precondition', body);
+  }
+});
+
+// --- #2767: structural-evidence demotion ------------------------------------
+
+const ALL_STRUCTURAL_SIGNALS = {
+  verificationCommand: true,
+  candidateFilesExist: true,
+  trustedEditor: true,
+};
+
+test('#2767: classifyIssue demotes a runtime-observation-precondition hit to a warned orphan when all structural signals hold', () => {
+  const issue = {
+    number: 100,
+    title: 't',
+    state: 'OPEN',
+    labels: [],
+    body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.',
+  };
+  const baseOptions = {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  };
+
+  const withoutEvidence = classifyIssue(issue, baseOptions);
+  assert.equal(withoutEvidence.orphan, false);
+  assert.equal(withoutEvidence.reason, 'runtime_observation_precondition');
+
+  const withEvidence = classifyIssue(issue, {
+    ...baseOptions,
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  });
+  assert.equal(withEvidence.orphan, true);
+  assert.equal(withEvidence.reason, 'orphan');
+  assert.equal(
+    withEvidence.warning,
+    'runtime_observation_precondition_demoted',
+  );
+});
+
+test('#2767: classifyIssue keeps filtering when any one structural signal is false', () => {
+  const issue = {
+    number: 100,
+    title: 't',
+    state: 'OPEN',
+    labels: [],
+    body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.',
+  };
+  const baseOptions = {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  };
+  for (const key of Object.keys(
+    ALL_STRUCTURAL_SIGNALS,
+  ) as (keyof typeof ALL_STRUCTURAL_SIGNALS)[]) {
+    const result = classifyIssue(issue, {
+      ...baseOptions,
+      structuralEvidence: { ...ALL_STRUCTURAL_SIGNALS, [key]: false },
+    });
+    assert.equal(result.orphan, false, `expected filter with ${key}: false`);
+    assert.equal(result.reason, 'runtime_observation_precondition');
   }
 });
 

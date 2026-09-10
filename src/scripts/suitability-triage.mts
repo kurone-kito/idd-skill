@@ -5,7 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
@@ -15,12 +15,20 @@ import {
 import { computeBranchName } from './branch-name.mts';
 import { parseCliArgs } from './cli-args.mts';
 import {
+  type CollaboratorPermissionCache,
+  collaboratorPermission,
+} from './collaborator-permission.mts';
+import {
   DEFAULT_BUNDLE_IDS,
   DEFAULT_MANIFEST_PATH,
   parseCandidateFiles,
   resolveHighContentionFiles,
 } from './discover-shared-file-overlap.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  resolveGhApiHostname,
+} from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import {
   findFencedCodeRanges,
@@ -55,6 +63,14 @@ import {
   type SuitabilityRejectionComment,
   type SuitabilityRejectionRecord,
 } from './supersession-detection.mts';
+import {
+  buildTrustedLoginPredicate,
+  candidateFilesExistOnDisk,
+  evaluateStructuralEvidence,
+  hasAllStructuralSignals,
+  hasVerificationCommandSignal,
+  type StructuralEvidence,
+} from './triage-structural-evidence.mts';
 
 /**
  * Wall-clock budget for the #1484 merged-PR file-overlap scan (CodeRabbit
@@ -70,6 +86,10 @@ import {
  * as a live binding.)
  */
 const MERGED_PR_SCAN_DEADLINE_MS = 2 * 60 * 1000;
+
+/** Mirrors `provider-adapter-github.mts`'s
+ * `USER_CONTENT_EDITS_MAX_PAGES` -- see that constant's doc comment. */
+const USER_CONTENT_EDITORS_MAX_PAGES = 10;
 
 /** Parsed CLI arguments. */
 interface SuitabilityTriageArgs {
@@ -140,6 +160,13 @@ interface NormalizedIssue {
   url: string;
   /** #1484: the merged-PR scan window start (no claim exists yet at A4.5). */
   createdAt: string;
+  /** #2767: the issue author's login, read only for the live CLI's
+   * `trustedEditor` structural-evidence signal. `''` in
+   * `evaluateSuitabilityLocal`'s `--body-file`/`--stdin` mode, which has
+   * no live author to report -- `isTrustedEditorSignal` already treats an
+   * empty author as untrusted, so this alone keeps local mode from ever
+   * demoting. */
+  author: string;
 }
 
 interface Repository {
@@ -183,6 +210,19 @@ interface Context {
    * as a false duplicate precisely because evidence collection broke).
    */
   highConfidenceCollectionDegraded?: boolean;
+  /** #2767: pre-computed structural-evidence signal, read only by Checks
+   * 6/7 (`checkAutonomy`/`checkVerifiability`) to decide whether one of
+   * their own specific lexical-fail branches demotes to a warned pass.
+   * `checkActionability` (Check 5) does not read this field (round 17,
+   * Codex review, PR #2840): its own `hasAcceptance` condition is almost
+   * always a strict superset of what `verificationCommand` requires, so a
+   * demotion branch there was realistically unreachable in production --
+   * see that function's own comment. `undefined` (the default for every
+   * pre-#2767 caller/test, and for `evaluateSuitabilityLocal`'s
+   * `--body-file`/`--stdin` mode, which has no live author/editors to
+   * trust) means `hasAllStructuralSignals` is false, so behavior is
+   * identical to before this field existed. */
+  structuralEvidence?: StructuralEvidence;
 }
 
 interface CheckResult {
@@ -215,6 +255,10 @@ interface SuitabilityOptions {
   highConfidenceDuplicate?: unknown;
   /** #1484 */
   highConfidenceCollectionDegraded?: unknown;
+  /** #2767 -- see `Context.structuralEvidence`'s doc comment. Accepted
+   * as `unknown` like every other option here; normalized (or dropped
+   * if malformed) before being copied into `Context`. */
+  structuralEvidence?: unknown;
 }
 
 const CHECKS: {
@@ -781,7 +825,33 @@ function isEnumeratedParentheticalEntry(
   const otherEntries = [...beforeEntries, ...afterEntries];
   return otherEntries.length > 0 && otherEntries.every(looksLikeLabelEntry);
 }
-const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
+// #2767 round 4 (Codex review, PR #2840): required at least one space/tab
+// after the `#` run (`[ \t]+`, not `\s*`) -- CommonMark requires that
+// whitespace (or end of line) for a real ATX heading, so a malformed line
+// like "##Acceptance Criteria" with no space renders as plain paragraph
+// text, never a heading, yet the original `\s*` still matched it (and,
+// since `\s` also matches a newline under the `/m` flag, even matched
+// across a line break, e.g. "#\nAcceptance Criteria"). This is the same
+// pattern triage-structural-evidence.mts's own
+// ACCEPTANCE_CRITERIA_HEADING_PATTERN copied from, and Codex's finding
+// there applies here too -- `[ \t]+` still matches every real heading;
+// only a line Markdown itself would not render as a heading now misses.
+// #2767 round 7 (E9 whole-class sweep, same PR): the *interior* gap
+// between "Acceptance" and "Criteria" was still `\s+`, which also
+// matches a newline, so "## Acceptance\nCriteria" -- two separate
+// lines, only the first of which Markdown renders as the actual ATX
+// heading text -- still matched as one combined heading. Narrowed to
+// `[ \t]+`, matching the same fix on the sibling pattern.
+// #2767 round 9 (advisor review, same PR, closing a self-documented
+// deferral): two more CommonMark ATX-heading shapes this pattern still
+// missed, both false negatives (denying a genuine heading its demotion
+// benefit, never a false-positive risk): an ATX heading may carry up to
+// three leading spaces (`^ {0,3}`, matching `parseCandidateFiles`'s own
+// heading regex, which already tolerated this), and may end in an
+// optional closing sequence of `#` characters preceded by whitespace
+// (`(?:[ \t]+#+)?`), e.g. "## Acceptance Criteria ##".
+const ACCEPTANCE_CRITERIA_PATTERN =
+  /^ {0,3}#+[ \t]+Acceptance[ \t]+Criteria(?:[ \t]+#+)?[ \t]*$/im;
 // #2711 PR #2735 review (Codex): this repo's own "## Candidate files"
 // convention (#2589) names files to EDIT, never a verification signal --
 // matched here (mirroring ACCEPTANCE_CRITERIA_PATTERN's own shape) so the
@@ -1895,6 +1965,7 @@ export function evaluateSuitability(
     highConfidenceCollectionDegraded: Boolean(
       options.highConfidenceCollectionDegraded,
     ),
+    structuralEvidence: normalizeStructuralEvidence(options.structuralEvidence),
   };
 
   const checks: CheckResult[] = [];
@@ -1903,7 +1974,10 @@ export function evaluateSuitability(
     checks.push({
       id: check.id,
       name: check.name,
-      result: result.pass ? 'pass' : 'fail',
+      // #2767: a demoted result already carries `pass: true` from the
+      // check itself, so `passed`/`outcome`/the short-circuit below need
+      // no separate handling -- `result: 'warn'` is presentational only.
+      result: result.pass ? (result.demoted ? 'warn' : 'pass') : 'fail',
       evidence: result.evidence,
       ...(result.tier ? { tier: result.tier } : {}),
     });
@@ -2278,6 +2352,27 @@ export function checkActionability(context: Context): CheckOutcome {
     };
   }
 
+  // #2767 round 17 (Codex review, PR #2840): this check has no
+  // realistically reachable structural-evidence demotion branch, unlike
+  // Checks 6/7 -- `hasAcceptance` above already matches the bare phrase
+  // "Acceptance Criteria" (or "Output"/"Deliverables") ANYWHERE in the
+  // body, which `verificationCommand`'s own heading requirement
+  // (`ACCEPTANCE_CRITERIA_HEADING_PATTERN`, a real ATX/Setext heading
+  // containing that same phrase) almost always also satisfies -- any body
+  // with a normally-written "## Acceptance Criteria" heading has already
+  // returned `pass: true` above, before this check ever reaches its own
+  // fail branch. (One contrived exception exists: a heading with extra
+  // whitespace between the two words, e.g. "##  Acceptance    Criteria",
+  // matches the heading pattern's `[ \t]+` gap but not `hasAcceptance`'s
+  // literal single space -- verified via `gh api /markdown` as a real
+  // heading. Not a realistic authoring pattern, and not worth preserving
+  // a demotion branch for.) A `hasAllStructuralSignals` branch here fired
+  // almost exclusively for a synthetic evidence value injected directly
+  // into `evaluateSuitability` (bypassing `computeLiveStructuralEvidence`'s
+  // real body-derived computation), never for the live CLI's own real
+  // evidence on realistic content. Removed (previously demoted here)
+  // rather than left as effectively-dead code; the PR's own scope is
+  // Checks 6/7 for this reason.
   return {
     pass: false,
     evidence: 'Issue lacks concrete actionable scope or acceptance detail.',
@@ -2447,6 +2542,18 @@ export function checkAutonomy(context: Context): CheckOutcome {
         continue;
       }
 
+      // #2767: demotable -- an either/or lexical-pattern hit, one of the
+      // three branches this issue names. The label / title-prefix /
+      // authoring-bucket-marker checks above this point in the function
+      // are NEVER demoted (the issue's explicit never-demote list) --
+      // this branch is reached only once none of those matched.
+      if (hasAllStructuralSignals(context.structuralEvidence)) {
+        return {
+          pass: true,
+          demoted: true,
+          evidence: `Issue presents an unresolved either/or implementation choice: "${markerText}" (demoted: structural evidence present).`,
+        };
+      }
       return {
         pass: false,
         evidence:
@@ -2473,6 +2580,14 @@ export function checkAutonomy(context: Context): CheckOutcome {
       continue;
     }
 
+    // #2767: demotable -- see the either/or branch's comment above.
+    if (hasAllStructuralSignals(context.structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence: `Issue explicitly requires external human coordination or approval: "${matchedText}" (demoted: structural evidence present).`,
+      };
+    }
     return {
       pass: false,
       evidence:
@@ -2493,6 +2608,14 @@ export function checkAutonomy(context: Context): CheckOutcome {
       continue;
     }
 
+    // #2767: demotable -- see the either/or branch's comment above.
+    if (hasAllStructuralSignals(context.structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence: `Issue names an unresolved product or design choice: "${markerText}" (demoted: structural evidence present).`,
+      };
+    }
     return {
       pass: false,
       evidence: 'Issue names an unresolved product or design choice.',
@@ -2700,6 +2823,18 @@ export function checkVerifiability(context: Context): CheckOutcome {
   const hasObjectiveSignals = hasVerificationChannel || hasObjectiveCriteria;
 
   if (!hasObjectiveSignals) {
+    // #2767: demotable -- this is the "no objective verification signal"
+    // shape the issue names, distinct from the escape-hatch either/or
+    // branch further below (deliberately left un-demoted; see that
+    // branch's own comment).
+    if (hasAllStructuralSignals(context.structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence:
+          'Issue does not provide objective verification signals or substantive acceptance criteria (demoted: structural evidence present).',
+      };
+    }
     return {
       pass: false,
       evidence:
@@ -2736,7 +2871,10 @@ export function checkVerifiability(context: Context): CheckOutcome {
       ...findHtmlCommentRanges(normalizedBody, codeRangesForCommentMasking),
     ],
   );
-  const hasSubjectiveApproval = ((): boolean => {
+  // #2767: captures the matched text (not just a boolean) so a demoted
+  // warn's evidence can name the matched phrase, matching the pattern
+  // discover-viability-gate.mts's demotable criteria already use.
+  const subjectiveApprovalMatch = ((): string | null => {
     let lineOffset = 0;
     for (const line of normalizedBody.split('\n')) {
       if (
@@ -2744,7 +2882,7 @@ export function checkVerifiability(context: Context): CheckOutcome {
         SUBJECTIVE_GATE_PATTERN.test(line) &&
         !isFramedAsDescriptive(normalizedBody, paragraphSpans, lineOffset)
       ) {
-        return true;
+        return line.trim();
       }
       lineOffset += line.length + 1;
     }
@@ -2762,13 +2900,14 @@ export function checkVerifiability(context: Context): CheckOutcome {
           proximityMatch.index,
         )
       ) {
-        return true;
+        return proximityMatch[0];
       }
       proximityMatch = proximityPattern.exec(normalizedBody);
     }
 
-    return false;
+    return null;
   })();
+  const hasSubjectiveApproval = subjectiveApprovalMatch !== null;
   // A body that carries BOTH a resolved-decision marker (a
   // "## Decision (resolved …)" heading, or the grooming-pass workflow's
   // inline "Maintainer decision (…): …" prose, #2661) AND a concrete,
@@ -2788,6 +2927,14 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // rather than re-derived here.
   const hasResolvedDecision = computeHasResolvedDecision(body);
   if (hasSubjectiveApproval && !(hasResolvedDecision && hasObjectiveCriteria)) {
+    // #2767: demotable -- the "subjective approval or judgment" shape.
+    if (hasAllStructuralSignals(context.structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence: `Issue success depends on subjective approval or judgment: "${subjectiveApprovalMatch}" (demoted: structural evidence present).`,
+      };
+    }
     return {
       pass: false,
       evidence: 'Issue success depends on subjective approval or judgment.',
@@ -3030,6 +3177,13 @@ export function checkVerifiability(context: Context): CheckOutcome {
             isEscapeHatchBranch(rightBranchText, rightBranchStart) ||
             isEscapeHatchBranch(leftBranchText, leftBranchStart)
           ) {
+            // #2767: deliberately NOT demoted, unlike this function's other
+            // two fail branches. This check exists precisely to force human
+            // judgment on an ambiguous documentation branch -- a different
+            // failure class from the lexical-pattern false positives the
+            // structural-evidence signal targets, per idd-suitability
+            // .instructions.md's "Escape-hatch acceptance criteria" Edge
+            // Case.
             return {
               pass: false,
               evidence:
@@ -3338,7 +3492,7 @@ function runCli(): void {
     collectionWarnings = evidence.collectionWarnings;
   }
 
-  const result = evaluateSuitability(issue, {
+  const suitabilityOptions: SuitabilityOptions = {
     repository: { owner, repo },
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
@@ -3346,7 +3500,84 @@ function runCli(): void {
     markerPrefix: resolveMarkerPrefix(policyConfig),
     highConfidenceDuplicate,
     highConfidenceCollectionDegraded: collectionWarnings.length > 0,
-  });
+  };
+  let result = evaluateSuitability(issue, suitabilityOptions);
+  // #2767: only Checks 6-7 (autonomy/verifiability) ever demote (Check 5,
+  // actionability, has no realistically reachable demotion branch --
+  // removed round 17, see `checkActionability`'s own comment), and an
+  // issue that already passes on wording alone never needs the demotion
+  // path -- fetch structural evidence (an extra network round trip: editor
+  // logins plus a live collaborator-permission check) only when the plain
+  // evaluation already failed on one of those two.
+  //
+  // That check-id test alone is not sufficient (Codex review, PR #2840,
+  // round 9): several of Checks 6-7's own failure branches are documented
+  // as "never demote" regardless of evidence -- e.g. Check 6's
+  // blocked-by-human label/marker branches, Check 7's escape-hatch branch
+  // -- so a fetch still ran for a failure that no amount of real structural
+  // evidence could ever flip. `wouldDemoteWithFullEvidence` answers the
+  // general question directly instead of re-deriving, and keeping in sync
+  // with, each check's own internal branch list: re-evaluate locally
+  // (no network) with every signal forced `true` (the strongest possible
+  // evidence); if that still does not pass, the live-fetched evidence --
+  // strictly no stronger than all-true -- cannot pass either, so the fetch
+  // is skipped. Mirrors the fix already applied to
+  // `discover-viability-gate.mts` (commit 4053e95a), generalized here to
+  // cover per-branch (not just per-check) non-demotability.
+  //
+  // Gates on the CURRENT failed check's own result flipping to `warn` in
+  // the all-true re-run, not on the whole re-run's aggregate `.passed`
+  // (Codex review, PR #2840, round 13): `evaluateSuitability` is
+  // fail-fast (CHECKS.mts's `for` loop returns at the first `!pass`), so
+  // when the current failure is demotable but an independent LATER check
+  // also fails on its own (non-demotable) grounds -- e.g. a lexical
+  // autonomy hit followed by Check 7's escape-hatch branch -- the all-true
+  // re-run demotes the current check to `warn` and continues, only to
+  // stop at that later check's own genuine failure, so its aggregate
+  // `.passed` is still `false` even though the fetch IS worth making: the
+  // output's `checks` array (populated for every check the loop actually
+  // reaches, `runCli`'s own `output.checks` below) reports each check's
+  // own `result` regardless of the overall verdict, so live evidence that
+  // demotes the current check to `warn` is real, useful information even
+  // when a later check still blocks overall `passed`.
+  const allTrueStructuralEvidence: StructuralEvidence = {
+    verificationCommand: true,
+    candidateFilesExist: true,
+    trustedEditor: true,
+  };
+  const wouldDemoteWithFullEvidence =
+    !result.passed &&
+    (result.failedCheck === 'autonomy' ||
+      result.failedCheck === 'verifiability') &&
+    evaluateSuitability(issue, {
+      ...suitabilityOptions,
+      structuralEvidence: allTrueStructuralEvidence,
+    }).checks.some(
+      (check) => check.id === result.failedCheck && check.result === 'warn',
+    );
+  if (wouldDemoteWithFullEvidence) {
+    // Same fail-open contract as the `existingRejection` scan above: this
+    // is a detect-only demotion path, not a gate, so a transient GitHub
+    // API failure (rate limit, timeout, an absent GraphQL connection --
+    // `getWorkItemUserContentEdits`/`collaboratorPermission` both throw on
+    // one) must degrade to "no structural evidence" -- keep the plain
+    // `result` computed above unchanged -- rather than crashing the whole
+    // suitability evaluation.
+    try {
+      const structuralEvidence = computeLiveStructuralEvidence(
+        owner,
+        repo,
+        issue,
+        policyConfig,
+      );
+      result = evaluateSuitability(issue, {
+        ...suitabilityOptions,
+        structuralEvidence,
+      });
+    } catch {
+      // Keep the plain `result` from above.
+    }
+  }
 
   const output = {
     repository: { owner, repo },
@@ -3439,6 +3670,9 @@ export function evaluateSuitabilityLocal(
     // locally) -- a wall-clock timestamp here would make this "pure"
     // evaluation nondeterministic for no benefit.
     createdAt: '',
+    // #2767: no live author in local/offline mode -- keeps this path from
+    // ever demoting (see `NormalizedIssue.author`'s doc comment).
+    author: '',
   };
 
   const context: Context = {
@@ -3664,13 +3898,27 @@ Live (--issue) output schema:
   "outcome": "ready|unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid",
   "failedCheck": "repository_fit|...|null",
   "existingRejection": {"author":"...","createdAt":"...","url":"...","outcome":"...|null","check":"...|null"},
-  "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|fail","evidence":"..."}]
+  "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|warn|fail","evidence":"..."}]
 }
 
 Each checks[] entry may also carry "tier":"high-confidence|weak" -- present
 only on a duplicate_or_superseded fail (absent on every pass and on every
 other check), distinguishing a high-confidence mechanical hit from the weak
 title/declaration heuristic.
+
+A checks[] entry's "result" is "warn" (#2767) only for autonomy or
+verifiability, and only when a lexical-pattern fail was demoted to a
+passed, annotated result because every structural-evidence signal
+(triage-structural-evidence.mts: a runnable verification command, an
+existing candidate file, a fully trusted author+editor set) held for
+this issue; it counts as a pass for "passed"/"outcome"/"failedCheck" but
+is worth a human's attention when composing an A4.5 rejection comment for
+a DIFFERENT check that still failed outright. actionability has no
+reachable demotion branch (#2767 round 17): its own pass condition
+already accepts any body containing the bare phrase "Acceptance
+Criteria"/"Output"/"Deliverables", a strict superset of what the
+verificationCommand signal itself requires. Never emitted in local
+(--body-file/--stdin) mode, which has no live author/editors to trust.
 
 "existingRejection" (#1887) is present only when a trusted marker actor
 already posted a correctly-formatted "A4.5 suitability gate rejection"
@@ -3753,7 +4001,9 @@ function normalizeIssue(issue: unknown): NormalizedIssue {
     url?: unknown;
     html_url?: unknown;
     created_at?: unknown;
+    user?: { login?: unknown } | null;
   };
+  const authorLogin = i.user?.login;
   return {
     number: Number.parseInt(String(i.number), 10),
     title: String(i.title ?? ''),
@@ -3762,6 +4012,7 @@ function normalizeIssue(issue: unknown): NormalizedIssue {
     labels: normalizeLabels(i.labels),
     url: String(i.url ?? i.html_url ?? ''),
     createdAt: String(i.created_at ?? ''),
+    author: typeof authorLogin === 'string' ? authorLogin : '',
   };
 }
 
@@ -3773,6 +4024,35 @@ function normalizeIssue(issue: unknown): NormalizedIssue {
  * `evaluateHighConfidenceDuplicate` special-cases `undefined` for exactly
  * this reason). Every array field defaults to `[]` on a malformed shape.
  */
+/** #2767: `undefined` unless `raw` is a well-formed `StructuralEvidence`
+ * object -- a malformed value degrades to "no structural evidence" (never
+ * demotes) rather than throwing, matching every other `normalize*`
+ * helper's tolerant-input contract in this file. */
+function normalizeStructuralEvidence(
+  raw: unknown,
+): StructuralEvidence | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const r = raw as {
+    verificationCommand?: unknown;
+    candidateFilesExist?: unknown;
+    trustedEditor?: unknown;
+  };
+  if (
+    typeof r.verificationCommand !== 'boolean' ||
+    typeof r.candidateFilesExist !== 'boolean' ||
+    typeof r.trustedEditor !== 'boolean'
+  ) {
+    return undefined;
+  }
+  return {
+    verificationCommand: r.verificationCommand,
+    candidateFilesExist: r.candidateFilesExist,
+    trustedEditor: r.trustedEditor,
+  };
+}
+
 function normalizeHighConfidenceDuplicateInput(
   raw: unknown,
 ): HighConfidenceDuplicateInput | undefined {
@@ -3958,6 +4238,176 @@ function normalizeText(value: unknown): string {
 function fetchIssue(repoRef: string, issueNumber: number): NormalizedIssue {
   const issue = ghJson(['api', `repos/${repoRef}/issues/${issueNumber}`]);
   return normalizeIssue(issue);
+}
+
+/**
+ * #2767: the editor logins GraphQL `Issue.userContentEdits` records, for
+ * the `trustedEditor` structural-evidence signal -- `null` for a
+ * deleted/ghost editor account, same contract as
+ * `provider-adapter-github.mts`'s `getWorkItemUserContentEdits`. This
+ * file is not yet migrated onto `provider-port.mts` (see
+ * `tests/provider-port-migration-guard.test.mts`'s `MIGRATED_HELPERS`
+ * list), so it makes its own direct `gh api graphql` call rather than
+ * adopting the port abstraction mid-issue; the query and its pagination
+ * (Codex/CodeRabbit review, PR #2840) mirror that adapter's own.
+ */
+function fetchUserContentEditors(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): (string | null)[] {
+  const allNodes: { editor?: { login?: unknown } | null }[] = [];
+  let before: string | null = null;
+  for (let page = 0; page < USER_CONTENT_EDITORS_MAX_PAGES; page += 1) {
+    const query = `query($owner:String!,$repo:String!,$number:Int!,$before:String){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      userContentEdits(last:100, before:$before){
+        pageInfo { hasPreviousPage startCursor }
+        nodes { editor { login } }
+      }
+    }
+  }
+}`;
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...(resolveGhApiHostname()
+        ? ['--hostname', resolveGhApiHostname() as string]
+        : []),
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-F',
+      `number=${issueNumber}`,
+    ];
+    // Omit `before` entirely on the first page -- an empty-string `-f
+    // before=` would send a literal empty-string cursor to GraphQL, not
+    // "unset" (mirrors provider-adapter-github.mts's own `after` handling).
+    if (before) {
+      apiArgs.push('-f', `before=${before}`);
+    }
+    const parsed = ghJson(apiArgs) as {
+      data?: {
+        repository?: {
+          issue?: {
+            userContentEdits?: {
+              pageInfo?: {
+                hasPreviousPage?: unknown;
+                startCursor?: unknown;
+              } | null;
+              nodes?: { editor?: { login?: unknown } | null }[] | null;
+            } | null;
+          } | null;
+        } | null;
+      };
+      errors?: unknown;
+    };
+    // Codex review (PR #2840, this round): `gh api graphql` exits non-zero
+    // on a schema-level error, but a resolver-level failure can still come
+    // back as HTTP 200 with a non-empty top-level `errors` array alongside
+    // a *partial* `userContentEdits.nodes` -- the same shape
+    // `fetchClosedByMergedPrNumbers` above already guards against.
+    // Accepting that partial page as complete could omit an older
+    // untrusted editor while `pageInfo.hasPreviousPage` still reads
+    // `false`/absent, wrongly satisfying `trustedEditor`; throw so the
+    // caller's fail-open catch (never "zero editors") runs instead.
+    if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+      throw new Error(
+        `userContentEdits GraphQL response returned errors: ${JSON.stringify(parsed.errors)}`,
+      );
+    }
+    // Codex review (PR #2840): reject an absent connection/nodes array
+    // instead of defaulting to `[]` -- treating a genuine read failure (a
+    // deleted/inaccessible issue between the earlier REST fetch and this
+    // call, or a malformed response) as "zero edits" would silently let a
+    // real failure through as a false trustedEditor signal, since the
+    // caller's fail-open catch never runs when this function does not
+    // throw.
+    const connection = parsed.data?.repository?.issue?.userContentEdits;
+    if (!connection || !Array.isArray(connection.nodes)) {
+      throw new Error(
+        'userContentEdits: issue, connection, or nodes is null/absent',
+      );
+    }
+    allNodes.push(...connection.nodes);
+    if (connection.pageInfo?.hasPreviousPage !== true) {
+      return allNodes.map((node) =>
+        typeof node?.editor?.login === 'string' ? node.editor.login : null,
+      );
+    }
+    const startCursor = connection.pageInfo?.startCursor;
+    if (typeof startCursor !== 'string' || !startCursor) {
+      throw new Error(
+        'userContentEdits: hasPreviousPage is true but startCursor is absent',
+      );
+    }
+    before = startCursor;
+  }
+  throw new Error(
+    `userContentEdits: exceeded ${USER_CONTENT_EDITORS_MAX_PAGES} pages without reaching the start of the connection`,
+  );
+}
+
+/**
+ * #2767 live CLI wiring: builds the trust predicate from this
+ * repository's configured `trustedMarkerActors` plus a live
+ * collaborator-permission check, then computes the structural-evidence
+ * signal for `issue`.
+ *
+ * Checks the two local-only signals (`verificationCommand`,
+ * `candidateFilesExist` -- both computable from `issue.body` alone, no
+ * network) before touching the network at all (Codex review, PR #2840,
+ * round 12): `runCli`'s own `wouldDemoteWithFullEvidence` sentinel only
+ * gates whether this function is called at all (is demotion *ever*
+ * possible for this failure branch); it says nothing about whether
+ * *this specific issue's real body* actually satisfies the two local
+ * signals. Demotion requires all three signals together, so either one
+ * being false already makes the live `fetchUserContentEditors` fetch (a
+ * paginated GraphQL round trip) and the collaborator-permission lookup
+ * wasted network cost for no possible change in outcome -- the same
+ * fix already applied to `discover-viability-gate.mts`'s own
+ * `computeLiveStructuralEvidence` (commit fb7efc8f).
+ */
+function computeLiveStructuralEvidence(
+  owner: string,
+  repo: string,
+  issue: NormalizedIssue,
+  policyConfig: unknown,
+): StructuralEvidence {
+  const body = issue.body;
+  const verificationCommand = hasVerificationCommandSignal(body);
+  const candidateFilesExist = candidateFilesExistOnDisk(body, existsSync);
+  if (!verificationCommand || !candidateFilesExist) {
+    return { verificationCommand, candidateFilesExist, trustedEditor: false };
+  }
+  const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: policyConfig as { trustedMarkerActors?: unknown } | null,
+  });
+  const collaboratorCache: CollaboratorPermissionCache = new Map();
+  const isTrustedLogin = buildTrustedLoginPredicate(
+    trustedMarkerLogins,
+    (login) => {
+      const { permission } = collaboratorPermission(
+        owner,
+        repo,
+        login,
+        collaboratorCache,
+      );
+      return permission === 'admin' || permission === 'write';
+    },
+  );
+  return evaluateStructuralEvidence({
+    body,
+    author: issue.author,
+    editorLogins: fetchUserContentEditors(owner, repo, issue.number),
+    isTrustedLogin,
+    existsAt: existsSync,
+  });
 }
 
 function fetchDuplicateCandidates(

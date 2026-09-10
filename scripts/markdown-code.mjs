@@ -130,10 +130,56 @@ const MARKDOWN_BLOCK_CONTENT_PATTERN =
   /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:[-+*])[ \t]+|1[.)][ \t]+|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
 const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
   /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
+/**
+ * A tightly-packed `=`-run (any length) or a short `-`-run (1-2 dashes,
+ * too few to also qualify as a thematic break) -- the two
+ * {@link MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN} shapes that are
+ * genuinely ambiguous rather than self-contained. An ATX heading always
+ * ends its own block on its own line, and a run of 3+ `-`/`_`/`*`
+ * characters is always ALSO a valid thematic break (CommonMark resolves
+ * that overlap in favor of whichever reading applies -- Setext heading
+ * when a paragraph precedes it, thematic break otherwise -- but either
+ * way the line ends its own block, so no context check is needed there).
+ * A bare `=`-run can never be a thematic break at all, and a 1-2-dash run
+ * is too short for one either: both are ONLY a genuine Setext heading
+ * underline when a paragraph is actually open before them to close.
+ * With nothing open before it, the line is ordinary paragraph text
+ * instead, which does NOT end its own block (Codex review, PR #2840,
+ * round 26, databaseId 3976819197): `gh api /markdown` confirms a
+ * standalone `===` with no preceding paragraph text renders as its own
+ * open paragraph, so a following custom tag with no blank line before it
+ * lazily continues that paragraph as literal text, never opening a
+ * type-7 HTML block -- masking a real, later Acceptance-criteria or
+ * Candidate-files section through the next blank line or EOF, exactly
+ * because the previous code treated *any* dash/equals run as always
+ * ending its own block regardless of what (if anything) preceded it.
+ */
+const MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN =
+  /^ {0,3}(?:={1,}|-{1,2})[ \t]*$/u;
 const MARKDOWN_HTML_BLOCK_START_PATTERN =
   /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
 const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
   /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>/u;
+/**
+ * Stricter, line-consuming variant of
+ * {@link MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN}, used only by
+ * {@link findHtmlBlockRanges}'s own custom-tag opener test (Codex review,
+ * PR #2840, round 18). CommonMark's real type-7 rule requires the
+ * complete tag to be followed only by whitespace through end of line --
+ * `<span>intro</span>` entirely on one line is an ordinary paragraph
+ * (`</span>` follows the open tag, not whitespace/EOL), never an HTML
+ * block opener, but the shared prefix-only pattern (built for a laxer
+ * "does this line START with something tag-shaped" question, still
+ * correct for its own three call sites -- {@link isWithinOpenHtmlBlock},
+ * {@link findMarkdownBlockBoundary}'s two uses -- which ask a different
+ * question this stricter anchor would not improve) matched it anyway,
+ * over-masking real Acceptance-criteria/Candidate-files content on a
+ * following, non-blank-line-separated line. `gh api /markdown` confirms
+ * the paragraph-then-heading rendering. Scoped to this one call site
+ * rather than tightening the shared pattern itself.
+ */
+const MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN =
+  /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>[ \t]*$/u;
 // CommonMark §4.1: a thematic break is 3+ matching -, _, or * characters,
 // each optionally followed by spaces/tabs -- interior spacing is allowed
 // (e.g. `_ _ _`), unlike the tightly-packed run already covered above.
@@ -141,11 +187,20 @@ const MARKDOWN_THEMATIC_BREAK_PATTERN =
   /^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/u;
 const HTML_RAW_TEXT_TAG_OPEN_PATTERN =
   /^ {0,3}<(script|pre|style|textarea)\b/iu;
+// Codex review, PR #2840 (round 23): requires the literal closing `>`
+// (with only optional horizontal whitespace before it), not just a `\b`
+// word boundary after the tag name -- `</pre bogus` satisfies `\b` (a
+// boundary exists between "pre" and the space) but is not a real closing
+// tag at all. CommonMark does not close the raw-text block there, so the
+// block (and any fake Acceptance-criteria/Candidate-files content inside
+// it) extends to a real close or end of text, verified via `gh api
+// /markdown`; the unanchored `\b` version wrongly ended the block early,
+// exposing that still-opaque content as if it were real, visible text.
 const HTML_RAW_TEXT_TAG_CLOSE_PATTERNS = {
-  script: /<\/script\b/iu,
-  pre: /<\/pre\b/iu,
-  style: /<\/style\b/iu,
-  textarea: /<\/textarea\b/iu,
+  script: /<\/script[ \t]*>/iu,
+  pre: /<\/pre[ \t]*>/iu,
+  style: /<\/style[ \t]*>/iu,
+  textarea: /<\/textarea[ \t]*>/iu,
 };
 /**
  * The raw-text tag that `content` opens (one of {@link HtmlRawTextTag}'s
@@ -973,6 +1028,412 @@ function parseFencedLine(
 }
 function isValidFenceOpener(fence) {
   return fence.marker[0] !== '`' || !fence.info.includes('`');
+}
+/**
+ * Raw HTML block ranges (CommonMark block types 1-7): a `<script>`/`<pre>`/
+ * `<style>`/`<textarea>` raw-text element (closes only at its own matching
+ * closing tag, #1900's four-way tag matching reused via
+ * {@link rawTextOpenTag}/{@link HTML_RAW_TEXT_TAG_CLOSE_PATTERNS}); a
+ * comment/processing-instruction/declaration/CDATA "special" block (closes
+ * at its own token, {@link specialHtmlBlockCloseToken}, same-line self-close
+ * via {@link isSelfClosedSpecialHtmlBlock}); or a generic block-level tag
+ * (`<div>`, `<pre>`... as a *block* line, `<table>`, etc. --
+ * {@link MARKDOWN_HTML_BLOCK_START_PATTERN}) or a lone custom tag
+ * ({@link MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN}, which per CommonMark
+ * cannot interrupt a paragraph, so it only opens a block when the preceding
+ * line is blank or this is the first line of `text`) -- both closing at the
+ * next blank line or end of text. No general container/list-depth
+ * *tracking* (state threaded across unrelated lines) -- matches
+ * {@link findHtmlCommentRanges}'s existing scope choice for this same
+ * "mask untrusted issue-body text" purpose, unlike
+ * {@link isWithinOpenHtmlBlock}'s more elaborate container-aware
+ * backward/forward scan built for a different question (is a specific
+ * later code span destroyed by an enclosing block). Each opener's own
+ * close-scan is still bounded by that opener's own container, derived
+ * directly from its own line (round 15 below) -- a narrower, cheaper
+ * question than full cross-line tracking.
+ *
+ * Codex review, PR #2840: an issue can place example Markdown (a fake
+ * `## Acceptance criteria` heading plus a checklist, or a fake
+ * `## Candidate files` entry) inside a raw HTML block such as `<pre>`,
+ * which GitHub renders as literal/opaque content, not Markdown structure --
+ * neither {@link findFencedCodeRanges}, {@link findIndentedCodeRanges}, nor
+ * {@link findHtmlCommentRanges} masked that shape.
+ *
+ * Opener detection strips a container prefix first (Codex review, PR
+ * #2840, round 11): `- <pre>` (an HTML block opener as a list item's own
+ * first line) or `> <pre>` (inside a blockquote) previously tested the
+ * *unstripped* line against every opener pattern below, all of which are
+ * anchored at `^ {0,3}<`, so the leading marker made every one of them
+ * miss -- the block's opaque content stayed fully unmasked, letting a
+ * fake heading/checklist/candidate-path inside it satisfy a structural
+ * signal GitHub itself never renders as real structure. Reuses
+ * {@link parseContainerLine} (blockquote `>` stripping) and
+ * {@link stripListItemMarker} (list-marker stripping) -- the same helpers
+ * {@link findMarkdownBlockBoundary} already uses for this exact
+ * "container-prefix-aware opener" question -- rather than inventing new
+ * machinery.
+ *
+ * Every close/end scan (a raw-text tag's own closing tag, a special
+ * block's close token, a generic block's next blank line) additionally
+ * stops at the opener's own enclosing container boundary (Codex review,
+ * PR #2840, round 15; {@link isHtmlBlockContainerEnded}): an unclosed
+ * raw-text/special block that opens inside a blockquote or list item
+ * (`> <pre>` with no matching `</pre>` anywhere in `text`) previously
+ * scanned all the way to a real closing tag or end of text, masking any
+ * genuine Acceptance-criteria/Candidate-files content that renders
+ * *outside* the block once its enclosing container itself ends --
+ * `gh api /markdown` confirms GitHub closes an unclosed HTML block at
+ * its container's own end, never leaking past it.
+ *
+ * A custom-tag opener (`MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN`, which
+ * per CommonMark cannot interrupt a paragraph) is additionally eligible
+ * when this line opens a *fresh* list item container (Codex review, PR
+ * #2840, round 13): `stripListItemMarker` strips a marker only when one
+ * is present, so `content !== containerContent` means this line is a
+ * list item's own first line, which has no "previous line" inside that
+ * new container for the interruption rule to apply to -- the same
+ * reasoning `noOpenParagraph` already covers for the top-level case.
+ *
+ * `fencedRanges` (Codex review, PR #2840, round 14; same
+ * caller-supplied-ranges convention {@link findIndentedCodeRanges} already
+ * uses for the identical purpose) lets a caller exclude fenced-code-block
+ * content from opener/closer detection: an unclosed raw-text tag such as
+ * `<pre>` *inside* a fenced example is literal example text, not a real
+ * HTML block opener, but a scan of the raw line text alone cannot tell the
+ * difference -- without this, that literal `<pre>` opened a raw-text block
+ * with no real closing tag anywhere in `text`, extending the returned
+ * range through the remainder of the body and masking any genuine
+ * Acceptance-criteria/Candidate-files content after the fence. Must be in
+ * ascending `start` order, as {@link findFencedCodeRanges} already returns.
+ */
+/**
+ * True when `scanLine` -- a line reached while scanning forward for an
+ * already-open HTML block's own close condition -- falls outside the
+ * Markdown container the block's *opener* line itself opened in (Codex
+ * review, PR #2840, round 15). Mirrors {@link findFencedCodeRanges}'s own
+ * fence-close condition almost verbatim -- the identical question ("has
+ * the enclosing blockquote/list-item container this opener line started
+ * in already ended by this later line") reusing the same
+ * {@link parseContainerLine}, {@link stripContainerPrefixes}, and
+ * {@link continuesListContainer} helpers, just carried as a local
+ * variable pair for one opener's own forward scan rather than threaded
+ * cross-line tracker state: an HTML block's opener line always directly
+ * names its own container context (the literal `<` character that opens
+ * it), unlike a bare fence line that can silently inherit an earlier,
+ * unmarked list's content-zone -- the harder problem
+ * {@link createListContentIndentTrackerState} exists to solve -- so no
+ * tracker is needed here.
+ */
+function isHtmlBlockContainerEnded(
+  scanLine,
+  openerContainerDepth,
+  openerListContentIndent,
+) {
+  const containerLine = parseContainerLine(scanLine);
+  if (
+    openerContainerDepth > 0 &&
+    containerLine.containerDepth < openerContainerDepth
+  ) {
+    return true;
+  }
+  if (openerListContentIndent !== null) {
+    const listContinuationLine = stripContainerPrefixes(
+      scanLine,
+      openerContainerDepth,
+    );
+    if (
+      !continuesListContainer(listContinuationLine, openerListContentIndent)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+export function findHtmlBlockRanges(text, fencedRanges = []) {
+  const ranges = [];
+  let lineStart = 0;
+  // Despite reading like a literal "was the raw previous line blank"
+  // flag, this tracks CommonMark's real type-7 (custom tag) gate: no
+  // paragraph is currently open before the current line (Codex review,
+  // PR #2840, round 16 -- renamed from `previousLineBlank` after finding
+  // three places that name had led to the wrong value). A genuinely
+  // blank line satisfies this, but so does any line right after a block
+  // that just closed -- a self-closed raw-text tag, a closed fence, a
+  // closed special/generic HTML block, or a block whose enclosing
+  // container just ended -- none of those leave an open paragraph behind
+  // either, `gh api /markdown` confirms a type-7 tag freely opens
+  // immediately after any of them. Every block-closing exit below sets
+  // this `true` for exactly that reason.
+  let noOpenParagraph = true;
+  let fencedRangeIndex = 0;
+  while (lineStart <= text.length) {
+    const newlineIndex = text.indexOf('\n', lineStart);
+    const lineEnd =
+      newlineIndex === -1
+        ? text.length
+        : newlineIndex > lineStart && text[newlineIndex - 1] === '\r'
+          ? newlineIndex - 1
+          : newlineIndex;
+    const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const line = text.slice(lineStart, lineEnd);
+    const isBlank = line.trim() === '';
+    while (
+      fencedRangeIndex < fencedRanges.length &&
+      lineStart >= (fencedRanges[fencedRangeIndex]?.end ?? text.length)
+    ) {
+      fencedRangeIndex += 1;
+    }
+    const fencedRange = fencedRanges[fencedRangeIndex];
+    const isOpaqueFenceContent =
+      fencedRange !== undefined &&
+      lineStart > fencedRange.start &&
+      lineStart < fencedRange.end;
+    if (isOpaqueFenceContent) {
+      // A closed fence leaves no open paragraph behind either (Codex
+      // review, PR #2840, round 16 -- corrects this round's own earlier
+      // `false`): `gh api /markdown` confirms a type-7 tag right after a
+      // closed fence, with no blank line between, still freely opens.
+      noOpenParagraph = true;
+      lineStart = lineAfter;
+      if (newlineIndex === -1) {
+        break;
+      }
+      continue;
+    }
+    // Codex review, PR #2840 (round 20, widened round 22): does this
+    // non-blank line, on its own, complete a one-line block that leaves
+    // no paragraph open behind it -- an ATX heading or a thematic break
+    // (never a list-item line, which both patterns below already
+    // exclude: unlike those two, a list item's own content line can
+    // still be, or start, an open paragraph within that item).
+    // {@link MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN} only recognizes a
+    // tightly-packed thematic break (`---`, `***`, `___`); a *spaced*
+    // one (`_ _ _`) is CommonMark-valid too (only
+    // {@link MARKDOWN_THEMATIC_BREAK_PATTERN} recognizes it) and ends
+    // its own block exactly the same way -- `gh api /markdown` confirms
+    // a custom tag right after `_ _ _`, no blank line between, still
+    // freely opens. Tested against the blockquote-stripped
+    // `containerContent` set below inside the `!isBlank` branch, never
+    // the list-marker-stripped `content` (which would let a list item's
+    // own text that merely *looks* heading-shaped after stripping
+    // wrongly count). Read at the bottom fallback, the only place that
+    // still needs it once every dedicated opener branch above has
+    // already `continue`d past it.
+    //
+    // A bare `=`-run or a short 1-2-dash run is genuinely ambiguous,
+    // though (Codex review, PR #2840, round 26, databaseId 3976819197):
+    // {@link MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN} only ends its own
+    // block as a Setext heading underline when `noOpenParagraph` (still
+    // holding its value from *before* this line, read here ahead of the
+    // reassignment at this loop's own bottom) is false -- i.e. a
+    // paragraph was genuinely open to close. With nothing open before
+    // it, the line is ordinary paragraph text instead, which stays open
+    // rather than ending its own block; see that pattern's own doc
+    // comment for the masking bug this closes.
+    let endsOwnBlock = false;
+    if (!isBlank) {
+      const openerLine = parseContainerLine(line);
+      const containerContent = openerLine.content;
+      endsOwnBlock =
+        (MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(containerContent) &&
+          (!MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN.test(containerContent) ||
+            !noOpenParagraph)) ||
+        MARKDOWN_THEMATIC_BREAK_PATTERN.test(containerContent);
+      const content = stripListItemMarker(containerContent);
+      // Codex review, PR #2840 (round 13): `stripListItemMarker` returns
+      // its input unchanged when the line has no list marker, so this
+      // line's own first line of a *fresh* list item container -- CommonMark
+      // 5.2 -- has no "previous line" within that container for the
+      // paragraph-interruption rule to apply to, the same reason
+      // `noOpenParagraph` already permits a custom-tag opener right
+      // after a blank line.
+      const opensFreshContainer = content !== containerContent;
+      // Codex review, PR #2840 (round 15): this opener's own container
+      // context, carried through its forward scan below via
+      // {@link isHtmlBlockContainerEnded} -- see that function's doc
+      // comment for why deriving it directly from this line (rather than
+      // a cross-line tracker) is sufficient here.
+      const openerContainerDepth = openerLine.containerDepth;
+      const openerListContentIndent = openerLine.listContentIndent;
+      const rawTag = rawTextOpenTag(content);
+      const closeToken = specialHtmlBlockCloseToken(content);
+      const opensGeneric =
+        rawTag === null &&
+        closeToken === null &&
+        (MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
+          ((noOpenParagraph || opensFreshContainer) &&
+            MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN.test(content)));
+      if (rawTag !== null) {
+        // Copilot review, PR #2840 (round 8): a same-line self-closed
+        // raw-text block (e.g. `<pre>- \`fake/path\`</pre>` entirely on
+        // one line) was previously left out of both branches below
+        // (`opensGeneric` is also false here, since `rawTag !== null`
+        // excludes it) -- masking nothing for that line at all. Emit the
+        // single-line range immediately in that case instead of scanning
+        // forward for a close that already happened.
+        const closePattern = HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[rawTag];
+        let end = lineEnd;
+        // `resumeAt` (Codex review, PR #2840, round 16) is deliberately
+        // separate from `end`: `end` is the masking boundary and must
+        // stay *before* the line's own newline (downstream position-
+        // preserving masking depends on that newline surviving), but
+        // resuming the outer loop AT that same pre-newline position made
+        // it re-process the bare newline character as its own spurious
+        // one-character "blank line" next iteration -- Copilot review,
+        // PR #2840, round 16. `resumeAt` always lands exactly on a real
+        // line boundary instead.
+        let resumeAt = lineAfter;
+        if (!closePattern.test(line)) {
+          let scanStart = lineAfter;
+          end = text.length;
+          resumeAt = text.length;
+          while (scanStart <= text.length) {
+            const nl = text.indexOf('\n', scanStart);
+            const scanLineEnd = nl === -1 ? text.length : nl;
+            const scanLineAfter = nl === -1 ? text.length : nl + 1;
+            const scanLine = text.slice(scanStart, scanLineEnd);
+            // Codex review, PR #2840 (round 15): stop at the opener's own
+            // container boundary before testing for the real closing tag
+            // -- once the enclosing blockquote/list-item container has
+            // ended, a line past it is never part of this block, real
+            // closing tag or not.
+            if (
+              isHtmlBlockContainerEnded(
+                scanLine,
+                openerContainerDepth,
+                openerListContentIndent,
+              )
+            ) {
+              end = scanStart;
+              resumeAt = scanStart;
+              break;
+            }
+            if (closePattern.test(scanLine)) {
+              end = scanLineEnd;
+              resumeAt = scanLineAfter;
+              break;
+            }
+            if (nl === -1) {
+              break;
+            }
+            scanStart = scanLineAfter;
+          }
+        }
+        ranges.push({ start: lineStart, end });
+        lineStart = resumeAt;
+        // A closed raw-text block leaves no open paragraph behind either
+        // (Codex review, PR #2840, round 16 -- corrects this branch's
+        // pre-existing `false` from round 8): `gh api /markdown` confirms
+        // a type-7 tag right after a self-closed, scan-closed, or
+        // container-ended raw-text block still freely opens.
+        noOpenParagraph = true;
+        continue;
+      }
+      if (closeToken !== null) {
+        // Same same-line rationale as the raw-text branch above (Copilot
+        // review, PR #2840, round 8): a same-line self-closed special
+        // block (e.g. `<!-- x -->`) is masked by findHtmlCommentRanges
+        // separately for the `<!--` case, but `<?`/`<!X`/`<![CDATA[` had
+        // no other masking and fell through unmasked here entirely.
+        let end = lineEnd;
+        // See the raw-text branch above for why `resumeAt` is tracked
+        // separately from `end` (Codex review, PR #2840, round 16).
+        let resumeAt = lineAfter;
+        if (!isSelfClosedSpecialHtmlBlock(content)) {
+          let scanStart = lineAfter;
+          end = text.length;
+          resumeAt = text.length;
+          while (scanStart <= text.length) {
+            const nl = text.indexOf('\n', scanStart);
+            const scanLineEnd = nl === -1 ? text.length : nl;
+            const scanLineAfter = nl === -1 ? text.length : nl + 1;
+            const scanLine = text.slice(scanStart, scanLineEnd);
+            if (
+              isHtmlBlockContainerEnded(
+                scanLine,
+                openerContainerDepth,
+                openerListContentIndent,
+              )
+            ) {
+              end = scanStart;
+              resumeAt = scanStart;
+              break;
+            }
+            if (scanLine.includes(closeToken)) {
+              end = scanLineEnd;
+              resumeAt = scanLineAfter;
+              break;
+            }
+            if (nl === -1) {
+              break;
+            }
+            scanStart = scanLineAfter;
+          }
+        }
+        ranges.push({ start: lineStart, end });
+        lineStart = resumeAt;
+        // A closed special block leaves no open paragraph behind either
+        // (Codex review, PR #2840, round 16 -- corrects this branch's
+        // pre-existing `false` from round 8); see the raw-text branch's
+        // identical comment above.
+        noOpenParagraph = true;
+        continue;
+      }
+      if (opensGeneric) {
+        let scanStart = lineAfter;
+        let end = text.length;
+        // Ends at whichever comes first: its own next-blank-line close
+        // condition, or the opener's enclosing container ending on a
+        // non-blank line (Codex review, PR #2840, round 15). Both land on
+        // a real line-start offset already, so no separate `resumeAt` is
+        // needed here (contrast the raw-text/special-block branches
+        // above).
+        while (scanStart <= text.length) {
+          const nl = text.indexOf('\n', scanStart);
+          const scanLineEnd = nl === -1 ? text.length : nl;
+          const scanLineAfter = nl === -1 ? text.length : nl + 1;
+          const scanLine = text.slice(scanStart, scanLineEnd);
+          if (scanLine.trim() === '') {
+            end = scanStart;
+            break;
+          }
+          if (
+            isHtmlBlockContainerEnded(
+              scanLine,
+              openerContainerDepth,
+              openerListContentIndent,
+            )
+          ) {
+            end = scanStart;
+            break;
+          }
+          if (nl === -1) {
+            end = text.length;
+            break;
+          }
+          scanStart = scanLineAfter;
+        }
+        ranges.push({ start: lineStart, end });
+        lineStart = end;
+        // A closed generic block leaves no open paragraph behind either,
+        // regardless of whether it closed via its own blank-line rule or
+        // via its container ending (Codex review, PR #2840, round 16 --
+        // corrects this branch's own round-15 `endedOnBlankLine`
+        // conditional, which wrongly kept the container-ending case
+        // `false`); see the raw-text branch's comment above for the
+        // `gh api /markdown` verification this generalizes.
+        noOpenParagraph = true;
+        continue;
+      }
+    }
+    noOpenParagraph = isBlank || endsOwnBlock;
+    lineStart = lineAfter;
+    if (newlineIndex === -1) {
+      break;
+    }
+  }
+  return ranges;
 }
 /**
  * Fenced code block ranges only (no inline spans, no indented code). Unlike

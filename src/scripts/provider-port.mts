@@ -93,6 +93,14 @@ export interface ProviderComment {
   nodeId?: string;
 }
 
+/** One GraphQL `Issue.userContentEdits` node -- see
+ * {@link ProviderPort.getWorkItemUserContentEdits}. */
+export interface ProviderUserContentEdit {
+  editedAt: string;
+  /** `null` for a deleted/ghost editor account. */
+  editorLogin: string | null;
+}
+
 /** Result of {@link ProviderPort.postWorkItemComment}. */
 export interface ProviderPostedComment {
   id: number;
@@ -441,15 +449,43 @@ export interface ProviderPort {
    * separate, unimplemented surface, even though GraphQL's
    * `userContentEdits` field is not itself issue-exclusive -- both
    * `Issue` and `PullRequest` implement the underlying `UpdatableComment`
-   * interface). The GraphQL `Issue.userContentEdits { editedAt }`
-   * read (#2762) -- the only place GitHub records a body edit; a REST
-   * timeline `edited` event with a `changes.body` payload is never emitted
-   * for a real edit. Bounded to the most recent 100 edits (`last: 100`,
-   * not `first`, so a long edit history keeps the newest edits rather than
-   * the oldest -- callers only ever need the latest one). Returns the
-   * `editedAt` values in ascending order as GitHub itself returns them;
-   * throws on any `gh` failure, matching {@link getWorkItemTimeline}'s
-   * throw-on-failure contract rather than swallowing it.
+   * interface). The GraphQL `Issue.userContentEdits { editedAt editor {
+   * login } }` read (#2762, widened by #2767 to also select `editor`) --
+   * the only place GitHub records a body edit; a REST timeline `edited`
+   * event with a `changes.body` payload is never emitted for a real edit.
+   * Reads the full edit history, paginating backward in pages of 100
+   * (`last: 100`, not `first`) until GitHub reports no earlier page,
+   * bounded by an internal page cap that throws rather than silently
+   * truncating (#2767: the `trustedEditor` signal needs every editor, not
+   * just the most recent ones -- unlike the pre-#2767 single-page
+   * implementation this doc comment originally described). Returns edits
+   * in ascending `editedAt` order regardless of the backward page-fetch
+   * order; `editorLogin` is `null` for a deleted/ghost editor account
+   * (GitHub still records the edit but the `editor` field resolves to
+   * `null`) -- callers that need a trust decision must treat `null` as
+   * untrusted, not skip it. Throws on any `gh` failure, matching
+   * {@link getWorkItemTimeline}'s throw-on-failure contract rather than
+   * swallowing it.
+   */
+  getWorkItemUserContentEdits(number: number): ProviderUserContentEdit[];
+
+  /**
+   * work-items (issues only). Keeps returning just the `editedAt` values
+   * (#2762's original shape) for the callers that only ever needed
+   * timestamps -- `discover-readiness-check.mts`,
+   * `discover-orphan-filter.mts`, `claim-approval-gate.mts`, all of which
+   * only need the *newest* edit's timestamp (they compute the maximum
+   * over the returned array themselves; none assumes a particular
+   * order) -- so none of them needed a call-site change when #2767 added
+   * editor identity. Deliberately NOT a thin wrapper over
+   * {@link getWorkItemUserContentEdits} (Codex review, PR #2840, round
+   * 12; it was for one round before this fix): that method's full
+   * backward pagination (needed so the `trustedEditor` signal sees every
+   * editor) is unnecessary and actively harmful here -- the true newest
+   * edit is always present in a single bounded `last:100` page
+   * regardless of total edit count, so paginating further only adds
+   * GraphQL cost, and that method's 1,000-edit page-cap throw would turn
+   * a freshness-only read into a hard failure for a large edit history.
    */
   getWorkItemUserContentEditTimestamps(number: number): string[];
 

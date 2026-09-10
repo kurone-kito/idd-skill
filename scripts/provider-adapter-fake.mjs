@@ -10,6 +10,24 @@
 // passed to `createFakeProviderAdapter`; nothing here spawns a subprocess
 // or makes a network call.
 import { PROVIDER_CAPABILITY_GROUPS } from './provider-contract.mjs';
+
+/**
+ * Backs both {@link ProviderPort.getWorkItemUserContentEdits} and
+ * {@link ProviderPort.getWorkItemUserContentEditTimestamps} (#2767):
+ * `fixture.userContentEdits` wins when set for `number`; otherwise falls
+ * back to `fixture.userContentEditTimestamps` (the #2762 shape), reporting
+ * `editorLogin: null` for every entry -- a fixture written before #2767
+ * keeps working unchanged, just with no editor-identity signal.
+ */
+function resolveFixtureUserContentEdits(fixture, number) {
+  const withEditors = fixture.userContentEdits?.[number];
+  if (withEditors) {
+    return withEditors;
+  }
+  return (fixture.userContentEditTimestamps?.[number] ?? []).map(
+    (editedAt) => ({ editedAt, editorLogin: null }),
+  );
+}
 export function createFakeProviderAdapter(fixture) {
   fixture.postedComments ??= [];
   fixture.closedWorkItems ??= [];
@@ -76,8 +94,13 @@ export function createFakeProviderAdapter(fixture) {
     getWorkItemTimeline(number) {
       return fixture.timelines?.[number] ?? [];
     },
+    getWorkItemUserContentEdits(number) {
+      return resolveFixtureUserContentEdits(fixture, number);
+    },
     getWorkItemUserContentEditTimestamps(number) {
-      return fixture.userContentEditTimestamps?.[number] ?? [];
+      return resolveFixtureUserContentEdits(fixture, number).map(
+        (edit) => edit.editedAt,
+      );
     },
     getWorkItemState(number) {
       return fixture.issueStates?.[number] ?? null;

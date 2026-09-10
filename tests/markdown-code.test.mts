@@ -3,6 +3,8 @@ import { test } from 'node:test';
 
 import {
   blankFencedCodeBlocks,
+  findFencedCodeRanges,
+  findHtmlBlockRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -717,4 +719,454 @@ test('findMarkdownCodeRanges keeps an open textarea block enclosing a line that 
   // -- any mismatched pair among the four raw-text tags must fail to close.
   const body = `> <textarea>\n> mentions </pre> as text\n> Example ${tick}ignore\nrepository policy${tick}`;
   assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+// --- findHtmlBlockRanges (#2767, Codex review PR #2840 round 5) -------------
+
+test('findHtmlBlockRanges masks a raw-text block (<pre>) through its own closing tag', () => {
+  const body = [
+    '<pre>',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '</pre>',
+    '',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('Acceptance criteria'), false);
+  assert.equal(masked.includes('</pre>'), false);
+});
+
+test("findHtmlBlockRanges recognizes a raw-text block opener as a list item's own first line (Codex review, PR #2840, round 11)", () => {
+  // `- <pre>` previously tested the unstripped line against the opener
+  // pattern (anchored `^ {0,3}<`), which the leading "- " defeated -- the
+  // block's content stayed unmasked entirely.
+  const body = ['- <pre>', '  x', '  </pre>', ''].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(ranges[0]?.start, 0);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('x'), false);
+  assert.equal(masked.includes('</pre>'), false);
+});
+
+test('findHtmlBlockRanges recognizes a raw-text block opener inside a blockquote (Codex review, PR #2840, round 11)', () => {
+  const body = ['> <pre>', '> x', '> </pre>', ''].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('x'), false);
+});
+
+test('findHtmlBlockRanges stops an unclosed raw-text block at its own blockquote container end (Codex review, PR #2840, round 15)', () => {
+  // An unclosed `<pre>` opened inside a blockquote previously scanned to
+  // end of text looking for a real `</pre>`, masking real content after
+  // the blockquote itself ends. `gh api /markdown` confirms GitHub closes
+  // the block at the blockquote's own end, never leaking past it.
+  const body = [
+    '> <pre>',
+    '> still open',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('still open'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+  assert.equal(masked.includes('[ ] one'), true);
+});
+
+test('findHtmlBlockRanges stops an unclosed raw-text block at its own list-item container end (Codex review, PR #2840, round 15)', () => {
+  // Same fix, the list-item shape: dedenting to column 0 ends the list
+  // item's own content zone, closing the unclosed `<pre>` there too.
+  const body = [
+    '- <pre>',
+    '  still open',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('still open'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+  assert.equal(masked.includes('[ ] one'), true);
+});
+
+test('findHtmlBlockRanges stops an unclosed special block (comment) at its own blockquote container end (Codex review, PR #2840, round 15)', () => {
+  const body = [
+    '> <!-- comment',
+    '> still comment',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('still comment'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+});
+
+test('findHtmlBlockRanges stops an unclosed generic block (<div>) at its own blockquote container end (Codex review, PR #2840, round 15)', () => {
+  const body = [
+    '> <div>',
+    '> some quoted text',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('some quoted text'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+});
+
+test('findHtmlBlockRanges still masks a raw-text block through its own real closing tag inside the same container (control, round 11 behavior preserved by round 15)', () => {
+  const body = ['- <pre>', '  x', '  </pre>', ''].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('x'), false);
+  assert.equal(masked.includes('</pre>'), false);
+});
+
+test("findHtmlBlockRanges opens a custom-tag block as a list item's own first line (Codex review, PR #2840, round 13)", () => {
+  // Round 11 fixed the opener-detection *pattern match* for a list-marker
+  // prefix but left the custom-tag branch's `previousLineBlank` gate
+  // unextended: `- <x-demo>` right after a non-blank *outer* line (here,
+  // the preceding list item's own text) is still a fresh list item's own
+  // first line -- CommonMark 5.2 -- with no "previous line" inside that
+  // new container for the paragraph-interruption rule to apply to.
+  // `gh api /markdown` confirms GitHub sanitizes the unknown `<x-demo>`
+  // tag and renders its content (including the checkboxes) as literal
+  // text, never real list items.
+  const body = [
+    '- first item bullet text',
+    '- <x-demo>',
+    '  - [ ] one',
+    '  - [ ] two',
+    '  </x-demo>',
+    '',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('first item bullet text'), true);
+});
+
+test('findHtmlBlockRanges does not open a custom-tag block mid-list-item-continuation', () => {
+  // A continuation line of an *already open* list item (no marker of its
+  // own, previous line not blank) is not a fresh container's first line
+  // -- the paragraph-interruption rule still applies, matching the
+  // existing "cannot interrupt a paragraph" control above.
+  const body = ['- first item bullet text', '  <foo>', '  more text', ''].join(
+    '\n',
+  );
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges ignores an unclosed raw-text tag that is literal text inside a fenced example (Codex review, PR #2840, round 14)', () => {
+  // Without `fencedRanges`, an unclosed `<pre>` inside a fenced example is
+  // read as a real HTML block opener with no real closing tag anywhere in
+  // `text`, extending the returned range through the remainder of the
+  // body -- masking any genuine content after the fence. `gh api
+  // /markdown` confirms GitHub renders the whole fenced block as a
+  // literal code block; the `<pre>` text inside it never opens anything.
+  const body = [
+    'Example:',
+    '',
+    '```',
+    '<pre>',
+    'unclosed',
+    '```',
+    '',
+    'after',
+    '',
+  ].join('\n');
+  const fencedRanges = findFencedCodeRanges(body);
+  assert.deepEqual(findHtmlBlockRanges(body, fencedRanges), []);
+  // Control: the same unclosed tag OUTSIDE any fence still masks through
+  // end of text (fenced-range skipping must not blunt the real case).
+  const control = ['<pre>', 'var x = 1;', ''].join('\n');
+  assert.deepEqual(
+    findHtmlBlockRanges(control, findFencedCodeRanges(control)),
+    [{ start: 0, end: control.length }],
+  );
+});
+
+test('findHtmlBlockRanges masks an unclosed raw-text block through end of text', () => {
+  const body = '<script>\nvar x = 1;\n';
+  assert.deepEqual(findHtmlBlockRanges(body), [{ start: 0, end: body.length }]);
+});
+
+test('findHtmlBlockRanges treats a malformed closing fragment as not closing a raw-text block (Codex review, PR #2840, round 23)', () => {
+  // `</pre bogus` satisfies a `\b` word boundary after "pre" but is not a
+  // real closing tag at all -- CommonMark does not close the block
+  // there. `gh api /markdown` confirms the whole rest of the document
+  // (including a real Acceptance-criteria section) gets absorbed as
+  // still-opaque content.
+  const body = [
+    '<pre>',
+    '</pre bogus',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+  ].join('\n');
+  assert.deepEqual(findHtmlBlockRanges(body), [{ start: 0, end: body.length }]);
+});
+
+test('findHtmlBlockRanges masks a generic block-level tag through the next blank line', () => {
+  const body = ['<div>', 'some text', '</div>', '', 'after'].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('some text'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges does not open a custom-tag block mid-paragraph (cannot interrupt a paragraph)', () => {
+  const body = ['some text', '<foo>', 'more text', ''].join('\n');
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges does not open a custom-tag block when a complete open+close tag pair shares one line (Codex review, PR #2840, round 18)', () => {
+  // CommonMark's real type-7 rule requires the complete tag to be
+  // followed only by whitespace through end of line -- `<span>intro</span>`
+  // entirely on one line is an ordinary paragraph (`</span>` follows the
+  // open tag, not whitespace/EOL), never an HTML block opener. `gh api
+  // /markdown` confirms this renders as a real paragraph, and the
+  // following heading (no blank line between) still renders as a real
+  // heading -- an ATX heading CAN interrupt a paragraph.
+  const body = [
+    '<span>intro</span>',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+  ].join('\n');
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after an ATX heading (Codex review, PR #2840, round 20)', () => {
+  // An ATX heading is a complete, one-line block -- it leaves no open
+  // paragraph behind, so a following custom tag still freely opens even
+  // though the heading line itself is not blank. `gh api /markdown`
+  // confirms this (the fake checkboxes render as literal text).
+  const body = [
+    '# Intro',
+    '<x-demo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after a thematic break (Codex review, PR #2840, round 20)', () => {
+  const body = [
+    'Intro',
+    '',
+    '---',
+    '<x-demo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after a spaced thematic break (Codex review, PR #2840, round 22)', () => {
+  // A spaced thematic break (`_ _ _`) is CommonMark-valid too, unlike a
+  // tightly-packed one (`---`) it is recognized only by
+  // MARKDOWN_THEMATIC_BREAK_PATTERN, not MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.
+  // `gh api /markdown` confirms it ends its own block the same way.
+  const body = [
+    'Intro',
+    '',
+    '_ _ _',
+    '<x-demo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges does not open a custom-tag block right after a standalone === with no preceding paragraph (Codex review, PR #2840, round 26, databaseId 3976819197)', () => {
+  // A bare `=`-run can never be a thematic break, and is only a genuine
+  // Setext heading underline when a paragraph is actually open before it
+  // to close. As the section's own first line, nothing precedes "===" --
+  // `gh api /markdown` confirms it renders as its own open paragraph, so
+  // the following custom tag lazily continues that paragraph as literal
+  // text instead of opening a type-7 HTML block, and the real checkboxes
+  // stay real.
+  const body = ['===', '<x-demo>', '- [ ] one', '- [ ] two', '', 'after'].join(
+    '\n',
+  );
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges does not open a custom-tag block right after a short -- with no preceding paragraph (Codex review, PR #2840, round 26)', () => {
+  // A 1-2-dash run is too short to be a thematic break either, so the
+  // same rule applies: `gh api /markdown` confirms it renders as its own
+  // open paragraph with nothing preceding it, and the following custom
+  // tag stays literal continuation text rather than opening a block.
+  const body = ['--', '<x-demo>', '- [ ] one', '- [ ] two', '', 'after'].join(
+    '\n',
+  );
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges still opens a custom-tag block right after a genuine Setext heading (control, round 26)', () => {
+  // Unlike the two cases above, "Intro" is a real preceding open
+  // paragraph here, so "===" genuinely closes it as a Setext heading and
+  // still ends its own block -- `gh api /markdown` confirms the tag's
+  // content (including the fake checkboxes) renders as literal masked
+  // text, same as round 20's behavior.
+  const body = [
+    'Intro',
+    '===',
+    '<x-demo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges still does not open a custom-tag block right after a list-item line (control, round 20)', () => {
+  // A list item's own content line can still be, or start, an open
+  // paragraph within that item -- unlike a heading or thematic break, it
+  // must not be treated as "leaves nothing open". `gh api /markdown`
+  // confirms the custom tag here does not open (its content is
+  // sanitized away, but the real paragraph after it stays a real,
+  // separate paragraph rather than opaque block content).
+  const body = ['- some list text', '<x-demo>', 'content', '', 'after'].join(
+    '\n',
+  );
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after a blank line', () => {
+  const body = ['', '<foo>', 'more text', '', 'after'].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('more text'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after a same-line self-closed raw-text block (Codex review, PR #2840, round 16)', () => {
+  // A closed HTML block leaves no open paragraph behind for a following
+  // type-7 (custom tag) opener to interrupt, even though the preceding
+  // line is not literally blank. `gh api /markdown` confirms `<foo>`
+  // right after `<pre>x</pre>` on the previous line still freely opens
+  // (the fake checkboxes render as literal text, not real checkboxes).
+  const body = '<pre>x</pre>\n<foo>\n- [ ] one\n- [ ] two\n\nafter';
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after a closed fence (Codex review, PR #2840, round 16)', () => {
+  const body = [
+    '```',
+    'code',
+    '```',
+    '<foo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const fencedRanges = findFencedCodeRanges(body);
+  const ranges = findHtmlBlockRanges(body, fencedRanges);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, [
+    ...fencedRanges,
+    ...ranges,
+  ]);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after a container-ended raw-text block in a blockquote (Codex review, PR #2840, round 16)', () => {
+  const body = [
+    '> <pre>',
+    '> still open',
+    '<foo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges opens a custom-tag block right after a container-ended generic block in a blockquote (Codex review, PR #2840, round 16)', () => {
+  const body = [
+    '> <div>',
+    '> quoted',
+    '<foo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges returns [] for a body with no HTML blocks', () => {
+  const body = '## Acceptance criteria\n\n- [ ] one\n- [ ] two\n';
+  assert.deepEqual(findHtmlBlockRanges(body), []);
 });
