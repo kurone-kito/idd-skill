@@ -1057,6 +1057,47 @@ test('classifyThreadAckOnlyPostDisposition rejects a genuinely new concern in a 
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects a hedged "partially addresses" closure sentence even with genuine trailing boilerplate (Codex P1 round 2, #2858)', () => {
+  // Codex's round-2 finding: the round-1 fixes (sentence-boundary gap,
+  // mandatory boilerplate tail) do not by themselves catch a hedge
+  // adverb inside the matched sentence -- "confirmed. This partially
+  // addresses the concern.\n\n🐇 ✓" has genuine boilerplate immediately
+  // following and never crosses a sentence boundary, so it still passed
+  // both round-1 guards. The hedge-adverb guard closes this specific,
+  // demonstrated case.
+  const thread = {
+    id: 'thread-hedged-with-boilerplate',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'HB-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'HB-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, confirmed. This partially addresses the concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 

@@ -1338,19 +1338,39 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 //    keeps out the cross-sentence example above, since "However, ..." is
 //    not one of the known boilerplate forms.
 //
+// Hedge-adverb guard (Codex review round 2, PR #2868, #2858): even with
+// both constraints above, "`@user`, confirmed. This partially addresses
+// the concern.\n\n🐇 ✓" still matched -- genuine boilerplate immediately
+// follows, and "partially" sits inside the matched sentence rather than
+// crossing a sentence boundary, so neither guard above catches it. This
+// is a materially different problem class from the reverted "new
+// concern" blocklist above: that attempt tried to recognize an
+// open-ended, arbitrarily-phrased NEW substantive finding appended after
+// a genuine ack (unbounded -- natural language has unlimited ways to
+// raise a concern). A hedge adverb directly modifying "addresses" itself
+// is a small, closed, well-known class of English degree adverbs -- the
+// same kind of narrow enumeration `CODERABBIT_ACK_OPENING_RE` already
+// uses for its own confirmation verbs (thanks/confirmed/agreed). Given
+// this repository's `fully_autonomous_merge` policy (AGENTS.md), a
+// hedged "addresses" is exactly the shape most likely to hide real
+// outstanding feedback behind an ack-shaped reply, so closing the
+// specific, demonstrated case outweighs leaving it as stated residual
+// risk the way the new-concern class above still is.
+const CODERABBIT_ACK_HEDGE_RE =
+  /\b(?:partially|partly|somewhat|mostly|largely|barely|slightly|arguably|in\s+part|to\s+some\s+extent|not\s+(?:fully|entirely|completely|really))\s+addresses\s+the\b/i;
 // Residual risk, stated rather than papered over -- NOT the same class as
 // the two forms above: those report CodeRabbit's own resolve-attempt
 // DECISION, which by this file's own reasoning cannot co-occur with a new
 // substantive concern in the same reply. This third form reads prose with
-// no such structural barrier, so it is strictly weaker: a reply whose
-// SAME sentence both hedges ("partially", "mostly", ...) or raises a
-// concern and still ends with a period immediately before genuine
-// CodeRabbit boilerplate (e.g. "This addresses the concern, mostly.
-// <!-- auto-generated reply -->") would still misclassify. No sampled
-// reply has done this. An enumerated hedge-word guard was considered and
-// rejected for the same reason the new-concern blocklist above was: it
-// does not generalize, and this file's own philosophy prefers a stated,
-// bounded residual risk over an unbounded semantic blocklist.
+// no such structural barrier, so it is strictly weaker: a hedge word this
+// enumeration does not cover (e.g. "kind of", "sort of", or a novel
+// phrasing), or a reply whose SAME sentence both raises a concern in some
+// non-hedge-adverb way and still ends with a period immediately before
+// genuine CodeRabbit boilerplate, would still misclassify. No sampled
+// reply has done either. Extending the hedge-adverb enumeration further
+// is a bounded, reviewable change; recognizing arbitrary new-concern
+// phrasing is not -- that line is why the guard above stops at degree
+// adverbs and does not attempt the open-ended problem.
 const CODERABBIT_ACK_CLOSURE_RE =
   /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform|\baddresses\s+the\b[^.!?]{0,80}?\b(?:concern|finding)\b\.\s*(?:🐇|---|<details|<!--|_You are interacting)/i;
 // Explicit `isCodeRabbitLogin` author check (Copilot review, #2649,
@@ -1380,7 +1400,8 @@ function isKnownAdvisoryAckTemplate(comment) {
     isCodeRabbitLogin(authorLogin) &&
     !!body &&
     CODERABBIT_ACK_OPENING_RE.test(body) &&
-    CODERABBIT_ACK_CLOSURE_RE.test(body)
+    CODERABBIT_ACK_CLOSURE_RE.test(body) &&
+    !CODERABBIT_ACK_HEDGE_RE.test(body)
   );
 }
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
