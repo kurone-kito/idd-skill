@@ -15,6 +15,10 @@ no-sync-required `clean`/`behind-no-conflict` exit applies the
 
 ## E4 — Classify and score ReviewItems_snapshot
 
+Once per triage pass (not per item), read the claimed issue's own body
+and note any explicit out-of-scope statement in it — later scoring
+needs that context.
+
 For each item in ReviewItems_snapshot, first classify it:
 
 - **PATH A — actionable feedback**: human reviewer threads and regular
@@ -47,6 +51,22 @@ Then apply path-specific scoring:
 - **PATH B**: no High/Medium/Low. Score only a _completed_ review of
   current HEAD as `Accepted` (confirmed/useful) or `Rejected`
   (noted, no action) — route a non-review notice to E6 instead.
+- **Scope fence (PATH A and PATH B).** A finding that asks to
+  introduce, or further broaden, a change class the claimed issue's own
+  body explicitly places out of scope is **Reject forced** — PATH A's
+  `Low`, PATH B's `Rejected` — regardless of technical correctness or
+  tractability, from the point that class is introduced onward; a
+  refinement or bug fix inside an already-introduced instance of that
+  class is still in-scope work and scores normally. This fence
+  overrides PATH A's High-tier `Accept forced` rule above: a
+  correctness finding that would introduce or broaden a fenced class
+  does not reach `Accept forced` just because it is otherwise
+  High-severity. Record a rejected instance as a known limitation (the
+  PR body's "Follow-up issues (if any)" section), not a defect. This is
+  a sibling of `idd-review-fix.instructions.md`'s E10 "Round-count
+  heuristic for genuinely-new findings": that heuristic covers a shared
+  root cause once PATH A work is already underway, while this fence
+  applies at PATH A/B scoring, before that work starts.
 
 ## E5 — Record Accept / Reject decisions
 
@@ -55,7 +75,8 @@ Record a path-specific disposition for every item:
 - **PATH A**: High-severity items reach Accepted only via "Verify
   before accept" below, or — when the actor-permission cap applies —
   an explicit maintainer confirmation reply; Medium/Low require an
-  explicit Accept or Reject decision.
+  explicit Accept or Reject decision, except a scope-fenced finding
+  (E4), which is Reject forced regardless of severity.
 - **PATH B** (a _completed_ review of the current HEAD): `Accepted`
   means the advisory confirms the implementation or captures useful
   context; `Rejected` means noted, no action required. An advisory
