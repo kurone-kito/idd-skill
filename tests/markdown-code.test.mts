@@ -1170,3 +1170,215 @@ test('findHtmlBlockRanges returns [] for a body with no HTML blocks', () => {
   const body = '## Acceptance criteria\n\n- [ ] one\n- [ ] two\n';
   assert.deepEqual(findHtmlBlockRanges(body), []);
 });
+
+// --- #2865: mask HTML-attribute and inline-link-title/destination backticks,
+// and inherit an HTML block's list content indent on a continuation-line
+// opener. All shapes below verified against `gh api /markdown` (mode: gfm)
+// before implementation.
+
+test('findMarkdownCodeRanges: an HTML-attribute-embedded backtick command is not a real code span (#2865)', () => {
+  // `gh api /markdown` confirms `<span title="`node --test`"></span>`
+  // keeps its backticks literal inside the attribute value -- CommonMark's
+  // raw-HTML inline rule takes precedence over the code-span rule there.
+  const body =
+    '## Acceptance criteria\n\n<span title="`node --test`"></span>\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: an inline-link title/destination-embedded backtick is not a real code span (#2865)', () => {
+  // `gh api /markdown` confirms `[test](/url "`node --test`")` renders as
+  // `<a href="/url" title="`node --test`">test</a>`, backticks literal.
+  const body = 'See [test](/url "`node --test`") for details.\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: an inline-link destination with a balanced nested paren still masks the title backticks (#2865)', () => {
+  // `gh api /markdown` confirms `/wiki/Example_(disambiguation)` survives
+  // as a real destination (CommonMark allows one balanced, unescaped
+  // paren pair in a bare destination), with the title's backticks still
+  // literal: `<a href="/wiki/Example_(disambiguation)" title="`node
+  // --test`">`.
+  const body =
+    'See [wiki](/wiki/Example_(disambiguation) "`node --test`") page.\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: a real code span right next to an excluded HTML tag is still found (control, #2865)', () => {
+  // `gh api /markdown` confirms `` `real` `` renders as a genuine
+  // `<code>` span immediately followed by the (backtick-literal) `<span>`
+  // tag -- the new exclusion must not swallow adjacent real content.
+  const body = 'Prefix `real` <span title="`fake`"></span> suffix.\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`real`');
+});
+
+test('findMarkdownCodeRanges: a link-shaped prefix that never reaches a valid title/close fails closed, leaving its backtick pair a real span (#2865)', () => {
+  // `gh api /markdown` confirms `[note](which uses `code`)` renders
+  // `[note](which uses` as literal text, a real `<code>` span for
+  // `` `code` ``, then a literal `)` -- never a link at all, since the
+  // text after the destination never resolves to a valid title or a
+  // direct closing `)`.
+  const body = '[note](which uses `code`)\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`code`');
+});
+
+test('findMarkdownCodeRanges: an HTML tag match never spans a blank line, so a backtick pair on the far side stays a real span (#2865)', () => {
+  // `gh api /markdown` confirms `<span title="` / (blank) / `` `node
+  // --test`"> `` never forms one tag (CommonMark parses block structure,
+  // including where a blank line ends a paragraph, before inline
+  // content) -- it renders as two literal-text paragraphs, the second of
+  // which contains a genuine `<code>` span. Without the blank-line guard,
+  // the tag-matching regex's own quoted-value character class would
+  // otherwise happily span the blank line and swallow this real span.
+  const body = '<span title="\n\n`node --test`">\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
+
+test('findHtmlBlockRanges stops an unclosed raw-text block at an inherited list-item container end with no marker on the opener line itself (#2865)', () => {
+  // Same failure class as the existing round-15 `- <pre>` test above, but
+  // the `<pre>` opener line itself carries no list marker -- it is a
+  // continuation line of the `- Example:` item two lines above, separated
+  // only by one blank line (still within the list's own content zone).
+  // `gh api /markdown` confirms the rendered `<pre>` stays scoped inside
+  // the list item (`<li><p>Example:</p><pre>still open</pre></li>`) and
+  // the heading below renders as real structure, never swallowed.
+  const body = [
+    '- Example:',
+    '',
+    '  <pre>',
+    '  still open',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('still open'), false);
+  assert.equal(masked.includes('Acceptance criteria'), true);
+  assert.equal(masked.includes('[ ] one'), true);
+});
+
+// --- #2865 review-fix (Codex review, round 1): four correctness gaps in
+// the round-4 matchers above, each verified against `gh api /markdown`.
+
+test('findMarkdownCodeRanges: a link destination with two levels of nested balanced parens still masks the title backticks (databaseId 3978211245)', () => {
+  // `gh api /markdown` confirms `/foo(a(b)c)` survives as a real
+  // destination (`<a href="/foo(a(b)c)" title="`node --test`">`) --
+  // the fixed-depth regex this replaced under-matched here, wrongly
+  // restoring the title's backticks as a real code span.
+  const body = 'See [test](/foo(a(b)c) "`node --test`") for details.\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: a bare `]` with no link opener leaves its backtick pair a real span (databaseId 3978211256)', () => {
+  // `gh api /markdown` confirms `foo](/url "`node --test`")` renders
+  // `foo](/url "` as literal text and `` `node --test` `` as a genuine
+  // code span -- never a link, since no `[` precedes the `]` at all.
+  const body = 'foo](/url "`node --test`")\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
+
+test('findMarkdownCodeRanges: an escaped `[` before `]` leaves its backtick pair a real span (databaseId 3978211256)', () => {
+  // `gh api /markdown` confirms `\[test](/url "`node --test`")` renders
+  // the escaped bracket as literal `[test](/url "` text, with a genuine
+  // code span for the backticks -- the escaped `[` is not a real link
+  // opener.
+  const body = '\\[test](/url "`node --test`")\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
+
+test('findMarkdownCodeRanges: an escaped `<` leaves its backtick pair a real span (databaseId 3978211270)', () => {
+  // `gh api /markdown` confirms `\<span title="`node --test`">` renders
+  // the escaped angle bracket as literal `&lt;span title="` text, with a
+  // genuine code span for the backticks -- never raw HTML.
+  const body = '\\<span title="`node --test`">\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
+
+// --- #2865 review-fix (Codex review, round 2): balanced-bracket link
+// opener and a bounded scan against quadratic behavior on malformed input.
+
+test('findMarkdownCodeRanges: a nested balanced-bracket link label still masks the title backticks (databaseId 3978373742)', () => {
+  // `gh api /markdown` confirms `[foo [bar] baz](/url "`node --test`")` is
+  // a real link (nested balanced brackets are valid link-text content) --
+  // the nearest-bracket heuristic this replaces wrongly rejected the real
+  // outer `[` because it hit the inner `]` first.
+  const body = '[foo [bar] baz](/url "`node --test`")\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: many unresolved link-like prefixes stay linear, not quadratic (databaseId 3978373746)', () => {
+  // A pathological run of `[x](` with no closing paren or whitespace
+  // anywhere -- each occurrence previously invoked an unbounded forward
+  // scan over the entire remaining text. 20000 repetitions (80 KB) must
+  // complete well within a normal test timeout; a quadratic regression
+  // here would make this hang or take seconds, not milliseconds.
+  const body = '[x]('.repeat(20000);
+  const start = Date.now();
+  const ranges = findMarkdownCodeRanges(body);
+  const elapsedMs = Date.now() - start;
+  assert.deepEqual(ranges, []);
+  assert.ok(
+    elapsedMs < 2000,
+    `expected a bounded scan to stay well under 2s, took ${elapsedMs}ms`,
+  );
+});
+
+// --- #2865 review-fix (Codex review, round 3): a bracket inside an
+// earlier code span, an invalid (non-punctuation) escape in a bare
+// destination, and a still-unbounded paragraph search.
+
+test('findMarkdownCodeRanges: a bracket inside an earlier code span is not a link opener (databaseId 3978515893)', () => {
+  // `gh api /markdown` confirms `` `[foo` ](/url "`node --test`") `` is
+  // TWO separate real code spans (`` `[foo` `` and `` `node --test` ``)
+  // with plain text between them -- the `[` inside the first span is
+  // literal code content, not a real Markdown bracket, so it must never
+  // count as a link opener for the `]` that follows.
+  const body = '`[foo` ](/url "`node --test`")\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 2);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`[foo`');
+  assert.equal(body.slice(ranges[1].start, ranges[1].end), '`node --test`');
+});
+
+test('findMarkdownCodeRanges: a backslash before a non-punctuation character in a bare destination is literal (databaseId 3978515897)', () => {
+  // `gh api /markdown` confirms `[x](foo\ bar "`node --test`")` renders
+  // entirely as literal text with a genuine code span for the backticks
+  // -- CommonMark only allows backslash-escaping ASCII punctuation, so
+  // `\` before a space is a literal backslash and the space still ends
+  // the bare destination, breaking this out of link syntax entirely.
+  const body = '[x](foo\\ bar "`node --test`")\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
+
+test('findMarkdownCodeRanges: many unresolved link-like prefixes stay linear even with the paragraph-boundary search (databaseId 3978515904)', () => {
+  // Same pathological shape as the round-2 performance test above, but
+  // specifically exercising that hasPlausibleLinkOpener's own
+  // paragraph-start search is bounded to the trailing scan window, not
+  // the whole document, on every one of the 20000 calls this makes.
+  const body = '[x]('.repeat(20000);
+  const start = Date.now();
+  const ranges = findMarkdownCodeRanges(body);
+  const elapsedMs = Date.now() - start;
+  assert.deepEqual(ranges, []);
+  assert.ok(
+    elapsedMs < 2000,
+    `expected a bounded scan to stay well under 2s, took ${elapsedMs}ms`,
+  );
+});
