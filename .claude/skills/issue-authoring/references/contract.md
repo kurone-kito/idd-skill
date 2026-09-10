@@ -1639,8 +1639,8 @@ only approval boundary.
   except the narrow, marker-scoped exception immediately below.
 - **Narrow auto-release exception (review-fix-loop-cutoff).** A
   follow-up issue whose body carried the exact marker
-  `idd-skill-authoring-defer-source: review-fix-loop-cutoff` at Stage 1
-  publication time — part of the initial `authoring-publication` body
+  `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->` at
+  Stage 1 publication time — part of the initial `authoring-publication` body
   write, never added by a later edit — may complete the full Stage 2
   sequence above (release-marker preflight, release-guard, heartbeat
   renewal, verified label removal, release-complete reconciliation,

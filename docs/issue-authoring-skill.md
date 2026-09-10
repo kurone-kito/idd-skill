@@ -1232,8 +1232,8 @@ Work on its own.
 ### Narrow auto-release exception (review-fix-loop-cutoff)
 
 A follow-up issue whose body carried the exact marker
-`idd-skill-authoring-defer-source: review-fix-loop-cutoff` at Stage 1
-publication time — part of the initial `authoring-publication` body
+`<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->` at
+Stage 1 publication time — part of the initial `authoring-publication` body
 write, never added by a later edit — may complete the full release
 checklist and label-removal sequence above without the "user explicitly
 requests release" precondition, immediately after Stage 1 publication
