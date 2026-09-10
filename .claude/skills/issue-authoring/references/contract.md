@@ -1743,11 +1743,22 @@ only approval boundary.
   snapshot. Before running the check, update the just-fetched snapshot's
   `isMinimized` field to `true` for every candidate the minimize
   helper's own report (`minimize-superseded-markers.mjs`'s `items[]`,
-  keyed by subject id) lists with `status: "applied"` -- or re-fetch the
-  paginated log fresh -- before auditing; running the check against the
-  unmodified pre-mutation snapshot reports every comment the sweep just
-  minimized as still-outstanding backlog, making even a fully successful
-  sweep look like it failed. A nonzero count after this update means the
+  keyed by subject id) lists with **either** `status: "applied"` **or**
+  `status: "skipped", reason: "already-minimized"` -- the latter fires
+  whenever the fetched snapshot's own `isMinimized` was already stale or
+  absent for a comment GitHub already considers minimized (for example
+  one an earlier sweep or the opportunistic per-post step already
+  cleared), and counts exactly the same as a fresh `"applied"` for this
+  update: both mean the comment is minimized now, regardless of which
+  attempt did it. Missing either status keeps that comment's snapshot
+  entry wrongly `isMinimized: false`. Re-fetching the paginated log fresh
+  is an acceptable alternative to this snapshot update, not merely a
+  fallback -- either one produces the same accurate post-sweep state.
+  Skipping both and auditing the unmodified pre-mutation snapshot reports
+  every comment the sweep (or a prior one) already minimized as
+  still-outstanding backlog, making even a fully successful, fully
+  idempotent sweep look like it failed. A nonzero count after this update
+  means the
   sweep attempt genuinely did not fully clear the backlog it was
   supposed to (a partial permission failure or a genuine defect) --
   record it, but never block release on it; this is the mechanical
