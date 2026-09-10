@@ -3523,7 +3523,7 @@ test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a r
   assert.equal(verdict.ready, true);
 });
 
-test('self-referential-bootstrap-auto: an indeterminate PR with no bindable claim (path 2/4) stays unwaivable, same as the ordinary waiver', () => {
+test('self-referential-bootstrap-auto: an indeterminate PR with no bindable claim (path 2/4) still cannot be waived, same as the ordinary waiver', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [],

@@ -9,6 +9,8 @@ import {
   buildAdvisoryConvergenceWaiverPrecondition,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   readAdvisoryConvergenceDeadlineMinutes,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mjs';
@@ -77,6 +79,8 @@ export function planExternalCheckWaiver(input, options = {}) {
   const requestedSelector = String(input?.requestedSelector ?? '').trim();
   const reason = String(input?.reason ?? '').trim();
   const expiresAt = String(input?.expiresAt ?? '').trim();
+  const autoBootstrap = Boolean(input?.autoBootstrap);
+  const runId = String(input?.runId ?? '').trim();
   const actor = String(input?.actor ?? '')
     .trim()
     .toLowerCase();
@@ -187,13 +191,37 @@ export function planExternalCheckWaiver(input, options = {}) {
       );
     }
   }
-  if (!authority.known) {
+  // kurone-kito/idd-skill#2657: the one narrow, documented exception to
+  // "human maintainer only" -- an auto-bootstrap marker's trust comes from
+  // the run-id/event-type verification `advisory-convergence.mts` performs
+  // at consume time (the marker names the exact GitHub Actions run that
+  // posted it, and the consumer independently confirms that run is a
+  // `pull_request_target`-triggered run of this gate's own workflow file
+  // for the current PR HEAD), never from a GitHub collaborator permission.
+  // There is no human actor to authorize here, so this skips the check
+  // entirely rather than trying to satisfy it with a synthetic identity.
+  if (!autoBootstrap) {
+    if (!authority.known) {
+      blockingReasons.push(
+        authority.error || 'actor authority could not be proven',
+      );
+    } else if (!authority.authorized) {
+      blockingReasons.push(
+        `${actor || 'actor'} is not authorized under ${authority.policy}`,
+      );
+    }
+  }
+  if (autoBootstrap && reason !== SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON) {
     blockingReasons.push(
-      authority.error || 'actor authority could not be proven',
+      `--auto-bootstrap requires reason to be exactly "${SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON}"`,
     );
-  } else if (!authority.authorized) {
+  }
+  if (autoBootstrap && !runId) {
+    blockingReasons.push('--auto-bootstrap requires a run id');
+  }
+  if (autoBootstrap && claimless) {
     blockingReasons.push(
-      `${actor || 'actor'} is not authorized under ${authority.policy}`,
+      '--auto-bootstrap cannot be combined with --claimless',
     );
   }
   if (matchedChecks.length === 0) {
@@ -238,7 +266,14 @@ export function planExternalCheckWaiver(input, options = {}) {
         return { ...precondition, terminalEvaluated: false };
       })()
     : undefined;
-  const allowClosedPrecondition = input?.allowClosedPrecondition === true;
+  // kurone-kito/idd-skill#2657: an auto-bootstrap marker is evaluated
+  // independent of this hatch by design (`autoWaiverValid` in
+  // `advisory-convergence.mts` never gates behind `deadlinePassed`/
+  // `terminalUnavailable`) -- the whole point is posting immediately, not
+  // waiting for the deadline clock this hatch reports on. Always bypassed
+  // for this mode, not merely available via the operator opt-in flag.
+  const allowClosedPrecondition =
+    input?.allowClosedPrecondition === true || autoBootstrap;
   if (
     advisoryConvergenceWaiverPrecondition &&
     !advisoryConvergenceWaiverPrecondition.open &&
@@ -282,6 +317,7 @@ export function planExternalCheckWaiver(input, options = {}) {
           checkSelector: requestedSelector,
           reason,
           expiresAt,
+          runId: autoBootstrap ? runId : undefined,
         })
       : '';
   return {
@@ -376,23 +412,37 @@ export async function runExternalCheckWaiver(options = {}) {
   const { owner, name } = parseOwnerRepo(repository);
   const rawConfig = readJsonFile('.github/idd/config.json');
   const policy = normalizePolicyConfig(rawConfig);
-  const viewerLogin = String(safeGhText(['api', 'user', '--jq', '.login']))
-    .trim()
-    .toLowerCase();
-  const actor = resolveActorLogin(options.actor, args.actor, viewerLogin);
-  if (!actor) {
-    throw new Error(
-      'could not determine current GitHub user; ensure gh is authenticated',
-    );
+  // kurone-kito/idd-skill#2657: `--auto-bootstrap` runs as a GitHub Actions
+  // job authenticated via `GITHUB_TOKEN`, not an interactive human operator
+  // -- `gh api user` has no meaningful identity to resolve there (and may
+  // simply fail), and there is no authenticated viewer to require matching
+  // `--actor` against. The actual GitHub comment author is whatever
+  // `GITHUB_TOKEN` resolves to regardless of this string; it only feeds the
+  // rendered marker's human-readable note.
+  let actor;
+  let authority;
+  if (args.autoBootstrap) {
+    actor = 'github-actions[bot]';
+    authority = options.authority ?? {};
+  } else {
+    const viewerLogin = String(safeGhText(['api', 'user', '--jq', '.login']))
+      .trim()
+      .toLowerCase();
+    actor = resolveActorLogin(options.actor, args.actor, viewerLogin);
+    if (!actor) {
+      throw new Error(
+        'could not determine current GitHub user; ensure gh is authenticated',
+      );
+    }
+    if (args.apply && args.actor && actor !== viewerLogin && viewerLogin) {
+      throw new Error(
+        `--actor ${args.actor} does not match the authenticated user ${viewerLogin}; omit --actor to use the authenticated identity`,
+      );
+    }
+    authority =
+      options.authority ??
+      resolveCollaboratorAuthority({ owner, repo: name, actor });
   }
-  if (args.apply && args.actor && actor !== viewerLogin && viewerLogin) {
-    throw new Error(
-      `--actor ${args.actor} does not match the authenticated user ${viewerLogin}; omit --actor to use the authenticated identity`,
-    );
-  }
-  const authority =
-    options.authority ??
-    resolveCollaboratorAuthority({ owner, repo: name, actor });
   const pr =
     options.pr ??
     fetchPullRequest({ owner, repo: name, prNumber: args.prNumber });
@@ -403,13 +453,56 @@ export async function runExternalCheckWaiver(options = {}) {
       owner,
       repo: name,
       rawConfig,
-      viewerLogin: actor,
+      // Auto-bootstrap has no human "viewer" identity to add as an extra
+      // trusted login for resolving the linked issue's OWN claim markers
+      // (`buildTrustedMarkerLogins` always trusts `viewerLogin` alongside
+      // the repo owner and configured `trustedMarkerActors`) -- passing
+      // the bot login here would be a no-op in practice (it never posts
+      // issue claim markers) but is semantically wrong, so pass `''`.
+      viewerLogin: args.autoBootstrap ? '' : actor,
       linkedIssues: pr.closingIssuesReferences,
       issueNumber: args.issueNumber,
       expectedClaimId: args.claimId,
       headRefName: pr.headRefName,
       prNumber: args.prNumber,
     });
+  const resolvedHeadCommittedAt =
+    options.headCommittedAt ??
+    fetchHeadCommittedAt({
+      owner,
+      repo: name,
+      headRefOid: String(pr.headRefOid ?? '').trim(),
+    });
+  // kurone-kito/idd-skill#2657: the fixed, bounded validity window
+  // computed from the PR's own HEAD commit timestamp -- independent of
+  // `advisoryWait.convergenceDeadline` (the 2026-09-10 self-cancellation
+  // bug: a waiver with the same anchor and duration as `deadlinePassed`
+  // is always already expired the moment `deadlinePassed` becomes true).
+  // An unresolvable anchor yields '', which flows into
+  // `planExternalCheckWaiver`'s existing, UNCHANGED
+  // `if (!expiresKnown) blockingReasons.push(...)` check -- the same
+  // fail-closed mechanism this file already relies on for an unresolvable
+  // anchor elsewhere; deliberately not a `?? now()`-style fallback, which
+  // would silently defeat that.
+  const autoBootstrapExpiresAt = () => {
+    const headMs = Date.parse(resolvedHeadCommittedAt);
+    if (!Number.isFinite(headMs)) {
+      return '';
+    }
+    const durationMs = parseIsoDurationToMs(
+      SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY,
+    );
+    if (!Number.isFinite(durationMs) || (durationMs ?? 0) <= 0) {
+      return '';
+    }
+    // Matches `resolveExpiryAt`'s own `--expires` (absolute) branch: strip
+    // the millisecond suffix `toISOString()` always adds, for the same
+    // whole-second canonical style every hand-authored/rendered timestamp
+    // in this marker family already uses.
+    return new Date(headMs + (durationMs ?? 0))
+      .toISOString()
+      .replace(/\.\d{3}Z$/, 'Z');
+  };
   const report = planExternalCheckWaiver(
     {
       mode: args.apply ? 'apply' : 'dry-run',
@@ -424,21 +517,19 @@ export async function runExternalCheckWaiver(options = {}) {
       expectedClaimId: args.claimId,
       requestedSelector: args.checkSelector,
       reason: args.reason,
-      expiresAt: resolveExpiryAt({
-        expiresAt: args.expiresAt,
-        expiresIn: args.expiresIn,
-        now: options.now instanceof Date ? options.now : new Date(),
-      }),
+      expiresAt: args.autoBootstrap
+        ? autoBootstrapExpiresAt()
+        : resolveExpiryAt({
+            expiresAt: args.expiresAt,
+            expiresIn: args.expiresIn,
+            now: options.now instanceof Date ? options.now : new Date(),
+          }),
       repoOwner: owner,
       claimless: args.claimless,
-      headCommittedAt:
-        options.headCommittedAt ??
-        fetchHeadCommittedAt({
-          owner,
-          repo: name,
-          headRefOid: String(pr.headRefOid ?? '').trim(),
-        }),
+      headCommittedAt: resolvedHeadCommittedAt,
       allowClosedPrecondition: args.allowClosedPrecondition,
+      autoBootstrap: args.autoBootstrap,
+      runId: args.runId,
       // Read through the SAME validating reader the gate uses, not the raw
       // resolver: the gate rejects the whole `advisoryWait` section when any
       // sibling key is schema-invalid and falls back to the 24h default. A
@@ -1296,6 +1387,8 @@ const EXTERNAL_CHECK_WAIVER_FLAG_SPEC = {
   '--format': { type: 'string', default: 'json' },
   '--claimless': { type: 'boolean', default: false },
   '--allow-closed-precondition': { type: 'boolean', default: false },
+  '--auto-bootstrap': { type: 'boolean', default: false },
+  '--run-id': { type: 'string', default: '' },
   '--help': { type: 'boolean', short: 'h' },
 };
 export function parseArgs(argv) {
@@ -1328,6 +1421,8 @@ export function parseArgs(argv) {
     format,
     claimless: values.claimless,
     allowClosedPrecondition: values['allow-closed-precondition'],
+    autoBootstrap: values['auto-bootstrap'],
+    runId: values['run-id'].trim(),
     help,
   };
   if (!parsed.help) {
@@ -1350,6 +1445,35 @@ export function parseArgs(argv) {
     }
     if (parsed.claimless && parsed.claimId) {
       throw new Error('--claimless cannot be combined with --claim-id');
+    }
+    // kurone-kito/idd-skill#2657: --auto-bootstrap always resolves a real
+    // linked-issue claim (never claimless), always requires --run-id, and
+    // always computes --expires internally as the PR's HEAD commit
+    // timestamp plus the fixed SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY
+    // duration -- independent of `advisoryWait.convergenceDeadline` --
+    // rather than trusting a caller-supplied expiry. --reason is still a
+    // required, visible flag in the workflow invocation (for auditability),
+    // but must equal the dedicated token exactly; planExternalCheckWaiver
+    // enforces this same invariant again as a blocking reason, in case a
+    // future caller constructs the plan input directly instead of through
+    // this CLI.
+    if (parsed.autoBootstrap) {
+      if (parsed.claimless) {
+        throw new Error('--auto-bootstrap cannot be combined with --claimless');
+      }
+      if (!parsed.runId) {
+        throw new Error('--auto-bootstrap requires --run-id <id>');
+      }
+      if (parsed.reason !== SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON) {
+        throw new Error(
+          `--auto-bootstrap requires --reason ${SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON}`,
+        );
+      }
+      if (parsed.expiresAt || parsed.expiresIn) {
+        throw new Error(
+          '--auto-bootstrap computes --expires internally; do not pass --expires or --expires-in',
+        );
+      }
     }
   }
   return parsed;
@@ -1390,6 +1514,16 @@ Options:
                                      precondition opens; use it when terminal Copilot
                                      unavailability already applies, which this helper does
                                      not evaluate.
+  --auto-bootstrap                  render the CI-workflow-posted, run-bound
+                                     self-referential-bootstrap-auto waiver instead of an
+                                     ordinary maintainer-authorized one: skips the actor
+                                     authority check entirely, bypasses the deadline-hatch
+                                     precondition, and requires --run-id and --reason
+                                     self-referential-bootstrap-auto exactly. --expires and
+                                     --expires-in are computed internally and must be
+                                     omitted. Cannot combine with --claimless.
+  --run-id <id>                     the posting GitHub Actions run's own GITHUB_RUN_ID;
+                                     required with --auto-bootstrap.
   --actor <login>                   override the GitHub actor used for authority evaluation
   --repo <owner/name>               repository override
   --apply                           post the canonical waiver comment after validation

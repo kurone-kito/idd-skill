@@ -112,6 +112,7 @@ import {
   readAdvisorySameHeadRerollCap,
   readAdvisoryWaitPolicy,
   resolveEffectiveAdvisoryTerminalWindowMinutes,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
 import { buildCopilotRecoverySummary } from './advisory-wait-state.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
@@ -197,21 +198,18 @@ export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
  * drift apart. */
 export const ADVISORY_CONVERGENCE_WORKFLOW_PATH =
   SELF_REFERENTIAL_WAIVER_TRIGGER_FILES[5];
-/** kurone-kito/idd-skill#2657: the dedicated reason token identifying the
- * CI-workflow-posted, run-bound waiver -- distinct from any
- * person-authored reason token, so a manually-typed waiver can never
- * masquerade as this automated kind. */
-export const SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON =
-  'self-referential-bootstrap-auto';
-/** kurone-kito/idd-skill#2657: the fixed, bounded validity window for a
- * self-referential-bootstrap-auto waiver, anchored on the PR's HEAD
- * commit timestamp -- deliberately independent of
- * `advisoryWait.convergenceDeadline` (the 2026-09-10 self-cancellation
- * bug: a waiver anchored and durationed identically to `deadlinePassed`
- * is always already expired the moment `deadlinePassed` becomes true).
- * Matches this gate's own existing `waiverMaxValidity` default used
- * elsewhere for external-check waivers. */
-export const SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY = 'PT24H';
+// kurone-kito/idd-skill#2657: `SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON` /
+// `SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY` are declared in
+// `advisory-wait-policy.mts` (imported above) and re-exported here for
+// backward-compatible call sites, rather than declared locally: this file
+// already imports FROM `external-check-waiver.mts`
+// (`resolveCollaboratorAuthority`/`normalizeAuthorityEvidence`), which also
+// needs these two constants for its own `--auto-bootstrap` CLI mode --
+// declaring them in either file directly would form an import cycle.
+export {
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+} from './advisory-wait-policy.mjs';
 /** #1719: stable, machine-readable tokens for
  * `sameHeadReroll.ineligibleReasons` -- one per boolean term of the
  * `eligible` conjunction, in the same order the conjunction is written in
