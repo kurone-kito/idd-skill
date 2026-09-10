@@ -930,6 +930,25 @@ test('findHtmlBlockRanges does not open a custom-tag block mid-paragraph (cannot
   assert.deepEqual(findHtmlBlockRanges(body), []);
 });
 
+test('findHtmlBlockRanges does not open a custom-tag block when a complete open+close tag pair shares one line (Codex review, PR #2840, round 18)', () => {
+  // CommonMark's real type-7 rule requires the complete tag to be
+  // followed only by whitespace through end of line -- `<span>intro</span>`
+  // entirely on one line is an ordinary paragraph (`</span>` follows the
+  // open tag, not whitespace/EOL), never an HTML block opener. `gh api
+  // /markdown` confirms this renders as a real paragraph, and the
+  // following heading (no blank line between) still renders as a real
+  // heading -- an ATX heading CAN interrupt a paragraph.
+  const body = [
+    '<span>intro</span>',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+  ].join('\n');
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
 test('findHtmlBlockRanges opens a custom-tag block right after a blank line', () => {
   const body = ['', '<foo>', 'more text', '', 'after'].join('\n');
   const ranges = findHtmlBlockRanges(body);

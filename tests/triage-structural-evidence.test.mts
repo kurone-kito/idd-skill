@@ -265,6 +265,23 @@ test('hasVerificationCommandSignal: an Acceptance criteria section after an uncl
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: an Acceptance criteria heading right after a same-line open+close custom tag still counts (Codex review, PR #2840, round 18)', () => {
+  // A complete `<span>intro</span>` entirely on one line is an ordinary
+  // paragraph, not an HTML block opener (CommonMark's type-7 rule
+  // requires the tag be followed only by whitespace to end of line) --
+  // the real Acceptance criteria heading right after it (no blank line
+  // between) is still a real heading. `gh api /markdown` confirms this.
+  const body = [
+    '<span>intro</span>',
+    '## Acceptance criteria',
+    '',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: an Acceptance criteria section after a fenced example containing an unclosed raw tag still counts (Codex review, PR #2840, round 14)', () => {
   // Same round-14 fenced-bleed fix as candidateFilesExistOnDisk's mirror
   // test above: the unclosed `<pre>` inside the fence previously extended

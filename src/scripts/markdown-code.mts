@@ -147,6 +147,26 @@ const MARKDOWN_HTML_BLOCK_START_PATTERN =
   /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
 const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
   /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>/u;
+/**
+ * Stricter, line-consuming variant of
+ * {@link MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN}, used only by
+ * {@link findHtmlBlockRanges}'s own custom-tag opener test (Codex review,
+ * PR #2840, round 18). CommonMark's real type-7 rule requires the
+ * complete tag to be followed only by whitespace through end of line --
+ * `<span>intro</span>` entirely on one line is an ordinary paragraph
+ * (`</span>` follows the open tag, not whitespace/EOL), never an HTML
+ * block opener, but the shared prefix-only pattern (built for a laxer
+ * "does this line START with something tag-shaped" question, still
+ * correct for its own three call sites -- {@link isWithinOpenHtmlBlock},
+ * {@link findMarkdownBlockBoundary}'s two uses -- which ask a different
+ * question this stricter anchor would not improve) matched it anyway,
+ * over-masking real Acceptance-criteria/Candidate-files content on a
+ * following, non-blank-line-separated line. `gh api /markdown` confirms
+ * the paragraph-then-heading rendering. Scoped to this one call site
+ * rather than tightening the shared pattern itself.
+ */
+const MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN =
+  /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>[ \t]*$/u;
 // CommonMark §4.1: a thematic break is 3+ matching -, _, or * characters,
 // each optionally followed by spaces/tabs -- interior spacing is allowed
 // (e.g. `_ _ _`), unlike the tightly-packed run already covered above.
@@ -1335,7 +1355,7 @@ export function findHtmlBlockRanges(
         closeToken === null &&
         (MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
           ((noOpenParagraph || opensFreshContainer) &&
-            MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content)));
+            MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN.test(content)));
 
       if (rawTag !== null) {
         // Copilot review, PR #2840 (round 8): a same-line self-closed
