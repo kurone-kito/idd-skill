@@ -1313,16 +1313,30 @@ the set or roll back the close already recorded above.
 of the three sweep attempts in this section (per-target preflight,
 anchor-before-release-complete, and this closing sweep), run
 `audit-authored-issue.mjs`'s `authoring-marker-minimization-backlog`
-check against the same paginated owner-marker/journal data just fetched
-for that sweep (`--comments-file`/`--journal-comments-file`, or
-`auditAuthoredIssue()` directly) and note its reported count. A nonzero
-count immediately after a sweep attempt means that attempt did not fully
-clear the backlog it was supposed to (a partial permission failure, an
-untrusted-authored candidate the sweep correctly declined to touch, or a
-genuine defect) -- record it, but never block release on it; this is the
-mechanical signal that makes a skipped or partially-failed sweep attempt
-visible instead of silent, the way #2750/#2821's original
-per-post-only instruction's gap went unnoticed for weeks.
+check and note its reported count -- always with `--trusted-marker-logins`
+(or the equivalent `trustedMarkerActors` option on `auditAuthoredIssue()`)
+set to the same trusted actors the sweep itself used, so the check's own
+eligibility rule matches what the sweep could actually clear; omitting
+it makes the count overstate the real backlog by including
+untrusted-authored matches the sweep was never going to touch.
+
+**Feed it the sweep's own post-mutation result, never the pre-mutation
+snapshot the sweep read.** The minimize helper mutates GitHub directly;
+it never updates an in-memory or on-disk comment snapshot. Before
+running the check, update the just-fetched snapshot's `isMinimized`
+field to `true` for every candidate the minimize helper's own report
+(`minimize-superseded-markers.mjs`'s `items[]`, keyed by subject id)
+lists with `status: "applied"` -- or re-fetch the paginated log fresh --
+before auditing; running the check against the unmodified pre-mutation
+snapshot reports every comment the sweep just minimized as still-
+outstanding backlog, making even a fully successful sweep look like it
+failed. A nonzero count after this update means the sweep attempt
+genuinely did not fully clear the backlog it was supposed to (a partial
+permission failure or a genuine defect) -- record it, but never block
+release on it; this is the mechanical signal that makes a skipped or
+partially-failed sweep attempt visible instead of silent, the same kind
+of gap that went unnoticed for weeks in the original per-post-only
+instruction this section replaces (measured effectiveness cited above).
 
 ### Narrow auto-release exception (review-fix-loop-cutoff)
 
