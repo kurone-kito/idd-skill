@@ -1642,6 +1642,23 @@ only approval boundary.
   `matchCanonicalAuthoringMarkerFamily` unchanged) every byte-exact
   canonical match that is not the newest **trusted-actor** match for its
   family, exactly as the opportunistic per-post step above does.
+  **Fetch that paginated log via GraphQL, never a plain REST
+  issue-comments fetch, and skip an already-minimized candidate before
+  submitting it** (#2896 review, Codex): a GraphQL `issueComments` /
+  `comments` query can select `isMinimized` on each node directly,
+  while REST's issue-comments endpoint never carries that field at
+  all, so a REST-fetched snapshot cannot distinguish a comment this
+  sweep already cleared from one it never touched. Use that field to
+  exclude any candidate already `isMinimized: true` **before** it ever
+  reaches the minimize helper's `--subject-ids`, not only when
+  auditing the result afterward. Without this, every historical
+  byte-exact canonical comment on a long-lived shared journal (one can
+  accumulate hundreds over time) gets resubmitted to
+  `minimize-superseded-markers.mjs` on every single sweep invocation
+  across every target, and that helper probes each subject ID serially
+  with no overall deadline -- a degraded GitHub API can then consume
+  its per-call timeout once per historical comment and stall release
+  for many minutes despite the attempted-not-blocking framing below.
   Determine "newest" only among candidates from a trusted marker actor
   (#2896 review, Codex), never from every structural match
   indiscriminately -- an untrusted actor's byte-exact canonical comment
@@ -1775,9 +1792,16 @@ only approval boundary.
   cleared), and counts exactly the same as a fresh `"applied"` for this
   update: both mean the comment is minimized now, regardless of which
   attempt did it. Missing either status keeps that comment's snapshot
-  entry wrongly `isMinimized: false`. Re-fetching the paginated log fresh
-  is an acceptable alternative to this snapshot update, not merely a
+  entry wrongly `isMinimized: false`. Re-fetching the paginated log
+  fresh **via GraphQL** (matching the sweep's own fetch above) is an
+  acceptable alternative to this snapshot update, not merely a
   fallback -- either one produces the same accurate post-sweep state.
+  A REST re-fetch is not a valid alternative here (#2896 review,
+  Codex): REST's issue-comments endpoint never carries `isMinimized`
+  at all, so a REST re-fetch is exactly as blind to minimization state
+  as the stale pre-mutation snapshot this paragraph exists to correct
+  -- it produces a different but equally wrong snapshot, not an
+  accurate one.
   Skipping both and auditing the unmodified pre-mutation snapshot reports
   every comment the sweep (or a prior one) already minimized as
   still-outstanding backlog, making even a fully successful, fully
