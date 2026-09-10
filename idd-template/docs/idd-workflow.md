@@ -1164,8 +1164,8 @@ as a structured self-review step within the same response.
 
 ### Repository-configurable critique delegate
 
-A repository may point C1 at a reviewer other than the per-agent
-mechanism above by setting `critiqueLoop.delegate` in
+A repository may point C1 or E10 at a reviewer other than the
+per-agent mechanism above by setting `critiqueLoop.delegate` in
 `.github/idd/config.json` (see
 [Customization Surfaces](customization.md#customization-surfaces) and
 [Configuration Authority Hierarchy](policy-constants.md#configuration-authority-hierarchy)):
@@ -1225,25 +1225,27 @@ Configuration-time fail-safe (distinct from the runtime behavior
 above): a non-object `critiqueLoop.delegate`, one whose `command` is
 missing, empty, whitespace-only, non-string, or supplied through the
 prototype chain rather than as an own property, or one carrying any key
-beyond `command`/`mode`, is treated the same as an absent delegate — C1
-uses the per-agent mechanism, never attempting the delegate at all. A
-present but non-object **`critiqueLoop`** parent (a string, array, or
-`null`) is a repository-local configuration error rather than an absent
-key: it fails closed to the per-agent mechanism and, like a malformed
+beyond `command`/`mode`, is treated the same as an absent delegate —
+the calling pass (C1 or E10) uses the per-agent mechanism, never
+attempting the delegate at all. A present but non-object
+**`critiqueLoop`** parent (a string, array, or `null`) is a
+repository-local configuration error rather than an absent key: it
+fails closed to the per-agent mechanism and, like a malformed
 `delegate`, blocks user-global inheritance instead of letting a global
 delegate stand in for it. A present but **unrecognized `mode`** is
-unusable the same way: effective C1 resolution reports a
+unusable the same way: effective delegate resolution reports a
 repository-local one as malformed, so it neither runs nor inherits the
 user-global layer, and reports an unusable user-global fragment as
-absent. Either way C1 falls back to the per-agent mechanism rather than
-running the delegate under an assumed default. (A direct
-`normalizePolicyConfig` caller — a different consumer, not the C1
-resolution path — still collapses such a value to the `fallback`
-default, which is why both behaviors have their own regression tests.)
-`.github/idd/config.json` schema validation separately rejects an
-unsupported `mode` value or any key other than `command`/`mode` before
-the file is accepted, so this state normally reaches C1 only through
-the unvalidated user-global file.
+absent. Either way the calling pass falls back to the per-agent
+mechanism rather than running the delegate under an assumed default.
+(A direct `normalizePolicyConfig` caller — a different consumer, not
+the delegate resolution path used by C1 or E10 — still collapses such
+a value to the `fallback` default, which is why both behaviors have
+their own regression tests.) `.github/idd/config.json` schema
+validation separately rejects an unsupported `mode` value or any key
+other than `command`/`mode` before the file is accepted, so this state
+normally reaches C1 or E10 only through the unvalidated user-global
+file.
 
 The C-phase's objective diff validation floor described below applies
 **uniformly** whether a delegate is configured or not, in every mode,
@@ -1430,14 +1432,22 @@ never changes which mechanism supplies critique findings, the C-phase
 objective diff validation floor, the E-phase Copilot
 advisory-convergence policy, required checks, or merge gates.
 
-### E10 has no delegate or telemetry hook support
+### E10 delegate support; telemetry hook stays C1-only
 
-`idd-review-fix.instructions.md`'s own critique pass (E10) does not
-consult `critiqueLoop.delegate` or `critiqueLoop.telemetryHook` at
-all — both surfaces are scoped to the C1 critique pass only, and E10
-always runs the per-agent mechanism above unmodified, regardless of
-how either surface is configured. Extending either surface to E10 is a
-separate, not-yet-scoped change.
+`idd-review-fix.instructions.md`'s own critique pass (E10) also
+consults `critiqueLoop.delegate`, using the exact same resolution
+chain, `mode` semantics, and fail-closed hold behavior described above
+for C1 — including the `idd-critique-delegate` helper and the
+`instructions-only` resolution order. E10 states the fail-closed hold
+in its own vocabulary: when the mechanisms that actually ran under
+`on-success`/`never` leave no readable findings list, that is a hold
+(the shared Hold / suspend rules in
+`idd-overview-appendix.instructions.md` apply), never a clean "zero
+issues, proceed to E11" round.
+
+`critiqueLoop.telemetryHook` remains scoped to the C1 critique pass
+only; E10 never consults it, regardless of configuration. Extending
+the telemetry hook to E10 remains a separate, not-yet-scoped change.
 
 ### Mutation / write-side helper lens
 
