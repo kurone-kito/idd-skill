@@ -27,7 +27,9 @@ collapses to a single outcome here: **STOP and report; do not claim**.
 2. **When the repository is `instructions-only`** (no helper runtime
    shipped): skip the helper commands and use the written tables only.
    That is the sole path where the tables below are the primary
-   control surface.
+   control surface. The generated-tokens `--record-tokens`/
+   `--read-tokens` ownership check has no written-table equivalent
+   under this profile; skip it.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
 vendored-node** invocation form. Under `package-manager` /
