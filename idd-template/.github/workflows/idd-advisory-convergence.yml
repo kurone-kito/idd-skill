@@ -52,10 +52,20 @@ concurrency:
   # it), so grouping by ref would collapse unrelated PRs into one slot.
   # Review-thread comments and review submissions live in the companion
   # idd-advisory-convergence-comment.yml workflow and must not share
-  # this group. Keep pull_request and pull_request_target in their
-  # existing group, but isolate workflow_dispatch so a manual re-check
-  # cannot cancel an in-flight PR-linked run.
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || github.event.pull_request.number || inputs.pr_number }}
+  # this group. Isolate workflow_dispatch so a manual re-check cannot
+  # cancel an in-flight PR-linked run.
+  #
+  # kurone-kito/idd-skill#2657 (Codex review, PR #2895): also isolate
+  # pull_request from pull_request_target (previously grouped together)
+  # -- both fire on the same opened/synchronize PR event, so whichever
+  # instance started later could cancel the other mid-run, including the
+  # pull_request_target instance's own idd-advisory-convergence-self-
+  # waiver job, which would then never finish posting the bootstrap
+  # marker for that push (a cancelled run is not itself a new trigger,
+  # so recovery would need a manual rerun -- defeating the whole
+  # no-human-click point of that job). A new push still correctly
+  # cancels a STALE run of the SAME event type for the same PR.
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || format('{0}-{1}', github.event_name, github.event.pull_request.number || inputs.pr_number) }}
 on:
   # Trigger-migration transition state: pull_request is evaluated
   # against the pull request's own merge ref, so a same-repository PR

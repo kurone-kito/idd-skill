@@ -7,7 +7,23 @@ concurrency:
   # context either, so it falls back to its own inputs. Review-thread
   # comments and review submissions live in a separate non-required
   # workflow (#2136, #2764 Phase 1) and must not share this group.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  #
+  # kurone-kito/idd-skill#2657 (Codex review, PR #2895): also grouped by
+  # `github.event_name`, so the `pull_request` and `pull_request_target`
+  # instances that both fire on the same opened/synchronize PR event no
+  # longer share a cancellation slot. Before this, whichever instance
+  # started later could cancel the other mid-run -- including the
+  # `pull_request_target` instance's own `idd-advisory-convergence-self-
+  # waiver` job, which would then never finish posting the bootstrap
+  # marker for that push, since a cancelled run is not itself a new
+  # trigger (recovery would need a manual rerun, defeating the whole
+  # no-human-click point of that job). Splitting the groups by event name
+  # still lets a new push correctly cancel a STALE run of the SAME event
+  # type for the same PR; it costs nothing beyond the "two required-check
+  # runs per PR" transition-window cost the CI-topology comment below
+  # already accepts, since a run that no longer gets cancelled by its
+  # sibling now more often simply completes on its own instead.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
 name: IDD advisory-convergence gate
 # Required-check gate (#1341): asserts that the primary advisory bot's
 # ("Copilot's") review has converged on the current PR HEAD, using the
