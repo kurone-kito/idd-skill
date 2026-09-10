@@ -55,15 +55,16 @@ the same resolution chain and `mode` semantics C1 already has. When
 helper runtime is enabled, resolve the effective `critiqueLoop.delegate`
 with the
 [`idd-critique-delegate`](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate)
-helper — `node scripts/idd-critique-delegate.mjs` for source-repo /
-vendored-node profiles; for package-manager / ephemeral-npx, resolve
-the profile-selected command from `docs/idd-helper-scripts.md` rather
-than hardcoding that bare binary name — instead of hand-deriving it;
-for `instructions-only` execution, apply the resolution order directly
-instead: repo-local `critiqueLoop.delegate` always wins outright, and
-only when it is genuinely absent does a local runtime's user-global
-config file apply. `critiqueLoop.telemetryHook` remains C1-only and is
-never consulted here. Delegate findings enter this pass the way `mode`
+helper: `node scripts/idd-critique-delegate.mjs` for source-repo /
+vendored-node profiles, or the profile-selected command named in
+`docs/idd-helper-scripts.md` for package-manager / ephemeral-npx
+profiles — never hardcode the bare binary name for those profiles.
+For `instructions-only` execution (no helper runtime), apply the
+resolution order directly: repo-local `critiqueLoop.delegate` always
+wins outright, and only when it is genuinely absent does a local
+runtime's user-global config file apply. `critiqueLoop.telemetryHook`
+remains C1-only and is never consulted here. Delegate findings enter
+this pass the way `mode`
 governs at C1 — see `docs/idd-workflow.md`'s "Critique pass invocation"
 section for the full table — replacing or joining the per-agent
 mechanism; never assume they are unconditionally added on top of it.
