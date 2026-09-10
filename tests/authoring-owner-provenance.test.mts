@@ -1,13 +1,61 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { evaluateAuthoringOwnerProvenance } from '../src/scripts/authoring-owner-provenance.mts';
 import { renderAuthoringOwnerMarker } from '../src/scripts/marker-helpers.mts';
+import { stubExecutable } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const TARGET = 'kurone-kito/idd-skill#2891';
 const MARKER_PREFIX = 'idd-skill';
 const TRUSTED_LOGINS = ['kurone-kito'];
+
+// Stub `gh` on PATH (the tests/gh-exec.test.mts / ci-wait-policy.test.mts
+// pattern) so the CLI tests below exercise the real execFileSync + child
+// process contract -- including the comments-before-body fetch ordering
+// and the provider/policy wiring -- without network access (#2901 review,
+// Copilot round 6: the pure-function tests above never invoke the emitted
+// CLI or its bin wrapper).
+function stubGh(scriptBody: string): () => void {
+  return stubExecutable('gh', scriptBody);
+}
+
+/** Build a stub `gh` script answering both calls `runCli` makes, in the
+ * order it now makes them (comments first, then the issue body): `gh api
+ * repos/<owner>/<repo>/issues/<n>/comments --paginate --jq .[]` (NDJSON,
+ * one comment object per line) and `gh api repos/<owner>/<repo>/issues/<n>`
+ * (a single JSON issue object). `process.argv.slice(2)` inside the stub is
+ * `['api', <path>, ...]` (`stubExecutable`'s own documented contract). */
+function ghStubScriptForIssue(
+  issueBody: string,
+  comments: readonly {
+    id: number;
+    user: { login: string };
+    body: string;
+    created_at: string;
+    updated_at: string;
+  }[],
+): string {
+  return `
+const path = process.argv[3];
+if (path && path.endsWith('/comments')) {
+  const comments = ${JSON.stringify(comments)};
+  process.stdout.write(comments.map((c) => JSON.stringify(c)).join('\\n') + '\\n');
+} else {
+  process.stdout.write(JSON.stringify({
+    number: 2891,
+    title: 'CLI test issue',
+    body: ${JSON.stringify(issueBody)},
+    html_url: 'https://github.com/kurone-kito/idd-skill/issues/2891',
+  }));
+}
+`;
+}
 
 function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
@@ -560,4 +608,219 @@ test('an acquire marker with body-sha256=none reports not-found, never pass', ()
       ?.evidence ?? '',
     /body-sha256/,
   );
+});
+
+test('a Stage 1 acquire edited into unparseable garbage fails closed, not the next acquire', () => {
+  // Copilot round 5 caught an edited marker that still PARSES with the
+  // same target -- this is the deeper variant Copilot round 6 found: the
+  // edit breaks parsing entirely (or could equally retarget the marker),
+  // so the old target-match filter silently dropped it from `events`
+  // before any validity check ever saw it, letting a later, unedited
+  // acquire become events[0] and report pass. The pre-pass in
+  // findStageOneAcquire now catches this by scanning every trusted
+  // owner-marker-shaped comment for an edit BEFORE selecting a winner,
+  // not just the one that would otherwise be selected.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        // Still recognizable as marker-shaped (contains the token) but
+        // no longer parses as a well-formed marker at all.
+        body: `<!-- idd-skill-authoring-owner: target=${TARGET}; corrupted`,
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T17:00:00Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
+        createdAt: '2026-09-10T16:50:00Z',
+        updatedAt: '2026-09-10T16:50:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /edited after posting/,
+  );
+});
+
+test('a Stage 1 acquire retargeted by an edit fails closed, not the next acquire', () => {
+  // Same underlying bug, via a different corruption shape: the edit keeps
+  // the marker well-formed but changes its own `target` field to a
+  // different issue, so the old target-match filter dropped it before
+  // the anchor/validity checks could ever see it.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), {
+          target: 'kurone-kito/idd-skill#1',
+          anchor: 'kurone-kito/idd-skill#1',
+        }),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T17:00:00Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
+        createdAt: '2026-09-10T16:50:00Z',
+        updatedAt: '2026-09-10T16:50:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.equal(result.marker, null);
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /edited after posting/,
+  );
+});
+
+test('CLI: pass -- an unchanged body reports pass end to end', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const restore = stubGh(
+    ghStubScriptForIssue(liveBody, [
+      {
+        id: 1,
+        user: { login: 'kurone-kito' },
+        body: acquireMarkerBody(sha256(liveBody)),
+        created_at: '2026-09-10T16:48:44Z',
+        updated_at: '2026-09-10T16:48:44Z',
+      },
+    ]),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'pass');
+    assert.equal(output.target, TARGET);
+    assert.equal(output.recordedBodySha256, sha256(liveBody));
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: mismatch -- a body edited since acquire reports mismatch end to end', () => {
+  const acquireTimeBody = '# Draft\n\nOriginal.\n';
+  const editedLiveBody = '# Draft\n\nEdited after acquire.\n';
+  const restore = stubGh(
+    ghStubScriptForIssue(editedLiveBody, [
+      {
+        id: 1,
+        user: { login: 'kurone-kito' },
+        body: acquireMarkerBody(sha256(acquireTimeBody)),
+        created_at: '2026-09-10T16:48:44Z',
+        updated_at: '2026-09-10T16:48:44Z',
+      },
+    ]),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'mismatch');
+    assert.equal(output.recordedBodySha256, sha256(acquireTimeBody));
+    assert.equal(output.computedBodySha256, sha256(editedLiveBody));
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: not-found -- no acquire marker reports not-found end to end', () => {
+  const liveBody = 'plain issue body with no authoring marker at all';
+  const restore = stubGh(ghStubScriptForIssue(liveBody, []));
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'not-found');
+    assert.equal(output.marker, null);
+    assert.equal(output.recordedBodySha256, null);
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: --issue rejects a token with trailing garbage instead of truncating it', () => {
+  const restore = stubGh(ghStubScriptForIssue('unused', []));
+  try {
+    assert.throws(() => {
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891junk',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+        ],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+    }, /must be a positive integer/);
+  } finally {
+    restore();
+  }
 });

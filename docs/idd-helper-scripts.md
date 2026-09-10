@@ -296,13 +296,21 @@ in this preamble, since the fallback differs per helper.
   `--verbose` evidence) rather than accepting an invalid marker: its own
   `supersedes` field is `none` (contract.md requires this for `acquire`);
   its `body-sha256` is a real 64-hex digest, never the sentinel `none`;
-  its own `anchor` names the same issue as its own `target` (a mismatch
-  means the marker declares itself a multi-target set's non-anchor
-  child, out of scope for this single-target-orphan helper); and the
-  underlying comment's `updatedAt` equals its `createdAt` (contract.md:
-  owner comments are append-only and must not be edited, since an edited
-  comment could have had its `body-sha256` rewritten after the fact) (PR
-  #2901 review round 5, chatgpt-codex-connector and Copilot)
+  and its own `anchor` names the same issue as its own `target` (a
+  mismatch means the marker declares itself a multi-target set's
+  non-anchor child, out of scope for this single-target-orphan helper)
+  (PR #2901 review round 5, chatgpt-codex-connector and Copilot). Before
+  selecting a marker at all, also rejects the whole log if ANY trusted,
+  owner-marker-shaped comment was edited after posting (`updatedAt`
+  differs from `createdAt`) — not just the one that would otherwise be
+  selected, so editing the true Stage 1 acquire into something
+  unparseable or retargeting it cannot make it silently vanish and let a
+  later acquire win instead (contract.md: owner comments are append-only
+  and must not be edited or deleted). A trusted actor who deletes the
+  true Stage 1 acquire outright, rather than editing it, is an accepted
+  limitation instead: a deleted comment leaves no trace in any API
+  response this helper can read (PR #2901 review round 6,
+  chatgpt-codex-connector and Copilot)
 
 **Review & Merge Phase Helpers:**
 
