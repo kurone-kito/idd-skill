@@ -1732,16 +1732,23 @@ Interpretation rules:
   profile, see
   [Helper Runtime Profile](customization.md#helper-runtime-profile) —
   so this path is the common case, not an edge case): resolve the
-  private admin
-  directory the same way as the lock file above, then atomically
-  create-or-replace an `idd-generated-tokens-<sanitized-claim-id>-<8-hex
-  -char sha256 prefix>.json` file there (`<sanitized-claim-id>`:
-  non-`[A-Za-z0-9._-]` characters replaced with `_`, then truncated to
-  64 characters, so a long claim-id can't push the filename past the
-  filesystem's `NAME_MAX` -- #2879 review, Codex P1), writing
-  `{ agentId, claimId, nonce?, recordedAt }`. No exclusive-create
-  semantics needed (unlike the lock): a plain atomic replace is correct
-  since this is idempotent evidence, not a mutual-exclusion primitive.
+  private admin directory the same way as the lock file above, then
+  atomically create-or-replace a file there matching this pattern
+  (kept in a fenced block, not a prose code span, so a Markdown
+  reflow can't break the filename across a line -- #2879 review,
+  Codex P1):
+
+  ```text
+  idd-generated-tokens-<sanitized-claim-id>-<8-hex-char sha256 prefix>.json
+  ```
+
+  `<sanitized-claim-id>`: non-`[A-Za-z0-9._-]` characters replaced with
+  `_`, then truncated to 64 characters, so a long claim-id can't push
+  the filename past the filesystem's `NAME_MAX` -- #2879 review, Codex
+  P1. Write `{ agentId, claimId, nonce?, recordedAt }`. No
+  exclusive-create semantics needed (unlike the lock): a plain atomic
+  replace is correct since this is idempotent evidence, not a
+  mutual-exclusion primitive.
 - **`instructions-only` helper-free fallback, read side** (#2879 review,
   Codex P1 -- the mandatory `--read-tokens` check in the Claim
   revalidation gate has no helper-free path without this): resolve the
