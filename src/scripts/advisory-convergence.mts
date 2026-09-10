@@ -233,7 +233,39 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * `collaborator-permission.mts` in particular are explicitly excluded,
  * per the issue's own background, as high-edit-contention files shared
  * by many unrelated consumers. Widening this set is a reviewed edit to
- * the constant, never automatic. */
+ * the constant, never automatic.
+ *
+ * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 9): being in
+ * this allowlist does NOT mean every possible bug in these files can be
+ * self-bootstrapped -- an inherent, narrow dead zone remains, and always
+ * will, by the same trusted-checkout design this mechanism itself
+ * depends on (both the posting job and this verdict job check out the
+ * repository's default branch, never the PR head -- see the workflow's
+ * own header comment for why: executing PR-controlled code with
+ * `issues: write` would defeat the whole point of `pull_request_target`).
+ * A bug specifically WITHIN the code that decides whether/how to invoke
+ * `--auto-bootstrap` (`runExternalCheckWaiver`'s own auto-bootstrap
+ * branches and `planExternalCheckWaiver`'s `autoBootstrap`-gated
+ * checks, both in `external-check-waiver.mts`), the two Actions-API
+ * methods the trust chain itself calls (`getWorkflowRun`,
+ * `listChangeRequestChangedFiles` in `provider-adapter-github.mts`), or
+ * this file's own verification functions
+ * ({@link verifySelfReferentialBootstrapWaiverRun},
+ * {@link resolveSelfReferentialTriggerFiles}, `autoWaiverValid`) cannot
+ * be rescued by THIS mechanism, because the OLD, buggy version of
+ * exactly that code is what would have to decide to trust the fix --
+ * the same fixed point every self-hosting bootstrap has (compiling a
+ * fixed compiler bug still needs the old, broken compiler for the first
+ * build). Isolating marker emission into a smaller module would shrink
+ * this dead zone, never eliminate it, and is out of scope here. The
+ * REST of each listed file's surface (which is most of it -- each
+ * implements far more than this one trust path) remains genuinely
+ * bootstrappable exactly as advertised above. For the residual case,
+ * this repository's existing `ciGate.externalCheckWaivers.mode:
+ * "maintainer-authorized"` backstop (AGENTS.md's "Advisory-convergence
+ * waiver backstop" bullet) is the documented human off-ramp for
+ * precisely "the autonomous advisory-convergence loop cannot converge
+ * on its own" -- not a gap this constant needs to also close. */
 export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   'src/scripts/advisory-convergence.mts',
   'src/scripts/advisory-wait-state.mts',

@@ -1490,6 +1490,30 @@ or a proven Copilot outage, since the whole point is bootstrapping a fix
 to the deadline mechanism itself. Do not widen this exception to any
 other reason token, actor, or check selector.
 
+**A narrow, inherent dead zone remains** (kurone-kito/idd-skill#2657,
+Codex review, PR #2895, round 9): being in the trigger-file allowlist
+does not mean every possible bug in that file can be self-bootstrapped.
+Both the posting job and the verdict job always check out the
+repository's default branch, never the PR head -- required so neither
+job ever executes PR-controlled code with `issues: write` -- so a bug
+specifically WITHIN the code that decides whether/how to invoke
+`--auto-bootstrap` (its own branches in `external-check-waiver.mts`),
+the two Actions-API methods the trust chain above itself calls
+(`getWorkflowRun`, `listChangeRequestChangedFiles` in
+`provider-adapter-github.mts`), or the five conditions' own verification
+functions in `advisory-convergence.mts` cannot be rescued by this
+mechanism: the OLD, buggy version of exactly that code is what would
+have to decide to trust the fix. This is the same fixed point every
+self-hosting bootstrap has, and isolating marker emission into a
+smaller module would shrink it, never eliminate it. The rest of each
+listed file's surface -- most of it, since each implements far more
+than this one trust path -- remains genuinely bootstrappable as
+described above. For the residual case, the
+[maintainer-authorized waiver backstop](#external-check-waiver-contract)
+this repository already configures is the documented human off-ramp
+for precisely this situation, not a gap this mechanism itself needs to
+close.
+
 ### Provider health helper
 
 - Command: `node scripts/provider-health.mjs [--owner <owner>] [--repo <repo>]`
