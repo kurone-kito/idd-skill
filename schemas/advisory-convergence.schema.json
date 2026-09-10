@@ -381,7 +381,7 @@
     },
     "ready": {
       "type": "boolean",
-      "description": "Overall pass gate: true when the scope does not apply, or converged is true, or the deadline has passed (or terminal is COPILOT_UNAVAILABLE) and the gate is waived."
+      "description": "Overall pass gate: true when the scope does not apply, or converged is true, or the deadline has passed (or terminal is COPILOT_UNAVAILABLE) and the gate is waived, or waiver.autoWaiverValid is true (kurone-kito/idd-skill#2657) -- this last disjunct is independent of the deadline/terminal-unavailable precondition the others share."
     },
     "reasons": {
       "type": "array",

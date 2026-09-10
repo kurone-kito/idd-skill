@@ -1353,9 +1353,13 @@ workflow's own file layout). For every other repository, both the
 distributed `idd-template/` posting step and `resolveSelfReferentialTriggerFiles`
 independently derive a profile-appropriate set instead: compiled
 `scripts/*.mjs` paths for `vendored-node`, the dependency manifest and
-lockfiles for `package-manager`, and only the two workflow paths for any
-other profile -- since a `vendored-node`/`package-manager` adopter never
-ships this source repository's own `src/scripts/*.mts` files, an
+lockfiles for `package-manager`, `.github/idd/config.json` for
+`ephemeral-npx` (that profile selects its checker version through
+`helperRuntime.packageSpec`, configured there -- see
+[Customizing IDD](customization.md)), and only the two workflow paths
+for any other profile -- since a `vendored-node`/`package-manager`
+adopter never ships this source repository's own `src/scripts/*.mts`
+files, an
 unconditional match against them left the mechanism both non-functional
 for adopters and gameable via a PR touching a path that does not exist in
 their own checkout at all. `idd-advisory-convergence.yml` detects this
