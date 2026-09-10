@@ -196,11 +196,48 @@ test('findCorruptingProseWraps: does not flag when the hyphen sits right before 
   assert.deepEqual(findCorruptingProseWraps('**foo-\n**bar'), []);
 });
 
-test('findCorruptingProseWraps: real-corpus regression finds no violations on this repository’s own tracked Markdown files', () => {
-  // Direct counterpart of code-span-wrap's own real-corpus regression
-  // above, and of audit-code-span-wrap.test.mts's end-to-end
-  // auditCodeSpanWraps() check -- confirms acceptance criterion 3 (no new
-  // false positives) at the function level too.
+test('findCorruptingProseWraps: does not flag a hyphen at the very start of an emphasis span (no left-side token)', () => {
+  // PR #2880 review (Copilot): a hyphen with nothing before it in the
+  // span (prevPrevChar undefined) is not a compound-word join -- e.g. a
+  // hyphen/flag-style prefix like "*-flag*", not "well-known".
+  assert.deepEqual(findCorruptingProseWraps('*-\nflag* text'), []);
+  assert.deepEqual(findCorruptingProseWraps('**-\nflag** text'), []);
+});
+
+test('findCorruptingProseWraps: does not flag a multi-line emphasis example quoted inside an HTML comment', () => {
+  // PR #2880 review (Codex): CommonMark never renders HTML comment
+  // content as emphasis, so an example quoted inside one (this rule's
+  // own kind of illustrative comment) must not be flagged.
+  assert.deepEqual(
+    findCorruptingProseWraps('<!-- example: **well-\nknown** -->'),
+    [],
+  );
+});
+
+test('findCorruptingProseWraps: still flags a real violation outside an unrelated HTML comment', () => {
+  // Regression guard: masking HTML comments must not also mask real
+  // prose that merely sits near one.
+  const violations = findCorruptingProseWraps(
+    '<!-- note --> **transport-\nlayer** failure',
+  );
+  assert.equal(violations.length, 1);
+});
+
+test('findCorruptingProseWraps: does not flag emphasis text preceding an unterminated HTML comment', () => {
+  // An unterminated `<!--` masks through end of text (mirrors
+  // resolved-decision.mts's own findHtmlCommentRanges close-scan), so a
+  // real violation entirely before it must still be found.
+  const violations = findCorruptingProseWraps(
+    '**transport-\nlayer** failure <!-- unterminated',
+  );
+  assert.equal(violations.length, 1);
+});
+
+test('findCorruptingProseWraps: a single fixture file with no emphasis markup reports no violations', () => {
+  // This checks one specific fixture, not a full repository corpus scan
+  // -- that end-to-end check lives in
+  // audit-code-span-wrap.test.mts's auditCodeSpanWraps() regression
+  // (PR #2880 review, Copilot).
   const text = readFileSync(
     join(
       REPO_ROOT,

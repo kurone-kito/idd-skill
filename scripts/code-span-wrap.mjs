@@ -114,25 +114,63 @@ export function findCorruptingCodeSpanWraps(text) {
 //
 // EMPHASIS_SPAN_PATTERN mirrors INLINE_CODE_SPAN_PATTERN's own technique --
 // a backreference-counted delimiter run (`\1`) whose inner content may
-// cross a single line break but never a blank line -- with two extra
-// guards approximating CommonMark's emphasis flanking rules well enough to
-// avoid misreading a `*`/`-`/`+` bullet-list marker as an emphasis opener:
-// the opening run must not be immediately followed by whitespace (a bullet
+// cross any number of line breaks, same as INLINE_CODE_SPAN_PATTERN, as
+// long as none of them is a blank line -- with two extra guards
+// approximating CommonMark's emphasis flanking rules well enough to avoid
+// misreading a `*`/`-`/`+` bullet-list marker as an emphasis opener: the
+// opening run must not be immediately followed by whitespace (a bullet
 // marker always is, e.g. `* item`), and the closing run must be
 // immediately preceded by non-whitespace (rules out closing on a stray
 // later `*`/`**` separated from the emphasized text by a space). This is a
 // heuristic, not a full CommonMark emphasis parser -- deliberately, to keep
 // this dogfood-only check simple and low-risk; see
 // findCorruptingProseWraps's own corpus-validated scope below.
+//
+// Known limitations (PR #2880 review, Codex), accepted as residual scope
+// rather than fixed here -- each is a missed detection (false negative),
+// never a false positive that could wrongly block a clean PR, and a human/
+// Copilot review remains the backstop that caught this issue's own
+// incident in the first place:
+// - An escaped delimiter (`\*`) immediately before a wrapped compound is
+//   read as a real closing marker, ending the match early and missing the
+//   wrap after it (e.g. `*note \*literal well-\nknown*`).
+// - A blockquote `>` container prefix on a wrapped continuation line is
+//   not stripped before the neighbor check, so a wrap inside a
+//   blockquoted emphasis span (e.g. `> **well-\n> known**`) is missed.
+// - The neighbor test below is ASCII-only ({@link TOKEN_CONTINUING} is
+//   shared with {@link findCorruptingCodeSpanWraps}, which this issue does
+//   not change), so a non-ASCII letter adjacent to the hyphen (e.g.
+//   `**café-\nstyle**`) is not recognized as continuing the compound.
 const EMPHASIS_SPAN_PATTERN =
   /(\*{1,2})(?!\s)((?:(?!\1)[^\r\n]|\r?\n(?![ \t]*\r?\n))+?)(?<=\S)\1/g;
+// idd-skill issue #2876 (PR #2880 review, Codex): an HTML comment can
+// legitimately quote example Markdown -- including a multi-line
+// `**bold**` hyphen wrap used to illustrate this very rule -- that
+// CommonMark never renders as real emphasis at all. stripMarkdownCodeRegions
+// deliberately does NOT mask HTML comments (some operational markers are
+// HTML comments), so mask them here, scoped to this prose scan only:
+// blank each `<!-- ... -->` region's content (preserving line/column
+// structure, same style as blankFencedCodeBlocks) before matching
+// emphasis spans. Simple `indexOf`-based closing, matching this
+// repository's other HTML-comment handling (e.g. resolved-decision.mts's
+// findHtmlCommentRanges) -- not a full HTML parser.
+const HTML_COMMENT_PATTERN = /<!--[\s\S]*?(?:-->|$)/g;
+function blankHtmlComments(text) {
+  return text.replace(HTML_COMMENT_PATTERN, (match) =>
+    match.replace(/[^\r\n]/g, ' '),
+  );
+}
 /**
  * Find `**`/`*` emphasis spans in prose Markdown text (outside fenced code
- * blocks and inline code spans) whose line break falls immediately after a
- * hyphen joining a token on each side (reusing the same
- * {@link TOKEN_CONTINUING} neighbor test as
+ * blocks, inline code spans, and HTML comments) whose line break falls
+ * immediately after a hyphen joining a token on each side (reusing the
+ * same {@link TOKEN_CONTINUING} neighbor test as
  * {@link findCorruptingCodeSpanWraps}) -- the prose counterpart of that
- * function. Returns one violation per corrupting break, in document order.
+ * function. A hyphen at the very start of an emphasis span's content does
+ * not qualify: with nothing before it, there is no left-side token to
+ * join, so it is not a corrupted compound word (PR #2880 review,
+ * Copilot). Returns one violation per corrupting break, in document
+ * order.
  */
 export function findCorruptingProseWraps(text) {
   const normalized = text.replace(/\r\n?/g, '\n');
@@ -141,8 +179,9 @@ export function findCorruptingProseWraps(text) {
   // preserving line/column structure -- so code content already covered by
   // findCorruptingCodeSpanWraps is never double-flagged here, and this scan
   // never mistakes a code span's own emphasis-looking characters for real
-  // prose emphasis.
-  const scanned = stripMarkdownCodeRegions(normalized);
+  // prose emphasis. blankHtmlComments does the same for HTML comment
+  // content, which is never real Markdown structure either.
+  const scanned = blankHtmlComments(stripMarkdownCodeRegions(normalized));
   const violations = [];
   for (const match of scanned.matchAll(EMPHASIS_SPAN_PATTERN)) {
     const marker = match[1];
@@ -164,7 +203,8 @@ export function findCorruptingProseWraps(text) {
       const nextChar = inner[afterIndex];
       if (
         prevChar === '-' &&
-        (prevPrevChar === undefined || TOKEN_CONTINUING.test(prevPrevChar)) &&
+        prevPrevChar !== undefined &&
+        TOKEN_CONTINUING.test(prevPrevChar) &&
         nextChar !== undefined &&
         TOKEN_CONTINUING.test(nextChar)
       ) {
