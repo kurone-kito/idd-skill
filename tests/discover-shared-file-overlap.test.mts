@@ -444,6 +444,25 @@ test('parseCandidateFileEntries still de-dupes an exact repeated raw spelling', 
   ]);
 });
 
+test('parseCandidateFileEntries excludes an HTML-attribute-embedded backtick path (#2865)', () => {
+  // `gh api /markdown` confirms `<span title="`package.json`">not a
+  // candidate</span>` keeps its backticks literal inside the attribute
+  // value -- never a rendered code span, so `package.json` here is not a
+  // real candidate file, even though a naive backtick-pair scan would
+  // extract it as one.
+  const body =
+    '## Candidate files\n\n<span title="`package.json`">not a candidate</span>\n';
+  assert.deepEqual(parseCandidateFileEntries(body), []);
+});
+
+test('parseCandidateFileEntries still extracts a real candidate path alongside an HTML-attribute-embedded backtick (#2865)', () => {
+  const body =
+    '## Candidate files\n\n- `src/scripts/foo.mts`\n<span title="`package.json`">not a candidate</span>\n';
+  assert.deepEqual(parseCandidateFileEntries(body), [
+    { raw: 'src/scripts/foo.mts', normalized: 'src/scripts/foo.mts' },
+  ]);
+});
+
 test('parseCandidateFiles applies its own normalized-key dedup on top of parseCandidateFileEntries (Codex review, PR #2840 round 9)', () => {
   // parseCandidateFileEntries now keeps every distinct raw spelling
   // (including two that share a normalized key), so parseCandidateFiles

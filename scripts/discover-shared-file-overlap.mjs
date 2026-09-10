@@ -17,6 +17,7 @@ import { resolve } from 'node:path';
 import { parseAutopilotSuitability } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
+import { findMarkdownCodeRanges } from './markdown-code.mjs';
 import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import {
   resolveActiveClaim,
@@ -335,8 +336,28 @@ export function parseCandidateFileEntries(body) {
   const section = lines.slice(start, end);
   const sectionText = section.join('\n');
   const entries = [];
-  // Every backtick-quoted path in the section, regardless of line wrapping.
+  // Every backtick-quoted path in the section, regardless of line wrapping --
+  // but only a genuine inline-code-span match (#2865): a naive backtick pair
+  // can also fall inside an HTML tag's attribute value or a link's own
+  // title/destination (e.g. `<span title="`package.json`">not a
+  // candidate</span>`), which CommonMark renders as literal attribute/title
+  // text, never a code span (`gh api /markdown` confirms this). Reuse
+  // `markdown-code.mts`'s own exclusion (the same fix applied to
+  // `hasVerificationCommandSignal`'s command-span detection) by accepting a
+  // match only when it is fully contained in one of
+  // `findMarkdownCodeRanges`'s real code-span ranges -- containment, not
+  // exact-range equality, because adjacent real spans with no gap between
+  // them can merge into one wider range.
+  const codeRanges = findMarkdownCodeRanges(sectionText);
   for (const match of sectionText.matchAll(/`([^`]+)`/g)) {
+    const matchStart = match.index;
+    const matchEnd = matchStart + match[0].length;
+    const isGenuineCodeSpan = codeRanges.some(
+      (range) => matchStart >= range.start && matchEnd <= range.end,
+    );
+    if (!isGenuineCodeSpan) {
+      continue;
+    }
     const raw = match[1].trim();
     const normalized = normalizeContentionPath(raw);
     if (looksLikePath(normalized)) {
