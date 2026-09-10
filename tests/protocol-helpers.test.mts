@@ -2144,7 +2144,7 @@ test('classifyThreadAckOnlyPostDisposition rejects the "in no way" and "by no me
     iddAgentLogins: ['idd-bot'],
     advisoryBotLogins: ['coderabbitai[bot]'],
   };
-  const mkThread = (id, body) => ({
+  const mkThread = (id: string, body: string) => ({
     id,
     isResolved: true,
     updatedAt: '',
@@ -2243,7 +2243,7 @@ test('classifyThreadAckOnlyPostDisposition rejects "perhaps" and "possibly" as m
     iddAgentLogins: ['idd-bot'],
     advisoryBotLogins: ['coderabbitai[bot]'],
   };
-  const mkThread = (id, body) => ({
+  const mkThread = (id: string, body: string) => ({
     id,
     isResolved: true,
     updatedAt: '',
