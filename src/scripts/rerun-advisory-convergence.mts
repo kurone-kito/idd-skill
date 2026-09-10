@@ -1006,36 +1006,41 @@ export function computeRefreshLatestPlan(
     };
   }
 
-  const familyInstances = (input.instances ?? []).filter((instance) =>
-    PULL_REQUEST_FAMILY_EVENTS.has(
-      String(instance.runEvent ?? '')
-        .trim()
-        .toLowerCase(),
-    ),
-  );
-  if (familyInstances.length === 0) {
+  const allInstances = input.instances ?? [];
+  if (allInstances.length === 0) {
     return {
       ...header,
       commands: [],
       pendingCommands: [],
       reason:
-        'no pull_request-family check-run instance exists yet for this HEAD; nothing to refresh -- a future pull_request/pull_request_target trigger will create the first instance',
+        'no check-run instance exists yet for this HEAD; nothing to refresh -- a future pull_request/pull_request_target trigger will create the first instance',
     };
   }
 
-  // Mirrors classifyInstance steps 4-5: never guess a rerun target from an
-  // unresolvable run identity -- but (Codex P1, PR #2855 review) applied
-  // per-instance now, not just to a single "latest" pick: an instance
-  // whose own identity can't be trusted is skipped rather than aborting
-  // every OTHER instance's refresh. Deduplicated by runId: two check-run
-  // instances can briefly resolve to the same underlying workflow run
-  // (e.g. one instance's `gh api` lookup racing another's), and rerunning
-  // the same run id twice in one pass is redundant, not merely harmless.
+  // Checked BEFORE the family-event filter, not after (Copilot, PR #2855
+  // review, "previously missed"): an instance whose run id is
+  // unresolvable, or whose underlying run lookup failed, has `runEvent:
+  // null` (see the enrichment in `collectFromGitHub`) -- filtering by
+  // family membership FIRST would silently treat that instance the same
+  // as one that genuinely belongs to a different, non-family event
+  // (`workflow_dispatch`, say), collapsing "this HEAD has an
+  // unverifiable check-run instance, inspect manually" into the far more
+  // reassuring "nothing has triggered yet for this HEAD" whenever every
+  // instance happened to be unresolvable. Mirrors classifyInstance steps
+  // 4-5: never guess a rerun target from an unresolvable run identity --
+  // but (Codex P1, PR #2855 review) applied per-instance, not just to a
+  // single "latest" pick: one instance's unresolvable identity is
+  // reported and skipped rather than aborting every OTHER instance's
+  // refresh. Deduplicated by runId: two check-run instances can briefly
+  // resolve to the same underlying workflow run (e.g. one instance's
+  // `gh api` lookup racing another's), and rerunning the same run id
+  // twice in one pass is redundant, not merely harmless.
   const seenRunIds = new Set<string>();
   const unresolvableReasons: string[] = [];
+  const nonFamilyEvents = new Set<string>();
   const resolvedCommands: RerunPlanCommand[] = [];
   const pendingResolvedCommands: RerunPlanCommand[] = [];
-  for (const instance of familyInstances) {
+  for (const instance of allInstances) {
     if (instance.runId === null) {
       unresolvableReasons.push(
         `check-run ${instance.checkRunId} has no resolvable workflow run id`,
@@ -1046,6 +1051,16 @@ export function computeRefreshLatestPlan(
       unresolvableReasons.push(
         `the underlying workflow run for check-run ${instance.checkRunId} could not be fetched (network/permission/transient failure)`,
       );
+      continue;
+    }
+    const resolvedRunEvent = String(instance.runEvent ?? '')
+      .trim()
+      .toLowerCase();
+    if (!PULL_REQUEST_FAMILY_EVENTS.has(resolvedRunEvent)) {
+      // Resolved, but genuinely a different (non-family) trigger for
+      // this same check-run name -- not ours to touch, and not
+      // unresolvable either.
+      nonFamilyEvents.add(resolvedRunEvent || '(unknown)');
       continue;
     }
     if (seenRunIds.has(instance.runId)) {
@@ -1102,11 +1117,23 @@ export function computeRefreshLatestPlan(
   pendingResolvedCommands.sort(byStartedAtDesc);
 
   if (resolvedCommands.length === 0 && pendingResolvedCommands.length === 0) {
+    // Two genuinely different "nothing to rerun" causes (Copilot, PR
+    // #2855 review): an unresolvable instance MIGHT be a family one we
+    // simply couldn't verify (actionable -- inspect manually), whereas
+    // every instance resolving to a confirmed non-family event is the
+    // ordinary "this HEAD just hasn't had a pull_request-family trigger
+    // yet" case the original message described. Prefer the unresolvable
+    // reason whenever both are present: an operator investigating a
+    // stuck rollup needs to know verification failed, not just that no
+    // family instance was found.
     return {
       ...header,
       commands: [],
       pendingCommands: [],
-      reason: `no resolvable pull_request-family instance for this HEAD -- ${unresolvableReasons.join('; ')}; inspect manually`,
+      reason:
+        unresolvableReasons.length > 0
+          ? `no resolvable pull_request-family instance for this HEAD -- ${unresolvableReasons.join('; ')}; inspect manually`
+          : `no pull_request-family check-run instance exists yet for this HEAD (found: ${[...nonFamilyEvents].join(', ')}); nothing to refresh -- a future pull_request/pull_request_target trigger will create the first instance`,
     };
   }
 

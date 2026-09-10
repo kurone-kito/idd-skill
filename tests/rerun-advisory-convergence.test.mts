@@ -2981,6 +2981,78 @@ test('computeRefreshLatestPlan: skips an unresolvable instance without blocking 
   assert.match(plan.reason, /check-run 1001/);
 });
 
+// Copilot review (PR #2855, round 5, "previously missed"): an instance
+// whose run id is unresolvable (or whose run lookup failed) carries
+// `runEvent: null` in production (see `collectFromGitHub`'s enrichment --
+// `runEvent: meta?.event ?? null`, and `meta` is only populated for a
+// successfully resolved run). Filtering by family membership BEFORE
+// checking resolvability used to silently drop such an instance out of
+// consideration entirely, so the sole check-run instance for this HEAD
+// being unverifiable was misreported as "nothing has triggered yet"
+// rather than "inspect manually".
+test('computeRefreshLatestPlan: an unresolvable instance (matching its real runEvent: null shape) is reported as unresolvable, not as "no instance exists"', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ runId: null, runEvent: null })],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
+  assert.match(plan.reason, /no resolvable workflow run id/);
+  assert.doesNotMatch(
+    plan.reason,
+    /nothing has triggered|check-run instance exists yet/,
+    'an unresolvable instance must not be reported as though this HEAD has no check-run instance at all',
+  );
+});
+
+test('computeRefreshLatestPlan: a run-lookup failure (matching its real runEvent: null shape) is reported as unresolvable too', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ runLookupFailed: true, runEvent: null })],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.match(plan.reason, /could not be fetched/);
+});
+
+test('computeRefreshLatestPlan: every instance resolving to a genuinely different event names that event in the reason', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ runEvent: 'workflow_dispatch' })],
+    }),
+    baseOptions(),
+  );
+  assert.match(plan.reason, /found: workflow_dispatch/);
+});
+
+test('computeRefreshLatestPlan: a genuinely non-family instance alongside a family one is ignored, not treated as unresolvable', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          runEvent: 'workflow_dispatch',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runEvent: 'pull_request',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5002');
+  assert.doesNotMatch(plan.reason, /unresolvable/);
+});
+
 test('computeRefreshLatestPlan: -R owner/repo is embedded in every generated command', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
