@@ -765,19 +765,24 @@ external scheduler.
 Running this variant safely requires:
 
 - **A non-context-inheriting delegation mechanism for the full
-  B-through-F4 worker role, when the calling tool offers one.** A
-  context-inheriting worker (e.g. Claude Code's `fork` subagent) can let
-  the orchestrator's own recent framing compete with, and sometimes
-  override, the delegation brief's own role statement — the same
-  problem [Critique pass invocation](#critique-pass-invocation) already
-  avoids for Claude Code's narrower critique-pass role, since that row
-  also picks a fresh `general-purpose` agent rather than a
+  B-through-F4 worker role, whenever the calling tool offers one — a
+  strong preference, not merely a suggestion, per
+  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).**
+  A context-inheriting worker (e.g. Claude Code's `fork` subagent) can
+  let the orchestrator's own recent framing compete with, and
+  sometimes override, the delegation brief's own role statement — the
+  same problem [Critique pass invocation](#critique-pass-invocation)
+  already avoids for Claude Code's narrower critique-pass role, since
+  that row also picks a fresh `general-purpose` agent rather than a
   context-inheriting one. Extend that same preference to this full
-  worker role, whenever the tool exposes the choice, and fall back to
-  the explicit role-statement wording in
-  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation)
-  as defense-in-depth when only a context-inheriting mechanism is
-  available (kurone-kito/idd-skill#2221, kurone-kito/idd-skill#2624).
+  worker role whenever the tool exposes the choice; a
+  context-inheriting mechanism is a fallback only for when no
+  non-context-inheriting alternative exists, and even careful brief
+  wording (the explicit role-statement text in
+  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation))
+  does not reliably close its residual role-misread risk — a
+  documented known limitation (kurone-kito/idd-skill#2221,
+  kurone-kito/idd-skill#2624, kurone-kito/idd-skill#2802).
 - **A small concurrency cap**, sized against CI-minute cost and
   shared-file contention rather than raised without bound. The optional
   `discover-shared-file-overlap` helper (see

@@ -414,6 +414,55 @@ own narrower question. This record moved here from
 kurone-kito/idd-skill#2000, which stayed open only as a findable record
 until one of the revisit triggers above fires.
 
+### Context-inheriting delegation residual risk
+
+kurone-kito/idd-skill#2624 adopted a documented positive-framed
+mitigation for the [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation)
+context-inheriting fallback: the delegation brief must state
+explicitly that the delegate is the sole worker for the named issue,
+with no peer workers to coordinate with or wait on. `#2624` itself was
+scoped to the wake-up-discipline stall pattern and did not evaluate
+this mitigation against a different, related failure mode: a
+context-inheriting delegate mistaking itself for the orchestrator that
+dispatched it, rather than the worker the brief names it as.
+
+kurone-kito/idd-skill#2802 recorded direct field evidence that neither
+that positive-framed mitigation, nor an added explicit negative
+instruction naming the failure mode directly, reliably prevents it.
+Three independent occurrences: a context-inheriting fork (sharing the
+orchestrator's full transcript) whose brief opened with the documented
+positive-framed statement nearly verbatim still produced a first-turn
+status line functionally identical to the orchestrator's own
+immediately-preceding turn-ending text — "I dispatched a worker and am
+waiting for its completion notification" — despite there being no such
+sub-worker, in two independent occurrences (each corrected mid-session
+only by an explicit follow-up message naming the confusion directly).
+A third occurrence, during the authoring pass that drafted `#2802`
+itself (2026-09-09), added an explicit negative instruction ("you are
+not an orchestrator, there is no sub-worker, YOU are the worker") to
+the brief; the fork still ended its first turn describing having
+"delegated to a background fork" and "waiting for a completion
+notification," with zero tool calls made, and a second differently
+worded attempt with the same negative framing reproduced the identical
+zero-tool-call echo. Only abandoning delegation and performing the
+work directly in the orchestrating session's own turns made forward
+progress. After switching away from the context-inheriting mechanism
+in the originally reported session, the failure mode did not recur
+across roughly 13 further delegated dispatches in that session — a
+small, uncontrolled sample, but consistent with a non-context-inheriting
+mechanism addressing the failure at its root rather than through
+better-worded briefs.
+
+**Maintainer decision** (Groom hearing, 2026-09-10): adopt both
+mitigations together rather than continuing to iterate on brief
+wording the evidence shows does not reliably work. State the
+non-context-inheriting delegation mechanism as a strong preference,
+not merely a suggestion, whenever the calling tool offers one, and
+record the context-inheriting fallback's residual role-misread risk
+explicitly as a known, accepted limitation in both
+`idd-claim.instructions.md` and `docs/idd-workflow.md`'s Orchestrator
+fan-out variant section.
+
 ## Work and self-review
 
 ### B1 Step 3 — install-deps silent under-install detection
