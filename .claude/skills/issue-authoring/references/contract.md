@@ -1583,7 +1583,8 @@ only approval boundary.
   any published body; the `audit-authored-issue` linter (or its manual
   fallback) is green on every published body in the set. Keep the authoring
   label in place until the checklist passes and the user explicitly requests
-  release from the authoring hold. Keep the set anchor held until every other
+  release from the authoring hold, except for the narrow auto-release
+  exception below. Keep the set anchor held until every other
   target's label removal is verified, and remove the anchor label last. For
   every target, first re-fetch owner comments during release-marker preflight.
   If a valid current-owner/set `mode=release` marker already exists, reuse the
@@ -1634,7 +1635,30 @@ only approval boundary.
   and verify the restored set state; leave every target generation open and
   stop. If restoration cannot be completed or a newer owner has appeared,
   record a set-level recovery hold and never claim a partial release. Release
-  is a human action; nothing in this bundle auto-releases a held issue set.
+  is a human action; nothing in this bundle auto-releases a held issue set,
+  except the narrow, marker-scoped exception immediately below.
+- **Narrow auto-release exception (review-fix-loop-cutoff).** A
+  follow-up issue whose body carried the exact marker
+  `idd-skill-authoring-defer-source: review-fix-loop-cutoff` at Stage 1
+  publication time — part of the initial `authoring-publication` body
+  write, never added by a later edit — may complete the full Stage 2
+  sequence above (release-marker preflight, release-guard, heartbeat
+  renewal, verified label removal, release-complete reconciliation,
+  every other mechanical gate unchanged) without the "user explicitly
+  requests release" precondition, immediately after Stage 1 publication
+  completes for that issue. The exception is additive, not a
+  relaxation: it replaces only that one precondition; it applies only
+  to the single target carrying the marker, never to a roadmap anchor
+  or a sibling target in the same authoring set that lacks it; and a
+  marker added after Stage 1 publication never qualifies a target
+  retroactively. This exists because
+  `idd-review-triage.instructions.md`'s round-count cutoff files this
+  exact marker on a follow-up issue during unattended autonomous
+  execution, where no human is present to issue a release request —
+  left under the ordinary human-gated boundary above, that deferred
+  work would sit under the authoring label indefinitely on a fully
+  autonomous repository, silently defeating the point of deferring it
+  at all (preventive; no observed incident yet).
 
 ## Publication boundary
 
@@ -1644,4 +1668,6 @@ need a separate user approval once it passes the mechanical
 [Authoring hold and release](#authoring-hold-and-release) above for the
 full two-stage contract. Removing the authoring label and starting the
 IDD execution loop both require the user's explicit hold-release
-request; nothing else authorizes either.
+request, except the narrow auto-release exception documented in
+[Authoring hold and release](#authoring-hold-and-release) above; nothing
+else authorizes either.

@@ -319,8 +319,10 @@ approval boundary that hands off to IDD execution.
 ### Stage 2: Release (the single approval boundary)
 
 - The user's explicit hold-release request is the only approval this
-  bundle's workflow requires, and it authorizes IDD execution for the
-  released issues
+  bundle's workflow requires — except the narrow review-fix-loop-cutoff
+  auto-release exception in
+  [Authoring hold and release](contract.md#authoring-hold-and-release) —
+  and it authorizes IDD execution for the released issues
 - Before removing the authoring label, bundled skill runs a release
   checklist that absorbs the rigor of the dropped middle step:
   - every child issue is referenced from its parent roadmap's
@@ -379,9 +381,11 @@ approval boundary that hands off to IDD execution.
   set-level recovery hold and never claim a partial release.
 - Bundled skill removes the authoring label from all published issues
   only after the release checklist passes and the user's release
-  request is explicit
+  request is explicit, except the narrow review-fix-loop-cutoff
+  auto-release exception in
+  [Authoring hold and release](contract.md#authoring-hold-and-release)
 - Release remains a human action; nothing in this bundle auto-releases
-  a held issue set
+  a held issue set, except that same narrow, marker-scoped exception
 
 ## A4.5 Gate Timing
 
@@ -429,13 +433,16 @@ time and report the specific failure (unclear, invalid, duplicate).
 - publish a body that has not passed the mechanical
   `audit-authored-issue` gate and the critique pass
 - remove the authoring label from any issue without an explicit
-  release request
+  release request, except the narrow review-fix-loop-cutoff
+  auto-release exception in
+  [Authoring hold and release](contract.md#authoring-hold-and-release)
 
 ## Handoff to execution
 
-Once the user's explicit release request removes the authoring label
-from every issue in the released set, execution is authorized: the
-repository's normal entry file and routed
+Once the user's explicit release request — or the narrow
+review-fix-loop-cutoff auto-release exception — removes the authoring
+label from every issue in the released set, execution is authorized:
+the repository's normal entry file and routed
 `.github/instructions/*.instructions.md` phase files (Discover, Claim,
 Work) may pick up the released issues. This bundle does not itself
 start that loop.
