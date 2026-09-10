@@ -59,6 +59,28 @@ function heartbeatMarkerBody(
   });
 }
 
+function bootstrapMarkerBody(
+  bodySha256: string,
+  overrides: { owner?: string } = {},
+): string {
+  return ownerMarkerBody('bootstrap', {
+    owner: overrides.owner ?? 'owner-token-1',
+    bodySha256,
+    supersedes: 'none',
+  });
+}
+
+function resumeMarkerBody(
+  bodySha256: string,
+  overrides: { owner?: string; supersedes?: string } = {},
+): string {
+  return ownerMarkerBody('resume', {
+    owner: overrides.owner ?? 'owner-token-1',
+    bodySha256,
+    supersedes: overrides.supersedes ?? 'prior-owner-token',
+  });
+}
+
 test('unchanged body with a matching acquire-time hash reports pass', () => {
   const liveBody = '# Draft\n\nSome content.\n';
   const result = evaluateAuthoringOwnerProvenance({
@@ -380,4 +402,78 @@ test('a matching release-complete does close the generation, allowing the next a
   });
   assert.equal(result.verdict, 'pass');
   assert.equal(result.marker?.owner, 'owner-token-2');
+});
+
+test('a bootstrap marker opens a generation a later competing acquire cannot displace', () => {
+  // The exact scenario chatgpt-codex-connector's third-round PR #2901
+  // review flagged: a stale orphan is recovered with a trusted bootstrap,
+  // then a competing acquire follows in the same still-open generation.
+  // contract.md: "The first valid bootstrap marker wins" -- the replay
+  // must recognize bootstrap as a generation opener, not just acquire.
+  const bootstrapBody = '# Draft\n\nRecovered via bootstrap.\n';
+  const editedLiveBody = '# Draft\n\nEdited to match the losing acquire.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody: editedLiveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: bootstrapMarkerBody(sha256(bootstrapBody), {
+          owner: 'owner-token-bootstrap',
+        }),
+        createdAt: '2026-09-10T16:48:44Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(editedLiveBody), {
+          owner: 'owner-token-losing-acquire',
+        }),
+        createdAt: '2026-09-10T16:49:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'mismatch');
+  assert.equal(result.marker?.mode, 'bootstrap');
+  assert.equal(result.marker?.owner, 'owner-token-bootstrap');
+  assert.equal(result.recordedBodySha256, sha256(bootstrapBody));
+});
+
+test('a resume marker opens a generation a later competing acquire cannot displace', () => {
+  // Same shape as the bootstrap case, for an interrupted-set recovery:
+  // contract.md: "A resume marker opens a new generation only for the
+  // exact interrupted set and matching prior owner token."
+  const resumeBody = '# Draft\n\nRecovered via resume.\n';
+  const editedLiveBody = '# Draft\n\nEdited to match the losing acquire.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody: editedLiveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: resumeMarkerBody(sha256(resumeBody), {
+          owner: 'owner-token-resume',
+        }),
+        createdAt: '2026-09-10T16:48:44Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(editedLiveBody), {
+          owner: 'owner-token-losing-acquire',
+        }),
+        createdAt: '2026-09-10T16:49:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'mismatch');
+  assert.equal(result.marker?.mode, 'resume');
+  assert.equal(result.marker?.owner, 'owner-token-resume');
+  assert.equal(result.recordedBodySha256, sha256(resumeBody));
 });

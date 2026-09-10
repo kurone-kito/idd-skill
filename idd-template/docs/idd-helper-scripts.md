@@ -267,21 +267,26 @@ in this preamble, since the fallback differs per helper.
   auto-release exception's provenance check
   (`skills/issue-authoring/references/contract.md`): computes the sha256
   of a live issue body's exact UTF-8 content and compares it against that
-  same issue's own trusted `mode=acquire` `authoring-owner` marker's
-  recorded `body-sha256`, reporting a machine-readable
+  same issue's own trusted winning ownership-generation `authoring-owner`
+  marker's recorded `body-sha256`, reporting a machine-readable
   `pass`/`mismatch`/`not-found` verdict — `not-found` is never treated as
   a pass. Read-only: never posts, labels, or mutates anything (referenced
   in
   [kurone-kito/idd-skill#2891](https://github.com/kurone-kito/idd-skill/issues/2891)).
-  Replays the target's own marker log to pick the acquire that won its
-  last generation (a same-generation race between two competing acquires
-  resolves to the earlier one — contract.md: choose the winner by
-  deterministic comment order — and a generation closes only on a
-  `mode=release-complete` that retains that generation's exact
-  owner/set/session/anchor), rather than always taking the globally-last
-  acquire comment (PR #2901 review, chatgpt-codex-connector: the earlier
-  form could authorize the auto-release exception against a losing
-  racer's edited-body digest, or against an unrelated stale completion).
+  Replays the target's own marker log to pick the `acquire`, `bootstrap`,
+  or `resume` marker that won its last generation — contract.md: "the
+  first valid acquisition, bootstrap, or resume marker by GitHub comment
+  order wins" — rather than always taking the globally-last `acquire`
+  comment or ignoring `bootstrap`/`resume` entirely (PR #2901 review,
+  chatgpt-codex-connector across three rounds: the earlier forms could
+  authorize the auto-release exception against a losing racer's
+  edited-body digest, against an unrelated or incomplete stale
+  completion, or displace a legitimate `bootstrap`/`resume` winner with a
+  later competing `acquire`). A generation closes only on a
+  `mode=release-complete` that is itself anchor-scoped
+  (`target === anchor`), carries a real snapshot digest (not the
+  release-guard sentinel `none`), and retains that generation's exact
+  owner/set/session/anchor while superseding that same owner token.
   `mode=release-complete` is anchor-only, so for a non-anchor child in a
   multi-target set this replay cannot see the child's true generation
   boundary and fails closed (`mismatch`, never a false `pass`) instead —
