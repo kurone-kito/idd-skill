@@ -2204,16 +2204,20 @@ function waitForNewAttempt(owner, repo, runId, priorAttempt) {
   }
 }
 /** Safety bound: {@link waitForRunCompletion} fails closed (throws)
- * instead of polling forever when a still-running instance never
- * reaches a terminal state within this window. Shorter than {@link
- * APPLY_POLL_TIMEOUT_MS} (which waits for a NEW attempt after `gh run
- * rerun` already started one) -- this instead waits for the ORIGINAL,
- * already-in-flight run this helper never touched, so a bound comfortably
- * inside the companion workflow's own job `timeout-minutes: 10` (see
- * `idd-advisory-convergence-comment.yml`) matters more here: a wait that
- * outlives the job's own timeout would be silently killed with no
- * visible error, defeating the throw-on-timeout contract entirely. */
-const PENDING_RUN_POLL_TIMEOUT_MS = 5 * 60_000;
+ * instead of polling forever when a still-running instance never reaches
+ * a terminal state within this window. Reuses {@link APPLY_POLL_TIMEOUT_MS}
+ * (15 minutes) rather than a shorter bound of its own (Codex P1, PR #2855
+ * review, correcting this constant's own prior reasoning): the run being
+ * waited on is the REQUIRED gate job, whose own `timeout-minutes: 10` (see
+ * `idd-advisory-convergence.yml`) already exceeds any bound shorter than
+ * 10 minutes -- a wait that gives up before the gate's own allowed
+ * lifetime elapses would misreport a still-legitimately-running gate as
+ * stuck. The companion workflow's OWN `timeout-minutes: 10` being
+ * smaller than either of this file's two internal wait budgets is a
+ * pre-existing property of `waitForNewAttempt`/`rerunAndWait` this
+ * function does not change -- GitHub's own job timeout is the backstop
+ * in that case, not this function's throw. */
+const PENDING_RUN_POLL_TIMEOUT_MS = APPLY_POLL_TIMEOUT_MS;
 /**
  * Blocks until `runId` (within `owner`/`repo`) reports
  * `status === 'completed'` -- i.e. the run {@link
@@ -2356,12 +2360,44 @@ if (import.meta.main) {
           repo,
           refreshLatestPlan.pendingCommand.runId,
         );
-        buildProductionApplyDeps(args).rerunAndWait(
-          refreshLatestPlan.pendingCommand,
-        );
-        process.stderr.write(
-          `\n--refresh-latest --apply: executed ${refreshLatestPlan.pendingCommand.command} after it reached a terminal state.\n`,
-        );
+        // Re-check the PR's current HEAD before firing the deferred
+        // rerun (Codex P1, PR #2855 review): the wait above can take
+        // several minutes, during which the PR can advance to a new
+        // HEAD. `gh run rerun` on the captured (now-stale) run would
+        // still fire -- and the required gate's own concurrency group
+        // has `cancel-in-progress: true` keyed by PR number alone, so
+        // that stale rerun could CANCEL a legitimate, already-running
+        // gate instance for the new HEAD, leaving it without a passing
+        // required check and no guaranteed later refresh. Abort instead
+        // of recomputing the whole plan: a HEAD change means a fresh
+        // pull_request/pull_request_target trigger already fired for
+        // the new HEAD on its own, independent of this deferred rerun.
+        const currentHeadSha = ghText(
+          [
+            'pr',
+            'view',
+            String(args.prNumber),
+            '-R',
+            `${owner}/${repo}`,
+            '--json',
+            'headRefOid',
+            '--jq',
+            '.headRefOid',
+          ],
+          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+        ).toLowerCase();
+        if (currentHeadSha !== refreshLatestPlan.prHeadSha) {
+          process.stderr.write(
+            `\n--refresh-latest --apply: the PR HEAD moved from ${refreshLatestPlan.prHeadSha} to ${currentHeadSha} while waiting for the pending run to complete -- skipping the now-stale rerun (a fresh trigger already fired for the new HEAD).\n`,
+          );
+        } else {
+          buildProductionApplyDeps(args).rerunAndWait(
+            refreshLatestPlan.pendingCommand,
+          );
+          process.stderr.write(
+            `\n--refresh-latest --apply: executed ${refreshLatestPlan.pendingCommand.command} after it reached a terminal state.\n`,
+          );
+        }
       }
     } else {
       process.stderr.write(`\n${refreshLatestPlan.reason}\n`);
