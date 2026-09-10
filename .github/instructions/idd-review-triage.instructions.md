@@ -21,16 +21,19 @@ no-sync-required `clean`/`behind-no-conflict` exit applies the
 ## E4 — Classify and score ReviewItems_snapshot
 
 Once per triage pass (not per item), read the claimed issue's own body
-and note any explicit out-of-scope statement in it. Check the issue's
-`userContentEdits` (GraphQL) for an entry whose `editedAt` postdates the
-B2 plan comment's post time (`idd-work.instructions.md`) — `updatedAt`
-is not this signal, since it also advances on comments, labels, and
-other activity unrelated to the body. A body edit after the plan was
-posted does not get trusted for a new out-of-scope statement used in
-the scope fence below without independent corroboration (a maintainer
-comment, not another body edit) — the issue's original author retains
-edit rights throughout the claim and could otherwise time an edit to
-force-reject a legitimate finding. Later scoring needs this context.
+and note any explicit out-of-scope statement in it, trusted for the
+scope fence below only if it predates the B2 plan
+(`idd-work.instructions.md`) — an author keeps edit rights throughout
+the claim and could otherwise time an edit to force-reject a legitimate
+finding. Fetch `userContentEdits` (GraphQL; `updatedAt` also moves on
+unrelated activity, so it will not do) and find the entry with the
+latest `editedAt` at or before the plan's post time; that entry's
+`diff` (or the original creation content, if none predates the plan)
+is the trusted snapshot. A statement absent from it — added later, or
+present now but not there — needs independent corroboration (a
+maintainer comment, not another edit). Treat an unavailable or failed
+`userContentEdits` read the same way: fail closed, never assume no
+post-plan edit occurred.
 
 For each item in ReviewItems_snapshot, first classify it:
 
@@ -75,20 +78,17 @@ Then apply path-specific scoring:
   overrides PATH A's High-tier `Accept forced` rule: even a
   correctness finding that would introduce or broaden a fenced class
   does not reach `Accept forced` merely for being High-severity.
-  Record a rejected instance as a known limitation (the PR body's
-  "Follow-up issues (if any)" section), not a defect, editing the
-  body under the same safeguards as the "PR body sync" subsection of
-  `idd-review-fix.instructions.md`'s E12 (claim revalidation gate
-  immediately before the edit, fetch the current full
-  body, edit only this claim, post the full result back, then re-check
-  `closingIssuesReferences`) regardless of whether E9-E15 otherwise runs
-  this round — a scope-fenced rejection can leave the Accepted PATH A
-  count at zero, which skips E9-E15 (E8) and E12 along with it, so this
-  edit cannot rely on being reached through that path. This rule
-  parallels `idd-review-fix.instructions.md`'s E10 "Round-count
-  heuristic for genuinely-new findings": that heuristic covers a shared
-  root cause once PATH A work is already underway, while this fence
-  applies at PATH A/B scoring, before that work starts.
+  Record a rejected instance as a known limitation in the PR body's
+  follow-up-issues content (`idd-pr-submit.instructions.md` — mapped
+  onto the template's "Follow-up issues" section when one exists), not
+  a defect. Edit it under E12's "PR body sync" safeguards
+  (`idd-review-fix.instructions.md`: claim revalidation first, fetch
+  the full body, edit only this claim, post the full result back,
+  re-check `closingIssuesReferences`) even when E8's zero-Accepted-
+  PATH-A skip bypasses E9-E15, and E12 with it. This rule parallels
+  E10's "Round-count heuristic for genuinely-new findings" (same file):
+  that heuristic covers a shared root cause once PATH A work is
+  underway; this fence applies earlier, at PATH A/B scoring.
 
 ## E5 — Record Accept / Reject decisions
 
