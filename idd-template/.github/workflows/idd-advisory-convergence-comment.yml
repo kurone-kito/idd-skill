@@ -184,17 +184,19 @@ jobs:
     # `--refresh-latest --apply` then blocks inside `waitForRunCompletion`
     # for up to that run's own remaining lifetime (bounded by ITS
     # `timeout-minutes: 10` in idd-advisory-convergence.yml) before issuing
-    # up to two sequential reruns (`rerun-advisory-convergence.mts` reruns
-    # every pull_request-family instance for this HEAD, not only one,
-    # since kurone-kito/idd-skill#1381 -- typically `pull_request` plus
-    # `pull_request_target` under Phase 1). GitHub kills the job outright
-    # at this timeout regardless of what step is running, so a shorter
-    # bound here would silently drop the deferred rerun before it ever
-    # fires -- exactly the scenario `--refresh-latest` exists to prevent.
-    # 35 = 10 (waiting out the original run) + 2x10 (two sequential
-    # reruns, `rerunAndWait`'s own poll bounded by the same 10-minute gate
-    # timeout each) + 5 headroom for setup/checkout and the steps
-    # preceding this wait.
+    # its own sequential reruns (`rerun-advisory-convergence.mts` reruns
+    # EVERY resolvable pull_request-family instance for this HEAD, not a
+    # fixed count -- typically `pull_request` plus `pull_request_target`
+    # under Phase 1, kurone-kito/idd-skill#1381). GitHub kills the job
+    # outright at this timeout regardless of what step is running, so a
+    # shorter bound here would silently drop a deferred rerun before it
+    # ever fires -- exactly the scenario `--refresh-latest` exists to
+    # prevent. 35 = 10 (waiting out the original run) + 2x10 (the typical
+    # Phase 1 case of two sequential reruns, `rerunAndWait`'s own poll
+    # bounded by the same 10-minute gate timeout each -- not a hard upper
+    # bound; more concurrent family instances for one HEAD would need
+    # more) + 5 headroom for setup/checkout and the steps preceding this
+    # wait.
     timeout-minutes: 35
     if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
     steps:
