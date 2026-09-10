@@ -176,6 +176,53 @@ follow-up is important enough to file in-repo now, invoke the
 `issue-authoring` skill (its Stage 1 hold) instead of improvising a
 body. Do not add a parallel "worker-lite authoring" contract.
 
+### Live-operator-directed immediate-fix carve-out
+
+The "never call `gh issue create`" rule immediately above assumes
+unattended execution with no live operator present. When a live
+operator is present during a claimed issue's own execution and directs
+an immediate fix for a blocking bug unrelated to the claimed work, the
+session may proceed with that fix under the operator's live authority
+instead of routing it through the `issue-authoring` skill first.
+Minimum provenance: the side-fix PR body must cross-reference the
+originating claimed issue using a **non-closing cross-reference** (for
+example, `Refs #<claimed-issue-number>` — never a closing keyword such
+as `Closes`/`Fixes`/`Resolves`, which would auto-close the originating
+issue on the side-fix's own merge). Formal `issue-authoring` tracking
+is still preferred when time allows, but it is not a start blocker for
+this carve-out.
+
+How the executing session obtains a branch, worktree, and claim for
+the side-fix while the originating claim stays active — and how the
+side-fix's own merge and cleanup avoid releasing that originating
+claim — is not yet defined. The shared claim revalidation gate
+(`idd-overview-core.instructions.md`) scopes its cwd-vs-claim check off
+the active claim's recorded `branch:` field, not the mutation's target
+branch, so no branch-naming convention alone exempts a same-session
+side-fix from it. Treat this as an open gap: this carve-out authorizes
+the _decision_ to proceed under live authority; the operator directing
+it owns the mechanics until a follow-up defines them.
+
+D3's closing-keyword requirement and D3.5's presence-detection and
+auto-injection (steps 1-5, including step 4) apply only to the
+side-fix PR's own deliberate closing set — its own linked issue, if
+any, or none otherwise — never to the originating claimed issue named
+above; do not let them treat the non-closing cross-reference above as
+missing, or rewrite it into a closing keyword. The originating claimed
+issue must not appear in the side-fix PR's `closingIssuesReferences`,
+and the side-fix branch's commit messages must not contain a closing
+keyword referencing it — still run D3.5 step 6's exact-set comparison
+and step 7's commit-message scan to confirm both, treating the
+originating issue as outside the side-fix PR's deliberate closing set.
+On a non-default `{development-branch}`, D3.5's own skip rule applies
+unchanged instead: skip all seven steps, since `closingIssuesReferences`
+never populates there regardless of this carve-out.
+
+While a side-fix PR that the claimed issue's PR depends on is in
+flight, periodically re-check the claimed issue's own PR review and CI
+state — unresolved review threads and failing checks — rather than
+discovering that backlog only after the side-fix merges.
+
 ### D3.6 — Derive the IDD impact checklist
 
 Skip this sub-step and D3.7 below entirely when
