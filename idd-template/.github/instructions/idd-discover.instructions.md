@@ -72,13 +72,16 @@ routing:
    authoring-held roadmap is never routed into step 2's traversal.
 2. If the target issue carries the configured roadmap label or an
    `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker — the same test
-   **A2**'s roadmap-node/execution-leaf classification rule uses — do
-   not continue to steps 3-5. Instead:
+   **A2**'s roadmap-node/execution-leaf classification rule uses (an
+   unmarked legacy umbrella isn't recognized here — retro-label it
+   first, per A1's Legacy roots) — do not continue to steps 3-5.
+   Instead:
    - Apply **A3**'s dependency bullet to the target itself (both
      visible `Blocked by #NNN` lines and hidden blocked-by markers)
-     and its human-coordination/runtime-observation-precondition
-     bullet; a hit reports the target as blocked and stops (no
-     fallback, per the rule above). Skip A3's other bullets here:
+     and its coordination/runtime-observation-precondition bullet; a
+     dependency hit reports blocked, a coordination hit reports that
+     criterion instead — either way this run stops (no fallback, per
+     the rule above). Skip A3's other bullets here:
      **A1.5** already checks the roadmap's own blocked-by-human/
      needs-decision labels and claim state, and "no open dependent
      issues" does not apply to a root whose own children are its
