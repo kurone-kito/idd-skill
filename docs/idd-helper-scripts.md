@@ -1745,7 +1745,12 @@ Interpretation rules:
   `<sanitized-claim-id>`: non-`[A-Za-z0-9._-]` characters replaced with
   `_`, then truncated to 64 characters, so a long claim-id can't push
   the filename past the filesystem's `NAME_MAX` -- #2879 review, Codex
-  P1. Write `{ agentId, claimId, nonce?, recordedAt }`. No
+  P1. `<8-hex-char sha256 prefix>`: the first 8 hex characters of the
+  SHA-256 digest of the **original, pre-sanitize, pre-truncate**
+  `{claim-id}`, UTF-8-encoded -- not the sanitized or truncated form,
+  so a fallback and the CLI (or two fallback implementations) agree on
+  the same path for the same claim-id (#2879 review, Codex P2). Write
+  `{ agentId, claimId, nonce?, recordedAt }`. No
   exclusive-create semantics needed (unlike the lock): a plain atomic
   replace is correct since this is idempotent evidence, not a
   mutual-exclusion primitive.
