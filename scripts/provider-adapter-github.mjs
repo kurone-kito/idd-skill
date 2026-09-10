@@ -1624,7 +1624,23 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       const rows = deps.ghApiJson(`${repoPath}/pulls/${number}/files`, {
         paginate: true,
       });
-      return rows.map((row) => String(row.filename ?? ''));
+      // kurone-kito/idd-skill#2657 (Codex review, PR #2895): include a
+      // renamed file's OLD path alongside its new one. A consumer
+      // matching this list against a committed allowlist of paths (the
+      // self-referential-bootstrap-auto trigger-file check) would
+      // otherwise never recognize a PR that renames one of those exact
+      // paths away, recreating the same self-referential deadlock a
+      // rename-shaped checker repair would otherwise hit.
+      return rows.flatMap((row) => {
+        const filename = String(row.filename ?? '');
+        const previousFilename =
+          typeof row.previous_filename === 'string'
+            ? row.previous_filename
+            : '';
+        return previousFilename && previousFilename !== filename
+          ? [filename, previousFilename]
+          : [filename];
+      });
     },
     listChangeRequestCommits(number) {
       return deps.ghApiJson(`${repoPath}/pulls/${number}/commits`, {

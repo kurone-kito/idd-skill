@@ -2241,3 +2241,53 @@ test('postWorkItemComment always throws a real Error, even when the underlying f
       /persistent: not an Error instance/.test(error.message),
   );
 });
+
+// ---------------------------------------------------------------------------
+// listChangeRequestChangedFiles (kurone-kito/idd-skill#2657, Codex review,
+// PR #2895): a consumer matching this list against a committed allowlist of
+// paths (the self-referential-bootstrap-auto trigger-file check) must also
+// recognize a renamed file by its OLD path, or a rename-shaped checker
+// repair away from an allowlisted path recreates the exact self-referential
+// deadlock that mechanism exists to solve.
+// ---------------------------------------------------------------------------
+
+test("listChangeRequestChangedFiles includes a renamed file's previous path alongside its new one", () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          filename: 'src/scripts/renamed-checker.mts',
+          previous_filename: 'src/scripts/advisory-convergence.mts',
+          status: 'renamed',
+        },
+        { filename: 'README.md', status: 'modified' },
+      ],
+    }),
+  );
+
+  assert.deepEqual(port.listChangeRequestChangedFiles(42), [
+    'src/scripts/renamed-checker.mts',
+    'src/scripts/advisory-convergence.mts',
+    'README.md',
+  ]);
+});
+
+test('listChangeRequestChangedFiles never duplicates a path when previous_filename equals filename', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          filename: 'README.md',
+          previous_filename: 'README.md',
+          status: 'modified',
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(port.listChangeRequestChangedFiles(42), ['README.md']);
+});
