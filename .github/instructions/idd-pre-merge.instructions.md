@@ -140,12 +140,27 @@ turns an operator-visible failure into a silent stall.
   helper reference in
   [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
   to collect this evidence (the fields listed at that anchor). Helpers
-  remain read-only evidence collectors: if execution fails, output is
-  invalid JSON, required sections are missing, or live GitHub state
-  disagrees with it, discard helper output and fetch the activity
-  universe snapshot (same scope as E1 Step 1) plus current CI state for
-  the HEAD SHA directly — the instruction rules remain canonical. Return
-  to E1 if **any** of the following is true:
+  remain read-only evidence collectors. Distinguish two failure shapes
+  before deciding whether to retry: an **infrastructure/transport-layer
+  failure** — the invocation itself fails with no well-formed gate
+  result at all (a bare network/transport error, or a non-2xx HTTP
+  status with no substantive JSON body) — retries the identical
+  invocation once, mirroring the CI-wait algorithm's own infra-vs-code
+  retry distinction (`ciWait.rerunPolicy`,
+  `idd-ci.instructions.md`) rather than inventing a new pattern; if the
+  retry fails the same way, fall back to the discard-and-fetch-directly
+  path below unchanged — a single bounded attempt, not a loop. A
+  **substantive non-passing gate result** — the helper ran to
+  completion and returned well-formed JSON with real gate fields (for
+  example `claimValid: false` backed by an actual criterion, not a
+  collection-failure placeholder) — is never retried; continue trusting
+  it at face value, unchanged from today. For every other case —
+  output is invalid JSON, required sections are missing, or live GitHub
+  state disagrees with it — discard helper output and fetch the
+  activity universe snapshot (same scope as E1 Step 1) plus current CI
+  state for the HEAD SHA directly, unchanged and without retry — the
+  instruction rules remain canonical. Return to E1 if **any** of the
+  following is true:
   - The current PR HEAD SHA differs from the stored `{head-SHA}` (a new
     push after E1's snapshot, even if the watermark posted later).
   - The stored value is `none` and the live snapshot is non-empty
