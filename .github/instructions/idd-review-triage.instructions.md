@@ -67,7 +67,15 @@ Then apply path-specific scoring:
   correctness finding that would introduce or broaden a fenced class
   does not reach `Accept forced` just because it is otherwise
   High-severity. Record a rejected instance as a known limitation (the
-  PR body's "Follow-up issues (if any)" section), not a defect. This is
+  PR body's "Follow-up issues (if any)" section), not a defect, editing
+  the body under the same safeguards as
+  `idd-review-fix.instructions.md`'s E12 "PR body sync" (claim
+  revalidation gate immediately before the edit, fetch the current full
+  body, edit only this claim, post the full result back, then re-check
+  `closingIssuesReferences`) regardless of whether E9-E15 otherwise runs
+  this round — a scope-fenced rejection can leave the Accepted PATH A
+  count at zero, which skips E9-E15 (E8) and E12 along with it, so this
+  edit cannot rely on being reached through that path. This is
   a sibling of `idd-review-fix.instructions.md`'s E10 "Round-count
   heuristic for genuinely-new findings": that heuristic covers a shared
   root cause once PATH A work is already underway, while this fence
