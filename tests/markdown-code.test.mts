@@ -760,6 +760,43 @@ test('findHtmlBlockRanges recognizes a raw-text block opener inside a blockquote
   assert.equal(masked.includes('x'), false);
 });
 
+test("findHtmlBlockRanges opens a custom-tag block as a list item's own first line (Codex review, PR #2840, round 13)", () => {
+  // Round 11 fixed the opener-detection *pattern match* for a list-marker
+  // prefix but left the custom-tag branch's `previousLineBlank` gate
+  // unextended: `- <x-demo>` right after a non-blank *outer* line (here,
+  // the preceding list item's own text) is still a fresh list item's own
+  // first line -- CommonMark 5.2 -- with no "previous line" inside that
+  // new container for the paragraph-interruption rule to apply to.
+  // `gh api /markdown` confirms GitHub sanitizes the unknown `<x-demo>`
+  // tag and renders its content (including the checkboxes) as literal
+  // text, never real list items.
+  const body = [
+    '- first item bullet text',
+    '- <x-demo>',
+    '  - [ ] one',
+    '  - [ ] two',
+    '  </x-demo>',
+    '',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  assert.equal(ranges.length, 1);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('first item bullet text'), true);
+});
+
+test('findHtmlBlockRanges does not open a custom-tag block mid-list-item-continuation', () => {
+  // A continuation line of an *already open* list item (no marker of its
+  // own, previous line not blank) is not a fresh container's first line
+  // -- the paragraph-interruption rule still applies, matching the
+  // existing "cannot interrupt a paragraph" control above.
+  const body = ['- first item bullet text', '  <foo>', '  more text', ''].join(
+    '\n',
+  );
+  assert.deepEqual(findHtmlBlockRanges(body), []);
+});
+
 test('findHtmlBlockRanges masks an unclosed raw-text block through end of text', () => {
   const body = '<script>\nvar x = 1;\n';
   assert.deepEqual(findHtmlBlockRanges(body), [{ start: 0, end: body.length }]);

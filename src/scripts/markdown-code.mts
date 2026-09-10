@@ -1175,12 +1175,16 @@ function isValidFenceOpener(fence: FencedLine): boolean {
  * unanchored pattern or a blank-line check, both already
  * container-agnostic. Deliberately still no multi-line container-depth
  * tracking beyond the opening line -- matches this function's own
- * existing top-level-scan scope note above; a custom-tag opener
- * (`MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN`, which per CommonMark
- * cannot interrupt a paragraph) technically starts a fresh container
- * immediately after a list marker even when `previousLineBlank` is
- * false for the *outer* text, an accepted residual edge this round does
- * not additionally chase.
+ * existing top-level-scan scope note above.
+ *
+ * A custom-tag opener (`MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN`, which
+ * per CommonMark cannot interrupt a paragraph) is additionally eligible
+ * when this line opens a *fresh* list item container (Codex review, PR
+ * #2840, round 13): `stripListItemMarker` strips a marker only when one
+ * is present, so `content !== containerContent` means this line is a
+ * list item's own first line, which has no "previous line" inside that
+ * new container for the interruption rule to apply to -- the same
+ * reasoning `previousLineBlank` already covers for the top-level case.
  */
 export function findHtmlBlockRanges(text: string): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
@@ -1200,14 +1204,23 @@ export function findHtmlBlockRanges(text: string): MarkdownCodeRange[] {
     const isBlank = line.trim() === '';
 
     if (!isBlank) {
-      const content = stripListItemMarker(parseContainerLine(line).content);
+      const containerContent = parseContainerLine(line).content;
+      const content = stripListItemMarker(containerContent);
+      // Codex review, PR #2840 (round 13): `stripListItemMarker` returns
+      // its input unchanged when the line has no list marker, so this
+      // line's own first line of a *fresh* list item container -- CommonMark
+      // 5.2 -- has no "previous line" within that container for the
+      // paragraph-interruption rule to apply to, the same reason
+      // `previousLineBlank` already permits a custom-tag opener right
+      // after a blank line.
+      const opensFreshContainer = content !== containerContent;
       const rawTag = rawTextOpenTag(content);
       const closeToken = specialHtmlBlockCloseToken(content);
       const opensGeneric =
         rawTag === null &&
         closeToken === null &&
         (MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
-          (previousLineBlank &&
+          ((previousLineBlank || opensFreshContainer) &&
             MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content)));
 
       if (rawTag !== null) {

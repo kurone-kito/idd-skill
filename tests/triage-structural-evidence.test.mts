@@ -154,6 +154,29 @@ test('hasVerificationCommandSignal: a raw HTML block (<pre>) opened inside a blo
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test("hasVerificationCommandSignal: a custom-tag HTML block opened as a list item's own first line does not count (Codex review, PR #2840, round 13)", () => {
+  // Round 11 fixed the opener-detection *pattern match* for a list-marker
+  // prefix but left the custom-tag branch's blank-line-eligibility gate
+  // unextended: `- <x-demo>` right after another list item's own text
+  // (not a blank line) is still a fresh list item's own first line --
+  // CommonMark 5.2 -- with no "previous line" inside that new container
+  // for the paragraph-interruption rule to apply to. Verified against
+  // GitHub's own renderer (gh api /markdown): the unknown `<x-demo>` tag
+  // is sanitized and its content, including the fake checkboxes, renders
+  // as literal text, never a real checklist.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '- first item bullet text',
+    '- <x-demo>',
+    '  - [ ] one',
+    '  - [ ] two',
+    '  </x-demo>',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: an escaped backtick command span does not count (Codex review, PR #2840 round 5)', () => {
   // CommonMark renders an escaped backtick (`\` + backtick) as a literal
   // character, never a real code-span delimiter.
