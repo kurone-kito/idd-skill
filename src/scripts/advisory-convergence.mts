@@ -235,6 +235,13 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * by many unrelated consumers. Widening this set is a reviewed edit to
  * the constant, never automatic.
  *
+ * `.github/idd/config.json` joined this set later still (Codex review,
+ * PR #2895, round 10): this repository's own `ciGate`/`advisoryWait`
+ * policy inputs live there too, same as for every other repository's
+ * own profile-derived set below, and a repair to this repository's own
+ * policy configuration deserves the same bootstrap this list already
+ * grants its `.mts` sources.
+ *
  * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 9): being in
  * this allowlist does NOT mean every possible bug in these files can be
  * self-bootstrapped -- an inherent, narrow dead zone remains, and always
@@ -275,6 +282,7 @@ export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   'src/scripts/marker-helpers.mts',
   'src/scripts/protocol-helpers.mts',
   'src/scripts/provider-adapter-github.mts',
+  '.github/idd/config.json',
   '.github/workflows/idd-advisory-convergence.yml',
   '.github/workflows/idd-advisory-convergence-comment.yml',
 ] as const;
@@ -1803,8 +1811,32 @@ export function computeAdvisoryConvergenceVerdict(
   // attacker-shaped input from that login's own comment body, so this
   // filters the specific marker kind within it rather than trusting
   // every `github-actions[bot]`-authored waiver of any reason.
+  //
+  // kurone-kito/idd-skill#2657 (Copilot review, PR #2895, round 10):
+  // additionally blocked when `scopeIndeterminate` AND no active claim
+  // resolves (`!claim.activeClaimPresent`) -- NOT `scopeIndeterminate`
+  // alone, which would also block the `idd-claimed-branch-mismatch`
+  // sub-case a prior test already pins as intentionally still
+  // auto-waivable ("#1686 path 3 symmetry"): that sub-case's own real,
+  // bindable `activeClaimId` means an accepted marker there is bound to
+  // a KNOWN, exactly-matched claim, not the `none` sentinel -- no
+  // safeguard to bypass. The two sub-cases this DOES need to block
+  // (`idd-claimed-multiple-resolving-claim-candidates` and
+  // `idd-claimed-claim-history-without-active-claim`) both fall under
+  // `!claim.activeClaimPresent`, where the CONSUMER's own claim
+  // resolution reports an empty active claim, same as a genuinely
+  // claimless PR -- letting a `none`-bound auto-bootstrap marker
+  // validate through the unconditional auto-waiver branch there would
+  // bypass the `scopeIndeterminate` human-review requirement with no
+  // human judgment involved at all, unlike the ordinary
+  // maintainer-authorized waiver (which intentionally CAN resolve
+  // `scopeIndeterminate`, per that path's own gating on
+  // `scopeNotApplicable` alone -- a human maintainer's explicit judgment
+  // call, not a mechanical one). `all-prs` scope (the default) never
+  // produces `scopeIndeterminate` at all, so this is a no-op there.
   const autoWaiverValid =
     !scopeNotApplicable &&
+    !(scopeIndeterminate && !claim.activeClaimPresent) &&
     touchesSelfReferentialAllowlist &&
     autoWaiverEvidence.valid.some(
       (entry) =>

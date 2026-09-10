@@ -1487,8 +1487,15 @@ actor is today. Unlike an ordinary maintainer-authorized waiver
 self-referential-bootstrap-auto waiver is evaluated **unconditionally** --
 it makes `ready` true immediately, without waiting for the deadline clock
 or a proven Copilot outage, since the whole point is bootstrapping a fix
-to the deadline mechanism itself. Do not widen this exception to any
-other reason token, actor, or check selector.
+to the deadline mechanism itself. It stays gated on the applicability
+scope, though: under `convergenceScope: "idd-claimed"`, a PR whose
+linked issue's claim history is ambiguous or lacks a currently active
+claim resolves `indeterminate`, not `not_applicable` -- deliberately
+kept **not** self-bootstrap-eligible (Copilot review, PR #2895, round
+10), unlike the ordinary maintainer waiver's own `not_applicable`-only
+gate, since that path requires an actual human judgment call that this
+one never makes. Do not widen this exception to any other reason
+token, actor, or check selector.
 
 **A narrow, inherent dead zone remains** (kurone-kito/idd-skill#2657,
 Codex review, PR #2895, round 9): being in the trigger-file allowlist

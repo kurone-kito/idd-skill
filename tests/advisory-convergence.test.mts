@@ -3221,6 +3221,52 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
   assert.equal(verdict.ready, true);
 });
 
+test('self-referential-bootstrap-auto: an indeterminate idd-claimed scope (stale claim history, no currently active claim) rejects an otherwise fully valid none-bound marker (Copilot review, PR #2895, round 10)', () => {
+  // Mirrors "idd-claimed scope: a stale trusted claim... yields a failing
+  // outcome, not not_applicable (#1686 path 4)": applicability resolves
+  // `indeterminate` (`claimMarkerHistoryPresent: true`, no active claim),
+  // deliberately NOT `not_applicable` -- the ordinary convergence path
+  // stays blocked pending human review. The consumer's own active claim
+  // is empty here too, so a none-bound marker would otherwise satisfy
+  // `claimBindingSatisfied` and validate through the unconditional
+  // auto-waiver branch with no human judgment involved at all, exactly
+  // the gap `!scopeBlocksConvergenceEval` (not `!scopeNotApplicable`
+  // alone) closes.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [],
+      claimMarkerHistoryPresent: true,
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ claimId: 'none' }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'indeterminate',
+    reason: 'idd-claimed-claim-history-without-active-claim',
+  });
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
 test('self-referential-bootstrap-auto: a PR that does not touch the trigger-file allowlist is rejected even with an otherwise fully valid marker and run (independent allowlist verification, Codex review, PR #2895)', () => {
   // The four trust conditions on the cited run alone only prove the marker
   // cites SOME genuine `pull_request_target`-triggered run of the correct
@@ -3737,6 +3783,19 @@ test('SELF_REFERENTIAL_WAIVER_TRIGGER_FILES includes the waiver parser/summarize
       `expected ${path} to be a member of SELF_REFERENTIAL_WAIVER_TRIGGER_FILES`,
     );
   }
+});
+
+test('SELF_REFERENTIAL_WAIVER_TRIGGER_FILES includes the runtime config (Codex review, PR #2895, round 10)', () => {
+  // This repository's own ciGate/advisoryWait policy inputs live in
+  // .github/idd/config.json too, same as every other repository's own
+  // profile-derived set (resolveSelfReferentialTriggerFiles's own base
+  // set) -- a PR repairing this repository's own policy configuration
+  // must still be able to trigger this bypass.
+  assert.ok(
+    (SELF_REFERENTIAL_WAIVER_TRIGGER_FILES as readonly string[]).includes(
+      '.github/idd/config.json',
+    ),
+  );
 });
 
 test('resolveSelfReferentialTriggerFiles: this source repository always resolves its own fixed list, regardless of profile (Codex + Copilot review, PR #2895)', () => {
