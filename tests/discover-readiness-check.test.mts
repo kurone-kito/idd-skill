@@ -12,6 +12,8 @@ import {
   extractBlockedByIssueNumbers,
   extractBlockedByRoadmapMarkers,
   extractDependencyIssueNumbers,
+  extractReviewFixLoopCutoffRefsIssueNumbers,
+  hasReviewFixLoopCutoffDeferMarker,
   isInaccessibleIssueLookupError,
   parseArgs,
   parseSwarmFloorArg,
@@ -185,6 +187,62 @@ test('extractDependencyIssueNumbers captures every same-line Depends on ref and 
   assert.deepEqual(
     extractDependencyIssueNumbers('- Depends on #55, #56\n- [ ] #78'),
     [55, 56, 78],
+  );
+});
+
+test('hasReviewFixLoopCutoffDeferMarker recognizes only the exact marker (#2877)', () => {
+  assert.equal(
+    hasReviewFixLoopCutoffDeferMarker(
+      '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+    ),
+    true,
+  );
+  // Absent marker.
+  assert.equal(hasReviewFixLoopCutoffDeferMarker('Refs #100'), false);
+  // A different (hypothetical) defer-source value does not match.
+  assert.equal(
+    hasReviewFixLoopCutoffDeferMarker(
+      '<!-- idd-skill-authoring-defer-source: some-other-reason -->',
+    ),
+    false,
+  );
+  // A configured marker prefix threads through the same as the roadmap
+  // marker extractor.
+  assert.equal(
+    hasReviewFixLoopCutoffDeferMarker(
+      '<!-- acme-authoring-defer-source: review-fix-loop-cutoff -->',
+      'acme',
+    ),
+    true,
+  );
+  assert.equal(
+    hasReviewFixLoopCutoffDeferMarker(
+      '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+      'acme',
+    ),
+    false,
+  );
+});
+
+test('extractReviewFixLoopCutoffRefsIssueNumbers captures Refs lines like extractBlockedByIssueNumbers (#2877)', () => {
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers('Refs #100, #200'),
+    [100, 200],
+  );
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers('- Refs #55'),
+    [55],
+  );
+  // Mid-sentence prose is not a dependency declaration.
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers('this refs #5 in passing'),
+    [],
+  );
+  // Inline-code and fenced examples stay masked, matching the other
+  // extractors' #1121 boundary.
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers('`Refs #77`'),
+    [],
   );
 });
 
@@ -543,6 +601,154 @@ test('filters issue blocked by open roadmap marker', async () => {
   assert.match(
     summary.filteredOut[0].reasons.join(','),
     /blocked_by_open_roadmap_marker:roadmap-x/,
+  );
+});
+
+test('a review-fix-loop-cutoff follow-up stays blocked while its Refs target is open (#2877)', async () => {
+  const issues = new Map([
+    [
+      401,
+      {
+        number: 401,
+        title: 'deferred follow-up',
+        state: 'OPEN',
+        body: [
+          '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+          '',
+          'Refs #402',
+        ].join('\n'),
+        labels: [],
+      },
+    ],
+    [
+      402,
+      {
+        number: 402,
+        title: 'originating issue',
+        state: 'OPEN',
+        body: '',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([401], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.match(
+    summary.filteredOut[0].reasons.join(','),
+    /blocked_by_deferred_refs_issue:#402/,
+  );
+});
+
+test('a review-fix-loop-cutoff follow-up becomes ready once its Refs target closes (#2877)', async () => {
+  const issues = new Map([
+    [
+      403,
+      {
+        number: 403,
+        title: 'deferred follow-up',
+        state: 'OPEN',
+        body: [
+          '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+          '',
+          'Refs #404',
+        ].join('\n'),
+        labels: [],
+      },
+    ],
+    [
+      404,
+      {
+        number: 404,
+        title: 'originating issue, now closed',
+        state: 'CLOSED',
+        body: '',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([403], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.filteredOut.length, 0);
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [403],
+  );
+});
+
+test('an ordinary Refs line without the defer marker never blocks (#2877 non-regression)', async () => {
+  const issues = new Map([
+    [
+      405,
+      {
+        number: 405,
+        title: 'ordinary issue citing a related, still-open issue',
+        state: 'OPEN',
+        body: 'Refs #406',
+        labels: [],
+      },
+    ],
+    [
+      406,
+      {
+        number: 406,
+        title: 'unrelated open issue',
+        state: 'OPEN',
+        body: '',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([405], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.filteredOut.length, 0);
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [405],
+  );
+});
+
+test('fails safe when a review-fix-loop-cutoff Refs target cannot be resolved (#2877)', async () => {
+  const issues = new Map([
+    [
+      407,
+      {
+        number: 407,
+        title: 'deferred follow-up with a dangling Refs target',
+        state: 'OPEN',
+        body: [
+          '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+          '',
+          'Refs #408',
+        ].join('\n'),
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([407], {
+    includeUnresolvable: true,
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.equal(summary.summary.unresolvableCount, 1);
+  assert.match(
+    summary.filteredOut[0].reasons.join(','),
+    /unresolvable_defer_source_refs_issue/,
   );
 });
 

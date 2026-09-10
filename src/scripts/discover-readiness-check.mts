@@ -49,6 +49,14 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // would be in the temporal dead zone).
 const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?`;
 
+// Declared here, above the `import.meta.main` CLI block, for the same
+// top-level-await TDZ reason as `DEPENDENCY_LINE_PREFIX` above: the block
+// awaits `evaluateDiscoverReadiness`, whose own synchronous body can call
+// `hasReviewFixLoopCutoffDeferMarker` (#2877) before that promise settles.
+/** The one currently-defined `{markerPrefix}-authoring-defer-source` value
+ * `hasReviewFixLoopCutoffDeferMarker` recognizes. */
+const REVIEW_FIX_LOOP_CUTOFF_DEFER_SOURCE = 'review-fix-loop-cutoff';
+
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
@@ -504,6 +512,37 @@ export async function evaluateDiscoverReadiness(
       }
     }
 
+    // #2877: a follow-up issue carrying the review-fix-loop-cutoff defer
+    // marker names its originating issue via a `Refs #NNN` line, which is
+    // otherwise non-blocking. Narrow exception: resolve that reference the
+    // same way an ordinary `Blocked by #NNN` is resolved above, so the
+    // follow-up cannot start before the work it was deferred from actually
+    // closes. An issue without the marker is completely unaffected -- its
+    // own `Refs` lines are never inspected here.
+    if (hasReviewFixLoopCutoffDeferMarker(issue.body, resolvedMarkerPrefix)) {
+      for (const refsNumber of extractReviewFixLoopCutoffRefsIssueNumbers(
+        issue.body,
+      )) {
+        const refsIssue = await getIssue(refsNumber, issueCache, loadIssue);
+        if (!refsIssue || isInaccessibleIssue(refsIssue)) {
+          const refsReason = isInaccessibleIssue(refsIssue)
+            ? 'issue_inaccessible'
+            : 'issue_not_found';
+          reasons.add('unresolvable_defer_source_refs_issue');
+          unresolvable.push({
+            issueNumber: issue.number,
+            kind: 'defer_source_refs_issue',
+            reference: `#${refsNumber}`,
+            reason: refsReason,
+          });
+          continue;
+        }
+        if (refsIssue.state === 'OPEN') {
+          reasons.add(`blocked_by_deferred_refs_issue:#${refsNumber}`);
+        }
+      }
+    }
+
     for (const marker of extractBlockedByRoadmapMarkers(
       issue.body,
       resolvedMarkerPrefix,
@@ -800,6 +839,55 @@ export function extractDependencyIssueNumbers(body: string): number[] {
     ...explicitDependencies,
     ...taskListDependencies.map((match) => Number.parseInt(match[1], 10)),
   ]);
+}
+
+/**
+ * Whether `body` carries the exact
+ * `<!-- {markerPrefix}-authoring-defer-source: review-fix-loop-cutoff -->`
+ * marker (#2877). `idd-review-triage.instructions.md`'s round-count cutoff
+ * writes this marker, once, at Stage 1 publication time, on a follow-up
+ * issue that bundles deferred Low-severity review findings; that issue's
+ * body also carries a `Refs #<originating-issue>` line back to the PR/issue
+ * the deferral came from (the D3 follow-up-issue rule), which this file
+ * otherwise never parses as a dependency -- `Refs` is deliberately
+ * non-blocking everywhere else, including `discover-roadmap-graph`'s cycle
+ * exemption. `skills/issue-authoring/references/contract.md` documents
+ * this marker as valid only when it is part of the initial
+ * `authoring-publication` write, never added by a later edit -- this
+ * function does not itself verify that provenance, it only reads
+ * current body content. That is intentionally fine for Discover's
+ * narrow purpose here: a marker this function should not have honored
+ * (added after publication) can only make a candidate *more* blocked,
+ * never less, so a false positive here fails safe.
+ */
+export function hasReviewFixLoopCutoffDeferMarker(
+  body: string,
+  markerPrefix: string = DEFAULT_MARKER_PREFIX,
+): boolean {
+  const pattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-defer-source:\\s*${escapeRegex(REVIEW_FIX_LOOP_CUTOFF_DEFER_SOURCE)}\\s*-->`,
+    'i',
+  );
+  // Strip code regions first, matching the #1121 boundary every other
+  // extractor in this file already applies: an issue that quotes this
+  // marker as inline-code or fenced-example prose (documenting the
+  // mechanism itself, as `#2877` and its own follow-up do) must not be
+  // misread as actually carrying a live marker.
+  return pattern.test(stripMarkdownCodeRegions(body));
+}
+
+/**
+ * Collect the `#N` references declared on a `Refs` keyword line (#2877).
+ * Symmetric with {@link extractBlockedByIssueNumbers}; the caller decides
+ * whether to treat the result as blocking -- see
+ * {@link hasReviewFixLoopCutoffDeferMarker}.
+ */
+export function extractReviewFixLoopCutoffRefsIssueNumbers(
+  body: string,
+): number[] {
+  return dedupeNumbers(
+    extractKeywordLineRefs(stripMarkdownCodeRegions(body), 'Refs'),
+  );
 }
 
 /**
