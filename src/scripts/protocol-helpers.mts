@@ -2063,8 +2063,396 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 // "I couldn't resolve this review thread on the repository platform..."
 // fallback trailer (the same API call failed, so CodeRabbit reports the
 // attempt instead).
-const CODERABBIT_ACK_CLOSURE_RE =
+//
+// #2858: a THIRD, weaker-in-kind shape -- observed on
+// kurone-kito/idd-skill#2853's review thread on the issue-reference
+// template link (2 samples from that one already-agent-resolved thread,
+// not the 18/18 sample above): "...addresses the template
+// link-resolution concern." /
+// "...addresses the template issue-reference finding." Unlike the two
+// forms above, this is prose describing an outcome, not CodeRabbit's own
+// resolve-attempt decision: CodeRabbit never attempted (or reported
+// failing) to resolve this thread, because it was already resolved
+// independently (e.g. by the IDD agent's own resolve-review-thread.mjs)
+// before CodeRabbit replied, so it had no attempt of its own to report.
+// Kept as its own regex (`CODERABBIT_ACK_ADDRESSES_CLOSURE_RE`, below,
+// tested only after the two strong forms above fail) rather than folded
+// into one `|`-alternation, specifically so its own guards -- narrowed
+// across three rounds of Codex/Copilot review on this same PR (#2858,
+// PR #2868) -- never apply to the two strong, structurally-safe forms:
+//
+// Guard history below reflects the CURRENT implementation as of round 7
+// (Codex/CodeRabbit review on PR #2868) -- Copilot's round-8 review
+// flagged an earlier revision of this comment block for still describing
+// the pre-round-7 `{0,80}`/`[^.!?]` mechanism after the code had already
+// moved on, which is exactly the kind of drift this file's own extensive
+// documentation is meant to prevent. Each guard below states what it
+// does NOW, with the specific round/finding that shaped it for
+// traceability, not a literal transcript of an earlier regex.
+//
+// 1. **Locality bound, tokenized** (originally a `{0,80}` character
+//    count; replaced by a `{0,3}` modifier-TOKEN count, round 7, Codex):
+//    the gap between "addresses the" and "concern"/"finding" is capped
+//    so an incidental "concern"/"finding" mention far away in the same
+//    reply's trailing Learnings-used block can't retroactively create a
+//    false closure signal. Both real observed replies use a 2-token
+//    noun-phrase modifier ("template link-resolution", "template
+//    issue-reference"); the cap allows one token of headroom beyond
+//    that, since a coherent conjunction-based topic change realistically
+//    needs 4+ words (round 7's own adversarial example needed 5).
+// 2. **Word/hyphen-only tokens, no sentence-boundary or comma crossing**
+//    (originally `[^.!?]` exclusion, round 1, Codex; superseded by the
+//    `[\w-]+` token grammar, round 7): restricting each gap token to
+//    word and hyphen characters, separated only by whitespace, means
+//    neither a comma nor a sentence terminator (`.`/`!`/`?`) can appear
+//    inside the gap at all -- either one breaks the token chain outright.
+//    This subsumes the original round-1 finding ("This addresses the
+//    requested change. However, I still have a concern." must not reach
+//    the second sentence's "concern") without a separate exclusion rule.
+// 3. **Mandatory boilerplate tail, no bare end-of-body fallback**
+//    (round 1, Codex; tail shape fully anchored to end-of-body, round 6,
+//    Codex): the closure sentence must end in a period immediately
+//    followed by the complete recognized boilerplate shape (see
+//    `CODERABBIT_ACK_CLOSURE_TAIL_SOURCE` below), not merely start with
+//    one of its markers. Every sampled reply (all 20: the original 18
+//    plus these 2) carries real trailing boilerplate, so requiring it
+//    unconditionally costs no real match; this also rejects a single-
+//    sentence reply with nothing following it at all, such as "`@user`,
+//    confirmed. This partially addresses the concern." with no footer --
+//    a hedged, non-committal acknowledgment that would otherwise pass on
+//    structure alone.
+// 4. **No backtracking past an earlier same-sentence "concern"/"finding"**
+//    (round 3, Codex; largely a consequence of guards 1-2's token
+//    grammar rather than a separate per-character lookahead, but not
+//    unconditionally so -- see the precise bound stated below): "`@user`,
+//    confirmed. This addresses the original concern but reveals another
+//    finding.\n\n🐇 ✓" has a genuinely new finding joined by "but" in the
+//    SAME sentence. Reaching the later "finding" would require consuming
+//    "concern", "but", and "reveals" as modifier tokens first -- 3 tokens
+//    before even reaching "another finding", already past the `{0,3}`
+//    cap guard 1 enforces -- so no valid parse reaches the second
+//    occurrence; the match fails at the first "concern" instead, exactly
+//    as guard 3's tail check requires. This holds whenever reaching the
+//    second occurrence needs MORE than 3 modifier tokens; a short,
+//    non-contrastive conjunctive bridge can still consume an earlier
+//    occurrence as a plain token within budget and reach a second one --
+//    "addresses the concern and finding.\n\n🐇 ✓" matches by treating
+//    "concern" as modifier-token #1 (self-critique, E2 pass on this PR).
+//    Not treated as a precision bug: "X addresses the concern and
+//    finding" reads as a benign compound object (both were addressed),
+//    not a hidden new concern, unlike the "but"-joined case above.
+// 5. **Hedge-adverb guard, both before "addresses" and inside the gap**
+//    (round 2, Codex; scoping fixed round 3, Copilot; extended into the
+//    gap itself, round 7, Codex): "`@user`, confirmed. This partially
+//    addresses the concern.\n\n🐇 ✓" has genuine boilerplate immediately
+//    following, crosses no sentence boundary, and "concern" is the first
+//    and only candidate, so guards 1-4 don't catch it. A small, closed
+//    set of English degree adverbs immediately before "addresses" -- the
+//    same narrow-enumeration style `CODERABBIT_ACK_OPENING_RE` already
+//    uses for its own confirmation verbs (thanks/confirmed/agreed) -- is
+//    materially different from the open-ended "new concern" blocklist
+//    already tried and reverted above: that attempt tried to recognize
+//    arbitrarily-phrased new substantive content (unbounded), while this
+//    is a small, well-known closed class of adverbs modifying
+//    "addresses" itself. Implemented as a negative lookbehind directly on
+//    this alternative (not a separate whole-body check) so it can never
+//    reject the two strong forms merely because unrelated hedge-shaped
+//    wording happens to appear elsewhere in the same reply's boilerplate
+//    (e.g. a Learnings-used block quoting a past PR's discussion) --
+//    Copilot's round-3 finding on the round-2 fix. Round 7 additionally
+//    checks each gap token against the same enumeration, since a hedge
+//    word can also hide INSIDE the gap ("addresses the partially
+//    resolved concern") where the lookbehind never looks. Given this
+//    repository's `fully_autonomous_merge` policy (AGENTS.md), a hedged
+//    "addresses" is exactly the shape most likely to hide real
+//    outstanding feedback behind an ack-shaped reply, so closing this
+//    demonstrated case outweighs leaving it as stated residual risk the
+//    way the new-concern class above still is.
+//
+// Residual risk, stated rather than papered over -- NOT the same class as
+// the two strong forms: those report CodeRabbit's own resolve-attempt
+// DECISION, which by this file's own reasoning cannot co-occur with a new
+// substantive concern in the same reply. This third form reads prose with
+// no such structural barrier, so it is strictly weaker. Two residual gaps
+// remain, both raised as a design question on issue #2858 rather than
+// chased further here:
+//
+// (a) **Contrastive/evaluative adjectives within the `{0,3}` token
+//     window** (Codex round 8, PR #2868): degree adverbs (guard 5) are a
+//     closed, enumerable class -- English has roughly a dozen. A
+//     CONTRASTIVE adjective is not: "wrong", "different", "other",
+//     "unrelated", "remaining", "outstanding", "unaddressed" all read as
+//     coherent, grammatically ordinary English inside the gap --
+//     "`@user`, thanks. This addresses the wrong security
+//     concern.\n\n🐇 ✓" is a coherent sentence stating the fix missed the
+//     mark, yet matches structurally. Enumerating this class would be
+//     the exact open-ended "new concern" blocklist this file's own
+//     history already tried and reverted (guard 5's comment above); it
+//     is not the same shape as a short, closed adverb list. This is the
+//     third form's irreducible limit for recognizing a prose closure via
+//     structure rather than genuine language understanding, not a gap
+//     guards 1-5 failed to close. Both real observed samples use plain
+//     noun-attributive modifiers naming the topic ("template",
+//     "link-resolution"), never an evaluative adjective -- no sampled
+//     reply has used this shape to hide misclassified feedback.
+// (b) The `<details>` block's interior (see
+//     `CODERABBIT_ACK_CLOSURE_DETAILS_SOURCE` below) is intentionally
+//     opaque, quoted text; a concern hidden there rather than as sibling
+//     prose would also still misclassify, for the same reason.
+const CODERABBIT_ACK_STRONG_CLOSURE_RE =
   /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
+
+const CODERABBIT_ACK_HEDGE_WORDS_SOURCE =
+  'partially|partly|somewhat|mostly|largely|barely|slightly|arguably|in\\s+part|to\\s+some\\s+extent|not\\s+(?:fully|entirely|completely|really)';
+
+// Sibling enumeration to the degree-adverb list above, for the SAME
+// hedged/non-committal semantic class but the ADJECTIVE part of speech
+// (self-critique, E2 pass on this PR, PR #2868): the adverb list above
+// modifies a VERB ("partially addresses"); a lead-in noun phrase instead
+// takes an ADJECTIVE modifying its noun ("The partial workaround
+// addresses...", "The temporary fix addresses..."). Grammatically
+// distinct from the adverb list, so it is its own enumeration rather
+// than folded in, but the SAME bounded philosophy: a small, closed set
+// of English words describing partial/provisional completeness -- not
+// the open-ended CONTRASTIVE-adjective class (residual gap (a) above,
+// "wrong", "different", "unrelated") that states something was done
+// incorrectly rather than only partially or temporarily.
+const CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE =
+  'partial|temporary|interim|provisional|tentative|preliminary|stopgap|incomplete';
+
+// A THIRD, semantically distinct closed enumeration (Codex review, PR
+// #2868, round 10; widened round 12): hedge words (adverb and adjective
+// forms above) say something was done to a DEGREE; negation words say
+// it was NOT done at all -- a strictly stronger, more severe inversion,
+// not a variant of hedging. "The fix never addresses the security
+// concern.\n\n🐇 ✓" matched: "never" sits immediately before "addresses"
+// the same way a hedge adverb would, but neither hedge enumeration
+// includes it (hedging and negating are different speech acts), so the
+// lookbehind below passed it through untouched. English negation
+// adverbs occurring directly before a verb are a small, well-known
+// closed class -- the same narrow-enumeration standard as the two hedge
+// lists above, not the open-ended contrastive-adjective problem
+// (residual gap (a)): negation is a grammatical function word category,
+// not free descriptive vocabulary. `no\s+longer` is included as a
+// two-word negation idiom; `barely` is deliberately NOT duplicated here
+// since it is already in the hedge-adverb list above (a "small degree,"
+// not "zero," semantic). Round 12 (Codex) found the initial enumeration
+// still omitted `seldom` (a negative-frequency adverb, the same class as
+// `rarely`/`hardly`); widened the same pass to also cover the two
+// negation IDIOMS `in\s+no\s+way` and `by\s+no\s+means`, completing the
+// small set of common English negation function words/idioms rather
+// than waiting for each to surface as its own review round -- see the
+// closing statement below `CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE` for
+// where further membership widening of this closed class belongs.
+const CODERABBIT_ACK_NEGATION_WORDS_SOURCE =
+  'never|not|nor|hardly|scarcely|rarely|seldom|no\\s+longer|in\\s+no\\s+way|by\\s+no\\s+means';
+
+// A FOURTH closed enumeration, added proactively in the same pass as the
+// round-12 negation widening above rather than waiting for its own
+// review round: EPISTEMIC adverbs, which cast doubt on whether a claimed
+// action genuinely happened at all, distinct from both hedging (a
+// partial degree) and negation (an outright denial). "`@user`,
+// confirmed. This supposedly addresses the concern.\n\n🐇 ✓" reads as
+// the acknowledgment itself casting doubt on its own claim -- CodeRabbit
+// (or a reply mimicking its template) questioning whether the fix
+// really works, not confirming that it does. A small, well-known closed
+// class of English evidentiality adverbs, the same bounded standard as
+// the three enumerations above.
+//
+// **Closing statement for this whole family of enumerations**: degree
+// (hedge), adjectival-degree, negation, and epistemic are the closed
+// SEMANTIC function-word classes this guard enumerates, each
+// independently motivated by a distinct relationship to the
+// acknowledgment ("to what degree," "was it done at all," "should the
+// claim itself be trusted"). A fifth, GRAMMATICAL (not semantic) class
+// -- coordinating conjunctions -- is enumerated separately below
+// (`CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE`) for a structural reason,
+// not a meaning-based one. A further member surfacing within one of
+// these five existing classes (a synonym for an adverb already covered,
+// an idiomatic variant) is a bounded widening, fixed in place the same
+// way round 12 fixed `seldom` and round 13 fixed `perhaps`/`possibly`/
+// `maybe`/`presumably` below. A genuinely NEW class -- distinct from all
+// five, and from the coordinating-conjunction structural fix -- is a
+// design question for issue #2858, the same escalation path residual
+// gap (a) already used -- not something to keep discovering ad hoc
+// inside this PR's review-fix loop.
+const CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE =
+  'supposedly|allegedly|ostensibly|nominally|purportedly|seemingly|apparently|perhaps|possibly|maybe|presumably';
+
+// A GRAMMATICAL (not semantic) closed class (Codex review, PR #2868,
+// round 13): the seven English coordinating conjunctions ("FANBOYS":
+// for/and/nor/but/or/yet/so) are excluded from the internal gap's
+// modifier tokens, closing a compact variant of the round-7 "but
+// reveals another finding" bypass that fits within the `{0,3}` token
+// cap: "`@user`, confirmed. This addresses the concern but raises
+// concerns.\n\n🐇 ✓" consumes "concern", "but", "raises" as three
+// modifier tokens (all within budget, unlike round 7's 5-token example)
+// and reaches the second, plural "concerns" as the closure target.
+// Tightening the token CAP further cannot close this in general: real
+// samples already need up to 2 tokens, and a 2-token variant of the same
+// bypass exists ("concern yet concerns"), so no finite cap excludes the
+// attack while still admitting real noun phrases. Excluding coordinating
+// conjunctions specifically is the right bound instead, because English
+// has EXACTLY seven of them -- a closed set fixed by the language's
+// grammar, not an open-ended vocabulary list -- and a genuine noun-phrase
+// modifier never needs one (neither real observed sample does).
+const CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE = 'for|and|nor|but|or|yet|so';
+
+// CodeRabbit review, PR #2868, round 4: two mechanical bypasses in the
+// pattern below, both closed by widening two sub-patterns from singular-
+// only to also accept the plural/multi-space form, exactly the same
+// narrow-enumeration style as every other guard here:
+// 1. The gap's negative lookahead and the final anchor only recognized
+//    the SINGULAR "concern"/"finding". A plural first occurrence
+//    ("concerns"/"findings") does not satisfy `\b(?:concern|finding)\b`
+//    (no word boundary between "concern" and its trailing "s"), so the
+//    lookahead's `(?!...)` trivially succeeds there and the engine keeps
+//    consuming characters as if no candidate occurrence existed --
+//    resurfacing guard 4's own "backtrack past the first occurrence"
+//    class of bug, but for plural nouns specifically. Both sub-patterns
+//    now accept an optional trailing "s".
+// 2. The hedge lookbehind ended in a single `\s`, so "partially  addresses"
+//    (two spaces) fell outside the lookbehind's fixed one-character gap
+//    and bypassed the guard entirely. Widened to `\s+`; V8's lookbehind
+//    supports variable-length alternatives (confirmed empirically on
+//    this exact Node floor after Copilot's round-5 finding to the
+//    contrary was rejected, above), so this is a safe, narrow widening.
+//
+// Tail grammar, anchored to end-of-body (Codex review, PR #2868, round 6):
+// the boilerplate-tail alternation used to validate only the FIRST
+// recognized token (`🐇`, `---`, `<details`, `<!--`, or
+// `_You are interacting`) and accept whatever followed unexamined --
+// itself a prefix match, the same "validated a fragment, not the whole
+// shape" bug rounds 4-5 already closed on the opening side. Demonstrated:
+// "`@user`, confirmed. This addresses the wording concern.\n\n---\n\n
+// However, the null-check remains unresolved." matched, because "---"
+// satisfies the alternation even though genuine new feedback follows it.
+// Every one of the four alternatives had the same flaw.
+//
+// Fixed by replacing the prefix alternation with the fixed-order,
+// fully-optional tail grammar the two real observed samples
+// (kurone-kito/idd-skill#2853) actually have -- sign-off, then a
+// `---`-delimited `<details>...</details>` block (the Learnings-used
+// container; its interior is opaque quoted text and is NOT re-validated,
+// see residual risk below), then the AI-system disclaimer, then the
+// auto-generated-reply marker (single-sourced via
+// `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` so it cannot drift from
+// `CODERABBIT_ACK_OPENING_RE`'s own use of the same literal) -- anchored
+// to `$` so nothing can follow any of them unexamined.
+//
+// Residual risk, stated rather than papered over: the `<details>` block's
+// interior is intentionally NOT validated -- real templates quote
+// arbitrary past-PR text there (see the two real fixtures below), so
+// requiring it to match a known shape is not feasible. A genuinely new
+// concern hidden INSIDE a collapsed Learnings-used block, rather than as
+// plain sibling prose, would still misclassify. This is a structural
+// container CodeRabbit uses for inert quotation, not a shape any sampled
+// reply has used to hide substantive feedback -- the same "no sampled
+// reply has done this" standard the hedge-adverb guard's own residual
+// risk above already applies.
+//
+// Note on the four-branch alternation below: each of the four elements
+// (sign-off, details block, disclaimer, marker) is individually optional
+// -- no single one is present in every sample -- but making all four
+// optional independently would let an empty tail (nothing at all after
+// the closure period) match too, reopening exactly the "hedged reply with
+// no footer" gap guard 3 already closed. The alternation instead
+// enumerates the four valid ENTRY points (start at the sign-off, or skip
+// straight to the details block, or the disclaimer, or the bare marker),
+// each requiring at least that one element to be genuinely present, with
+// everything after it in the fixed real-sample order still optional.
+//
+// The details block's interior uses the same no-backtrack-past-the-
+// first-occurrence technique as guard 4's `concern`/`finding` gap above,
+// not a plain lazy `[\s\S]*?`: a lazy quantifier still backtracks FORWARD
+// past the first "</details>" to a later one if the rest of the pattern
+// fails at the first (regression test added alongside this fix,
+// self-caught before this ever reached review) -- a second, unrelated
+// details block later in the tail let a lazy match swallow genuine prose
+// sandwiched between the two as if it were all one details block's
+// content. The per-character negative lookahead forbids consuming past
+// the first "</details>" at all, so no such backtrack is possible.
+const CODERABBIT_ACK_CLOSURE_SIGNOFF_SOURCE = '🐇(?:\\s*✓)?';
+const CODERABBIT_ACK_CLOSURE_DETAILS_SOURCE =
+  '---\\s*<details>(?:(?!<\\/details>)[\\s\\S])*<\\/details>';
+const CODERABBIT_ACK_CLOSURE_DISCLAIMER_SOURCE =
+  '_You are interacting with an AI system\\._';
+const CODERABBIT_ACK_CLOSURE_MARKER_SOURCE = escapeRegExp(
+  CODERABBIT_AUTO_GENERATED_REPLY_MARKER,
+);
+const CODERABBIT_ACK_CLOSURE_TAIL_SOURCE =
+  `(?:${CODERABBIT_ACK_CLOSURE_SIGNOFF_SOURCE}` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_DETAILS_SOURCE})?` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_DISCLAIMER_SOURCE})?` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})?` +
+  `|${CODERABBIT_ACK_CLOSURE_DETAILS_SOURCE}` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_DISCLAIMER_SOURCE})?` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})?` +
+  `|${CODERABBIT_ACK_CLOSURE_DISCLAIMER_SOURCE}` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})?` +
+  `|${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})` +
+  '\\s*$';
+// Internal gap tokenized, capped at 3 modifier words, hedge words
+// excluded per token (Codex review, PR #2868, round 7): the previous
+// `(?:(?!\b(?:concerns?|findings?)\b)[^.!?]){0,80}` gap was a NEGATIVE
+// bound again -- any non-period, non-concern/finding character was
+// allowed, for up to 80 of them -- and Codex demonstrated it accepts a
+// coordinating conjunction that silently swaps in a genuinely different,
+// unaddressed concern: "confirmed. This addresses the documentation
+// issue but leaves a security concern.\n\n🐇 ✓" has only ONE "concern"
+// occurrence (so guard 4's no-backtrack protection never engages), and
+// it is immediately followed by the required boilerplate, so the old
+// gap matched it as a clean acknowledgment even though "but leaves a"
+// means the opposite.
+//
+// Both real observed samples (kurone-kito/idd-skill#2853) show the gap
+// is a SHORT, plain noun-phrase modifier with no verbs or conjunctions
+// at all: "template link-resolution" and "template issue-reference" (2
+// tokens each). The fix flips this gap to the same positive-shape style
+// as guard 6's lead-in whitelist: the gap may consist of at most 3
+// space-separated `[\w-]+` tokens (one more than either real sample
+// needs, since a coherent conjunction-based "flip" needs a verb plus a
+// new subject -- realistically 4 or more words -- to read as a genuine
+// change of topic; Codex's own example needs 5). Restricting tokens to
+// `[\w-]+` also subsumes guards 2 and 4 for free: neither a comma nor a
+// sentence-terminating `.`/`!`/`?` is a word character or whitespace, so
+// either one breaks the token chain outright, and reaching a SECOND,
+// later "concern"/"finding" now requires consuming more modifier tokens
+// than the cap allows (verified against round 3's own "addresses the
+// original concern but reveals another finding" fixture below, still
+// rejected under the new grammar with no separate backtrack guard
+// needed).
+//
+// Each token is additionally checked against the same closed hedge-word
+// enumeration as the lookbehind below, via a per-token negative
+// lookahead: without this, "addresses the partially resolved concern"
+// would let a hedge word hide INSIDE the gap rather than immediately
+// before "addresses", bypassing the lookbehind (which only inspects the
+// text immediately preceding "addresses") entirely.
+//
+// Residual risk, stated rather than papered over, the same standard as
+// every guard above -- and corrected here after an earlier revision of
+// this paragraph understated it (Codex round 8, PR #2868, below): within
+// the 3-token cap, the token content itself is not semantically
+// restricted beyond the closed hedge-adverb enumeration. This is not
+// limited to ungrammatical "word salad" like "addresses the concern
+// finding." -- a CONTRASTIVE adjective reads as perfectly ordinary
+// English while still meaning the opposite of an acknowledgment:
+// "addresses the wrong security concern" is coherent and structurally
+// matches. See residual gap (a) in the comment above
+// `CODERABBIT_ACK_STRONG_CLOSURE_RE` for why this class (contrastive
+// adjectives: "wrong", "different", "unrelated", "remaining", and
+// similar) is NOT enumerable the way the degree-adverb hedge list is,
+// and is raised as a design question on issue #2858 rather than chased
+// with an open-ended list here.
+const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
+  `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\s+)` +
+    '\\baddresses\\s+the\\b' +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE}|${CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE})\\b)[\\w-]+){0,3}` +
+    '\\s+\\b(?:concerns?|findings?)\\b\\.\\s*' +
+    CODERABBIT_ACK_CLOSURE_TAIL_SOURCE,
+  'i',
+);
 
 // Explicit `isCodeRabbitLogin` author check (Copilot review, #2649,
 // round 4): the closure phrase is CodeRabbit's own resolution decision in
@@ -2085,19 +2473,171 @@ const CODERABBIT_ACK_CLOSURE_RE =
 // acknowledgment (a CodeRabbit-side defect) would still misclassify here.
 // This helper matches CodeRabbit's own stated decision; it cannot second-
 // guess a wrong decision CodeRabbit reports about itself.
+//
+// 6. **Opening-to-closure lead-in whitelist, scoped to the weaker
+//    "addresses the ..." form only** (Codex review, PR #2868, rounds 4
+//    and 5): every guard above narrows what counts as a closure WITHIN a
+//    matched span, but neither closure regex was ever anchored to where
+//    the opening ends -- `.test(body)` searches the WHOLE body, so an
+//    entirely separate sentence carrying genuinely new, unresolved
+//    feedback between the opening and the closure was invisible to it.
+//    Round 4 tried a NEGATIVE bound: at most one sentence terminator
+//    (`.`/`!`/`?`) between the opening and the closure match, on the
+//    theory that a second terminator means a second, independent
+//    sentence sits in between. Round 5 disproved it: natural language
+//    can join an unresolved clause to the closure without ANY second
+//    terminator at all -- "`@user`, confirmed. The null-check remains
+//    unresolved; this update addresses the wording concern.\n\n🐇 ✓"
+//    joins with a semicolon and leaves the terminator count at exactly
+//    one. An em dash or a bare coordinating conjunction ("and") work
+//    the same way. Any guard defined by what the gap must NOT contain is
+//    probeable forever against open-ended prose -- guard 5's own
+//    reasoning already said so; the round-4 terminator count was the one
+//    guard in this file that violated it anyway.
+//
+//    The fix flips to a POSITIVE whitelist, the same style as
+//    `CODERABBIT_ACK_OPENING_RE`'s own closed verb list and guard 5's
+//    closed adverb list: instead of asking "does the gap avoid
+//    disallowed punctuation," ask "does the gap match one of the small
+//    number of lead-in shapes the real observed samples actually use."
+//    Both observed samples (kurone-kito/idd-skill#2853, tests above) are
+//    a bare, short noun-phrase subject referring back to the fix -- "The
+//    repository-qualified reference", "Commit `80c936a7`" -- never a
+//    clause with its own verb describing outstanding status.
+//    `CODERABBIT_ACK_CLOSURE_LEADIN_RE`, below, requires the ENTIRE gap
+//    (the opening's own terminating `.`/`!`, then this lead-in, then
+//    nothing else) to match one of: a bare pronoun ("this"/"that"/"it"),
+//    "the" plus one or two more words, or "commit" plus a short hex
+//    SHA -- deliberately not a free `[^...]` class anywhere.
+//
+//    This intentionally FAILS CLOSED on any lead-in shape not in the
+//    list, including a legitimate one not yet observed: given this
+//    repository's `fully_autonomous_merge` policy, an unrecognized
+//    lead-in should route to a human-authored disposition rather than
+//    risk silently accepting hidden feedback behind an ack-shaped reply.
+//    That is the intended failure mode, not a defect to widen away the
+//    next time a real reply is rejected -- widen the enumeration
+//    (bounded, reviewable) rather than reopening a `[^...]` gap
+//    (unbounded, the class of bug this guard exists to close).
+//
+//    Scoped to `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` only, not the two
+//    strong forms: those report CodeRabbit's own resolve-attempt
+//    DECISION, which this file's own reasoning above already treats as
+//    unable to co-occur with a new concern in the same reply, so they
+//    keep the whole-body `.test()` they always had.
+//
+// 7. **Hedge words excluded from the lead-in's own noun-phrase tokens
+//    too** (self-critique, E2 pass on this PR): guard 5's hedge-adverb
+//    enumeration reaches the internal "addresses the ... concern" gap
+//    (guard 5 above) but never reached the LEAD-IN's own "the" plus
+//    1-2 word slots, since that whitelist was designed purely as a
+//    structural check (pronoun / short noun phrase / commit SHA), not a
+//    semantic filter. "`@user`, confirmed. The partial workaround
+//    addresses the wording concern.\n\n🐇 ✓" matched despite "partial"
+//    being exactly the hedged, non-committal shape guard 5 exists to
+//    reject elsewhere. Applying the same per-token negative lookahead
+//    used in the internal gap closes this location too. Excludes BOTH
+//    enumerations (adverb and adjective forms), since a lead-in noun
+//    phrase's modifier is grammatically an adjective ("partial",
+//    "temporary") even though the internal gap's is an adverb
+//    ("partially") -- the first attempt at this fix reused only the
+//    adverb list and still let "partial"/"temporary" straight through,
+//    caught empirically before this ever reached review.
+// 8. **Negation words excluded everywhere a free token or a hedge
+//    lookbehind already exists** (Codex review, PR #2868, round 10,
+//    widened round 12): hedge words (guards 5 and 7) say something was
+//    done to a DEGREE; negation words say it was NOT done at all -- a
+//    stronger, more severe inversion, not a hedging variant, so it is
+//    its own enumeration (`CODERABBIT_ACK_NEGATION_WORDS_SOURCE` above)
+//    rather than folded into either hedge list. "`@user`, confirmed.
+//    The fix never addresses the security concern.\n\n🐇 ✓" matched:
+//    "never" sits immediately before "addresses" the same way a hedge
+//    adverb would, but neither hedge enumeration includes negation
+//    words, so every guard passed it through untouched. Round 12 found
+//    the initial enumeration still omitted `seldom`; widened in the same
+//    pass to also cover `in no way` / `by no means`. Wired into all
+//    three locations a hedge check already exists -- the lookbehind
+//    immediately before "addresses" (guard 5), the internal gap's
+//    per-token exclusion (guard 5), and the lead-in's per-token
+//    exclusion (guard 7) -- for the same defense-in-depth reasoning as
+//    guard 7's own dual adverb/adjective exclusion above.
+// 9. **Epistemic-adverb enumeration, added proactively rather than
+//    waiting for a review round** (self-critique, same pass as round
+//    12's negation widening; widened round 13):
+//    `CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE` above closes a fourth,
+//    distinct semantic relationship -- casting doubt on whether the
+//    claimed fix genuinely happened at all ("supposedly", "allegedly")
+//    -- neither a degree (hedge) nor an outright denial (negation).
+//    Wired into the same three locations as guards 5, 7, and 8. Round
+//    13 (Codex) found the initial enumeration omitted "perhaps"; widened
+//    the same pass to also cover "possibly"/"maybe"/"presumably". See
+//    the closing statement in that constant's own doc comment for why
+//    this is treated as the natural end of the SEMANTIC enumeration
+//    family (guard 10 below is a separate, GRAMMATICAL closed class, not
+//    a sixth semantic one).
+// 10. **Coordinating-conjunction exclusion, a grammatical rather than
+//     semantic closed class** (Codex review, PR #2868, round 13): the
+//     `{0,3}` token cap alone cannot close every conjunction-joined
+//     bypass, because a COMPACT one fits within budget where round 7's
+//     original 5-token example did not -- "confirmed. This addresses
+//     the concern but raises concerns.\n\n🐇 ✓" consumes "concern",
+//     "but", "raises" as three modifier tokens (within the cap) and
+//     reaches the second, plural "concerns" as the closure target.
+//     Tightening the cap further cannot close this in general: a
+//     2-token variant of the same bypass exists ("concern yet
+//     concerns"), and real samples already need up to 2 tokens, so no
+//     finite cap excludes the attack while still admitting real noun
+//     phrases. `CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE` excludes
+//     English's seven coordinating conjunctions ("FANBOYS") instead --
+//     a set fixed by the language's grammar, not open-ended vocabulary,
+//     so this is not the same class of fix as the semantic
+//     enumerations above and does not reopen the open-ended
+//     new-concern-blocklist problem. Wired into the internal gap (the
+//     demonstrated bypass) and the lead-in (defense-in-depth,
+//     consistent with guards 7-9); not the immediate pre-"addresses"
+//     lookbehind, since a bare conjunction directly before "addresses"
+//     ("confirmed. But addresses...") is not a coherent English
+//     sentence in the first place.
+const CODERABBIT_ACK_CLOSURE_LEADIN_RE = new RegExp(
+  '^[.!]\\s+(?:' +
+    'this|that|it|' +
+    `the\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE}|${CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE})\\b)[\\w-]+` +
+    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_HEDGE_ADJECTIVES_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE}|${CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE})\\b)[\\w-]+){0,1}|` +
+    'commit\\s+`[0-9a-f]{7,40}`' +
+    ')\\s+$',
+  'i',
+);
+
 function isKnownAdvisoryAckTemplate(comment: {
   author?: { login?: string | null } | null;
   body?: string | null;
 }): boolean {
   const authorLogin = String(comment.author?.login ?? '');
   const body = String(comment.body ?? '');
-  return (
-    !!authorLogin &&
-    isCodeRabbitLogin(authorLogin) &&
-    !!body &&
-    CODERABBIT_ACK_OPENING_RE.test(body) &&
-    CODERABBIT_ACK_CLOSURE_RE.test(body)
-  );
+  if (!authorLogin || !isCodeRabbitLogin(authorLogin) || !body) {
+    return false;
+  }
+  const openingMatch = CODERABBIT_ACK_OPENING_RE.exec(body);
+  if (!openingMatch) {
+    return false;
+  }
+  // The two strong forms (CodeRabbit's own resolve-attempt decision) are
+  // checked on the whole body with no further guard -- see the comment
+  // above `CODERABBIT_ACK_STRONG_CLOSURE_RE` for why the weaker third
+  // form's guards (locality, sentence-boundary, hedge-adverb, opening-
+  // to-closure lead-in whitelist) must never apply here, even when
+  // unrelated hedge-shaped wording happens to appear elsewhere in the
+  // same reply (e.g. a Learnings-used block).
+  if (CODERABBIT_ACK_STRONG_CLOSURE_RE.test(body)) {
+    return true;
+  }
+  const addressesMatch = CODERABBIT_ACK_ADDRESSES_CLOSURE_RE.exec(body);
+  if (!addressesMatch) {
+    return false;
+  }
+  const openingEnd = openingMatch.index + openingMatch[0].length;
+  const gapToClosure = body.slice(openingEnd, addressesMatch.index);
+  return CODERABBIT_ACK_CLOSURE_LEADIN_RE.test(gapToClosure);
 }
 
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
