@@ -427,9 +427,9 @@ node scripts/claim-lock.mjs --acquire --worktree <path> \
   --agent-id <agent-id> --claim-id <claim-id>
 ```
 
-Also confirm `--read-tokens` finds `{claim-id}` recorded before
-trusting it; absent or malformed → stop. See
-`docs/idd-helper-scripts.md`.
+Then, separately, run `--read-tokens --worktree <path> --claim-id
+<id>` and require `present: true` with no `malformed`; otherwise
+stop. See `docs/idd-helper-scripts.md`.
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
 `{claim-id}` is always a collision — re-run pre-check (c) (`--claim-id`

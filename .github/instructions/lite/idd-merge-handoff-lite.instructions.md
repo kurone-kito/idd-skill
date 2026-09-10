@@ -39,8 +39,9 @@ Before posting the handoff comment, confirm all of the following:
    the package-manager-profile `idd:claim-lock` command with the same
    arguments — resolve the exact command from
    `docs/idd-helper-scripts.md` if unsure). A `collision` result is
-   fail-closed: stop rather than proceed. Also confirm `--read-tokens`
-   finds this `{claim-id}` recorded; absent or malformed → stop.
+   fail-closed: stop rather than proceed. Then, separately, run
+   `--read-tokens --worktree <path> --claim-id <id>` and require
+   `present: true` with no `malformed`; otherwise stop.
 4. If any check fails, stop.
 
 ## F2.5 — Draft and post the handoff comment
