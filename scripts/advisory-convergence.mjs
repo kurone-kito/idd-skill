@@ -1138,6 +1138,11 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     waivableSelectors: [...(options.waivableSelectors ?? [])],
     maxValidity: String(options.waiverMaxValidity ?? 'PT24H'),
     mode: waiverMode,
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): the ONE
+    // authorized call site -- see `allowSelfReferentialBootstrapAuto`'s
+    // own doc comment in protocol-helpers.mts for why every other caller
+    // must leave this unset.
+    allowSelfReferentialBootstrapAuto: true,
   });
   const autoWaiverRepositoryFullName = String(
     options.repositoryFullName ?? '',

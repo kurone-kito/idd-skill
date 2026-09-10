@@ -11,6 +11,7 @@ import {
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
 
 // Re-exported so callers that already import advisory-bot-identity helpers
@@ -159,6 +160,7 @@ export function summarizeExternalCheckWaivers(
     waivableSelectors = null,
     maxValidity = '',
     mode = '',
+    allowSelfReferentialBootstrapAuto = false,
   } = {},
 ) {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
@@ -193,6 +195,18 @@ export function summarizeExternalCheckWaivers(
     const parsed = parseExternalCheckWaiverComment(body, createdAt);
     if (!parsed) {
       malformed.push({ authorLogin, bodyPreview: body.slice(0, 120) });
+      continue;
+    }
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): excluded
+    // entirely, before any other classification, for every caller except
+    // the one dedicated auto-waiver evidence call that opts in -- see
+    // `allowSelfReferentialBootstrapAuto`'s own doc comment above for why
+    // author/head/claim/expiry classification must never even run for
+    // this reason token otherwise.
+    if (
+      !allowSelfReferentialBootstrapAuto &&
+      parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON
+    ) {
       continue;
     }
     if (!trustedSet.has(authorLogin)) {

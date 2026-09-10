@@ -12,6 +12,7 @@ import {
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mts';
 
 // Re-exported so callers that already import advisory-bot-identity helpers
@@ -687,6 +688,7 @@ export function summarizeExternalCheckWaivers(
     waivableSelectors = null,
     maxValidity = '',
     mode = '',
+    allowSelfReferentialBootstrapAuto = false,
   }: {
     prHeadSha?: string;
     activeClaimId?: unknown;
@@ -710,6 +712,24 @@ export function summarizeExternalCheckWaivers(
     // `advisory-convergence.mts`'s own `waiverMode === 'maintainer-authorized'`
     // guard.
     mode?: string;
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): a
+    // `self-referential-bootstrap-auto`-reasoned marker's `reason`/`runId`
+    // are attacker-shaped input from a `github-actions[bot]`-authored
+    // comment body -- trusting one as an ORDINARY valid waiver here (which
+    // happens whenever an adopter's own `trustedMarkerLogins` includes
+    // that login, a plausible choice unrelated to this feature) would
+    // let it satisfy the deadline/terminal-gated waiver escape hatch, or
+    // an F2/F3 pre-merge-readiness consumer's own generic waiver check,
+    // WITHOUT ever running the run-id/event-type/HEAD/repository/
+    // changed-file verification `advisory-convergence.mts`'s dedicated,
+    // isolated auto-waiver evidence call performs. Default `false` (fail
+    // closed): such a marker is excluded from every bucket entirely,
+    // never merely `unauthorized`/`wrongHead`/etc., since the reason
+    // itself disqualifies it regardless of any other field. Only that
+    // one dedicated call sets this `true`; every other caller (this
+    // function's own ordinary-waiver callers, `external-check-waiver.mts`,
+    // `pre-merge-readiness.mts`) must leave it unset.
+    allowSelfReferentialBootstrapAuto?: boolean;
   } = {},
 ): ExternalCheckWaiverEvidence {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
@@ -748,6 +768,19 @@ export function summarizeExternalCheckWaivers(
 
     if (!parsed) {
       malformed.push({ authorLogin, bodyPreview: body.slice(0, 120) });
+      continue;
+    }
+
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): excluded
+    // entirely, before any other classification, for every caller except
+    // the one dedicated auto-waiver evidence call that opts in -- see
+    // `allowSelfReferentialBootstrapAuto`'s own doc comment above for why
+    // author/head/claim/expiry classification must never even run for
+    // this reason token otherwise.
+    if (
+      !allowSelfReferentialBootstrapAuto &&
+      parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON
+    ) {
       continue;
     }
 
