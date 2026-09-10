@@ -569,11 +569,29 @@ jobs:
             fi
           done
           echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
-      - name: Fail closed when no helper runtime is configured
-        if: steps.profile.outputs.profile == 'instructions-only'
+      - name: Notice when no helper runtime is configured
+        # kurone-kito/idd-skill#2657 (Copilot review, PR #2895, round 11):
+        # this used to `exit 1` unconditionally whenever helperRuntime
+        # resolved to instructions-only, failing this optional job on
+        # EVERY pull_request_target trigger for the template's own shipped
+        # default config (which omits helperRuntime, per
+        # docs/idd-helper-scripts.md's import-time selection order) --
+        # including PRs that never touch this check's own trigger-file
+        # allowlist and have no reason to invoke this job at all. That
+        # contradicted the already-documented promise
+        # (idd-template/docs/customization.md's "Self-referential
+        # -bootstrap-auto waiver co-requisite" section): out of the box,
+        # this job exits successfully on every allowlisted-touching PR
+        # too, explaining itself with a notice instead of failing. Gating
+        # on the allowlist-touch result (same reasoning as the
+        # package-manager steps below) and downgrading to `::notice::`
+        # with no `exit 1` makes both true: a PR unrelated to this
+        # mechanism never sees this job at all, and an allowlisted-
+        # touching PR on an unconfigured runtime gets a clear, non-failing
+        # explanation instead of a false-alarm required-check failure.
+        if: steps.allowlist.outputs.touched == 'true' && steps.profile.outputs.profile == 'instructions-only'
         run: |
-          echo "::error::This repository hosts the idd-advisory-convergence-self-waiver job but resolves helperRuntime.profile to instructions-only (no runnable helper command). Configure helperRuntime.profile in .github/idd/config.json, or remove this optional job."
-          exit 1
+          echo "::notice::helperRuntime.profile resolves to instructions-only (no runnable helper command), so idd-advisory-convergence-self-waiver has nothing to run for this PR and exits successfully without posting a waiver. Configure helperRuntime.profile in .github/idd/config.json to enable auto-posting for PRs that touch this check's own trigger-file allowlist."
       - uses: actions/setup-node@v4
         if: steps.profile.outputs.profile != 'instructions-only'
         with:
@@ -643,8 +661,14 @@ jobs:
         # Skip a fork PR entirely: the consumer's run-bound trust check
         # would reject it anyway (a fork's own workflow run never matches
         # this repository), so this avoids a doomed post and the API
-        # calls it would cost.
-        if: steps.allowlist.outputs.touched == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        # calls it would cost. Also skip instructions-only explicitly
+        # (kurone-kito/idd-skill#2657, Copilot review, PR #2895, round 11)
+        # instead of relying on the `case` statement's `*)` fallthrough
+        # below to catch it -- that fallthrough exists as defense-in-depth
+        # for a genuinely unrecognized future profile string, not as the
+        # intended route for a profile the "Notice" step above already
+        # explained and let pass without failing the job.
+        if: steps.allowlist.outputs.touched == 'true' && steps.profile.outputs.profile != 'instructions-only' && github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}

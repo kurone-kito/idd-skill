@@ -412,3 +412,83 @@ test('idd-template comment-refresh workflow keeps the profile/manager guard on d
     `${path} rerun step's if: must still exclude an ambiguous package manager`,
   );
 });
+
+// kurone-kito/idd-skill#2657 (Copilot review, PR #2895, round 11): the
+// template's self-waiver job used to `exit 1` unconditionally whenever
+// helperRuntime resolved to instructions-only, failing this optional job
+// on every pull_request_target trigger for the template's own shipped
+// default config -- including PRs that never touch this check's own
+// trigger-file allowlist -- contradicting
+// idd-template/docs/customization.md's documented promise that the job
+// exits successfully (with a notice) out of the box. Pin both halves of
+// the fix: the notice step never fails the job, and it (like the
+// package-manager steps) only runs when the allowlist was actually
+// touched.
+test('idd-template self-waiver job never fails the job when no helper runtime is configured', () => {
+  const path = 'idd-template/.github/workflows/idd-advisory-convergence.yml';
+  const text = readWorkflow(path);
+  const noticeIndex = text.indexOf(
+    '- name: Notice when no helper runtime is configured',
+  );
+  assert.ok(
+    noticeIndex !== -1,
+    `${path} must keep a non-failing notice step for an unconfigured helper runtime`,
+  );
+  const nextStepIndex = text.indexOf('\n      - name:', noticeIndex + 1);
+  const noticeStepText = text.slice(
+    noticeIndex,
+    nextStepIndex === -1 ? undefined : nextStepIndex,
+  );
+  const noticeIfLine = noticeStepText
+    .split('\n')
+    .find((line) => line.trim().startsWith('if:'));
+  assert.ok(noticeIfLine, `${path} notice step must have an if: condition`);
+  assert.match(
+    noticeIfLine as string,
+    /steps\.allowlist\.outputs\.touched\s*==\s*'true'/,
+    `${path} notice step's if: must be gated on the allowlist touch result`,
+  );
+  // Strip comment lines first: the step's own doc comment intentionally
+  // mentions the old `exit 1` behavior it replaced, which would otherwise
+  // make this assertion self-defeating.
+  const noticeStepCode = noticeStepText
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n');
+  assert.doesNotMatch(
+    noticeStepCode,
+    /exit 1/,
+    `${path} notice step must not fail the job (exit 1) for an unconfigured helper runtime`,
+  );
+  assert.match(
+    noticeStepCode,
+    /::notice::/,
+    `${path} notice step must explain itself with a ::notice:: annotation`,
+  );
+});
+
+test('idd-template self-waiver job never posts through an instructions-only runtime', () => {
+  const path = 'idd-template/.github/workflows/idd-advisory-convergence.yml';
+  const text = readWorkflow(path);
+  const postIndex = text.indexOf(
+    '- name: Post the self-referential-bootstrap-auto waiver',
+  );
+  assert.ok(
+    postIndex !== -1,
+    `${path} must keep the self-referential-bootstrap-auto post step`,
+  );
+  const nextStepIndex = text.indexOf('\n      - name:', postIndex + 1);
+  const postStepText = text.slice(
+    postIndex,
+    nextStepIndex === -1 ? undefined : nextStepIndex,
+  );
+  const postIfLine = postStepText
+    .split('\n')
+    .find((line) => line.trim().startsWith('if:'));
+  assert.ok(postIfLine, `${path} post step must have an if: condition`);
+  assert.match(
+    postIfLine as string,
+    /steps\.profile\.outputs\.profile\s*!=\s*'instructions-only'/,
+    `${path} post step's if: must exclude instructions-only, not rely on the case statement's *) fallthrough`,
+  );
+});
