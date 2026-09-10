@@ -190,20 +190,29 @@ const PENDING_STATUSES = new Set([
   'pending',
 ]);
 
-/** Workflow-run trigger events this helper trusts to reliably refresh the
- * PR's required-check rollup on rerun, matching the events
- * `idd-advisory-convergence` itself subscribes to (its own header comment,
- * mirrored in `idd-ci.instructions.md` §Rerun mechanics): `pull_request`,
- * `pull_request_target` (#2764 -- evaluated against the base branch's own
- * workflow YAML, but its check-runs are still attached to the PR's real
- * HEAD SHA, exactly like the other members here; the commit check-runs API
- * this helper queries is scoped by SHA, not by triggering event, so no
- * separate SHA-resolution path is needed), `pull_request_review`,
- * `pull_request_review_comment`. A run triggered by any other event --
- * most notably `workflow_dispatch` -- has no `pull_request` context of its
- * own and is documented as NOT reliably associated with the PR's HEAD SHA,
- * so rerunning it would not dependably clear a stuck rollup even though
- * the run itself is otherwise a plain, non-bot failure. */
+/** This helper's own "pull_request-family" allowlist: trigger events whose
+ * check-runs are expected to attach reliably to the PR's real HEAD SHA, so
+ * rerunning them can refresh the required-check rollup (Copilot review, PR
+ * #2855) -- `pull_request`, `pull_request_target` (#2764 -- evaluated
+ * against the base branch's own workflow YAML, but its check-runs are
+ * still attached to the PR's real HEAD SHA, exactly like the other
+ * members here; the commit check-runs API this helper queries is scoped by
+ * SHA, not by triggering event, so no separate SHA-resolution path is
+ * needed), `pull_request_review`, `pull_request_review_comment`. Not
+ * necessarily identical to which of these `idd-advisory-convergence`
+ * itself currently subscribes to directly -- #2764 Phase 1 moved
+ * `pull_request_review` off that workflow's own trigger list onto a
+ * companion (see `idd-advisory-convergence-comment.yml`), but a
+ * `pull_request_review`-triggered instance can still exist for a HEAD (via
+ * that companion's own rerun of an existing run) and remains just as
+ * reliably associated with the PR's HEAD SHA as before, so it stays in
+ * this set; `idd-ci.instructions.md` §Rerun mechanics documents the
+ * cross-file contract this set and the required workflow's own triggers
+ * both honor. A run triggered by any other event -- most notably
+ * `workflow_dispatch` -- has no `pull_request` context of its own and is
+ * documented as NOT reliably associated with the PR's HEAD SHA, so
+ * rerunning it would not dependably clear a stuck rollup even though the
+ * run itself is otherwise a plain, non-bot failure. */
 const PULL_REQUEST_FAMILY_EVENTS = new Set([
   'pull_request',
   'pull_request_target',
