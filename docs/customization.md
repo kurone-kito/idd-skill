@@ -1417,14 +1417,19 @@ never the default (`idd-suitability.instructions.md`'s "Mutation
 Policy and Coordination Rule" section). Turning that customization on
 trades a faster re-scan for a manual-review cost: a wrongly-classified
 rejection then keeps the issue out of the candidate pool on every
-later pass until someone reviews the label by hand, instead of today's
-default of a fresh seven-check re-run each pass. That fresh re-run is
-not a gap left for the customization to fill -- issue #1887 shipped
-`suitability-triage.mjs`'s `existingRejection` field, which already
-surfaces any prior "A4.5 suitability gate rejection" comment from a
-trusted marker actor to every later caller, so a rejected candidate is
-neither silently retried from scratch nor permanently hidden by
-default.
+later pass until someone reviews the label by hand, instead of the
+default reconciliation path -- a fresh seven-check re-run once the
+standing rejection goes stale (a title/body edit, including a recorded
+Groom-hearing decision), or immediately when no standing rejection
+exists. A non-stale standing rejection is not itself a gap left for
+the customization to fill: `idd-suitability.instructions.md`'s
+Standing-rejection pre-check (`kurone-kito/idd-skill#2803`) already
+blocks reclaim on any
+"A4.5 suitability gate rejection" comment from a trusted marker actor
+before Check 1 ever runs, building on the `existingRejection` field
+issue #1887 shipped in `suitability-triage.mjs`; a rejected candidate
+is therefore neither silently retried from scratch nor permanently
+hidden by default.
 
 When confidence is low, keep the issue open and route via a concise
 comment. "Uncertain means open" is the safe default, and selection
@@ -1433,10 +1438,13 @@ stops the pass instead, though an already-reported `invalid` (a trusted
 `existingRejection` on this exact candidate, confirmed by a fresh Check 3
 failure) narrows that halt to excluding just that one candidate — see
 [`idd-suitability.instructions.md`](../.github/instructions/idd-suitability.instructions.md#failure-outcomes)'s
-Failure Outcomes table for both cases. This carve-out responds to a
-concrete incident: a 2026-09-08 false-positive `invalid` verdict
-(kurone-kito/idd-skill#2738) that the unconditional halt would have
-forced every later concurrent session to re-report, resolved by a
+Failure Outcomes table for both cases. This fresh-Check-3 path is now
+the fallback the Standing-rejection pre-check above defers to only
+once a standing rejection has gone stale; the common case is the
+pre-check's own exclusion, before Check 3 ever runs. This carve-out
+responds to a concrete incident: a 2026-09-08 false-positive `invalid`
+verdict (kurone-kito/idd-skill#2738) that the unconditional halt would
+have forced every later concurrent session to re-report, resolved by a
 2026-09-09 maintainer hearing (kurone-kito/idd-skill#2747).
 
 The configured ready label from `approvalSignals.readyLabelName`

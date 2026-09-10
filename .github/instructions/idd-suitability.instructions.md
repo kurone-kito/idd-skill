@@ -200,7 +200,9 @@ A5 is never reached for a candidate that fails any check, labeled or not.
 
 - **Permitted**: a single diagnostic comment explaining the rejection,
   prefixed with **"A4.5 suitability gate rejection"** so it is never
-  confused with a claim or work-in-progress marker; optionally, a
+  confused with a claim or work-in-progress marker; the one-line
+  reconciliation comment the Standing-rejection pre-check (Decision
+  Flow, below) requires on a stale rejection; optionally, a
   transient `triage:{outcome}` label as a diagnostic aid for humans (this
   must never masquerade as an implementation claim); linking related
   issues as context (e.g., "Related to #NNN which addresses similar
@@ -224,14 +226,20 @@ convention:
 ```
 
 Never emit this marker for `needs-decision` or `blocked-by-human`: those
-two already carry a stable label (see above) and need no second
-signal. Discover's own
+two already have a dedicated label available (see above) and need no
+second signal. Discover's own
 candidate-selection pass (`idd-discover.instructions.md`) reads this
 marker to skip a previously-rejected candidate without a full manual
 comment-history read, applying the same staleness rule as every other
 evidentiary marker in this workflow: a rejection whose comment predates
 the issue's own latest substantive (title/body) edit is stale and never
-suppresses a genuinely improved issue.
+suppresses a genuinely improved issue. The Decision Flow's
+Standing-rejection pre-check (below) applies this same staleness rule
+directly to the rejection comment itself, closing the gap for
+`needs-decision`/`blocked-by-human` outcomes: A4.5 never applies their
+label itself (a maintainer does), and neither carries a marker, so a
+later session may find no signal at all — label or no label — that the
+issue was already adjudicated.
 
 ### High-confidence coordination-close (#1485)
 
@@ -267,11 +275,40 @@ risk, not a blocker on the gate above.
 
 ## Decision Flow
 
+**Standing-rejection pre-check (kurone-kito/idd-skill#2803).** Before
+Check 1, scan the candidate's existing comments for a non-stale "A4.5
+suitability gate rejection" comment posted by a trusted marker actor —
+any outcome, not only the four carrying their own
+`idd-skill-triage-verdict` marker. Apply the same
+edit-postdates-rejection staleness rule as the Machine-readable outcome
+marker above (a recorded Groom-hearing decision counts as a body edit
+for this rule, since Groom applies it as inline body prose). A
+non-stale rejection means the session must not claim the candidate —
+label or no label — so exclude it from Candidates without posting a
+second rejection comment and loop; a stale rejection requires posting
+a one-line reconciliation comment (what changed, or why this session's
+re-evaluation differs) before Check 1-7 run normally. This is now a
+hard pre-claim prohibition, so apply this workflow's
+[fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
+when the scan itself cannot be completed — a comments-fetch failure, or
+a helper result whose `existingRejectionCollectionWarnings` field
+reports a collection failure with no conclusive `existingRejection`
+value — rather than treating an inconclusive scan the same as a
+confirmed absence: stop and report instead of proceeding to Check 1.
+
 ```text
 Candidates = A4 survivor set
   (for A0-T: the single verified explicit target; failure = STOP, no fallback)
   (for A0-T: every "remove from Candidates, loop" branch below means: report and STOP)
 Loop: Rerun A4 Step 2 over Candidates to pick the next candidate
+  → Standing-rejection pre-check (see above)
+    → Non-stale rejection found → do not claim; exclude, post nothing, loop
+      (for A0-T: report why the target is blocked in the run output only
+      — not a second comment — then STOP, no fallback)
+    → Stale rejection found → post reconciliation comment → Run Check 1
+    → No trusted rejection found → Run Check 1
+    → Scan inconclusive (fetch failed, or existingRejectionCollectionWarnings
+      with no conclusive existingRejection) → stop, report (fail closed)
   → Run Check 1 (Repository Fit)
     → PASS → Run Check 2
     → FAIL → Classify as out-of-scope → Report, remove from Candidates, loop
