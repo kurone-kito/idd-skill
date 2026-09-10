@@ -2181,12 +2181,87 @@ const CODERABBIT_ACK_HEDGE_WORDS_SOURCE =
 //    supports variable-length alternatives (confirmed empirically on
 //    this exact Node floor after Copilot's round-5 finding to the
 //    contrary was rejected, above), so this is a safe, narrow widening.
+//
+// Tail grammar, anchored to end-of-body (Codex review, PR #2868, round 6):
+// the boilerplate-tail alternation used to validate only the FIRST
+// recognized token (`🐇`, `---`, `<details`, `<!--`, or
+// `_You are interacting`) and accept whatever followed unexamined --
+// itself a prefix match, the same "validated a fragment, not the whole
+// shape" bug rounds 4-5 already closed on the opening side. Demonstrated:
+// "`@user`, confirmed. This addresses the wording concern.\n\n---\n\n
+// However, the null-check remains unresolved." matched, because "---"
+// satisfies the alternation even though genuine new feedback follows it.
+// Every one of the four alternatives had the same flaw.
+//
+// Fixed by replacing the prefix alternation with the fixed-order,
+// fully-optional tail grammar the two real observed samples
+// (kurone-kito/idd-skill#2853) actually have -- sign-off, then a
+// `---`-delimited `<details>...</details>` block (the Learnings-used
+// container; its interior is opaque quoted text and is NOT re-validated,
+// see residual risk below), then the AI-system disclaimer, then the
+// auto-generated-reply marker (single-sourced via
+// `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` so it cannot drift from
+// `CODERABBIT_ACK_OPENING_RE`'s own use of the same literal) -- anchored
+// to `$` so nothing can follow any of them unexamined.
+//
+// Residual risk, stated rather than papered over: the `<details>` block's
+// interior is intentionally NOT validated -- real templates quote
+// arbitrary past-PR text there (see the two real fixtures below), so
+// requiring it to match a known shape is not feasible. A genuinely new
+// concern hidden INSIDE a collapsed Learnings-used block, rather than as
+// plain sibling prose, would still misclassify. This is a structural
+// container CodeRabbit uses for inert quotation, not a shape any sampled
+// reply has used to hide substantive feedback -- the same "no sampled
+// reply has done this" standard the hedge-adverb guard's own residual
+// risk above already applies.
+//
+// Note on the four-branch alternation below: each of the four elements
+// (sign-off, details block, disclaimer, marker) is individually optional
+// -- no single one is present in every sample -- but making all four
+// optional independently would let an empty tail (nothing at all after
+// the closure period) match too, reopening exactly the "hedged reply with
+// no footer" gap guard 3 already closed. The alternation instead
+// enumerates the four valid ENTRY points (start at the sign-off, or skip
+// straight to the details block, or the disclaimer, or the bare marker),
+// each requiring at least that one element to be genuinely present, with
+// everything after it in the fixed real-sample order still optional.
+//
+// The details block's interior uses the same no-backtrack-past-the-
+// first-occurrence technique as guard 4's `concern`/`finding` gap above,
+// not a plain lazy `[\s\S]*?`: a lazy quantifier still backtracks FORWARD
+// past the first "</details>" to a later one if the rest of the pattern
+// fails at the first (regression test added alongside this fix,
+// self-caught before this ever reached review) -- a second, unrelated
+// details block later in the tail let a lazy match swallow genuine prose
+// sandwiched between the two as if it were all one details block's
+// content. The per-character negative lookahead forbids consuming past
+// the first "</details>" at all, so no such backtrack is possible.
+const CODERABBIT_ACK_CLOSURE_SIGNOFF_SOURCE = '🐇(?:\\s*✓)?';
+const CODERABBIT_ACK_CLOSURE_DETAILS_SOURCE =
+  '---\\s*<details>(?:(?!<\\/details>)[\\s\\S])*<\\/details>';
+const CODERABBIT_ACK_CLOSURE_DISCLAIMER_SOURCE =
+  '_You are interacting with an AI system\\._';
+const CODERABBIT_ACK_CLOSURE_MARKER_SOURCE = escapeRegExp(
+  CODERABBIT_AUTO_GENERATED_REPLY_MARKER,
+);
+const CODERABBIT_ACK_CLOSURE_TAIL_SOURCE =
+  `(?:${CODERABBIT_ACK_CLOSURE_SIGNOFF_SOURCE}` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_DETAILS_SOURCE})?` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_DISCLAIMER_SOURCE})?` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})?` +
+  `|${CODERABBIT_ACK_CLOSURE_DETAILS_SOURCE}` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_DISCLAIMER_SOURCE})?` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})?` +
+  `|${CODERABBIT_ACK_CLOSURE_DISCLAIMER_SOURCE}` +
+  `(?:\\s*${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})?` +
+  `|${CODERABBIT_ACK_CLOSURE_MARKER_SOURCE})` +
+  '\\s*$';
 const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
   `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE})\\s+)` +
     '\\baddresses\\s+the\\b' +
     '(?:(?!\\b(?:concerns?|findings?)\\b)[^.!?]){0,80}' +
     '\\b(?:concerns?|findings?)\\b\\.\\s*' +
-    '(?:🐇|---|<details|<!--|_You are interacting)',
+    CODERABBIT_ACK_CLOSURE_TAIL_SOURCE,
   'i',
 );
 

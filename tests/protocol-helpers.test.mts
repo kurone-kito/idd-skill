@@ -1372,6 +1372,133 @@ test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined t
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback appended right after the "---" boilerplate marker (Codex round 6, #2868)', () => {
+  // Codex's round-6 finding on PR #2868: the boilerplate-tail alternation
+  // validated only the FIRST recognized token ("---", in this example)
+  // and accepted whatever followed it unexamined -- a prefix match, the
+  // same "validated a fragment, not the whole shape" bug rounds 4-5
+  // already closed on the opening side. This is Codex's exact
+  // adversarial example.
+  const thread = {
+    id: 'thread-addresses-concern-then-prose-after-rule',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'TT-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'TT-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This addresses the wording ' +
+            'concern.\n\n---\n\nHowever, the null-check remains ' +
+            'unresolved.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback appended right after the 🐇 sign-off with no separating boilerplate (regression guard, #2858)', () => {
+  // Same class as the "---" case above, for the sign-off marker
+  // specifically: the tail grammar must require the ENTIRE remainder to
+  // be one of the known trailing shapes, not just start with one.
+  const thread = {
+    id: 'thread-addresses-concern-then-prose-after-signoff',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'TS-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'TS-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This addresses the wording concern.' +
+            '\n\n🐇 ✓ However, the null-check remains unresolved.',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback sandwiched between two "<details>" blocks (regression guard, #2858)', () => {
+  // The details-block sub-pattern uses a LAZY `[\s\S]*?` so it stops at
+  // the first "</details>" rather than the last -- confirms a second,
+  // unrelated details block later in the tail cannot be used to smuggle
+  // prose past the lazy match by making the whole tail look like "one
+  // details block" when it is actually two with substantive text between
+  // them.
+  const thread = {
+    id: 'thread-addresses-concern-then-prose-between-details',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'TD-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'TD-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. This addresses the wording ' +
+            'concern.\n\n---\n\n<details>\n<summary>foo</summary>\n' +
+            '</details>\n\nHowever, the null-check remains ' +
+            'unresolved.\n\n<details>\n<summary>bar</summary>\n' +
+            '</details>',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 test('classifyThreadAckOnlyPostDisposition rejects a same-sentence "addresses the X concerns but reveals a new finding" construction using plural nouns (CodeRabbit round 4, #2858)', () => {
   // CodeRabbit's round-4 review on PR #2868: guard 4's per-character
   // negative lookahead only recognized the SINGULAR "concern"/"finding",
