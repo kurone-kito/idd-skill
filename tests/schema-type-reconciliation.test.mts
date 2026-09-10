@@ -238,6 +238,7 @@ interface PolicyConfigFile {
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: number;
     e10NoProgressHoldAfter?: number;
+    deferAfterRounds?: number;
     delegate?: {
       command: string;
       mode?: 'fallback' | 'combined' | 'on-success' | 'never';
@@ -1215,7 +1216,11 @@ const policyConfigFixture = {
     legacyRoots: [1234],
   },
   claim: { verifySettleDelay: 'PT5S' },
-  critiqueLoop: { cPhaseLowSeveritySkipAfter: 3, e10NoProgressHoldAfter: 3 },
+  critiqueLoop: {
+    cPhaseLowSeveritySkipAfter: 3,
+    e10NoProgressHoldAfter: 3,
+    deferAfterRounds: 15,
+  },
   reviewEscalation: {
     changesRequestedFirstEscalation: 'PT24H',
     changesRequestedSecondEscalation: 'PT48H',
