@@ -295,6 +295,28 @@ test('parseCandidateFiles does not mistake a continuation-of-a-continuation line
   assert.deepEqual(parseCandidateFiles(body), ['src/one.mts', 'src/two.mts']);
 });
 
+test('parseCandidateFiles stops at a genuine multi-line Setext heading, not just a single-line one (Codex review, PR #2840, round 20)', () => {
+  // CommonMark lets a Setext heading's own content span several lines --
+  // round 16's fix only checked ONE line back, so it wrongly treated the
+  // heading's own SECOND content line as a "continuation" just because
+  // the FIRST content line above it was also indented (both lines are
+  // the same heading's own content, not a continuation of anything).
+  // `gh api /markdown` confirms CommonMark forms one heading
+  // ("First line<br>Second line") from both lines together.
+  const body = [
+    '## Candidate files',
+    '',
+    '- `scripts/a.mts`',
+    '',
+    ' First line',
+    ' Second line',
+    ' ---',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mts']);
+});
+
 test('parseCandidateFiles rejects a tab-indented "## Candidate files" heading -- CommonMark renders it as an indented code block, not a heading (Codex review, PR #2840, round 11)', () => {
   // Verified against GitHub's own renderer (gh api /markdown): a tab
   // advances to the next 4-column tab stop, past the 0-3-space ATX

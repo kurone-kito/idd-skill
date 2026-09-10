@@ -84,25 +84,34 @@ const INDENTED_NONBLANK_LINE_PATTERN = /^[ \t]+\S/;
  *
  * 1. A list-item bullet/ordered marker or blockquote marker (Codex
  *    review, PR #2840, round 2): see {@link SETEXT_MARKER_LED_LINE_PATTERN}.
- * 2. An indented line that is itself a *continuation* -- the line
- *    immediately before it (`lines[contentIndex - 1]`) is marker-led or
- *    itself indented and non-blank (Codex review, PR #2840, round 16;
- *    corrects round 9's blanket "any indented line is ineligible"
- *    heuristic, which a fresh finding showed goes the *dangerous*
- *    direction for this file's purpose: missing a genuine Setext boundary
- *    means the `## Candidate files` section reads too far, picking up an
- *    unrelated later section's own path as if it were a real candidate).
+ * 2. An indented line that is itself a *continuation* of a list item --
+ *    walking backward through the run of indented, non-blank lines this
+ *    line is part of eventually reaches a marker-led line (Codex review,
+ *    PR #2840, round 16, corrected round 20). A genuine multi-line Setext
+ *    heading's own content lines are ALL indented too (CommonMark allows
+ *    a Setext heading to span several lines), but that whole run traces
+ *    back to a blank line or an unindented top-level line, never a list
+ *    marker -- checking only the ONE line immediately before
+ *    (round 16's own form) wrongly treated a second heading content line
+ *    as a continuation just because the FIRST heading content line above
+ *    it also happened to be indented, e.g. `" First line\n Second
+ *    line\n ---"` right after a blank line: both lines are the SAME
+ *    multi-line heading's own content, not a continuation of anything.
+ *    `gh api /markdown` confirms CommonMark forms one heading
+ *    ("First line<br>Second line") from both lines together.
+ *
  *    An indented *wrapped continuation* line of a multi-line bullet --
  *    e.g. `- change:\n  \`src/a.mts\`\n---`, where the second line
  *    carries the real candidate path but starts with a backtick, not a
- *    marker -- is still correctly excluded this way, since the line
- *    before it (`- change:`) is marker-led; a continuation-of-a-
- *    continuation (`- Run:\n  one\n  two\n---`) is also still excluded,
- *    since the line before its own last indented line is itself indented
- *    and non-blank. A genuine 1-3-space-indented top-level Setext heading
- *    (CommonMark-legal, e.g. ` Notes\n -----` right after a blank line)
- *    is no longer wrongly excluded just for carrying that indentation.
- *    `gh api /markdown` confirms both shapes' real rendering.
+ *    marker -- is still correctly excluded this way, since walking back
+ *    from it reaches `- change:` directly (marker-led); a
+ *    continuation-of-a-continuation (`- Run:\n  one\n  two\n---`) is
+ *    also still excluded, since walking back from its last indented line
+ *    passes through the middle indented line and still reaches `- Run:`.
+ *    A genuine 1-3-space-indented top-level Setext heading (CommonMark-
+ *    legal, e.g. ` Notes\n -----` right after a blank line) is still
+ *    eligible: walking back one step reaches the blank line, not a
+ *    marker.
  */
 function isSetextIneligiblePrecedingLine(
   lines: readonly string[],
@@ -115,11 +124,16 @@ function isSetextIneligiblePrecedingLine(
   if (!INDENTED_NONBLANK_LINE_PATTERN.test(line)) {
     return false;
   }
-  const previous = lines[contentIndex - 1];
+  let index = contentIndex - 1;
+  while (
+    index >= 0 &&
+    INDENTED_NONBLANK_LINE_PATTERN.test(lines[index] ?? '')
+  ) {
+    index -= 1;
+  }
+  const boundary = lines[index];
   return (
-    previous !== undefined &&
-    (SETEXT_MARKER_LED_LINE_PATTERN.test(previous) ||
-      INDENTED_NONBLANK_LINE_PATTERN.test(previous))
+    boundary !== undefined && SETEXT_MARKER_LED_LINE_PATTERN.test(boundary)
   );
 }
 

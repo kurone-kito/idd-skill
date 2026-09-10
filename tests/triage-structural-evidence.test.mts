@@ -158,6 +158,27 @@ test('hasVerificationCommandSignal: a continuation-of-a-continuation before a th
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: a genuine multi-line Setext heading does not leak a later real command into the section (Codex review, PR #2840, round 20)', () => {
+  // CommonMark lets a Setext heading's own content span several lines --
+  // round 16's fix only checked ONE line back, so it wrongly treated the
+  // heading's own SECOND content line as a "continuation" just because
+  // the FIRST content line above it was also indented. `gh api /markdown`
+  // confirms CommonMark forms one heading from both lines together.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '- [ ] Only one thing',
+    '',
+    ' First line',
+    ' Second line',
+    ' ---',
+    '',
+    '- `node --test tests/foo.test.mts`',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: a heading with no space after the # run is not a real ATX heading (Codex review, PR #2840)', () => {
   // CommonMark requires a space/tab (or end of line) after the ATX `#`
   // run -- `##Acceptance criteria` renders as ordinary paragraph text,

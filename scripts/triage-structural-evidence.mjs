@@ -212,15 +212,37 @@ function countInterruptingCheckboxItems(sectionText) {
  * `isSetextIneligiblePrecedingLine` line-array helper, translated to a
  * lookbehind since this function works on `rest.search()` over a single
  * string rather than a `lines` array): an indented content line is only
- * Setext-ineligible when it is itself a *continuation* -- the line
- * immediately before it is marker/blockquote-led or itself indented and
- * non-blank. A negative lookbehind checks that preceding line's shape
- * directly (V8 supports variable-length lookbehind). ` {0,3}` (space-only,
- * bounded) restores CommonMark's own real indent tolerance for the
- * content line itself, replacing round 15's zero-indent requirement.
+ * Setext-ineligible when it is itself a *continuation* -- walking
+ * backward from it through zero or more indented, non-blank lines
+ * eventually reaches a marker/blockquote-led line. The lookbehind
+ * expresses this as one marker-led line followed by a `*`-repeated group
+ * of fully-consumed indented continuation lines (V8 supports a quantifier
+ * inside a lookbehind); a continuation-of-a-continuation
+ * (`- Run:\n  one\n  two\n---`) is excluded via that repeated group, not
+ * just a direct one-line continuation. ` {0,3}` (space-only, bounded)
+ * restores CommonMark's own real indent tolerance for the content line
+ * itself, replacing round 15's zero-indent requirement.
+ *
+ * Known residual (round 20, Codex review, PR #2840): a genuine multi-line
+ * Setext sibling heading (CommonMark lets a Setext heading's content span
+ * several lines, e.g. `" First line\n Second line\n ---"`, `gh api
+ * /markdown` confirms one heading forms from both) is recognized starting
+ * at its LAST content line, not its first -- the underline-adjacency
+ * check below only ever tests the line directly above the underline. The
+ * one extra line this leaks into the current section is inert heading
+ * prose (Setext content is inline-parsed text, never block-level list/
+ * checkbox syntax), so it cannot itself satisfy `verificationCommand` --
+ * unlike round 15/16's fixes, this does not reopen the false-positive
+ * direction this module exists to avoid. Chasing full multi-line
+ * recognition here would require restructuring the content-line match
+ * itself (an unbounded run of same-indent lines before the underline,
+ * not a single line) -- `discover-shared-file-overlap.mts`'s own
+ * line-array form already gets this exactly right for its own purpose
+ * (see its backward-walk fix); this regex-based sibling accepts the
+ * imprecision rather than a substantially larger rewrite.
  */
 const NEXT_ATX_HEADING_PATTERN =
-  /\n(?: {0,3}#{1,6}\s|(?=(?<!(?:^|\n)(?: {0,3}[-*+][ \t]+| {0,3}\d{1,9}[.)][ \t]+| {0,3}>|[ \t]+\S)[^\r\n]*\r?\n) {0,3}(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
+  /\n(?: {0,3}#{1,6}\s|(?=(?<!(?:^|\n)(?: {0,3}[-*+][ \t]+| {0,3}\d{1,9}[.)][ \t]+| {0,3}>)[^\r\n]*\r?\n(?:[ \t]+\S[^\r\n]*\r?\n)*) {0,3}(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
 /** Matches the `## Acceptance criteria` heading (any ATX level, any of
  * the two capitalization conventions used across this repository's own
  * issues) on its own line. Requires at least one space/tab after the `#`
