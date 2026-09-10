@@ -182,11 +182,11 @@ outcome (trust/safety concerns require human review):
 | `invalid` | Trust/safety concern or defect | Fresh: report, stop (do not retry). Reconfirmed (`existingRejection`: `outcome: invalid`): exclude, post nothing, loop |
 <!-- dprint-ignore-end -->
 
-Applying either label happens while holding the claim, per
-`idd-overview-appendix.instructions.md` (Hold / suspend) — the
-**Needs-decision claim release** sub-rule covers
-`status:needs-decision` specifically; `status:blocked-by-human` follows
-the same shape.
+Neither label is applied directly by A4.5. `status:needs-decision` is
+applied while holding the claim, per
+`idd-overview-appendix.instructions.md`'s **Needs-decision claim
+release** rule (Hold / suspend). `status:blocked-by-human` has no
+equivalent named rule documented there yet.
 
 ## Mutation Policy and Coordination Rule
 
@@ -222,9 +222,8 @@ convention:
 ```
 
 Never emit this marker for `needs-decision` or `blocked-by-human`: those
-two already carry a stable label (applied while holding the claim, per
-`idd-overview-appendix.instructions.md`'s Hold / suspend section) and
-need no second signal. Discover's own
+two already carry a stable label (see above) and need no second
+signal. Discover's own
 candidate-selection pass (`idd-discover.instructions.md`) reads this
 marker to skip a previously-rejected candidate without a full manual
 comment-history read, applying the same staleness rule as every other
