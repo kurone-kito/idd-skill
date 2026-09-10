@@ -271,10 +271,13 @@ fresh evidence (preventive; no observed incident yet — #2043). The
 workflow's PR-keyed `concurrency` group only serializes workflow runs
 against each other; it does not gate the agent's local F4.
 
-**In-flight cleanup-run wait (#2846).** Before either side decides
-whether to post its own evidence comment (the duplicate-success-record
-rule above), also check whether this PR's own `post-merge-cleanup.yml`
-check run is still in flight — narrowing the residual race the
+**In-flight cleanup-run wait (#2846).** Before the agent's F4 step
+decides whether to post its own evidence comment (the
+duplicate-success-record rule above — only the agent can run this
+wait; the workflow itself cannot block on its own run without
+deadlocking), also check whether this PR's own
+`post-merge-cleanup.yml` check run is still in flight — narrowing the
+residual race the
 marker-comment check alone cannot fully close: a run that has started
 but not yet posted its comment leaves no marker for that rule to find,
 so without this earlier wait both sides can still post within the same
@@ -314,11 +317,14 @@ gh pr checks <pr-number> --json workflow,bucket --jq \
   any) and adjudicates on the marker's own recorded status, regardless
   of how the run itself concluded.
 - **`true`**: the run is in flight. Poll the same query at a reasonable
-  interval until it returns `false`, bounded by the same
-  `ciWait.runningTimeout` (default `PT30M`, once started) /
-  `ciWait.generationTimeout` (default `PT10M`, while still queued)
-  windows `idd-ci.instructions.md`'s CI polling algorithm already uses.
-  Past that bound with the run still in flight, treat it the same as
+  interval until it returns `false`, bounded by
+  `ciWait.generationTimeout` (default `PT10M`) measured from this
+  first `true` observation. A single bound suffices here — unlike the
+  longer-running checks `idd-ci.instructions.md`'s own polling
+  algorithm bounds with the queued/running split, this workflow's job
+  completes in roughly 15 seconds, so distinguishing a merely queued
+  run from an actually running one buys nothing at that scale. Past
+  that bound with the run still in flight, treat it the same as
   "not in flight" and continue to the duplicate-success-record skip
   rule unchanged — a resulting duplicate comment is this check's
   accepted fail-open default, the same one the "not in flight" case
