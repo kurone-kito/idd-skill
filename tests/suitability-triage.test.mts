@@ -2792,9 +2792,15 @@ test('ACCEPTANCE_CRITERIA_PATTERN requires whitespace after the ATX # run, match
     new URL('../src/scripts/suitability-triage.mts', import.meta.url),
     'utf8',
   );
+  // #2767 round 7 (Codex review, PR #2840): also pins the *interior* gap
+  // between "Acceptance" and "Criteria" as `[ \t]+`, not `\s+` -- `\s`
+  // also matches a newline, so "## Acceptance\nCriteria" (two separate
+  // lines, only the first of which Markdown renders as the actual heading
+  // text) previously still matched as one combined heading, since an ATX
+  // heading is inherently single-line.
   assert.match(
     source,
-    /const ACCEPTANCE_CRITERIA_PATTERN = \/\^#\+\[ \\t\]\+Acceptance/,
+    /const ACCEPTANCE_CRITERIA_PATTERN =\s*\n\s*\/\^#\+\[ \\t\]\+Acceptance\[ \\t\]\+Criteria/,
   );
 });
 

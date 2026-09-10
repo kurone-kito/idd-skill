@@ -103,6 +103,19 @@ test('hasVerificationCommandSignal: a real (non-escaped) command span still coun
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: a checkbox marker with no whitespace after ] does not render as a real task-list item (Codex review, PR #2840 round 7)', () => {
+  const body = `## Acceptance criteria\n\n- [ ]not a task\n- [x]also not\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: a heading split across two lines by the interior whitespace gap does not count (Codex review, PR #2840 round 7)', () => {
+  // The interior gap between "Acceptance" and "criteria" must stay on one
+  // line -- an ATX heading is inherently single-line, so "## Acceptance"
+  // and a separate "criteria" line must never combine into one match.
+  const body = `## Acceptance\ncriteria\n\n- [ ] one\n- [ ] two\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: case-insensitive heading', () => {
   const body = `## acceptance CRITERIA\n\n- [ ] a\n- [ ] b\n`;
   assert.equal(hasVerificationCommandSignal(body), true);

@@ -830,7 +830,14 @@ function isEnumeratedParentheticalEntry(
 // ACCEPTANCE_CRITERIA_HEADING_PATTERN copied from, and Codex's finding
 // there applies here too -- `[ \t]+` still matches every real heading;
 // only a line Markdown itself would not render as a heading now misses.
-const ACCEPTANCE_CRITERIA_PATTERN = /^#+[ \t]+Acceptance\s+Criteria[ \t]*$/im;
+// #2767 round 7 (E9 whole-class sweep, same PR): the *interior* gap
+// between "Acceptance" and "Criteria" was still `\s+`, which also
+// matches a newline, so "## Acceptance\nCriteria" -- two separate
+// lines, only the first of which Markdown renders as the actual ATX
+// heading text -- still matched as one combined heading. Narrowed to
+// `[ \t]+`, matching the same fix on the sibling pattern.
+const ACCEPTANCE_CRITERIA_PATTERN =
+  /^#+[ \t]+Acceptance[ \t]+Criteria[ \t]*$/im;
 // #2711 PR #2735 review (Codex): this repo's own "## Candidate files"
 // convention (#2589) names files to EDIT, never a verification signal --
 // matched here (mirroring ACCEPTANCE_CRITERIA_PATTERN's own shape) so the

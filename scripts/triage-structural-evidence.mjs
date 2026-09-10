@@ -43,8 +43,14 @@ import { findHtmlCommentRanges } from './resolved-decision.mjs';
  */
 const VERIFICATION_COMMAND_CODE_SPAN_PATTERN =
   /`(?:node --test\b[^`]*|pnpm run [^\s`]+[^`]*|npx [^\s`]+[^`]*|node scripts\/[^\s`]+\.mjs[^`]*)`/;
-/** A Markdown checkbox list item: `- [ ]` / `- [x]` / `* [X]`. */
-const CHECKBOX_ITEM_PATTERN = /^\s*[-*+]\s+\[[ xX]\]/gm;
+/** A Markdown checkbox list item: `- [ ]` / `- [x]` / `* [X]`. Requires
+ * whitespace or end-of-line immediately after the closing `]` (Codex
+ * review, PR #2840, round 7): GitHub only renders `[ ]`/`[x]` as an
+ * interactive task-list checkbox when a space (or line end) follows the
+ * bracket -- `- [ ]not a task` renders as literal bracket text, not a
+ * checkbox, but the earlier pattern (no lookahead at all) still counted
+ * it. */
+const CHECKBOX_ITEM_PATTERN = /^\s*[-*+]\s+\[[ xX]\](?=[ \t]|$)/gm;
 /**
  * Section boundary: an ATX heading, or the position immediately before a
  * Setext-style sibling heading's own content line (a text line directly
@@ -70,9 +76,14 @@ const NEXT_ATX_HEADING_PATTERN =
  * space renders as plain paragraph text, not a heading, so the earlier
  * `[ \t]*` (zero-or-more) let that non-heading line open a fake
  * Acceptance-criteria section anyway. Mirrors `parseCandidateFiles`'s own
- * `\s+` heading pattern, which already required it. */
+ * `\s+` heading pattern, which already required it. The gap between
+ * "Acceptance" and "criteria" is `[ \t]+`, not `\s+` (Codex review, PR
+ * #2840, round 7): `\s` also matches a newline, so `\s+` there let
+ * `## Acceptance\ncriteria` -- two separate lines, only the first of
+ * which Markdown renders as the actual ATX heading text -- match as one
+ * combined heading anyway. An ATX heading is inherently single-line. */
 const ACCEPTANCE_CRITERIA_HEADING_PATTERN =
-  /^#{1,6}[ \t]+Acceptance\s+[Cc]riteria[ \t]*$/im;
+  /^#{1,6}[ \t]+Acceptance[ \t]+[Cc]riteria[ \t]*$/im;
 /**
  * Mask fenced code, indented (4-space) code, real HTML comment ranges, and
  * raw HTML block ranges (Codex review, PR #2840, two rounds): an issue can
