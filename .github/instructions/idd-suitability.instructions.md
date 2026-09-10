@@ -303,6 +303,7 @@ Candidates = A4 survivor set
 Loop: Rerun A4 Step 2 over Candidates to pick the next candidate
   → Standing-rejection pre-check (see above)
     → Non-stale rejection found → do not claim; exclude, post nothing, loop
+      (for A0-T: report why the target is blocked, then STOP — no fallback)
     → Stale rejection found → post reconciliation comment → Run Check 1
     → No trusted rejection found → Run Check 1
     → Scan inconclusive (fetch failed, or existingRejectionCollectionWarnings
