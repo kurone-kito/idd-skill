@@ -136,10 +136,10 @@ turns an operator-visible failure into a silent stall.
   [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
   to collect this evidence (the fields listed at that anchor). Helpers
   remain read-only evidence collectors. Distinguish two failure shapes
-  before deciding whether to retry: an **infrastructure/transport-layer
-  failure** — the invocation itself fails with no well-formed gate
-  result at all (a bare network/transport error, or a non-2xx HTTP
-  status with no substantive JSON body) — retries the identical
+  before deciding whether to retry. On an **infrastructure/transport-
+  layer failure** — the invocation itself fails with no well-formed
+  gate result at all (a bare network/transport error, or a non-2xx
+  HTTP status with no substantive JSON body) — retry the identical
   invocation once, mirroring the CI-wait algorithm's own infra-vs-code
   retry distinction (`ciWait.rerunPolicy`,
   `idd-ci.instructions.md`) rather than inventing a new pattern; if the
