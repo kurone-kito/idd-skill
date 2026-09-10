@@ -3648,6 +3648,7 @@ test('SELF_REFERENTIAL_WAIVER_TRIGGER_FILES includes the waiver parser/summarize
   for (const path of [
     'src/scripts/marker-helpers.mts',
     'src/scripts/protocol-helpers.mts',
+    'src/scripts/provider-adapter-github.mts',
   ]) {
     assert.ok(
       (SELF_REFERENTIAL_WAIVER_TRIGGER_FILES as readonly string[]).includes(
@@ -3686,6 +3687,7 @@ test('resolveSelfReferentialTriggerFiles: a vendored-node adopter resolves the c
     'scripts/external-check-waiver.mjs',
     'scripts/marker-helpers.mjs',
     'scripts/protocol-helpers.mjs',
+    'scripts/provider-adapter-github.mjs',
     ADVISORY_CONVERGENCE_WORKFLOW_PATH,
     '.github/workflows/idd-advisory-convergence-comment.yml',
   ]);

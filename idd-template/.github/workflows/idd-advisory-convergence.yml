@@ -569,6 +569,7 @@ jobs:
                 "scripts/external-check-waiver.mjs"
                 "scripts/marker-helpers.mjs"
                 "scripts/protocol-helpers.mjs"
+                "scripts/provider-adapter-github.mjs"
               )
               ;;
             package-manager)

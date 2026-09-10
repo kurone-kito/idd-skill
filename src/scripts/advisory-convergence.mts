@@ -216,14 +216,24 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * genuine checker upgrade could never match a path that never exists in
  * the adopter's own checkout) and gameable (a PR could touch that
  * nonexistent path purely to satisfy the string match).
- * `marker-helpers.mts`/`protocol-helpers.mts` joined this set in the
- * same review round (Codex, PR #2895): `advisory-convergence.mts`
- * directly imports the marker parser/renderer and waiver summarizer
- * from both, so a checker repair isolated to either file -- exactly
- * what this PR's own earlier commits did to implement `run-id:` -- must
- * also be able to trigger this bypass, or it recreates the very
- * deadlock this mechanism exists to solve. Widening this set is a
- * reviewed edit to the constant, never automatic. */
+ * `marker-helpers.mts`/`protocol-helpers.mts`/`provider-adapter-github.mts`
+ * joined this set across this same review (Codex, PR #2895):
+ * `advisory-convergence.mts` directly imports the marker parser/renderer,
+ * the waiver summarizer, and the `getWorkflowRun`/
+ * `listChangeRequestChangedFiles` GitHub adapter calls the trust path
+ * itself invokes, from these three files respectively -- a checker
+ * repair isolated to any one of them (exactly what this PR's own
+ * earlier commits did, across all three, to implement `run-id:` and the
+ * independent allowlist check) must also be able to trigger this
+ * bypass, or it recreates the very deadlock this mechanism exists to
+ * solve. This is a deliberately bounded set of DIRECT, waiver-path-
+ * specific dependencies, not every file `advisory-convergence.mts`
+ * imports for its OTHER, unrelated verdict logic (deadline, terminal
+ * state, disposition evidence, ...) -- `policy-helpers.mts` and
+ * `collaborator-permission.mts` in particular are explicitly excluded,
+ * per the issue's own background, as high-edit-contention files shared
+ * by many unrelated consumers. Widening this set is a reviewed edit to
+ * the constant, never automatic. */
 export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   'src/scripts/advisory-convergence.mts',
   'src/scripts/advisory-wait-state.mts',
@@ -232,6 +242,7 @@ export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   'src/scripts/external-check-waiver.mts',
   'src/scripts/marker-helpers.mts',
   'src/scripts/protocol-helpers.mts',
+  'src/scripts/provider-adapter-github.mts',
   '.github/workflows/idd-advisory-convergence.yml',
   '.github/workflows/idd-advisory-convergence-comment.yml',
 ] as const;
@@ -287,6 +298,7 @@ export function resolveSelfReferentialTriggerFiles(
         'scripts/external-check-waiver.mjs',
         'scripts/marker-helpers.mjs',
         'scripts/protocol-helpers.mjs',
+        'scripts/provider-adapter-github.mjs',
         ...workflowPaths,
       ];
     case 'package-manager':

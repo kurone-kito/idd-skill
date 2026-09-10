@@ -534,6 +534,7 @@ jobs:
             "src/scripts/external-check-waiver.mts"
             "src/scripts/marker-helpers.mts"
             "src/scripts/protocol-helpers.mts"
+            "src/scripts/provider-adapter-github.mts"
             ".github/workflows/idd-advisory-convergence.yml"
             ".github/workflows/idd-advisory-convergence-comment.yml"
           )
