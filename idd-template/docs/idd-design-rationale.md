@@ -569,6 +569,21 @@ instructions prompted that judgment call, and a documentation-only PR
 has no test suite to catch a silently transcribed false premise later
 (kurone-kito/idd-skill#1390).
 
+### B2.2 — Example field-name verification
+
+Issue kurone-kito/idd-skill#2806's own "Proposed change" section cited
+an illustrative gate field, `claimValid: false`, that did not exist
+anywhere in `schemas/pre-merge-readiness.schema.json` — the real
+fields are `claim.matchesExpectedClaim` / `claim.claimLost`. B2.1 did
+not apply because that issue was an ordinary bugfix issue, not
+decision-transcription, and the fabricated field appeared in an
+illustrative example, not a rationale claim, so nothing in the written
+instructions caught it during that issue's own implementation, PR
+kurone-kito/idd-skill#2875; a Codex review caught it instead, after
+the text had already shipped once. A maintainer hearing recorded on
+kurone-kito/idd-skill#2878 added this narrow, adjacent check rather
+than broadening B2.1's own condition.
+
 ### B3 — De-duplication refactor: check for behavior parity, not just body equivalence
 
 Closes a real regression class: consolidating a wrapper function used

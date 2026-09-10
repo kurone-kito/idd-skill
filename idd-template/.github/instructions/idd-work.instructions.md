@@ -333,6 +333,13 @@ silent edit. Resume planning only after the addendum is recorded.
 
 On no conflict, continue with the plan below.
 
+### B2.2 — Example field-name verification
+
+When the issue's "Proposed change" or "Acceptance criteria" cites an
+existing schema field, config key, or token as an example (not one it
+adds), verify it exists as cited; fix or drop if not, hold if unclear
+(`#2806`).
+
 Draft an implementation plan and post it as an issue comment, then run
 a critique pass for correctness and concreteness (see
 `idd-overview-appendix.instructions.md` for per-agent implementation),
