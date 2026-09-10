@@ -58,9 +58,10 @@ Then apply path-specific scoring:
   (noted, no action) — route a non-review notice to E6 instead.
 - **Scope fence (PATH A and PATH B).** A finding that asks to
   introduce, or further broaden, a change class the claimed issue's own
-  body explicitly places out of scope is **Reject forced** — PATH A's
-  `Low`, PATH B's `Rejected` — regardless of technical correctness or
-  tractability, from the point that class is introduced onward; a
+  body explicitly places out of scope scores `Low` (PATH A) or
+  `Rejected` (PATH B) and disposes **Reject forced**, regardless of
+  technical correctness or tractability, from the point that class is
+  introduced onward; a
   refinement or bug fix inside an already-introduced instance of that
   class is still in-scope work and scores normally. This fence
   overrides PATH A's High-tier `Accept forced` rule above: a
