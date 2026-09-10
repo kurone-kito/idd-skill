@@ -59,7 +59,7 @@ test('required advisory-convergence workflows no longer trigger on review commen
 // normally mergeable (pull_request_target cannot fire against its own
 // defining PR -- verification of its attachment is deferred to the
 // first PR opened after this change merges).
-test('required advisory-convergence workflows moved pull_request_review to pull_request_target', () => {
+test('required advisory-convergence workflows add pull_request_target and drop pull_request_review', () => {
   for (const path of REQUIRED_PATHS) {
     const text = readWorkflow(path);
     const onBlock = text.slice(

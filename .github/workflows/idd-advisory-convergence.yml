@@ -113,18 +113,19 @@ name: IDD advisory-convergence gate
 # generic "re-run failed jobs".
 #
 # Bounded poll for the "not reviewed yet" race (#2015): the
-# `pull_request` `synchronize` trigger above fires the instant a push
-# lands, well before the primary bot's own review typically lands
-# (10-40s later) -- originally via the separate `pull_request_review`
-# trigger this workflow declared directly; that trigger moved to the
-# companion workflow in #2764 Phase 1, but the timing gap this poll
-# exists for is unchanged, since the push-triggered run still starts
-# immediately regardless of where the review's own signal now arrives
-# from -- so a push that also needed a fresh review used to get
-# asserted, and fail, before that review existed, costing an external
-# rerun most of the time (the exact recovery documented a few
-# paragraphs below). `advisory-convergence.mjs`'s CLI entry point now
-# runs `runAdvisoryConvergenceWithPoll` instead of asserting
+# `pull_request`/`pull_request_target` `synchronize` trigger above
+# fires the instant a push lands, well before the primary bot's own
+# review typically lands (10-40s later) -- originally via the separate
+# `pull_request_review` trigger this workflow declared directly; that
+# trigger moved to the companion workflow in #2764 Phase 1, but the
+# timing gap this poll exists for is unchanged, since the
+# push-triggered run still starts immediately regardless of where the
+# review's own signal now arrives from -- so a push that also needed a
+# fresh review used to get asserted, and fail, before that review
+# existed, costing an external rerun most of the time (the exact
+# recovery documented a few paragraphs below).
+# `advisory-convergence.mjs`'s CLI entry point now runs
+# `runAdvisoryConvergenceWithPoll` instead of asserting
 # immediately: when (and ONLY when) the verdict's sole blocking reason
 # is literally "{bot} has not reviewed this pull request yet" --
 # `isSoleCopilotNotReviewedYetReason` in the .mts source -- it polls a
