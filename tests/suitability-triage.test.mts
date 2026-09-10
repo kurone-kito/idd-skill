@@ -5540,7 +5540,8 @@ test('runCli: non-verbose output mapping still spreads tier when present', () =>
 // loadHighContentionFiles reads a real file (readFileSync), so these exercise
 // it against this repository's own real audit/sync-manifest.json rather than
 // an in-memory fixture -- `bundle-discovery-phase` is a real, non-default
-// bundle (renamed from `bundle-discovery` by #2789's bundle-core split)
+// bundle (the phase-specific bundle that #2789's bundle-core split
+// produced from `bundle-discovery`, alongside the new shared `bundle-core`)
 // whose file set is disjoint enough from DEFAULT_BUNDLE_IDS
 // (bundle-review/bundle-merge) to prove the override genuinely changes the
 // resolved exclusion set, not just accepts the flag syntactically.
