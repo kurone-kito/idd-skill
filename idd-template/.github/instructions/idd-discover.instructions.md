@@ -73,27 +73,41 @@ routing:
 2. If the target issue carries the configured roadmap label or an
    `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker — the same test
    **A2**'s roadmap-node/execution-leaf classification rule uses — do
-   not continue this targeted-readiness path. Instead, treat the target
-   as the root **A1** would have selected: continue with **A1.5**
-   against it — its own stop/close outcomes decide whether child
-   enumeration resumes, exactly as in the normal roadmap path — then,
-   only if it does, run **A2**'s traversal scoped to this root and its
-   own descendants only (never a repository-wide search), then the
-   normal **A3** → **A3.5** → **A4** sequence to rank that scoped set
-   down to its single highest-suitability open child, and run
-   **A4.5** → **A5** against that one child only.
-   `idd-suitability.instructions.md`'s and `idd-claim.instructions.md`'s
-   existing A0-T-keyed stop-without-fallback rules apply to that child
-   unchanged: an A3.5/A4.5 rejection or a lost A5 claim race ends this
-   run — report and stop — rather than retrying a second-ranked child;
-   extending this branch to retry additional children on a per-candidate
-   failure is a deliberate scope limit, left to a follow-up issue. This
-   graph-scoped continuation also excludes **A0**'s own A0-O
-   orphan-fallback triggers (a)/(b)/(c) throughout: an empty or
-   fully-unsuitable scoped candidate set likewise ends the run the same
-   way A0-T's other failure branches do — report and stop — never
-   falling back to an unrelated orphan issue, per the no-silent-fallback
-   rule above.
+   not continue to steps 3-5. Instead:
+   - Apply **A3**'s dependency bullet to the target itself (both
+     visible `Blocked by #NNN` lines and hidden blocked-by markers)
+     and its human-coordination/runtime-observation-precondition
+     bullet; a hit reports the target as blocked and stops (no
+     fallback, per the rule above). Skip A3's other bullets here:
+     **A1.5** already checks the roadmap's own blocked-by-human/
+     needs-decision labels and claim state, and "no open dependent
+     issues" does not apply to a root whose own children are its
+     dependents.
+   - Treat the target as the root **A1** would have selected: run
+     **A1.5** against it. A1.5's own outcome governs what happens
+     next: a close or non-autonomous-gap outcome ends this run here —
+     report and stop, never falling back to A1 the way the normal
+     roadmap path would; only a continue outcome proceeds.
+   - Run **A2**'s traversal scoped to this root and its own
+     descendants only (never a repository-wide search), then the
+     normal **A3** → **A3.5** → **A4** sequence over that scoped set:
+     A3.5 filters and continues with the remaining startable
+     candidates exactly as in the normal roadmap path — no
+     stop-without-fallback applies at this filtering step. This
+     graph-scoped continuation excludes **A0**'s own A0-O
+     orphan-fallback triggers (a)/(b)/(c) throughout: an empty or
+     fully-discarded scoped set ends the run the same way A0-T's other
+     failure branches do — report and stop.
+   - Rank the survivors down to a single highest-suitability open
+     child and run **A4.5** → **A5** against that one child only.
+     `idd-suitability.instructions.md`'s and
+     `idd-claim.instructions.md`'s existing A0-T-keyed
+     stop-without-fallback rules apply to it unchanged: an A4.5
+     rejection, a failed A5 Pre-check (a) approval re-verification, or
+     a lost A5 claim race ends this run — report and stop — rather
+     than falling back to the next-ranked survivor. Extending this
+     branch to retry a subsequent survivor on such a failure is out of
+     scope here.
 3. Apply A3's readiness bullets to the target (the same blocked-by,
    human-coordination, and runtime-observation checks, resolved the
    same way) — plus one target-only check: no active, non-stale claim
