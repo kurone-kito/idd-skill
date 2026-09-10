@@ -465,74 +465,28 @@ jobs:
           fi
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
-      - name: Fail closed when no helper runtime is configured
-        if: steps.profile.outputs.profile == 'instructions-only'
-        run: |
-          echo "::error::This repository hosts the idd-advisory-convergence-self-waiver job but resolves helperRuntime.profile to instructions-only (no runnable helper command). Configure helperRuntime.profile in .github/idd/config.json, or remove this optional job."
-          exit 1
-      - uses: actions/setup-node@v4
-        if: steps.profile.outputs.profile != 'instructions-only'
-        with:
-          node-version: 24.x
-      - name: Detect package manager
-        id: manager
-        if: steps.profile.outputs.profile == 'package-manager'
-        run: |
-          MANAGER=$(node -e "
-            const fs = require('node:fs');
-            let declared = '';
-            try {
-              const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-              declared = String(pkg.packageManager || '').split('@')[0];
-            } catch {
-              // No readable package.json: fall through to lockfile detection.
-            }
-            if (['npm', 'pnpm', 'yarn'].includes(declared)) {
-              console.log(declared);
-            } else {
-              const lockfiles = [
-                ['pnpm-lock.yaml', 'pnpm'],
-                ['package-lock.json', 'npm'],
-                ['yarn.lock', 'yarn'],
-              ].filter(([file]) => fs.existsSync(file));
-              if (lockfiles.length === 1) {
-                console.log(lockfiles[0][1]);
-              } else if (lockfiles.length === 0) {
-                console.log('npm');
-              } else {
-                console.log('ambiguous');
-              }
-            }
-          ")
-          if [ "$MANAGER" = "ambiguous" ]; then
-            echo "::warning::Multiple package-manager lockfiles were found with no declared \"packageManager\" field in package.json; refusing to guess which one to use. Add a \"packageManager\": \"<name>@<version>\" field to package.json, or remove the stale lockfile(s)."
-          fi
-          echo "manager=$MANAGER" >> "$GITHUB_OUTPUT"
-      - name: Fail closed on ambiguous package manager
-        if: steps.manager.outputs.manager == 'ambiguous'
-        run: |
-          echo "::error::This job resolves helperRuntime.profile to package-manager, but multiple package-manager lockfiles were found with no declared \"packageManager\" field in package.json, so which manager to use cannot be determined. Add a \"packageManager\": \"<name>@<version>\" field to package.json, or remove the stale lockfile(s)."
-          exit 1
-      - name: Install dependencies (package-manager profile)
-        if: steps.profile.outputs.profile == 'package-manager'
-        env:
-          MANAGER: ${{ steps.manager.outputs.manager }}
-        run: |
-          case "$MANAGER" in
-            pnpm)
-              corepack enable
-              pnpm install --frozen-lockfile
-              ;;
-            yarn)
-              corepack enable
-              yarn install --frozen-lockfile
-              ;;
-            *)
-              npm ci
-              ;;
-          esac
       - name: Detect self-referential trigger-file allowlist touch
         id: allowlist
+        # kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 10):
+        # runs BEFORE any profile-specific setup below that can fail
+        # closed (ambiguous package manager, a broken lockfile install) --
+        # this step needs only `gh`/`jq`/bash, never node, so nothing
+        # below is a prerequisite for it. Detecting the touch first lets
+        # the profile-specific setup steps skip entirely for the vast
+        # majority of PRs that never touch the allowlist at all (see each
+        # step's own added `steps.allowlist.outputs.touched == 'true'`
+        # condition below), instead of failing this job on every PR for a
+        # repository whose current package-manager setup happens to be
+        # broken. A PR that migrates away from a genuinely broken
+        # package-manager setup (the profile-migration case two commits
+        # ago) still cannot post through THAT profile's own broken
+        # runtime -- unavoidable, since posting still needs a working
+        # `pnpm exec`/`npm exec`/`yarn` invocation for that profile
+        # specifically -- but this ordering at least stops a broken
+        # lockfile from blocking every OTHER allowlisted PR that never
+        # depended on package-manager health in the first place (e.g. one
+        # fixing package.json/the lockfile itself, already an allowlisted
+        # path).
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
@@ -615,6 +569,76 @@ jobs:
             fi
           done
           echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
+      - name: Fail closed when no helper runtime is configured
+        if: steps.profile.outputs.profile == 'instructions-only'
+        run: |
+          echo "::error::This repository hosts the idd-advisory-convergence-self-waiver job but resolves helperRuntime.profile to instructions-only (no runnable helper command). Configure helperRuntime.profile in .github/idd/config.json, or remove this optional job."
+          exit 1
+      - uses: actions/setup-node@v4
+        if: steps.profile.outputs.profile != 'instructions-only'
+        with:
+          node-version: 24.x
+      - name: Detect package manager
+        id: manager
+        # kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 10):
+        # skip entirely when this PR does not touch the allowlist -- see
+        # the allowlist-detection step's own doc comment above for why
+        # this (and the two steps below) moved after it.
+        if: steps.profile.outputs.profile == 'package-manager' && steps.allowlist.outputs.touched == 'true'
+        run: |
+          MANAGER=$(node -e "
+            const fs = require('node:fs');
+            let declared = '';
+            try {
+              const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              declared = String(pkg.packageManager || '').split('@')[0];
+            } catch {
+              // No readable package.json: fall through to lockfile detection.
+            }
+            if (['npm', 'pnpm', 'yarn'].includes(declared)) {
+              console.log(declared);
+            } else {
+              const lockfiles = [
+                ['pnpm-lock.yaml', 'pnpm'],
+                ['package-lock.json', 'npm'],
+                ['yarn.lock', 'yarn'],
+              ].filter(([file]) => fs.existsSync(file));
+              if (lockfiles.length === 1) {
+                console.log(lockfiles[0][1]);
+              } else if (lockfiles.length === 0) {
+                console.log('npm');
+              } else {
+                console.log('ambiguous');
+              }
+            }
+          ")
+          if [ "$MANAGER" = "ambiguous" ]; then
+            echo "::warning::Multiple package-manager lockfiles were found with no declared \"packageManager\" field in package.json; refusing to guess which one to use. Add a \"packageManager\": \"<name>@<version>\" field to package.json, or remove the stale lockfile(s)."
+          fi
+          echo "manager=$MANAGER" >> "$GITHUB_OUTPUT"
+      - name: Fail closed on ambiguous package manager
+        if: steps.manager.outputs.manager == 'ambiguous'
+        run: |
+          echo "::error::This job resolves helperRuntime.profile to package-manager, but multiple package-manager lockfiles were found with no declared \"packageManager\" field in package.json, so which manager to use cannot be determined. Add a \"packageManager\": \"<name>@<version>\" field to package.json, or remove the stale lockfile(s)."
+          exit 1
+      - name: Install dependencies (package-manager profile)
+        if: steps.profile.outputs.profile == 'package-manager' && steps.allowlist.outputs.touched == 'true'
+        env:
+          MANAGER: ${{ steps.manager.outputs.manager }}
+        run: |
+          case "$MANAGER" in
+            pnpm)
+              corepack enable
+              pnpm install --frozen-lockfile
+              ;;
+            yarn)
+              corepack enable
+              yarn install --frozen-lockfile
+              ;;
+            *)
+              npm ci
+              ;;
+          esac
       - name: Post the self-referential-bootstrap-auto waiver
         # Skip a fork PR entirely: the consumer's run-bound trust check
         # would reject it anyway (a fork's own workflow run never matches
