@@ -595,6 +595,59 @@ test('getWorkItemUserContentEdits pages backward across multiple pages and aggre
   ]);
 });
 
+test('getWorkItemUserContentEdits returns edits in ascending editedAt order even though the newer page is fetched first (Copilot review, PR #2840)', () => {
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        call += 1;
+        // Page 1 (fetched first) holds the NEWER edit; page 2 (fetched
+        // second, via `before:`) holds the OLDER one -- backward
+        // pagination visits pages newest-first, so a naive
+        // `allNodes.push(...page.nodes)` per page would append the older
+        // page after the newer one, leaving the overall array
+        // newest-first rather than ascending.
+        if (call === 1) {
+          return JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  userContentEdits: {
+                    pageInfo: {
+                      hasPreviousPage: true,
+                      startCursor: 'CURSOR_1',
+                    },
+                    nodes: [{ editedAt: '2026-09-08T00:00:00Z' }],
+                  },
+                },
+              },
+            },
+          });
+        }
+        return JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                userContentEdits: {
+                  pageInfo: { hasPreviousPage: false, startCursor: null },
+                  nodes: [{ editedAt: '2026-01-01T00:00:00Z' }],
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  const edits = port.getWorkItemUserContentEdits(2840);
+  assert.deepEqual(
+    edits.map((edit) => edit.editedAt),
+    ['2026-01-01T00:00:00Z', '2026-09-08T00:00:00Z'],
+  );
+});
+
 test('getWorkItemUserContentEdits throws when hasPreviousPage is true but startCursor is absent', () => {
   const port = createGithubProviderAdapter(
     'kurone-kito',

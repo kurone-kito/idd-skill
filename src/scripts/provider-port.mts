@@ -453,15 +453,19 @@ export interface ProviderPort {
    * login } }` read (#2762, widened by #2767 to also select `editor`) --
    * the only place GitHub records a body edit; a REST timeline `edited`
    * event with a `changes.body` payload is never emitted for a real edit.
-   * Bounded to the most recent 100 edits (`last: 100`, not `first`, so a
-   * long edit history keeps the newest edits rather than the oldest --
-   * callers only ever need the latest ones). Returns edits in ascending
-   * order as GitHub itself returns them; `editorLogin` is `null` for a
-   * deleted/ghost editor account (GitHub still records the edit but the
-   * `editor` field resolves to `null`) -- callers that need a trust
-   * decision must treat `null` as untrusted, not skip it. Throws on any
-   * `gh` failure, matching {@link getWorkItemTimeline}'s throw-on-failure
-   * contract rather than swallowing it.
+   * Reads the full edit history, paginating backward in pages of 100
+   * (`last: 100`, not `first`) until GitHub reports no earlier page,
+   * bounded by an internal page cap that throws rather than silently
+   * truncating (#2767: the `trustedEditor` signal needs every editor, not
+   * just the most recent ones -- unlike the pre-#2767 single-page
+   * implementation this doc comment originally described). Returns edits
+   * in ascending `editedAt` order regardless of the backward page-fetch
+   * order; `editorLogin` is `null` for a deleted/ghost editor account
+   * (GitHub still records the edit but the `editor` field resolves to
+   * `null`) -- callers that need a trust decision must treat `null` as
+   * untrusted, not skip it. Throws on any `gh` failure, matching
+   * {@link getWorkItemTimeline}'s throw-on-failure contract rather than
+   * swallowing it.
    */
   getWorkItemUserContentEdits(number: number): ProviderUserContentEdit[];
 

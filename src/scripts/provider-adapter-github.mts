@@ -263,7 +263,14 @@ function fetchWorkItemUserContentEditsPage(
  * page silently dropped an untrusted editor beyond the most recent 100
  * edits -- exactly the laundering path the signal exists to block. Pages
  * backward via `before:`/`hasPreviousPage` until the full connection is
- * read, bounded by {@link USER_CONTENT_EDITS_MAX_PAGES}. */
+ * read, bounded by {@link USER_CONTENT_EDITS_MAX_PAGES}. Each individual
+ * page is itself chronologically ascending (GitHub's own connection
+ * order), but backward pagination reads the *newest* page first --
+ * appending each successively older page after the previous one would
+ * leave the newest edits first and the oldest last overall, breaking
+ * {@link ProviderPort.getWorkItemUserContentEdits}'s documented ascending
+ * contract (Copilot review, PR #2840); sort by `editedAt` below rather
+ * than weaken that contract to match the pagination order. */
 function fetchWorkItemUserContentEdits(
   deps: GithubProviderAdapterDeps,
   owner: string,
@@ -298,7 +305,11 @@ function fetchWorkItemUserContentEdits(
           editedAt: node.editedAt,
           editorLogin:
             typeof node.editor?.login === 'string' ? node.editor.login : null,
-        }));
+        }))
+        .sort(
+          (left, right) =>
+            Date.parse(left.editedAt) - Date.parse(right.editedAt),
+        );
     }
     if (!result.startCursor) {
       throw new Error(
