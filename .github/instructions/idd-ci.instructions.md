@@ -288,7 +288,7 @@ a scoped waiver posted automatically by a separate `issues: write` job in
 `idd-advisory-convergence.yml` itself — no manual waiver or rerun needed
 to unblock it. See
 [External-check waiver contract](../../docs/idd-helper-scripts.md#external-check-waiver-contract)
-for the marker shape, the four acceptance conditions, and why this one
+for the marker shape, the five acceptance conditions, and why this one
 waiver kind is evaluated independent of the deadline/terminal-unavailable
 gate. This does not replace the manual flow for any other reason token,
 actor, or check.
