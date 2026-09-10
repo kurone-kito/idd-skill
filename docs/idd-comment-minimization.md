@@ -271,6 +271,82 @@ fresh evidence (preventive; no observed incident yet — #2043). The
 workflow's PR-keyed `concurrency` group only serializes workflow runs
 against each other; it does not gate the agent's local F4.
 
+**Workflow-run ownership check (#2846).** Before either side
+decides whether to post its own evidence comment (the
+duplicate-success-record rule above), also check whether this PR's own
+`post-merge-cleanup.yml` check run has already started posting or has
+finished doing so — closing the residual race the marker-comment check
+alone cannot: a run that has started but not yet posted its comment
+leaves no marker for that rule to find, so without this earlier check
+both sides can still post within the same few-second window after
+merge (the observed incident: a live CodeRabbit review caught exactly
+this duplicate `idd-cleanup-evidence` comment on
+`kurone-kito/dotfiles#396`).
+
+`gh pr checks` surfaces this `pull_request_target`-triggered run as a
+normal PR check even though it fires after merge — verified on PR
+`#2855`, 2026-09-10. Filter on whatever `name:` the adopter's own copy
+of the workflow actually declares; this repository's dogfooded copy
+and the template both currently say `Post-merge cleanup`. A
+`workflow_dispatch` rerun can add a second entry for the same
+workflow, so pick a single winning entry first: `pending` always wins
+outright (a still-running run always takes priority over an
+already-completed one); otherwise take the entry with the latest
+`startedAt`.
+
+```sh
+# 1. the winning entry's bucket and run id (from its own `link` URL)
+gh pr checks <pr-number> --json workflow,bucket,link,startedAt --jq \
+  'map(select(.workflow == "Post-merge cleanup"))
+   | if length == 0 then empty
+     elif any(.bucket == "pending") then (map(select(.bucket == "pending")) | .[0])
+     else max_by(.startedAt) end
+   | [.bucket, (.link | sub(".*/runs/"; "") | sub("/job/.*"; ""))] | @tsv'
+```
+
+- **No output, or the lookup itself fails** (old `gh`, no network, a
+  GitHub Enterprise Server version without this data): no visible run
+  for this PR. Continue to the duplicate-success-record skip rule
+  unchanged.
+- **First field is `pending`**: the run is in flight. Skip the agent's
+  own evidence-comment post entirely — let that run own it. No need to
+  run step 2 below.
+- **Any other first field** (a completed run): run step 2 below with
+  the second field as `<run-id>`.
+
+```sh
+# 2. that run's posting-step conclusion
+gh api "repos/{owner}/{repo}/actions/runs/<run-id>/jobs" --jq \
+  '.jobs[].steps[] | select(.name == "Post cleanup evidence comment") | .conclusion'
+```
+
+The posting step's own conclusion decides ownership for a completed
+run, not the check's overall `bucket` — two distinct failure modes
+would otherwise misclassify a run that never actually posted anything
+as one that did:
+
+- The template workflow skips its cleanup and evidence steps entirely
+  under an `instructions-only` (or ambiguous package-manager)
+  `helperRuntime.profile` — a job whose meaningful steps were all
+  skipped still reports a passing check.
+- The evidence-posting step itself runs under the default GitHub
+  Actions `bash -e`; its `COMMENTS_TSV=$(gh api --paginate ...)` read
+  is a plain assignment with no `set +e` guard, so a transient `gh
+  api` failure there (rate limit, network) aborts the step — and the
+  check run — before `gh pr comment` is ever reached.
+
+Only an exact `success` conclusion means the step actually ran to
+completion (whether it posted fresh evidence, or intentionally
+no-op'd because a success record already existed):
+
+- **`success`**: skip the agent's own post entirely — let that run own
+  it.
+- **Anything else** (`skipped`, `failure`, `cancelled`, no such step at
+  all — an older workflow copy, or an adopter's copy that renamed the
+  step, ...): that run did not reliably take ownership of posting.
+  Treat it the same as "no visible run" and continue to the
+  duplicate-success-record skip rule unchanged.
+
 ## GitHub mechanism
 
 GitHub GraphQL exposes `minimizeComment`:
