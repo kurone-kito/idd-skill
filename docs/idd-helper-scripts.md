@@ -1341,9 +1341,15 @@ Interpretation rules:
 A narrow, documented exception to "human maintainer only" above: when a
 PR's own diff touches `idd-advisory-convergence`'s committed trigger-file
 allowlist (the check's own source, its policy inputs, or its workflow
-files -- exactly seven paths, a committed constant, never derived from
-imports), that PR cannot benefit from its own fix to the checker while
-still unmerged. `idd-advisory-convergence.yml` detects this from a
+files -- a fixed, committed set of paths, never derived from imports;
+this source repository's own copy lists exactly seven `.mts`/workflow
+paths, and the distributed `idd-template/` copy resolves a
+profile-appropriate set instead -- compiled `scripts/*.mjs` paths for
+`vendored-node`, the dependency manifest and lockfile for
+`package-manager`, since neither ships this source repository's own
+`src/scripts/*.mts` files), that PR cannot benefit from its own fix to
+the checker while still unmerged. `idd-advisory-convergence.yml` detects
+this from a
 separate job with `issues: write` as its only write permission (the
 verdict job stays read-only; it additionally gains `actions: read`,
 required for the run-id trust verification's own
@@ -1377,10 +1383,21 @@ idd-external-check-waiver --pr 123 \
   fixed `PT24H`, independent of `advisoryWait.convergenceDeadline`;
 - it still resolves the linked issue's real active claim exactly like the
   ordinary path (never a claimless `none` waiver) and still requires one
-  to exist.
+  to exist;
+- it never reuses an existing marker (kurone-kito/idd-skill#2657, Codex
+  review round 2, PR #2895): the generic reuse scan every other
+  `--apply` invocation runs first (to avoid double-posting on a retry)
+  is skipped entirely here, since it correlates only on selector,
+  reason, HEAD, and claim -- never the `run-id:`/event-type trust chain
+  below -- so a same-repository PR-controlled `pull_request` workflow
+  could otherwise prepost a same-reason marker with no verifiable
+  `run-id:` and trick this job into believing a valid waiver already
+  exists, skipping its own post. Always attempting to post is at worst
+  a harmless extra marker; the consumer's trust check below already
+  accepts any candidate that verifies.
 
-The marker is honored only when **all four** of the following hold,
-verified by `advisory-convergence.mts` itself (not the generic
+The marker is honored only when **all** of the following hold, verified
+by `advisory-convergence.mts` itself (not the generic
 `resolveTrustedCollaboratorMarkerLogins` trust surface, since this check
 needs a live per-marker run lookup no other consumer needs):
 
@@ -1390,17 +1407,29 @@ needs a live per-marker run lookup no other consumer needs):
    `run-id:` returns `path` equal to
    `.github/workflows/idd-advisory-convergence.yml`, `head_sha` equal to
    the marker's `{head-sha}`, and `head_repository.full_name` equal to
-   the current repository; and
+   the current repository;
 4. that same response's `event` field is exactly `pull_request_target`,
    never `pull_request` -- closing the gap where a same-repository PR
    editing the workflow YAML can still trigger a `pull_request`-triggered
    run of it during a `pull_request`/`pull_request_target` migration
-   window (kurone-kito/idd-skill#2764 Phase 1).
+   window (kurone-kito/idd-skill#2764 Phase 1); and
+5. the PR's own changed files (fetched independently at consume time,
+   never trusted from the posting job's own internal check) include at
+   least one path from the trigger-file allowlist above
+   (kurone-kito/idd-skill#2657, Codex review, PR #2895) -- conditions 3
+   and 4 alone only prove the marker cites a genuine
+   `pull_request_target` run of this exact workflow file/head/repo, not
+   that the run's own allowlist check found a match, so without this a
+   same-repository PR could forge a marker citing the ordinary verdict
+   job's own trivially-discoverable run id for its own HEAD and bypass
+   advisory convergence for a change that never touched the allowlist at
+   all.
 
 A marker missing `run-id:`, whose run cannot be resolved, targets another
-head SHA or repository, or ran under any event other than
-`pull_request_target`, is rejected the same way a manual waiver from an
-untrusted actor is today. Unlike an ordinary maintainer-authorized waiver
+head SHA or repository, ran under any event other than
+`pull_request_target`, or whose PR diff does not touch the trigger-file
+allowlist, is rejected the same way a manual waiver from an untrusted
+actor is today. Unlike an ordinary maintainer-authorized waiver
 (gated behind `deadlinePassed || terminalUnavailable`), a valid
 self-referential-bootstrap-auto waiver is evaluated **unconditionally** --
 it makes `ready` true immediately, without waiting for the deadline clock

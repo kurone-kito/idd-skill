@@ -1599,6 +1599,102 @@ test('runExternalCheckWaiver: --auto-bootstrap posts end to end with no viewer-i
   assert.equal(parsed?.claimId, 'claim-20260830T222316Z-2328');
 });
 
+test('runExternalCheckWaiver: --auto-bootstrap never reuses an existing same-reason marker, even one with no verifiable run-id (Codex review, PR #2895, round 2)', async () => {
+  // kurone-kito/idd-skill#2657: the generic reuse scan correlates on
+  // `reason` but never validates a candidate's `run-id:` against the
+  // Actions Runs API. A forged marker with the exact
+  // self-referential-bootstrap-auto reason token but no run-id (or an
+  // unverifiable one) would previously still be accepted as "reusable",
+  // causing this job to skip posting its own valid, run-bound marker --
+  // silently leaving the required check red once the consumer correctly
+  // rejects the unverifiable reused one. Reuse must be disabled entirely
+  // for --auto-bootstrap, so this must always attempt to post regardless
+  // of what is already present.
+  const forgedMarker = {
+    id: 900,
+    html_url:
+      'https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-900',
+    created_at: '2026-08-30T18:15:00Z',
+    user: { login: 'github-actions[bot]' },
+    body: renderExternalCheckWaiverComment({
+      actor: 'github-actions[bot]',
+      agentId: 'github-actions-bot',
+      claimId: 'claim-20260830T222316Z-2328',
+      headSha: REUSE_HEAD_SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: '2099-01-01T00:00:00Z',
+      // Deliberately no run-id: the forged-marker shape this fix defends
+      // against never has a verifiable one.
+    }),
+  };
+  let posted: { prNumber: number; body: string } | undefined;
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: () => [forgedMarker],
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T18:20:00Z'),
+    isTTY: false,
+    postComment: (prNumber, body) => {
+      posted = { prNumber, body };
+      return { html_url: 'https://example.invalid/posted' };
+    },
+  });
+
+  assert.equal(
+    report?.applied,
+    true,
+    'must post its own marker instead of reusing the pre-existing same-reason one',
+  );
+  assert.equal(report?.reusedWaiver, undefined);
+  assert.equal(posted?.prNumber, 2325);
+  assert.match(posted?.body ?? '', / run-id:555 -->/);
+});
+
 test('runExternalCheckWaiver: --auto-bootstrap clamps its fixed expiry to a configured shorter maxValidity (Codex review, PR #2895)', async () => {
   // The fixed PT24H default is anchored on the HEAD commit timestamp
   // independent of `advisoryWait.convergenceDeadline` (see the test above),

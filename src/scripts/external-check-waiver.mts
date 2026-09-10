@@ -1043,16 +1043,37 @@ export async function runExternalCheckWaiver(
     claimId: wouldPost?.claimId ?? '',
     supersedes: String(report.linkedIssue?.activeClaim?.supersedes ?? ''),
   };
-  const existingWaiver = findReusableWaiverComment({
-    comments: prComments,
-    evidence: buildWaiverEvidence(prComments, preWriteBinding),
-    checkSelector: report.requested.selector,
-    expectedHeadSha: wouldPost?.headSha ?? '',
-    allowedClaimIds: toAllowedClaimIds(preWriteBinding),
-    expectedReason: args.autoBootstrap
-      ? SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON
-      : undefined,
-  });
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 2): the
+  // generic reuse scan correlates on `reason` (now via `expectedReason`)
+  // but never validates a candidate's `run-id:` against the Actions Runs
+  // API the way the CONSUMER's `autoWaiverValid` check does. A
+  // same-repository PR-controlled `pull_request` workflow with
+  // `issues: write` could therefore prepost a same-selector,
+  // same-claim/HEAD bot marker using the exact
+  // `self-referential-bootstrap-auto` reason token but an absent or
+  // unverifiable `run-id:`, which this reuse scan would still accept as
+  // reusable -- causing the trusted `pull_request_target` posting job to
+  // exit believing a valid waiver already exists, skip posting its own
+  // run-bound marker, and leave the required check permanently red once
+  // the consumer (correctly) rejects the unverifiable reused one.
+  // Applying the same run-id/event-type trust checks here would require
+  // this CLI to make its own Actions Runs API call and duplicate
+  // `verifySelfReferentialBootstrapWaiverRun`; simpler and just as safe
+  // (per the reviewer's own suggested alternative) is to disable generic
+  // reuse entirely for this mode: this job runs once per relevant
+  // trigger with a fresh `$GITHUB_RUN_ID` every time, so always
+  // attempting to post is at worst a harmless extra marker (the
+  // consumer's `autoWaiverValid` check already tolerates more than one
+  // valid entry, taking any that verifies) -- never a missed post.
+  const existingWaiver = args.autoBootstrap
+    ? null
+    : findReusableWaiverComment({
+        comments: prComments,
+        evidence: buildWaiverEvidence(prComments, preWriteBinding),
+        checkSelector: report.requested.selector,
+        expectedHeadSha: wouldPost?.headSha ?? '',
+        allowedClaimIds: toAllowedClaimIds(preWriteBinding),
+      });
   if (existingWaiver) {
     const reusedReport = {
       ...report,
@@ -1301,17 +1322,18 @@ export function collectValidWaiverComments({
   allowedClaimIds?: string[];
   /**
    * kurone-kito/idd-skill#2657 (Codex review, PR #2895): require an exact
-   * `reason` match before treating an existing marker as reusable.
-   * Without this, `--auto-bootstrap`'s own reuse scan (which must trust
-   * `github-actions[bot]` to resolve its own prior post) would also
-   * treat ANY other `github-actions[bot]`-authored same-selector marker
-   * as reusable -- including one a PR-controlled `pull_request`-triggered
-   * workflow forged with a different (or absent) `run-id:` -- causing
-   * the trusted `pull_request_target` posting job to skip posting its
-   * own valid marker because it wrongly believes one already exists.
-   * Optional and unused by every other caller, which correlates on
-   * `entry.reason === parsed.reason` already (see `matchesValidEntry`
-   * below) without needing to assert a SPECIFIC expected value.
+   * `reason` match before a candidate can correlate to a valid evidence
+   * entry. `runExternalCheckWaiver`'s `--auto-bootstrap` PRE-WRITE reuse
+   * scan never calls this function at all (generic reuse is disabled
+   * entirely for that mode -- see the call site's own doc comment for
+   * why a `reason`-only filter is not a sufficient trust check on its
+   * own); this parameter is exercised by that mode's POST-WRITE
+   * duplicate-reconcile scan instead, so a same-selector,
+   * different-reason bot marker is never misreported as a competing
+   * duplicate of this run's own post. Optional and unused by every
+   * other caller, which correlates on `entry.reason === parsed.reason`
+   * already (see `matchesValidEntry` below) without needing to assert a
+   * SPECIFIC expected value.
    */
   expectedReason?: string;
 }): ReusableWaiver[] {
