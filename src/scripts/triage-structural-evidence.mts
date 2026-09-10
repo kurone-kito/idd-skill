@@ -64,8 +64,20 @@ const VERIFICATION_COMMAND_CODE_SPAN_PATTERN =
  * (advisor review, round 9, closing a self-documented deferral): GFM's
  * task-list extension applies to any list item, ordered or unordered, so
  * "1. [ ] one" is a real, GitHub-rendered checkbox the bullet-only pattern
- * previously missed -- a false-negative-only fix. */
-const CHECKBOX_ITEM_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\](?=[ \t]|$)/gm;
+ * previously missed -- a false-negative-only fix.
+ *
+ * The marker separator is `[ \t]+`, not `\s+` (Codex review, PR #2840,
+ * round 16): `\s` also matches a newline, so `\s+` let a bare `*` (an
+ * empty list item) followed, across a blank line, by an unrelated later
+ * paragraph that happens to start with `[ ] one` count as one combined
+ * checkbox -- `gh api /markdown` confirms GitHub renders these as two
+ * separate, unrelated structures (an empty list item, then an ordinary
+ * paragraph), never a real task-list checkbox. The marker and its `[ ]`
+ * must stay on the one line a real GFM task-list item requires. Also
+ * anchors `^` against `[ \t]*`, not `\s*` (the same cross-line leak in
+ * the leading-indent position). */
+const CHECKBOX_ITEM_PATTERN =
+  /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX]\](?=[ \t]|$)/gm;
 
 /**
  * Section boundary: an ATX heading, or the position immediately before a

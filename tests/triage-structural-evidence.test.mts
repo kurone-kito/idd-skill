@@ -42,6 +42,30 @@ test('hasVerificationCommandSignal: false on a single checkbox item', () => {
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: a list marker and a later, unrelated bracketed paragraph do not combine into a checkbox (Codex review, PR #2840, round 16)', () => {
+  // `\s+` between the marker and `[ ]` previously matched across a blank
+  // line, so a bare `*` (an empty list item) followed by an unrelated
+  // later paragraph starting with `[ ] one` counted as one combined
+  // checkbox. `gh api /markdown` confirms GitHub renders these as two
+  // separate, unrelated structures (an empty list item, then an ordinary
+  // paragraph) -- never a real task-list checkbox. Two such pairs, so a
+  // regression back to `\s+` would still show `true` (2+ false matches),
+  // not just a weaker single-match false positive.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '*',
+    '',
+    '[ ] one',
+    '',
+    '*',
+    '',
+    '[ ] two',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: false when the section is absent', () => {
   const body = `## Background\n\nSome prose, no AC section at all.\n`;
   assert.equal(hasVerificationCommandSignal(body), false);
