@@ -207,7 +207,7 @@ const EMPHASIS_SPAN_PATTERN =
 // findHtmlCommentRanges uses for the same "mask an HTML comment" need)
 // -- not a full HTML parser either way.
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?(?:-->|$)/g;
-const HTML_COMMENT_MASK_CHAR = '';
+const HTML_COMMENT_MASK_CHAR = '\uE000';
 
 function blankHtmlComments(text: string): string {
   return text.replace(HTML_COMMENT_PATTERN, (match) =>
