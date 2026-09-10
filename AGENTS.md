@@ -68,8 +68,7 @@ the reasoning behind this layout.
   script also flags this failure mode outside code spans, in prose
   Markdown text: a hyphenated compound word (e.g. "transport-layer")
   must never wrap right after the hyphen inside `**bold**` / `*italic*`
-  emphasis, for the same corrupting-space reason (idd-skill issue
-  `#2876`).
+  emphasis, for the same corrupting-space reason (issue `#2876`).
 - **Bare issue/PR reference wrapping**: a bare `#NNN` reference must
   never be the first token of a paragraph, list item, or wrapped
   continuation line in prose Markdown — `dprint fmt`'s automatic

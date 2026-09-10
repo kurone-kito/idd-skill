@@ -274,6 +274,34 @@ test('findCorruptingProseWraps: an HTML comment with a stray backtick does not s
   assert.equal(violations.length, 1);
 });
 
+test('findCorruptingProseWraps: does not flag literal emphasis markers inside a raw HTML block', () => {
+  // PR #2880 review (Codex): CommonMark renders a raw HTML block's
+  // contents literally, never as emphasis, so a wrapped `*...*` example
+  // inside e.g. `<pre>` must not be scanned as prose.
+  assert.deepEqual(
+    findCorruptingProseWraps(
+      ['<pre>', '*well-', 'known*', '</pre>'].join('\n'),
+    ),
+    [],
+  );
+});
+
+test('findCorruptingProseWraps: does not flag emphasis starting right after an escaped delimiter', () => {
+  // PR #2880 review (Codex): CommonMark never treats an escaped `*` as a
+  // real emphasis opener, so the asterisks and text after it are literal,
+  // not emphasis, and must not be scanned as if they were.
+  assert.deepEqual(findCorruptingProseWraps('\\*well-\nknown* text'), []);
+});
+
+test('findCorruptingProseWraps: still flags a real violation elsewhere when an earlier escaped delimiter is present', () => {
+  // Regression guard: ignoring an escaped opener must not also blank a
+  // later, genuine emphasis span.
+  const violations = findCorruptingProseWraps(
+    '\\*literal* then **transport-\nlayer** failure',
+  );
+  assert.equal(violations.length, 1);
+});
+
 test('findCorruptingProseWraps: a real fixture file with emphasis markup has no corrupting hyphen wraps', () => {
   // This checks one specific fixture (which does contain `**bold**`
   // emphasis, e.g. its "**Example**:" line -- PR #2880 review, Copilot),

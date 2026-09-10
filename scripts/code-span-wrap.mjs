@@ -37,6 +37,8 @@
 // this repository's corpus.
 import {
   blankFencedCodeBlocks,
+  findFencedCodeRanges,
+  findHtmlBlockRanges,
   findMarkdownCodeRanges,
   INLINE_CODE_SPAN_PATTERN,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -132,9 +134,14 @@ export function findCorruptingCodeSpanWraps(text) {
 // never a false positive that could wrongly block a clean PR, and a human/
 // Copilot review remains the backstop that caught this issue's own
 // incident in the first place:
-// - An escaped delimiter (`\*`) immediately before a wrapped compound is
-//   read as a real closing marker, ending the match early and missing the
-//   wrap after it (e.g. `*note \*literal well-\nknown*`).
+// - An escaped delimiter (`\*`) immediately before a wrapped compound,
+//   INSIDE an already-open span, is read as a real closing marker, ending
+//   the match early and missing the wrap after it (e.g.
+//   `*note \*literal well-\nknown*`). The negative lookbehind below only
+//   stops a leading escaped delimiter from wrongly OPENING a span in the
+//   first place (the opposite-direction, false-positive-causing case) --
+//   it does not give `(?!\1)` the same escape awareness for a closer
+//   found mid-span.
 // - A blockquote `>` container prefix on a wrapped continuation line is
 //   not stripped before the neighbor check, so a wrap inside a
 //   blockquoted emphasis span (e.g. `> **well-\n> known**`) is missed.
@@ -142,8 +149,18 @@ export function findCorruptingCodeSpanWraps(text) {
 //   shared with {@link findCorruptingCodeSpanWraps}, which this issue does
 //   not change), so a non-ASCII letter adjacent to the hyphen (e.g.
 //   `**café-\nstyle**`) is not recognized as continuing the compound.
+//
+// The leading `(?<!\\)` (PR #2880 review, Codex) stops an escaped
+// delimiter (e.g. `\*well-\nknown*`) from opening a span at all: CommonMark
+// never treats an escaped `*` as a real emphasis delimiter, so the
+// asterisks and the text after them are literal, not emphasis, and must
+// not be scanned as if they were (a false positive that could reject a
+// literal-example PR). Single-backslash heuristic, matching this
+// repository's existing style for the same "good enough" escape check
+// (e.g. resolved-decision.mts's isEscapedBacktick) -- does not attempt
+// full backslash-run parity for a doubly-escaped `\\*`.
 const EMPHASIS_SPAN_PATTERN =
-  /(\*{1,2})(?!\s)((?:(?!\1)[^\r\n]|\r?\n(?![ \t]*\r?\n))+?)(?<=\S)\1/g;
+  /(?<!\\)(\*{1,2})(?!\s)((?:(?!\1)[^\r\n]|\r?\n(?![ \t]*\r?\n))+?)(?<=\S)\1/g;
 // idd-skill issue #2876 (PR #2880 review, Codex): an HTML comment can
 // legitimately quote example Markdown -- including a multi-line
 // `**bold**` hyphen wrap used to illustrate this very rule -- that
@@ -202,15 +219,16 @@ function blankAsteriskThematicBreaks(text) {
 }
 /**
  * Find `**`/`*` emphasis spans in prose Markdown text (outside fenced,
- * indented, and inline code, HTML comments, and asterisk thematic-break
- * lines) whose line break falls immediately after a hyphen joining a
- * token on each side (reusing the same {@link TOKEN_CONTINUING} neighbor
- * test as {@link findCorruptingCodeSpanWraps}) -- the prose counterpart
- * of that function. A hyphen at the very start of an emphasis span's
- * content does not qualify: with nothing before it, there is no
- * left-side token to join, so it is not a corrupted compound word (PR
- * #2880 review, Copilot). Returns one violation per corrupting break, in
- * document order.
+ * indented, and inline code, raw HTML blocks, HTML comments, and
+ * asterisk thematic-break lines) whose line break falls immediately
+ * after a hyphen joining a token on each side (reusing the same
+ * {@link TOKEN_CONTINUING} neighbor test as
+ * {@link findCorruptingCodeSpanWraps}) -- the prose counterpart of that
+ * function. A hyphen at the very start of an emphasis span's content
+ * does not qualify: with nothing before it, there is no left-side token
+ * to join, so it is not a corrupted compound word (PR #2880 review,
+ * Copilot). Returns one violation per corrupting break, in document
+ * order.
  */
 export function findCorruptingProseWraps(text) {
   const normalized = text.replace(/\r\n?/g, '\n');
@@ -219,15 +237,22 @@ export function findCorruptingProseWraps(text) {
   // fenced, indented, and inline (findMarkdownCodeRanges /
   // maskMarkdownCodeRegionsPreservingPositions cover all three, unlike
   // stripMarkdownCodeRegions's fenced-plus-inline-only scope; #2880
-  // review, Codex) -- so code content already covered by
-  // findCorruptingCodeSpanWraps is never double-flagged here and this
-  // scan never mistakes a code region's own emphasis-looking characters
-  // for real prose emphasis. Both preserve line/column structure. Then
-  // blank asterisk thematic-break lines, which are never real emphasis.
+  // review, Codex) plus raw HTML blocks (e.g. `<pre>...</pre>`, whose
+  // contents CommonMark renders literally, never as emphasis; same
+  // review round) -- so code/HTML-block content already covered
+  // elsewhere is never double-flagged here and this scan never mistakes
+  // such a region's own emphasis-looking characters for real prose
+  // emphasis. All three preserve line/column structure. Then blank
+  // asterisk thematic-break lines, which are never real emphasis.
   const withoutComments = blankHtmlComments(normalized);
+  const fencedRanges = findFencedCodeRanges(withoutComments);
+  const codeAndHtmlBlockRanges = [
+    ...findMarkdownCodeRanges(withoutComments),
+    ...findHtmlBlockRanges(withoutComments, fencedRanges),
+  ];
   const withoutCode = maskMarkdownCodeRegionsPreservingPositions(
     withoutComments,
-    findMarkdownCodeRanges(withoutComments),
+    codeAndHtmlBlockRanges,
   );
   const scanned = blankAsteriskThematicBreaks(withoutCode);
   const violations = [];
