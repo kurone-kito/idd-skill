@@ -226,8 +226,8 @@ convention:
 ```
 
 Never emit this marker for `needs-decision` or `blocked-by-human`: those
-two already carry a stable label (see above) and need no second
-signal. Discover's own
+two already have a dedicated label available (see above) and need no
+second signal. Discover's own
 candidate-selection pass (`idd-discover.instructions.md`) reads this
 marker to skip a previously-rejected candidate without a full manual
 comment-history read, applying the same staleness rule as every other
@@ -287,7 +287,14 @@ non-stale rejection means the session must not claim the candidate —
 label or no label — so exclude it from Candidates without posting a
 second rejection comment and loop; a stale rejection requires posting
 a one-line reconciliation comment (what changed, or why this session's
-re-evaluation differs) before Check 1-7 run normally.
+re-evaluation differs) before Check 1-7 run normally. This is now a
+hard pre-claim prohibition, so apply this workflow's
+[fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
+when the scan itself cannot be completed — a comments-fetch failure, or
+a helper result carrying a rejection-collection warning with no
+conclusive answer — rather than treating an inconclusive scan the same
+as a confirmed absence: stop and report instead of proceeding to Check
+1.
 
 ```text
 Candidates = A4 survivor set
@@ -298,6 +305,8 @@ Loop: Rerun A4 Step 2 over Candidates to pick the next candidate
     → Non-stale rejection found → do not claim; exclude, post nothing, loop
     → Stale rejection found → post reconciliation comment → Run Check 1
     → No trusted rejection found → Run Check 1
+    → Scan inconclusive (fetch failed, or a collection warning with no
+      conclusive answer) → stop, report (fail closed)
   → Run Check 1 (Repository Fit)
     → PASS → Run Check 2
     → FAIL → Classify as out-of-scope → Report, remove from Candidates, loop
