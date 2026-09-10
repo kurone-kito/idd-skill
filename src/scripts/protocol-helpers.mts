@@ -2162,11 +2162,30 @@ const CODERABBIT_ACK_STRONG_CLOSURE_RE =
 const CODERABBIT_ACK_HEDGE_WORDS_SOURCE =
   'partially|partly|somewhat|mostly|largely|barely|slightly|arguably|in\\s+part|to\\s+some\\s+extent|not\\s+(?:fully|entirely|completely|really)';
 
+// CodeRabbit review, PR #2868, round 4: two mechanical bypasses in the
+// pattern below, both closed by widening two sub-patterns from singular-
+// only to also accept the plural/multi-space form, exactly the same
+// narrow-enumeration style as every other guard here:
+// 1. The gap's negative lookahead and the final anchor only recognized
+//    the SINGULAR "concern"/"finding". A plural first occurrence
+//    ("concerns"/"findings") does not satisfy `\b(?:concern|finding)\b`
+//    (no word boundary between "concern" and its trailing "s"), so the
+//    lookahead's `(?!...)` trivially succeeds there and the engine keeps
+//    consuming characters as if no candidate occurrence existed --
+//    resurfacing guard 4's own "backtrack past the first occurrence"
+//    class of bug, but for plural nouns specifically. Both sub-patterns
+//    now accept an optional trailing "s".
+// 2. The hedge lookbehind ended in a single `\s`, so "partially  addresses"
+//    (two spaces) fell outside the lookbehind's fixed one-character gap
+//    and bypassed the guard entirely. Widened to `\s+`; V8's lookbehind
+//    supports variable-length alternatives (confirmed empirically on
+//    this exact Node floor after Copilot's round-5 finding to the
+//    contrary was rejected, above), so this is a safe, narrow widening.
 const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
-  `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE})\\s)` +
+  `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE})\\s+)` +
     '\\baddresses\\s+the\\b' +
-    '(?:(?!\\b(?:concern|finding)\\b)[^.!?]){0,80}' +
-    '\\b(?:concern|finding)\\b\\.\\s*' +
+    '(?:(?!\\b(?:concerns?|findings?)\\b)[^.!?]){0,80}' +
+    '\\b(?:concerns?|findings?)\\b\\.\\s*' +
     '(?:🐇|---|<details|<!--|_You are interacting)',
   'i',
 );
@@ -2190,6 +2209,35 @@ const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
 // acknowledgment (a CodeRabbit-side defect) would still misclassify here.
 // This helper matches CodeRabbit's own stated decision; it cannot second-
 // guess a wrong decision CodeRabbit reports about itself.
+//
+// 6. **Opening-to-closure anchor, scoped to the weaker "addresses the ..."
+//    form only** (Codex review, PR #2868, round 4): every guard above
+//    narrows what counts as a closure WITHIN a matched span, but neither
+//    closure regex was ever anchored to where the opening ends --
+//    `.test(body)` searches the WHOLE body, so an entirely separate
+//    sentence carrying genuinely new, unresolved feedback between the
+//    opening and the closure was invisible to it. Concretely: "`@user`,
+//    confirmed. However, the null-check remains unresolved. The
+//    documentation update addresses the wording concern.\n\n🐇 ✓" has an
+//    explicit "remains unresolved" sentence the closure guards never
+//    look at, yet the ADDRESSES form still matches later in the body.
+//    A real sampled reply (kurone-kito/idd-skill#2853, tests above) shows
+//    the closure is legitimately its OWN sentence, separate from the
+//    opening's -- "confirmed. The repository-qualified reference
+//    addresses the ... concern." -- so requiring the closure to start
+//    immediately after the opening (same sentence) would reject a real,
+//    observed template. The bound that holds both true is a COUNT, not
+//    a position: the text between the end of the opening match and the
+//    start of the closure match must contain at most one sentence
+//    terminator (`.`/`!`/`?`) -- the one that legitimately closes the
+//    opening's own "confirmed."/"thanks." sentence before the closure's
+//    lead-in clause begins. Two or more means at least one additional,
+//    independent sentence sits in between, exactly Codex's demonstrated
+//    shape. Scoped to `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` only, not the
+//    two strong forms: those report CodeRabbit's own resolve-attempt
+//    DECISION, which this file's own reasoning above already treats as
+//    unable to co-occur with a new concern in the same reply, so they
+//    keep the whole-body `.test()` they always had.
 function isKnownAdvisoryAckTemplate(comment: {
   author?: { login?: string | null } | null;
   body?: string | null;
@@ -2199,19 +2247,28 @@ function isKnownAdvisoryAckTemplate(comment: {
   if (!authorLogin || !isCodeRabbitLogin(authorLogin) || !body) {
     return false;
   }
-  if (!CODERABBIT_ACK_OPENING_RE.test(body)) {
+  const openingMatch = CODERABBIT_ACK_OPENING_RE.exec(body);
+  if (!openingMatch) {
     return false;
   }
   // The two strong forms (CodeRabbit's own resolve-attempt decision) are
   // checked on the whole body with no further guard -- see the comment
   // above `CODERABBIT_ACK_STRONG_CLOSURE_RE` for why the weaker third
-  // form's guards (locality, sentence-boundary, hedge-adverb) must never
-  // apply here, even when unrelated hedge-shaped wording happens to
-  // appear elsewhere in the same reply (e.g. a Learnings-used block).
+  // form's guards (locality, sentence-boundary, hedge-adverb, opening-
+  // to-closure anchor) must never apply here, even when unrelated
+  // hedge-shaped wording happens to appear elsewhere in the same reply
+  // (e.g. a Learnings-used block).
   if (CODERABBIT_ACK_STRONG_CLOSURE_RE.test(body)) {
     return true;
   }
-  return CODERABBIT_ACK_ADDRESSES_CLOSURE_RE.test(body);
+  const addressesMatch = CODERABBIT_ACK_ADDRESSES_CLOSURE_RE.exec(body);
+  if (!addressesMatch) {
+    return false;
+  }
+  const openingEnd = openingMatch.index + openingMatch[0].length;
+  const gapToClosure = body.slice(openingEnd, addressesMatch.index);
+  const sentenceTerminatorCount = (gapToClosure.match(/[.!?]/g) ?? []).length;
+  return sentenceTerminatorCount <= 1;
 }
 
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all

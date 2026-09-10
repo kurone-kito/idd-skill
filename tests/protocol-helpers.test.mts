@@ -895,7 +895,12 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
   // a genuinely new concern appended after a comma, rather than a
   // period, never reaches that tail check, even though it is well
   // within the 80-character locality bound the sibling test above
-  // exercises.
+  // exercises. CodeRabbit's round-4 review on PR #2868 found the
+  // original fixture used "partially addresses," so the hedge-adverb
+  // guard (guard 5) rejected it before ever reaching the tail check this
+  // test is meant to exercise -- the assertion held, but not for the
+  // stated reason. Dropped "partially" so the tail check (guard 3) is
+  // what actually rejects this fixture, matching the test's own claim.
   const thread = {
     id: 'thread-addresses-concern-but-new-issue',
     isResolved: true,
@@ -914,7 +919,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
           id: 'CN-2',
           author: { login: 'coderabbitai[bot]' },
           body:
-            '`@kurone-kito`, confirmed. This partially addresses the ' +
+            '`@kurone-kito`, confirmed. This addresses the ' +
             'concern, but the retry path still dereferences null.',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
@@ -1193,6 +1198,137 @@ test('classifyThreadAckOnlyPostDisposition still recognizes a strong "Review thr
   });
 
   assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern" closure separated from the opening by an intervening unresolved sentence (Codex round 4, #2858)', () => {
+  // Codex's round-4 finding on PR #2868: every guard on
+  // `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` narrows what counts as a
+  // closure WITHIN a matched span, but neither closure regex was ever
+  // anchored to where the opening ends -- `.test(body)` searches the
+  // WHOLE body, so a genuinely new, unresolved concern in its OWN
+  // sentence between the opening and the closure was invisible. This is
+  // Codex's exact adversarial example: an explicit "remains unresolved"
+  // sentence sits between "confirmed." and the closure sentence that
+  // follows it.
+  const thread = {
+    id: 'thread-addresses-concern-after-unresolved-sentence',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'AU-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'AU-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. However, the null-check remains ' +
+            'unresolved. The documentation update addresses the ' +
+            'wording concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a same-sentence "addresses the X concerns but reveals a new finding" construction using plural nouns (CodeRabbit round 4, #2858)', () => {
+  // CodeRabbit's round-4 review on PR #2868: guard 4's per-character
+  // negative lookahead only recognized the SINGULAR "concern"/"finding",
+  // so a PLURAL first occurrence ("concerns") does not satisfy
+  // `\b(?:concern|finding)\b` (no word boundary between "concern" and
+  // its trailing "s") and the lookahead trivially succeeds there,
+  // letting the gap consume straight through the plural occurrence to
+  // reach a later singular one instead -- the same backtrack-past-the-
+  // first-occurrence class guard 4 already closed for singular nouns,
+  // reopened for plurals.
+  const thread = {
+    id: 'thread-addresses-plural-concerns-but-reveals-finding',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'PL-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'PL-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed. This addresses the original ' +
+            'concerns but reveals another finding.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a hedged "partially  addresses" closure with a double space bypassing the hedge lookbehind (CodeRabbit round 4, #2858)', () => {
+  // CodeRabbit's round-4 review on PR #2868: the hedge lookbehind ended
+  // in a single `\s`, so two spaces between the hedge word and
+  // "addresses" fell outside its fixed one-character gap and bypassed
+  // the guard entirely. Widened to `\s+`.
+  const thread = {
+    id: 'thread-hedged-double-space-bypass',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'DS-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'DS-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, confirmed. This partially  addresses the ' +
+            'concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
 // Codex review findings on this PR (#2014), both verified against source
