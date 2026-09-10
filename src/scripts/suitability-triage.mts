@@ -836,8 +836,16 @@ function isEnumeratedParentheticalEntry(
 // lines, only the first of which Markdown renders as the actual ATX
 // heading text -- still matched as one combined heading. Narrowed to
 // `[ \t]+`, matching the same fix on the sibling pattern.
+// #2767 round 9 (advisor review, same PR, closing a self-documented
+// deferral): two more CommonMark ATX-heading shapes this pattern still
+// missed, both false negatives (denying a genuine heading its demotion
+// benefit, never a false-positive risk): an ATX heading may carry up to
+// three leading spaces (`^ {0,3}`, matching `parseCandidateFiles`'s own
+// heading regex, which already tolerated this), and may end in an
+// optional closing sequence of `#` characters preceded by whitespace
+// (`(?:[ \t]+#+)?`), e.g. "## Acceptance Criteria ##".
 const ACCEPTANCE_CRITERIA_PATTERN =
-  /^#+[ \t]+Acceptance[ \t]+Criteria[ \t]*$/im;
+  /^ {0,3}#+[ \t]+Acceptance[ \t]+Criteria(?:[ \t]+#+)?[ \t]*$/im;
 // #2711 PR #2735 review (Codex): this repo's own "## Candidate files"
 // convention (#2589) names files to EDIT, never a verification signal --
 // matched here (mirroring ACCEPTANCE_CRITERIA_PATTERN's own shape) so the
@@ -3484,12 +3492,36 @@ function runCli(): void {
   // the demotion path -- fetch structural evidence (an extra network round
   // trip: editor logins plus a live collaborator-permission check) only
   // when the plain evaluation already failed on one of those three.
-  if (
+  //
+  // That check-id test alone is not sufficient (Codex review, PR #2840,
+  // round 9): several of Checks 5-7's own failure branches are documented
+  // as "never demote" regardless of evidence -- e.g. Check 6's
+  // blocked-by-human label/marker branches, Check 7's escape-hatch branch
+  // -- so a fetch still ran for a failure that no amount of real structural
+  // evidence could ever flip. `wouldDemoteWithFullEvidence` answers the
+  // general question directly instead of re-deriving, and keeping in sync
+  // with, each check's own internal branch list: re-evaluate locally
+  // (no network) with every signal forced `true` (the strongest possible
+  // evidence); if that still does not pass, the live-fetched evidence --
+  // strictly no stronger than all-true -- cannot pass either, so the fetch
+  // is skipped. Mirrors the fix already applied to
+  // `discover-viability-gate.mts` (commit 4053e95a), generalized here to
+  // cover per-branch (not just per-check) non-demotability.
+  const allTrueStructuralEvidence: StructuralEvidence = {
+    verificationCommand: true,
+    candidateFilesExist: true,
+    trustedEditor: true,
+  };
+  const wouldDemoteWithFullEvidence =
     !result.passed &&
     (result.failedCheck === 'actionability' ||
       result.failedCheck === 'autonomy' ||
-      result.failedCheck === 'verifiability')
-  ) {
+      result.failedCheck === 'verifiability') &&
+    evaluateSuitability(issue, {
+      ...suitabilityOptions,
+      structuralEvidence: allTrueStructuralEvidence,
+    }).passed;
+  if (wouldDemoteWithFullEvidence) {
     // Same fail-open contract as the `existingRejection` scan above: this
     // is a detect-only demotion path, not a gate, so a transient GitHub
     // API failure (rate limit, timeout, an absent GraphQL connection --

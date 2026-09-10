@@ -153,6 +153,62 @@ test('hasVerificationCommandSignal: a real command inside a real inline code spa
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: an ATX heading indented up to 3 spaces is still real (advisor review, round 9)', () => {
+  // CommonMark allows up to three leading spaces before an ATX heading's
+  // `#` run without demoting it to an indented code block.
+  const body = `   ## Acceptance criteria\n\n- [ ] one\n- [ ] two\n`;
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: an ATX heading indented 4+ spaces is an indented code block, not a heading (control)', () => {
+  const body = `    ## Acceptance criteria\n\n- [ ] one\n- [ ] two\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: an ATX heading with a whitespace-preceded closing # sequence is still real (advisor review, round 9)', () => {
+  const body = `## Acceptance criteria ##\n\n- [ ] one\n- [ ] two\n`;
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: a closing # sequence glued directly to the text (no space) is part of the heading text, not a closing sequence (control)', () => {
+  // CommonMark requires whitespace before a real closing sequence -- with
+  // none, the trailing "##" is ordinary heading text, so "Criteria##" (not
+  // "Criteria") is what the pattern must NOT match here.
+  const body = `## Acceptance criteria##\n\n- [ ] one\n- [ ] two\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: an ordered-list checkbox item counts the same as a bulleted one (advisor review, round 9)', () => {
+  // GFM's task-list extension applies to any list item, ordered or
+  // unordered -- "1. [ ] one" is a real, GitHub-rendered checkbox.
+  const body = `## Acceptance criteria\n\n1. [ ] one\n2. [ ] two\n`;
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: a mixed multi-line double-backtick span with real headings inside is real structure, not smuggled content (Codex review, PR #2840 round 9 -- rejected)', () => {
+  // Considered a P1 smuggling finding, then rejected after verification
+  // against GitHub's own renderer (`gh api /markdown`, mode: gfm): an ATX
+  // heading line interrupts an already-open paragraph in CommonMark, so
+  // the opening "``" here is closed as its own one-line paragraph before
+  // the "## Acceptance criteria" line is ever reached, and the unclosed
+  // backtick run reverts to literal text -- the heading, checkboxes, and
+  // the later code span all render as real structure, exactly as this
+  // signal reports them. `true` is the correct answer, not a bug.
+  const body = [
+    'Real content.',
+    '',
+    '``',
+    '## Acceptance criteria',
+    '- [ ] one',
+    '- [ ] two',
+    '## Candidate files',
+    '- `src/scripts/exists.mts`',
+    '``',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 // --- candidateFilesExistOnDisk -----------------------------------------------
 
 test('candidateFilesExistOnDisk: true when at least one listed path exists', () => {
@@ -328,6 +384,47 @@ test('candidateFilesExistOnDisk: resolves a bare instructions basename under idd
   const existing = new Set([
     '/repo/idd-template/.github/instructions/idd-discover.instructions.md',
   ]);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    true,
+  );
+});
+
+test("candidateFilesExistOnDisk: a later raw spelling sharing an earlier one's contention key still resolves (Codex review, PR #2840 round 9)", () => {
+  // parseCandidateFileEntries previously de-duplicated on `normalized`,
+  // discarding the second entry here (`package.json`) because its
+  // contention key collides with the first (`idd-template/package.json`,
+  // which normalizes to the same key but does not exist). The later raw
+  // spelling is the one that actually exists on disk, so it must not be
+  // silently dropped.
+  const body = `## Candidate files\n\n- \`idd-template/package.json\`\n- \`package.json\`\n`;
+  const existing = new Set(['/repo/package.json']);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    true,
+  );
+});
+
+test('candidateFilesExistOnDisk: a mixed multi-line double-backtick span with a real path inside is real structure, not smuggled content (Codex review, PR #2840 round 9 -- rejected)', () => {
+  // Same rejected finding as hasVerificationCommandSignal's mirrored test
+  // -- see that test's comment for the full CommonMark rationale, verified
+  // against GitHub's own renderer. `true` is correct here too: the file
+  // path lives inside a genuine single-backtick inline code span (its own
+  // one-line paragraph, following the real "## Candidate files" heading),
+  // not inside the outer double-backtick run, which never actually closes.
+  const body = [
+    'Real content.',
+    '',
+    '``',
+    '## Acceptance criteria',
+    '- [ ] one',
+    '- [ ] two',
+    '## Candidate files',
+    '- `src/scripts/exists.mts`',
+    '``',
+    '',
+  ].join('\n');
+  const existing = new Set(['/repo/src/scripts/exists.mts']);
   assert.equal(
     candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
     true,

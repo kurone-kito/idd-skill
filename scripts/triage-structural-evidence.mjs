@@ -43,14 +43,18 @@ import { findHtmlCommentRanges } from './resolved-decision.mjs';
  */
 const VERIFICATION_COMMAND_CODE_SPAN_PATTERN =
   /`(?:node --test\b[^`]*|pnpm run [^\s`]+[^`]*|npx [^\s`]+[^`]*|node scripts\/[^\s`]+\.mjs[^`]*)`/;
-/** A Markdown checkbox list item: `- [ ]` / `- [x]` / `* [X]`. Requires
- * whitespace or end-of-line immediately after the closing `]` (Codex
- * review, PR #2840, round 7): GitHub only renders `[ ]`/`[x]` as an
+/** A Markdown checkbox list item: `- [ ]` / `- [x]` / `* [X]` / `1. [ ]`.
+ * Requires whitespace or end-of-line immediately after the closing `]`
+ * (Codex review, PR #2840, round 7): GitHub only renders `[ ]`/`[x]` as an
  * interactive task-list checkbox when a space (or line end) follows the
  * bracket -- `- [ ]not a task` renders as literal bracket text, not a
  * checkbox, but the earlier pattern (no lookahead at all) still counted
- * it. */
-const CHECKBOX_ITEM_PATTERN = /^\s*[-*+]\s+\[[ xX]\](?=[ \t]|$)/gm;
+ * it. Also accepts an ordered-list marker (`\d+[.)]`), not just a bullet
+ * (advisor review, round 9, closing a self-documented deferral): GFM's
+ * task-list extension applies to any list item, ordered or unordered, so
+ * "1. [ ] one" is a real, GitHub-rendered checkbox the bullet-only pattern
+ * previously missed -- a false-negative-only fix. */
+const CHECKBOX_ITEM_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\](?=[ \t]|$)/gm;
 /**
  * Section boundary: an ATX heading, or the position immediately before a
  * Setext-style sibling heading's own content line (a text line directly
@@ -102,9 +106,18 @@ const NEXT_ATX_HEADING_PATTERN =
  * #2840, round 7): `\s` also matches a newline, so `\s+` there let
  * `## Acceptance\ncriteria` -- two separate lines, only the first of
  * which Markdown renders as the actual ATX heading text -- match as one
- * combined heading anyway. An ATX heading is inherently single-line. */
+ * combined heading anyway. An ATX heading is inherently single-line.
+ *
+ * Two more shapes (advisor review, round 9, closing a self-documented
+ * deferral): up to three leading spaces (`^ {0,3}`, CommonMark's own ATX
+ * indent allowance, mirrored from `parseCandidateFileEntries`'s own
+ * heading regex, which already tolerated it), and an optional closing
+ * `#` sequence preceded by whitespace (`(?:[ \t]+#+)?`), e.g.
+ * "## Acceptance criteria ##". Both are false-negative-only fixes (a
+ * genuine heading Markdown renders that this pattern previously missed),
+ * never a new false-positive surface. */
 const ACCEPTANCE_CRITERIA_HEADING_PATTERN =
-  /^#{1,6}[ \t]+Acceptance[ \t]+[Cc]riteria[ \t]*$/im;
+  /^ {0,3}#{1,6}[ \t]+Acceptance[ \t]+[Cc]riteria(?:[ \t]+#+)?[ \t]*$/im;
 /**
  * Mask fenced code, indented (4-space) code, real HTML comment ranges, and
  * raw HTML block ranges (Codex review, PR #2840, two rounds): an issue can
@@ -168,6 +181,28 @@ function extractSection(body, headingPattern) {
  * module. Computed on the masked body (not the original) so a span that
  * only *looks* real until an enclosing fence/comment/HTML block is masked
  * away is not wrongly counted as surviving.
+ *
+ * Considered and rejected (Codex review, PR #2840, round 9; verified
+ * against GitHub's own renderer via `gh api /markdown`, `mode: gfm`, not
+ * just reasoned about): masking genuine inline code spans too before
+ * heading/section-boundary detection, to guard against a multi-line span
+ * "smuggling" a fake `## Acceptance criteria` heading plus fake
+ * checkboxes past detection. CommonMark parses block structure before
+ * inline content, and an ATX heading line interrupts an already-open
+ * paragraph -- so a `` `` `` opened on one line is closed as that line's
+ * own one-line paragraph the moment a `## heading` line follows, and the
+ * unclosed backtick run reverts to literal text; the heading, checkboxes,
+ * and any code span past it render as real structure, not span content.
+ * `findMarkdownCodeRanges` on such a body already reflects this (via
+ * `findInlineCodeRanges`'s own `findMarkdownBlockBoundary` paragraph-
+ * boundary handling) -- it never returns a range spanning the heading
+ * line -- so there is no fake heading for a masking pass to hide: the
+ * input this finding described cannot occur under real Markdown
+ * rendering. Adding a masking pass anyway would not fix a live gap; it
+ * would make heading/Setext-boundary detection newly depend on
+ * `findMarkdownBlockBoundary` being correct for every construct (thematic
+ * break, Setext underline, HTML block) it was never exercised against for
+ * this purpose, trading a phantom risk for a real one.
  */
 export function hasVerificationCommandSignal(body) {
   const maskedBody = maskOpaqueMarkdown(String(body ?? ''));
@@ -229,6 +264,12 @@ function candidatePathVariants(rawPath) {
  * contention key `package.json` (which does exist at repo root),
  * wrongly satisfying this filesystem-existence signal for a path the
  * issue never actually named.
+ *
+ * Considered and rejected (Codex review, PR #2840, round 9) for the same
+ * reason documented on {@link hasVerificationCommandSignal}: also masking
+ * genuine inline code spans before heading/Setext-boundary detection here
+ * would guard against an input that GitHub's own renderer does not
+ * actually produce -- see that doc comment for the verified rationale.
  */
 export function candidateFilesExistOnDisk(
   body,

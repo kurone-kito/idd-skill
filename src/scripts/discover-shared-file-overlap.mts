@@ -59,9 +59,23 @@ const SETEXT_UNDERLINE_PATTERN = /^[ \t]{0,3}(?:=+|-+)[ \t]*$/;
  * thematic break is not a Setext heading over that bullet -- the `---`
  * ends the list instead -- so treating it as one dropped the list's own
  * final (and, for a one-item list, only) candidate path.
+ *
+ * Also excludes an indented line generally (Codex review, PR #2840, round
+ * 9): the bullet-marker alternative above only matches a *direct* marker
+ * line, not an indented *wrapped continuation* line of a multi-line bullet
+ * -- e.g. `- change:\n  \`src/a.mts\`\n---`, where the second line (the
+ * one actually carrying the candidate path) is indented past the marker
+ * but starts with a backtick, not a marker, so it fell through to being
+ * read as ordinary Setext-heading-eligible content and the section was
+ * wrongly truncated one line before its own real path. Heuristic, scoped
+ * to this section only: a genuine 1-3-space-indented Setext heading
+ * inside a `## Candidate files` list is a contrived, unrealistic shape;
+ * an indented wrapped continuation line is this repository's own
+ * documented multi-line-bullet convention. Trading the former's
+ * correctness for the latter's is the safer direction here.
  */
 const SETEXT_INELIGIBLE_PRECEDING_LINE_PATTERN =
-  /^[ \t]{0,3}(?:[-*+][ \t]+|\d+[.)][ \t]+|>)/;
+  /^[ \t]{0,3}(?:[-*+][ \t]+|\d+[.)][ \t]+|>)|^[ \t]+\S/;
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `candidate:`): tests/flag-name-matrix.test.mts scans this file's
@@ -183,10 +197,24 @@ export interface CandidateFileEntry {
  * lenient: it extracts every backtick-quoted path in the section —
  * including the continuation lines of a multi-line bullet — plus the
  * leading path-like token of any bullet that has no backticks at all.
- * Returns `[]` when the section is absent. De-duplicates on `normalized`
- * (the pre-existing contract every current caller of
- * {@link parseCandidateFiles} already relies on) -- two raw spellings that
- * collapse to the same contention key keep only the first `raw` seen.
+ * Returns `[]` when the section is absent. De-duplicates on `raw` (Codex
+ * review, PR #2840, round 9; previously deduplicated on `normalized`,
+ * which silently discarded a later raw spelling sharing an earlier one's
+ * contention key even when the later spelling is the one that actually
+ * exists on disk -- see {@link candidateFilesExistOnDisk}'s doc comment).
+ * `parseCandidateFiles` applies its own separate normalized-key dedup on
+ * top, preserving that function's pre-existing one-entry-per-contention-
+ * key contract for its own callers.
+ *
+ * (Considered and rejected, round 9: masking genuine inline code spans
+ * out of `body` first, to guard a multi-line span from smuggling a fake
+ * heading/Setext boundary past detection. Verified against GitHub's own
+ * renderer -- see `triage-structural-evidence.mts`'s
+ * `hasVerificationCommandSignal` doc comment -- that CommonMark's
+ * block-before-inline parsing order already makes that input impossible:
+ * an ATX heading (or Setext-eligible content line) inside an open span
+ * closes it as literal text before the span can extend across the
+ * heading, so there is no fake heading for a masking pass to hide.)
  */
 export function parseCandidateFileEntries(body: unknown): CandidateFileEntry[] {
   const text = typeof body === 'string' ? body : '';
@@ -264,13 +292,13 @@ export function parseCandidateFileEntries(body: unknown): CandidateFileEntry[] {
     }
   }
 
-  const seenNormalized = new Set<string>();
+  const seenRaw = new Set<string>();
   const deduped: CandidateFileEntry[] = [];
   for (const entry of entries) {
-    if (seenNormalized.has(entry.normalized)) {
+    if (seenRaw.has(entry.raw)) {
       continue;
     }
-    seenNormalized.add(entry.normalized);
+    seenRaw.add(entry.raw);
     deduped.push(entry);
   }
   return deduped;
@@ -278,18 +306,27 @@ export function parseCandidateFileEntries(body: unknown): CandidateFileEntry[] {
 
 /**
  * Parse the `## Candidate files` section into a de-duplicated, normalized
- * path list -- a thin `.map(e => e.normalized)` wrapper over
- * {@link parseCandidateFileEntries} that keeps this exact pre-existing
- * shape for its callers: `suitability-triage.mts`'s Check 4 high-contention
- * tier and this module's own `analyzeSharedFileOverlap`, both of which
- * compare candidate paths as contention keys, never as filesystem paths.
+ * path list, built from {@link parseCandidateFileEntries} for its callers:
+ * `suitability-triage.mts`'s Check 4 high-contention tier and this module's
+ * own `analyzeSharedFileOverlap`, both of which compare candidate paths as
+ * contention keys, never as filesystem paths. Applies its own
+ * normalized-key `Set` dedup (Codex review, PR #2840, round 9) --
+ * {@link parseCandidateFileEntries} itself now de-duplicates on `raw`, so
+ * two raw spellings sharing a contention key (e.g. an
+ * `idd-template/<name>` source and its `<name>` mirror) both survive
+ * there; collapsing them back to one entry per key here preserves this
+ * function's own pre-existing one-entry-per-contention-key contract.
  * {@link candidateFilesExistOnDisk} (triage-structural-evidence.mts, #2767)
  * needs the un-normalized `raw` form instead -- a filesystem existence
  * check against a mirror-collapsed contention key can report a real file
  * as existing when the path actually written in the issue does not.
  */
 export function parseCandidateFiles(body: unknown): string[] {
-  return parseCandidateFileEntries(body).map((entry) => entry.normalized);
+  return [
+    ...new Set(
+      parseCandidateFileEntries(body).map((entry) => entry.normalized),
+    ),
+  ];
 }
 
 /** Extract a strict leading path token from a bullet that quotes no path. */

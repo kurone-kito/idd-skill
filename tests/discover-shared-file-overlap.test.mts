@@ -208,6 +208,24 @@ test('parseCandidateFiles does not mistake a blockquoted line before an underlin
   assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
 });
 
+test('parseCandidateFiles does not mistake an indented wrapped continuation line before a thematic break for a Setext heading (Codex review, PR #2840 round 9)', () => {
+  // The bullet-marker-only exclusion missed an indented WRAPPED
+  // CONTINUATION line of a multi-line bullet -- the line that actually
+  // carries the candidate path here starts with two spaces then a
+  // backtick, not a marker, so it fell through to being read as ordinary
+  // Setext-heading-eligible content and the section was wrongly truncated
+  // one line before its own real path.
+  const body = [
+    '## Candidate files',
+    '',
+    '- change:',
+    '  `src/a.mts`',
+    '',
+    '---',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
+});
+
 // ---------------------------------------------------------------------------
 // parseCandidateFileEntries (#2767 round 8, Codex review PR #2840)
 // ---------------------------------------------------------------------------
@@ -230,7 +248,11 @@ test('parseCandidateFileEntries keeps raw distinct from normalized for a plain (
   ]);
 });
 
-test('parseCandidateFileEntries de-dupes on the normalized key, keeping the first raw spelling seen', () => {
+test('parseCandidateFileEntries de-dupes on raw, keeping BOTH spellings that share a normalized key (Codex review, PR #2840 round 9)', () => {
+  // Previously de-duplicated on `normalized`, silently discarding the
+  // second entry here even though it is a distinct raw spelling -- a
+  // filesystem-existence check needs both, since the one that actually
+  // exists on disk might be either one.
   const body =
     '## Candidate files\n\n- `idd-template/.github/instructions/idd-merge.instructions.md`\n- `.github/instructions/idd-merge.instructions.md`\n';
   assert.deepEqual(parseCandidateFileEntries(body), [
@@ -238,15 +260,36 @@ test('parseCandidateFileEntries de-dupes on the normalized key, keeping the firs
       raw: 'idd-template/.github/instructions/idd-merge.instructions.md',
       normalized: MERGE_FILE,
     },
+    {
+      raw: '.github/instructions/idd-merge.instructions.md',
+      normalized: MERGE_FILE,
+    },
   ]);
 });
 
-test('parseCandidateFiles stays a thin normalized-only projection of parseCandidateFileEntries', () => {
+test('parseCandidateFileEntries still de-dupes an exact repeated raw spelling', () => {
+  const body =
+    '## Candidate files\n\n- `src/scripts/foo.mts`\n- `src/scripts/foo.mts`\n';
+  assert.deepEqual(parseCandidateFileEntries(body), [
+    { raw: 'src/scripts/foo.mts', normalized: 'src/scripts/foo.mts' },
+  ]);
+});
+
+test('parseCandidateFiles applies its own normalized-key dedup on top of parseCandidateFileEntries (Codex review, PR #2840 round 9)', () => {
+  // parseCandidateFileEntries now keeps every distinct raw spelling
+  // (including two that share a normalized key), so parseCandidateFiles
+  // must collapse those back to one entry per contention key itself to
+  // keep its own pre-existing one-entry-per-key contract for its callers.
   const body = readFixture('candidate-merge.md');
-  assert.deepEqual(
-    parseCandidateFiles(body),
-    parseCandidateFileEntries(body).map((entry) => entry.normalized),
-  );
+  assert.deepEqual(parseCandidateFiles(body), [
+    ...new Set(
+      parseCandidateFileEntries(body).map((entry) => entry.normalized),
+    ),
+  ]);
+  assert.deepEqual(parseCandidateFiles(body), [
+    MERGE_FILE,
+    'idd-advisory-wait.instructions.md',
+  ]);
 });
 
 // ---------------------------------------------------------------------------

@@ -2798,9 +2798,14 @@ test('ACCEPTANCE_CRITERIA_PATTERN requires whitespace after the ATX # run, match
   // lines, only the first of which Markdown renders as the actual heading
   // text) previously still matched as one combined heading, since an ATX
   // heading is inherently single-line.
+  // #2767 round 9 (advisor review, PR #2840): also pins the up-to-three-
+  // leading-space allowance and the optional whitespace-preceded closing
+  // `#` sequence, both real CommonMark ATX-heading shapes this pattern
+  // previously missed (e.g. "   ## Acceptance Criteria" or
+  // "## Acceptance Criteria ##").
   assert.match(
     source,
-    /const ACCEPTANCE_CRITERIA_PATTERN =\s*\n\s*\/\^#\+\[ \\t\]\+Acceptance\[ \\t\]\+Criteria/,
+    /const ACCEPTANCE_CRITERIA_PATTERN =\s*\n\s*\/\^ \{0,3\}#\+\[ \\t\]\+Acceptance\[ \\t\]\+Criteria\(\?:\[ \\t\]\+#\+\)\?\[ \\t\]\*\$\/im/,
   );
 });
 
@@ -3508,6 +3513,30 @@ test('#2767: checkAutonomy never demotes a blocked-by-human title-prefix fail (n
   } as Context);
   assert.equal(result.pass, false);
   assert.equal(result.demoted, undefined);
+});
+
+// #2767 round 9 (Codex review, PR #2840): `runCli`'s own live-fetch gate
+// (unexported, see the source-text pin below) originally tested only
+// `failedCheck === 'autonomy' | 'actionability' | 'verifiability'`, not
+// whether THIS issue's specific failure branch is one the never-demote
+// list above excludes -- wasting a live editor-history + collaborator-
+// permission fetch for a failure no evidence could ever flip. The fix
+// re-evaluates locally with all three signals forced `true` (the
+// strongest possible evidence) and only fetches when that still passes.
+// This test proves the premise the fix relies on at the exact
+// `evaluateSuitability` abstraction level `runCli` itself calls it at
+// (not just `checkAutonomy` in isolation, already proven above): a
+// blocked-by-human autonomy fail keeps `evaluateSuitability(...).passed`
+// `false` even when every structural signal is `true`.
+test('#2767: evaluateSuitability never demotes a blocked-by-human autonomy fail, even with all structural signals present (round 9 sentinel premise)', () => {
+  const issue = { ...BASE_ISSUE, labels: ['status:blocked-by-human'] };
+  const result = evaluateSuitability(issue, {
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    duplicateCandidates: [{ number: 1, title: issue.title }],
+    structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.failedCheck, 'autonomy');
 });
 
 test('#2767: checkVerifiability demotes a missing-objective-signal fail to warn', () => {
@@ -6033,6 +6062,26 @@ test('runCli: the issue-comments fetch is skipped entirely with zero trusted mar
   assert.match(
     source,
     /if \(trustedMarkerActors\.length > 0\) \{\s*\n\s*try \{\s*\n\s*const issueComments = fetchIssueComments\(/,
+  );
+});
+
+// #2767 round 9 (Codex review, PR #2840): runCli isn't unit-tested for the
+// same reason as the pins above (real gh I/O) -- this pins that the live
+// `computeLiveStructuralEvidence` fetch is gated behind a sentinel
+// `evaluateSuitability` re-check with every signal forced `true`, not just
+// the bare check-id test the fetch previously ran behind. The behavioral
+// premise this sentinel relies on (a per-branch never-demote fail keeps
+// `evaluateSuitability(...).passed` false even with all-true evidence) is
+// proven directly above ("evaluateSuitability never demotes a
+// blocked-by-human autonomy fail...").
+test('runCli: the live structural-evidence fetch is gated behind an all-true sentinel re-check, not just the failedCheck id (#2767 round 9)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /const allTrueStructuralEvidence: StructuralEvidence = \{\s*\n\s*verificationCommand: true,\s*\n\s*candidateFilesExist: true,\s*\n\s*trustedEditor: true,\s*\n\s*\};\s*\n\s*const wouldDemoteWithFullEvidence =\s*\n\s*!result\.passed &&\s*\n\s*\(result\.failedCheck === 'actionability' \|\|\s*\n\s*result\.failedCheck === 'autonomy' \|\|\s*\n\s*result\.failedCheck === 'verifiability'\) &&\s*\n\s*evaluateSuitability\(issue, \{\s*\n\s*\.\.\.suitabilityOptions,\s*\n\s*structuralEvidence: allTrueStructuralEvidence,\s*\n\s*\}\)\.passed;\s*\n\s*if \(wouldDemoteWithFullEvidence\) \{/,
   );
 });
 
