@@ -57,6 +57,15 @@ test('hasVerificationCommandSignal: a command in a LATER section does not count'
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: a command in a LATER Setext-headed section does not count (Codex review, PR #2840)', () => {
+  // A Setext-style sibling heading ("Notes\n-----", no leading `#`) must
+  // stop the Acceptance criteria section just like an ATX heading does --
+  // an ATX-only boundary let this later section's own command leak into
+  // the extracted section text and wrongly set verificationCommand: true.
+  const body = `## Acceptance criteria\n\n- [ ] Only one thing\n\nNotes\n-----\n\n- \`node --test tests/foo.test.mts\`\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: case-insensitive heading', () => {
   const body = `## acceptance CRITERIA\n\n- [ ] a\n- [ ] b\n`;
   assert.equal(hasVerificationCommandSignal(body), true);
@@ -86,6 +95,39 @@ test('candidateFilesExistOnDisk: false when the section is absent', () => {
   assert.equal(
     candidateFilesExistOnDisk(body, () => true, '/repo'),
     false,
+  );
+});
+
+test('candidateFilesExistOnDisk: an absolute path candidate never satisfies the signal, even when existsAt is unconditionally true (CodeRabbit review, PR #2840)', () => {
+  const body = `## Candidate files\n\n- \`/etc/passwd\`\n`;
+  assert.equal(
+    candidateFilesExistOnDisk(body, () => true, '/repo'),
+    false,
+  );
+});
+
+test('candidateFilesExistOnDisk: a Windows-drive-letter absolute path candidate never satisfies the signal, even on a POSIX host (CodeRabbit review, PR #2840)', () => {
+  const body = `## Candidate files\n\n- \`C:\\Windows\\System32\\config\`\n`;
+  assert.equal(
+    candidateFilesExistOnDisk(body, () => true, '/repo'),
+    false,
+  );
+});
+
+test('candidateFilesExistOnDisk: a ../-escaping path candidate never satisfies the signal, even when existsAt is unconditionally true (CodeRabbit review, PR #2840)', () => {
+  const body = `## Candidate files\n\n- \`../../etc/passwd\`\n`;
+  assert.equal(
+    candidateFilesExistOnDisk(body, () => true, '/repo'),
+    false,
+  );
+});
+
+test('candidateFilesExistOnDisk: a relative path whose internal ../ segment still normalizes inside repoRoot still resolves and can satisfy the signal', () => {
+  const body = `## Candidate files\n\n- \`src/scripts/../scripts/exists.mts\`\n`;
+  const existing = new Set(['/repo/src/scripts/exists.mts']);
+  assert.equal(
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    true,
   );
 });
 

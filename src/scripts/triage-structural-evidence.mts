@@ -25,6 +25,8 @@
  * primitives their own way and call `evaluateStructuralEvidence`.
  */
 
+import { isAbsolute, relative, resolve } from 'node:path';
+
 import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
 
 /** The three structural signals. All three must hold for a demotion. */
@@ -48,17 +50,22 @@ const VERIFICATION_COMMAND_CODE_SPAN_PATTERN =
 const CHECKBOX_ITEM_PATTERN = /^\s*[-*+]\s+\[[ xX]\]/gm;
 
 /**
- * ATX-heading-only section boundary, deliberately simpler than
- * `suitability-triage.mts`'s own `NEXT_HEADING_PATTERN` (which also
- * recognizes Setext headings and has accumulated several precision
- * fixes). Reusing that constant would create a circular import --
- * `suitability-triage.mts` imports this module for the demotion wiring.
- * This is an advisory pre-check, not a precision-critical gate: a missed
- * Setext boundary only means this function fails to find the section (no
- * demotion, identical to today's behavior), never a false demotion, so
- * the simpler regex is an accepted, deliberate trade-off.
+ * Section boundary: an ATX heading, or the position immediately before a
+ * Setext-style sibling heading's own content line (a text line directly
+ * followed, with no blank line between, by a lone run of `=`/`-`
+ * characters). Duplicated from `suitability-triage.mts`'s own
+ * `NEXT_HEADING_PATTERN` rather than imported -- that file imports this
+ * module for the demotion wiring, so sharing the constant would create a
+ * circular import. (Codex review, PR #2840): an ATX-only boundary let a
+ * Setext-style sibling section's own content leak into the extracted
+ * `## Acceptance criteria` text, so a command or 2+ checkboxes in that
+ * later, unrelated section could set `verificationCommand: true` on a
+ * trusted issue and wrongly demote a genuine autonomy/verifiability
+ * failure -- not merely fail to find the boundary, the false-positive
+ * direction this module exists to avoid.
  */
-const NEXT_ATX_HEADING_PATTERN = /\n {0,3}#{1,6}\s/;
+const NEXT_ATX_HEADING_PATTERN =
+  /\n(?: {0,3}#{1,6}\s|(?=[ \t]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)))/;
 
 /** Matches the `## Acceptance criteria` heading (any ATX level, any of
  * the two capitalization conventions used across this repository's own
@@ -133,20 +140,43 @@ export function candidateFilesExistOnDisk(
 ): boolean {
   const paths = parseCandidateFiles(body);
   return paths.some((path) =>
-    candidatePathVariants(path).some((variant) =>
-      existsAt(resolveRepoPath(repoRoot, variant)),
-    ),
+    candidatePathVariants(path).some((variant) => {
+      const resolved = resolveRepoPath(repoRoot, variant);
+      return resolved !== null && existsAt(resolved);
+    }),
   );
 }
 
-/** Minimal path join avoiding a hard `node:path` dependency for this one
- * call site's simple case (no `..`/`.` segments to resolve -- every
- * candidate-file path is already relative and forward-slashed). */
-function resolveRepoPath(repoRoot: string, relativePath: string): string {
-  if (/^([a-zA-Z]:)?[/\\]/.test(relativePath)) {
-    return relativePath;
+/**
+ * Resolves a `## Candidate files` path against `repoRoot`, containing it
+ * to the repository -- `parseCandidateFiles` reads this text straight out
+ * of untrusted issue-body prose. Returns `null` (never probed by
+ * {@link candidateFilesExistOnDisk}, same as "does not exist") for an
+ * absolute path or one whose `..` segments escape `repoRoot` after
+ * normalization (CodeRabbit review, PR #2840): the pre-fix version passed
+ * an absolute path through unchanged and never normalized `..` segments at
+ * all, so `existsAt` could probe outside the working tree and wrongly
+ * satisfy `candidateFilesExist` for a path this signal's own documentation
+ * excludes.
+ */
+function resolveRepoPath(
+  repoRoot: string,
+  candidatePath: string,
+): string | null {
+  // `node:path`'s own `isAbsolute` is platform-bound (POSIX does not
+  // recognize a Windows drive-letter path as absolute) -- issue-body text
+  // is untrusted and platform-agnostic, so also reject the drive-letter
+  // form explicitly regardless of the host OS, matching this function's
+  // pre-fix regex.
+  if (isAbsolute(candidatePath) || /^[a-zA-Z]:[/\\]/.test(candidatePath)) {
+    return null;
   }
-  return `${repoRoot.replace(/[/\\]+$/, '')}/${relativePath}`;
+  const resolved = resolve(repoRoot, candidatePath);
+  const rel = relative(repoRoot, resolved);
+  if (rel === '..' || rel.startsWith(`..${'/'}`) || isAbsolute(rel)) {
+    return null;
+  }
+  return resolved;
 }
 
 /**
