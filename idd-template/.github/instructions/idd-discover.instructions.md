@@ -57,23 +57,31 @@ reason and stop without claiming. Fall back to normal discovery only when
 the operator explicitly asks for normal discovery in the same run; do not
 silently search for another issue.
 
-For a valid open target that is not itself a roadmap node (see step 1
+For a valid open target that is not itself a roadmap node (see step 2
 below), skip A0-O, A1, A1.5, A2, and candidate selection. Before A5, run
 targeted readiness and viability checks against that issue only:
 
-1. Fetch the target issue. If it carries the configured roadmap label or
-   an `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker — the same test
+1. Fetch the target issue. If it carries the configured authoring label,
+   report `Issue #N is currently being authored`, run the
+   stale-authoring warning check above, and stop without claiming — this
+   check runs first and applies whether the target turns out to be an
+   execution leaf or a roadmap node in step 2 below, so an
+   authoring-held roadmap is never routed into step 2's traversal.
+2. If the target issue carries the configured roadmap label or an
+   `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker — the same test
    **A2**'s roadmap-node/execution-leaf classification rule uses — do
-   not continue this targeted-readiness path. Instead, treat the
-   operator's target as scoping A1's own root selection: run a
-   single-root traversal from this issue as A2's root (skipping A1's
-   own roadmap search), then continue the normal
-   A1.5 → A2 → A3 → A3.5 → A4 → A4.5 → A5 sequence from there, ranking
-   and claiming the roadmap's own highest-suitability open children
-   first.
-2. If the target issue carries the configured authoring label, report
-   `Issue #N is currently being authored`, run the stale-authoring
-   warning check above, and stop without claiming.
+   not continue this targeted-readiness path. Instead, treat the target
+   as the root **A1** would have selected: continue with **A1.5**
+   against it, then run **A2**'s traversal scoped to this root and its
+   own descendants only (never a repository-wide search), then the
+   normal **A3** → **A3.5** → **A4** → **A4.5** → **A5** sequence over
+   that scoped candidate set, ranking and claiming the roadmap's own
+   highest-suitability open child first. This graph-scoped continuation
+   excludes **A0**'s own A0-O orphan-fallback triggers (a)/(b)/(c): if
+   this roadmap's own descendants are exhausted or unsuitable, end the
+   run the same way A0-T's other failure branches do — report and stop
+   — never falling back to an unrelated orphan issue, per the
+   no-silent-fallback rule above.
 3. Apply A3's readiness bullets to the target (the same blocked-by,
    human-coordination, and runtime-observation checks, resolved the
    same way) — plus one target-only check: no active, non-stale claim
@@ -664,4 +672,7 @@ Do not widen issue-selection scope beyond the roadmap traversal except
 for the explicit query allowlist already defined in A0-T, A0-O, A1,
 A1.5, A3, and A4.5, or for a same-run operator opt-in per A3 step 5
 (never inferred from prior or standing instructions). A single explicit
-target authorizes only that issue.
+target authorizes only that issue, except when A0-T step 2 classifies it
+as a roadmap node: then it authorizes normal selection scoped to that
+roadmap's own descendants only, never an unrelated orphan issue (A0-O
+stays excluded, per A0-T step 2).
