@@ -1693,11 +1693,11 @@ only approval boundary.
   attempt (this does not retroactively fail Stage 1 itself), and the
   target falls back to the ordinary human-release-request precondition.
   Perform this comparison immediately before the label-removal step
-  itself, not only once earlier in the sequence -- matching the
-  immediately-before-each-removal re-verification discipline this
-  section already requires for owner/set/anchor/session and the
-  expected label/body snapshot -- so a body edit landing between an
-  earlier check and the actual removal cannot silently bypass this
+  itself, not only once earlier in the sequence -- matching this
+  section's existing discipline of re-verifying immediately before
+  each removal for owner/set/anchor/session and the expected
+  label/body snapshot -- so a body edit landing between an earlier
+  check and the actual removal cannot silently bypass this
   precondition. A dedicated helper/test to perform and verify this
   comparison mechanically is tracked as a follow-up rather than
   designed here. This

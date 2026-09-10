@@ -520,9 +520,17 @@ export async function evaluateDiscoverReadiness(
     // closes. An issue without the marker is completely unaffected -- its
     // own `Refs` lines are never inspected here.
     if (hasReviewFixLoopCutoffDeferMarker(issue.body, resolvedMarkerPrefix)) {
-      for (const refsNumber of extractReviewFixLoopCutoffRefsIssueNumbers(
+      const deferSourceRefsNumbers = extractReviewFixLoopCutoffRefsIssueNumbers(
         issue.body,
-      )) {
+      );
+      // Review fix (#2877): a marked issue with no extracted `Refs` target
+      // at all is a malformed marker -- missing the D3-required
+      // originating-issue line -- and must fail closed (blocked) rather
+      // than silently becoming Discover-ready with no blocker reasons.
+      if (deferSourceRefsNumbers.length === 0) {
+        reasons.add('missing_defer_source_refs_line');
+      }
+      for (const refsNumber of deferSourceRefsNumbers) {
         const refsIssue = await getIssue(refsNumber, issueCache, loadIssue);
         if (!refsIssue || isInaccessibleIssue(refsIssue)) {
           const refsReason = isInaccessibleIssue(refsIssue)
@@ -877,17 +885,37 @@ export function hasReviewFixLoopCutoffDeferMarker(
 }
 
 /**
- * Collect the `#N` references declared on a `Refs` keyword line (#2877).
- * Symmetric with {@link extractBlockedByIssueNumbers}; the caller decides
- * whether to treat the result as blocking -- see
- * {@link hasReviewFixLoopCutoffDeferMarker}.
+ * Collect the `#N` references declared on the **first** `Refs` keyword line
+ * in the body -- never every `Refs` line the way
+ * {@link extractBlockedByIssueNumbers} collects every `Blocked by` line
+ * (#2877 review fix, Codex P2). The D3 follow-up-issue rule requires
+ * exactly one `Refs #<originating-issue>` line naming the work this
+ * marker's target was deferred from; a later, unrelated `Refs #N` citation
+ * elsewhere in the body (for example an informational
+ * `Refs #900 (non-blocking)` aside) is ordinary prose, not a second
+ * originating-issue declaration, and must not also become a hard blocker.
+ * The caller decides whether the result is blocking -- see
+ * {@link hasReviewFixLoopCutoffDeferMarker} -- and how to treat an empty
+ * result (no `Refs` line found at all).
  */
 export function extractReviewFixLoopCutoffRefsIssueNumbers(
   body: string,
 ): number[] {
-  return dedupeNumbers(
-    extractKeywordLineRefs(stripMarkdownCodeRegions(body), 'Refs'),
+  const stripped = stripMarkdownCodeRegions(body);
+  const linePattern = new RegExp(
+    `${DEPENDENCY_LINE_PREFIX}Refs:?[ \\t]+(#\\d+.*)$`,
+    'im',
   );
+  const match = linePattern.exec(stripped);
+  if (!match) {
+    return [];
+  }
+  const { numbers } = consumeDependencyRefList(match[1]);
+  const continuationNumbers = consumeContinuationRefLines(
+    stripped,
+    (match.index ?? 0) + match[0].length,
+  );
+  return dedupeNumbers([...numbers, ...continuationNumbers]);
 }
 
 /**

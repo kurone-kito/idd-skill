@@ -246,6 +246,24 @@ test('extractReviewFixLoopCutoffRefsIssueNumbers captures Refs lines like extrac
   );
 });
 
+test('extractReviewFixLoopCutoffRefsIssueNumbers takes only the first Refs line (#2877 review fix, Codex P2)', () => {
+  // A second, unrelated `Refs` citation elsewhere in the body (e.g. an
+  // informational aside) must not also be treated as an originating-issue
+  // declaration -- only the first line's numbers count.
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers(
+      'Refs #100\n\nSee also Refs #900 (non-blocking) for background.',
+    ),
+    [100],
+  );
+  assert.deepEqual(
+    extractReviewFixLoopCutoffRefsIssueNumbers(
+      '## Background\n\nRefs #12, #13\n\nRefs #999 unrelated',
+    ),
+    [12, 13],
+  );
+});
+
 test('dependency parsers ignore code-fenced examples and stay on one line', () => {
   // A fenced example quoting the relaxed bullet/blockquote syntax is masked,
   // so it is not read as a real blocker (the leading fence uses ~ to keep this
@@ -750,6 +768,85 @@ test('fails safe when a review-fix-loop-cutoff Refs target cannot be resolved (#
     summary.filteredOut[0].reasons.join(','),
     /unresolvable_defer_source_refs_issue/,
   );
+});
+
+test('an unrelated non-blocking Refs aside never blocks once the originating issue closes (#2877 review fix, Codex P2)', async () => {
+  const issues = new Map([
+    [
+      409,
+      {
+        number: 409,
+        title: 'deferred follow-up with an extra informational Refs aside',
+        state: 'OPEN',
+        body: [
+          '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+          '',
+          'Refs #410',
+          '',
+          'See also Refs #900 (non-blocking) for background.',
+        ].join('\n'),
+        labels: [],
+      },
+    ],
+    [
+      410,
+      {
+        number: 410,
+        title: 'originating issue, now closed',
+        state: 'CLOSED',
+        body: '',
+        labels: [],
+      },
+    ],
+    [
+      900,
+      {
+        // Still OPEN: if the second Refs line were also treated as
+        // blocking, this candidate would incorrectly stay filtered.
+        number: 900,
+        title: 'unrelated open issue cited only for background',
+        state: 'OPEN',
+        body: '',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([409], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.filteredOut.length, 0);
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [409],
+  );
+});
+
+test('a marked issue with no Refs line at all fails closed (#2877 review fix)', async () => {
+  const issues = new Map([
+    [
+      411,
+      {
+        number: 411,
+        title: 'malformed deferred follow-up missing its Refs line',
+        state: 'OPEN',
+        body: '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([411], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut[0].reasons, [
+    'missing_defer_source_refs_line',
+  ]);
 });
 
 test('open roadmap dependencies are ignored as parent epics', async () => {
