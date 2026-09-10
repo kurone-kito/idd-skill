@@ -186,7 +186,8 @@ test('parseCandidateFiles stops at the next heading and ignores non-list prose',
 test('resolveHighContentionFiles unions the named bundles plus extra surfaces', () => {
   const manifest = {
     bundleBudgets: [
-      { id: 'bundle-review', files: ['a.md', 'shared.md'] },
+      { id: 'bundle-review-triage-phase', files: ['a.md', 'shared.md'] },
+      { id: 'bundle-review-fix-phase', files: ['d.md'] },
       { id: 'bundle-merge', files: ['shared.md', 'b.md'] },
       { id: 'bundle-discovery', files: ['c.md'] },
     ],
@@ -196,6 +197,7 @@ test('resolveHighContentionFiles unions the named bundles plus extra surfaces', 
     'a.md',
     MANIFEST_FILE,
     'b.md',
+    'd.md',
     'shared.md',
   ]);
   assert.equal(resolved.has('c.md'), false);
