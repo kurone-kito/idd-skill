@@ -169,6 +169,7 @@ const COVERED_HELPERS = [
   'advisory-wait-state',
   'audit-authored-issue',
   'audit-pr-cleanup',
+  'authoring-owner-provenance',
   'branch-conflict-state',
   'branch-name',
   'ci-wait-policy',

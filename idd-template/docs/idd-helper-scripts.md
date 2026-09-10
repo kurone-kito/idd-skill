@@ -263,6 +263,16 @@ in this preamble, since the fallback differs per helper.
   and it invokes the resolved hook, always exiting `0` regardless of
   the hook's own success or failure (referenced in
   [kurone-kito/idd-skill#2679](https://github.com/kurone-kito/idd-skill/issues/2679))
+- `scripts/authoring-owner-provenance.mjs` for the review-fix-loop-cutoff
+  auto-release exception's provenance check
+  (`skills/issue-authoring/references/contract.md`): computes the sha256
+  of a live issue body's exact UTF-8 content and compares it against that
+  same issue's own trusted `mode=acquire` `authoring-owner` marker's
+  recorded `body-sha256`, reporting a machine-readable
+  `pass`/`mismatch`/`not-found` verdict — `not-found` is never treated as
+  a pass. Read-only: never posts, labels, or mutates anything (referenced
+  in
+  [kurone-kito/idd-skill#2891](https://github.com/kurone-kito/idd-skill/issues/2891))
 
 **Review & Merge Phase Helpers:**
 

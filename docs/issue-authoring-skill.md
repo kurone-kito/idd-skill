@@ -1463,9 +1463,10 @@ once earlier in the sequence — matching this section's existing
 discipline of re-verifying immediately before each removal for
 owner/set/anchor/session and the expected label/body snapshot — so a
 body edit landing between an earlier check and the actual removal
-cannot silently bypass this precondition. A dedicated helper/test to
-perform and verify this comparison mechanically is tracked as a
-follow-up rather than designed here.
+cannot silently bypass this precondition. The `authoring-owner-provenance`
+helper (`node scripts/authoring-owner-provenance.mjs --issue <number>`;
+see `docs/idd-helper-scripts.md`) performs and verifies this comparison
+mechanically (`#2891`).
 
 **Roadmap-anchor scope (accepted limitation, `#2877`).** The "never a
 roadmap anchor" exclusion above is permanent, not a gap awaiting a fix:
