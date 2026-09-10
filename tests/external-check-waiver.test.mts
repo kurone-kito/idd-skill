@@ -1717,6 +1717,170 @@ test('runExternalCheckWaiver: --auto-bootstrap never reuses an existing same-rea
   assert.match(posted?.body ?? '', / run-id:555 -->/);
 });
 
+test('runExternalCheckWaiver: --auto-bootstrap exits 0 (graceful skip) when the adopter has not opted into the waiver policy (Codex review, PR #2895)', async () => {
+  // The distributed template's own shipped .github/idd/config.json omits
+  // ciGate entirely, so an adopter who hosts this workflow without ALSO
+  // opting into ciGate.externalCheckWaivers.mode: "maintainer-authorized"
+  // and registering this selector under ciGate.externalChecks.waivable
+  // would otherwise have this job fail on every single
+  // allowlisted-touching PR. This must be a graceful no-op, not a
+  // thrown error, for --auto-bootstrap specifically.
+  const dir = mkdtempSync(join(tmpdir(), 'idd-waiver-auto-bootstrap-skip-'));
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    // No ciGate key at all -- matches the shipped template default
+    // exactly.
+    writeFileSync(join(dir, '.github', 'idd', 'config.json'), '{}');
+    process.chdir(dir);
+
+    let postCalls = 0;
+    const { exitCode, report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          '--run-id',
+          '555',
+          '--auto-bootstrap',
+          '--apply',
+          '--yes',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+      },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+          },
+        ],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: () => [],
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T18:20:00Z'),
+      isTTY: false,
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'https://example.invalid/posted' };
+      },
+    });
+
+    assert.equal(
+      exitCode,
+      0,
+      'must exit 0, not throw, for a config-only block',
+    );
+    assert.equal(report?.applied, false);
+    assert.equal(postCalls, 0);
+    assert.ok(
+      report?.blockingReasons?.includes(
+        'external-check waiver mode is disabled',
+      ),
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap still throws on a genuine blocking reason, not only a config-only one (Codex review, PR #2895)', async () => {
+  // The graceful skip above must stay narrowly scoped to the two known
+  // adopter-configuration-only reasons -- a REAL problem (here: the PR
+  // itself is closed) must still surface as a thrown error, exactly as
+  // before.
+  const dir = mkdtempSync(join(tmpdir(), 'idd-waiver-auto-bootstrap-real-'));
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(join(dir, '.github', 'idd', 'config.json'), '{}');
+    process.chdir(dir);
+
+    await assert.rejects(
+      () =>
+        runExternalCheckWaiver({
+          args: {
+            ...parseArgs([
+              '--pr',
+              '2325',
+              '--check',
+              'idd-advisory-convergence',
+              '--reason',
+              SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+              '--run-id',
+              '555',
+              '--auto-bootstrap',
+              '--apply',
+              '--yes',
+            ]),
+            repo: 'kurone-kito/idd-skill',
+          },
+          pr: {
+            number: 2325,
+            state: 'CLOSED',
+            url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+            headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            headRefOid: REUSE_HEAD_SHA,
+            statusCheckRollup: [
+              {
+                __typename: 'CheckRun',
+                name: 'idd-advisory-convergence',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+              },
+            ],
+          },
+          issueCandidates: [
+            {
+              number: 2328,
+              url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+              activeClaim: {
+                agentId: 'claude-6043e89f',
+                claimId: 'claim-20260830T222316Z-2328',
+                supersedes: 'none',
+                branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+                createdAt: '2026-08-30T22:23:26Z',
+              },
+            },
+          ],
+          prComments: () => [],
+          headCommittedAt: '2026-08-30T18:13:24Z',
+          now: new Date('2026-08-30T18:20:00Z'),
+          isTTY: false,
+          postComment: () => ({ html_url: 'https://example.invalid/posted' }),
+        }),
+      /is not open/,
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('runExternalCheckWaiver: --auto-bootstrap clamps its fixed expiry to a configured shorter maxValidity (Codex review, PR #2895)', async () => {
   // The fixed PT24H default is anchored on the HEAD commit timestamp
   // independent of `advisoryWait.convergenceDeadline` (see the test above),

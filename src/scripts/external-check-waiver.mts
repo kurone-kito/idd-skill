@@ -971,6 +971,41 @@ export async function runExternalCheckWaiver(
   }
 
   if (!report.canApply) {
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): the
+    // distributed template's own shipped `.github/idd/config.json`
+    // omits `ciGate` entirely, so an adopter who hosts this workflow
+    // without ALSO opting into `ciGate.externalCheckWaivers.mode:
+    // "maintainer-authorized"` and registering this selector under
+    // `ciGate.externalChecks.waivable` (a non-obvious co-requisite,
+    // undocumented as required for this specific job) would otherwise
+    // have this job fail on every single allowlisted-touching PR.
+    // Treat that specific, adopter-configuration-only blocking shape as
+    // a graceful no-op for `--auto-bootstrap` -- exit 0 with a clear
+    // notice -- rather than a failed job; any OTHER blocking reason
+    // (a genuine problem unrelated to this opt-in policy) still throws
+    // exactly as before.
+    const configOnlyBlockingReasons = new Set([
+      'external-check waiver mode is disabled',
+      'one or more matched checks are not configured as waivable external checks',
+    ]);
+    if (
+      args.autoBootstrap &&
+      report.blockingReasons.length > 0 &&
+      report.blockingReasons.every((reason) =>
+        configOnlyBlockingReasons.has(reason),
+      )
+    ) {
+      process.stderr.write(
+        `::notice::--auto-bootstrap skipped: this repository has not opted into ` +
+          `ciGate.externalCheckWaivers.mode "maintainer-authorized" with this ` +
+          `selector registered under ciGate.externalChecks.waivable, so the ` +
+          `self-referential-bootstrap-auto waiver cannot be posted yet ` +
+          `(${report.blockingReasons.join('; ')}). See docs/customization.md.\n`,
+      );
+      const skippedReport = { ...report, applied: false };
+      renderReport(skippedReport, args.format);
+      return { exitCode: 0, report: skippedReport };
+    }
     renderReport(report, args.format);
     throw new Error(
       `external-check waiver apply blocked: ${report.blockingReasons.join('; ')}`,
