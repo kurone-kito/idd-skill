@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { auditAuthoredIssue } from '../src/scripts/audit-authored-issue.mts';
+import {
+  renderAuthoringOwnerMarker,
+  renderAuthoringPublicationIntentMarker,
+} from '../src/scripts/marker-helpers.mts';
 
 function suitabilityFooter(score: number): string {
   return `---\n\n_Autopilot suitability: ${score} / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: ${score} -->`;
@@ -2712,6 +2716,260 @@ test('authoring-owner-marker-trail rejects issue=none at state=member even when 
     (entry) => entry.id === 'authoring-owner-marker-trail',
   );
   assert.equal(finding?.result, 'fail');
+});
+
+// --- authoring-marker-minimization-backlog (#2896) ---
+
+function canonicalOwnerMarkerBody({
+  target = 'kurone-kito/idd-skill#9001',
+  mode = 'acquire',
+}: {
+  target?: string;
+  mode?:
+    | 'acquire'
+    | 'resume'
+    | 'bootstrap'
+    | 'heartbeat'
+    | 'release'
+    | 'release-guard'
+    | 'release-complete';
+} = {}): string {
+  return renderAuthoringOwnerMarker({
+    markerPrefix: 'idd-skill',
+    target,
+    anchor: target,
+    mode,
+    owner: 'owner-tok1',
+    set: 'set-xyz789',
+    session: 'sess-1',
+    bodySha256: TEST_BODY_SHA256,
+    snapshotSha256: 'none',
+    supersedes: 'none',
+  });
+}
+
+function canonicalPublicationIntentBody({
+  target = 'target-abc123',
+  state = 'member',
+}: {
+  target?: string;
+  state?: 'pending' | 'member' | 'cleanup' | 'abandoned';
+} = {}): string {
+  return renderAuthoringPublicationIntentMarker({
+    markerPrefix: 'idd-skill',
+    target,
+    anchor: 'kurone-kito/idd-skill#9001',
+    set: 'set-xyz789',
+    session: 'sess-1',
+    token: 'pub-token1',
+    journal: 'kurone-kito/idd-skill#9001',
+    issue: 'kurone-kito/idd-skill#9001',
+    actor: 'kurone-kito',
+    state,
+  });
+}
+
+test('authoring-marker-minimization-backlog is not applicable when neither comments nor journalComments are supplied', () => {
+  const report = auditAuthoredIssue(orphanBody(), { shape: 'orphan' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, undefined);
+  assert.match(finding?.detail ?? '', /not applicable/);
+});
+
+test('authoring-marker-minimization-backlog reports zero when only one canonical owner marker exists (nothing superseded yet)', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [{ body: canonicalOwnerMarkerBody() }],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, undefined);
+  assert.match(finding?.detail ?? '', /authoring-owner: 0/);
+});
+
+test('authoring-marker-minimization-backlog counts every canonical owner marker except the newest (last in array order)', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [
+      { body: canonicalOwnerMarkerBody({ mode: 'acquire' }) },
+      { body: canonicalOwnerMarkerBody({ mode: 'heartbeat' }) },
+      { body: canonicalOwnerMarkerBody({ mode: 'release' }) },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /authoring-owner: 2/);
+});
+
+test('authoring-marker-minimization-backlog excludes a comment already reported isMinimized', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'acquire' }),
+        isMinimized: true,
+      },
+      { body: canonicalOwnerMarkerBody({ mode: 'heartbeat' }) },
+      { body: canonicalOwnerMarkerBody({ mode: 'release' }) },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.match(finding?.detail ?? '', /authoring-owner: 1/);
+});
+
+test('authoring-marker-minimization-backlog ignores a non-byte-exact match (blank-line separator variant), matching the live sweep', () => {
+  const canonical = canonicalOwnerMarkerBody({ mode: 'acquire' });
+  const blankLineVariant = canonical.replace(
+    '\n_Issue-authoring',
+    '\n\n_Issue-authoring',
+  );
+  assert.notEqual(blankLineVariant, canonical);
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [
+      { body: blankLineVariant },
+      { body: canonicalOwnerMarkerBody({ mode: 'release' }) },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.match(finding?.detail ?? '', /authoring-owner: 0/);
+});
+
+test('authoring-marker-minimization-backlog counts the authoring-publication-intent family from journalComments independently', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    journalComments: [
+      { body: canonicalPublicationIntentBody({ state: 'pending' }) },
+      { body: canonicalPublicationIntentBody({ state: 'member' }) },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /authoring-publication-intent: 1/);
+  // The owner half was never supplied (no `comments` option) -- it must
+  // report as "not checked", never as a confirmed "0" (#2896 review):
+  // collapsing the two would misreport "never counted" as "counted,
+  // found none".
+  assert.match(finding?.detail ?? '', /authoring-owner: not checked/);
+});
+
+test('authoring-marker-minimization-backlog distinguishes "not checked" from "checked, zero found" for the omitted family', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [{ body: canonicalOwnerMarkerBody() }],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  // Only one canonical owner marker -- nothing superseded -- so the total
+  // stays 0 and this finding carries no warning severity, but the
+  // never-supplied journalComments half must still read "not checked",
+  // never a bare "0".
+  assert.equal(finding?.severity, undefined);
+  assert.match(finding?.detail ?? '', /authoring-owner: 0\b/);
+  assert.match(
+    finding?.detail ?? '',
+    /authoring-publication-intent: not checked/,
+  );
+});
+
+test('authoring-marker-minimization-backlog treats an empty comments array as checked (zero found), not "not applicable"', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.doesNotMatch(finding?.detail ?? '', /not applicable/);
+  assert.match(finding?.detail ?? '', /authoring-owner: 0\b/);
+});
+
+test('authoring-marker-minimization-backlog computes "newest" independently per family in a mixed-family comments array', () => {
+  // Both families appear in the SAME comments array (an unrealistic but
+  // worth-covering shape): the owner family's "newest" must be its own
+  // last owner-family match, not simply the array's last element overall
+  // (which here is a publication-intent match).
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [
+      { body: canonicalOwnerMarkerBody({ mode: 'acquire' }) },
+      { body: canonicalOwnerMarkerBody({ mode: 'release' }) },
+      { body: canonicalPublicationIntentBody({ state: 'member' }) },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  // The 'acquire' owner marker is superseded by the later 'release' one
+  // even though a later, different-family comment follows it.
+  assert.match(finding?.detail ?? '', /authoring-owner: 1/);
+});
+
+test('authoring-marker-minimization-backlog excludes a non-canonical variant even when it is the last array entry', () => {
+  const blankLineVariant = canonicalOwnerMarkerBody({
+    mode: 'release',
+  }).replace('\n_Issue-authoring', '\n\n_Issue-authoring');
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [
+      { body: canonicalOwnerMarkerBody({ mode: 'acquire' }) },
+      // Last in array order, but not a byte-exact canonical match, so it
+      // must not become the "newest" match -- there is then only one
+      // real canonical match ('acquire'), so nothing is superseded.
+      { body: blankLineVariant },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.match(finding?.detail ?? '', /authoring-owner: 0\b/);
+});
+
+test('authoring-marker-minimization-backlog is not gated on the authoring label', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: [],
+    comments: [
+      { body: canonicalOwnerMarkerBody({ mode: 'acquire' }) },
+      { body: canonicalOwnerMarkerBody({ mode: 'release' }) },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /authoring-owner: 1/);
+});
+
+test('authoring-marker-minimization-backlog never fails the report, even with a nonzero backlog', () => {
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    comments: [
+      { body: canonicalOwnerMarkerBody({ mode: 'acquire' }) },
+      { body: canonicalOwnerMarkerBody({ mode: 'release' }) },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(report.passed, true);
 });
 
 // --- upstream-candidate-marker-label: bidirectional pairing (#2700/#2703) ---

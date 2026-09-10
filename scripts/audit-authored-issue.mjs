@@ -13,11 +13,15 @@
 // the roadmap shape's `## Tracks` checkbox lines actually resolving to a
 // child issue reference, the roadmap-id/blocked-by dependency-marker
 // rules, visible/hidden line agreement for the suitability and effort
-// footers, and an advisory warning-severity check that flags an issue/PR
+// footers, an advisory warning-severity check that flags an issue/PR
 // reference used near coordination language (e.g. "before", "once",
 // "requires") with no corresponding Blocked-by/Depends-on/task-list
-// dependency encoding. The advisory check never fails the report or
-// changes the exit code — see checkProseOnlyDependency.
+// dependency encoding (see checkProseOnlyDependency), and (given
+// pre-fetched comment data) a mechanical count of eligible,
+// not-yet-minimized superseded authoring-owner / authoring-publication-intent
+// marker comments (see checkAuthoringMarkerMinimizationBacklog, #2896).
+// Every advisory/count-only check always reports `result: 'pass'` and
+// never changes the exit code.
 //
 // All marker value parsing is delegated to the existing
 // autopilot-suitability.mts / effort.mts / marker-regex.mts /
@@ -47,6 +51,7 @@ import {
 } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import {
+  matchCanonicalAuthoringMarkerFamily,
   parseAuthoringOwnerComment,
   parseAuthoringPublicationComment,
   parseAuthoringPublicationIntentComment,
@@ -357,10 +362,13 @@ if (import.meta.main) {
  * Audit a drafted issue body against the issue-authoring contract's
  * structural expectations for the declared shape. Every check runs
  * independently (no short-circuit), so one report surfaces every problem
- * at once instead of stopping at the first failure. One check
- * (`prose-dependency`) is advisory-only: it always reports `result:
- * 'pass'` and only ever adds a `severity: 'warning'` marker plus detail,
- * so it never affects `passed` or the caller's exit code.
+ * at once instead of stopping at the first failure. Three checks
+ * (`prose-dependency`, `roadmap-tracks-parse`, and
+ * `authoring-marker-minimization-backlog`) are advisory-only: each
+ * always reports `result: 'pass'` and only ever adds a `severity:
+ * 'warning'` marker plus detail on the specific condition it flags, so
+ * none of the three ever affects `passed` or the caller's exit code. See
+ * {@link AuditFinding.severity}.
  */
 export function auditAuthoredIssue(body, options) {
   const rawText = typeof body === 'string' ? body : String(body ?? '');
@@ -429,6 +437,7 @@ export function auditAuthoredIssue(body, options) {
     checkEffortVisibleLineAgreement(text, markerPrefix),
     checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
     checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options),
+    checkAuthoringMarkerMinimizationBacklog(markerPrefix, options),
     checkUpstreamCandidateMarkerLabel(
       text,
       markerPrefix,
@@ -1376,6 +1385,148 @@ function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
     'owner-marker, publication-token line, and journal publication-intent record are all present and well-formed',
   );
 }
+/**
+ * Counts how many entries in `comments` are byte-exact canonical
+ * renderings of `family` (#2896) and are not the single newest such match
+ * -- mirroring the "skip the just-posted comment itself" rule the
+ * hide-on-supersede sweep (`skills/issue-authoring/references/
+ * contract.md`'s "Authoring hold and release" section) already applies.
+ * "Newest" is the last matching entry in array order: callers are
+ * expected to supply comments in GitHub's deterministic
+ * `created_at`-then-id order. This is the first **order-dependent**
+ * comment-aware check in this file -- unlike
+ * {@link checkAuthoringOwnerMarkerTrail}, which uses order-independent
+ * `.some()`/`.every()` scans, this function's result changes if the input
+ * order changes. `AuthoringCommentInput.createdAt` is accepted but never
+ * consulted here to verify or sort by ascending order; a caller that
+ * supplies comments out of order gets a silently wrong count, not a
+ * detected error.
+ *
+ * `family` is matched against the RAW `comment.body` (never
+ * `stripMarkdownCodeRegions`-masked): unlike the structural checks above,
+ * this count exists to mirror exactly what the live hide-on-supersede
+ * sweep would find on the real, unmodified comment body -- a body this
+ * function would treat as canonical only by first stripping content out
+ * of it is not actually byte-exact against what
+ * `matchCanonicalAuthoringMarkerFamily` would see live.
+ *
+ * A match whose `isMinimized` is already `true` is excluded from the
+ * count -- it is not backlog, it is already handled. Returns `0` when
+ * `comments` is `undefined` (the caller, {@link
+ * checkAuthoringMarkerMinimizationBacklog}, reports that family as "not
+ * checked" rather than treating this `0` as a confirmed zero) or when
+ * fewer than two matches exist (nothing can be "superseded" without a
+ * later match to supersede it).
+ */
+function countEligibleSupersededMarkers(comments, markerPrefix, family) {
+  if (comments === undefined) {
+    return 0;
+  }
+  const matchIndexes = [];
+  comments.forEach((comment, index) => {
+    if (
+      matchCanonicalAuthoringMarkerFamily(comment.body, markerPrefix) === family
+    ) {
+      matchIndexes.push(index);
+    }
+  });
+  if (matchIndexes.length < 2) {
+    return 0;
+  }
+  const newestIndex = matchIndexes[matchIndexes.length - 1];
+  let count = 0;
+  for (const index of matchIndexes) {
+    if (index === newestIndex || comments[index].isMinimized === true) {
+      continue;
+    }
+    count += 1;
+  }
+  return count;
+}
+/**
+ * Reports how many `authoring-owner` (from {@link AuditOptions.comments})
+ * and `authoring-publication-intent` (from
+ * {@link AuditOptions.journalComments}) comments are eligible for the
+ * hide-on-supersede sweep but not yet minimized (#2896). This is the
+ * mechanical observability signal the issue-authoring contract's release-
+ * time sweep depends on to make a compliance gap visible instead of
+ * silent, the way #2750/#2821's original per-post-only instruction's gap
+ * went unnoticed for weeks (measured 2026-09-11: 3 of 95 expected-
+ * hideable comments across 22 sampled issues, about 3%).
+ *
+ * Always reports `result: 'pass'` -- a nonzero backlog is surfaced as a
+ * `severity: 'warning'` finding, never a hard failure: the same body can
+ * be re-audited at any point in an issue's lifecycle (not only
+ * immediately after the Stage 2 sweep runs), and the journal issue's own
+ * backlog accumulates across every authoring set that shares it, so a
+ * strict fail here would block an unrelated publish on backlog this
+ * session did not create. Not applicable (as a whole) when the caller
+ * supplies neither `comments` nor `journalComments` -- unlike
+ * `authoring-owner-marker-trail`, this check is never gated on the
+ * authoring label: the backlog it counts exists (or does not) regardless
+ * of whether the audited body currently carries that label.
+ *
+ * **Per-family "not checked" vs "checked, zero found" (#2896 review).**
+ * `comments` and `journalComments` are independently optional: a caller
+ * may supply only one. The `detail` text always names both families and
+ * distinguishes an omitted family ("not checked") from one that was
+ * supplied and found to have zero backlog ("0") -- collapsing the two
+ * into a bare `0` would misreport "never actually counted" as "counted,
+ * found none", which is exactly the kind of silent gap this check exists
+ * to surface. `total` (and therefore whether this finding carries
+ * `severity: 'warning'`) sums only the families actually checked; an
+ * omitted family never contributes a phantom `0` to that sum.
+ */
+function checkAuthoringMarkerMinimizationBacklog(markerPrefix, options) {
+  const id = 'authoring-marker-minimization-backlog';
+  const name =
+    'Eligible, not-yet-minimized superseded authoring-owner / authoring-publication-intent marker count';
+  const ownerChecked = options.comments !== undefined;
+  const intentChecked = options.journalComments !== undefined;
+  if (!ownerChecked && !intentChecked) {
+    return pass(
+      id,
+      name,
+      'not applicable: neither comments nor journalComments were supplied to this check',
+    );
+  }
+  const ownerBacklog = ownerChecked
+    ? countEligibleSupersededMarkers(
+        options.comments,
+        markerPrefix,
+        'authoring-owner',
+      )
+    : null;
+  const publicationIntentBacklog = intentChecked
+    ? countEligibleSupersededMarkers(
+        options.journalComments,
+        markerPrefix,
+        'authoring-publication-intent',
+      )
+    : null;
+  const total = (ownerBacklog ?? 0) + (publicationIntentBacklog ?? 0);
+  const ownerPart = ownerChecked
+    ? `authoring-owner: ${ownerBacklog}`
+    : 'authoring-owner: not checked (comments not supplied)';
+  const intentPart = intentChecked
+    ? `authoring-publication-intent: ${publicationIntentBacklog}`
+    : 'authoring-publication-intent: not checked (journalComments not supplied)';
+  const breakdown = `${ownerPart}, ${intentPart}`;
+  if (total === 0) {
+    return pass(
+      id,
+      name,
+      `no eligible, not-yet-minimized superseded marker comments found among the checked families (${breakdown})`,
+    );
+  }
+  return {
+    id,
+    name,
+    result: 'pass',
+    severity: 'warning',
+    detail: `${total} eligible, not-yet-minimized superseded marker comment(s) found among the checked families (${breakdown}) -- run the Stage 2 release-time hide-on-supersede sweep to clear the backlog`,
+  };
+}
 // An empty or whitespace-only currentRepo (reachable via an explicit
 // `--current-repo ''`, or an environment where `$GITHUB_REPOSITORY`
 // resolves to an empty string) must be treated the same as it being
@@ -1912,10 +2063,10 @@ function fail(id, name, detail) {
 }
 /**
  * Read and JSON-parse a comments file (an array of
- * `{body, author?, createdAt?}` objects) the same uncaught-throw-on-
- * malformed-input way `--body-file` already behaves: a missing file or
- * invalid JSON propagates as an unhandled exception rather than a new
- * soft-degrade path this file does not otherwise have.
+ * `{body, author?, createdAt?, isMinimized?}` objects) the same
+ * uncaught-throw-on-malformed-input way `--body-file` already behaves: a
+ * missing file or invalid JSON propagates as an unhandled exception
+ * rather than a new soft-degrade path this file does not otherwise have.
  */
 function readCommentsFile(path) {
   const raw = readFileSync(resolve(process.cwd(), path), 'utf8');
@@ -1933,6 +2084,9 @@ function readCommentsFile(path) {
       ...(typeof record.author === 'string' ? { author: record.author } : {}),
       ...(typeof record.createdAt === 'string'
         ? { createdAt: record.createdAt }
+        : {}),
+      ...(typeof record.isMinimized === 'boolean'
+        ? { isMinimized: record.isMinimized }
         : {}),
     };
   });
@@ -1964,9 +2118,20 @@ function main() {
   ) {
     fail_('--expect-bucket must be needs-decision or blocked-by-human');
   }
-  if (args.journalCommentsFile && !args.newIssue) {
-    fail_('--journal-comments-file requires --new-issue');
-  }
+  // #2896 review: --journal-comments-file no longer requires --new-issue.
+  // It used to (the only consumer was the new-issue publication-intent
+  // cross-check), but authoring-marker-minimization-backlog also reads
+  // journalComments unconditionally, and that check's whole point is to
+  // run at Stage 2 release on an already-published (never new) issue --
+  // requiring --new-issue here made the CLI unable to reach the exact
+  // invocation shape the issue-authoring contract's release-time sweep
+  // documents. Dropping this gate does not change
+  // authoring-owner-marker-trail's own behavior: it already no-ops the
+  // journal cross-check whenever --new-issue is absent (`options.newIssue
+  // !== true` returns early before journalComments is ever read), so
+  // journalComments passed without --new-issue is simply unused by that
+  // check, exactly as before.
+  //
   // Supplying journal data with no --comments-file would silently produce
   // a misleading pass: the owner-marker check (a prerequisite for even
   // reaching the journal cross-check) reports "not applicable" without
@@ -2163,11 +2328,15 @@ section headings for the declared shape, the roadmap-id/blocked-by
 dependency-marker rules, visible/hidden suitability+effort line
 agreement, and an advisory (warning-severity only) check that flags an
 issue/PR reference used near coordination language with no corresponding
-dependency marker, and (when --comments-file is supplied) the
+dependency marker, (when --comments-file is supplied) the
 authoring-owner-marker-trail check that verifies an authoring-labeled
-issue carries the owner-marker/publication-token trail. Exits 0 when
-every check passes, 1 when any check fails, 2 on a usage error; the
-advisory check never affects the exit code.
+issue carries the owner-marker/publication-token trail, and (when
+--comments-file and/or --journal-comments-file is supplied) the
+authoring-marker-minimization-backlog check that counts eligible,
+not-yet-minimized superseded authoring-owner / authoring-publication-intent
+marker comments. Exits 0 when every check passes, 1 when any check fails,
+2 on a usage error; the advisory check and
+authoring-marker-minimization-backlog never affect the exit code.
 
 Options:
   --shape <orphan|roadmap|child>   declared issue shape (required)
@@ -2198,13 +2367,24 @@ Options:
                                     target match (requires --current-repo or
                                     $GITHUB_REPOSITORY to be resolvable)
   --comments-file <path>           JSON array of this issue's pre-fetched comments
-                                    ({body, author?, createdAt?}); enables
-                                    authoring-owner-marker-trail (network-free: this
-                                    module never fetches comments itself)
+                                    ({body, author?, createdAt?, isMinimized?});
+                                    enables authoring-owner-marker-trail and the
+                                    authoring-owner half of
+                                    authoring-marker-minimization-backlog
+                                    (network-free: this module never fetches
+                                    comments itself; isMinimized defaults to
+                                    "not minimized" when omitted)
   --journal-comments-file <path>   JSON array of the journal issue's pre-fetched
-                                    comments, for the new-issue publication-intent
-                                    cross-check (requires --new-issue and
-                                    --comments-file)
+                                    comments (same shape as --comments-file);
+                                    requires --comments-file. Feeds the
+                                    authoring-publication-intent half of
+                                    authoring-marker-minimization-backlog on its
+                                    own (usable without --new-issue -- for
+                                    example, at Stage 2 release on an
+                                    already-published issue), and additionally
+                                    feeds the new-issue publication-intent
+                                    cross-check when --new-issue and --issue
+                                    are also given
   --new-issue                      this issue was just created in this invocation
                                     (not an edit); requires the leading
                                     authoring-publication body line, and (when
