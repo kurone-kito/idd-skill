@@ -618,9 +618,11 @@ tradeoffs behind each question before asking it, rather than bundling
 several unrelated technical topics into one dense batch.
 
 **Apply the operator's answers back onto the issue**: update the score
-footer, remove or update the `triage:{outcome}` label, revise
-acceptance criteria to reflect the decision, and record the decision as
-inline prose in the issue body: `Maintainer decision (<provenance>,
+footer, remove or update the `triage:{outcome}` label -- and the
+configured needs-decision label too, when the hold-and-return rule
+below applied it to this same candidate, since nothing else removes it
+-- revise acceptance criteria to reflect the decision, and record the
+decision as inline prose in the issue body: `Maintainer decision (<provenance>,
 Groom hearing, <date>): <resolution text>` -- the shape
 `suitability-triage.mjs`'s Check 7 recognizes as a resolved
 decision (`#2661`); a comment may additionally note the decision, but the body
@@ -632,20 +634,25 @@ itself never claims or works the issue (see
 [Mutation Policy and Coordination Rule](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)).
 
 **Hold when a recorded resolution proves infeasible.** The feasibility
-check above narrows this gap but does not close it -- the same field
-evidence (2026-09-10, issue `#2805`) shows infeasibility that only
-became visible once an implementing session was deep enough into the
-codebase to see it. When a session reaches implementation and finds the
-Groom-recorded resolution cannot be built as specified, it must hold
-and return the candidate to its pre-Groom decision-blocked state,
-rather than silently reinterpreting, downscoping, or unilaterally
-picking a different resolution: apply the configured needs-decision
-label and release the claim, the same general hold mechanism the shared
-Hold / suspend rules in `idd-overview-appendix.instructions.md` already
-document -- not a literal restoration of the Grooming pass's own
-`triage:{outcome}` label. Record exactly what made the recorded option
-infeasible in the hold comment, so the next Groom pass has the
-information a corrected question needs.
+check above reduces the risk of drafting an infeasible option, but does
+not eliminate it -- the same field evidence (2026-09-10, issue
+`#2805`) shows infeasibility that only became visible once an
+implementing session was deep enough into the codebase to see it. When
+a session reaches implementation and finds the Groom-recorded
+resolution cannot be built as specified, it must hold the candidate as
+decision-blocked again, rather than silently reinterpreting,
+downscoping, or unilaterally picking a different resolution: apply the
+configured needs-decision label and release the claim, the same
+general hold mechanism the shared Hold / suspend rules in
+`idd-overview-appendix.instructions.md` already document. Record
+exactly what made the recorded option infeasible in the hold comment,
+so the next Groom pass has the information a corrected question needs.
+That later pass removes the needs-decision label as part of applying
+its own operator's answers back onto the issue (above) -- alongside the
+`triage:{outcome}` label, the score footer, and a fresh `Maintainer
+decision` line that supersedes the infeasible one -- rather than
+leaving the label in place indefinitely or removing it without
+recording a genuinely buildable replacement.
 
 **Worked example.** An issue was rejected `needs-decision` at score
 `2/5` because its acceptance criteria read "add caching, or document
