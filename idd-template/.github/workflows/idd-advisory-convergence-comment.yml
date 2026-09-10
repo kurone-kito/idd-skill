@@ -178,7 +178,7 @@ defaults:
 jobs:
   refresh-if-idd-originated:
     runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-slim' }}
-    # 30, not the required gate's own 10 (Codex P1, kurone-kito/idd-skill#2855
+    # 35, not the required gate's own 10 (Codex P1, kurone-kito/idd-skill#2855
     # review): a `pull_request_review` submission can land while the
     # required gate's own run is still mid-flight, and
     # `--refresh-latest --apply` then blocks inside `waitForRunCompletion`
@@ -191,10 +191,11 @@ jobs:
     # at this timeout regardless of what step is running, so a shorter
     # bound here would silently drop the deferred rerun before it ever
     # fires -- exactly the scenario `--refresh-latest` exists to prevent.
-    # 30 covers 10 (waiting out the original run) plus roughly 2x10 (two
-    # sequential reruns, `rerunAndWait`'s own poll bounded by the same
-    # 10-minute gate timeout each) with headroom for setup/checkout.
-    timeout-minutes: 30
+    # 35 = 10 (waiting out the original run) + 2x10 (two sequential
+    # reruns, `rerunAndWait`'s own poll bounded by the same 10-minute gate
+    # timeout each) + 5 headroom for setup/checkout and the steps
+    # preceding this wait.
+    timeout-minutes: 35
     if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
     steps:
       - uses: actions/checkout@v4

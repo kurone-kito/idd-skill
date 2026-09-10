@@ -2952,7 +2952,7 @@ function waitForNewAttempt(
  * mechanism): GitHub kills the job outright at its own timeout
  * regardless of what step is running, so a caller whose own timeout is
  * shorter than this wait would never actually issue the deferred rerun
- * -- see `idd-advisory-convergence-comment.yml`'s `timeout-minutes: 30`
+ * -- see `idd-advisory-convergence-comment.yml`'s `timeout-minutes: 35`
  * (and its `idd-template/` copy) for the derivation. */
 const PENDING_RUN_POLL_TIMEOUT_MS = APPLY_POLL_TIMEOUT_MS;
 
