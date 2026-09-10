@@ -11,14 +11,75 @@
 # existing pull_request-family required run for the current HEAD SHA.
 # It never asserts `ready` itself.
 #
-# Two trigger families land here (#2411): `pull_request_review_comment`
-# (inline review-thread comments) and `issue_comment` (regular PR
-# comments -- where post-idd-marker.mjs and
-# disposition-non-review-notices.mjs actually post every marker/
-# disposition type, since both use the issues-comments API). `issue_comment`
-# also fires for a comment on a plain issue, not only a PR; the job-level
-# `if:` below skips those (`github.event.issue.pull_request` is only
-# present when the commented-on issue is a PR).
+# Three trigger families land here: `pull_request_review_comment` (inline
+# review-thread comments) and `issue_comment` (regular PR comments --
+# where post-idd-marker.mjs and disposition-non-review-notices.mjs
+# actually post every marker/disposition type, since both use the
+# issues-comments API), both from #2411; and `pull_request_review`
+# (review submissions, #2764 Phase 1) -- moved here from
+# idd-advisory-convergence.yml's own trigger list, alongside the content-
+# filtering reason below. NOT for tamper-resistance: this workflow is
+# just as PR-editable as the required workflow's own former trigger was
+# (there is no `pull_request_review_target` -- GitHub's `_target` variant
+# exists only for `pull_request`), so a same-repository PR can still
+# disable or alter this step. What actually stays trusted is the push-
+# triggered gate itself, via `pull_request_target` (this same #2764
+# Phase 1 change, on `idd-advisory-convergence.yml`); this review-refresh
+# path is deliberately best-effort on top of that, not a second trusted
+# surface -- a tampered copy can only delay a fresh green, never force
+# one, since the gate's own verdict is still computed independently on
+# every push. Unlike the two comment families, a review submission is
+# not filtered by IDD-originated content (see "Classify review comment"
+# below) and "Rerun required HEAD check" routes it through
+# `rerun-advisory-convergence.mjs --refresh-latest --apply` instead of
+# the two comment families' plain `--apply`: the ordinary `--apply` path
+# only reruns a `rerun-eligible` instance (excludes anything already
+# `pass` and enforces the rerun-once budget), which would leave a
+# same-HEAD review that lands after the gate already went green -- or
+# after its one rerun was already spent -- unable to force a fresh
+# evaluation (Codex P1, PR #2855 review). `--refresh-latest` reruns every
+# resolvable pull_request-family instance for this HEAD unconditionally
+# instead (still honoring ciWait.rerunPolicy: "hold") -- not only the
+# most recently started one, since the required rollup can stay pinned
+# to an earlier instance even after a later one for the same SHA
+# completes (kurone-kito/idd-skill#1381, Codex P1, PR #2855 review); see
+# `RefreshLatestPlan`'s doc comment in `rerun-advisory-convergence.mts`
+# for why this is a separate mode rather than changing `--apply`'s own
+# budget for every caller.
+# This step still cannot reach `pull_request_review` submitted BY the
+# configured primary bot itself (Copilot, by this repository's default):
+# GitHub gates any workflow run a bot actor triggers to `action_required`
+# regardless of which workflow it lands on (`idd-ci.instructions.md`
+# lines 222-231), so the job never reaches this step for that submission
+# -- unchanged from the former direct trigger, which was equally gated
+# for the same actor. That gap self-heals on the next non-bot trigger (a
+# push, or a human/session review-thread reply), exactly as it always
+# has; see `idd-ci.instructions.md` §Rerun mechanics for the manual
+# recovery command if a stuck rollup needs one sooner.
+#
+# Fork-originated PRs (Codex P1, PR #2855 review): a `pull_request_review`
+# run whose PR is from a fork gets a read-only `GITHUB_TOKEN` from GitHub
+# regardless of this workflow's declared `actions: write` permission --
+# the same restriction `docs/customization.md`'s
+# `strip-untrusted-labels.yml` trust-model section documents for
+# `pull_request`, and `pull_request_review_comment` (this workflow's own
+# pre-existing #2136/#2411 trigger) already shares it. The former
+# `pull_request_review` trigger (directly on the required workflow) never
+# hit this, because recomputing its own verdict needed only read access;
+# routing through `gh run rerun` here needs write, which a fork PR's
+# token cannot have -- the mutation step fails visibly (a 403), not
+# silently. No trusted writable review event exists for this case (there
+# is no `pull_request_review_target`), and putting `pull_request_review`
+# back on the required workflow to get one would reopen the exact vector
+# this move closes for same-repository PRs (a PR-evaluated trigger on the
+# *required* workflow can forge its own green conclusion; a tampered
+# companion can only issue or withhold a rerun). Recovery is the same as
+# any other stuck rollup: a maintainer's manual `gh run rerun`, the next
+# push, or (past the configured deadline) this repository's
+# `ciGate.externalCheckWaivers` mechanism.
+# `issue_comment` also fires for a comment on a plain issue, not only a
+# PR; the job-level `if:` below skips those (`github.event.issue.pull_request`
+# is only present when the commented-on issue is a PR).
 #
 # Job id is deliberately NOT `idd-advisory-convergence`.
 #
@@ -27,24 +88,63 @@
 # once per comment, exhausting every same-HEAD instance's one-time rerun
 # budget mid-burst. The "Check for newer qualifying event" step below
 # waits a short quiet window, then re-queries whether a newer
-# IDD-originated comment/review has since landed on the same PR; if so,
-# this run skips its own `--apply` call and leaves it to the
-# later-triggered run (which asks the same question in turn). This is a
-# job-body-level check -- it does not alter `cancel-in-progress: false`
-# below, which stays exactly as #2136 established it. (Note on that
-# setting's actual scope, corrected from an earlier draft of this
-# comment: it protects only the currently in-progress run in this
-# group from cancellation; a merely *pending*, not-yet-started run is
-# still cancelled and replaced by the newest pending run when another
-# is queued behind it, since no `queue:` key is set here -- the
-# debounce below exists for the case where a run has already started
-# and must itself decide whether a newer event supersedes it, which
-# that pending-run replacement does not cover.) If the debounce step's
-# own `gh api` calls fail, the step fails and GitHub Actions' default
-# sequential-failure behavior skips "Rerun required HEAD check"
-# entirely for that run -- safe, since this is a non-required companion
-# refresh, and a later qualifying event (or the required check's own
-# polling) will trigger a fresh attempt.
+# IDD-originated comment has since landed on the same PR; if so, this
+# run skips its own `--apply` call and leaves it to the later-triggered
+# run (which asks the same question in turn). This is a job-body-level
+# check -- it does not alter `cancel-in-progress: false` below, which
+# stays exactly as #2136 established it. (Note on that setting's actual
+# scope, corrected from an earlier draft of this comment: it protects
+# only the currently in-progress run in this group from cancellation; a
+# merely *pending*, not-yet-started run is still cancelled and replaced
+# by the newest pending run when another is queued behind it, since no
+# `queue:` key is set here -- the debounce below exists for the case
+# where a run has already started and must itself decide whether a
+# newer event supersedes it, which that pending-run replacement does
+# not cover.) If the debounce step's own `gh api` calls fail, the step
+# fails and GitHub Actions' default sequential-failure behavior skips
+# "Rerun required HEAD check" entirely for that run -- safe, since this
+# is a non-required companion refresh, and a later qualifying event (or
+# the required check's own polling) will trigger a fresh attempt.
+#
+# `pull_request_review` deliberately skips debounce entirely (Codex P1,
+# PR #2855 review): the two comment families need it because a burst of
+# them all ask the SAME question (plain `--apply`), so skipping in favor
+# of a later one is safe -- but a review's `--refresh-latest` is a
+# STRONGER question a superseding comment-triggered run cannot answer on
+# its behalf (comment-triggered runs never carry `--refresh-latest`). A
+# review superseded by debounce would silently downgrade to whatever the
+# later comment run does, which could leave an already-green gate green
+# even though the review added new blocking findings. Debounce exists
+# purely to protect the rerun-once budget from a comment burst
+# (#2643) -- a hazard `--refresh-latest` does not share (it bypasses that
+# budget already) and reviews do not produce (human-paced, not bursty)
+# -- so this workflow does not need debounce protection for reviews at
+# all; "Rerun required HEAD check" below always proceeds for a review
+# submission instead of consulting the debounce step's output.
+#
+# Residual NOT closed by the above (Codex P1, PR #2855 review): the
+# pending-run-replacement gap this same module header already discloses
+# a few paragraphs up (a *queued*, not-yet-started run can still be
+# evicted and replaced by a newer trigger sharing this same
+# `concurrency.group`, before debounce -- which only judges an
+# ALREADY-STARTED run -- ever gets a say) applies to a review-triggered
+# run exactly as it does to a comment-triggered one: if a comment run
+# is already in-flight when a review lands, the review's own run queues
+# behind it, and a THIRD event landing before that queue slot is served
+# evicts the review's queued run in favor of the newer one, which never
+# carries `--refresh-latest`. This is not new to reviews -- it is the
+# same already-documented, already-accepted gap the pre-existing
+# comment-burst case already lived with -- and splitting this workflow
+# into a separate concurrency group per trigger family was already
+# considered and rejected for the analogous rollup-ordering race
+# `idd-advisory-convergence.yml`'s own "Concurrency-hardening
+# investigation" note documents: it would defeat the deliberate
+# cross-trigger debouncing this workflow depends on, without actually
+# closing the underlying queue-depth-of-one platform limitation. No safe
+# mechanical fix was found within this PR's scope; recovery is the same
+# manual `rerun-advisory-convergence.mjs --refresh-latest --apply` this
+# file's header already documents for the `action_required` and
+# fork-PR-token cases above.
 concurrency:
   # Do not cancel: a later human LGTM must not abort an in-flight
   # IDD-originated refresh before it reruns the required check (#2136).
@@ -52,6 +152,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
 name: IDD advisory-convergence comment refresh
 on:
+  pull_request_review:
+    types:
+      - submitted
   pull_request_review_comment:
     types:
       - created
@@ -68,7 +171,30 @@ permissions:
 jobs:
   refresh-if-idd-originated:
     runs-on: ubuntu-slim
-    timeout-minutes: 10
+    # 55, not the required gate's own 10 (Codex P1, PR #2855 review): a
+    # `pull_request_review` submission can land while the required gate's
+    # own run is still mid-flight, and `--refresh-latest --apply` then
+    # blocks inside `waitForRunCompletion` and (per rerun)
+    # `rerunAndWait`'s own `waitForNewAttempt`, each bounded by
+    # `rerun-advisory-convergence.mts`'s OWN internal 15-minute safety
+    # bound (`APPLY_POLL_TIMEOUT_MS`/`PENDING_RUN_POLL_TIMEOUT_MS`) --
+    # not the gate's shorter 10-minute job timeout that internal bound
+    # deliberately exceeds as its own margin (Codex P1, PR #2855 review,
+    # round 8, correcting this comment's own prior 10-minute-per-wait
+    # arithmetic). GitHub kills THIS job outright at ITS OWN timeout
+    # regardless of what step is running, so a bound smaller than the sum
+    # of the internal waits it wraps would silently drop a deferred rerun
+    # before those internal waits ever gave up gracefully -- exactly the
+    # scenario `--refresh-latest` exists to prevent. 55 = 15 (waiting out
+    # the original run, if still pending) + 2x15 (the typical Phase 1
+    # case of two sequential reruns, `rerunAndWait`'s own poll bounded by
+    # the same 15-minute internal safety margin each -- not a hard upper
+    # bound; more concurrent family instances for one HEAD would need
+    # more, since `rerun-advisory-convergence.mts` reruns EVERY resolvable
+    # pull_request-family instance for this HEAD, not a fixed count,
+    # #1381) + 10 headroom for setup/checkout and the steps preceding
+    # this wait.
+    timeout-minutes: 55
     if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,16 +226,44 @@ jobs:
       - name: Classify review comment
         id: origin
         env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
+          # A pull_request_review event carries its free-text summary at
+          # github.event.review.body, not github.event.comment.body (no
+          # `comment` object exists for that event). Feeding it through
+          # the same classifier costs nothing -- a review body can itself
+          # carry an IDD marker (a session's own review-ack, or a bot's
+          # stamped review) -- but a review submission always qualifies
+          # for a rerun regardless of this classifier's verdict; see the
+          # `if:` conditions below, which OR in `pull_request_review`
+          # explicitly rather than relying on content classification.
+          COMMENT_BODY: ${{ github.event.review.body || github.event.comment.body }}
         run: node scripts/review-comment-origin.mjs
       - name: Check for newer qualifying event
         id: debounce
-        if: steps.origin.outputs.idd_originated == 'true'
+        # `pull_request_review` deliberately excluded -- see the Debounce
+        # module-header paragraph above for why a review must not be
+        # debounced in favor of a later comment-triggered run. The
+        # `github.event_name != 'pull_request_review'` conjunct is load-
+        # bearing, not redundant (Copilot + Codex P1, PR #2855 review): a
+        # review body that happens to classify as IDD-originated (it is
+        # fed through the same classifier as a comment, for the reason
+        # documented on "Classify review comment" above) would otherwise
+        # still satisfy `idd_originated == 'true'` and run this step for
+        # a review -- and if this step's own `gh api` calls then failed,
+        # the job would stop here (module header above), never reaching
+        # "Rerun required HEAD check" at all for that review.
+        if: steps.origin.outputs.idd_originated == 'true' && github.event_name != 'pull_request_review'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          # Same dual-trigger-family PR-number resolution as the rerun
-          # step below.
+          # Same PR-number resolution as the rerun step below, though
+          # this step itself only ever runs for pull_request_review_comment
+          # or issue_comment -- its own `if:` above excludes
+          # pull_request_review entirely (Copilot, PR #2855 review: an
+          # earlier revision's comments here still described
+          # review-specific behavior even after that exclusion landed).
+          # pull_request_review_comment carries
+          # github.event.pull_request.number; issue_comment carries
+          # github.event.issue.number instead (#2411).
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           # Both pull_request_review_comment and issue_comment carry the
           # triggering comment's own timestamps at github.event.comment
@@ -125,12 +279,51 @@ jobs:
           TRIGGERED_AT: ${{ github.event.comment.updated_at || github.event.comment.created_at }}
         run: node scripts/advisory-comment-debounce.mjs --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
       - name: Rerun required HEAD check
-        if: steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'
+        # A review submission always proceeds, bypassing the debounce
+        # step's output entirely (module header above) -- it is not
+        # consulted for `pull_request_review` at all (that step's own
+        # `if:` excludes it), so a review is never superseded by a later
+        # comment-triggered run that cannot provide the same
+        # `--refresh-latest` guarantee. The explicit `success() &&` on
+        # the comment-family branch is load-bearing, not redundant
+        # (Codex P1, PR #2855 review): GitHub Actions implicitly
+        # prepends `success()` to a step's own `if:` UNLESS the
+        # expression itself already calls one of success()/failure()/
+        # always() -- so without an explicit call here, a failure in
+        # "Classify review comment" above (its own `review-comment-
+        # origin.mjs` throwing, e.g. on a malformed review body) would
+        # implicitly skip this ENTIRE step, silently defeating the
+        # review branch's own "always proceeds" guarantee for the exact
+        # trigger that guarantee exists to protect. Calling success()
+        # explicitly here suppresses that implicit prepend and lets the
+        # `pull_request_review` disjunct genuinely short-circuit
+        # regardless of any earlier step's own outcome, while the
+        # comment-family branch still requires it, matching this step's
+        # pre-existing (implicit) behavior for that path unchanged.
+        if: github.event_name == 'pull_request_review' || (success() && steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          # pull_request_review_comment carries the PR number at
-          # github.event.pull_request.number; issue_comment (#2411)
-          # carries it at github.event.issue.number instead.
+          # pull_request_review and pull_request_review_comment carry the
+          # PR number at github.event.pull_request.number; issue_comment
+          # (#2411) carries it at github.event.issue.number instead.
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-        run: node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --apply
+          # A review submission reruns unconditionally (module header
+          # above) when this job itself runs, including when the gate is
+          # already `pass` or its rerun-once budget is already spent --
+          # neither of the two comment families needs that: they are
+          # already filtered to IDD-originated content and share the
+          # ordinary rerun-once budget deliberately (#2643 comment-burst
+          # protection). "When this job itself runs" is doing real work
+          # here: the primary bot's own review submission is gated to
+          # `action_required` before any step executes (module header
+          # above) -- unconditional refers to bypassing pass/budget
+          # classification once this step runs, not to every review
+          # submission reaching it.
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request_review" ]; then
+            node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --refresh-latest --apply
+          else
+            node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --apply
+          fi

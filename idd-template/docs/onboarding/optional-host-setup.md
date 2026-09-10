@@ -594,14 +594,22 @@ comments), independent of what is checked out locally, so pinning the
 checkout to the trusted branch costs nothing functionally.
 
 Two automatic trigger types keep the required verdict current:
-`pull_request` for the normal push case, and `pull_request_review` for
-Copilot's review submission. Review-thread comments are **not** on
-that required job. IDD-originated comments (a disposition prefix, the
-reply-identity stamp, or an operational marker the check already
-honors) refresh the existing HEAD-associated required run from the
-companion `idd-advisory-convergence-comment.yml` workflow, which
-calls `rerun-advisory-convergence --apply` and never reports
-`ready` itself. Ordinary human prose (`LGTM`) does not create or
+`pull_request` for the normal push case, and `pull_request_target` as
+its tamper-resistant counterpart (see Trusted-code checkout above --
+a same-repository PR cannot edit `pull_request_target`'s own copy of
+this workflow file, unlike `pull_request`). Review-thread comments are
+**not** on that required job, and neither is Copilot's review
+submission (`pull_request_review`) — both instead refresh the
+existing HEAD-associated required run from the non-required companion
+`idd-advisory-convergence-comment.yml` workflow: an IDD-originated
+comment (a disposition prefix, the reply-identity stamp, or an
+operational marker the check already honors) calls
+`rerun-advisory-convergence --apply`, while a review submission calls
+`rerun-advisory-convergence --refresh-latest --apply` instead — a
+review needs a fresh evaluation even if the gate is already green or
+its rerun-once budget is already spent, which the plain `--apply`
+path does not provide. Neither call reports `ready` itself. Ordinary
+human prose (`LGTM`) does not create or
 cancel the required check.
 
 A thread being resolved or unresolved via the "Resolve conversation"

@@ -49,7 +49,40 @@ test('required advisory-convergence workflows no longer trigger on review commen
       `${path} on: must not include issue_comment`,
     );
     assert.match(onBlock, /pull_request:/);
-    assert.match(onBlock, /pull_request_review:/);
+  }
+});
+
+// #2764 Phase 1: pull_request_review moved to the companion workflow (a
+// PR-edited copy of this file could otherwise control when its own
+// required check re-asserts); pull_request_target was added alongside
+// the existing pull_request trigger so the implementing PR itself stays
+// normally mergeable (pull_request_target cannot fire against its own
+// defining PR -- verification of its attachment is deferred to the
+// first PR opened after this change merges).
+test('required advisory-convergence workflows add pull_request_target and drop pull_request_review', () => {
+  for (const path of REQUIRED_PATHS) {
+    const text = readWorkflow(path);
+    const onBlock = text.slice(
+      text.indexOf('\non:'),
+      text.indexOf('\npermissions:'),
+    );
+    assert.doesNotMatch(
+      onBlock,
+      /(?<!_)pull_request_review:/,
+      `${path} on: must not include pull_request_review (moved to the companion workflow)`,
+    );
+    assert.match(
+      onBlock,
+      /pull_request_target:/,
+      `${path} on: must include pull_request_target`,
+    );
+    // Still checks out only the trusted default branch, for every
+    // trigger including the new one -- see the module-header rationale.
+    assert.match(
+      text,
+      /ref:\s*main/,
+      `${path} checkout must stay pinned to ref: main`,
+    );
   }
 });
 
@@ -113,6 +146,50 @@ test('comment-refresh workflows also trigger on issue_comment and guard non-PR i
       prNumberAssignment[1],
       /github\.event\.pull_request\.number\s*\|\|\s*github\.event\.issue\.number/,
       `${path} PR_NUMBER must resolve from either event shape`,
+    );
+  }
+});
+
+// #2764 Phase 1: pull_request_review submissions now refresh the gate
+// through this companion instead of running a PR-controlled copy of the
+// gate workflow directly.
+test('comment-refresh workflows now trigger on pull_request_review submissions', () => {
+  for (const path of COMMENT_PATHS) {
+    const text = readWorkflow(path);
+    const onBlock = text.slice(
+      text.indexOf('\non:'),
+      text.indexOf('\npermissions:'),
+    );
+    assert.match(
+      onBlock,
+      /pull_request_review:/,
+      `${path} on: must include pull_request_review`,
+    );
+    // The rerun/debounce steps' if: conditions must OR in the review
+    // trigger explicitly, not rely on content classification -- a
+    // review's own body is not filtered through the IDD-origin marker
+    // check the way a comment's is (#2764 review floor: silently
+    // routing review events through unchanged idd_originated-only
+    // conditions would never actually rerun the gate on a review).
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    assert.notEqual(rerunIndex, -1);
+    const rerunStepText = text.slice(
+      rerunIndex,
+      text.indexOf('\n      - name:', rerunIndex + 1) === -1
+        ? undefined
+        : text.indexOf('\n      - name:', rerunIndex + 1),
+    );
+    const ifLine = rerunStepText
+      .split('\n')
+      .find((line) => line.trim().startsWith('if:'));
+    assert.ok(
+      ifLine,
+      `${path} Rerun required HEAD check step must have an if:`,
+    );
+    assert.match(
+      ifLine as string,
+      /github\.event_name\s*==\s*'pull_request_review'/,
+      `${path} rerun step's if: must OR in pull_request_review explicitly`,
     );
   }
 });
@@ -189,4 +266,149 @@ test('comment-refresh workflows debounce the rerun call and preserve cancel-in-p
       `${path} must not cancel an in-flight IDD refresh`,
     );
   }
+});
+
+// Codex P1 review, PR #2855, round 9: GitHub Actions implicitly prepends
+// `success()` to a step's own if: UNLESS the expression itself already
+// calls one of success()/failure()/always() -- so without an explicit
+// call, a failure in the preceding "Classify review comment" step (its
+// own review-comment-origin.mjs throwing) would silently skip this
+// ENTIRE step, defeating the pull_request_review disjunct's own "always
+// proceeds regardless of debounce" guarantee for the exact trigger that
+// guarantee exists to protect.
+test('comment-refresh workflows call success() explicitly so a classifier failure cannot silently skip a pull_request_review rerun', () => {
+  for (const path of COMMENT_PATHS) {
+    const text = readWorkflow(path);
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    assert.notEqual(rerunIndex, -1);
+    const rerunStepText = text.slice(
+      rerunIndex,
+      text.indexOf('\n      - name:', rerunIndex + 1) === -1
+        ? undefined
+        : text.indexOf('\n      - name:', rerunIndex + 1),
+    );
+    const ifLine = rerunStepText
+      .split('\n')
+      .find((line) => line.trim().startsWith('if:')) as string;
+    assert.ok(ifLine, `${path} rerun step must have an if: condition`);
+    assert.match(
+      ifLine,
+      /success\(\)/,
+      `${path} rerun step's if: must call success() explicitly to suppress GitHub's implicit prepend`,
+    );
+    // The pull_request_review disjunct itself must stay outside any
+    // success() gating -- a regex anchored on "pull_request_review' &&
+    // success()" (either operand order) would indicate success() ended
+    // up gating the review branch instead of only the comment branch.
+    assert.doesNotMatch(
+      ifLine,
+      /pull_request_review'\s*&&\s*success\(\)/,
+      `${path} rerun step's pull_request_review branch must not itself be gated by success()`,
+    );
+    assert.doesNotMatch(
+      ifLine,
+      /success\(\)\s*&&\s*\(?\s*github\.event_name\s*==\s*'pull_request_review'/,
+      `${path} rerun step's pull_request_review branch must not itself be gated by success()`,
+    );
+  }
+});
+
+// Codex P1 review, PR #2855: a review superseded by debounce would
+// silently downgrade to whatever a later comment-triggered run does
+// (plain `--apply`, never `--refresh-latest`), which could leave an
+// already-green gate green even though the review added new blocking
+// findings. `pull_request_review` must bypass debounce entirely, not
+// merely be exempted from the origin-classification half of the gate.
+test('comment-refresh workflows never let debounce suppress a pull_request_review rerun', () => {
+  for (const path of COMMENT_PATHS) {
+    const text = readWorkflow(path);
+    const debounceIndex = text.indexOf(
+      '- name: Check for newer qualifying event',
+    );
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    assert.ok(debounceIndex !== -1 && rerunIndex !== -1);
+
+    const debounceStepText = text.slice(debounceIndex, rerunIndex);
+    const debounceIfLine = debounceStepText
+      .split('\n')
+      .find((line) => line.trim().startsWith('if:'));
+    assert.ok(
+      debounceIfLine,
+      `${path} debounce step must have an if: condition`,
+    );
+    // Copilot + Codex P1 review, PR #2855: merely not MENTIONING
+    // pull_request_review is not enough -- a review body that happens to
+    // classify as IDD-originated (it is fed through the same classifier
+    // as a comment) would otherwise still satisfy
+    // `idd_originated == 'true'` and run this step for a review anyway.
+    // The exclusion must be explicit and load-bearing, not incidental.
+    assert.match(
+      debounceIfLine as string,
+      /github\.event_name\s*!=\s*'pull_request_review'/,
+      `${path} debounce step's if: must explicitly exclude pull_request_review, not merely omit mentioning it`,
+    );
+
+    const rerunStepText = text.slice(
+      rerunIndex,
+      text.indexOf('\n      - name:', rerunIndex + 1) === -1
+        ? undefined
+        : text.indexOf('\n      - name:', rerunIndex + 1),
+    );
+    const rerunIfLine = rerunStepText
+      .split('\n')
+      .find((line) => line.trim().startsWith('if:'));
+    assert.ok(rerunIfLine, `${path} rerun step must have an if: condition`);
+    // The pull_request_review disjunct must stand on its own, never
+    // conjoined with `steps.debounce.outputs.skip` -- a regex anchored on
+    // "pull_request_review' &&...debounce" (in either operand order)
+    // would indicate the bypass regressed back to being debounce-gated.
+    assert.doesNotMatch(
+      rerunIfLine as string,
+      /pull_request_review'\s*&&[^|]*debounce/,
+      `${path} rerun step's pull_request_review branch must not be gated by debounce.outputs.skip`,
+    );
+    assert.doesNotMatch(
+      rerunIfLine as string,
+      /debounce\.outputs\.skip[^|]*&&[^)]*pull_request_review/,
+      `${path} rerun step's pull_request_review branch must not be gated by debounce.outputs.skip`,
+    );
+  }
+});
+
+// CodeRabbit review, PR #2855: idd-template's helper-runtime profile
+// guard ("Classify review comment" step's own if:) must still apply to
+// the debounce and rerun steps even though pull_request_review bypasses
+// origin classification -- an instructions-only install has no helper
+// runtime to execute either step's run: case statement with, regardless
+// of which trigger family reaches it.
+test('idd-template comment-refresh workflow keeps the profile/manager guard on debounce and rerun steps', () => {
+  const path =
+    'idd-template/.github/workflows/idd-advisory-convergence-comment.yml';
+  const text = readWorkflow(path);
+  const debounceIndex = text.indexOf(
+    '- name: Check for newer qualifying event',
+  );
+  const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+  assert.ok(debounceIndex !== -1 && rerunIndex !== -1);
+
+  const rerunStepText = text.slice(
+    rerunIndex,
+    text.indexOf('\n      - name:', rerunIndex + 1) === -1
+      ? undefined
+      : text.indexOf('\n      - name:', rerunIndex + 1),
+  );
+  const rerunIfLine = rerunStepText
+    .split('\n')
+    .find((line) => line.trim().startsWith('if:'));
+  assert.ok(rerunIfLine, `${path} rerun step must have an if: condition`);
+  assert.match(
+    rerunIfLine as string,
+    /steps\.profile\.outputs\.profile\s*!=\s*'instructions-only'/,
+    `${path} rerun step's if: must still exclude instructions-only`,
+  );
+  assert.match(
+    rerunIfLine as string,
+    /steps\.manager\.outputs\.manager\s*!=\s*'ambiguous'/,
+    `${path} rerun step's if: must still exclude an ambiguous package manager`,
+  );
 });
