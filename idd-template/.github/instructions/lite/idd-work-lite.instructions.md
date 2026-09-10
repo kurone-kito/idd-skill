@@ -103,11 +103,12 @@ worktree removal) behind the
     narrower than the global `-y`/`--yes` flag, which would also skip
     approval for any other command WorkTrunk runs on that call.
 18. Do not use `wt new`.
-19. If WorkTrunk uses a pre-start install hook, its first command must acquire
-    the worktree lock and re-run `--record-tokens --nonce <nonce>` (same
-    value as the A5 write; omitting `--nonce` drops it, since the helper
-    overwrites rather than merges) for this worktree's own copy, before it
-    installs anything.
+19. If WorkTrunk uses a pre-start install hook, its first command must
+    acquire the worktree lock, then — as a separate call — run
+    `--record-tokens --worktree <this-worktree-path> --agent-id <id>
+    --claim-id <id> --nonce <nonce>` (same nonce value as the A5 write;
+    omitting `--nonce` drops it, since the helper overwrites rather than
+    merges) for this worktree's own copy, before it installs anything.
 20. If the hook cannot acquire the lock or record tokens, create the
     worktree without the hook.
 21. If WorkTrunk is unavailable, use
@@ -122,11 +123,12 @@ worktree removal) behind the
     exists (rare), treat it as a fresh claim while preserving the inherited
     branch name.
 26. For manual `git worktree add` or WorkTrunk without a hook, acquire the
-    worktree lock with the profile-selected `claim-lock` helper and re-run
-    `--record-tokens --nonce <nonce>` (same value as the A5 write; omitting
-    `--nonce` drops it, since the helper overwrites rather than merges) for
-    this worktree's own copy, immediately after creation and before any
-    install or other mutation.
+    worktree lock with the profile-selected `claim-lock` helper, then — as
+    a separate call — run `--record-tokens --worktree <this-worktree-path>
+    --agent-id <id> --claim-id <id> --nonce <nonce>` (same nonce value as
+    the A5 write; omitting `--nonce` drops it, since the helper overwrites
+    rather than merges) for this worktree's own copy, immediately after
+    creation and before any install or other mutation.
 27. Run `install-deps` on the manual/no-hook path.
 28. Verify the primary worktree's HEAD is still on `main`.
 29. Verify `git worktree list` shows the new path.
