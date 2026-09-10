@@ -2733,18 +2733,19 @@ test('runRerunAdvisoryConvergence leaves checkName empty (default) when --check-
 // tests deliberately probe those two exclusions computeRerunPlan itself
 // would apply.
 
-test('computeRefreshLatestPlan: no command and an explanatory reason when no pull_request-family instance exists', () => {
+test('computeRefreshLatestPlan: no commands and an explanatory reason when no pull_request-family instance exists', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
       instances: [baseInstance({ runEvent: 'workflow_dispatch' })],
     }),
     baseOptions(),
   );
-  assert.equal(plan.command, null);
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
   assert.match(plan.reason, /nothing to refresh/);
 });
 
-test('computeRefreshLatestPlan: reruns the latest instance even when it already classifies pass (the regression this mode exists to fix)', () => {
+test('computeRefreshLatestPlan: reruns an instance even when it already classifies pass (the regression this mode exists to fix)', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
       instances: [
@@ -2758,8 +2759,8 @@ test('computeRefreshLatestPlan: reruns the latest instance even when it already 
     }),
     baseOptions(),
   );
-  assert.equal(plan.command?.runId, '5001');
-  assert.equal(plan.command?.command, 'gh run rerun 5001');
+  assert.equal(plan.commands[0]?.runId, '5001');
+  assert.equal(plan.commands[0]?.command, 'gh run rerun 5001');
   assert.equal(plan.reason, '');
 });
 
@@ -2767,7 +2768,7 @@ test('computeRefreshLatestPlan: reruns the latest instance even when it already 
 // budget classification, but a "hold" rerunPolicy is a repository's
 // explicit opt-out of every automatic rerun, not one of those three --
 // it must still be honored here exactly as computeRerunPlan honors it.
-test('computeRefreshLatestPlan: a "hold" rerunPolicy suppresses the rerun, even for an otherwise-reruns-anyway pass instance', () => {
+test('computeRefreshLatestPlan: a "hold" rerunPolicy suppresses every rerun, even for an otherwise-reruns-anyway pass instance', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
       instances: [
@@ -2780,11 +2781,18 @@ test('computeRefreshLatestPlan: a "hold" rerunPolicy suppresses the rerun, even 
     }),
     baseOptions({ rerunPolicy: 'hold' }),
   );
-  assert.equal(plan.command, null);
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
   assert.match(plan.reason, /ciWait\.rerunPolicy is "hold"/);
 });
 
-test('computeRefreshLatestPlan: selects the most-recently-started pull_request-family instance among several', () => {
+// Codex P1 review, PR #2855, round 2: selecting only the most-recently-
+// started instance can rerun the wrong one -- idd-advisory-
+// convergence.yml's own #1381 incident documents the required rollup
+// staying pinned to an EARLIER instance even after a later instance for
+// the identical SHA completes with SUCCESS. This mode reruns every
+// resolvable instance instead of guessing which one the rollup follows.
+test('computeRefreshLatestPlan: reruns every resolvable terminal instance for this HEAD, not only the most recently started one', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
       instances: [
@@ -2805,18 +2813,47 @@ test('computeRefreshLatestPlan: selects the most-recently-started pull_request-f
     }),
     baseOptions(),
   );
-  assert.equal(plan.command?.runId, '5002');
-  assert.deepEqual(plan.command?.checkRunIds, ['1002']);
+  assert.equal(plan.commands.length, 2);
+  // Newest-startedAt first -- a readability ordering only, not a
+  // correctness one, since both entries are acted on.
+  assert.equal(plan.commands[0]?.runId, '5002');
+  assert.deepEqual(plan.commands[0]?.checkRunIds, ['1002']);
+  assert.equal(plan.commands[1]?.runId, '5001');
+  assert.deepEqual(plan.commands[1]?.checkRunIds, ['1001']);
+});
+
+test('computeRefreshLatestPlan: deduplicates instances that resolve to the same run id', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:00Z',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:05Z',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5001');
 });
 
 // Codex P1 review, PR #2855: a still-running instance is NOT the same as
 // "will already reflect this review" -- its own evidence was fetched at
 // whatever point during its execution the live query happened to run,
-// which can be before this review landed. `pendingCommand` carries the
+// which can be before this review landed. `pendingCommands` carries the
 // resolved rerun for the caller to issue once the run actually completes
 // (see the CLI's --refresh-latest --apply wiring), rather than declining
 // to act at all.
-test('computeRefreshLatestPlan: a still-running latest instance is left alone (never cancelled), but its rerun is deferred via pendingCommand', () => {
+test('computeRefreshLatestPlan: a still-running instance is left alone (never cancelled), but its rerun is deferred via pendingCommands', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
       instances: [
@@ -2830,46 +2867,75 @@ test('computeRefreshLatestPlan: a still-running latest instance is left alone (n
     }),
     baseOptions(),
   );
-  assert.equal(plan.command, null);
+  assert.deepEqual(plan.commands, []);
   assert.match(plan.reason, /still running/);
   assert.doesNotMatch(
     plan.reason,
     /it will already reflect this review/,
     'the reason must not assert the very claim the still-running instance cannot guarantee',
   );
-  assert.equal(plan.pendingCommand?.runId, '5001');
-  assert.equal(plan.pendingCommand?.command, 'gh run rerun 5001');
+  assert.equal(plan.pendingCommands[0]?.runId, '5001');
+  assert.equal(plan.pendingCommands[0]?.command, 'gh run rerun 5001');
 });
 
-test('computeRefreshLatestPlan: pendingCommand is null whenever command is resolved', () => {
+test('computeRefreshLatestPlan: a still-running instance never lands in commands alongside a terminal one in pendingCommands', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runEvent: 'pull_request_target',
+          status: 'in_progress',
+          conclusion: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5001');
+  assert.equal(plan.pendingCommands.length, 1);
+  assert.equal(plan.pendingCommands[0]?.runId, '5002');
+});
+
+test('computeRefreshLatestPlan: pendingCommands is empty whenever every instance resolved to commands', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
       instances: [baseInstance({ conclusion: 'success' })],
     }),
     baseOptions(),
   );
-  assert.notEqual(plan.command, null);
-  assert.equal(plan.pendingCommand, null);
+  assert.notEqual(plan.commands.length, 0);
+  assert.deepEqual(plan.pendingCommands, []);
 });
 
-test('computeRefreshLatestPlan: pendingCommand is null for every no-op reason (hold policy, no instance, unresolvable run id)', () => {
+test('computeRefreshLatestPlan: both commands and pendingCommands are empty for every no-op reason (hold policy, no instance, unresolvable run id)', () => {
   const held = computeRefreshLatestPlan(
     baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
     baseOptions({ rerunPolicy: 'hold' }),
   );
-  assert.equal(held.pendingCommand, null);
+  assert.deepEqual(held.commands, []);
+  assert.deepEqual(held.pendingCommands, []);
 
   const noInstance = computeRefreshLatestPlan(
     baseInput({ instances: [baseInstance({ runEvent: 'workflow_dispatch' })] }),
     baseOptions(),
   );
-  assert.equal(noInstance.pendingCommand, null);
+  assert.deepEqual(noInstance.commands, []);
+  assert.deepEqual(noInstance.pendingCommands, []);
 
   const unresolvable = computeRefreshLatestPlan(
     baseInput({ instances: [baseInstance({ runId: null })] }),
     baseOptions(),
   );
-  assert.equal(unresolvable.pendingCommand, null);
+  assert.deepEqual(unresolvable.commands, []);
+  assert.deepEqual(unresolvable.pendingCommands, []);
 });
 
 test('computeRefreshLatestPlan: fails closed on an unresolvable run id', () => {
@@ -2877,7 +2943,7 @@ test('computeRefreshLatestPlan: fails closed on an unresolvable run id', () => {
     baseInput({ instances: [baseInstance({ runId: null })] }),
     baseOptions(),
   );
-  assert.equal(plan.command, null);
+  assert.deepEqual(plan.commands, []);
   assert.match(plan.reason, /no resolvable workflow run id/);
 });
 
@@ -2886,11 +2952,35 @@ test('computeRefreshLatestPlan: fails closed when the underlying run lookup fail
     baseInput({ instances: [baseInstance({ runLookupFailed: true })] }),
     baseOptions(),
   );
-  assert.equal(plan.command, null);
+  assert.deepEqual(plan.commands, []);
   assert.match(plan.reason, /could not be fetched/);
 });
 
-test('computeRefreshLatestPlan: -R owner/repo is embedded in the generated command', () => {
+// An unresolvable instance alongside a resolvable one must not block the
+// resolvable one's rerun (Codex P1, PR #2855 review, round 2): only the
+// unresolvable instance is skipped, noted in `reason`.
+test('computeRefreshLatestPlan: skips an unresolvable instance without blocking a resolvable sibling', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({ checkRunId: '1001', runId: null }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runEvent: 'pull_request_target',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5002');
+  assert.match(plan.reason, /skipped 1 unresolvable instance/);
+  assert.match(plan.reason, /check-run 1001/);
+});
+
+test('computeRefreshLatestPlan: -R owner/repo is embedded in every generated command', () => {
   const plan = computeRefreshLatestPlan(
     baseInput({
       owner: 'kurone-kito',
@@ -2900,7 +2990,7 @@ test('computeRefreshLatestPlan: -R owner/repo is embedded in the generated comma
     baseOptions(),
   );
   assert.equal(
-    plan.command?.command,
+    plan.commands[0]?.command,
     'gh run rerun 5001 -R kurone-kito/idd-skill',
   );
 });
@@ -2920,7 +3010,7 @@ test('runRerunAdvisoryConvergence: --refresh-latest returns refreshLatestPlan in
     },
   );
   assert.equal(result.plan, null);
-  assert.equal(result.refreshLatestPlan?.command?.runId, '5001');
+  assert.equal(result.refreshLatestPlan?.commands[0]?.runId, '5001');
   assert.equal(result.args.refreshLatest, true);
 });
 
