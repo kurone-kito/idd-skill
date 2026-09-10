@@ -881,13 +881,36 @@ export async function runExternalCheckWaiver(
       (configuredMaxValidityMs ?? 0) > 0
         ? Math.min(durationMs ?? 0, configuredMaxValidityMs ?? 0)
         : (durationMs ?? 0);
+    // kurone-kito/idd-skill#2657 (CodeRabbit review, PR #2895): a
+    // `pull_request_target` `reopened` trigger can fire with no new
+    // commit, so `resolvedHeadCommittedAt` can be far older than "now"
+    // (days, for a long-stale PR). Anchoring purely on that HEAD
+    // timestamp would then compute an expiry already in the past, which
+    // `planExternalCheckWaiver`'s own `expiry must be in the future`
+    // check rejects -- silently blocking the auto-bootstrap post in
+    // exactly the stale-reopen scenario the workflow's own trigger list
+    // (`opened`/`reopened`/`synchronize`) invites. Fall back to
+    // anchoring on "now" ONLY when the HEAD-anchored value would
+    // already be non-future -- mirroring `expiresInFuture`'s own
+    // strict `>` comparison exactly, so this never fires for the
+    // ordinary case (HEAD and "now" only seconds/minutes apart, since
+    // this runs moments after the triggering push). Anchoring on "now"
+    // unconditionally would defeat the whole point of this waiver being
+    // HEAD-anchored rather than now-anchored (the 2026-09-10
+    // self-cancellation bug this design already avoids elsewhere).
+    const headAnchoredExpiryMs = headMs + clampedDurationMs;
+    const nowMs = (
+      options.now instanceof Date ? options.now : new Date()
+    ).getTime();
+    const expiryMs =
+      headAnchoredExpiryMs > nowMs
+        ? headAnchoredExpiryMs
+        : nowMs + clampedDurationMs;
     // Matches `resolveExpiryAt`'s own `--expires` (absolute) branch: strip
     // the millisecond suffix `toISOString()` always adds, for the same
     // whole-second canonical style every hand-authored/rendered timestamp
     // in this marker family already uses.
-    return new Date(headMs + clampedDurationMs)
-      .toISOString()
-      .replace(/\.\d{3}Z$/, 'Z');
+    return new Date(expiryMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
   };
 
   const report = planExternalCheckWaiver(

@@ -1801,6 +1801,86 @@ test('runExternalCheckWaiver: --auto-bootstrap clamps its fixed expiry to a conf
   }
 });
 
+test('runExternalCheckWaiver: --auto-bootstrap anchors expiry on "now" when the HEAD commit timestamp is stale (CodeRabbit review, PR #2895)', async () => {
+  // A pull_request_target `reopened` trigger can fire with no new commit,
+  // so the HEAD commit timestamp can be far older than "now" for a
+  // long-stale PR. Anchoring purely on that HEAD timestamp would compute
+  // an expiry already in the past, which planExternalCheckWaiver's own
+  // "expiry must be in the future" check rejects -- silently blocking the
+  // auto-bootstrap post in exactly the stale-reopen scenario the
+  // workflow's own trigger list invites.
+  let posted: { prNumber: number; body: string } | undefined;
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: () => [],
+    // A week old relative to `now` below -- HEAD + PT24H would be
+    // 2026-08-26T18:13:24Z, days in the past relative to `now`.
+    headCommittedAt: '2026-08-25T18:13:24Z',
+    now: new Date('2026-09-01T12:00:00Z'),
+    isTTY: false,
+    postComment: (prNumber, body) => {
+      posted = { prNumber, body };
+      return { html_url: 'https://example.invalid/posted' };
+    },
+  });
+
+  assert.equal(
+    report?.applied,
+    true,
+    'a stale HEAD commit timestamp must not block the auto-bootstrap marker',
+  );
+  const parsed = parseExternalCheckWaiverComment(
+    posted?.body ?? '',
+    '2026-09-01T12:00:00Z',
+  );
+  // Anchored on "now" (2026-09-01T12:00:00Z) + PT24H, not the stale HEAD
+  // commit timestamp.
+  assert.equal(parsed?.expiresAt, '2026-09-02T12:00:00Z');
+});
+
 test('runExternalCheckWaiver reads one post-write snapshot for the reconcile (#2328 review)', async () => {
   // Two sequential reads would leave `comments` older than `evidence`, and
   // the correlation can only find markers present in `comments` — so a
