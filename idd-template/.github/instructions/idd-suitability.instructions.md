@@ -298,8 +298,8 @@ exact match is not found, PASS the check and continue. Also covers the
 High-confidence tier's evidence collection (#1484).
 
 **Agent-specific limitations**: All seven checks should be agent-agnostic
-(work for Copilot, Claude, Codex, Antigravity CLI (formerly Gemini CLI)).
-If an agent cannot reliably perform a check, document that limitation
+(work for Copilot, Claude, Codex, Antigravity CLI). If an agent cannot
+reliably perform a check, document that limitation
 and treat as a PASS so work is not blocked by agent capability limits.
 **Exception**: Check 3
 (Trust/Safety) must fail closed — when it cannot be reliably evaluated,
@@ -316,16 +316,22 @@ such masking, so keep a trigger phrase out of the title entirely when
 authoring an issue about this shape.
 
 **Escape-hatch acceptance criteria**: an either/or acceptance-criteria
-bullet where one branch is a substantive change and the other reads as
-"or document the gap/tradeoff" is not a Check 7 (Verifiability) PASS by
-default just because the second branch sounds safer. Worked example:
-"Add retry logic to the flaky network call, or document why retries are
-unsafe here" leaves an unresolved subjective call — whether a piece of
-documentation adequately discloses a known gap has no automated check
-unless the acceptance criteria state exactly what the documentation must
-say. Evaluate the documentation branch on its own merits, not as an
-automatic pass; if it only restates the bullet without disclosing the
-tradeoff, classify as `needs-decision` rather than PASS.
+bullet where one branch is substantive and the other reads as "or
+document the gap/tradeoff" is not an automatic Check 7 (Verifiability)
+PASS. Example: "Add retry logic to the flaky network call, or document
+why retries are unsafe here" leaves an unresolved subjective call —
+whether the documentation adequately discloses the gap has no automated
+check unless the acceptance criteria state exactly what it must say.
+Evaluate that branch on its own merits; if it only restates the bullet,
+classify as `needs-decision` rather than PASS.
+
+**Structural-evidence demotion for Checks 5/6/7 (#2767)**: a lexical
+fail (never Check 6's label/title-prefix/marker signals `#2737`, nor
+Check 7's escape-hatch branch above) demotes to `warn` when all three
+hold: `verificationCommand` (a runnable command, or 2+ checkboxes, in
+`## Acceptance criteria`), `candidateFilesExist` (an existing
+`## Candidate files` path), and `trustedEditor` (author and every body
+editor trusted). `warn` still passes.
 
 After A4.5 passes, proceed to `idd-claim.instructions.md`; for rejected
 candidates follow the Failure Outcomes section above.
