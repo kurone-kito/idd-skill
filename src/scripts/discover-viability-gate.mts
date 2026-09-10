@@ -21,8 +21,10 @@ import {
 import { findInlineResolvedDecisionSpans } from './resolved-decision.mts';
 import {
   buildTrustedLoginPredicate,
+  candidateFilesExistOnDisk,
   evaluateStructuralEvidence,
   hasAllStructuralSignals,
+  hasVerificationCommandSignal,
   type StructuralEvidence,
 } from './triage-structural-evidence.mts';
 
@@ -1149,6 +1151,20 @@ function buildIssueLoader(
  * editor logins -- then builds the trust predicate from this repository's
  * configured `trustedMarkerActors` plus a live collaborator-permission
  * check, and the file-existence predicate from the real filesystem.
+ *
+ * Checks the two local-only signals (`verificationCommand`,
+ * `candidateFilesExist` -- both computable from the already-loaded issue
+ * body alone) before touching the network at all (Codex review, PR
+ * #2840, round 9): demotion requires all three signals together, so
+ * either one being false already makes the live `trustedEditor` fetch
+ * (a paginated `userContentEdits` GraphQL call, plus a
+ * collaborator-permission lookup once `isTrustedLogin` is actually
+ * exercised) a wasted round trip and a rate-limit risk for no possible
+ * change in outcome. This is a narrower, per-call optimization than the
+ * caller's own `hasDemotableFailure` gate (which skips calling this
+ * function at all for a non-demotable *criterion*): even when the
+ * criterion IS demotable, the specific issue's body can still fail one
+ * of the two local signals outright.
  */
 function computeLiveStructuralEvidence(
   port: ReturnType<typeof createGithubProviderAdapter>,
@@ -1159,6 +1175,24 @@ function computeLiveStructuralEvidence(
   const issueNumber = Number(issue.number);
   if (!Number.isInteger(issueNumber)) {
     return undefined;
+  }
+  const body = String(issue.body ?? '');
+  // #2767 (Codex review, PR #2840, round 9): compute the two local-only
+  // signals first -- both read only the already-loaded issue body, no
+  // network call -- and skip the userContentEdits fetch (a paginated
+  // GraphQL round trip) plus the collaborator-permission lookup entirely
+  // when either is already false. Demotion requires all three signals
+  // together, so a false verificationCommand/candidateFilesExist makes
+  // the live trustedEditor signal moot regardless of what it would
+  // resolve to, and this call site is reached even for the non-demotable
+  // case the caller's own hasDemotableFailure gate cannot see: an issue
+  // whose body genuinely lacks either local signal still triggers this
+  // function whenever the *criterion* is demotable, wasting the fetch on
+  // every such issue.
+  const verificationCommand = hasVerificationCommandSignal(body);
+  const candidateFilesExist = candidateFilesExistOnDisk(body, existsSync);
+  if (!verificationCommand || !candidateFilesExist) {
+    return { verificationCommand, candidateFilesExist, trustedEditor: false };
   }
   const { config } = loadPolicyConfig();
   const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
@@ -1181,7 +1215,7 @@ function computeLiveStructuralEvidence(
   const author = (issue.user as { login?: unknown } | null)?.login;
   const edits = port.getWorkItemUserContentEdits(issueNumber);
   return evaluateStructuralEvidence({
-    body: String(issue.body ?? ''),
+    body,
     author: typeof author === 'string' ? author : '',
     editorLogins: edits.map((edit) => edit.editorLogin),
     isTrustedLogin,

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -1284,4 +1285,40 @@ test('#2767: evaluateDiscoverViability never calls computeStructuralEvidence whe
   assert.ok(
     summary.discarded[0]?.failedCriteria.includes('clear_verification'),
   );
+});
+
+// #2767 round 9 (Codex review, PR #2840): computeLiveStructuralEvidence
+// itself (the live CLI wiring computeStructuralEvidence above delegates
+// to, unexported and not unit-testable via mocked loadIssue/
+// computeStructuralEvidence -- it does real port/gh I/O) previously
+// always fetched userContentEdits (a paginated GraphQL round trip) plus
+// exercised the collaborator-permission lookup, even when the issue body
+// could not possibly satisfy verificationCommand or candidateFilesExist
+// -- both computable locally from the already-loaded body alone.
+// Demotion requires all three signals together, so either local signal
+// being false makes the live trustedEditor fetch wasted network cost and
+// a rate-limit risk for no possible change in outcome. Source-text pin
+// on the wiring, per this file's convention for the unexported live
+// path; the behavioral premise (a false local signal keeps
+// hasAllStructuralSignals false regardless of trustedEditor) is already
+// proven directly in triage-structural-evidence.test.mts's own
+// hasAllStructuralSignals suite.
+test('computeLiveStructuralEvidence skips the live userContentEdits fetch when a local-only signal is already false (#2767 round 9)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/discover-viability-gate.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /const verificationCommand = hasVerificationCommandSignal\(body\);\s*\n\s*const candidateFilesExist = candidateFilesExistOnDisk\(body, existsSync\);\s*\n\s*if \(!verificationCommand \|\| !candidateFilesExist\) \{\s*\n\s*return \{ verificationCommand, candidateFilesExist, trustedEditor: false \};\s*\n\s*\}/,
+  );
+  // The early-return check must run before the userContentEdits fetch,
+  // not merely exist somewhere in the function -- pin the ordering too.
+  const earlyReturnIndex = source.indexOf(
+    'if (!verificationCommand || !candidateFilesExist)',
+  );
+  const fetchIndex = source.indexOf('port.getWorkItemUserContentEdits(');
+  assert.notEqual(earlyReturnIndex, -1);
+  assert.notEqual(fetchIndex, -1);
+  assert.equal(earlyReturnIndex < fetchIndex, true);
 });
