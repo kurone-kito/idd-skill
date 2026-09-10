@@ -335,10 +335,10 @@ On no conflict, continue with the plan below.
 
 ### B2.2 — Example field-name verification
 
-When the issue's "Proposed change" or "Acceptance criteria" cites a
-schema field, config key, or similar token as an example, verify it
-exists in that location before planning; fix or drop it if not
-(2026-09-10, `#2806`).
+When the issue's "Proposed change" or "Acceptance criteria" cites an
+existing schema field, config key, or token as an example (not one it
+adds), verify it exists; fix or drop it if not, hold if unclear
+(`#2806`).
 
 Draft an implementation plan and post it as an issue comment, then run
 a critique pass for correctness and concreteness (see
