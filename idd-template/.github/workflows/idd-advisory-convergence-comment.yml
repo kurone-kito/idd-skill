@@ -17,25 +17,38 @@
 # actually post every marker/disposition type, since both use the
 # issues-comments API), both from #2411; and `pull_request_review`
 # (review submissions) -- moved here from idd-advisory-convergence.yml's
-# own trigger list so a same-repository PR cannot edit that workflow's
-# copy to control when its own required run re-asserts. Unlike the two
-# comment families, a review submission always reruns the gate
-# unconditionally (see "Classify review comment" below): it is not
-# filtered by IDD-originated content, matching the gate's own former
-# unconditional `pull_request_review` trigger exactly -- and, per that
-# same "always" guarantee, "Rerun required HEAD check" below adds
+# own trigger list, alongside the content-filtering reason below. NOT for
+# tamper-resistance: this workflow is just as PR-editable as the
+# required workflow's own former trigger was (there is no
+# `pull_request_review_target` -- GitHub's `_target` variant exists only
+# for `pull_request`), so a same-repository PR can still disable or
+# alter this step. What actually stays trusted is the push-triggered
+# gate itself, via `pull_request_target` on `idd-advisory-convergence.yml`;
+# this review-refresh path is deliberately best-effort on top of that,
+# not a second trusted surface -- a tampered copy can only delay a fresh
+# green, never force one, since the gate's own verdict is still computed
+# independently on every push. Unlike the two comment families, a review
+# submission is not filtered by IDD-originated content (see "Classify
+# review comment" below), and "Rerun required HEAD check" below adds
 # `--refresh-latest` for this one trigger family: the ordinary `--apply`
 # alone only reruns a `rerun-eligible` instance (excludes anything
 # already `pass` and enforces the rerun-once budget), which would leave a
 # same-HEAD review landing after the gate already went green -- or after
 # its one rerun was already spent -- unable to force a fresh evaluation
 # (Codex P1, kurone-kito/idd-skill#2855 review). `--refresh-latest` reruns
-# the latest pull_request-family instance unconditionally instead,
-# restoring the former direct-trigger's "every review gets a fresh
-# evaluation" guarantee; see `RefreshLatestPlan`'s doc comment in the
-# canonical source repository's `rerun-advisory-convergence.mts` for why
-# this is a separate mode rather than changing `--apply`'s own budget for
-# every caller. `issue_comment` also fires for a comment on a plain
+# the latest pull_request-family instance unconditionally instead (still
+# honoring ciWait.rerunPolicy: "hold"); see `RefreshLatestPlan`'s doc
+# comment in the canonical source repository's
+# `rerun-advisory-convergence.mts` for why this is a separate mode
+# rather than changing `--apply`'s own budget for every caller. This
+# step still cannot reach `pull_request_review` submitted BY the primary
+# bot itself: GitHub gates any workflow run a bot actor triggers to
+# `action_required` regardless of which workflow it lands on, so the job
+# never reaches this step for that submission -- unchanged from the
+# former direct trigger, which was equally gated for the same actor.
+# That gap self-heals on the next non-bot trigger (a push, or a
+# human/session review-thread reply), exactly as it always has.
+# `issue_comment` also fires for a comment on a plain
 # issue, not only a PR; the job-level `if:` below skips those
 # (`github.event.issue.pull_request` is only present when the
 # commented-on issue is a PR).
@@ -350,14 +363,20 @@ jobs:
           PROFILE: ${{ steps.profile.outputs.profile }}
           PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
           MANAGER: ${{ steps.manager.outputs.manager }}
-          # A review submission always reruns unconditionally (module
-          # header above), including when the gate is already `pass` or
-          # its rerun-once budget is already spent -- neither of the two
-          # comment families needs that: they are already filtered to
-          # IDD-originated content and share the ordinary rerun-once
-          # budget deliberately (#2643 comment-burst protection). Single
-          # word, no spaces -- safe to expand unquoted below (omitted
-          # entirely, not an empty-string argument, when empty).
+          # A review submission reruns unconditionally (module header
+          # above) when this job itself runs, including when the gate is
+          # already `pass` or its rerun-once budget is already spent --
+          # neither of the two comment families needs that: they are
+          # already filtered to IDD-originated content and share the
+          # ordinary rerun-once budget deliberately (#2643 comment-burst
+          # protection). "When this job itself runs" is doing real work
+          # here: the primary bot's own review submission is gated to
+          # `action_required` before any step executes (module header
+          # above) -- unconditional refers to bypassing pass/budget
+          # classification once this step runs, not to every review
+          # submission reaching it. Single word, no spaces -- safe to
+          # expand unquoted below (omitted entirely, not an empty-string
+          # argument, when empty).
           REFRESH_FLAG: ${{ github.event_name == 'pull_request_review' && '--refresh-latest' || '' }}
         run: |
           if [ -z "$PR_NUMBER" ]; then
