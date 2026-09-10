@@ -52,8 +52,10 @@ import {
 } from './supersession-detection.mts';
 import {
   buildTrustedLoginPredicate,
+  candidateFilesExistOnDisk,
   evaluateStructuralEvidence,
   hasAllStructuralSignals,
+  hasVerificationCommandSignal,
   type StructuralEvidence,
 } from './triage-structural-evidence.mts';
 
@@ -940,32 +942,49 @@ export async function filterOrphanIssues(
       result.reason === 'runtime_observation_precondition' &&
       typeof options.fetchUserContentEditorsByIssueNumber === 'function'
     ) {
-      // CodeRabbit review, PR #2557 (same fail-open contract this file
-      // already applies below to its other opportunistic per-candidate
-      // fetches): a transient GitHub API failure from either the editor
-      // fetch or the live collaborator-permission check must not abort the
-      // whole default-on discover pass. Degrade to "no structural evidence
-      // available" -- keep the plain `result` computed above unchanged --
-      // rather than crashing or guessing a trust verdict.
-      try {
-        const authorLogin = (issue.user as { login?: unknown } | null)?.login;
-        const structuralEvidence = evaluateStructuralEvidence({
-          body: String(issue.body ?? ''),
-          author: typeof authorLogin === 'string' ? authorLogin : '',
-          editorLogins: options.fetchUserContentEditorsByIssueNumber(
-            issue.number,
-          ),
-          isTrustedLogin,
-          existsAt: options.existsAt ?? existsSync,
-        });
-        result = classifyIssue(issue, {
-          ...classifyOptions,
-          structuralEvidence,
-        });
-      } catch {
-        // Keep the original `result` (still filtered under
-        // runtime_observation_precondition, the prior byte-stable
-        // behavior).
+      // Codex review, PR #2840 (round 15): check the two local-only
+      // signals first -- both read only the already-loaded issue body, no
+      // network call -- and skip `fetchUserContentEditorsByIssueNumber` (a
+      // paginated GraphQL round trip) plus the live collaborator-
+      // permission check entirely when either is already false. Demotion
+      // requires all three signals together, so a false
+      // verificationCommand/candidateFilesExist makes the live
+      // trustedEditor signal moot regardless of what it would resolve to
+      // -- the same short-circuit `discover-viability-gate.mts` and
+      // `suitability-triage.mts`'s own `computeLiveStructuralEvidence`
+      // already apply for this identical reason.
+      const body = String(issue.body ?? '');
+      const existsAt = options.existsAt ?? existsSync;
+      const verificationCommand = hasVerificationCommandSignal(body);
+      const candidateFilesExist = candidateFilesExistOnDisk(body, existsAt);
+      if (verificationCommand && candidateFilesExist) {
+        // CodeRabbit review, PR #2557 (same fail-open contract this file
+        // already applies below to its other opportunistic per-candidate
+        // fetches): a transient GitHub API failure from either the editor
+        // fetch or the live collaborator-permission check must not abort
+        // the whole default-on discover pass. Degrade to "no structural
+        // evidence available" -- keep the plain `result` computed above
+        // unchanged -- rather than crashing or guessing a trust verdict.
+        try {
+          const authorLogin = (issue.user as { login?: unknown } | null)?.login;
+          const structuralEvidence = evaluateStructuralEvidence({
+            body,
+            author: typeof authorLogin === 'string' ? authorLogin : '',
+            editorLogins: options.fetchUserContentEditorsByIssueNumber(
+              issue.number,
+            ),
+            isTrustedLogin,
+            existsAt,
+          });
+          result = classifyIssue(issue, {
+            ...classifyOptions,
+            structuralEvidence,
+          });
+        } catch {
+          // Keep the original `result` (still filtered under
+          // runtime_observation_precondition, the prior byte-stable
+          // behavior).
+        }
       }
     }
 

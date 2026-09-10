@@ -334,6 +334,38 @@ test('#2767: filterOrphanIssues degrades to the plain (filtered) result when fet
   assert.equal(result.warnings.length, 0);
 });
 
+test('#2767: filterOrphanIssues skips fetchUserContentEditorsByIssueNumber entirely when a local structural signal is already false (Codex review, PR #2840, round 15)', async () => {
+  let fetchCalls = 0;
+  const issues = [
+    {
+      number: 33,
+      title: 'no Acceptance criteria or Candidate files section at all',
+      state: 'OPEN',
+      labels: [],
+      body: 'Do this only after the prior fix has merged and is confirmed to take effect in production.',
+      url: 'https://example.com/33',
+      user: { login: 'alice' },
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchUserContentEditorsByIssueNumber: () => {
+      fetchCalls += 1;
+      return ['alice'];
+    },
+    isTrustedCollaborator: () => false,
+    trustedMarkerLogins: ['alice'],
+    existsAt: () => false,
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.runtime_observation_precondition.length, 1);
+  assert.equal(result.warnings.length, 0);
+});
+
 // #2767 (CodeRabbit review, PR #2840): a fixture that builds an
 // `OrphanIssueInput` by hand (every test above) bypasses `fetchOpenIssues`/
 // `normalizeIssue` entirely, which is exactly how the live CLI's `user`
