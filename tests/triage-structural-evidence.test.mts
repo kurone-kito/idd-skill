@@ -66,6 +66,16 @@ test('hasVerificationCommandSignal: a command in a LATER Setext-headed section d
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: a heading with no space after the # run is not a real ATX heading (Codex review, PR #2840)', () => {
+  // CommonMark requires a space/tab (or end of line) after the ATX `#`
+  // run -- `##Acceptance criteria` renders as ordinary paragraph text,
+  // not a heading, so it must not open a fake Acceptance-criteria
+  // section even when followed by content that would otherwise satisfy
+  // the signal.
+  const body = `##Acceptance criteria\n\n- [ ] one\n- [ ] two\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: case-insensitive heading', () => {
   const body = `## acceptance CRITERIA\n\n- [ ] a\n- [ ] b\n`;
   assert.equal(hasVerificationCommandSignal(body), true);

@@ -63,9 +63,15 @@ const NEXT_ATX_HEADING_PATTERN =
   /\n(?: {0,3}#{1,6}\s|(?=[ \t]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)))/;
 /** Matches the `## Acceptance criteria` heading (any ATX level, any of
  * the two capitalization conventions used across this repository's own
- * issues) on its own line. */
+ * issues) on its own line. Requires at least one space/tab after the `#`
+ * run (Codex review, PR #2840): CommonMark requires that whitespace (or
+ * end of line) for a real ATX heading -- `##Acceptance criteria` with no
+ * space renders as plain paragraph text, not a heading, so the earlier
+ * `[ \t]*` (zero-or-more) let that non-heading line open a fake
+ * Acceptance-criteria section anyway. Mirrors `parseCandidateFiles`'s own
+ * `\s+` heading pattern, which already required it. */
 const ACCEPTANCE_CRITERIA_HEADING_PATTERN =
-  /^#{1,6}[ \t]*Acceptance\s+[Cc]riteria[ \t]*$/im;
+  /^#{1,6}[ \t]+Acceptance\s+[Cc]riteria[ \t]*$/im;
 /**
  * Mask fenced code, indented (4-space) code, and real HTML comment ranges
  * (Codex review, PR #2840): an issue can quote an example `## Acceptance
