@@ -82,65 +82,82 @@ const VERIFICATION_COMMAND_CODE_SPAN_PATTERN =
  * back for each line individually. */
 const CHECKBOX_ITEM_LINE_PATTERN =
   /^[ \t]*([-*+]|\d{1,9}[.)])[ \t]+\[[ xX]\](?=[ \t]|$)/;
-/** Any list-item line at all, checkbox or not -- used by
- * {@link countInterruptingCheckboxItems} to detect "this checkbox line
- * continues an already-open list", regardless of that earlier item's own
- * marker. */
-const LIST_ITEM_LINE_PATTERN = /^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+/;
+/** Any list-item line at all, checkbox or not, marker captured (group 1)
+ * -- used by {@link countInterruptingCheckboxItems} to decide whether a
+ * NON-checkbox list-item line still genuinely opened or continued a real
+ * list (Codex review, PR #2840, round 19; see that function's own doc
+ * comment for why line *shape* alone is not enough). */
+const LIST_ITEM_LINE_PATTERN = /^[ \t]*([-*+]|\d{1,9}[.)])[ \t]+/;
+/** True when `marker` is a shape CommonMark lets interrupt an
+ * already-open paragraph on its own: a bullet, or an ordered marker
+ * starting at `1`. */
+function isInterruptingMarker(marker: string): boolean {
+  return /^[-*+]$/.test(marker) || /^1[.)]$/.test(marker);
+}
 
 /**
  * Counts only the checkbox items in `sectionText` that CommonMark would
  * actually render as real GFM task-list items (Codex review, PR #2840,
- * round 17): a plain `matchAll` count over the whole section (what this
- * replaces) has no notion of paragraph interruption -- a non-`1`-numbered
- * ordered marker (`2.`, `3.`, ...) cannot interrupt an already-open
- * paragraph per CommonMark 5.2, so `prose\n2. [ ] a\n3. [ ] b` renders as
- * one plain paragraph (with hard line breaks), never real checkboxes --
- * `gh api /markdown` confirms this. A checkbox line counts when any of:
+ * round 17, corrected round 19): a plain `matchAll` count over the whole
+ * section (what round 17 replaced) has no notion of paragraph
+ * interruption -- a non-`1`-numbered ordered marker (`2.`, `3.`, ...)
+ * cannot interrupt an already-open paragraph per CommonMark 5.2, so
+ * `prose\n2. [ ] a\n3. [ ] b` renders as one plain paragraph (with hard
+ * line breaks), never real checkboxes -- `gh api /markdown` confirms
+ * this. A checkbox line counts when any of:
  *
  * - the immediately preceding line is blank (a fresh list can always
  *   open after a blank line);
- * - the immediately preceding line is itself ANY list-item line
- *   (continuing an already-open list, regardless of that other item's
- *   own marker -- a `2.` checkbox right after a `1.` or a `-` item is
- *   still part of the same list, not a fresh interruption attempt);
+ * - the immediately preceding line *itself* genuinely opened or
+ *   continued a real list (not merely LOOKED list-item-shaped -- round
+ *   17's own bug, caught in round 19: `prose\n2. ordinary\n3. [ ] one`
+ *   let the non-interrupting `2. ordinary` line's mere shape mark the
+ *   following `3. [ ] one` as "continuing a list" and wrongly count it,
+ *   even though `2. ordinary` itself never opened anything -- CommonMark
+ *   keeps the whole run inside the original paragraph, `gh api
+ *   /markdown` confirms zero real checkboxes here);
  * - its own marker is a bullet (`-`/`*`/`+`) or an ordered marker
  *   starting at `1` (`1.`/`1)`) -- CommonMark lets both interrupt a
  *   paragraph;
  * - it is `sectionText`'s own first line -- nothing precedes it inside
  *   the section to interrupt (the heading itself is a block boundary).
  *
- * Mirrors `findIndentedCodeRanges`'s own `isNonInterruptingListItem`
- * logic (built for a different purpose -- container/list-content-indent
- * tracking this simpler per-line walk does not need).
+ * The fix tracks one recursive per-line state -- "did THIS line actually
+ * open or continue a real list" -- rather than round 17's shape-only
+ * flag, so a non-interrupting list-shaped line correctly fails to seed a
+ * continuation for the line after it. Mirrors
+ * `findIndentedCodeRanges`'s own `isNonInterruptingListItem` logic (built
+ * for a different purpose -- container/list-content-indent tracking this
+ * simpler per-line walk does not need).
  */
 function countInterruptingCheckboxItems(sectionText: string): number {
   const lines = sectionText.split(/\r?\n/);
   let count = 0;
   let previousLineBlank = true;
-  let previousLineWasListItem = false;
+  let previousLineOpensOrContinuesList = false;
   for (const line of lines) {
     const isBlank = line.trim() === '';
     if (isBlank) {
       previousLineBlank = true;
-      previousLineWasListItem = false;
+      previousLineOpensOrContinuesList = false;
       continue;
     }
-    const checkboxMatch = CHECKBOX_ITEM_LINE_PATTERN.exec(line);
-    if (checkboxMatch) {
-      const marker = checkboxMatch[1] ?? '';
-      const canInterrupt =
+    const listItemMatch = LIST_ITEM_LINE_PATTERN.exec(line);
+    let currentLineOpensOrContinuesList = false;
+    if (listItemMatch) {
+      const marker = listItemMatch[1] ?? '';
+      currentLineOpensOrContinuesList =
         previousLineBlank ||
-        previousLineWasListItem ||
-        /^[-*+]$/.test(marker) ||
-        /^1[.)]$/.test(marker);
-      if (canInterrupt) {
+        previousLineOpensOrContinuesList ||
+        isInterruptingMarker(marker);
+      if (
+        currentLineOpensOrContinuesList &&
+        CHECKBOX_ITEM_LINE_PATTERN.test(line)
+      ) {
         count += 1;
       }
-      previousLineWasListItem = true;
-    } else {
-      previousLineWasListItem = LIST_ITEM_LINE_PATTERN.test(line);
     }
+    previousLineOpensOrContinuesList = currentLineOpensOrContinuesList;
     previousLineBlank = false;
   }
   return count;

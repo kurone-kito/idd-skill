@@ -483,6 +483,25 @@ test('hasVerificationCommandSignal: a non-1-numbered checkbox continuing an alre
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+test('hasVerificationCommandSignal: a non-interrupting ordered line does not seed a continuation for the checkbox after it (Codex review, PR #2840, round 19)', () => {
+  // Round 17's own bug: a non-1-numbered ordered line's mere shape
+  // (looking list-item-like) was enough to mark it "was a list item" for
+  // the NEXT line's continuation check, even though the line itself never
+  // actually opened or continued a real list (CommonMark keeps the whole
+  // run inside the original paragraph). `gh api /markdown` confirms zero
+  // real checkboxes render here -- one plain paragraph with hard breaks.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    'Some prose describing the work.',
+    '2. ordinary',
+    '3. [ ] first',
+    '4. [ ] second',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: a mixed multi-line double-backtick span with real headings inside is real structure, not smuggled content (Codex review, PR #2840 round 9 -- rejected)', () => {
   // Considered a P1 smuggling finding, then rejected after verification
   // against GitHub's own renderer (`gh api /markdown`, mode: gfm): an ATX
