@@ -179,6 +179,20 @@ test('parseCandidateFiles stops at the next heading and ignores non-list prose',
   assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mjs']);
 });
 
+test('parseCandidateFiles stops at a Setext-style sibling heading, not just an ATX one (Codex review, PR #2840)', () => {
+  const body = [
+    '## Candidate files',
+    '',
+    '- `scripts/a.mjs`',
+    '',
+    'Notes',
+    '-----',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mjs']);
+});
+
 // ---------------------------------------------------------------------------
 // resolveHighContentionFiles
 // ---------------------------------------------------------------------------

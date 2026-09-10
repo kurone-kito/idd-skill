@@ -40,6 +40,14 @@ const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
 const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 /** Upper bound on the best-effort open-PR scan (a `gh pr list --limit`). */
 const OPEN_PR_SCAN_LIMIT = 500;
+/** A Setext-style sibling heading's own underline: a lone run of `=` or `-`
+ * characters (optional leading indent up to 3 spaces, optional trailing
+ * whitespace), with no other content on the line. Declared here (well
+ * above the `import.meta.main` CLI entry block below) rather than next to
+ * {@link parseCandidateFiles}'s own use of it -- a module-level binding
+ * initialized after that block is a top-level-await TDZ risk
+ * (`tests/cli-entry-smoke.test.mts`). */
+const SETEXT_UNDERLINE_PATTERN = /^[ \t]{0,3}(?:=+|-+)[ \t]*$/;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `candidate:`): tests/flag-name-matrix.test.mts scans this file's
 // *compiled* .mjs source text for quoted flag literals such as the
@@ -103,6 +111,25 @@ export function parseCandidateFiles(body) {
   let start = -1;
   let end = lines.length;
   for (let index = 0; index < lines.length; index += 1) {
+    // Setext-style sibling heading boundary (Codex review, PR #2840): only
+    // once already inside the section (`start !== -1`), stop at a
+    // non-blank content line immediately followed (no blank line between)
+    // by its own underline -- e.g. `Notes\n-----` -- the same boundary
+    // `triage-structural-evidence.mts`'s own Acceptance-criteria section
+    // extraction already recognizes. An ATX heading alone missed this
+    // shape, letting an existing path in the later, unrelated section
+    // leak into `candidateFilesExist`. `index > start` (rather than `>=`)
+    // keeps the section's own opening line from ever being misread as a
+    // Setext heading's content line.
+    if (
+      start !== -1 &&
+      index > start &&
+      lines[index - 1].trim() !== '' &&
+      SETEXT_UNDERLINE_PATTERN.test(lines[index])
+    ) {
+      end = index - 1;
+      break;
+    }
     const heading = lines[index].match(/^\s{0,3}(#{1,6})\s+(.*)$/);
     if (!heading) {
       continue;
