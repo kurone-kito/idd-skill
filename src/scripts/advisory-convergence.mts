@@ -938,6 +938,21 @@ function verifySelfReferentialBootstrapWaiverRun(
   if (!run || 'error' in run) {
     return false;
   }
+  // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): fail closed when
+  // this invocation's own resolved repository identity is empty (e.g. a
+  // caller upstream failed to resolve owner/repo) -- without this,
+  // `String(undefined ?? '') === ''` would make an ABSENT expected
+  // repository equal an absent `run.repositoryFullName` too (a run whose
+  // own `head_repository` the Actions API reported as null), letting a
+  // malformed/direct invocation validate an auto-waiver without proving
+  // which repository actually ran it. `expected.path`/`expected.headSha`
+  // need no equivalent guard: both are always non-empty by construction
+  // (a hardcoded workflow-path constant and a regex-validated 40-hex SHA
+  // respectively), so an empty `run` counterpart already fails those
+  // comparisons on its own.
+  if (!expected.repositoryFullName) {
+    return false;
+  }
   return (
     String(run.path ?? '') === expected.path &&
     String(run.headSha ?? '').toLowerCase() ===
@@ -1711,10 +1726,13 @@ export function computeAdvisoryConvergenceVerdict(
     waivableSelectors: [...(options.waivableSelectors ?? [])],
     maxValidity: String(options.waiverMaxValidity ?? 'PT24H'),
     mode: waiverMode,
-    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): the ONE
-    // authorized call site -- see `allowSelfReferentialBootstrapAuto`'s
-    // own doc comment in protocol-helpers.mts for why every other caller
-    // must leave this unset.
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): one of exactly
+    // two authorized call sites -- see `allowSelfReferentialBootstrapAuto`'s
+    // own doc comment in protocol-helpers.mts for the full list and why
+    // every other caller must leave this unset. This one is the GATE
+    // decision (feeds `autoWaiverValid` directly below), paired with the
+    // independent run-id/event-type/HEAD/repository/changed-file
+    // verification that follows.
     allowSelfReferentialBootstrapAuto: true,
   });
   const autoWaiverRepositoryFullName = String(
@@ -2950,10 +2968,26 @@ export function collectFromGitHub(
     }
     const createdAt = String(comment.createdAt ?? '');
     const parsed = parseExternalCheckWaiverComment(body, createdAt);
+    // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): `parsed.runId`
+    // is attacker-controlled comment text (the marker's `run-id:` field is
+    // never percent-decoded or otherwise sanitized -- see
+    // ParsedExternalCheckWaiver.runId's own doc comment), and
+    // `getWorkflowRun` interpolates it directly into a `gh api` REST path
+    // (`repos/{owner}/{repo}/actions/runs/{runId}`). A same-repository
+    // workflow (the same threat model MAX_AUTO_WAIVER_RUN_LOOKUPS's own doc
+    // comment above already covers) could otherwise post a bot-authored
+    // marker whose run-id contains `/`, `?`, or other path syntax and steer
+    // this bounded lookup at an unintended API path instead of a single
+    // Actions run. Validate the token is a canonical positive integer --
+    // the same shape `ci-wait-policy.mts`'s `--run-id` already requires --
+    // before it is ever eligible to become a lookup key; a malformed token
+    // fails closed here exactly like every other invalid input in this
+    // file, rather than reaching the API call at all.
     if (
       parsed &&
       parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
       parsed.runId &&
+      parseCanonicalIntegerOrNull(parsed.runId) !== null &&
       !seenAutoWaiverRunIds.has(parsed.runId) &&
       String(parsed.headSha ?? '')
         .trim()

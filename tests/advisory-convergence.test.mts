@@ -3403,6 +3403,42 @@ test('self-referential-bootstrap-auto: a run reported with different repository-
   assert.equal(verdict.ready, true);
 });
 
+test('self-referential-bootstrap-auto: an unresolved repositoryFullName never trusts a run with no repository either (Copilot review, PR #2895)', () => {
+  // `String(undefined ?? '') === ''` would otherwise make an ABSENT
+  // expected repository equal an absent run.repositoryFullName too (e.g.
+  // the Actions API reporting a null head_repository, or this invocation's
+  // own owner/repo resolution failing upstream) -- fail closed instead of
+  // treating "neither side knows" as a match.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: '',
+        },
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: '',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
 test('self-referential-bootstrap-auto: a marker missing run-id: never resolves to any lookup, so it is rejected', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({

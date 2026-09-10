@@ -483,6 +483,11 @@ test('collectFromGitHub bounds the number of run-id lookups, keeping only the ea
     // flood could still share this PR's own real HEAD, which this
     // scenario deliberately does).
     const candidateCount = 25;
+    // 1-based -- a real GitHub Actions run id is never "0" (Copilot
+    // review, PR #2895: `collectFromGitHub` now validates each candidate's
+    // `run-id:` token as a canonical positive integer, `min: 1`, before it
+    // is eligible for lookup at all, matching `ci-wait-policy.mts`'s own
+    // `--run-id` shape).
     const comments = Array.from({ length: candidateCount }, (_, index) => ({
       id: 100 + index,
       body: renderExternalCheckWaiverComment({
@@ -493,9 +498,9 @@ test('collectFromGitHub bounds the number of run-id lookups, keeping only the ea
         reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
         expiresAt: '2099-01-01T00:00:00Z',
         actor: 'github-actions[bot]',
-        runId: String(index),
+        runId: String(index + 1),
       }),
-      // Ascending createdAt -- the earliest twenty (run ids "0".."19") are
+      // Ascending createdAt -- the earliest twenty (run ids "1".."20") are
       // the ones a bound respecting earliest-wins must keep.
       createdAt: `2026-07-31T09:00:${String(index).padStart(2, '0')}Z`,
       updatedAt: `2026-07-31T09:00:${String(index).padStart(2, '0')}Z`,
@@ -503,7 +508,7 @@ test('collectFromGitHub bounds the number of run-id lookups, keeping only the ea
     }));
     const workflowRuns: Record<string, unknown> = {};
     for (let index = 0; index < candidateCount; index += 1) {
-      workflowRuns[`o/r/${index}`] = {
+      workflowRuns[`o/r/${index + 1}`] = {
         path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
         head_sha: HEAD_SHA,
         head_repository: { full_name: 'o/r' },
@@ -526,7 +531,47 @@ test('collectFromGitHub bounds the number of run-id lookups, keeping only the ea
       .sort((left, right) => left - right);
     assert.deepEqual(
       lookedUpRunIds,
-      Array.from({ length: 20 }, (_, index) => index),
+      Array.from({ length: 20 }, (_, index) => index + 1),
     );
+  });
+});
+
+test('collectFromGitHub rejects a run-id token that is not a canonical positive integer, never looking it up (Copilot review, PR #2895)', () => {
+  withHermeticCwd(() => {
+    // renderExternalCheckWaiverComment's own runId normalization only
+    // requires a non-whitespace token to round-trip (matching the parser's
+    // own `\S+` shape) -- it does not itself require a canonical integer.
+    // getWorkflowRun interpolates the token directly into a `gh api` REST
+    // path, so a same-repository attacker-authored marker with path syntax
+    // in run-id must never reach that call. No `workflowRuns` fixture
+    // exists, so an attempted lookup would throw and this test would fail
+    // with that exception instead of the assertion below.
+    const pathInjectionMarker = {
+      id: 5,
+      body: renderExternalCheckWaiverComment({
+        agentId: 'github-actions-bot',
+        claimId: 'claim-abc',
+        headSha: HEAD_SHA,
+        checkSelector: 'idd-advisory-convergence',
+        reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        expiresAt: '2099-01-01T00:00:00Z',
+        actor: 'github-actions[bot]',
+        runId: `${RUN_ID}/../../orgs/evil`,
+      }),
+      createdAt: '2026-07-31T09:00:00Z',
+      updatedAt: '2026-07-31T09:00:00Z',
+      authorLogin: 'github-actions[bot]',
+    };
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [pathInjectionMarker] },
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunLookups, {});
   });
 });
