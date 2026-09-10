@@ -1412,24 +1412,34 @@ function checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options) {
  * of it is not actually byte-exact against what
  * `matchCanonicalAuthoringMarkerFamily` would see live.
  *
- * A match whose `isMinimized` is already `true` is excluded from the
- * count -- it is not backlog, it is already handled. When
- * `trustedActors` is provided (#2896 review, Codex), a match whose
+ * When `trustedActors` is provided (#2896 review, Codex), a match whose
  * `comment.author` is missing or not a case-insensitive member of that
- * set is also excluded from the count: `minimize-superseded-markers.mts`
- * and the documented sweep both require a trusted marker actor
- * regardless of body match, so an untrusted-author match is never
- * actually clearable and must not inflate this "eligible" count. This
- * filter applies only to eligibility, never to which match is
- * "newest" -- the newest determination stays purely structural (see
- * above) so an untrusted-author comment can still correctly supersede
- * an earlier trusted one. `trustedActors` left `undefined` disables this
- * filter entirely (backward-compatible: every match counts regardless
- * of author). Returns `0` when `comments` is `undefined` (the caller,
- * {@link checkAuthoringMarkerMinimizationBacklog}, reports that family
- * as "not checked" rather than treating this `0` as a confirmed zero) or
- * when fewer than two matches exist (nothing can be "superseded" without
- * a later match to supersede it).
+ * set is excluded from the candidate set **before** "newest" is
+ * selected, not only from the eligible count: the contract states
+ * "syntax alone never grants ownership" (see [Per-target
+ * ownership](../../skills/issue-authoring/references/contract.md)), so
+ * an untrusted-author body -- even a byte-exact canonical one -- is
+ * never treated as a real marker for either purpose. An earlier
+ * revision filtered trust only for eligibility, which let a trailing
+ * untrusted-author match steal "newest" status from the legitimate
+ * trusted marker just before it, wrongly reporting that trusted marker
+ * as superseded backlog (round 2 of review, Codex: the fix for the
+ * `minimize-superseded-markers.mts`/documented-sweep trust
+ * requirement -- round 1 -- did not go far enough). `trustedActors` left
+ * `undefined` disables this filter entirely (backward-compatible: every
+ * byte-exact match counts as a candidate regardless of author, matching
+ * pre-#2896-review behavior).
+ *
+ * A candidate match whose `isMinimized` is already `true` is excluded
+ * from the eligible count -- it is not backlog, it is already handled
+ * (this exclusion is unaffected by trust filtering: it applies to
+ * whichever candidate set survives the trust filter above). Returns `0`
+ * when `comments` is `undefined` (the caller, {@link
+ * checkAuthoringMarkerMinimizationBacklog}, reports that family as "not
+ * checked" rather than treating this `0` as a confirmed zero) or when
+ * fewer than two (trust-filtered, when applicable) candidates exist
+ * (nothing can be "superseded" without a later candidate to supersede
+ * it).
  */
 function countEligibleSupersededMarkers(
   comments,
@@ -1443,10 +1453,23 @@ function countEligibleSupersededMarkers(
   const matchIndexes = [];
   comments.forEach((comment, index) => {
     if (
-      matchCanonicalAuthoringMarkerFamily(comment.body, markerPrefix) === family
+      matchCanonicalAuthoringMarkerFamily(comment.body, markerPrefix) !== family
     ) {
-      matchIndexes.push(index);
+      return;
     }
+    if (trustedActors !== undefined) {
+      const author = comment.author;
+      if (
+        typeof author !== 'string' ||
+        !trustedActors.has(author.toLowerCase())
+      ) {
+        // Not a real candidate at all when a trust set is supplied:
+        // never counted, and never eligible to be selected as "newest"
+        // either -- syntax alone never grants ownership.
+        return;
+      }
+    }
+    matchIndexes.push(index);
   });
   if (matchIndexes.length < 2) {
     return 0;
@@ -1456,15 +1479,6 @@ function countEligibleSupersededMarkers(
   for (const index of matchIndexes) {
     if (index === newestIndex || comments[index].isMinimized === true) {
       continue;
-    }
-    if (trustedActors !== undefined) {
-      const author = comments[index].author;
-      if (
-        typeof author !== 'string' ||
-        !trustedActors.has(author.toLowerCase())
-      ) {
-        continue;
-      }
     }
     count += 1;
   }

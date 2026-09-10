@@ -3057,14 +3057,15 @@ test('authoring-marker-minimization-backlog with trustedMarkerActors excludes a 
   assert.match(finding?.detail ?? '', /authoring-owner: 0\b/);
 });
 
-test('authoring-marker-minimization-backlog trust filtering never changes which match is "newest"', () => {
-  // The 'release' marker (untrusted author) is still correctly excluded
-  // as "newest" -- structural newest-selection never consults trust --
-  // rather than being wrongly treated as a NEW eligible candidate simply
-  // because its own author fails the trust check. The earlier 'acquire'
-  // marker (trusted author) is genuinely superseded backlog and still
-  // counts as eligible on its own merits, regardless of who posted the
-  // newer marker that supersedes it.
+test('authoring-marker-minimization-backlog excludes an untrusted-author match from newest-selection, not only from the count (#2896 round 2 review, Codex)', () => {
+  // The trailing 'release' marker has an UNTRUSTED author. A naive design
+  // that only filters trust for the eligible count (not for candidate
+  // selection) would let this untrusted match "steal" newest status,
+  // wrongly making the legitimate trusted 'acquire' marker before it read
+  // as superseded backlog -- exactly backwards, since "syntax alone never
+  // grants ownership" (contract.md). The untrusted match must be excluded
+  // from the candidate set entirely: with only one real (trusted)
+  // candidate left, nothing is superseded and the count stays 0.
   const report = auditAuthoredIssue(orphanBody(), {
     shape: 'orphan',
     trustedMarkerActors: ['kurone-kito'],
@@ -3076,6 +3077,36 @@ test('authoring-marker-minimization-backlog trust filtering never changes which 
       {
         body: canonicalOwnerMarkerBody({ mode: 'release' }),
         author: 'some-untrusted-user',
+      },
+    ],
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'authoring-marker-minimization-backlog',
+  );
+  assert.match(finding?.detail ?? '', /authoring-owner: 0\b/);
+  assert.equal(finding?.severity, undefined);
+});
+
+test('authoring-marker-minimization-backlog: an untrusted match sandwiched between two trusted matches never becomes "newest" and is skipped as a candidate', () => {
+  // Three candidates: trusted 'acquire', untrusted 'heartbeat', trusted
+  // 'release'. The untrusted middle one must never count as either the
+  // eligible backlog or the newest -- the two trusted candidates
+  // ('acquire' superseded by 'release') are the only real pair here.
+  const report = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    trustedMarkerActors: ['kurone-kito'],
+    comments: [
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'acquire' }),
+        author: 'kurone-kito',
+      },
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'heartbeat' }),
+        author: 'some-untrusted-user',
+      },
+      {
+        body: canonicalOwnerMarkerBody({ mode: 'release' }),
+        author: 'kurone-kito',
       },
     ],
   });
