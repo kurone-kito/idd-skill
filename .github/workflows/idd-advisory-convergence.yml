@@ -181,10 +181,13 @@ name: IDD advisory-convergence gate
 # associated with the default branch instead of the intended branch, so
 # it never surfaces in that PR's required-check rollup at all even when
 # the run itself succeeds. The verified recovery is `gh run rerun
-# <run-id>` on the *existing* pull_request / pull_request_target /
-# pull_request_review_comment-triggered run for the current HEAD SHA --
-# found via `gh run list --workflow=idd-advisory-convergence.yml --json
-# databaseId,headSha,event,url` filtered to that exact SHA (not merely
+# <run-id>` on the *existing* pull_request / pull_request_target-
+# triggered run for the current HEAD SHA (Copilot, PR #2855 review: this
+# required workflow's own `on:` above has never included
+# `pull_request_review_comment` -- that trigger belongs to the
+# non-required companion `idd-advisory-convergence-comment.yml`
+# instead) -- found via `gh run list --workflow=idd-advisory-convergence.yml
+# --json databaseId,headSha,event,url` filtered to that exact SHA (not merely
 # a run that happens to share it, and not an older run for an earlier
 # HEAD on the same PR), or the Checks API -- because re-running that
 # run object preserves its original pull_request-family association, so
