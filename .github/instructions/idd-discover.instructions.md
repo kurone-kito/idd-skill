@@ -62,9 +62,12 @@ reason and stop without claiming. Fall back to normal discovery only when
 the operator explicitly asks for normal discovery in the same run; do not
 silently search for another issue.
 
-For a valid open target that is not itself a roadmap node (see step 2
-below), skip A0-O, A1, A1.5, A2, and candidate selection. Before A5, run
-targeted readiness and viability checks against that issue only:
+Run the steps below against a valid open target. Steps 1 and 2 apply
+regardless of target type; only once step 2 confirms the target is not
+a roadmap node does this shortcut skip A0-O, A1, A1.5, A2, and
+candidate selection, continuing through steps 3-5 to A5 against that
+issue only — a roadmap-node target instead follows step 2's own
+routing:
 
 1. Fetch the target issue. If it carries the configured authoring label,
    report `Issue #N is currently being authored`, run the
@@ -77,16 +80,25 @@ targeted readiness and viability checks against that issue only:
    **A2**'s roadmap-node/execution-leaf classification rule uses — do
    not continue this targeted-readiness path. Instead, treat the target
    as the root **A1** would have selected: continue with **A1.5**
-   against it, then run **A2**'s traversal scoped to this root and its
+   against it — its own stop/close outcomes decide whether child
+   enumeration resumes, exactly as in the normal roadmap path — then,
+   only if it does, run **A2**'s traversal scoped to this root and its
    own descendants only (never a repository-wide search), then the
-   normal **A3** → **A3.5** → **A4** → **A4.5** → **A5** sequence over
-   that scoped candidate set, ranking and claiming the roadmap's own
-   highest-suitability open child first. This graph-scoped continuation
-   excludes **A0**'s own A0-O orphan-fallback triggers (a)/(b)/(c): if
-   this roadmap's own descendants are exhausted or unsuitable, end the
-   run the same way A0-T's other failure branches do — report and stop
-   — never falling back to an unrelated orphan issue, per the
-   no-silent-fallback rule above.
+   normal **A3** → **A3.5** → **A4** sequence to rank that scoped set
+   down to its single highest-suitability open child, and run
+   **A4.5** → **A5** against that one child only.
+   `idd-suitability.instructions.md`'s and `idd-claim.instructions.md`'s
+   existing A0-T-keyed stop-without-fallback rules apply to that child
+   unchanged: an A3.5/A4.5 rejection or a lost A5 claim race ends this
+   run — report and stop — rather than retrying a second-ranked child;
+   extending this branch to retry additional children on a per-candidate
+   failure is a deliberate scope limit, left to a follow-up issue. This
+   graph-scoped continuation also excludes **A0**'s own A0-O
+   orphan-fallback triggers (a)/(b)/(c) throughout: an empty or
+   fully-unsuitable scoped candidate set likewise ends the run the same
+   way A0-T's other failure branches do — report and stop — never
+   falling back to an unrelated orphan issue, per the no-silent-fallback
+   rule above.
 3. Apply A3's readiness bullets to the target (the same blocked-by,
    human-coordination, and runtime-observation checks, resolved the
    same way) — plus one target-only check: no active, non-stale claim
