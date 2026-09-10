@@ -52,6 +52,27 @@
 # push, or a human/session review-thread reply), exactly as it always
 # has; see `idd-ci.instructions.md` §Rerun mechanics for the manual
 # recovery command if a stuck rollup needs one sooner.
+#
+# Fork-originated PRs (Codex P1, PR #2855 review): a `pull_request_review`
+# run whose PR is from a fork gets a read-only `GITHUB_TOKEN` from GitHub
+# regardless of this workflow's declared `actions: write` permission --
+# the same restriction `docs/customization.md`'s
+# `strip-untrusted-labels.yml` trust-model section documents for
+# `pull_request`, and `pull_request_review_comment` (this workflow's own
+# pre-existing #2136/#2411 trigger) already shares it. The former
+# `pull_request_review` trigger (directly on the required workflow) never
+# hit this, because recomputing its own verdict needed only read access;
+# routing through `gh run rerun` here needs write, which a fork PR's
+# token cannot have -- the mutation step fails visibly (a 403), not
+# silently. No trusted writable review event exists for this case (there
+# is no `pull_request_review_target`), and putting `pull_request_review`
+# back on the required workflow to get one would reopen the exact vector
+# this move closes for same-repository PRs (a PR-evaluated trigger on the
+# *required* workflow can forge its own green conclusion; a tampered
+# companion can only issue or withhold a rerun). Recovery is the same as
+# any other stuck rollup: a maintainer's manual `gh run rerun`, the next
+# push, or (past the configured deadline) this repository's
+# `ciGate.externalCheckWaivers` mechanism.
 # `issue_comment` also fires for a comment on a plain issue, not only a
 # PR; the job-level `if:` below skips those (`github.event.issue.pull_request`
 # is only present when the commented-on issue is a PR).
