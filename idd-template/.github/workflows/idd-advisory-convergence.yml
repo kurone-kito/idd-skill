@@ -567,6 +567,8 @@ jobs:
                 "scripts/advisory-wait-policy.mjs"
                 "scripts/rerun-advisory-convergence.mjs"
                 "scripts/external-check-waiver.mjs"
+                "scripts/marker-helpers.mjs"
+                "scripts/protocol-helpers.mjs"
               )
               ;;
             package-manager)

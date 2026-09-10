@@ -177,28 +177,37 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * the narrow trigger set the Background section requires (an
  * import-derived set would auto-waive most PRs, since this gate's own
  * script transitively imports several of the most-edited files in the
- * repository). Exactly the seven paths the hearing pinned, and exactly
- * this SOURCE REPOSITORY's own trigger set: this repository's own
- * top-level `.github/workflows/idd-advisory-convergence.yml` hardcodes
- * these same seven paths directly (its own checker files are these exact
- * `.mts` sources, regardless of its own configured
- * `helperRuntime.profile`), and {@link resolveSelfReferentialTriggerFiles}
- * below returns this constant only when `repositoryFullName` resolves to
- * this repository. Every other repository resolves a profile-derived
- * set instead (Codex + Copilot review, PR #2895): this repository's own
- * `src/scripts/*.mts` sources are never vended to a `vendored-node`/
- * `package-manager` adopter, so using this list unconditionally for the
- * DISTRIBUTED `idd-template/` copy left the mechanism both
- * non-functional (a genuine checker upgrade could never match a path
- * that never exists in the adopter's own checkout) and gameable (a PR
- * could touch that nonexistent path purely to satisfy the string match).
- * Widening this set is a reviewed edit to the constant, never automatic. */
+ * repository). A hand-curated set, and exactly this SOURCE REPOSITORY's
+ * own trigger set: this repository's own top-level
+ * `.github/workflows/idd-advisory-convergence.yml` hardcodes these same
+ * paths directly (its own checker files are these exact `.mts` sources,
+ * regardless of its own configured `helperRuntime.profile`), and
+ * {@link resolveSelfReferentialTriggerFiles} below returns this constant
+ * only when `repositoryFullName` resolves to this repository. Every
+ * other repository resolves a profile-derived set instead (Codex +
+ * Copilot review, PR #2895): this repository's own `src/scripts/*.mts`
+ * sources are never vended to a `vendored-node`/`package-manager`
+ * adopter, so using this list unconditionally for the DISTRIBUTED
+ * `idd-template/` copy left the mechanism both non-functional (a
+ * genuine checker upgrade could never match a path that never exists in
+ * the adopter's own checkout) and gameable (a PR could touch that
+ * nonexistent path purely to satisfy the string match).
+ * `marker-helpers.mts`/`protocol-helpers.mts` joined this set in the
+ * same review round (Codex, PR #2895): `advisory-convergence.mts`
+ * directly imports the marker parser/renderer and waiver summarizer
+ * from both, so a checker repair isolated to either file -- exactly
+ * what this PR's own earlier commits did to implement `run-id:` -- must
+ * also be able to trigger this bypass, or it recreates the very
+ * deadlock this mechanism exists to solve. Widening this set is a
+ * reviewed edit to the constant, never automatic. */
 export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   'src/scripts/advisory-convergence.mts',
   'src/scripts/advisory-wait-state.mts',
   'src/scripts/advisory-wait-policy.mts',
   'src/scripts/rerun-advisory-convergence.mts',
   'src/scripts/external-check-waiver.mts',
+  'src/scripts/marker-helpers.mts',
+  'src/scripts/protocol-helpers.mts',
   '.github/workflows/idd-advisory-convergence.yml',
   '.github/workflows/idd-advisory-convergence-comment.yml',
 ];
@@ -250,6 +259,8 @@ export function resolveSelfReferentialTriggerFiles(
         'scripts/advisory-wait-policy.mjs',
         'scripts/rerun-advisory-convergence.mjs',
         'scripts/external-check-waiver.mjs',
+        'scripts/marker-helpers.mjs',
+        'scripts/protocol-helpers.mjs',
         ...workflowPaths,
       ];
     case 'package-manager':

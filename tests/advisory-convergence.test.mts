@@ -3638,6 +3638,26 @@ test('ADVISORY_CONVERGENCE_WORKFLOW_PATH stays a member of SELF_REFERENTIAL_WAIV
   );
 });
 
+test('SELF_REFERENTIAL_WAIVER_TRIGGER_FILES includes the waiver parser/summarizer dependencies (Codex review, PR #2895, round 7)', () => {
+  // advisory-convergence.mts directly imports the marker parser/renderer
+  // from marker-helpers.mts and the waiver summarizer from
+  // protocol-helpers.mts -- a checker repair isolated to either file
+  // (exactly what this PR's own earlier commits did to implement
+  // run-id:) must still be able to trigger this bypass, or it recreates
+  // the deadlock this mechanism exists to solve.
+  for (const path of [
+    'src/scripts/marker-helpers.mts',
+    'src/scripts/protocol-helpers.mts',
+  ]) {
+    assert.ok(
+      (SELF_REFERENTIAL_WAIVER_TRIGGER_FILES as readonly string[]).includes(
+        path,
+      ),
+      `expected ${path} to be a member of SELF_REFERENTIAL_WAIVER_TRIGGER_FILES`,
+    );
+  }
+});
+
 test('resolveSelfReferentialTriggerFiles: this source repository always resolves its own fixed list, regardless of profile (Codex + Copilot review, PR #2895)', () => {
   for (const profile of [undefined, 'vendored-node', 'package-manager']) {
     assert.deepEqual(
@@ -3664,6 +3684,8 @@ test('resolveSelfReferentialTriggerFiles: a vendored-node adopter resolves the c
     'scripts/advisory-wait-policy.mjs',
     'scripts/rerun-advisory-convergence.mjs',
     'scripts/external-check-waiver.mjs',
+    'scripts/marker-helpers.mjs',
+    'scripts/protocol-helpers.mjs',
     ADVISORY_CONVERGENCE_WORKFLOW_PATH,
     '.github/workflows/idd-advisory-convergence-comment.yml',
   ]);

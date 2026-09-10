@@ -1346,8 +1346,8 @@ that PR cannot benefit from its own fix to the checker while still
 unmerged. This source repository's own copy of the allowlist -- checked
 both by its own top-level workflow's posting step and, at consume time,
 by `resolveSelfReferentialTriggerFiles` recognizing this exact
-repository -- lists exactly seven `.mts`/workflow paths, its real checker
-files, regardless of its own configured `helperRuntime.profile`
+repository -- lists a hand-curated set of `.mts`/workflow paths, its real
+checker files, regardless of its own configured `helperRuntime.profile`
 (`package-manager`, chosen for its own IDD dependency, unrelated to this
 workflow's own file layout). For every other repository, both the
 distributed `idd-template/` posting step and `resolveSelfReferentialTriggerFiles`

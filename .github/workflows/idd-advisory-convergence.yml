@@ -523,7 +523,7 @@ jobs:
         run: |
           # Kept in sync by hand with SELF_REFERENTIAL_WAIVER_TRIGGER_FILES
           # in src/scripts/advisory-convergence.mts -- exactly the same
-          # seven committed paths, never derived from imports (see that
+          # committed paths, never derived from imports (see that
           # constant's own doc comment for why an import-derived set would
           # auto-waive most PRs).
           ALLOWLIST=(
@@ -532,6 +532,8 @@ jobs:
             "src/scripts/advisory-wait-policy.mts"
             "src/scripts/rerun-advisory-convergence.mts"
             "src/scripts/external-check-waiver.mts"
+            "src/scripts/marker-helpers.mts"
+            "src/scripts/protocol-helpers.mts"
             ".github/workflows/idd-advisory-convergence.yml"
             ".github/workflows/idd-advisory-convergence-comment.yml"
           )
