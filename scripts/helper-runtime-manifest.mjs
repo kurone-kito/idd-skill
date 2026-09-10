@@ -154,6 +154,15 @@ const HELPER_COMMANDS = [
     description: 'Audit or apply post-merge comment cleanup.',
   },
   {
+    id: 'authoring-owner-provenance',
+    scriptName: 'idd:authoring-owner-provenance',
+    binName: 'idd-authoring-owner-provenance',
+    entryPath: 'scripts/authoring-owner-provenance.mjs',
+    vendoredCommand: 'node scripts/authoring-owner-provenance.mjs',
+    description:
+      "Compare a live issue body sha256 against that same issue's own trusted mode=acquire authoring-owner marker digest (review-fix-loop-cutoff provenance check).",
+  },
+  {
     id: 'branch-conflict-state',
     scriptName: 'idd:branch-conflict-state',
     binName: 'idd-branch-conflict-state',

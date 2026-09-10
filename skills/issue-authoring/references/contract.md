@@ -1871,9 +1871,10 @@ only approval boundary.
   each removal for owner/set/anchor/session and the expected
   label/body snapshot -- so a body edit landing between an earlier
   check and the actual removal cannot silently bypass this
-  precondition. A dedicated helper/test to perform and verify this
-  comparison mechanically is tracked as a follow-up rather than
-  designed here. This
+  precondition. The `authoring-owner-provenance` helper (`node
+  scripts/authoring-owner-provenance.mjs --issue <number>`; see
+  `docs/idd-helper-scripts.md`) performs and verifies this comparison
+  mechanically (`#2891`). This
   exists because
   `idd-review-triage.instructions.md`'s round-count cutoff files this
   exact marker on a follow-up issue during unattended autonomous

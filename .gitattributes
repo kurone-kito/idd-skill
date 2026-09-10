@@ -18,6 +18,7 @@ scripts/audit-docs.mjs linguist-generated=true
 scripts/audit-pr-cleanup-summary.mjs linguist-generated=true
 scripts/audit-pr-cleanup.mjs linguist-generated=true
 scripts/authoring-label-guard.mjs linguist-generated=true
+scripts/authoring-owner-provenance.mjs linguist-generated=true
 scripts/autopilot-suitability.mjs linguist-generated=true
 scripts/branch-conflict-state.mjs linguist-generated=true
 scripts/branch-name.mjs linguist-generated=true

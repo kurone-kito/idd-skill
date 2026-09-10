@@ -263,6 +263,56 @@ in this preamble, since the fallback differs per helper.
   and it invokes the resolved hook, always exiting `0` regardless of
   the hook's own success or failure (referenced in
   [kurone-kito/idd-skill#2679](https://github.com/kurone-kito/idd-skill/issues/2679))
+- `scripts/authoring-owner-provenance.mjs` for the review-fix-loop-cutoff
+  auto-release exception's provenance check
+  (`skills/issue-authoring/references/contract.md`): computes the sha256
+  of a live issue body's exact UTF-8 content and compares it against that
+  same issue's own Stage 1 `mode=acquire` `authoring-owner` marker's
+  recorded `body-sha256`, reporting a machine-readable
+  `pass`/`mismatch`/`not-found` verdict — `not-found` is never treated as
+  a pass. Read-only: never posts, labels, or mutates anything (referenced
+  in
+  [kurone-kito/idd-skill#2891](https://github.com/kurone-kito/idd-skill/issues/2891)).
+  Anchors on the target's own trusted, owner-marker-shaped comments
+  (every one still containing the case-insensitive
+  `<marker-prefix>-authoring-owner:` token, whether or not it parses),
+  taken in deterministic comment order. If ANY of those comments was
+  edited after posting (`updatedAt` differs from `createdAt`), the whole
+  log is rejected up front, before a first candidate is even chosen — an
+  editor cannot make the true Stage 1 acquire vanish from consideration
+  by editing it into something unparseable or retargeting it, letting a
+  later acquire silently win instead (PR #2901 review round 6, Copilot;
+  contract.md: owner comments are append-only). Past that check, the
+  _first_ candidate in comment order is scrutinized whatever its shape —
+  not merely the first one that happens to parse and match this target —
+  and must itself parse, name this issue as its target, and be a valid
+  Stage 1 `mode=acquire` marker, or this reports `not-found` rather than
+  silently skipping it for a later, validly-parsing marker (PR #2901
+  review round 7, Copilot). "Valid" means every condition contract.md
+  attaches to a genuine acquire: `mode=acquire` itself (every other mode
+  — `bootstrap`, `resume`, `heartbeat`, `release`, ... — presupposes a
+  prior acquire, so a well-formed history never opens with one);
+  `supersedes=none` (contract.md requires this specifically for
+  `acquire`); a real 64-hex `body-sha256`, never the sentinel `none`; and
+  its own `anchor` names the same issue as its own `target` (a mismatch
+  means the marker declares itself a multi-target set's non-anchor
+  child, out of scope for this single-target-orphan helper) (PR #2901
+  review round 5, chatgpt-codex-connector and Copilot). Only it, not any
+  later marker, is guaranteed to have hashed the body as published: a
+  same-generation racer, a `bootstrap`/`resume` recovery, or a legitimate
+  re-acquisition after a full release cycle all hash whatever body is
+  live at their own posting time, not the originally published one —
+  comparing against any of those instead would make the check pass
+  trivially for a body edited before that later marker (PR #2901 review,
+  chatgpt-codex-connector across four rounds). `target` comparisons fold
+  case, since GitHub owner/repo names are case-insensitive. Two accepted
+  limitations, both fail-closed (never a false `pass`): a marker whose
+  own `anchor` differs from its own `target` (a multi-target set's
+  non-anchor child, out of scope here); and tampering with the true
+  Stage 1 acquire that leaves no authoring-owner token at all — deleting
+  it outright, or editing it into ordinary prose — which cannot be
+  detected by a live comment-log reader (PR #2901 review rounds 5-7,
+  chatgpt-codex-connector and Copilot)
 
 **Review & Merge Phase Helpers:**
 
