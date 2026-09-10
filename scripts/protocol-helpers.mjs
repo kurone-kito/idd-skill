@@ -1433,34 +1433,65 @@ const CODERABBIT_ACK_ADDRESSES_CLOSURE_RE = new RegExp(
 // This helper matches CodeRabbit's own stated decision; it cannot second-
 // guess a wrong decision CodeRabbit reports about itself.
 //
-// 6. **Opening-to-closure anchor, scoped to the weaker "addresses the ..."
-//    form only** (Codex review, PR #2868, round 4): every guard above
-//    narrows what counts as a closure WITHIN a matched span, but neither
-//    closure regex was ever anchored to where the opening ends --
-//    `.test(body)` searches the WHOLE body, so an entirely separate
-//    sentence carrying genuinely new, unresolved feedback between the
-//    opening and the closure was invisible to it. Concretely: "`@user`,
-//    confirmed. However, the null-check remains unresolved. The
-//    documentation update addresses the wording concern.\n\n🐇 ✓" has an
-//    explicit "remains unresolved" sentence the closure guards never
-//    look at, yet the ADDRESSES form still matches later in the body.
-//    A real sampled reply (kurone-kito/idd-skill#2853, tests above) shows
-//    the closure is legitimately its OWN sentence, separate from the
-//    opening's -- "confirmed. The repository-qualified reference
-//    addresses the ... concern." -- so requiring the closure to start
-//    immediately after the opening (same sentence) would reject a real,
-//    observed template. The bound that holds both true is a COUNT, not
-//    a position: the text between the end of the opening match and the
-//    start of the closure match must contain at most one sentence
-//    terminator (`.`/`!`/`?`) -- the one that legitimately closes the
-//    opening's own "confirmed."/"thanks." sentence before the closure's
-//    lead-in clause begins. Two or more means at least one additional,
-//    independent sentence sits in between, exactly Codex's demonstrated
-//    shape. Scoped to `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` only, not the
-//    two strong forms: those report CodeRabbit's own resolve-attempt
+// 6. **Opening-to-closure lead-in whitelist, scoped to the weaker
+//    "addresses the ..." form only** (Codex review, PR #2868, rounds 4
+//    and 5): every guard above narrows what counts as a closure WITHIN a
+//    matched span, but neither closure regex was ever anchored to where
+//    the opening ends -- `.test(body)` searches the WHOLE body, so an
+//    entirely separate sentence carrying genuinely new, unresolved
+//    feedback between the opening and the closure was invisible to it.
+//    Round 4 tried a NEGATIVE bound: at most one sentence terminator
+//    (`.`/`!`/`?`) between the opening and the closure match, on the
+//    theory that a second terminator means a second, independent
+//    sentence sits in between. Round 5 disproved it: natural language
+//    can join an unresolved clause to the closure without ANY second
+//    terminator at all -- "`@user`, confirmed. The null-check remains
+//    unresolved; this update addresses the wording concern.\n\n🐇 ✓"
+//    joins with a semicolon and leaves the terminator count at exactly
+//    one. An em dash or a bare coordinating conjunction ("and") work
+//    the same way. Any guard defined by what the gap must NOT contain is
+//    probeable forever against open-ended prose -- guard 5's own
+//    reasoning already said so; the round-4 terminator count was the one
+//    guard in this file that violated it anyway.
+//
+//    The fix flips to a POSITIVE whitelist, the same style as
+//    `CODERABBIT_ACK_OPENING_RE`'s own closed verb list and guard 5's
+//    closed adverb list: instead of asking "does the gap avoid
+//    disallowed punctuation," ask "does the gap match one of the small
+//    number of lead-in shapes the real observed samples actually use."
+//    Both observed samples (kurone-kito/idd-skill#2853, tests above) are
+//    a bare, short noun-phrase subject referring back to the fix -- "The
+//    repository-qualified reference", "Commit `80c936a7`" -- never a
+//    clause with its own verb describing outstanding status.
+//    `CODERABBIT_ACK_CLOSURE_LEADIN_RE`, below, requires the ENTIRE gap
+//    (the opening's own terminating `.`/`!`, then this lead-in, then
+//    nothing else) to match one of: a bare pronoun ("this"/"that"/"it"),
+//    "the" plus one or two more words, or "commit" plus a short hex
+//    SHA -- deliberately not a free `[^...]` class anywhere.
+//
+//    This intentionally FAILS CLOSED on any lead-in shape not in the
+//    list, including a legitimate one not yet observed: given this
+//    repository's `fully_autonomous_merge` policy, an unrecognized
+//    lead-in should route to a human-authored disposition rather than
+//    risk silently accepting hidden feedback behind an ack-shaped reply.
+//    That is the intended failure mode, not a defect to widen away the
+//    next time a real reply is rejected -- widen the enumeration
+//    (bounded, reviewable) rather than reopening a `[^...]` gap
+//    (unbounded, the class of bug this guard exists to close).
+//
+//    Scoped to `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` only, not the two
+//    strong forms: those report CodeRabbit's own resolve-attempt
 //    DECISION, which this file's own reasoning above already treats as
 //    unable to co-occur with a new concern in the same reply, so they
 //    keep the whole-body `.test()` they always had.
+const CODERABBIT_ACK_CLOSURE_LEADIN_RE = new RegExp(
+  '^[.!]\\s+(?:' +
+    'this|that|it|' +
+    'the\\s+[\\w-]+(?:\\s+[\\w-]+){0,1}|' +
+    'commit\\s+`[0-9a-f]{7,40}`' +
+    ')\\s+$',
+  'i',
+);
 function isKnownAdvisoryAckTemplate(comment) {
   const authorLogin = String(comment.author?.login ?? '');
   const body = String(comment.body ?? '');
@@ -1475,9 +1506,9 @@ function isKnownAdvisoryAckTemplate(comment) {
   // checked on the whole body with no further guard -- see the comment
   // above `CODERABBIT_ACK_STRONG_CLOSURE_RE` for why the weaker third
   // form's guards (locality, sentence-boundary, hedge-adverb, opening-
-  // to-closure anchor) must never apply here, even when unrelated
-  // hedge-shaped wording happens to appear elsewhere in the same reply
-  // (e.g. a Learnings-used block).
+  // to-closure lead-in whitelist) must never apply here, even when
+  // unrelated hedge-shaped wording happens to appear elsewhere in the
+  // same reply (e.g. a Learnings-used block).
   if (CODERABBIT_ACK_STRONG_CLOSURE_RE.test(body)) {
     return true;
   }
@@ -1487,8 +1518,7 @@ function isKnownAdvisoryAckTemplate(comment) {
   }
   const openingEnd = openingMatch.index + openingMatch[0].length;
   const gapToClosure = body.slice(openingEnd, addressesMatch.index);
-  const sentenceTerminatorCount = (gapToClosure.match(/[.!?]/g) ?? []).length;
-  return sentenceTerminatorCount <= 1;
+  return CODERABBIT_ACK_CLOSURE_LEADIN_RE.test(gapToClosure);
 }
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
 // three of "Codex usage limit(s)", a reach/exceed/hit-family verb, and "for

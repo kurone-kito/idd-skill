@@ -1209,7 +1209,10 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
   // sentence between the opening and the closure was invisible. This is
   // Codex's exact adversarial example: an explicit "remains unresolved"
   // sentence sits between "confirmed." and the closure sentence that
-  // follows it.
+  // follows it. Originally caught by a terminator-count bound (two
+  // periods instead of one); round 5 replaced that with the positive
+  // lead-in whitelist below, which rejects this fixture too -- "However"
+  // is not one of the whitelisted lead-in shapes.
   const thread = {
     id: 'thread-addresses-concern-after-unresolved-sentence',
     isResolved: true,
@@ -1231,6 +1234,129 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
             '`@user`, confirmed. However, the null-check remains ' +
             'unresolved. The documentation update addresses the ' +
             'wording concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined to the closure with a semicolon instead of a second sentence terminator (Codex round 5, #2868)', () => {
+  // Codex's round-5 finding on PR #2868: the round-4 terminator-count
+  // bound (at most one `.`/`!`/`?` between opening and closure) is a
+  // NEGATIVE bound -- defined by what the gap must NOT contain -- and
+  // natural language can join an unresolved clause to the closure
+  // without a second terminator at all. A semicolon leaves the count at
+  // exactly one and would have passed round 4's guard. The positive
+  // lead-in whitelist rejects this outright: "The null-check remains
+  // unresolved" is not one of the whitelisted lead-in shapes.
+  const thread = {
+    id: 'thread-addresses-concern-after-semicolon-clause',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'SC-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'SC-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. The null-check remains unresolved; ' +
+            'this update addresses the wording concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined to the closure with an em dash (regression guard, #2858)', () => {
+  // Same class as the semicolon case above, demonstrating the lead-in
+  // whitelist closes the general "unbounded joining punctuation" gap
+  // rather than just the one punctuation mark Codex happened to probe.
+  const thread = {
+    id: 'thread-addresses-concern-after-em-dash-clause',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'ED-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'ED-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. The null-check remains unresolved ' +
+            '— this update addresses the wording concern.\n\n🐇 ✓',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined to the closure with a bare coordinating conjunction (regression guard, #2858)', () => {
+  // A third joining shape with no punctuation at all between the
+  // opening's period and the closure's lead-in -- confirms the
+  // whitelist fails closed on arbitrary lead-in text, not just on
+  // specific joining punctuation.
+  const thread = {
+    id: 'thread-addresses-concern-after-and-conjunction',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'AC5-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'AC5-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@user`, confirmed. Still broken and this addresses the ' +
+            'concern.\n\n🐇 ✓',
           createdAt: '2026-05-12T02:00:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
