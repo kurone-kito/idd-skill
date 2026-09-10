@@ -262,10 +262,20 @@ if (import.meta.main) {
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
+  // #2767: shared across every computeLiveStructuralEvidence call below,
+  // so a repeated editor login across --issue candidates costs one live
+  // collaborator-permission lookup (Codex review, PR #2840, round 21).
+  const collaboratorCache = new Map();
   const summary = await evaluateDiscoverViability(args.issueNumbers, {
     loadIssue: buildIssueLoader(owner, repo),
     computeStructuralEvidence: (issue) =>
-      computeLiveStructuralEvidence(port, owner, repo, issue),
+      computeLiveStructuralEvidence(
+        port,
+        owner,
+        repo,
+        issue,
+        collaboratorCache,
+      ),
   });
   if (args.csv) {
     process.stdout.write(renderCsv(summary));
@@ -962,8 +972,23 @@ function buildIssueLoader(owner, repo) {
  * function at all for a non-demotable *criterion*): even when the
  * criterion IS demotable, the specific issue's body can still fail one
  * of the two local signals outright.
+ *
+ * `collaboratorCache` is caller-supplied, not created here (Codex
+ * review, PR #2840, round 21): this function runs once per `--issue`
+ * (repeatable), and a fresh `Map` per call defeated
+ * `collaboratorPermission`'s own in-run caching whenever two issues
+ * shared an editor login, multiplying live permission lookups.
+ * Mirrors the identical fix already applied to
+ * `discover-orphan-filter.mts`'s own `runCli` wiring -- one cache
+ * created once, shared across the whole CLI invocation.
  */
-function computeLiveStructuralEvidence(port, owner, repo, issue) {
+function computeLiveStructuralEvidence(
+  port,
+  owner,
+  repo,
+  issue,
+  collaboratorCache,
+) {
   const issueNumber = Number(issue.number);
   if (!Number.isInteger(issueNumber)) {
     return undefined;
@@ -991,7 +1016,6 @@ function computeLiveStructuralEvidence(port, owner, repo, issue) {
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
     config: config,
   });
-  const collaboratorCache = new Map();
   const isTrustedLogin = buildTrustedLoginPredicate(
     trustedMarkerLogins,
     (login) => {

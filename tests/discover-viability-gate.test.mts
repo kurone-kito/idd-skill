@@ -1322,3 +1322,27 @@ test('computeLiveStructuralEvidence skips the live userContentEdits fetch when a
   assert.notEqual(fetchIndex, -1);
   assert.equal(earlyReturnIndex < fetchIndex, true);
 });
+
+// #2767 round 21 (Codex review, PR #2840): computeLiveStructuralEvidence
+// previously created a fresh CollaboratorPermissionCache per call, one per
+// --issue candidate, defeating collaboratorPermission's own in-run caching
+// whenever two issues shared an editor login and multiplying live
+// permission lookups. Source-text pin (unexported live path, same
+// convention as the round-9 pin above): the cache is now a caller-supplied
+// parameter, created once in the import.meta.main block and shared across
+// every computeLiveStructuralEvidence call, mirroring the identical fix
+// already applied to discover-orphan-filter.mts's own runCli wiring.
+test('computeLiveStructuralEvidence takes a caller-supplied collaboratorCache instead of creating its own (#2767 round 21)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/discover-viability-gate.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /function computeLiveStructuralEvidence\(\s*\n\s*port: ReturnType<typeof createGithubProviderAdapter>,\s*\n\s*owner: string,\s*\n\s*repo: string,\s*\n\s*issue: IssueLike,\s*\n\s*collaboratorCache: CollaboratorPermissionCache,\s*\n\s*\): StructuralEvidence \| undefined \{/,
+  );
+  assert.match(
+    source,
+    /const collaboratorCache: CollaboratorPermissionCache = new Map\(\);\s*\n\s*const summary = await evaluateDiscoverViability\(args\.issueNumbers, \{\s*\n\s*loadIssue: buildIssueLoader\(owner, repo\),\s*\n\s*computeStructuralEvidence: \(issue\) =>\s*\n\s*computeLiveStructuralEvidence\(\s*\n\s*port,\s*\n\s*owner,\s*\n\s*repo,\s*\n\s*issue,\s*\n\s*collaboratorCache,\s*\n\s*\),/,
+  );
+});
