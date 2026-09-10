@@ -55,10 +55,11 @@ repeated per row.
 
 No claim exists yet in this group; every row here runs before A5.
 
-| Mutation                                                  | Reversible / Irreversible | Undo path / Governing gate         | Source                                   |
-| --------------------------------------------------------- | ------------------------- | ---------------------------------- | ---------------------------------------- |
-| Post "A4.5 suitability gate rejection" diagnostic comment | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
-| Apply optional `triage:{outcome}` label                   | Reversible                | Remove the label                   | A4.5 (`idd-suitability.instructions.md`) |
+| Mutation                                                                                        | Reversible / Irreversible | Undo path / Governing gate         | Source                                   |
+| ----------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------- | ---------------------------------------- |
+| Post "A4.5 suitability gate rejection" diagnostic comment                                       | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
+| Apply optional `triage:{outcome}` label                                                         | Reversible                | Remove the label                   | A4.5 (`idd-suitability.instructions.md`) |
+| Post one-line reconciliation comment (Standing-rejection pre-check, kurone-kito/idd-skill#2803) | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
 
 ### Claim & ownership (A5)
 
@@ -164,13 +165,16 @@ rewrite the body before hashing. Anchor-only `release-guard` uses
 `snapshot-sha256`.
 The originating durable hold persists, for every target, its verified
 release-marker ID, absent-label result, and expected `body-sha256`. It also
-persists the canonical set snapshot as the SHA-256 digest of the
-lexicographically sorted lines `target=<target>;body-sha256=<digest>;release-marker=<comment-id>`;
-the same `snapshot-sha256` must be carried by `release-complete`. A later
-session must re-fetch every target, recompute and compare each body digest,
-verify the release marker and absent label, and recompute the set snapshot
-before accepting `release-complete`. Missing, mismatched, or unverifiable
-snapshot evidence fails closed and leaves the hold and labels in place.
+persists the canonical set snapshot as the SHA-256 digest, over UTF-8, of the
+target set's `<owner>/<repo>#<number>:<body-sha256>` lines (one per target,
+using each target's currently-verified `body-sha256`), sorted in ascending
+issue-number order and joined with a single `\n` character with no trailing
+newline; the same `snapshot-sha256` must be carried by `release-complete`. A
+later session must re-fetch every target, recompute and compare each body
+digest, verify the release marker and absent label, and recompute the set
+snapshot before accepting `release-complete`. Missing, mismatched, or
+unverifiable snapshot evidence fails closed and leaves the hold and labels in
+place.
 Read every issue comment page and order valid markers by GitHub `created_at`,
 then comment ID. Replay that ordered log as a state machine: an
 `acquire`/`bootstrap` with `supersedes=none` starts a generation only when no

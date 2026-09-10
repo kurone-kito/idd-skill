@@ -63,13 +63,19 @@
 // and how much budget remains.
 //
 // #2015: bounded poll for the "not reviewed yet" race. The hosting
-// workflow's `pull_request` `synchronize` trigger fires the instant a push
-// lands, independent of the separate `pull_request_review` trigger, which
-// only fires once the primary bot's own review actually lands (typically
-// 10-40s later) -- so a push that also needs a fresh review used to get
-// asserted, and fail, before that review existed, costing an external
-// rerun most of the time. The CLI entry point at the bottom of this file
-// now runs through `runAdvisoryConvergenceWithPoll` instead of
+// workflow's `pull_request`/`pull_request_target` `synchronize` trigger
+// fires the instant a push lands, well before the primary bot's own
+// review typically lands (10-40s later) -- originally via the separate
+// `pull_request_review` trigger the hosting workflow declared directly;
+// #2764 Phase 1 moved that trigger to a companion workflow instead (a
+// same-repository PR could otherwise edit the required workflow's own
+// copy to control when its review-triggered run re-asserted), but the
+// timing gap this poll exists for is unchanged, since the push-triggered
+// run still starts immediately regardless of where the review's own
+// signal now arrives from -- so a push that also needs a fresh review
+// used to get asserted, and fail, before that review existed, costing an
+// external rerun most of the time. The CLI entry point at the bottom of
+// this file now runs through `runAdvisoryConvergenceWithPoll` instead of
 // `runAdvisoryConvergence` directly: when (and ONLY when) the verdict's
 // sole blocking reason is that the primary bot has not reviewed the PR AT
 // ALL yet (`isSoleCopilotNotReviewedYetReason` -- excludes a stale-HEAD
@@ -1383,10 +1389,10 @@ function sleepSync(ms) {
 /**
  * #2015: wraps {@link runAdvisoryConvergence} with a short, bounded poll
  * for the narrow case {@link isSoleCopilotNotReviewedYetReason} identifies
- * -- absorbing the common race where the `pull_request` `synchronize`
- * trigger fires (and this CLI runs) before the separate
- * `pull_request_review` trigger's review has actually landed (typically
- * 10-40s later). Every other not-ready reason still fails on the very
+ * -- absorbing the common race where the `pull_request`/`pull_request_target`
+ * `synchronize` trigger fires (and this CLI runs) before the primary
+ * bot's own review has actually landed (typically 10-40s later). Every
+ * other not-ready reason still fails on the very
  * first pass with no wait, exactly as {@link runAdvisoryConvergence} alone
  * already does -- this wrapper adds no new pass path, only absorbs a
  * latency this one specific reason is known to resolve on its own. Does
@@ -1426,18 +1432,24 @@ function sleepSync(ms) {
  * first sleep alone exhausts the budget) -- an edge case only reachable via
  * an explicit non-default override, never the production defaults below.
  *
- * KNOWN RESIDUAL (PR #2023 review, Codex P1): the hosting workflow's
- * concurrency group is keyed by PR number ALONE across all three of its
- * triggers, with `cancel-in-progress: true` (see
- * `idd-advisory-convergence.yml`'s own header). If the primary bot's review
- * actually lands WHILE this poll is still sleeping, that submission starts
- * a fresh `pull_request_review`-triggered run in the SAME concurrency
- * group, which cancels this run before its next scheduled re-check ever
- * observes the review -- this run ends CANCELLED, not SUCCESS, and the
- * fresh run becomes the one responsible for reflecting the converged
- * state. No safe mechanical fix was found for this within #2015's scope:
- * narrowing the concurrency group would defeat the deliberate cross-trigger
- * debouncing the workflow's own "Concurrency-hardening investigation"
+ * KNOWN RESIDUAL (PR #2023 review, Codex P1), reshaped by #2764 Phase 1:
+ * the hosting workflow's concurrency group is keyed by PR number ALONE
+ * across all three of its triggers, with `cancel-in-progress: true` (see
+ * `idd-advisory-convergence.yml`'s own header). Originally, if the
+ * primary bot's review landed WHILE this poll was still sleeping, that
+ * submission started a fresh `pull_request_review`-triggered run
+ * directly in the SAME concurrency group, cancelling this run before its
+ * next scheduled re-check ever observed the review. `pull_request_review`
+ * no longer triggers the hosting workflow directly (#2764 Phase 1 moved
+ * it to a companion workflow); a review now reaches this run only
+ * indirectly, via the companion's `gh run rerun` on an already-terminal
+ * instance, not by entering this concurrency group as a fresh trigger
+ * while a sibling is still polling. Whether a rerun re-entering this
+ * group while another instance is still polling can still cancel it is
+ * not re-derived here. No safe mechanical fix was found for the original
+ * race within #2015's scope: narrowing the concurrency group would
+ * defeat the deliberate cross-trigger debouncing the workflow's own
+ * "Concurrency-hardening investigation"
  * comment already documents as load-bearing, and there is no way for a
  * script to detect an imminent cancellation from inside the run it is
  * about to lose. This is NOT a regression versus the pre-#2015 baseline,

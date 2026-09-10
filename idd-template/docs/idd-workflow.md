@@ -491,7 +491,7 @@ this way must never cite the triage tooling itself as a completion
 dependency: its acceptance criteria stay implementable by any agent,
 including one lacking that specific integration.
 
-A sibling entry path exists for a signal whose *root cause* lives in a
+A sibling entry path exists for a signal whose _root cause_ lives in a
 different repository (the `idd-skill` distribution itself) rather than
 in this one: see
 [Upstream-candidate escalation](../.github/instructions/idd-overview-appendix.instructions.md#upstream-candidate-escalation)
@@ -572,6 +572,22 @@ as a blocker has since closed or merged -- a cached readiness snapshot
 can be stale, and a closed blocker is a "free" suitability lever that
 costs nothing to re-apply.
 
+**Verify feasibility before drafting a question.** Before drafting a
+decision-blocked question, confirm every option it offers is actually
+buildable against the codebase's current architecture, with no
+undisclosed scope expansion -- a new persistence layer, a new
+dependency, or a change to an unrelated component's contract. A
+competing-options question can read as complete because every option
+sounds coherent in English, while only an implementing session's actual
+codebase familiarity reveals that one option needs a capability the
+architecture does not have. If an option fails this check, either drop
+it from the question or disclose the scope expansion it would require
+as part of the question itself, so the operator chooses with the same
+information an implementing session would need (field evidence observed
+2026-09-10,
+[kurone-kito/idd-skill#2805](https://github.com/kurone-kito/idd-skill/issues/2805)
+in the source repository).
+
 **Never override a deliberate decision.** When the original rejection
 recorded a genuinely deliberate empirical or product decision (not
 merely an unanswered question), grooming must never resolve it
@@ -583,9 +599,12 @@ tradeoffs behind each question before asking it, rather than bundling
 several unrelated technical topics into one dense batch.
 
 **Apply the operator's answers back onto the issue**: update the score
-footer, remove or update the `triage:{outcome}` label, revise
-acceptance criteria to reflect the decision, and record the decision as
-inline prose in the issue body: `Maintainer decision (<provenance>,
+footer, remove or update the `triage:{outcome}` label -- and the
+configured needs-decision label too, when the hold-and-return rule
+below applied it to this same candidate, so Discover's own A3
+readiness filter stops excluding it -- revise acceptance criteria to
+reflect the decision, and record the
+decision as inline prose in the issue body: `Maintainer decision (<provenance>,
 Groom hearing, <date>): <resolution text>` -- the shape
 `suitability-triage.mjs`'s Check 7 recognizes as a resolved
 decision
@@ -601,6 +620,38 @@ ordinary Discover pass then
 picks the issue up normally -- grooming itself never claims or works
 the issue (see
 [Mutation Policy and Coordination Rule](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)).
+
+**Hold when a recorded resolution proves infeasible.** The feasibility
+check above reduces the risk of drafting an infeasible option, but does
+not eliminate it -- the same field evidence (2026-09-10,
+[kurone-kito/idd-skill#2805](https://github.com/kurone-kito/idd-skill/issues/2805)
+in the source repository) shows infeasibility that only became visible
+once an implementing session was deep enough into the codebase to see
+it. When a session reaches implementation and finds the Groom-recorded
+resolution cannot be built as specified, it must hold the candidate as
+decision-blocked again, rather than silently reinterpreting,
+downscoping, or unilaterally picking a different resolution: apply the
+configured needs-decision label and release the claim, the same
+general hold mechanism the shared Hold / suspend rules in
+`.github/instructions/idd-overview-appendix.instructions.md` already
+document. Record exactly what made the recorded option infeasible in
+the hold comment, so the next Groom pass has the information a
+corrected question needs. That later pass removes the needs-decision
+label as part of applying its own operator's answers back onto the
+issue (above), alongside the `triage:{outcome}` label and the score
+footer, rather than leaving the label in place indefinitely or
+removing it without recording a genuinely buildable replacement.
+That replacement must strike through or otherwise replace the
+infeasible `Maintainer decision` line rather than merely append beside
+it -- re-triage's own `hasResolvedDecision` check treats every unstruck
+occurrence as live and has no way to tell which one is current, so an
+unstruck infeasible line can keep reading as resolved alongside its
+replacement. Removing the label here does not itself trigger the
+appendix's usual removal-and-re-claim pairing: like the adjacent
+`triage:{outcome}` removal above, the actual re-claim happens through
+the next ordinary Discover pass reading the now-label-free issue, not
+through the Groom pass itself, which -- as already stated above --
+never claims or works the issue.
 
 **Worked example.** An issue was rejected `needs-decision` at score
 `2/5` because its acceptance criteria read "add caching, or document
@@ -702,8 +753,10 @@ external scheduler.
 Running this variant safely requires:
 
 - **A non-context-inheriting delegation mechanism for the full
-  B-through-F4 worker role, when the calling tool offers one.** A
-  context-inheriting worker (one that receives the orchestrator's
+  B-through-F4 worker role, whenever the calling tool offers one — a
+  strong preference, not merely a suggestion, per
+  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).**
+  A context-inheriting worker (one that receives the orchestrator's
   complete conversation, such as Claude Code's `fork` subagent) can let
   the orchestrator's own recent framing compete with, and sometimes
   override, the delegation brief's own role statement — the same
@@ -711,10 +764,13 @@ Running this variant safely requires:
   avoids for Claude Code's narrower critique-pass role, since that row
   also picks a fresh `general-purpose` agent rather than a
   context-inheriting one. Extend that same preference to this full
-  worker role, whenever the tool exposes the choice, and fall back to
-  the explicit role-statement wording in [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation)
-  as defense-in-depth when only a context-inheriting mechanism is
-  available.
+  worker role whenever the tool exposes the choice; a
+  context-inheriting mechanism is a fallback only for when no
+  non-context-inheriting alternative exists, and even careful brief
+  wording (the explicit role-statement text in
+  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation))
+  does not reliably close its residual role-misread risk — a
+  documented known limitation.
 - **A small concurrency cap**, sized against CI-minute cost and
   shared-file contention rather than raised without bound. The optional
   `discover-shared-file-overlap` helper (see
@@ -1115,8 +1171,8 @@ as a structured self-review step within the same response.
 
 ### Repository-configurable critique delegate
 
-A repository may point C1 at a reviewer other than the per-agent
-mechanism above by setting `critiqueLoop.delegate` in
+A repository may point C1 or E10 at a reviewer other than the
+per-agent mechanism above by setting `critiqueLoop.delegate` in
 `.github/idd/config.json` (see
 [Customization Surfaces](customization.md#customization-surfaces) and
 [Configuration Authority Hierarchy](policy-constants.md#configuration-authority-hierarchy)):
@@ -1157,7 +1213,9 @@ advance to PR submission on that vacuous result. A delegate that trips
 one of the conditions above but still emitted a readable findings list
 has produced critique — those findings are the pass's output and C1
 continues to C3 scoring on them. `fallback`'s fall-through to the
-per-agent mechanism is unchanged.
+per-agent mechanism is unchanged. (Written here in C1's own step
+vocabulary — `C2`/`C3`; see "E10 delegate support" below for the same
+hold applied in E10's own vocabulary.)
 
 The hold turns on a **missing or unreadable** findings list, never on
 an empty one. A delegate that succeeded and reported no issues has
@@ -1176,25 +1234,27 @@ Configuration-time fail-safe (distinct from the runtime behavior
 above): a non-object `critiqueLoop.delegate`, one whose `command` is
 missing, empty, whitespace-only, non-string, or supplied through the
 prototype chain rather than as an own property, or one carrying any key
-beyond `command`/`mode`, is treated the same as an absent delegate — C1
-uses the per-agent mechanism, never attempting the delegate at all. A
-present but non-object **`critiqueLoop`** parent (a string, array, or
-`null`) is a repository-local configuration error rather than an absent
-key: it fails closed to the per-agent mechanism and, like a malformed
+beyond `command`/`mode`, is treated the same as an absent delegate —
+the calling pass (C1 or E10) uses the per-agent mechanism, never
+attempting the delegate at all. A present but non-object
+**`critiqueLoop`** parent (a string, array, or `null`) is a
+repository-local configuration error rather than an absent key: it
+fails closed to the per-agent mechanism and, like a malformed
 `delegate`, blocks user-global inheritance instead of letting a global
 delegate stand in for it. A present but **unrecognized `mode`** is
-unusable the same way: effective C1 resolution reports a
+unusable the same way: effective delegate resolution reports a
 repository-local one as malformed, so it neither runs nor inherits the
 user-global layer, and reports an unusable user-global fragment as
-absent. Either way C1 falls back to the per-agent mechanism rather than
-running the delegate under an assumed default. (A direct
-`normalizePolicyConfig` caller — a different consumer, not the C1
-resolution path — still collapses such a value to the `fallback`
-default, which is why both behaviors have their own regression tests.)
-`.github/idd/config.json` schema validation separately rejects an
-unsupported `mode` value or any key other than `command`/`mode` before
-the file is accepted, so this state normally reaches C1 only through
-the unvalidated user-global file.
+absent. Either way the calling pass falls back to the per-agent
+mechanism rather than running the delegate under an assumed default.
+(A direct `normalizePolicyConfig` caller — a different consumer, not
+the delegate resolution path used by C1 or E10 — still collapses such
+a value to the `fallback` default, which is why both behaviors have
+their own regression tests.) `.github/idd/config.json` schema
+validation separately rejects an unsupported `mode` value or any key
+other than `command`/`mode` before the file is accepted, so this state
+normally reaches C1 or E10 only through the unvalidated user-global
+file.
 
 The C-phase's objective diff validation floor described below applies
 **uniformly** whether a delegate is configured or not, in every mode,
@@ -1381,14 +1441,22 @@ never changes which mechanism supplies critique findings, the C-phase
 objective diff validation floor, the E-phase Copilot
 advisory-convergence policy, required checks, or merge gates.
 
-### E10 has no delegate or telemetry hook support
+### E10 delegate support; telemetry hook stays C1-only
 
-`idd-review-fix.instructions.md`'s own critique pass (E10) does not
-consult `critiqueLoop.delegate` or `critiqueLoop.telemetryHook` at
-all — both surfaces are scoped to the C1 critique pass only, and E10
-always runs the per-agent mechanism above unmodified, regardless of
-how either surface is configured. Extending either surface to E10 is a
-separate, not-yet-scoped change.
+`idd-review-fix.instructions.md`'s own critique pass (E10) also
+consults `critiqueLoop.delegate`, using the exact same resolution
+chain, `mode` semantics, and fail-closed hold behavior described above
+for C1 — including the `idd-critique-delegate` helper and the
+`instructions-only` resolution order. E10 states the fail-closed hold
+in its own vocabulary: when the mechanisms that actually ran under
+`on-success`/`never` leave no readable findings list, that is a hold
+(the shared Hold / suspend rules in
+`idd-overview-appendix.instructions.md` apply), never a clean "zero
+issues, proceed to E11" round.
+
+`critiqueLoop.telemetryHook` remains scoped to the C1 critique pass
+only; E10 never consults it, regardless of configuration. Extending
+the telemetry hook to E10 remains a separate, not-yet-scoped change.
 
 ### Mutation / write-side helper lens
 

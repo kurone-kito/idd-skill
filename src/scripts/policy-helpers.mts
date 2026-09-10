@@ -26,6 +26,7 @@ export interface CritiqueLoopDelegate {
 interface CritiqueLoopPolicy {
   cPhaseLowSeveritySkipAfter: number;
   e10NoProgressHoldAfter: number;
+  deferAfterRounds: number;
   delegate?: CritiqueLoopDelegate;
 }
 
@@ -404,6 +405,7 @@ interface RawConfig {
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: unknown;
     e10NoProgressHoldAfter?: unknown;
+    deferAfterRounds?: unknown;
     delegate?: { command?: unknown; mode?: unknown };
     telemetryHook?: { command?: unknown };
   };
@@ -590,6 +592,7 @@ export const POLICY_DEFAULTS = Object.freeze({
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
+    deferAfterRounds: 15,
   }) as Readonly<CritiqueLoopPolicy>,
   reviewEscalation: Object.freeze({
     changesRequestedFirstEscalation: 'PT24H',
@@ -779,6 +782,10 @@ export function normalizePolicyConfig(config: unknown) {
     e10NoProgressHoldAfter: parsePositiveInteger(
       c?.critiqueLoop?.e10NoProgressHoldAfter,
       POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
+    ),
+    deferAfterRounds: parsePositiveInteger(
+      c?.critiqueLoop?.deferAfterRounds,
+      POLICY_DEFAULTS.critiqueLoop.deferAfterRounds,
     ),
   };
   // Own-property omitted (not set to `undefined`) when no delegate is

@@ -426,6 +426,41 @@ own narrower question. This record moved here from
 kurone-kito/idd-skill#2000, which stayed open only as a findable record
 until one of the revisit triggers above fires.
 
+### Context-inheriting delegation residual risk
+
+kurone-kito/idd-skill#2624 adopted a documented positive-framed
+mitigation for the [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation)
+context-inheriting fallback: the delegation brief must state
+explicitly that the delegate is the sole worker for the named issue,
+with no peer workers to coordinate with or wait on. That issue was
+scoped to the wake-up-discipline stall pattern and did not evaluate
+this mitigation against a different, related failure mode: a
+context-inheriting delegate mistaking itself for the orchestrator that
+dispatched it, rather than the worker the brief names it as.
+
+kurone-kito/idd-skill#2802 recorded direct field evidence, from this
+project's own dogfooding, that neither that positive-framed
+mitigation, nor an added explicit negative instruction naming the
+failure mode directly, reliably prevents it: three independent
+occurrences of a context-inheriting delegate (sharing the
+orchestrator's own full conversation transcript) opening its first
+turn by describing having delegated to, and now waiting on, a
+sub-worker that did not exist — the delegate itself was the intended
+worker — even when the brief's role-reassignment wording matched the
+documented mitigation nearly verbatim, and even when a further attempt
+added an explicit negative instruction naming the confusion directly.
+Each occurrence needed an explicit follow-up message (or abandoning
+delegation entirely) to correct. See kurone-kito/idd-skill#2802 for the
+full narrative and observation counts.
+
+**Adopted mitigation**: state the non-context-inheriting delegation
+mechanism as a strong preference, not merely a suggestion, whenever
+the calling tool offers one, and record the context-inheriting
+fallback's residual role-misread risk explicitly as a known, accepted
+limitation next to the delegation-brief wording, rather than
+continuing to iterate on brief wording that field evidence shows does
+not reliably close the gap.
+
 ## Work and self-review
 
 ### B1 Step 3 — install-deps silent under-install detection
@@ -702,6 +737,54 @@ character, so there is no boundary between the closing `_` and the
 preceding letter. Drop the trailing `\b` rather than trying to work
 around it with lookarounds, when the surrounding text is already
 narrowly scoped enough that the ambiguity risk is negligible.
+
+### E4/E5 round-count defer cutoff
+
+E4/E5 scored each PATH A item Low/Medium/High with no ceiling on how
+many review-fix loop rounds (E1-E15) a PR could cycle through while new
+Low-severity findings kept arriving. `critiqueLoop.e10NoProgressHoldAfter`
+is a narrower guard: it only fires when the **same** Accepted finding
+recurs without progress across consecutive E10 passes — its own
+"meaningful progress" carve-out explicitly does not fire when each round
+surfaces a genuinely new finding, since that is convergence, not
+stagnation, by its own definition. A PR where successive rounds each
+raise a different, real Low-severity finding (e.g., one advisory bot
+converges, then a second bot's own first review arrives after the first
+bot's findings are fixed, itself finding something new) triggered no
+existing guard while extending indefinitely.
+
+Observed as Copilot review-submission counts climbing into the dozens
+on a handful of PRs in this repository's own dogfooding history
+(kurone-kito/idd-skill#2863); each review-submission count tracks one
+full E1-E15 loop iteration, since E14 requests a fresh review after
+every push, regardless of reviewer state.
+
+Only Low-severity PATH A items are eligible for the deferral
+disposition — Medium and High stay fully blocking, matching
+`e10NoProgressHoldAfter`'s own precedent ("unresolved High/Medium
+findings remain blockers until fixed or explicitly redirected by a
+maintainer"). The default threshold (`15`) is a starting point,
+expected to be tuned once a repository has enough review-fix-loop
+history to judge it, not a final calibration.
+
+`Reject (defer)` reuses the existing `**Rejected**`-prefixed reply
+format instead of introducing a new top-level disposition category:
+`isDispositionComment` already parses "starts with `**Rejected**`," and
+F2/F3 pair dispositions to advisory comments 1:1 by count — a new
+category would require touching that parser and gate for no functional
+gain, since a deferred item's terminal state (rejected, with a reason
+and a linked follow-up) is identical in shape to an ordinary rejection.
+
+### review-ack worked example
+
+A review posts a regular-comment finding plus a suppressed one.
+Disposition the regular-comment finding normally (`**Rejected** —
+verified placeholders-only`), then also post `review-ack:
+claude-code-1a2b3c4d 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+2026-08-19T00:10:00Z` (plain text, no HTML comment) to cover the
+suppressed one — the regular-comment rejection alone never sets
+`converged`, and this is not a license to skip **AW6** or the fix flow
+when the suppressed finding needs a code change.
 
 ## Advisory wait
 

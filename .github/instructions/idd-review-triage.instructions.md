@@ -172,12 +172,20 @@ state of its own, but can still match a prior resolved thread's claim.
   at current HEAD, or the new occurrence carries genuinely new
   information the prior thread did not address.
 
-**Reasoned-rejection convergence.** The iterate-to-zero loop may converge
-by reasoned rejection of peripheral or verified-false items — not every
-comment needs a code change. Record the reason in the disposition reply;
-"a bot raised it" alone never forces a change (e.g., a "credential
-leak" flag on a placeholders-only config file:
-`**Rejected** — verified placeholders-only`).
+**Round-count cutoff (`critiqueLoop.deferAfterRounds`, default `15`).**
+Once the claim's `review-watermark` post count (paginated,
+including minimized ones and this pass's own E1 post) reaches the
+threshold, disposition a still-undispositioned Low-severity (E4) PATH A
+item **Reject (defer)** instead of the normal judgment — never an
+already-Accepted item mid-fix (`e10NoProgressHoldAfter` unaffected) nor
+a CODEOWNER/required-reviewer item (E6's AMD exception applies). Reply
+`**Rejected** — deferred to follow-up issue #<n> (round
+<round>/<threshold>): {reason}`, resolve per the normal rule, and
+bundle every item from one cutoff into one follow-up issue per E6's
+follow-up-issue rule, each with an AC bullet and the
+`<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
+marker. See
+[rationale](../../docs/idd-design-rationale.md#e4e5-round-count-defer-cutoff).
 
 ## E6 — Post disposition replies
 
@@ -361,14 +369,8 @@ review-ack --from-pr <pr-number> --agent-id <id> --timestamp
 review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}
 ```
 
-_Worked example_: a review posts a regular-comment finding plus a
-suppressed one. Disposition the regular-comment finding normally
-(`**Rejected** — verified placeholders-only`), then also post
-`review-ack: claude-code-1a2b3c4d 4b825dc642cb6eb9a060e54bf8d69288fbee4904 2026-08-19T00:10:00Z`
-(plain text, no HTML comment) to cover the suppressed one — the
-regular-comment rejection alone never sets `converged`, and this is
-not a license to skip **AW6** or the fix flow when the suppressed
-finding needs a code change.
+_Worked example_: see
+[rationale](../../docs/idd-design-rationale.md#review-ack-worked-example).
 
 PATH B — Advisory non-review notice (rate-limit / quota / queued / bare
 ack / error, as defined in E4):
@@ -482,10 +484,9 @@ update unless you intentionally return to E1 afterward.
 
 ## E8 — Accepted PATH A count check
 
-If the Accepted PATH A count is zero → proceed to the
-**E-phase branch-sync check** below.
-
-Otherwise continue to `idd-review-fix.instructions.md`.
+Zero Accepted PATH A → **E-phase branch-sync check** below (per the
+Skip condition note above); otherwise →
+`idd-review-fix.instructions.md`.
 
 ## E-phase branch-sync check
 

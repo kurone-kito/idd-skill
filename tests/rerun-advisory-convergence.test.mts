@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  applyRefreshLatestPlan,
   applyRerunPlan,
   buildCheckRunsForRefArgs,
   buildRerunPlanTextSections,
   buildRunViewLogArgs,
+  computeRefreshLatestPlan,
   computeRerunPlan,
   describeNoActionState,
   describeOutstandingStates,
@@ -427,6 +429,7 @@ test('classifies an instance with an unknown/empty triggering event as unresolve
 
 for (const event of [
   'pull_request',
+  'pull_request_target',
   'pull_request_review',
   'pull_request_review_comment',
 ]) {
@@ -2337,6 +2340,7 @@ test('parseArgs parses --pr, --owner, --repo, --now', () => {
     help: false,
     apply: false,
     checkName: '',
+    refreshLatest: false,
   });
 });
 
@@ -2422,6 +2426,14 @@ test('parseArgs recognizes --help', () => {
 test('parseArgs recognizes --apply, defaulting to false when omitted', () => {
   assert.equal(parseArgs(['--pr', '1431']).apply, false);
   assert.equal(parseArgs(['--pr', '1431', '--apply']).apply, true);
+});
+
+test('parseArgs recognizes --refresh-latest, defaulting to false when omitted', () => {
+  assert.equal(parseArgs(['--pr', '1431']).refreshLatest, false);
+  assert.equal(
+    parseArgs(['--pr', '1431', '--refresh-latest']).refreshLatest,
+    true,
+  );
 });
 
 // --- --check-name (#1935: escape hatch for a job `name:` override) ------
@@ -2711,6 +2723,803 @@ test('runRerunAdvisoryConvergence leaves checkName empty (default) when --check-
     },
   });
   assert.equal(receivedCheckName, '');
+});
+
+// --- computeRefreshLatestPlan (#2764 Phase 1, Codex P1 review on PR #2855) --
+//
+// The ordinary computeRerunPlan/--apply path only reruns a
+// rerun-eligible instance -- it never touches anything already `pass`,
+// and enforces the rerun-once budget. --refresh-latest exists precisely
+// to bypass both for the narrow pull_request_review case, so its own
+// tests deliberately probe those two exclusions computeRerunPlan itself
+// would apply.
+
+test('computeRefreshLatestPlan: no commands and an explanatory reason when no pull_request-family instance exists', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ runEvent: 'workflow_dispatch' })],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
+  assert.match(plan.reason, /nothing to refresh/);
+});
+
+test('computeRefreshLatestPlan: reruns an instance even when it already classifies pass (the regression this mode exists to fix)', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:00Z',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands[0]?.runId, '5001');
+  assert.equal(plan.commands[0]?.command, 'gh run rerun 5001');
+  assert.equal(plan.reason, '');
+});
+
+// Copilot review (PR #2855): --refresh-latest bypasses pass/bot-gated/
+// budget classification, but a "hold" rerunPolicy is a repository's
+// explicit opt-out of every automatic rerun, not one of those three --
+// it must still be honored here exactly as computeRerunPlan honors it.
+test('computeRefreshLatestPlan: a "hold" rerunPolicy suppresses every rerun, even for an otherwise-reruns-anyway pass instance', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
+  assert.match(plan.reason, /ciWait\.rerunPolicy is "hold"/);
+});
+
+// Codex P1 review, PR #2855, round 2: selecting only the most-recently-
+// started instance can rerun the wrong one -- idd-advisory-
+// convergence.yml's own #1381 incident documents the required rollup
+// staying pinned to an EARLIER instance even after a later instance for
+// the identical SHA completes with SUCCESS. This mode reruns every
+// resolvable instance instead of guessing which one the rollup follows.
+test('computeRefreshLatestPlan: reruns every resolvable terminal instance for this HEAD, not only the most recently started one', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:00Z',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          startedAt: '2026-07-16T10:05:00Z',
+          conclusion: 'failure',
+          runEvent: 'pull_request_target',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 2);
+  // Newest-startedAt first -- a readability ordering only, not a
+  // correctness one, since both entries are acted on.
+  assert.equal(plan.commands[0]?.runId, '5002');
+  assert.deepEqual(plan.commands[0]?.checkRunIds, ['1002']);
+  assert.equal(plan.commands[1]?.runId, '5001');
+  assert.deepEqual(plan.commands[1]?.checkRunIds, ['1001']);
+});
+
+test('computeRefreshLatestPlan: deduplicates instances that resolve to the same run id', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:00Z',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:05Z',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5001');
+});
+
+// Codex P1 review, PR #2855: a still-running instance is NOT the same as
+// "will already reflect this review" -- its own evidence was fetched at
+// whatever point during its execution the live query happened to run,
+// which can be before this review landed. `pendingCommands` carries the
+// resolved rerun for the caller to issue once the run actually completes
+// (see the CLI's --refresh-latest --apply wiring), rather than declining
+// to act at all.
+test('computeRefreshLatestPlan: a still-running instance is left alone (never cancelled), but its rerun is deferred via pendingCommands', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          status: 'in_progress',
+          conclusion: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.match(plan.reason, /still running/);
+  assert.doesNotMatch(
+    plan.reason,
+    /it will already reflect this review/,
+    'the reason must not assert the very claim the still-running instance cannot guarantee',
+  );
+  assert.equal(plan.pendingCommands[0]?.runId, '5001');
+  assert.equal(plan.pendingCommands[0]?.command, 'gh run rerun 5001');
+});
+
+test('computeRefreshLatestPlan: a still-running instance never lands in commands alongside a terminal one in pendingCommands', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runEvent: 'pull_request_target',
+          status: 'in_progress',
+          conclusion: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5001');
+  assert.equal(plan.pendingCommands.length, 1);
+  assert.equal(plan.pendingCommands[0]?.runId, '5002');
+});
+
+test('computeRefreshLatestPlan: pendingCommands is empty whenever every instance resolved to commands', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'success' })],
+    }),
+    baseOptions(),
+  );
+  assert.notEqual(plan.commands.length, 0);
+  assert.deepEqual(plan.pendingCommands, []);
+});
+
+test('computeRefreshLatestPlan: both commands and pendingCommands are empty for every no-op reason (hold policy, no instance, unresolvable run id)', () => {
+  const held = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.deepEqual(held.commands, []);
+  assert.deepEqual(held.pendingCommands, []);
+
+  const noInstance = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runEvent: 'workflow_dispatch' })] }),
+    baseOptions(),
+  );
+  assert.deepEqual(noInstance.commands, []);
+  assert.deepEqual(noInstance.pendingCommands, []);
+
+  const unresolvable = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runId: null })] }),
+    baseOptions(),
+  );
+  assert.deepEqual(unresolvable.commands, []);
+  assert.deepEqual(unresolvable.pendingCommands, []);
+});
+
+test('computeRefreshLatestPlan: fails closed on an unresolvable run id', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runId: null })] }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.match(plan.reason, /no resolvable workflow run id/);
+});
+
+test('computeRefreshLatestPlan: fails closed when the underlying run lookup failed', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runLookupFailed: true })] }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.match(plan.reason, /could not be fetched/);
+});
+
+// An unresolvable instance alongside a resolvable one must not block the
+// resolvable one's rerun (Codex P1, PR #2855 review, round 2): only the
+// unresolvable instance is skipped, noted in `reason`.
+test('computeRefreshLatestPlan: skips an unresolvable instance without blocking a resolvable sibling', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({ checkRunId: '1001', runId: null }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runEvent: 'pull_request_target',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5002');
+  assert.match(plan.reason, /skipped 1 unresolvable instance/);
+  assert.match(plan.reason, /check-run 1001/);
+  assert.equal(plan.unresolvedInstanceCount, 1);
+});
+
+// Codex P1 review, PR #2855, round 6: an unresolved instance could be the
+// one the required rollup is actually pinned to -- computeRefreshLatestPlan
+// itself cannot tell, so it exposes the count structurally rather than
+// only inside the free-text `reason`, letting the CLI's --apply path fail
+// closed on it.
+test('computeRefreshLatestPlan: unresolvedInstanceCount is 0 whenever nothing was skipped as unresolvable', () => {
+  const clean = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions(),
+  );
+  assert.equal(clean.unresolvedInstanceCount, 0);
+
+  const nonFamilyOnly = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ runEvent: 'workflow_dispatch' })] }),
+    baseOptions(),
+  );
+  assert.equal(nonFamilyOnly.unresolvedInstanceCount, 0);
+
+  const held = computeRefreshLatestPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.equal(held.unresolvedInstanceCount, 0);
+});
+
+test('computeRefreshLatestPlan: unresolvedInstanceCount reflects every skipped instance when nothing resolved at all', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({ checkRunId: '1001', runId: null }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runLookupFailed: true,
+          runEvent: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.equal(plan.unresolvedInstanceCount, 2);
+});
+
+// Copilot review, PR #2855, round 6: two check-run instances resolving to
+// the SAME runId must not drop the duplicate's own checkRunId --
+// RerunPlanCommand.checkRunIds is documented as "every check-run id that
+// contributed to this run id."
+test('computeRefreshLatestPlan: two instances sharing a runId merge into one command with both checkRunIds', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          startedAt: '2026-07-16T10:05:00Z',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5001',
+          startedAt: '2026-07-16T10:00:00Z',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.deepEqual(plan.commands[0]?.checkRunIds, ['1001', '1002']);
+  // The earlier of the two known startedAt values is kept.
+  assert.equal(plan.commands[0]?.startedAt, '2026-07-16T10:00:00Z');
+});
+
+// Codex P1 review, PR #2855, round 8: two check-run rows sharing a runId
+// are not guaranteed to report the identical status -- this file's own
+// #1381 precedent establishes a stale row can coexist with a fresher one
+// for the same underlying run. If the first-seen row happened to be
+// COMPLETED while a later-seen row for the identical runId is still
+// IN_PROGRESS, classifying by the first row alone would rerun a live run
+// instead of waiting for it.
+test('computeRefreshLatestPlan: a pending row wins when it shares a runId with an already-seen terminal row', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          status: 'completed',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5001',
+          status: 'in_progress',
+          conclusion: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.equal(plan.pendingCommands.length, 1);
+  assert.deepEqual(plan.pendingCommands[0]?.checkRunIds, ['1001', '1002']);
+});
+
+test('computeRefreshLatestPlan: a pending row wins regardless of which order the two rows are seen in', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          status: 'in_progress',
+          conclusion: null,
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5001',
+          status: 'completed',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.equal(plan.pendingCommands.length, 1);
+});
+
+// Codex P1 review, PR #2855, round 11: a single check-run row's own
+// status/conclusion can itself be stale -- not just stale relative to a
+// SIBLING row (the pending-row-wins tests above), but stale relative to
+// the underlying workflow run's own live state, when a rerun for this
+// same runId was already issued moments earlier and its new attempt's row
+// has not propagated yet. `runStatus` (fetched from the authoritative
+// `GET .../actions/runs/{run_id}` endpoint) must win even over a present
+// terminal `conclusion` on the row itself, or the plan would re-issue
+// `gh run rerun` against a run that is, per the live workflow-run
+// endpoint, already running -- cancelling it instead of waiting for it.
+test('computeRefreshLatestPlan: a stale terminal conclusion on the only row for a runId still defers via pendingCommands when the live workflow run is running', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          status: 'completed',
+          conclusion: 'failure',
+          runStatus: 'in_progress',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.equal(plan.pendingCommands.length, 1);
+  assert.equal(plan.pendingCommands[0]?.runId, '5001');
+});
+
+test('computeRefreshLatestPlan: runStatus null (lookup unresolved or genuinely terminal) leaves the pre-existing conclusion-only classification unchanged', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          status: 'completed',
+          conclusion: 'failure',
+          runStatus: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.deepEqual(plan.pendingCommands, []);
+});
+
+// Codex P1 review, PR #2855, round 8: idd-ci.instructions.md documents
+// that rerunning an action_required-conclusion instance preserves the
+// original bot actor's privileges and simply re-enters action_required --
+// classifyInstance already excludes it as bot-gated-skip, but
+// --refresh-latest's "rerun everything" bypass had not been narrowed to
+// exclude it too.
+test('computeRefreshLatestPlan: excludes a bot-gated action_required instance from both commands and pendingCommands', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'action_required',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
+  assert.match(plan.reason, /bot-gated \(action_required/);
+  assert.match(plan.reason, /check-run\(s\) 1001/);
+  // Bot-gating is a known, documented case -- not an unresolvable one.
+  assert.equal(plan.unresolvedInstanceCount, 0);
+});
+
+test('computeRefreshLatestPlan: a bot-gated instance does not block a resolvable sibling', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runEvent: 'pull_request_target',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5002');
+  assert.match(plan.reason, /bot-gated action_required instance/);
+});
+
+// Copilot review (PR #2855, round 5, "previously missed"): an instance
+// whose run id is unresolvable (or whose run lookup failed) carries
+// `runEvent: null` in production (see `collectFromGitHub`'s enrichment --
+// `runEvent: meta?.event ?? null`, and `meta` is only populated for a
+// successfully resolved run). Filtering by family membership BEFORE
+// checking resolvability used to silently drop such an instance out of
+// consideration entirely, so the sole check-run instance for this HEAD
+// being unverifiable was misreported as "nothing has triggered yet"
+// rather than "inspect manually".
+test('computeRefreshLatestPlan: an unresolvable instance (matching its real runEvent: null shape) is reported as unresolvable, not as "no instance exists"', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ runId: null, runEvent: null })],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
+  assert.match(plan.reason, /no resolvable workflow run id/);
+  assert.doesNotMatch(
+    plan.reason,
+    /nothing has triggered|check-run instance exists yet/,
+    'an unresolvable instance must not be reported as though this HEAD has no check-run instance at all',
+  );
+});
+
+test('computeRefreshLatestPlan: a run-lookup failure (matching its real runEvent: null shape) is reported as unresolvable too', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ runLookupFailed: true, runEvent: null })],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.match(plan.reason, /could not be fetched/);
+});
+
+// Copilot review (PR #2855, round 11, "previously missed"): a run that
+// resolved successfully (runId set, runLookupFailed: false) can still
+// carry an empty runEvent -- the run lookup itself succeeded, but
+// GitHub's own `event` field on that run came back unset. This is
+// distinct from the two unresolvable shapes above (runId: null,
+// runLookupFailed: true), which both already carry runEvent: null as a
+// SIDE EFFECT of the failed/missing lookup -- here the lookup worked and
+// the event is what's genuinely missing. Must fail closed like those
+// cases, not fall into the "genuinely different, known event" bucket.
+test('computeRefreshLatestPlan: a resolved run whose own event field is empty is reported as unresolvable, not as a genuinely different event', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          runId: '5001',
+          runLookupFailed: false,
+          runEvent: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.pendingCommands, []);
+  assert.match(plan.reason, /triggering event could not be determined/);
+  assert.doesNotMatch(
+    plan.reason,
+    /nothing has triggered|check-run instance exists yet/,
+    'a resolved-but-unlabeled run must not be reported as though this HEAD has no check-run instance at all',
+  );
+  assert.equal(plan.unresolvedInstanceCount, 1);
+});
+
+test('computeRefreshLatestPlan: every instance resolving to a genuinely different event names that event in the reason', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [baseInstance({ runEvent: 'workflow_dispatch' })],
+    }),
+    baseOptions(),
+  );
+  assert.match(plan.reason, /found: workflow_dispatch/);
+});
+
+test('computeRefreshLatestPlan: a genuinely non-family instance alongside a family one is ignored, not treated as unresolvable', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          runEvent: 'workflow_dispatch',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          runEvent: 'pull_request',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.commands.length, 1);
+  assert.equal(plan.commands[0]?.runId, '5002');
+  assert.doesNotMatch(plan.reason, /unresolvable/);
+});
+
+test('computeRefreshLatestPlan: -R owner/repo is embedded in every generated command', () => {
+  const plan = computeRefreshLatestPlan(
+    baseInput({
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+      instances: [baseInstance({ conclusion: 'success' })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(
+    plan.commands[0]?.command,
+    'gh run rerun 5001 -R kurone-kito/idd-skill',
+  );
+});
+
+// --- applyRefreshLatestPlan (CodeRabbit, PR #2855 review) ------------------
+//
+// computeRefreshLatestPlan's `commands`/`pendingCommands` are INDEPENDENT
+// instances (typically `pull_request` and `pull_request_target` under
+// #2764 Phase 1): one instance's wait/rerun failing must not prevent the
+// OTHER instance from still being refreshed, unlike applyRerunPlan's
+// single evolving target where an uncaught error aborting the whole loop
+// is correct.
+
+function refreshLatestPlan(
+  overrides: Partial<
+    Pick<
+      ReturnType<typeof computeRefreshLatestPlan>,
+      'commands' | 'pendingCommands' | 'prHeadSha'
+    >
+  > = {},
+) {
+  return {
+    protocolVersion: '1' as const,
+    prNumber: 1431,
+    prHeadSha: HEAD,
+    checkName: RERUN_PLAN_CHECK_NAME,
+    now: NOW,
+    commands: [],
+    pendingCommands: [],
+    reason: '',
+    unresolvedInstanceCount: 0,
+    ...overrides,
+  };
+}
+
+test('applyRefreshLatestPlan: a thrown wait failure on one pending instance does not block the rest of the batch', () => {
+  const failing = {
+    runId: '5001',
+    command: 'gh run rerun 5001',
+    checkRunIds: ['1001'],
+    startedAt: '',
+  };
+  const okPending = {
+    runId: '5002',
+    command: 'gh run rerun 5002',
+    checkRunIds: ['1002'],
+    startedAt: '',
+  };
+  const okTerminal = {
+    runId: '5003',
+    command: 'gh run rerun 5003',
+    checkRunIds: ['1003'],
+    startedAt: '',
+  };
+  const waited: string[] = [];
+  const reran: string[] = [];
+  const result = applyRefreshLatestPlan(
+    refreshLatestPlan({
+      pendingCommands: [failing, okPending],
+      commands: [okTerminal],
+    }),
+    {
+      waitForRunCompletion: (runId) => {
+        waited.push(runId);
+        if (runId === failing.runId) {
+          throw new Error('timed out waiting for run 5001 to complete');
+        }
+      },
+      fetchCurrentHead: () => HEAD,
+      rerunAndWait: (command) => {
+        reran.push(command.runId);
+      },
+      log: () => {},
+    },
+  );
+  assert.deepEqual(waited, ['5001', '5002']);
+  assert.deepEqual(reran, ['5002', '5003']);
+  assert.deepEqual(result.executed, [okPending, okTerminal]);
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.failed[0]?.command.runId, '5001');
+  assert.match(result.failed[0]?.error ?? '', /timed out waiting/);
+});
+
+test('applyRefreshLatestPlan: a rerunAndWait failure on a terminal instance is isolated the same way', () => {
+  const okTerminal = {
+    runId: '5001',
+    command: 'gh run rerun 5001',
+    checkRunIds: ['1001'],
+    startedAt: '',
+  };
+  const failingTerminal = {
+    runId: '5002',
+    command: 'gh run rerun 5002',
+    checkRunIds: ['1002'],
+    startedAt: '',
+  };
+  const result = applyRefreshLatestPlan(
+    refreshLatestPlan({ commands: [okTerminal, failingTerminal] }),
+    {
+      waitForRunCompletion: () => {},
+      fetchCurrentHead: () => HEAD,
+      rerunAndWait: (command) => {
+        if (command.runId === failingTerminal.runId) {
+          throw new Error('gh: request failed');
+        }
+      },
+      log: () => {},
+    },
+  );
+  assert.deepEqual(result.executed, [okTerminal]);
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.failed[0]?.command.runId, '5002');
+  assert.match(result.failed[0]?.error ?? '', /gh: request failed/);
+});
+
+test('applyRefreshLatestPlan: skips a command whose HEAD moved, without treating it as a failure', () => {
+  const command = {
+    runId: '5001',
+    command: 'gh run rerun 5001',
+    checkRunIds: ['1001'],
+    startedAt: '',
+  };
+  const rerunCalls: string[] = [];
+  const result = applyRefreshLatestPlan(
+    refreshLatestPlan({ commands: [command] }),
+    {
+      waitForRunCompletion: () => {},
+      fetchCurrentHead: () => '2222222222222222222222222222222222222222',
+      rerunAndWait: (c) => {
+        rerunCalls.push(c.runId);
+      },
+      log: () => {},
+    },
+  );
+  assert.deepEqual(rerunCalls, []);
+  assert.deepEqual(result.executed, []);
+  assert.deepEqual(result.skippedStaleHead, [command]);
+  assert.deepEqual(result.failed, []);
+});
+
+test('applyRefreshLatestPlan: a fully successful batch has no failures and no stale skips', () => {
+  const pending = {
+    runId: '5001',
+    command: 'gh run rerun 5001',
+    checkRunIds: ['1001'],
+    startedAt: '',
+  };
+  const terminal = {
+    runId: '5002',
+    command: 'gh run rerun 5002',
+    checkRunIds: ['1002'],
+    startedAt: '',
+  };
+  const result = applyRefreshLatestPlan(
+    refreshLatestPlan({ pendingCommands: [pending], commands: [terminal] }),
+    {
+      waitForRunCompletion: () => {},
+      fetchCurrentHead: () => HEAD,
+      rerunAndWait: () => {},
+      log: () => {},
+    },
+  );
+  assert.deepEqual(result.executed, [pending, terminal]);
+  assert.deepEqual(result.skippedStaleHead, []);
+  assert.deepEqual(result.failed, []);
+});
+
+// --- runRerunAdvisoryConvergence: --refresh-latest ------------------------
+
+test('runRerunAdvisoryConvergence: --refresh-latest returns refreshLatestPlan instead of plan', () => {
+  const result = runRerunAdvisoryConvergence(
+    ['--pr', '1431', '--refresh-latest'],
+    {
+      collect: () => ({
+        input: baseInput({
+          instances: [baseInstance({ conclusion: 'success' })],
+        }),
+        options: baseOptions(),
+      }),
+    },
+  );
+  assert.equal(result.plan, null);
+  assert.equal(result.refreshLatestPlan?.commands[0]?.runId, '5001');
+  assert.equal(result.args.refreshLatest, true);
+});
+
+test('runRerunAdvisoryConvergence: omitting --refresh-latest leaves refreshLatestPlan null', () => {
+  const result = runRerunAdvisoryConvergence(['--pr', '1431'], {
+    collect: () => ({ input: baseInput(), options: baseOptions() }),
+  });
+  assert.equal(result.refreshLatestPlan, null);
+  assert.equal(result.args.refreshLatest, false);
 });
 
 // --- applyRerunPlan -------------------------------------------------------

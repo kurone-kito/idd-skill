@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -7,6 +8,15 @@ import {
   parseArgs,
   renderCsv,
 } from '../src/scripts/discover-viability-gate.mts';
+import type { StructuralEvidence } from '../src/scripts/triage-structural-evidence.mts';
+
+// --- #2767: structural-evidence demotion ------------------------------------
+
+const ALL_STRUCTURAL_SIGNALS: StructuralEvidence = {
+  verificationCommand: true,
+  candidateFilesExist: true,
+  trustedEditor: true,
+};
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
@@ -121,6 +131,48 @@ test('fails limited scope for broad cross-cutting work', () => {
 
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
+test('#2767: demotes a broad-scope limited_scope fail to warn when all structural signals hold', () => {
+  const issue = {
+    number: 2,
+    title: 'redesign architecture across multiple subsystems',
+    body: 'Broad update across many modules with public interface changes. Tests included.',
+    state: 'OPEN',
+  };
+
+  // Without structural evidence: unchanged fail.
+  const withoutEvidence = evaluateA4Viability(issue);
+  assert.equal(withoutEvidence.passed, false);
+  assert.ok(withoutEvidence.failedCriteria.includes('limited_scope'));
+
+  const withEvidence = evaluateA4Viability(issue, ALL_STRUCTURAL_SIGNALS);
+  assert.equal(withEvidence.passed, true);
+  assert.deepEqual(withEvidence.failedCriteria, []);
+  const limitedScope = withEvidence.criteria.find(
+    (c) => c.id === 'limited_scope',
+  );
+  assert.equal(limitedScope?.result, 'warn');
+});
+
+test('#2767: any single structural signal false keeps limited_scope failing (identical to today)', () => {
+  const issue = {
+    number: 2,
+    title: 'redesign architecture across multiple subsystems',
+    body: 'Broad update across many modules with public interface changes. Tests included.',
+    state: 'OPEN',
+  };
+  for (const key of Object.keys(
+    ALL_STRUCTURAL_SIGNALS,
+  ) as (keyof StructuralEvidence)[]) {
+    const partial: StructuralEvidence = {
+      ...ALL_STRUCTURAL_SIGNALS,
+      [key]: false,
+    };
+    const result = evaluateA4Viability(issue, partial);
+    assert.equal(result.passed, false, `expected fail with ${key}: false`);
+    assert.ok(result.failedCriteria.includes('limited_scope'));
+  }
 });
 
 test('fails limited scope when a broad cue accompanies a narrow cue', () => {
@@ -328,13 +380,48 @@ test('renderCsv quotes titles containing commas and quotes', () => {
   });
 
   const rows = csv.trimEnd().split('\n');
-  assert.equal(rows[0], 'kind,number,title,criteria');
-  assert.equal(rows[1], 'viable,10,"fix parser, escape ""quotes"" too",');
-  assert.equal(rows[2], 'discarded,11,"redesign, broadly",limited_scope');
-  // Each data row keeps exactly four fields when parsed as RFC 4180 CSV.
+  assert.equal(rows[0], 'kind,number,title,criteria,warnings');
+  assert.equal(rows[1], 'viable,10,"fix parser, escape ""quotes"" too",,');
+  assert.equal(rows[2], 'discarded,11,"redesign, broadly",limited_scope,');
+  // Each data row keeps exactly five fields when parsed as RFC 4180 CSV.
   for (const row of rows.slice(1)) {
-    assert.equal(parseCsvRow(row).length, 4);
+    assert.equal(parseCsvRow(row).length, 5);
   }
+});
+
+test('renderCsv: a demoted (warn) criterion appears in the warnings column', () => {
+  const csv = renderCsv({
+    viable: [
+      {
+        number: 20,
+        title: 'demoted issue',
+        criteria: [
+          {
+            id: 'limited_scope',
+            name: 'Limited scope',
+            result: 'warn',
+            evidence: 'x',
+          },
+          {
+            id: 'clear_verification',
+            name: 'Clear verification',
+            result: 'pass',
+            evidence: 'y',
+          },
+        ],
+      },
+    ],
+    discarded: [],
+    summary: {
+      total: 1,
+      viableCount: 1,
+      discardedCount: 0,
+      discardedByCriterion: {},
+    },
+  });
+
+  const rows = csv.trimEnd().split('\n');
+  assert.equal(rows[1], 'viable,20,demoted issue,,limited_scope');
 });
 
 test('fails clear verification when only subjective checks are present', () => {
@@ -359,6 +446,59 @@ test('fails autonomous completion when external coordination is required', () =>
 
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('#2767: demotes an external-coordination autonomous_completion fail to warn when all structural signals hold', () => {
+  const issue = {
+    number: 4,
+    title: 'wire external approval gate',
+    body: 'Requires external coordination and maintainer decision before completion. Add unit tests and keep CI green.',
+    state: 'OPEN',
+  };
+
+  const withoutEvidence = evaluateA4Viability(issue);
+  assert.equal(withoutEvidence.passed, false);
+
+  const withEvidence = evaluateA4Viability(issue, ALL_STRUCTURAL_SIGNALS);
+  assert.equal(withEvidence.passed, true);
+  const autonomy = withEvidence.criteria.find(
+    (c) => c.id === 'autonomous_completion',
+  );
+  assert.equal(autonomy?.result, 'warn');
+});
+
+test('#2767: any single structural signal false keeps autonomous_completion failing (identical to today)', () => {
+  const issue = {
+    number: 4,
+    title: 'wire external approval gate',
+    body: 'Requires external coordination and maintainer decision before completion.',
+    state: 'OPEN',
+  };
+  for (const key of Object.keys(
+    ALL_STRUCTURAL_SIGNALS,
+  ) as (keyof StructuralEvidence)[]) {
+    const partial: StructuralEvidence = {
+      ...ALL_STRUCTURAL_SIGNALS,
+      [key]: false,
+    };
+    const result = evaluateA4Viability(issue, partial);
+    assert.equal(result.passed, false, `expected fail with ${key}: false`);
+    assert.ok(result.failedCriteria.includes('autonomous_completion'));
+  }
+});
+
+test('#2767: clear_verification is never demoted (not in scope of this issue)', () => {
+  const result = evaluateA4Viability(
+    {
+      number: 3,
+      title: 'tune UX copy',
+      body: 'Success is when it looks good and passes maintainer preference review.',
+      state: 'OPEN',
+    },
+    ALL_STRUCTURAL_SIGNALS,
+  );
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('clear_verification'));
 });
 
 // --- #2738: autonomous_completion false positives on negated, quoted, or
@@ -455,6 +595,63 @@ test('still fails autonomous completion when "checked" appears without a past-te
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
+
+// #2767 AC: reuse the #2738/#2716/#2711/#2697-shape adversarial "still
+// fails" corpora above (numbers 33-35) -- the genuine fail siblings of the
+// pass-shape corpora further below -- rather than only fresh synthetic
+// bodies, so the demotion mechanism is proven against the real false-
+// positive shapes that motivated this issue, not just a representative
+// one-liner.
+for (const { number, title, body } of [
+  {
+    number: 33,
+    title: 'wire external approval gate',
+    body:
+      'This has no ambiguity here. Waiting for maintainer sign-off is ' +
+      'required before this can ship. Verification: add unit tests.',
+  },
+  {
+    number: 34,
+    title: "wire external approval gate for the customer's workflow",
+    body:
+      "The customer's rollout requires external coordination before " +
+      'this can ship. Verification: add unit tests.',
+  },
+  {
+    number: 35,
+    title: 'add pre-merge external verification step',
+    body:
+      'It must be checked whether production access is required before ' +
+      'this ships. Verification: add unit tests.',
+  },
+]) {
+  test(`#2767: demotes issue #${number}'s genuine autonomous_completion fail (#2738 adversarial corpus) to warn when all structural signals hold`, () => {
+    const issue = { number, title, body, state: 'OPEN' };
+
+    const withoutEvidence = evaluateA4Viability(issue);
+    assert.equal(withoutEvidence.passed, false);
+    assert.ok(withoutEvidence.failedCriteria.includes('autonomous_completion'));
+
+    const withEvidence = evaluateA4Viability(issue, ALL_STRUCTURAL_SIGNALS);
+    assert.equal(withEvidence.passed, true);
+    const autonomy = withEvidence.criteria.find(
+      (c) => c.id === 'autonomous_completion',
+    );
+    assert.equal(autonomy?.result, 'warn');
+
+    for (const key of Object.keys(
+      ALL_STRUCTURAL_SIGNALS,
+    ) as (keyof StructuralEvidence)[]) {
+      const partial: StructuralEvidence = {
+        ...ALL_STRUCTURAL_SIGNALS,
+        [key]: false,
+      };
+      const result = evaluateA4Viability(issue, partial);
+      assert.equal(result.passed, false, `expected fail with ${key}: false`);
+      assert.ok(result.failedCriteria.includes('autonomous_completion'));
+    }
+  });
+}
 
 // --- Independent critique follow-ups on the exclusions above: a
 // comma/list-boundary guard for negation, paragraph-scoped quote pairing,
@@ -993,4 +1190,159 @@ test('evaluateDiscoverViability groups viable and discarded candidates', async (
   assert.equal(summary.summary.discardedByCriterion.issue_not_found, 1);
   assert.equal(summary.summary.discardedByCriterion.issue_not_open, 1);
   assert.equal(summary.summary.discardedByCriterion.limited_scope, 1);
+});
+
+test('#2767: evaluateDiscoverViability demotes a candidate via computeStructuralEvidence and surfaces the warn on the viable item', async () => {
+  const issues = new Map([
+    [
+      11,
+      {
+        number: 11,
+        title: 'cross-cutting redesign',
+        state: 'OPEN',
+        body: 'across multiple subsystems and architecture overhaul, with unit tests and ci verification',
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverViability([11], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    computeStructuralEvidence: () => ALL_STRUCTURAL_SIGNALS,
+  });
+
+  assert.equal(summary.viable.length, 1);
+  assert.equal(summary.discarded.length, 0);
+  const [viableItem] = summary.viable;
+  const limitedScope = viableItem.criteria?.find(
+    (c) => c.id === 'limited_scope',
+  );
+  assert.equal(limitedScope?.result, 'warn');
+});
+
+test('#2767: evaluateDiscoverViability degrades to the plain (pre-evidence) result when computeStructuralEvidence throws, without aborting the batch', async () => {
+  const issues = new Map([
+    [
+      11,
+      {
+        number: 11,
+        title: 'cross-cutting redesign',
+        state: 'OPEN',
+        body: 'across multiple subsystems and architecture overhaul, with unit tests and ci verification',
+      },
+    ],
+    [
+      12,
+      {
+        number: 12,
+        title: 'targeted helper update',
+        state: 'OPEN',
+        body: 'single module change with unit tests and ci verification',
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverViability([11, 12], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    computeStructuralEvidence: () => {
+      throw new Error('gh api graphql ... failed: rate limited (HTTP 429)');
+    },
+  });
+
+  // The candidate whose plain evaluation failed stays discarded (the
+  // pre-#2767 fail, degraded from a thrown structural-evidence fetch),
+  // and the unrelated, already-viable candidate is unaffected.
+  assert.equal(summary.viable.length, 1);
+  assert.equal(summary.viable[0]?.number, 12);
+  assert.equal(summary.discarded.length, 1);
+  assert.equal(summary.discarded[0]?.number, 11);
+  assert.ok(summary.discarded[0]?.failedCriteria.includes('limited_scope'));
+});
+
+test('#2767: evaluateDiscoverViability never calls computeStructuralEvidence when the only failure is clear_verification (Copilot/Codex review, PR #2840)', async () => {
+  const issues = new Map([
+    [
+      13,
+      {
+        number: 13,
+        title: 'tune UX copy',
+        state: 'OPEN',
+        body: 'Success is when it looks good and passes maintainer preference review.',
+      },
+    ],
+  ]);
+  let called = false;
+
+  const summary = await evaluateDiscoverViability([13], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    computeStructuralEvidence: () => {
+      called = true;
+      return ALL_STRUCTURAL_SIGNALS;
+    },
+  });
+
+  assert.equal(called, false, 'computeStructuralEvidence must not be called');
+  assert.equal(summary.discarded.length, 1);
+  assert.ok(
+    summary.discarded[0]?.failedCriteria.includes('clear_verification'),
+  );
+});
+
+// #2767 round 9 (Codex review, PR #2840): computeLiveStructuralEvidence
+// itself (the live CLI wiring computeStructuralEvidence above delegates
+// to, unexported and not unit-testable via mocked loadIssue/
+// computeStructuralEvidence -- it does real port/gh I/O) previously
+// always fetched userContentEdits (a paginated GraphQL round trip) plus
+// exercised the collaborator-permission lookup, even when the issue body
+// could not possibly satisfy verificationCommand or candidateFilesExist
+// -- both computable locally from the already-loaded body alone.
+// Demotion requires all three signals together, so either local signal
+// being false makes the live trustedEditor fetch wasted network cost and
+// a rate-limit risk for no possible change in outcome. Source-text pin
+// on the wiring, per this file's convention for the unexported live
+// path; the behavioral premise (a false local signal keeps
+// hasAllStructuralSignals false regardless of trustedEditor) is already
+// proven directly in triage-structural-evidence.test.mts's own
+// hasAllStructuralSignals suite.
+test('computeLiveStructuralEvidence skips the live userContentEdits fetch when a local-only signal is already false (#2767 round 9)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/discover-viability-gate.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /const verificationCommand = hasVerificationCommandSignal\(body\);\s*\n\s*const candidateFilesExist = candidateFilesExistOnDisk\(body, existsSync\);\s*\n\s*if \(!verificationCommand \|\| !candidateFilesExist\) \{\s*\n\s*return \{ verificationCommand, candidateFilesExist, trustedEditor: false \};\s*\n\s*\}/,
+  );
+  // The early-return check must run before the userContentEdits fetch,
+  // not merely exist somewhere in the function -- pin the ordering too.
+  const earlyReturnIndex = source.indexOf(
+    'if (!verificationCommand || !candidateFilesExist)',
+  );
+  const fetchIndex = source.indexOf('port.getWorkItemUserContentEdits(');
+  assert.notEqual(earlyReturnIndex, -1);
+  assert.notEqual(fetchIndex, -1);
+  assert.equal(earlyReturnIndex < fetchIndex, true);
+});
+
+// #2767 round 21 (Codex review, PR #2840): computeLiveStructuralEvidence
+// previously created a fresh CollaboratorPermissionCache per call, one per
+// --issue candidate, defeating collaboratorPermission's own in-run caching
+// whenever two issues shared an editor login and multiplying live
+// permission lookups. Source-text pin (unexported live path, same
+// convention as the round-9 pin above): the cache is now a caller-supplied
+// parameter, created once in the import.meta.main block and shared across
+// every computeLiveStructuralEvidence call, mirroring the identical fix
+// already applied to discover-orphan-filter.mts's own runCli wiring.
+test('computeLiveStructuralEvidence takes a caller-supplied collaboratorCache instead of creating its own (#2767 round 21)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/discover-viability-gate.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /function computeLiveStructuralEvidence\(\s*\n\s*port: ReturnType<typeof createGithubProviderAdapter>,\s*\n\s*owner: string,\s*\n\s*repo: string,\s*\n\s*issue: IssueLike,\s*\n\s*collaboratorCache: CollaboratorPermissionCache,\s*\n\s*\): StructuralEvidence \| undefined \{/,
+  );
+  assert.match(
+    source,
+    /const collaboratorCache: CollaboratorPermissionCache = new Map\(\);\s*\n\s*const summary = await evaluateDiscoverViability\(args\.issueNumbers, \{\s*\n\s*loadIssue: buildIssueLoader\(owner, repo\),\s*\n\s*computeStructuralEvidence: \(issue\) =>\s*\n\s*computeLiveStructuralEvidence\(\s*\n\s*port,\s*\n\s*owner,\s*\n\s*repo,\s*\n\s*issue,\s*\n\s*collaboratorCache,\s*\n\s*\),/,
+  );
 });

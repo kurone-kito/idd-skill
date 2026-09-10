@@ -12,6 +12,7 @@ import {
   normalizeContentionPath,
   type OverlapCandidateInput,
   parseArgs,
+  parseCandidateFileEntries,
   parseCandidateFiles,
   type RankableCandidate,
   resolveHighContentionFiles,
@@ -179,6 +180,287 @@ test('parseCandidateFiles stops at the next heading and ignores non-list prose',
   assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mjs']);
 });
 
+test('parseCandidateFiles requires an exact "Candidate files" heading, not merely a same-prefix sibling (Codex review, PR #2840, round 12)', () => {
+  // "## Candidate files considered but rejected" is a real, distinct
+  // heading -- the prior `\b`-bounded prefix match ("^candidate files\b")
+  // wrongly treated it as this section's own contract heading, letting a
+  // path listed there satisfy candidateFilesExist for a section the issue
+  // never actually opened.
+  const body = [
+    '## Candidate files considered but rejected',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
+test('parseCandidateFiles recognizes a heading with a valid ATX closing hash sequence (Codex review, PR #2840, round 14)', () => {
+  // `## Candidate files ##` renders on GitHub as a level-2 heading titled
+  // exactly "Candidate files" -- the trailing `##` is closing-sequence
+  // syntax (gh api /markdown confirms), not part of the title. The
+  // round-12 exact-match fix rejected this heading entirely (title stayed
+  // "candidate files ##"), silently dropping every candidate path.
+  const body = ['## Candidate files ##', '', '- `scripts/a.mjs`'].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mjs']);
+});
+
+test('parseCandidateFiles still rejects a same-prefix sibling heading that also carries a closing hash sequence (control, round 14)', () => {
+  const body = [
+    '## Candidate files considered but rejected ##',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
+test('parseCandidateFiles rejects a heading whose trailing hashes are real code-span content, not an ATX closer (Codex review, PR #2840, round 23)', () => {
+  // `` ## Candidate `files ##` `` keeps its trailing `##` as literal
+  // code-span content, not a real ATX closer -- `gh api /markdown`
+  // confirms the rendered heading is `Candidate <code>files ##</code>`,
+  // not `Candidate files`. Stripping backticks before the closing-hash
+  // check exposed those code-span hashes as if they were a real closer,
+  // wrongly opening the section.
+  const body = [
+    '## Candidate `files ##`',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
+test('parseCandidateFiles stops at a Setext-style sibling heading, not just an ATX one (Codex review, PR #2840)', () => {
+  const body = [
+    '## Candidate files',
+    '',
+    '- `scripts/a.mjs`',
+    '',
+    'Notes',
+    '-----',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mjs']);
+});
+
+test('parseCandidateFiles does not mistake a bullet immediately before a thematic break for a Setext heading (Codex review, PR #2840 round 2)', () => {
+  // A `---` directly after a list-item bullet is CommonMark's thematic
+  // break ending the list, never a Setext heading over that bullet -- the
+  // naive "any nonblank preceding line" check wrongly truncated the
+  // section right at its own last (here, only) candidate path.
+  const body = ['## Candidate files', '', '- `src/a.mts`', '---'].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
+});
+
+test('parseCandidateFiles does not mistake a blockquoted line before an underline-shaped line for a Setext heading', () => {
+  const body = ['## Candidate files', '', '> `src/a.mts`', '---'].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
+});
+
+test('parseCandidateFiles does not mistake an indented wrapped continuation line before a thematic break for a Setext heading (Codex review, PR #2840 round 9)', () => {
+  // The bullet-marker-only exclusion missed an indented WRAPPED
+  // CONTINUATION line of a multi-line bullet -- the line that actually
+  // carries the candidate path here starts with two spaces then a
+  // backtick, not a marker, so it fell through to being read as ordinary
+  // Setext-heading-eligible content and the section was wrongly truncated
+  // one line before its own real path.
+  const body = [
+    '## Candidate files',
+    '',
+    '- change:',
+    '  `src/a.mts`',
+    '',
+    '---',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/a.mts']);
+});
+
+test('parseCandidateFiles stops at a genuine 1-3-space-indented Setext heading right after a blank line (Codex review, PR #2840, round 16)', () => {
+  // Round 9's blanket "any indented line is Setext-ineligible" heuristic
+  // went the dangerous direction here: a genuine, CommonMark-legal
+  // indented Setext heading right after a blank line (not a list-item
+  // continuation -- there is nothing to continue) was wrongly excluded,
+  // letting the section read past it and pick up an unrelated later
+  // section's own path. `gh api /markdown` confirms " Notes\n -----"
+  // renders as a real <h2> heading here.
+  const body = [
+    '## Candidate files',
+    '',
+    '- `scripts/a.mts`',
+    '',
+    ' Notes',
+    ' -----',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mts']);
+});
+
+test('parseCandidateFiles does not mistake a continuation-of-a-continuation line before a thematic break for a Setext heading (Codex review, PR #2840, round 16)', () => {
+  // The round-16 fix's continuation check must also catch a SECOND
+  // indented line whose own preceding line is itself indented (not
+  // marker-led), not just a continuation's direct marker-led opener.
+  const body = [
+    '## Candidate files',
+    '',
+    '- Run:',
+    '  `src/one.mts`',
+    '  `src/two.mts`',
+    '---',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/one.mts', 'src/two.mts']);
+});
+
+test('parseCandidateFiles stops at a genuine multi-line Setext heading, not just a single-line one (Codex review, PR #2840, round 20)', () => {
+  // CommonMark lets a Setext heading's own content span several lines --
+  // round 16's fix only checked ONE line back, so it wrongly treated the
+  // heading's own SECOND content line as a "continuation" just because
+  // the FIRST content line above it was also indented (both lines are
+  // the same heading's own content, not a continuation of anything).
+  // `gh api /markdown` confirms CommonMark forms one heading
+  // ("First line<br>Second line") from both lines together.
+  const body = [
+    '## Candidate files',
+    '',
+    '- `scripts/a.mts`',
+    '',
+    ' First line',
+    ' Second line',
+    ' ---',
+    '',
+    '- `scripts/should-not-count.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/a.mts']);
+});
+
+test('parseCandidateFiles does not leak a backtick-quoted path from an earlier line of a multi-line Setext heading (Codex review, PR #2840, round 24)', () => {
+  // Round 20 fixed *eligibility* (is the last line before the underline
+  // part of a real heading, not a list continuation) but left the
+  // truncation point at that last line, so a real backtick-quoted path
+  // on an EARLIER line of the same multi-line heading still leaked into
+  // the preceding section. `gh api /markdown` confirms
+  // "`package.json`\nNotes\n---" renders as one heading
+  // (<h2><code>package.json</code><br>Notes</h2>), never a candidate path.
+  const body = [
+    '## Candidate files',
+    '',
+    '`package.json`',
+    'Notes',
+    '---',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
+test('parseCandidateFiles rejects a tab-indented "## Candidate files" heading -- CommonMark renders it as an indented code block, not a heading (Codex review, PR #2840, round 11)', () => {
+  // Verified against GitHub's own renderer (gh api /markdown): a tab
+  // advances to the next 4-column tab stop, past the 0-3-space ATX
+  // indent allowance, so this line renders as a <pre><code> block. The
+  // earlier `\s{0,3}` (matching a tab the same as a space) wrongly opened
+  // a section here anyway.
+  const body = [
+    'Some content.',
+    '',
+    '\t## Candidate files',
+    '',
+    '- `src/scripts/exists.mts`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
+test('parseCandidateFiles still accepts a 3-space-indented "## Candidate files" heading (control)', () => {
+  const body = [
+    'Some content.',
+    '',
+    '   ## Candidate files',
+    '',
+    '- `src/scripts/exists.mts`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/scripts/exists.mts']);
+});
+
+test('parseCandidateFiles does not treat a tab-indented underline as a Setext boundary (Codex review, PR #2840, round 11)', () => {
+  // Same tab-vs-space indent error on SETEXT_UNDERLINE_PATTERN: a
+  // tab-indented "-----" renders as plain paragraph text (verified via
+  // gh api /markdown), never a real Setext underline, so it must not end
+  // the Candidate files section before its own later real path.
+  const body = [
+    '## Candidate files',
+    '',
+    '- `src/a.mts`',
+    '',
+    'Notes',
+    '\t-----',
+    '',
+    '- `src/b.mts`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['src/a.mts', 'src/b.mts']);
+});
+
+// ---------------------------------------------------------------------------
+// parseCandidateFileEntries (#2767 round 8, Codex review PR #2840)
+// ---------------------------------------------------------------------------
+
+test('parseCandidateFileEntries carries the raw path alongside its normalized contention key', () => {
+  const body =
+    '## Candidate files\n\n- `idd-template/.github/instructions/idd-merge.instructions.md`\n';
+  assert.deepEqual(parseCandidateFileEntries(body), [
+    {
+      raw: 'idd-template/.github/instructions/idd-merge.instructions.md',
+      normalized: MERGE_FILE,
+    },
+  ]);
+});
+
+test('parseCandidateFileEntries keeps raw distinct from normalized for a plain (non-mirrored) path', () => {
+  const body = '## Candidate files\n\n- `src/scripts/foo.mts`\n';
+  assert.deepEqual(parseCandidateFileEntries(body), [
+    { raw: 'src/scripts/foo.mts', normalized: 'src/scripts/foo.mts' },
+  ]);
+});
+
+test('parseCandidateFileEntries de-dupes on raw, keeping BOTH spellings that share a normalized key (Codex review, PR #2840 round 9)', () => {
+  // Previously de-duplicated on `normalized`, silently discarding the
+  // second entry here even though it is a distinct raw spelling -- a
+  // filesystem-existence check needs both, since the one that actually
+  // exists on disk might be either one.
+  const body =
+    '## Candidate files\n\n- `idd-template/.github/instructions/idd-merge.instructions.md`\n- `.github/instructions/idd-merge.instructions.md`\n';
+  assert.deepEqual(parseCandidateFileEntries(body), [
+    {
+      raw: 'idd-template/.github/instructions/idd-merge.instructions.md',
+      normalized: MERGE_FILE,
+    },
+    {
+      raw: '.github/instructions/idd-merge.instructions.md',
+      normalized: MERGE_FILE,
+    },
+  ]);
+});
+
+test('parseCandidateFileEntries still de-dupes an exact repeated raw spelling', () => {
+  const body =
+    '## Candidate files\n\n- `src/scripts/foo.mts`\n- `src/scripts/foo.mts`\n';
+  assert.deepEqual(parseCandidateFileEntries(body), [
+    { raw: 'src/scripts/foo.mts', normalized: 'src/scripts/foo.mts' },
+  ]);
+});
+
+test('parseCandidateFiles applies its own normalized-key dedup on top of parseCandidateFileEntries (Codex review, PR #2840 round 9)', () => {
+  // parseCandidateFileEntries now keeps every distinct raw spelling
+  // (including two that share a normalized key), so parseCandidateFiles
+  // must collapse those back to one entry per contention key itself to
+  // keep its own pre-existing one-entry-per-key contract for its callers.
+  const body = readFixture('candidate-merge.md');
+  assert.deepEqual(parseCandidateFiles(body), [
+    ...new Set(
+      parseCandidateFileEntries(body).map((entry) => entry.normalized),
+    ),
+  ]);
+  assert.deepEqual(parseCandidateFiles(body), [
+    MERGE_FILE,
+    'idd-advisory-wait.instructions.md',
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // resolveHighContentionFiles
 // ---------------------------------------------------------------------------
@@ -186,8 +468,9 @@ test('parseCandidateFiles stops at the next heading and ignores non-list prose',
 test('resolveHighContentionFiles unions the named bundles plus extra surfaces', () => {
   const manifest = {
     bundleBudgets: [
-      { id: 'bundle-review', files: ['a.md', 'shared.md'] },
-      { id: 'bundle-merge', files: ['shared.md', 'b.md'] },
+      { id: 'bundle-review-triage-phase', files: ['a.md', 'shared.md'] },
+      { id: 'bundle-review-fix-phase', files: ['d.md'] },
+      { id: 'bundle-merge-phase', files: ['shared.md', 'b.md'] },
       { id: 'bundle-discovery', files: ['c.md'] },
     ],
   };
@@ -196,6 +479,7 @@ test('resolveHighContentionFiles unions the named bundles plus extra surfaces', 
     'a.md',
     MANIFEST_FILE,
     'b.md',
+    'd.md',
     'shared.md',
   ]);
   assert.equal(resolved.has('c.md'), false);

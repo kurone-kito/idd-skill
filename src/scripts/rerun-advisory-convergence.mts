@@ -190,18 +190,32 @@ const PENDING_STATUSES = new Set([
   'pending',
 ]);
 
-/** Workflow-run trigger events this helper trusts to reliably refresh the
- * PR's required-check rollup on rerun, matching the events
- * `idd-advisory-convergence` itself subscribes to (its own header comment,
- * mirrored in `idd-ci.instructions.md` §Rerun mechanics): `pull_request`,
- * `pull_request_review`, `pull_request_review_comment`. A run triggered by
- * any other event -- most notably `workflow_dispatch` -- has no
- * `pull_request` context of its own and is documented as NOT reliably
- * associated with the PR's HEAD SHA, so rerunning it would not dependably
- * clear a stuck rollup even though the run itself is otherwise a plain,
- * non-bot failure. */
+/** This helper's own "pull_request-family" allowlist: trigger events whose
+ * check-runs are expected to attach reliably to the PR's real HEAD SHA, so
+ * rerunning them can refresh the required-check rollup (Copilot review, PR
+ * #2855) -- `pull_request`, `pull_request_target` (#2764 -- evaluated
+ * against the base branch's own workflow YAML, but its check-runs are
+ * still attached to the PR's real HEAD SHA, exactly like the other
+ * members here; the commit check-runs API this helper queries is scoped by
+ * SHA, not by triggering event, so no separate SHA-resolution path is
+ * needed), `pull_request_review`, `pull_request_review_comment`. Not
+ * necessarily identical to which of these `idd-advisory-convergence`
+ * itself currently subscribes to directly -- #2764 Phase 1 moved
+ * `pull_request_review` off that workflow's own trigger list onto a
+ * companion (see `idd-advisory-convergence-comment.yml`), but a
+ * `pull_request_review`-triggered instance can still exist for a HEAD (via
+ * that companion's own rerun of an existing run) and remains just as
+ * reliably associated with the PR's HEAD SHA as before, so it stays in
+ * this set; `idd-ci.instructions.md` §Rerun mechanics documents the
+ * cross-file contract this set and the required workflow's own triggers
+ * both honor. A run triggered by any other event -- most notably
+ * `workflow_dispatch` -- has no `pull_request` context of its own and is
+ * documented as NOT reliably associated with the PR's HEAD SHA, so
+ * rerunning it would not dependably clear a stuck rollup even though the
+ * run itself is otherwise a plain, non-bot failure. */
 const PULL_REQUEST_FAMILY_EVENTS = new Set([
   'pull_request',
+  'pull_request_target',
   'pull_request_review',
   'pull_request_review_comment',
 ]);
@@ -286,6 +300,25 @@ export interface RerunPlanRawInstance {
    * {@link collectFromGitHub} fills it for non-pass terminal instances.
    */
   verdictReasons?: string[] | null;
+  /**
+   * The underlying workflow run's own live `status` (from
+   * `GET .../actions/runs/{run_id}`), independent of this check-run row's
+   * own (possibly stale) `status`/`conclusion` pair. Consulted only by
+   * {@link computeRefreshLatestPlan} (Codex P1, PR #2855 review): when a
+   * review arrives while an already-issued rerun for this same `runId` is
+   * still spinning up, the check-runs-for-ref endpoint can keep exposing
+   * the PRIOR attempt's completed row for a short window before the new
+   * attempt's own row/status propagates -- the same kind of
+   * stale-row-vs-fresh-row lag this file's own #1381 precedent already
+   * documents across TWO rows sharing a runId, but here there is only one
+   * row and its `status`/`conclusion` are themselves what's stale. Without
+   * this field, that stale conclusion alone would classify the instance as
+   * immediately rerun-eligible and fire another `gh run rerun` against a
+   * run that is, per the authoritative workflow-run endpoint, already
+   * live -- cancelling it instead of waiting for it. `null` when unset
+   * (tests) or when the per-run lookup failed (`runLookupFailed`).
+   */
+  runStatus?: string | null;
 }
 
 /** {@link RerunPlanRawInstance} plus the assigned classification and a
@@ -865,6 +898,405 @@ export function computeRerunPlan(
 }
 
 /**
+ * Full JSON document printed by `--refresh-latest`, an alternate CLI mode
+ * from {@link computeRerunPlan}'s own budget/classification-gated `plan`
+ * (Codex P1, PR #2855 review). #2764 Phase 1 moved `pull_request_review`
+ * off `idd-advisory-convergence.yml`'s own trigger list onto the
+ * non-required companion workflow, which now reruns the existing required
+ * run via this helper instead of a fresh direct trigger -- but the
+ * ordinary `--apply` path only reruns a `rerun-eligible` instance, which
+ * EXCLUDES anything already classified `pass` and enforces the
+ * rerun-once budget: a same-HEAD review landing after the gate already
+ * went green (or after its one rerun was already spent) would leave a
+ * stale verdict standing even though the review may have raised new
+ * blocking findings, silently losing the pre-#2764 guarantee that EVERY
+ * review submission gets a fresh evaluation -- the former direct
+ * `pull_request_review` trigger always started a brand-new run, regardless
+ * of any prior instance's own conclusion or attempt count.
+ * `--refresh-latest` restores that guarantee narrowly: it reruns every
+ * resolvable pull_request-family instance for this HEAD unconditionally,
+ * bypassing {@link classifyInstance}'s pass/bot-gated/budget
+ * classification entirely. Deliberately NOT folded into
+ * `computeRerunPlan`/`--apply` itself: that budget exists to protect
+ * against a genuine comment-burst hazard (#2643) a review submission does
+ * not share (rare, human-paced, and already separately debounced by the
+ * companion workflow's own `advisory-comment-debounce.mjs` step) -- so
+ * the comment-family `--apply` path, and every existing test/invariant
+ * built around its budget, stays completely unchanged; only the
+ * companion workflow's `pull_request_review` step opts into this mode.
+ *
+ * Reruns every instance rather than only the newest one (Codex P1,
+ * PR #2855 review): `idd-advisory-convergence.yml`'s own #1381 incident
+ * documents the required rollup staying pinned to an EARLIER instance's
+ * check-run object even after a genuinely later instance for the
+ * identical SHA completes with SUCCESS, and that file's own recovery
+ * guidance for an unclear case is "rerun every run for that HEAD SHA
+ * rather than guessing -- rerunning an already-successful run is a
+ * harmless no-op, but rerunning the wrong one leaves the rollup stuck."
+ * A "select the newest instance" heuristic can rerun the survivor of a
+ * `cancel-in-progress` collision while the rollup stays pinned to the
+ * cancelled instance it never touches -- exactly the case that file's
+ * own docs warn against guessing around.
+ *
+ * One classification IS still honored, not bypassed (Copilot review,
+ * PR #2855): the resolved `ciWait.rerunPolicy`. A repository that
+ * explicitly opted out of every automatic rerun (`"hold"`) must stay
+ * opted out here too -- bypassing pass/bot-gated/budget classification is
+ * about restoring a fresh-evaluation guarantee, never about overriding a
+ * repository's own explicit no-automatic-reruns policy. See
+ * `computeRefreshLatestPlan`'s own hold check below.
+ */
+export interface RefreshLatestPlan {
+  protocolVersion: '1';
+  prNumber: number;
+  prHeadSha: string;
+  checkName: string;
+  now: string;
+  /** Every resolvable, already-terminal pull_request-family instance for
+   * this HEAD, selected for an unconditional rerun -- empty when there is
+   * nothing safe/useful to rerun yet, see `reason`. Newest-`startedAt`
+   * first, purely for a stable, readable summary: every entry here is
+   * acted on, so order has no bearing on correctness. */
+  commands: RerunPlanCommand[];
+  /** Every resolvable pull_request-family instance for this HEAD that is
+   * still running (Codex P1, PR #2855 review): the CLI's `--apply` path
+   * waits for each to reach a terminal state, THEN reruns it -- never
+   * treats "it's already running" as equivalent to "it will already
+   * reflect this review." A live run's evidence was fetched at whatever
+   * point during ITS OWN execution the query happened to run, which can
+   * be BEFORE this review landed; nothing else is guaranteed to trigger a
+   * fresh evaluation afterward once this function declines to act on it.
+   * Disjoint from `commands` -- an instance is never in both. */
+  pendingCommands: RerunPlanCommand[];
+  /** Empty only when every family instance for this HEAD rerun cleanly
+   * with nothing else worth noting. Otherwise explains what happened: a
+   * `"hold"` rerunPolicy, no pull_request-family instance exists yet for
+   * this HEAD, every instance's run id was unresolvable, some instances
+   * are still running (see `pendingCommands`), and/or some instances were
+   * skipped as unresolvable alongside others that DID rerun. */
+  reason: string;
+  /** Count of check-run instances for this HEAD skipped because their run
+   * id could not be resolved, or the underlying run lookup itself failed
+   * -- each MIGHT have been a pull_request-family instance this HEAD
+   * needed refreshed, but this function cannot tell (Codex P1, PR #2855
+   * review): a non-zero count here is a genuinely different risk than an
+   * empty `commands`/`pendingCommands` for a resolved non-family reason,
+   * since the omitted instance could be the one the required rollup is
+   * actually pinned to. The CLI's `--apply` path exits non-zero when this
+   * is non-zero, the same as a `RefreshLatestApplyResult.failed` entry,
+   * rather than reporting success while a potentially-blocking instance
+   * was never even attempted. Deliberately excludes a bot-gated
+   * (`action_required`) instance: that one IS identified, not unknowable
+   * -- rerunning it is simply documented to be futile (idd-ci
+   * .instructions.md), not a gap in what this function could verify. */
+  unresolvedInstanceCount: number;
+}
+
+/**
+ * Compute {@link RefreshLatestPlan} from the same already-fetched,
+ * already-enriched instances {@link computeRerunPlan} consumes -- pure, no
+ * I/O, directly unit-testable with fixtures, mirroring `computeRerunPlan`'s
+ * own DI shape.
+ */
+export function computeRefreshLatestPlan(
+  input: RerunPlanInput,
+  options: Pick<RerunPlanOptions, 'now' | 'rerunPolicy'>,
+): RefreshLatestPlan {
+  const now = String(options.now ?? '');
+  if (!isValidIsoTimestamp(now)) {
+    throw new Error('now must be an ISO 8601 UTC timestamp');
+  }
+  const prHeadSha = String(input.prHeadSha ?? '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(prHeadSha)) {
+    throw new Error('prHeadSha must be a 40-character hexadecimal commit SHA');
+  }
+  const checkName =
+    String(input.checkName ?? '').trim() || RERUN_PLAN_CHECK_NAME;
+  const owner = String(input.owner ?? '').trim();
+  const repo = String(input.repo ?? '').trim();
+  const repoFlag = owner && repo ? ` -R ${owner}/${repo}` : '';
+
+  const header = {
+    protocolVersion: '1' as const,
+    prNumber: Number(input.prNumber),
+    prHeadSha,
+    checkName,
+    now,
+    // Overridden below only once `unresolvableReasons` has actually been
+    // computed; every earlier return (hold policy, no instance at all)
+    // never reaches a state where an instance could have been skipped as
+    // unresolvable.
+    unresolvedInstanceCount: 0,
+  };
+
+  // Honored, not bypassed (Copilot review, PR #2855): a "hold" policy is
+  // a repository's explicit opt-out of every automatic rerun, checked
+  // before instance selection so it can never be reached even
+  // incidentally -- see this function's own doc comment above.
+  const rerunPolicy =
+    String(options.rerunPolicy ?? '').trim() === 'hold' ? 'hold' : 'rerun-once';
+  if (rerunPolicy === 'hold') {
+    return {
+      ...header,
+      commands: [],
+      pendingCommands: [],
+      reason:
+        'ciWait.rerunPolicy is "hold": this repository has opted out of automatic reruns, including --refresh-latest -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics)',
+    };
+  }
+
+  const allInstances = input.instances ?? [];
+  if (allInstances.length === 0) {
+    return {
+      ...header,
+      commands: [],
+      pendingCommands: [],
+      reason:
+        'no check-run instance exists yet for this HEAD; nothing to refresh -- a future pull_request/pull_request_target trigger will create the first instance',
+    };
+  }
+
+  // Checked BEFORE the family-event filter, not after (Copilot, PR #2855
+  // review, "previously missed"): an instance whose run id is
+  // unresolvable, or whose underlying run lookup failed, has `runEvent:
+  // null` (see the enrichment in `collectFromGitHub`) -- filtering by
+  // family membership FIRST would silently treat that instance the same
+  // as one that genuinely belongs to a different, non-family event
+  // (`workflow_dispatch`, say), collapsing "this HEAD has an
+  // unverifiable check-run instance, inspect manually" into the far more
+  // reassuring "nothing has triggered yet for this HEAD" whenever every
+  // instance happened to be unresolvable. Mirrors classifyInstance steps
+  // 4-5: never guess a rerun target from an unresolvable run identity --
+  // but (Codex P1, PR #2855 review) applied per-instance, not just to a
+  // single "latest" pick: one instance's unresolvable identity is
+  // reported and skipped rather than aborting every OTHER instance's
+  // refresh.
+  const unresolvableReasons: string[] = [];
+  const nonFamilyEvents = new Set<string>();
+  const botGatedCheckRunIds: string[] = [];
+  // Keyed by runId, not deduplicated away (Copilot, PR #2855 review,
+  // round 6): two check-run instances can briefly resolve to the same
+  // underlying workflow run (e.g. one instance's `gh api` lookup racing
+  // another's), and rerunning the same run id twice in one pass is
+  // redundant, not merely harmless -- but silently DROPPING the
+  // duplicate's own check-run id broke `RerunPlanCommand.checkRunIds`'s
+  // own documented contract ("every check-run id that contributed to
+  // this run id"). A duplicate's checkRunId is merged into the
+  // already-tracked command instead, keeping the earliest known
+  // `startedAt` between the two (matches this function's own
+  // newest-first sort semantics: an unknown/empty startedAt already
+  // sorts last, so preferring the known, earlier value is the more
+  // informative choice when a later-fetched duplicate turns out to have
+  // a smaller or missing startedAt).
+  const commandsByRunId = new Map<
+    string,
+    { command: RerunPlanCommand; pending: boolean }
+  >();
+  for (const instance of allInstances) {
+    if (instance.runId === null) {
+      unresolvableReasons.push(
+        `check-run ${instance.checkRunId} has no resolvable workflow run id`,
+      );
+      continue;
+    }
+    if (instance.runLookupFailed) {
+      unresolvableReasons.push(
+        `the underlying workflow run for check-run ${instance.checkRunId} could not be fetched (network/permission/transient failure)`,
+      );
+      continue;
+    }
+    const resolvedRunEvent = String(instance.runEvent ?? '')
+      .trim()
+      .toLowerCase();
+    if (!resolvedRunEvent) {
+      // Fail closed (Copilot, PR #2855 review, "previously missed"): the
+      // run id resolved and its lookup succeeded (both checked above), but
+      // the run's own `event` field still came back empty/unset -- a
+      // genuinely UNKNOWN triggering event, not a genuinely DIFFERENT,
+      // identified one. Treating this the same as the `nonFamilyEvents`
+      // case below would silently drop the sole instance for a HEAD into
+      // "nothing has triggered yet", the exact false reassurance the
+      // doc comment above this loop already guards against for the
+      // runId/runLookupFailed cases -- this closes the same gap for a
+      // resolved-but-unlabeled run. Mirrors classifyInstance step 6's
+      // "unknown triggering event => unresolved/inspect manually" for the
+      // ordinary --apply path.
+      unresolvableReasons.push(
+        `check-run ${instance.checkRunId} resolved to run id ${instance.runId} but its triggering event could not be determined`,
+      );
+      continue;
+    }
+    if (!PULL_REQUEST_FAMILY_EVENTS.has(resolvedRunEvent)) {
+      // Resolved, but genuinely a different (non-family) trigger for
+      // this same check-run name -- not ours to touch, and not
+      // unresolvable either.
+      nonFamilyEvents.add(resolvedRunEvent);
+      continue;
+    }
+
+    const status = String(instance.status ?? '')
+      .trim()
+      .toLowerCase();
+    const conclusion = instance.conclusion
+      ? String(instance.conclusion).trim().toLowerCase()
+      : null;
+    // Mirrors classifyInstance step 3's `bot-gated-skip` (Codex P1, PR
+    // #2855 review): `idd-ci.instructions.md` §Rerun mechanics documents
+    // that rerunning an `action_required`-conclusion instance preserves
+    // the original bot actor's privileges and simply re-enters
+    // `action_required` -- never clearing it, only spending this loop's
+    // sequential budget (and, via `pendingCommands`, the deferred-wait
+    // budget too) on a rerun that cannot help. Unlike
+    // `computeRerunPlan`/`--apply`'s classification, `--refresh-latest`
+    // otherwise bypasses pass/budget on purpose (see this function's own
+    // doc comment above) -- but bot-gating is not a policy choice this
+    // mode exists to override, the same distinction already drawn for
+    // `ciWait.rerunPolicy: "hold"`. A separate non-bot family instance
+    // for this same HEAD (if one exists) still gets its own entry here
+    // and can clear the rollup per that same doc's recovery guidance;
+    // this exclusion only withholds the gated instance itself.
+    if (conclusion === 'action_required') {
+      botGatedCheckRunIds.push(instance.checkRunId);
+      continue;
+    }
+    // Also consult the workflow run's own live status (Codex P1, PR #2855
+    // review), not just this check-run row's own status/conclusion: a row
+    // fetched moments after an already-issued rerun for this same runId
+    // can still report the PRIOR attempt's terminal conclusion before the
+    // new attempt's row catches up. `runStatus` reflects the authoritative
+    // `GET .../actions/runs/{run_id}` state instead, so it wins even over
+    // a present (possibly stale) `conclusion` -- see
+    // `RerunPlanRawInstance.runStatus`'s own doc comment.
+    const runStatus = instance.runStatus
+      ? String(instance.runStatus).trim().toLowerCase()
+      : null;
+    const pending =
+      (!conclusion && PENDING_STATUSES.has(status)) ||
+      (runStatus !== null && PENDING_STATUSES.has(runStatus));
+
+    const existing = commandsByRunId.get(instance.runId);
+    if (existing) {
+      existing.command.checkRunIds.push(instance.checkRunId);
+      const instanceStartedAt = instance.startedAt ?? '';
+      if (
+        instanceStartedAt &&
+        (!existing.command.startedAt ||
+          instanceStartedAt < existing.command.startedAt)
+      ) {
+        existing.command.startedAt = instanceStartedAt;
+      }
+      // Any pending row wins (Codex P1, PR #2855 review): two check-run
+      // rows sharing a runId are NOT guaranteed to report the identical
+      // status -- this file's own #1381 precedent already establishes
+      // that GitHub's check-runs-for-ref response can carry a stale row
+      // alongside a fresher one for the same underlying run. Rerunning a
+      // duplicate this function mistakenly classified as terminal (from
+      // an earlier-seen COMPLETED row) while a later-seen row for the
+      // identical runId is still IN_PROGRESS would cancel that live run
+      // instead of refreshing it -- the exact hazard `pendingCommands`
+      // exists to prevent. Once true, never flips back to false: a
+      // still-pending sibling row is reason enough to wait, regardless
+      // of processing order.
+      if (pending) {
+        existing.pending = true;
+      }
+      continue;
+    }
+
+    const resolvedCommand: RerunPlanCommand = {
+      runId: instance.runId,
+      command: `gh run rerun ${instance.runId}${repoFlag}`,
+      checkRunIds: [instance.checkRunId],
+      startedAt: instance.startedAt ?? '',
+    };
+    // Mirrors classifyInstance step 2's "rerunning a still-running
+    // instance cancels it instead of refreshing it" -- but unlike
+    // classifyInstance, this does NOT assume the live run will already
+    // reflect this review once it finishes (Codex P1, PR #2855 review):
+    // that run's own evidence was fetched at whatever point during ITS
+    // execution the query happened to run, which can be BEFORE this
+    // review landed, and nothing else is guaranteed to trigger a fresh
+    // evaluation afterward. `pendingCommands` carries the same resolved
+    // command for the caller to rerun ONCE this run reaches a terminal
+    // state, rather than declining to act on it at all.
+    commandsByRunId.set(instance.runId, {
+      command: resolvedCommand,
+      pending,
+    });
+  }
+  const resolvedCommands: RerunPlanCommand[] = [];
+  const pendingResolvedCommands: RerunPlanCommand[] = [];
+  for (const { command, pending } of commandsByRunId.values()) {
+    (pending ? pendingResolvedCommands : resolvedCommands).push(command);
+  }
+
+  // Newest-`startedAt` first (unknown/empty sorts LAST) purely for a
+  // stable, readable summary -- unlike the single-instance selection this
+  // replaced, every entry in both lists is acted on, so this ordering has
+  // no bearing on correctness (unlike buildOrderedPlan's own
+  // earliest-first, rerun-budget-driven ordering). Numeric checkRunId
+  // breaks a tie.
+  const byStartedAtDesc = (left: RerunPlanCommand, right: RerunPlanCommand) => {
+    const leftStarted = left.startedAt ?? '';
+    const rightStarted = right.startedAt ?? '';
+    if (leftStarted !== rightStarted) {
+      if (!leftStarted) return 1;
+      if (!rightStarted) return -1;
+      return leftStarted < rightStarted ? 1 : -1;
+    }
+    return Number(right.checkRunIds[0]) - Number(left.checkRunIds[0]);
+  };
+  resolvedCommands.sort(byStartedAtDesc);
+  pendingResolvedCommands.sort(byStartedAtDesc);
+
+  if (resolvedCommands.length === 0 && pendingResolvedCommands.length === 0) {
+    // Three genuinely different "nothing to rerun" causes (Copilot +
+    // Codex P1, PR #2855 review), in priority order: an unresolvable
+    // instance MIGHT be a family one we simply couldn't verify
+    // (actionable -- inspect manually, the most urgent); a bot-gated
+    // (`action_required`) instance IS a family one, but rerunning it
+    // cannot clear the rollup (idd-ci.instructions.md §Rerun mechanics
+    // -- a non-bot instance is needed instead, and none exists here);
+    // every instance resolving to a confirmed non-family event is the
+    // ordinary "this HEAD just hasn't had a pull_request-family trigger
+    // yet" case the original message described.
+    const reason =
+      unresolvableReasons.length > 0
+        ? `no resolvable pull_request-family instance for this HEAD -- ${unresolvableReasons.join('; ')}; inspect manually`
+        : botGatedCheckRunIds.length > 0
+          ? `every pull_request-family instance for this HEAD is bot-gated (action_required: check-run(s) ${botGatedCheckRunIds.join(', ')}) -- rerunning re-enters action_required per idd-ci.instructions.md §Rerun mechanics; a non-bot pull_request-family instance is needed to clear the rollup, and none currently exists for this HEAD`
+          : `no pull_request-family check-run instance exists yet for this HEAD (found: ${[...nonFamilyEvents].join(', ')}); nothing to refresh -- a future pull_request/pull_request_target trigger will create the first instance`;
+    return {
+      ...header,
+      commands: [],
+      pendingCommands: [],
+      reason,
+      unresolvedInstanceCount: unresolvableReasons.length,
+    };
+  }
+
+  const unresolvableSuffix =
+    unresolvableReasons.length > 0
+      ? ` (skipped ${unresolvableReasons.length} unresolvable instance(s): ${unresolvableReasons.join('; ')})`
+      : '';
+  const botGatedSuffix =
+    botGatedCheckRunIds.length > 0
+      ? ` (also skipped ${botGatedCheckRunIds.length} bot-gated action_required instance(s): ${botGatedCheckRunIds.join(', ')} -- rerunning them cannot clear action_required, per idd-ci.instructions.md §Rerun mechanics)`
+      : '';
+
+  return {
+    ...header,
+    commands: resolvedCommands,
+    pendingCommands: pendingResolvedCommands,
+    reason:
+      pendingResolvedCommands.length > 0
+        ? `${pendingResolvedCommands.length} pull_request-family instance(s) for this HEAD are still running; rerunning a live run now would cancel it instead of refreshing it -- wait for each to reach a terminal state, then rerun it (see pendingCommands)${unresolvableSuffix}${botGatedSuffix}`
+        : `${unresolvableSuffix}${botGatedSuffix}`.trim(),
+    unresolvedInstanceCount: unresolvableReasons.length,
+  };
+}
+
+/**
  * Resolve whether `instance` may still be rerun under `rerunPolicy`, given
  * its own `runAttempt`. Reuses {@link resolveCiRerunDecision}
  * (ci-wait-policy.mts) -- the same rerun-once-budget decision
@@ -1085,7 +1517,7 @@ function classifyInstance(
       ...instance,
       classification: 'unresolved',
       reason: runEvent
-        ? `triggering event "${runEvent}" is not pull_request-family (pull_request / pull_request_review / pull_request_review_comment); rerunning it is not a reliable way to refresh the PR's required-check rollup -- inspect manually`
+        ? `triggering event "${runEvent}" is not pull_request-family (pull_request / pull_request_target / pull_request_review / pull_request_review_comment); rerunning it is not a reliable way to refresh the PR's required-check rollup -- inspect manually`
         : 'triggering event is unknown; inspect manually rather than assuming it is safe to rerun',
     };
   }
@@ -1460,6 +1892,10 @@ interface RerunPlanArgs {
    * via `gh run rerun` instead of only diagnosing them. See
    * {@link applyRerunPlan}. */
   apply: boolean;
+  /** When `true`, bypass `computeRerunPlan` entirely and compute
+   * {@link RefreshLatestPlan} instead -- see that type's own doc comment
+   * for why (#2764 Phase 1, Codex P1 review on PR #2855). */
+  refreshLatest: boolean;
   /** Raw `--check-name` value, trimmed but NOT yet defaulted -- an empty
    * string means the flag was either omitted or given a
    * whitespace-only value (indistinguishable after trimming, and
@@ -1499,6 +1935,7 @@ const RERUN_ADVISORY_CONVERGENCE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
   '--apply': { type: 'boolean', default: false },
   '--check-name': { type: 'string', default: '' },
+  '--refresh-latest': { type: 'boolean', default: false },
 } as const;
 
 /**
@@ -1539,6 +1976,7 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
       help: true,
       apply: false,
       checkName: '',
+      refreshLatest: false,
     };
   }
 
@@ -1596,6 +2034,7 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
     help: false,
     apply: Boolean(values.apply),
     checkName: String(values['check-name'] ?? '').trim(),
+    refreshLatest: Boolean(values['refresh-latest']),
   };
 }
 
@@ -1773,7 +2212,7 @@ export function buildRerunPlanTextSections(
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--check-name <name>] [--apply] [--help]
+  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--check-name <name>] [--apply] [--refresh-latest] [--help]
 
 By default (without --apply): read-only. Fetches every
 "${RERUN_PLAN_CHECK_NAME}" check-run instance for the PR's current HEAD SHA
@@ -1828,6 +2267,29 @@ finds nothing (field-reported, #1935; see the job-definition comment in
 Omitting this flag keeps output byte-identical to before this flag
 existed.
 
+--refresh-latest replaces the whole plan/budget computation above with a
+single, much narrower question: which pull_request-family instances for
+this HEAD are safe to rerun unconditionally right now? Unlike the
+default mode, it does NOT classify pass / bot-gated-skip /
+rerun-budget-held -- it reruns EVERY resolvable pull_request-family
+instance for this HEAD (not only the most recently started one -- the
+required rollup can stay pinned to an earlier instance even after a
+later one for the same SHA completes, kurone-kito/idd-skill#1381), each
+UNLESS it is still running (which would cancel it instead -- queued for
+a deferred rerun once it finishes) or its run id could not be resolved.
+It still honors ciWait.rerunPolicy, though: a "hold" policy returns
+nothing to rerun here either, the same as the default mode -- bypassing
+pass/bot-gated/budget classification is not license to override a
+repository's own explicit no-automatic-reruns policy. Intended only for
+the narrow #2764 Phase 1 case where a fresh pull_request_review
+submission must get a fresh evaluation even if the gate is already green
+or its rerun-once budget is already spent -- see the RefreshLatestPlan
+doc comment in the .mts source. With --apply, executes each rerun
+sequentially (via the same "gh run rerun" mechanism as the default
+--apply path) instead of only printing them. Mutually exclusive in
+effect with the default plan computation: when given, --refresh-latest's
+own JSON document replaces the ordinary plan document on stdout.
+
 Honors the inspected repository's configured ciWait.rerunPolicy: when
 it is "hold", both the rerun plan and the recovery-refresh plan stay
 empty (with a notice explaining why) instead of recommending reruns a
@@ -1863,20 +2325,27 @@ export function runRerunAdvisoryConvergence(
   deps: RerunPlanDeps = defaultDeps,
 ): {
   plan: RerunAdvisoryConvergencePlan | null;
+  /** Populated instead of `plan` when `--refresh-latest` was given; see
+   * {@link computeRefreshLatestPlan}. */
+  refreshLatestPlan: RefreshLatestPlan | null;
   help: boolean;
   args: RerunPlanArgs;
 } {
   const args = parseArgs(argv);
   if (args.help) {
-    return { plan: null, help: true, args };
+    return { plan: null, refreshLatestPlan: null, help: true, args };
   }
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
 
   const { input, options } = deps.collect(args);
+  if (args.refreshLatest) {
+    const refreshLatestPlan = computeRefreshLatestPlan(input, options);
+    return { plan: null, refreshLatestPlan, help: false, args };
+  }
   const plan = computeRerunPlan(input, options);
-  return { plan, help: false, args };
+  return { plan, refreshLatestPlan: null, help: false, args };
 }
 
 // --- --apply: execute the plan's rerun-eligible instances ---------------
@@ -2047,8 +2516,14 @@ interface RawWorkflowRunPayload {
   /** 1 for the original run; increments on the SAME run id after `gh run
    * rerun` -- see {@link RerunPlanRawInstance.runAttempt}. */
   run_attempt?: number | null;
-  /** Consulted only by {@link waitForNewAttempt} (the `--apply` polling
-   * loop); every other reader of this payload shape ignores it. */
+  /** Consulted by {@link waitForNewAttempt} (the `--apply` polling loop)
+   * and, via {@link RerunPlanRawInstance.runStatus}, by
+   * {@link computeRefreshLatestPlan}'s pending classification (Codex P1,
+   * PR #2855 review): this is the authoritative live status of the
+   * workflow run itself, whereas a check-run row's own `status` can lag
+   * behind a rerun this function already knows was issued for the same
+   * `runId` -- see `runStatus`'s own doc comment for the race this
+   * closes. */
   status?: string | null;
 }
 
@@ -2395,6 +2870,8 @@ function collectFromGitHub(args: RerunPlanArgs): {
       triggeringActorLogin: string | null;
       triggeringActorType: string | null;
       runAttempt: number | null;
+      /** See {@link RerunPlanRawInstance.runStatus}. */
+      status: string | null;
     } | null // null means the per-run lookup itself failed
   >();
   // GH_TEXT_LOOP_TIMEOUT_OPTIONS (stdin ignored, 30s timeout), not a bare
@@ -2425,6 +2902,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
           Number.isInteger(runPayload.run_attempt)
             ? runPayload.run_attempt
             : null,
+        status: runPayload.status ? String(runPayload.status) : null,
       });
     } catch {
       runMetaById.set(runId, null);
@@ -2478,6 +2956,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
       runAttempt: meta?.runAttempt ?? null,
       verdictReasons:
         runId !== null ? (verdictReasonsByRunId.get(runId) ?? null) : null,
+      runStatus: meta?.status ?? null,
     };
   });
 
@@ -2638,6 +3117,185 @@ function waitForNewAttempt(
   }
 }
 
+/** Safety bound: {@link waitForRunCompletion} fails closed (throws)
+ * instead of polling forever when a still-running instance never reaches
+ * a terminal state within this window. Reuses {@link APPLY_POLL_TIMEOUT_MS}
+ * (15 minutes) rather than a shorter bound of its own (Codex P1, PR #2855
+ * review, correcting this constant's own prior reasoning): the run being
+ * waited on is the REQUIRED gate job, whose own `timeout-minutes: 10` (see
+ * `idd-advisory-convergence.yml`) already exceeds any bound shorter than
+ * 10 minutes -- a wait that gives up before the gate's own allowed
+ * lifetime elapses would misreport a still-legitimately-running gate as
+ * stuck. The companion workflow's own job `timeout-minutes` must in turn
+ * exceed THIS bound plus however long the subsequent reruns themselves
+ * take (Codex P1, PR #2855 review, a second round on the same
+ * mechanism): GitHub kills the job outright at its own timeout
+ * regardless of what step is running, so a caller whose own timeout is
+ * shorter than this wait would never actually issue the deferred rerun
+ * -- see `idd-advisory-convergence-comment.yml`'s `timeout-minutes: 55`
+ * (and its `idd-template/` copy) for the derivation. */
+const PENDING_RUN_POLL_TIMEOUT_MS = APPLY_POLL_TIMEOUT_MS;
+
+/**
+ * Blocks until `runId` (within `owner`/`repo`) reports
+ * `status === 'completed'` -- i.e. the run {@link
+ * computeRefreshLatestPlan}'s `pendingCommand` deferred (it was still
+ * running when the plan was computed) has reached a terminal state, safe
+ * to rerun without cancelling it. Companion to {@link waitForNewAttempt}
+ * (same `ghText` + polling shape), but waits for the ORIGINAL run's own
+ * completion rather than a NEW attempt after an already-issued rerun --
+ * this function issues no mutation itself; the caller reruns `runId`
+ * only after this returns (Codex P1, PR #2855 review: `pendingCommand`'s
+ * own doc comment explains why declining to act at all is not safe
+ * here).
+ */
+function waitForRunCompletion(
+  owner: string,
+  repo: string,
+  runId: string,
+): void {
+  const deadline = Date.now() + PENDING_RUN_POLL_TIMEOUT_MS;
+  for (;;) {
+    const payload = JSON.parse(
+      ghText(
+        ['api', `repos/${owner}/${repo}/actions/runs/${runId}`],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      ),
+    ) as RawWorkflowRunPayload;
+    if (payload.status === 'completed') {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `timed out waiting for run ${runId} (${owner}/${repo}) to reach a terminal state before rerunning it`,
+      );
+    }
+    sleepSync(APPLY_POLL_INTERVAL_MS);
+  }
+}
+
+/** One command `applyRefreshLatestPlan` could not execute -- the run it
+ * targeted either errored (network/permission/transient `gh` failure, or
+ * {@link waitForRunCompletion}'s own timeout) or was itself a still-
+ * pending instance that never reached a terminal state within budget. */
+export interface RefreshLatestApplyFailure {
+  command: RerunPlanCommand;
+  error: string;
+}
+
+/** Result of {@link applyRefreshLatestPlan}. */
+export interface RefreshLatestApplyResult {
+  /** Commands that were rerun successfully (their own `rerunAndWait`
+   * returned without throwing). */
+  executed: RerunPlanCommand[];
+  /** Commands skipped because the PR's HEAD had moved by the time this
+   * command's turn came (see `fetchCurrentHead` below) -- not a failure,
+   * since a fresh trigger already fired for the new HEAD on its own. */
+  skippedStaleHead: RerunPlanCommand[];
+  /** Commands whose wait or rerun threw. Non-empty means at least one
+   * instance for this HEAD was NOT refreshed and may still need manual
+   * attention -- see the CLI's own exit-code handling. */
+  failed: RefreshLatestApplyFailure[];
+}
+
+/** Dependencies injected by tests; production defaults perform real I/O
+ * (see the `import.meta.main` wiring below). Mirrors {@link
+ * RerunApplyDeps}'s DI pattern. */
+export interface RefreshLatestApplyDeps {
+  /** Blocks until `runId` reaches a terminal state (see {@link
+   * waitForRunCompletion}); throws on timeout or a propagated `gh`
+   * error. */
+  waitForRunCompletion: (runId: string) => void;
+  /** Returns the PR's CURRENT head SHA (lowercased), fetched fresh --
+   * never a cached/boolean comparison, so a test can assert exactly what
+   * SHA this function observed. */
+  fetchCurrentHead: () => string;
+  /** Executes one command and blocks until its run reaches a terminal
+   * state, regardless of its own conclusion (matches {@link
+   * RerunApplyDeps.rerunAndWait}). */
+  rerunAndWait: (command: RerunPlanCommand) => void;
+  /** Human-readable progress line, written to stderr in production. */
+  log: (message: string) => void;
+}
+
+/**
+ * Execute every command in `plan.pendingCommands` (waiting for each to
+ * reach a terminal state first) then every command in `plan.commands`,
+ * isolating one command's failure from the rest (CodeRabbit, PR #2855
+ * review): `plan.commands`/`plan.pendingCommands` are INDEPENDENT
+ * instances (typically `pull_request` and `pull_request_target` under
+ * #2764 Phase 1) whose own rerun outcome has no bearing on any other
+ * entry's -- unlike {@link applyRerunPlan}'s single evolving target,
+ * where a thrown error aborting the whole loop is the correct behavior.
+ * A HEAD re-check immediately precedes every individual rerun (Codex P1,
+ * PR #2855 review): both `waitForRunCompletion` and `rerunAndWait`
+ * themselves can take several minutes, during which the PR can advance
+ * to a new HEAD -- `gh run rerun` on a now-stale run would still fire,
+ * and the required gate's own concurrency group has
+ * `cancel-in-progress: true` keyed by PR number alone, so a stale rerun
+ * could CANCEL a legitimate, already-running gate instance for the new
+ * HEAD. Pure aside from the injected `deps` (no direct I/O of its own),
+ * mirroring {@link applyRerunPlan}'s own separation of policy from I/O.
+ */
+export function applyRefreshLatestPlan(
+  plan: RefreshLatestPlan,
+  deps: RefreshLatestApplyDeps,
+): RefreshLatestApplyResult {
+  const executed: RerunPlanCommand[] = [];
+  const skippedStaleHead: RerunPlanCommand[] = [];
+  const failed: RefreshLatestApplyFailure[] = [];
+
+  const headStillMatches = (command: RerunPlanCommand): boolean => {
+    const currentHeadSha = deps.fetchCurrentHead().toLowerCase();
+    if (currentHeadSha === plan.prHeadSha) {
+      return true;
+    }
+    deps.log(
+      `\n--refresh-latest --apply: the PR HEAD moved from ${plan.prHeadSha} to ${currentHeadSha} -- skipping the now-stale rerun of ${command.command} (a fresh trigger already fired for the new HEAD).\n`,
+    );
+    skippedStaleHead.push(command);
+    return false;
+  };
+
+  for (const pendingCommand of plan.pendingCommands) {
+    try {
+      deps.waitForRunCompletion(pendingCommand.runId);
+      if (!headStillMatches(pendingCommand)) {
+        continue;
+      }
+      deps.rerunAndWait(pendingCommand);
+      executed.push(pendingCommand);
+      deps.log(
+        `\n--refresh-latest --apply: executed ${pendingCommand.command} after it reached a terminal state.\n`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      deps.log(
+        `\n--refresh-latest --apply: ${pendingCommand.command} failed -- ${message} -- continuing with the remaining instances.\n`,
+      );
+      failed.push({ command: pendingCommand, error: message });
+    }
+  }
+  for (const command of plan.commands) {
+    try {
+      if (!headStillMatches(command)) {
+        continue;
+      }
+      deps.rerunAndWait(command);
+      executed.push(command);
+      deps.log(`\n--refresh-latest --apply: executed ${command.command}.\n`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      deps.log(
+        `\n--refresh-latest --apply: ${command.command} failed -- ${message} -- continuing with the remaining instances.\n`,
+      );
+      failed.push({ command, error: message });
+    }
+  }
+
+  return { executed, skippedStaleHead, failed };
+}
+
 /** Resolves `{owner, repo}` the same way {@link collectFromGitHub} does
  * (explicit `--owner`/`--repo` first, else `gh repo view` auto-detection)
  * -- duplicated as these two lines rather than extracted into a shared
@@ -2718,11 +3376,90 @@ function buildProductionApplyDeps(args: RerunPlanArgs): RerunApplyDeps {
 // so importing this module (for unit tests) never parses process.argv,
 // prints usage, or makes a `gh` call.
 if (import.meta.main) {
-  const { plan, help, args } = runRerunAdvisoryConvergence(
+  const { plan, refreshLatestPlan, help, args } = runRerunAdvisoryConvergence(
     process.argv.slice(2),
   );
   if (help) {
     printHelp();
+  } else if (refreshLatestPlan) {
+    // Same stdout/stderr split as the ordinary plan below: JSON only on
+    // stdout, human-readable summary on stderr.
+    process.stdout.write(`${JSON.stringify(refreshLatestPlan, null, 2)}\n`);
+    let applyFailedCount = 0;
+    if (
+      refreshLatestPlan.commands.length === 0 &&
+      refreshLatestPlan.pendingCommands.length === 0
+    ) {
+      process.stderr.write(`\n${refreshLatestPlan.reason}\n`);
+    } else {
+      if (refreshLatestPlan.reason) {
+        process.stderr.write(`\n${refreshLatestPlan.reason}\n`);
+      }
+      for (const command of refreshLatestPlan.commands) {
+        process.stderr.write(
+          `\n--refresh-latest selected: ${command.command}\n`,
+        );
+      }
+      for (const command of refreshLatestPlan.pendingCommands) {
+        process.stderr.write(
+          `\n--refresh-latest deferred (still running): ${command.command}\n`,
+        );
+      }
+      if (args.apply) {
+        const { owner, repo } = resolveOwnerRepo(args);
+        const applyDeps = buildProductionApplyDeps(args);
+        const refreshResult = applyRefreshLatestPlan(refreshLatestPlan, {
+          waitForRunCompletion: (runId) =>
+            waitForRunCompletion(owner, repo, runId),
+          fetchCurrentHead: () =>
+            ghText(
+              [
+                'pr',
+                'view',
+                String(args.prNumber),
+                '-R',
+                `${owner}/${repo}`,
+                '--json',
+                'headRefOid',
+                '--jq',
+                '.headRefOid',
+              ],
+              GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+            ),
+          rerunAndWait: applyDeps.rerunAndWait,
+          log: (message) => process.stderr.write(message),
+        });
+        // Sequential, not parallel (both loops inside
+        // applyRefreshLatestPlan) -- `waitForRunCompletion` and
+        // `rerunAndWait` both poll synchronously, and this file's own
+        // `planCaveat` already documents why a rerun burst must stay
+        // serialized rather than racing multiple `gh run rerun` calls
+        // against the same PR's shared concurrency group.
+        applyFailedCount = refreshResult.failed.length;
+      }
+    }
+    // A non-empty `failed`, or a non-zero `unresolvedInstanceCount`, both
+    // mean at least one instance for this HEAD was NOT refreshed despite
+    // --apply having run (CodeRabbit + Codex P1, PR #2855 review) --
+    // exit non-zero so the companion job surfaces that instead of
+    // reporting green while the required gate may still be stuck. Checked
+    // unconditionally here, not only inside the `else` branch above: an
+    // unresolved instance can be the ONLY instance for this HEAD, in
+    // which case `commands`/`pendingCommands` are both empty and the
+    // apply block above never even runs -- that must fail closed too,
+    // not silently report success on a plan with nothing left to try.
+    // Deliberately NOT the same convention as the ordinary --apply path
+    // below (which always exits 0, even when its own budget is exhausted
+    // unresolved): that path's "not yet resolved" is an expected,
+    // bounded policy limit with its own recovery text, whereas either
+    // condition here is a genuine risk that the instance actually
+    // controlling the required rollup was never attempted.
+    if (
+      args.apply &&
+      (applyFailedCount > 0 || refreshLatestPlan.unresolvedInstanceCount > 0)
+    ) {
+      process.exitCode = 1;
+    }
   } else if (plan) {
     // stdout carries ONLY the JSON document -- nothing else -- so the
     // overall stdout stream stays valid, machine-parseable JSON (e.g.
@@ -2794,5 +3531,12 @@ if (import.meta.main) {
   // before a large stdout write finishes flushing through a pipe (a
   // well-established Node.js footgun, confirmed empirically during
   // review), silently truncating the emitted JSON or recovery plan.
-  process.exitCode = 0;
+  // Guarded (CodeRabbit, PR #2855 review): the --refresh-latest --apply
+  // branch above may already have set exitCode to 1 for a genuine
+  // per-instance failure -- this default must not clobber that back to
+  // 0. Every other path never sets exitCode before reaching here, so
+  // this preserves that path's existing always-0 behavior unchanged.
+  if (process.exitCode === undefined) {
+    process.exitCode = 0;
+  }
 }

@@ -54,6 +54,30 @@ implementation). The distributed defaults for the E10 guardrails are
 listed in `docs/policy-constants.md`. Keep an E10 pass count for the
 current E9 fix batch.
 
+A repository may also configure `critiqueLoop.delegate` to point this
+pass at a different reviewer instead of the per-agent mechanism, using
+the same resolution chain and `mode` semantics C1 already has. When
+helper runtime is enabled, resolve the effective `critiqueLoop.delegate`
+with the
+[`idd-critique-delegate`](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate)
+helper: `node scripts/idd-critique-delegate.mjs` for source-repo /
+vendored-node profiles, or the profile-selected command named in
+`docs/idd-helper-scripts.md` for package-manager / ephemeral-npx
+profiles — never hardcode the bare binary name for those profiles.
+For `instructions-only` execution (no helper runtime), apply the
+resolution order directly: repo-local `critiqueLoop.delegate` always
+wins outright, and only when it is genuinely absent does a local
+runtime's user-global config file apply. `critiqueLoop.telemetryHook`
+remains C1-only and is never consulted here. Delegate findings enter
+this pass the way `mode`
+governs at C1 — see `docs/idd-workflow.md`'s "Critique pass invocation"
+section for the full table — replacing or joining the per-agent
+mechanism; never assume they are unconditionally added on top of it.
+Treat a delegate that, under `on-success` or `never`, leaves no
+readable findings list as a **hold**, not a clean "zero issues,
+proceed to E11" round: apply the shared Hold / suspend rules
+(`idd-overview-appendix.instructions.md`) instead of advancing.
+
 If the critique pass finds additional issues, fix them, commit
 atomically, and run E10 again while the findings are converging.
 

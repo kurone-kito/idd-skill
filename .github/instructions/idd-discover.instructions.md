@@ -62,14 +62,61 @@ reason and stop without claiming. Fall back to normal discovery only when
 the operator explicitly asks for normal discovery in the same run; do not
 silently search for another issue.
 
-For a valid open target, skip A0-O, A1, A1.5, A2, and candidate
-selection. Before A5, run targeted readiness and viability checks against
-that issue only:
+Run the steps below against a valid open target. Steps 1 and 2 apply
+regardless of target type; only once step 2 confirms the target is not
+a roadmap node does this shortcut skip A0-O, A1, A1.5, A2, and
+candidate selection, continuing through steps 3-5 to A5 against that
+issue only — a roadmap-node target instead follows step 2's own
+routing:
 
-1. Re-fetch the target issue.
-2. If the target issue carries the configured authoring label, report
-   `Issue #N is currently being authored`, run the stale-authoring
-   warning check above, and stop without claiming.
+1. Fetch the target issue. If it carries the configured authoring label,
+   report `Issue #N is currently being authored`, run the
+   stale-authoring warning check above, and stop without claiming — this
+   check runs first and applies whether the target turns out to be an
+   execution leaf or a roadmap node in step 2 below, so an
+   authoring-held roadmap is never routed into step 2's traversal.
+2. If the target issue carries the configured roadmap label or an
+   `idd-skill-roadmap-id` marker — the same test
+   **A2**'s roadmap-node/execution-leaf classification rule uses (an
+   unmarked legacy umbrella isn't recognized here — retro-label it
+   first, per A1's Legacy roots) — do not continue to steps 3-5.
+   Instead:
+   - Apply **A3**'s dependency bullet to the target itself (both
+     visible `Blocked by #NNN` lines and hidden
+     `idd-skill-blocked-by` markers) and its
+     coordination/runtime-observation-precondition bullet; a
+     dependency hit reports blocked, a coordination hit reports that
+     criterion instead — either way this run stops (no fallback).
+     Skip A3's other bullets here:
+     **A1.5** already checks the roadmap's own blocked-by-human/
+     needs-decision labels and claim state, and "no open dependent
+     issues" does not apply to a root whose own children are its
+     dependents.
+   - Treat the target as the root **A1** would have selected: run
+     **A1.5** against it. A1.5's own outcome governs what happens
+     next: a close or non-autonomous-gap outcome ends this run here —
+     report and stop, never falling back to A1 the way the normal
+     roadmap path would; only a continue outcome proceeds.
+   - Run **A2**'s traversal scoped to this root and its own
+     descendants only (never a repository-wide search), then the
+     normal **A3** → **A3.5** → **A4** sequence over that scoped set:
+     A3.5 filters and continues with the remaining startable
+     candidates exactly as in the normal roadmap path — no
+     stop-without-fallback applies at this filtering step. This
+     graph-scoped continuation excludes **A0**'s own A0-O
+     orphan-fallback triggers (a)/(b)/(c) throughout: an empty or
+     fully-discarded scoped set ends the run the same way A0-T's other
+     failure branches do — report and stop.
+   - Rank the survivors down to a single highest-suitability open
+     child and run **A4.5** → **A5** against that one child only.
+     `idd-suitability.instructions.md`'s and
+     `idd-claim.instructions.md`'s existing A0-T-keyed
+     stop-without-fallback rules apply to it unchanged: an A4.5
+     rejection, a failed A5 Pre-check (a) approval re-verification, or
+     a lost A5 claim race ends this run — report and stop — rather
+     than falling back to the next-ranked survivor. Extending this
+     branch to retry a subsequent survivor on such a failure is out of
+     scope here.
 3. Apply A3's readiness bullets to the target (the same blocked-by,
    human-coordination, and runtime-observation checks, resolved the
    same way) — plus one target-only check: no active, non-stale claim
@@ -202,10 +249,6 @@ reached via a parent roadmap's task list and never carry their own
 umbrella, or configure **`discover.legacyRoots`** (issue numbers,
 deduped against label/marker roots; invalid fails safe to none). See
 `docs/idd-helper-scripts.md`.
-
-**Note**: Repo-wide or label-based issue queries are permitted only in
-the scoped contexts A2 enumerates below (**A0-T**, **A0-O**, **A1**,
-**A1.5**, **A3**, **A4.5**); outside those, they are prohibited.
 
 ## A1.5 — Audit completed roadmaps
 
@@ -479,6 +522,10 @@ criteria. Fail any one → discard the issue.
   **complete** the work. Fail: requires operator to provide
   credentials; requires a product decision before the work can finish.
 
+**Structural-evidence demotion (#2767)**: Limited scope / Autonomous
+completion (never Clear verification) may demote to `warn` per
+`idd-suitability.instructions.md`'s matching edge case.
+
 If **no issue** survives the gate:
 
 - if the approval-needed fallback bucket from A3.5 is non-empty, apply
@@ -614,15 +661,16 @@ gates, or crosses a band; the `discover-roadmap-graph` union already
 emits this order.
 
 **High-contention shared-file overlap (advisory).** Concurrent sessions
-tend to edit the same F-phase bundle files (`bundle-review` /
-`bundle-merge`, `audit/sync-manifest.json`). **Soft** tie-breaker after
+tend to edit the same F-phase bundle files and `audit/sync-manifest.json`.
+**Soft** tie-breaker after
 score/desync/milestone/effort: prefer a candidate whose `## Candidate
 files` do **not** overlap an actively-claimed or open-PR issue on one of
 those; `discover-shared-file-overlap` (see
 [IDD helper scripts](../../docs/idd-helper-scripts.md)) reports
 `overlapFlag`/`recommendedOrder`, or `manifestMissing: true` with an
 empty set. See the
-[convention](../../docs/policy-constants.md#high-contention-shared-files).
+[convention](../../docs/policy-constants.md#high-contention-shared-files)
+for the current bundle ids.
 
 After picking, proceed to **A4.5** (`idd-suitability.instructions.md`).
 
@@ -637,27 +685,26 @@ mutation policy, coordination rules, decision flow, and edge cases.
 Two hidden HTML comment markers are used in issue bodies to support the
 discover phase:
 
-- **Roadmap identity** (`idd-skill-roadmap-id`): placed in
-  the roadmap issue body; A3 uses it to resolve `blocked-by` dependency
-  lookups. A1 identifies the roadmap by its configured label or umbrella
-  structure, not by this marker.
-- **Sequential dependency** (`idd-skill-blocked-by`): placed
-  in an issue body to express a hard dependency — this issue **cannot
-  start until** the roadmap with the matching `roadmap-id` is closed.
+- **Roadmap identity** (`idd-skill-roadmap-id`): in the
+  roadmap issue body; A3 uses it for `blocked-by` lookups. A1 finds the
+  roadmap by its label or umbrella structure, not this marker.
+- **Sequential dependency** (`idd-skill-blocked-by`): in an
+  issue body — this issue **cannot start until** the roadmap with the
+  matching `roadmap-id` is closed.
 
 **Do not use `idd-skill-blocked-by` to group sub-tasks under
-an active roadmap.** Sub-tasks that should be worked on while the
-roadmap is open belong in the roadmap's task list as `- [ ] #NNN`
-entries; `blocked-by` is reserved for issues that must wait for a
-separate, prior roadmap to close (cross-phase sequential dependency) —
-see the
+an active roadmap** — those belong in the roadmap's task list as
+`- [ ] #NNN` entries. `blocked-by` is only for a separate, prior
+roadmap that must close first; see the
 [A3 diagnostic](../../docs/idd-design-rationale.md#a3--diagnostic-all-candidates-blocked-by-an-open-roadmap)
-for the resulting deadlock pattern.
+for the deadlock this prevents.
 
 ## Scope invariant (summary)
 
-Do not widen issue-selection scope beyond the roadmap traversal except
-for the explicit query allowlist already defined in A0-T, A0-O, A1,
-A1.5, A3, and A4.5, or for a same-run operator opt-in per A3 step 5
-(never inferred from prior or standing instructions). A single explicit
-target authorizes only that issue.
+Do not widen issue-selection scope beyond A2's query allowlist (A0-T,
+A0-O, A1, A1.5, A3, A4.5) or a same-run operator opt-in per A3 step 5
+(never inferred from standing instructions). An explicit target
+authorizes only that issue, except when A0-T step 2 classifies it as a
+roadmap node: then it authorizes normal selection scoped to that
+roadmap's own descendants only, never an unrelated orphan issue (A0-O
+stays excluded, per A0-T step 2).

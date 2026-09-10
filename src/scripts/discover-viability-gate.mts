@@ -5,12 +5,28 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
+import { existsSync } from 'node:fs';
+
 import { parseCliArgs } from './cli-args.mts';
+import {
+  type CollaboratorPermissionCache,
+  collaboratorPermission,
+} from './collaborator-permission.mts';
+import { loadPolicyConfig } from './idd-config.mts';
+import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
 import { findInlineResolvedDecisionSpans } from './resolved-decision.mts';
+import {
+  buildTrustedLoginPredicate,
+  candidateFilesExistOnDisk,
+  evaluateStructuralEvidence,
+  hasAllStructuralSignals,
+  hasVerificationCommandSignal,
+  type StructuralEvidence,
+} from './triage-structural-evidence.mts';
 
 interface NormalizedIssue {
   number: number;
@@ -22,6 +38,12 @@ interface NormalizedIssue {
 interface EvalResult {
   pass: boolean;
   evidence: string;
+  /** #2767: set only when this result converted a would-be lexical-fail
+   * into a pass because `hasAllStructuralSignals` held -- see
+   * `supersession-detection.mts`'s `CheckOutcome.demoted` doc comment for
+   * the full contract (this local type mirrors it; `discover-viability-gate.mts`
+   * does not import that shared type). */
+  demoted?: boolean;
 }
 
 interface CriterionResult {
@@ -34,6 +56,10 @@ interface CriterionResult {
 interface ViableItem {
   number: number;
   title: string;
+  /** #2767: present only when at least one criterion was demoted
+   * (`result: 'warn'`) rather than an ordinary pass -- omitted otherwise,
+   * so an issue with no warn entries keeps the exact pre-#2767 shape. */
+  criteria?: CriterionResult[];
 }
 
 interface DiscardedItem {
@@ -59,6 +85,9 @@ interface IssueLike {
   title?: unknown;
   body?: unknown;
   state?: unknown;
+  /** #2767: raw REST `user` field, read only for the `trustedEditor`
+   * structural-evidence signal's author login. */
+  user?: unknown;
 }
 
 type IssueLoader = (
@@ -68,7 +97,10 @@ type IssueLoader = (
 const CRITERIA: {
   id: string;
   name: string;
-  evaluate: (issue: NormalizedIssue) => EvalResult;
+  evaluate: (
+    issue: NormalizedIssue,
+    structuralEvidence?: StructuralEvidence,
+  ) => EvalResult;
 }[] = [
   {
     id: 'limited_scope',
@@ -312,8 +344,21 @@ if (import.meta.main) {
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
+  // #2767: shared across every computeLiveStructuralEvidence call below,
+  // so a repeated editor login across --issue candidates costs one live
+  // collaborator-permission lookup (Codex review, PR #2840, round 21).
+  const collaboratorCache: CollaboratorPermissionCache = new Map();
   const summary = await evaluateDiscoverViability(args.issueNumbers, {
     loadIssue: buildIssueLoader(owner, repo),
+    computeStructuralEvidence: (issue) =>
+      computeLiveStructuralEvidence(
+        port,
+        owner,
+        repo,
+        issue,
+        collaboratorCache,
+      ),
   });
 
   if (args.csv) {
@@ -325,9 +370,23 @@ if (import.meta.main) {
 
 export async function evaluateDiscoverViability(
   issueNumbers: unknown[],
-  options: { loadIssue?: IssueLoader } = {},
+  options: {
+    loadIssue?: IssueLoader;
+    /** #2767: optional hook computing the structural-evidence signal for
+     * `issue` -- omitted (the default for every existing caller/test)
+     * means every criterion's demotion check sees `undefined`, which
+     * `hasAllStructuralSignals` treats as false, so behavior is byte-
+     * identical to before this hook existed. The live CLI below is the
+     * only caller that supplies one. */
+    computeStructuralEvidence?: (
+      issue: IssueLike,
+    ) =>
+      | StructuralEvidence
+      | undefined
+      | Promise<StructuralEvidence | undefined>;
+  } = {},
 ): Promise<ViabilitySummary> {
-  const { loadIssue } = options;
+  const { loadIssue, computeStructuralEvidence } = options;
   if (typeof loadIssue !== 'function') {
     throw new Error(
       'evaluateDiscoverViability requires loadIssue(issueNumber)',
@@ -356,11 +415,49 @@ export async function evaluateDiscoverViability(
       continue;
     }
 
-    const result = evaluateA4Viability(issue);
+    // #2767: evaluate without structural evidence first, and only fetch it
+    // (an extra network round trip in the live CLI) when the issue would
+    // otherwise fail on a demotable criterion -- an issue that already
+    // passes on wording alone never needs the demotion path, and neither
+    // does one whose only failure is `clear_verification` (never
+    // demotable), so this keeps the common case byte- and
+    // network-identical to before this hook existed. (Copilot/Codex
+    // review, PR #2840): the prior `!result.passed` condition alone fired
+    // this fetch for a `clear_verification`-only failure too, spending an
+    // editor-history request plus a collaborator-permission lookup that
+    // could never change the outcome.
+    let result = evaluateA4Viability(issue);
+    const hasDemotableFailure = result.failedCriteria.some(
+      (id) => id === 'limited_scope' || id === 'autonomous_completion',
+    );
+    if (hasDemotableFailure && computeStructuralEvidence) {
+      // #2767: a transient GitHub API failure (rate limit, timeout, an
+      // absent GraphQL connection) fetching structural evidence must not
+      // abort evaluation of every other issue in this batch -- degrade to
+      // "no evidence available" (the plain `result` computed above stays
+      // unchanged) rather than letting the rejection propagate.
+      let structuralEvidence: StructuralEvidence | undefined;
+      try {
+        structuralEvidence = await computeStructuralEvidence(issue);
+      } catch {
+        structuralEvidence = undefined;
+      }
+      if (structuralEvidence) {
+        result = evaluateA4Viability(issue, structuralEvidence);
+      }
+    }
     if (result.passed) {
+      // #2767: surface any demoted (`warn`) criterion even on an
+      // otherwise-fully-passed issue, so a human reviewer still sees
+      // what matched -- omitted when every criterion is an ordinary
+      // pass, keeping the exact pre-#2767 shape for the common case.
+      const hasWarning = result.criteria.some(
+        (criterion) => criterion.result === 'warn',
+      );
       viable.push({
         number: Number(issue.number ?? issueNumber),
         title: String(issue.title ?? ''),
+        ...(hasWarning ? { criteria: result.criteria } : {}),
       });
       continue;
     }
@@ -384,7 +481,10 @@ export async function evaluateDiscoverViability(
   };
 }
 
-export function evaluateA4Viability(issue: unknown): {
+export function evaluateA4Viability(
+  issue: unknown,
+  structuralEvidence?: StructuralEvidence,
+): {
   passed: boolean;
   failedCriteria: string[];
   criteria: CriterionResult[];
@@ -394,11 +494,14 @@ export function evaluateA4Viability(issue: unknown): {
   const failedCriteria: string[] = [];
 
   for (const criterion of CRITERIA) {
-    const result = criterion.evaluate(normalizedIssue);
+    const result = criterion.evaluate(normalizedIssue, structuralEvidence);
     criteria.push({
       id: criterion.id,
       name: criterion.name,
-      result: result.pass ? 'pass' : 'fail',
+      // #2767: a demoted result already carries `pass: true` from the
+      // criterion itself, so `passed`/`failedCriteria` below need no
+      // separate handling -- `result: 'warn'` is presentational only.
+      result: result.pass ? (result.demoted ? 'warn' : 'pass') : 'fail',
       evidence: result.evidence,
     });
     if (!result.pass) {
@@ -580,7 +683,10 @@ function findUnexcludedBroadScopeMatch(corpus: string): string | null {
   return null;
 }
 
-export function evaluateLimitedScope(issue: NormalizedIssue): EvalResult {
+export function evaluateLimitedScope(
+  issue: NormalizedIssue,
+  structuralEvidence?: StructuralEvidence,
+): EvalResult {
   const corpus = `${issue.title}\n${issue.body}`;
   // Test the broad-scope signal first: a broad/A4-fail cue must fail the
   // gate even when a narrow cue is also present (e.g. "single module change
@@ -588,6 +694,18 @@ export function evaluateLimitedScope(issue: NormalizedIssue): EvalResult {
   // let that wording bypass the gate.
   const broadScopeMatch = findUnexcludedBroadScopeMatch(corpus);
   if (broadScopeMatch !== null) {
+    // #2767: a false-positive broad-scope match is exactly the shape this
+    // demotion targets -- demote to a warned pass only when every
+    // structural signal (a runnable verification command, an existing
+    // candidate file, a fully trusted author+editor set) holds; otherwise
+    // behave exactly as before.
+    if (hasAllStructuralSignals(structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence: `Broad or cross-cutting scope signal detected: "${broadScopeMatch}" (demoted: structural evidence present).`,
+      };
+    }
     return {
       pass: false,
       evidence: `Broad or cross-cutting scope signal detected: "${broadScopeMatch}".`,
@@ -827,6 +945,7 @@ function findUnexcludedExternalCoordinationMatch(
 
 export function evaluateAutonomousCompletion(
   issue: NormalizedIssue,
+  structuralEvidence?: StructuralEvidence,
 ): EvalResult {
   // A blank line (not a bare "\n") between title and body, unlike the
   // other two evaluate* functions' corpus join: CUE_HARD_BREAK_PATTERN
@@ -844,6 +963,14 @@ export function evaluateAutonomousCompletion(
   const corpus = `${issue.title}\n\n${issue.body}`.replace(/\r\n/g, '\n');
   const match = findUnexcludedExternalCoordinationMatch(corpus);
   if (match !== null) {
+    // #2767: same demotion contract as evaluateLimitedScope above.
+    if (hasAllStructuralSignals(structuralEvidence)) {
+      return {
+        pass: true,
+        demoted: true,
+        evidence: `External coordination or manual decision signal detected: "${match}" (demoted: structural evidence present).`,
+      };
+    }
     return {
       pass: false,
       evidence: `External coordination or manual decision signal detected: "${match}".`,
@@ -936,6 +1063,15 @@ Output schema (JSON mode):
       "discardedByCriterion": { "limited_scope": 1 }
     }
   }
+
+A "discarded" item (and a "viable" item that carries at least one demoted
+criterion, #2767) also includes "criteria": [{ "id", "name", "result",
+"evidence" }], where "result" is "pass" | "warn" | "fail" -- "warn" means
+a lexical-pattern fail was demoted to a passed, annotated result because
+every structural-evidence signal (triage-structural-evidence.mts) held;
+it counts as a pass for "passed"/"failedCriteria" but is worth a human's
+attention. CSV mode's "warnings" column lists any such demoted criterion
+ids, pipe-joined.
 `);
 }
 
@@ -968,16 +1104,30 @@ function countDiscardedCriteria(
   return counts;
 }
 
+/** #2767: pipe-joined ids of any `result: 'warn'` (demoted) criteria on
+ * `item`, or `''` when `item` carries no `criteria` array (the common
+ * case -- see `ViableItem.criteria`'s doc comment) or none were demoted. */
+function warnCriteriaIds(item: { criteria?: CriterionResult[] }): string {
+  return (item.criteria ?? [])
+    .filter((criterion) => criterion.result === 'warn')
+    .map((criterion) => criterion.id)
+    .join('|');
+}
+
 export function renderCsv(summary: ViabilitySummary): string {
-  const lines = ['kind,number,title,criteria'];
+  const lines = ['kind,number,title,criteria,warnings'];
   for (const item of summary.viable) {
-    lines.push(`viable,${item.number},${escapeCsv(item.title)},`);
+    lines.push(
+      `viable,${item.number},${escapeCsv(item.title)},,${escapeCsv(
+        warnCriteriaIds(item),
+      )}`,
+    );
   }
   for (const item of summary.discarded) {
     lines.push(
       `discarded,${item.number},${escapeCsv(item.title)},${escapeCsv(
         (item.failedCriteria ?? []).join('|'),
-      )}`,
+      )},${escapeCsv(warnCriteriaIds(item))}`,
     );
   }
   return `${lines.join('\n')}\n`;
@@ -1002,4 +1152,92 @@ function buildIssueLoader(
   return function loadIssue(issueNumber: number): IssueLike | null {
     return port.getWorkItem(issueNumber);
   };
+}
+
+/**
+ * #2767 live CLI wiring for `computeStructuralEvidence`: fetches the one
+ * extra piece of live data the pure `triage-structural-evidence.mts`
+ * helper needs beyond the already-loaded issue -- the edit history's
+ * editor logins -- then builds the trust predicate from this repository's
+ * configured `trustedMarkerActors` plus a live collaborator-permission
+ * check, and the file-existence predicate from the real filesystem.
+ *
+ * Checks the two local-only signals (`verificationCommand`,
+ * `candidateFilesExist` -- both computable from the already-loaded issue
+ * body alone) before touching the network at all (Codex review, PR
+ * #2840, round 9): demotion requires all three signals together, so
+ * either one being false already makes the live `trustedEditor` fetch
+ * (a paginated `userContentEdits` GraphQL call, plus a
+ * collaborator-permission lookup once `isTrustedLogin` is actually
+ * exercised) a wasted round trip and a rate-limit risk for no possible
+ * change in outcome. This is a narrower, per-call optimization than the
+ * caller's own `hasDemotableFailure` gate (which skips calling this
+ * function at all for a non-demotable *criterion*): even when the
+ * criterion IS demotable, the specific issue's body can still fail one
+ * of the two local signals outright.
+ *
+ * `collaboratorCache` is caller-supplied, not created here (Codex
+ * review, PR #2840, round 21): this function runs once per `--issue`
+ * (repeatable), and a fresh `Map` per call defeated
+ * `collaboratorPermission`'s own in-run caching whenever two issues
+ * shared an editor login, multiplying live permission lookups.
+ * Mirrors the identical fix already applied to
+ * `discover-orphan-filter.mts`'s own `runCli` wiring -- one cache
+ * created once, shared across the whole CLI invocation.
+ */
+function computeLiveStructuralEvidence(
+  port: ReturnType<typeof createGithubProviderAdapter>,
+  owner: string,
+  repo: string,
+  issue: IssueLike,
+  collaboratorCache: CollaboratorPermissionCache,
+): StructuralEvidence | undefined {
+  const issueNumber = Number(issue.number);
+  if (!Number.isInteger(issueNumber)) {
+    return undefined;
+  }
+  const body = String(issue.body ?? '');
+  // #2767 (Codex review, PR #2840, round 9): compute the two local-only
+  // signals first -- both read only the already-loaded issue body, no
+  // network call -- and skip the userContentEdits fetch (a paginated
+  // GraphQL round trip) plus the collaborator-permission lookup entirely
+  // when either is already false. Demotion requires all three signals
+  // together, so a false verificationCommand/candidateFilesExist makes
+  // the live trustedEditor signal moot regardless of what it would
+  // resolve to, and this call site is reached even for the non-demotable
+  // case the caller's own hasDemotableFailure gate cannot see: an issue
+  // whose body genuinely lacks either local signal still triggers this
+  // function whenever the *criterion* is demotable, wasting the fetch on
+  // every such issue.
+  const verificationCommand = hasVerificationCommandSignal(body);
+  const candidateFilesExist = candidateFilesExistOnDisk(body, existsSync);
+  if (!verificationCommand || !candidateFilesExist) {
+    return { verificationCommand, candidateFilesExist, trustedEditor: false };
+  }
+  const { config } = loadPolicyConfig();
+  const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: config as { trustedMarkerActors?: unknown } | null,
+  });
+  const isTrustedLogin = buildTrustedLoginPredicate(
+    trustedMarkerLogins,
+    (login) => {
+      const { permission } = collaboratorPermission(
+        owner,
+        repo,
+        login,
+        collaboratorCache,
+      );
+      return permission === 'admin' || permission === 'write';
+    },
+  );
+  const author = (issue.user as { login?: unknown } | null)?.login;
+  const edits = port.getWorkItemUserContentEdits(issueNumber);
+  return evaluateStructuralEvidence({
+    body,
+    author: typeof author === 'string' ? author : '',
+    editorLogins: edits.map((edit) => edit.editorLogin),
+    isTrustedLogin,
+    existsAt: existsSync,
+  });
 }
