@@ -1897,6 +1897,128 @@ function mergeMarkdownCodeRanges(
   return merged;
 }
 
+// CommonMark §6.6 raw-HTML inline tag grammar (open-tag and closing-tag
+// forms only -- the two shapes whose attribute values can hide a backtick
+// pair, #2865). An attribute value may be unquoted (a nonempty run of
+// characters excluding whitespace, quotes, `=`, `<`, `>`, and a backtick --
+// CommonMark's own grammar excludes the backtick there too, so
+// `<span title=`x`>` never matches as a tag at all, leaving `` `x` `` a
+// genuine code span), single-quoted, or double-quoted; a quoted value may
+// itself contain a backtick, which GitHub renders as literal attribute
+// text, never a code-span delimiter (`gh api /markdown` confirms
+// `<span title="`node --test`"></span>` keeps its backticks literal).
+// {@link findInlineCodeRanges} skips a matched tag entirely so an
+// attribute-embedded backtick pair is never read as a code-span
+// opener/closer.
+const INLINE_HTML_TAG_NAME_PATTERN = '[A-Za-z][A-Za-z0-9-]*';
+const INLINE_HTML_ATTRIBUTE_NAME_PATTERN = '[A-Za-z_:][A-Za-z0-9_.:-]*';
+const INLINE_HTML_ATTRIBUTE_VALUE_PATTERN =
+  '(?:[^ \\t\\r\\n"\'=<>`]+|\'[^\']*\'|"[^"]*")';
+const INLINE_HTML_ATTRIBUTE_PATTERN =
+  `[ \\t\\r\\n]+${INLINE_HTML_ATTRIBUTE_NAME_PATTERN}` +
+  `(?:[ \\t\\r\\n]*=[ \\t\\r\\n]*${INLINE_HTML_ATTRIBUTE_VALUE_PATTERN})?`;
+const INLINE_HTML_OPEN_TAG_PATTERN = new RegExp(
+  `^<${INLINE_HTML_TAG_NAME_PATTERN}(?:${INLINE_HTML_ATTRIBUTE_PATTERN})*[ \\t\\r\\n]*/?>`,
+  'u',
+);
+const INLINE_HTML_CLOSE_TAG_PATTERN = new RegExp(
+  `^</${INLINE_HTML_TAG_NAME_PATTERN}[ \\t\\r\\n]*>`,
+  'u',
+);
+
+/**
+ * The end offset of a CommonMark raw-HTML inline tag (open or closing form)
+ * starting at `start` (which must hold `<`), bounded to `[start, end)`, or
+ * `null` when no valid tag matches there -- an unterminated quoted
+ * attribute value, for example, fails both patterns and falls through to
+ * ordinary text, leaving any backtick inside it a normal code-span
+ * candidate.
+ *
+ * **Blank-line guard**: CommonMark parses block structure (including where
+ * a blank line ends a paragraph) before inline content, so no raw-HTML
+ * inline tag can ever span a blank line -- `gh api /markdown` confirms
+ * `<span title="a` / (blank) / `b">` renders as two separate literal-text
+ * paragraphs, never one tag. The character classes above allow a bare `\n`
+ * (a quoted value may wrap a soft line break) but cannot themselves refuse
+ * a *second* consecutive one, so a match that happens to reach a real
+ * closing quote/`>` on the far side of a blank line is rejected here via
+ * {@link hasBlankLine} -- the same post-match guard
+ * {@link findInlineCodeRanges}'s own closing-backtick search already
+ * applies for the identical reason.
+ */
+function matchInlineHtmlTagEnd(
+  text: string,
+  start: number,
+  end: number,
+): number | null {
+  const remainder = text.slice(start, end);
+  const open = INLINE_HTML_OPEN_TAG_PATTERN.exec(remainder);
+  const matchLength =
+    open?.[0].length ??
+    INLINE_HTML_CLOSE_TAG_PATTERN.exec(remainder)?.[0].length ??
+    null;
+  if (matchLength === null) {
+    return null;
+  }
+  const matchEnd = start + matchLength;
+  return hasBlankLine(text, start, matchEnd) ? null : matchEnd;
+}
+
+// CommonMark §6.3 inline-link destination/title grammar, generalizing the
+// same attribute-value exclusion to a link's own `(destination "title")`
+// span (#2865, Codex review PR #2840 round 27, databaseId 3977018342):
+// `[test](/url "`node --test`")` renders its title's backticks literally
+// too (`gh api /markdown` confirms `<a href="/url" title="`node
+// --test`">`), never a code span. A bare destination is a run of
+// non-whitespace, non-paren characters -- with one level of backslash-
+// escaped or balanced unescaped parens allowed, per spec (`gh api
+// /markdown` confirms `/wiki/Example_(disambiguation)` survives as a real
+// destination) -- or an angle-bracket-quoted form. The optional title is a
+// double-, single-, or paren-quoted string; unlike an HTML attribute value,
+// a title supports backslash-escaping so an escaped delimiter does not end
+// it early. Per spec the destination/title parenthesis must directly
+// follow the link text's own closing `]` with no intervening whitespace,
+// so the caller only tries this match when the preceding character is `]`
+// -- a link-shaped prefix that never reaches a valid destination/title/`)`
+// (e.g. `[note](which uses \`code\`)`) fails the whole anchored match and
+// falls through to ordinary text, leaving that backtick pair a genuine
+// code span (`gh api /markdown` confirms GitHub renders exactly that).
+const INLINE_LINK_TITLE_PATTERN =
+  '(?:"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|\\((?:[^()\\\\]|\\\\.)*\\))';
+const INLINE_LINK_DESTINATION_PATTERN =
+  '(?:<[^<>\\r\\n]*>|(?:[^ \\t\\r\\n()\\\\]|\\\\.|\\([^()]*\\))*)';
+const INLINE_LINK_DEST_TITLE_PATTERN = new RegExp(
+  '^\\([ \\t\\r\\n]*' +
+    INLINE_LINK_DESTINATION_PATTERN +
+    `(?:[ \\t\\r\\n]+${INLINE_LINK_TITLE_PATTERN})?[ \\t\\r\\n]*\\)`,
+  'u',
+);
+
+/**
+ * The end offset of an inline link's `(destination "title")` span starting
+ * at `start` (which must hold `(`), bounded to `[start, end)`, or `null`
+ * when `start` is not immediately preceded by a link text's closing `]`,
+ * no valid destination/title matches there, or the match would span a
+ * blank line (see {@link matchInlineHtmlTagEnd}'s identical guard and
+ * rationale).
+ */
+function matchInlineLinkDestTitleEnd(
+  text: string,
+  start: number,
+  end: number,
+): number | null {
+  if (text[start - 1] !== ']') {
+    return null;
+  }
+  const remainder = text.slice(start, end);
+  const match = INLINE_LINK_DEST_TITLE_PATTERN.exec(remainder);
+  if (match === null) {
+    return null;
+  }
+  const matchEnd = start + match[0].length;
+  return hasBlankLine(text, start, matchEnd) ? null : matchEnd;
+}
+
 function findInlineCodeRanges(
   text: string,
   start: number,
@@ -1906,6 +2028,23 @@ function findInlineCodeRanges(
   let cursor = start;
 
   while (cursor < end) {
+    // #2865: skip an inline HTML tag or a link's own destination/title span
+    // entirely before ever considering a backtick inside it as a code-span
+    // delimiter -- CommonMark's raw-HTML and link rules take precedence
+    // over the code-span rule there.
+    if (text[cursor] === '<') {
+      const tagEnd = matchInlineHtmlTagEnd(text, cursor, end);
+      if (tagEnd !== null) {
+        cursor = tagEnd;
+        continue;
+      }
+    } else if (text[cursor] === '(') {
+      const linkEnd = matchInlineLinkDestTitleEnd(text, cursor, end);
+      if (linkEnd !== null) {
+        cursor = linkEnd;
+        continue;
+      }
+    }
     if (text[cursor] !== '`' || isEscapedBacktick(text, cursor)) {
       cursor += 1;
       continue;

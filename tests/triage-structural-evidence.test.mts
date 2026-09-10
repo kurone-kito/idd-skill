@@ -76,6 +76,16 @@ test('hasVerificationCommandSignal: false on an unrelated code span in AC', () =
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: false on an HTML-attribute-embedded backtick command (#2865)', () => {
+  // `gh api /markdown` confirms `<span title="`node --test`"></span>`
+  // keeps its backticks literal inside the attribute value -- CommonMark's
+  // raw-HTML inline rule takes precedence over the code-span rule there,
+  // so this is never a real code span GitHub renders as verification
+  // evidence.
+  const body = `## Acceptance criteria\n\n<span title="\`node --test\`"></span>\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: a command in a LATER section does not count', () => {
   const body = `## Acceptance criteria\n\n- [ ] Only one thing\n\n## Candidate files\n\n- \`node --test tests/foo.test.mts\`\n`;
   assert.equal(hasVerificationCommandSignal(body), false);

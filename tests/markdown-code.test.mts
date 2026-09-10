@@ -1171,8 +1171,73 @@ test('findHtmlBlockRanges returns [] for a body with no HTML blocks', () => {
   assert.deepEqual(findHtmlBlockRanges(body), []);
 });
 
-// --- #2865: inherit an HTML block's list content indent on a
-// continuation-line opener (no marker of its own).
+// --- #2865: mask HTML-attribute and inline-link-title/destination backticks,
+// and inherit an HTML block's list content indent on a continuation-line
+// opener. All shapes below verified against `gh api /markdown` (mode: gfm)
+// before implementation.
+
+test('findMarkdownCodeRanges: an HTML-attribute-embedded backtick command is not a real code span (#2865)', () => {
+  // `gh api /markdown` confirms `<span title="`node --test`"></span>`
+  // keeps its backticks literal inside the attribute value -- CommonMark's
+  // raw-HTML inline rule takes precedence over the code-span rule there.
+  const body =
+    '## Acceptance criteria\n\n<span title="`node --test`"></span>\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: an inline-link title/destination-embedded backtick is not a real code span (#2865)', () => {
+  // `gh api /markdown` confirms `[test](/url "`node --test`")` renders as
+  // `<a href="/url" title="`node --test`">test</a>`, backticks literal.
+  const body = 'See [test](/url "`node --test`") for details.\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: an inline-link destination with a balanced nested paren still masks the title backticks (#2865)', () => {
+  // `gh api /markdown` confirms `/wiki/Example_(disambiguation)` survives
+  // as a real destination (CommonMark allows one balanced, unescaped
+  // paren pair in a bare destination), with the title's backticks still
+  // literal: `<a href="/wiki/Example_(disambiguation)" title="`node
+  // --test`">`.
+  const body =
+    'See [wiki](/wiki/Example_(disambiguation) "`node --test`") page.\n';
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges: a real code span right next to an excluded HTML tag is still found (control, #2865)', () => {
+  // `gh api /markdown` confirms `` `real` `` renders as a genuine
+  // `<code>` span immediately followed by the (backtick-literal) `<span>`
+  // tag -- the new exclusion must not swallow adjacent real content.
+  const body = 'Prefix `real` <span title="`fake`"></span> suffix.\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`real`');
+});
+
+test('findMarkdownCodeRanges: a link-shaped prefix that never reaches a valid title/close fails closed, leaving its backtick pair a real span (#2865)', () => {
+  // `gh api /markdown` confirms `[note](which uses `code`)` renders
+  // `[note](which uses` as literal text, a real `<code>` span for
+  // `` `code` ``, then a literal `)` -- never a link at all, since the
+  // text after the destination never resolves to a valid title or a
+  // direct closing `)`.
+  const body = '[note](which uses `code`)\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`code`');
+});
+
+test('findMarkdownCodeRanges: an HTML tag match never spans a blank line, so a backtick pair on the far side stays a real span (#2865)', () => {
+  // `gh api /markdown` confirms `<span title="` / (blank) / `` `node
+  // --test`"> `` never forms one tag (CommonMark parses block structure,
+  // including where a blank line ends a paragraph, before inline
+  // content) -- it renders as two literal-text paragraphs, the second of
+  // which contains a genuine `<code>` span. Without the blank-line guard,
+  // the tag-matching regex's own quoted-value character class would
+  // otherwise happily span the blank line and swallow this real span.
+  const body = '<span title="\n\n`node --test`">\n';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.equal(ranges.length, 1);
+  assert.equal(body.slice(ranges[0].start, ranges[0].end), '`node --test`');
+});
 
 test('findHtmlBlockRanges stops an unclosed raw-text block at an inherited list-item container end with no marker on the opener line itself (#2865)', () => {
   // Same failure class as the existing round-15 `- <pre>` test above, but
