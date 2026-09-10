@@ -1133,6 +1133,19 @@ export async function runExternalCheckWaiver(
               .maxValidity,
           mode: normalizePolicyConfig(rawConfig).ciGate.externalCheckWaivers
             .mode,
+          // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): without
+          // this, `summarizeExternalCheckWaivers` excludes every
+          // `self-referential-bootstrap-auto`-reasoned marker from EVERY
+          // evidence bucket by default (its own doc comment) -- including
+          // the one THIS invocation just posted. The pre-write call site
+          // above never reaches this (its own ternary skips reuse-scanning
+          // entirely for `--auto-bootstrap`), but the post-write reconcile
+          // below runs for every mode, and is the ONLY concurrent-duplicate
+          // detection `--auto-bootstrap` has (reuse-scanning is
+          // intentionally disabled for it pre-write) -- leaving this unset
+          // would make that reconcile permanently blind to concurrent
+          // automatic posts, defeating its own stated purpose.
+          allowSelfReferentialBootstrapAuto: args.autoBootstrap,
         })
       : null;
   // The marker this invocation would post defines the binding a reusable

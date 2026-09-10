@@ -725,10 +725,28 @@ export function summarizeExternalCheckWaivers(
     // isolated auto-waiver evidence call performs. Default `false` (fail
     // closed): such a marker is excluded from every bucket entirely,
     // never merely `unauthorized`/`wrongHead`/etc., since the reason
-    // itself disqualifies it regardless of any other field. Only that
-    // one dedicated call sets this `true`; every other caller (this
-    // function's own ordinary-waiver callers, `external-check-waiver.mts`,
-    // `pre-merge-readiness.mts`) must leave it unset.
+    // itself disqualifies it regardless of any other field.
+    //
+    // Exactly two call sites may set this `true` -- every other caller
+    // (this function's own ordinary-waiver callers, and
+    // `pre-merge-readiness.mts`) must leave it unset:
+    // 1. `advisory-convergence.mts`'s dedicated, isolated auto-waiver
+    //    evidence call, whose `valid` classification directly feeds
+    //    `autoWaiverValid` -- a GATE decision -- so it is paired with the
+    //    run-id/event-type/HEAD/repository/changed-file verification
+    //    above before anything is trusted.
+    // 2. `external-check-waiver.mts`'s `runExternalCheckWaiver` POST-WRITE
+    //    reconcile (Copilot review, PR #2895): its own `evidence.valid` is
+    //    consulted only by `collectValidWaiverComments` to print a
+    //    concurrent-duplicate WARNING and pick which comment id to keep --
+    //    never to authorize, satisfy, or apply anything -- so there is no
+    //    gate to smuggle past. Its PRE-WRITE reuse-scan sibling call site
+    //    does NOT set this: reuse-scanning is disabled entirely for
+    //    `--auto-bootstrap` (that call site's own doc comment explains
+    //    why a `reason`-only filter is not a sufficient trust check for a
+    //    decision that skips posting), so leaving it unset there costs
+    //    nothing and keeps the exception as narrow as the decision it
+    //    actually affects requires.
     allowSelfReferentialBootstrapAuto?: boolean;
   } = {},
 ): ExternalCheckWaiverEvidence {
