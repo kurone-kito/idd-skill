@@ -2248,8 +2248,7 @@ export function checkAutonomy(context) {
         return {
           pass: true,
           demoted: true,
-          evidence:
-            'Issue presents an unresolved either/or implementation choice (demoted: structural evidence present).',
+          evidence: `Issue presents an unresolved either/or implementation choice: "${markerText}" (demoted: structural evidence present).`,
         };
       }
       return {
@@ -2280,8 +2279,7 @@ export function checkAutonomy(context) {
       return {
         pass: true,
         demoted: true,
-        evidence:
-          'Issue explicitly requires external human coordination or approval (demoted: structural evidence present).',
+        evidence: `Issue explicitly requires external human coordination or approval: "${matchedText}" (demoted: structural evidence present).`,
       };
     }
     return {
@@ -2307,8 +2305,7 @@ export function checkAutonomy(context) {
       return {
         pass: true,
         demoted: true,
-        evidence:
-          'Issue names an unresolved product or design choice (demoted: structural evidence present).',
+        evidence: `Issue names an unresolved product or design choice: "${markerText}" (demoted: structural evidence present).`,
       };
     }
     return {
@@ -2558,7 +2555,10 @@ export function checkVerifiability(context) {
       ...findHtmlCommentRanges(normalizedBody, codeRangesForCommentMasking),
     ],
   );
-  const hasSubjectiveApproval = (() => {
+  // #2767: captures the matched text (not just a boolean) so a demoted
+  // warn's evidence can name the matched phrase, matching the pattern
+  // discover-viability-gate.mts's demotable criteria already use.
+  const subjectiveApprovalMatch = (() => {
     let lineOffset = 0;
     for (const line of normalizedBody.split('\n')) {
       if (
@@ -2566,7 +2566,7 @@ export function checkVerifiability(context) {
         SUBJECTIVE_GATE_PATTERN.test(line) &&
         !isFramedAsDescriptive(normalizedBody, paragraphSpans, lineOffset)
       ) {
-        return true;
+        return line.trim();
       }
       lineOffset += line.length + 1;
     }
@@ -2583,12 +2583,13 @@ export function checkVerifiability(context) {
           proximityMatch.index,
         )
       ) {
-        return true;
+        return proximityMatch[0];
       }
       proximityMatch = proximityPattern.exec(normalizedBody);
     }
-    return false;
+    return null;
   })();
+  const hasSubjectiveApproval = subjectiveApprovalMatch !== null;
   // A body that carries BOTH a resolved-decision marker (a
   // "## Decision (resolved …)" heading, or the grooming-pass workflow's
   // inline "Maintainer decision (…): …" prose, #2661) AND a concrete,
@@ -2613,8 +2614,7 @@ export function checkVerifiability(context) {
       return {
         pass: true,
         demoted: true,
-        evidence:
-          'Issue success depends on subjective approval or judgment (demoted: structural evidence present).',
+        evidence: `Issue success depends on subjective approval or judgment: "${subjectiveApprovalMatch}" (demoted: structural evidence present).`,
       };
     }
     return {
