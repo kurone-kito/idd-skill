@@ -494,8 +494,10 @@ once `ciGate.externalCheckWaivers.mode` is `maintainer-authorized`
 external check never silently makes this one waivable too. **Posting a
 waiver comment does not by itself turn the check green**: a waiver is
 a regular PR conversation comment, which is not one of the required
-workflow's triggers (`pull_request` push or `pull_request_review`
-submission), so after posting a waiver a maintainer must also
+workflow's triggers (`pull_request`/`pull_request_target` push --
+`pull_request_review` submission is not one either, since #2764 Phase
+1 moved it to the non-required companion), so after posting a waiver
+a maintainer must also
 **re-run the existing** PR-linked check run **for the current HEAD
 SHA** — the Actions UI "Re-run jobs" button, or
 `gh run rerun <run-id>` — for the required check to actually
@@ -2006,8 +2008,9 @@ endpoints, filtered by the pull request's head branch, to attribute cost the
 same way for your own workflows. A branch-name filter alone can include an
 unrelated run -- a reused branch name, or a same-repository `push` /
 `workflow_dispatch` run against that branch outside this pull request --
-so also restrict to `pull_request`/`pull_request_review`/
-`pull_request_review_comment`-triggered runs and check each run's own
+so also restrict to `pull_request`/`pull_request_target`/
+`pull_request_review`/`pull_request_review_comment`-triggered runs and
+check each run's own
 `pull_requests[].number` against the target pull request (empty for a
 fork-originated pull request, where GitHub never populates that field).
 

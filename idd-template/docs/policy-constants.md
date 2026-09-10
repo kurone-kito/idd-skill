@@ -343,9 +343,15 @@ to bind to and are effectively not waivable in practice -- see
 short, bounded poll `advisory-convergence.mjs` itself runs when the
 `idd-advisory-convergence` required check's only blocking reason is that
 the primary bot has not reviewed the pull request at all yet -- absorbing
-the common race between the `pull_request: synchronize` trigger (fires
-immediately on push) and the separate `pull_request_review` trigger
-(fires once the bot's review actually lands). This is a **distinct
+the common race between the `pull_request`/`pull_request_target:
+synchronize` trigger (fires immediately on push) and the primary bot's
+own review landing shortly after. The bot's review submission
+(`pull_request_review`) does not trigger this required workflow directly
+-- it moved to the non-required companion
+`idd-advisory-convergence-comment.yml` workflow (`--refresh-latest
+--apply`, #2764 Phase 1) -- so this poll, not a same-job trigger, is
+what actually absorbs a review landing within its own bounded window.
+This is a **distinct
 config subtree from `advisoryWait.pollInterval`** above: that key governs
 the whole-minute-only E-phase advisory-wait protocol's own longer-horizon
 wait loop, entered only after this check has already resolved; this
