@@ -462,7 +462,7 @@ guards are listed in `docs/policy-constants.md`. A repository may
 configure `critiqueLoop.delegate` to point this step at a different
 reviewer instead of the per-agent mechanism. When helper runtime is
 enabled, resolve the effective `critiqueLoop.delegate` with the
-[critique-delegate](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate)
+[`idd-critique-delegate`](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate)
 helper — `node scripts/idd-critique-delegate.mjs` for source-repo /
 vendored-node profiles; for package-manager / ephemeral-npx, resolve
 the profile-selected command from `docs/idd-helper-scripts.md` rather
