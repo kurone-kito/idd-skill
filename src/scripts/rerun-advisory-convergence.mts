@@ -194,14 +194,19 @@ const PENDING_STATUSES = new Set([
  * PR's required-check rollup on rerun, matching the events
  * `idd-advisory-convergence` itself subscribes to (its own header comment,
  * mirrored in `idd-ci.instructions.md` §Rerun mechanics): `pull_request`,
- * `pull_request_review`, `pull_request_review_comment`. A run triggered by
- * any other event -- most notably `workflow_dispatch` -- has no
- * `pull_request` context of its own and is documented as NOT reliably
- * associated with the PR's HEAD SHA, so rerunning it would not dependably
- * clear a stuck rollup even though the run itself is otherwise a plain,
- * non-bot failure. */
+ * `pull_request_target` (#2764 -- evaluated against the base branch's own
+ * workflow YAML, but its check-runs are still attached to the PR's real
+ * HEAD SHA, exactly like the other members here; the commit check-runs API
+ * this helper queries is scoped by SHA, not by triggering event, so no
+ * separate SHA-resolution path is needed), `pull_request_review`,
+ * `pull_request_review_comment`. A run triggered by any other event --
+ * most notably `workflow_dispatch` -- has no `pull_request` context of its
+ * own and is documented as NOT reliably associated with the PR's HEAD SHA,
+ * so rerunning it would not dependably clear a stuck rollup even though
+ * the run itself is otherwise a plain, non-bot failure. */
 const PULL_REQUEST_FAMILY_EVENTS = new Set([
   'pull_request',
+  'pull_request_target',
   'pull_request_review',
   'pull_request_review_comment',
 ]);
@@ -1085,7 +1090,7 @@ function classifyInstance(
       ...instance,
       classification: 'unresolved',
       reason: runEvent
-        ? `triggering event "${runEvent}" is not pull_request-family (pull_request / pull_request_review / pull_request_review_comment); rerunning it is not a reliable way to refresh the PR's required-check rollup -- inspect manually`
+        ? `triggering event "${runEvent}" is not pull_request-family (pull_request / pull_request_target / pull_request_review / pull_request_review_comment); rerunning it is not a reliable way to refresh the PR's required-check rollup -- inspect manually`
         : 'triggering event is unknown; inspect manually rather than assuming it is safe to rerun',
     };
   }
