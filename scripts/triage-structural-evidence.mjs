@@ -90,9 +90,30 @@ const CHECKBOX_ITEM_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\](?=[ \t]|$)/gm;
  *   boundary on a Windows-style-line-ending issue body (GitHub accepts
  *   either) and leaking a later section's content the same way an
  *   entirely-missed ATX boundary would have.
+ *
+ * A third fix (Codex review, PR #2840, round 15): the content line must
+ * start with zero leading indentation, not the previous `[ \t]*` (any
+ * amount). An indented continuation line of a list item (e.g. `- Run:`
+ * followed by a two-space-indented `` `node --test ...` `` line) is not a
+ * candidate-files-boundary-eligible top-level Setext heading content line
+ * even though it starts with neither a marker nor `>` -- it belongs to
+ * the enclosing list item, a different container level, and a dedented
+ * `---` right after it is CommonMark's own thematic break, not a Setext
+ * underline over that indented line. `gh api /markdown` confirms this
+ * renders as a real list-item continuation plus a real `<hr>`, not a
+ * heading. Without this, the boundary truncated the section right before
+ * that indented line, discarding its own real verification command.
+ * Mirrors the identical blanket "any indented line is Setext-ineligible"
+ * heuristic `discover-shared-file-overlap.mts`'s own
+ * `SETEXT_INELIGIBLE_PRECEDING_LINE_PATTERN` already applies for this
+ * exact question (its `^[ \t]+\S` alternative) -- deliberately giving up
+ * detecting a genuine 1-3-space-indented top-level Setext heading in
+ * exchange for never truncating a list item's own indented content,
+ * the same false-negative-over-false-positive trade-off already made
+ * there.
  */
 const NEXT_ATX_HEADING_PATTERN =
-  /\n(?: {0,3}#{1,6}\s|(?=[ \t]*(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
+  /\n(?: {0,3}#{1,6}\s|(?=(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
 /** Matches the `## Acceptance criteria` heading (any ATX level, any of
  * the two capitalization conventions used across this repository's own
  * issues) on its own line. Requires at least one space/tab after the `#`

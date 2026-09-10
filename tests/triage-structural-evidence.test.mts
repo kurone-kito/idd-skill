@@ -66,6 +66,36 @@ test('hasVerificationCommandSignal: a command in a LATER Setext-headed section d
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: a wrapped command on an indented list continuation right before a thematic break still counts (Codex review, PR #2840, round 15)', () => {
+  // An indented continuation line of a list item (e.g. `- Run:` followed
+  // by a two-space-indented command) is not top-level Setext-heading
+  // content -- it belongs to the enclosing list item, a different
+  // container level -- and a dedented `---` right after it is
+  // CommonMark's own thematic break, not a Setext underline over that
+  // indented line. `gh api /markdown` confirms this renders as a real
+  // list-item continuation (the command stays inside the list item) plus
+  // a real `<hr>`. The boundary previously truncated the section right
+  // before this line, discarding the command it names.
+  const body = [
+    '## Acceptance criteria',
+    '',
+    '- Run:',
+    '  `node --test tests/foo.test.mts`',
+    '---',
+    '',
+    '## Candidate files',
+    '',
+    '- `src/scripts/foo.mts`',
+    '',
+  ].join('\n');
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: a trailing checklist item followed by a thematic break still counts (control, round 8 behavior preserved by round 15)', () => {
+  const body = '## Acceptance criteria\n\n- [ ] one\n- [ ] two\n---\n';
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 test('hasVerificationCommandSignal: a heading with no space after the # run is not a real ATX heading (Codex review, PR #2840)', () => {
   // CommonMark requires a space/tab (or end of line) after the ATX `#`
   // run -- `##Acceptance criteria` renders as ordinary paragraph text,
