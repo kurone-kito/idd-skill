@@ -3906,14 +3906,18 @@ only on a duplicate_or_superseded fail (absent on every pass and on every
 other check), distinguishing a high-confidence mechanical hit from the weak
 title/declaration heuristic.
 
-A checks[] entry's "result" is "warn" (#2767) only for actionability,
-autonomy, or verifiability, and only when a lexical-pattern fail was
-demoted to a passed, annotated result because every structural-evidence
-signal (triage-structural-evidence.mts: a runnable verification command,
-an existing candidate file, a fully trusted author+editor set) held for
+A checks[] entry's "result" is "warn" (#2767) only for autonomy or
+verifiability, and only when a lexical-pattern fail was demoted to a
+passed, annotated result because every structural-evidence signal
+(triage-structural-evidence.mts: a runnable verification command, an
+existing candidate file, a fully trusted author+editor set) held for
 this issue; it counts as a pass for "passed"/"outcome"/"failedCheck" but
 is worth a human's attention when composing an A4.5 rejection comment for
-a DIFFERENT check that still failed outright. Never emitted in local
+a DIFFERENT check that still failed outright. actionability has no
+reachable demotion branch (#2767 round 17): its own pass condition
+already accepts any body containing the bare phrase "Acceptance
+Criteria"/"Output"/"Deliverables", a strict superset of what the
+verificationCommand signal itself requires. Never emitted in local
 (--body-file/--stdin) mode, which has no live author/editors to trust.
 
 "existingRejection" (#1887) is present only when a trusted marker actor

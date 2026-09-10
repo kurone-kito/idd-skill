@@ -330,13 +330,13 @@ check unless the acceptance criteria state exactly what it must say.
 Evaluate that branch on its own merits; if it only restates the bullet,
 classify as `needs-decision` rather than PASS.
 
-**Structural-evidence demotion for Checks 5/6/7 (#2767)**: a lexical
-fail (never Check 6's label/title-prefix/marker signals `#2737`, nor
-Check 7's escape-hatch branch above) demotes to `warn` when all three
-hold: `verificationCommand` (a runnable command, or 2+ checkboxes, in
+**Structural-evidence demotion for Checks 6/7 (#2767)**: a lexical fail
+(never Check 6's label/title-prefix/marker signals `#2737`, nor Check
+7's escape-hatch branch above) demotes to `warn` when all three hold:
+`verificationCommand` (a runnable command, or 2+ checkboxes, in
 `## Acceptance criteria`), `candidateFilesExist` (an existing
 `## Candidate files` path), and `trustedEditor` (author and every body
-editor trusted). `warn` still passes.
+editor trusted). `warn` still passes. (Check 5 has no such branch.)
 
 After A4.5 passes, proceed to `idd-claim.instructions.md`; for rejected
 candidates follow the Failure Outcomes section above.
