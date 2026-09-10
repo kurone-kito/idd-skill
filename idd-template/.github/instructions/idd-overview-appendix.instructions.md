@@ -122,6 +122,38 @@ human-readable note (see `idd-review-snapshot.instructions.md`).
 For the full PATH A / PATH B classification of review items and their
 handling rules, see `idd-review-triage.instructions.md`.
 
+## Upstream-candidate escalation
+
+**Gating.** Applies only when `upstreamEscalation.enabled` is `true`
+in `.github/idd/config.json` (absent or `false`: skip silently).
+
+**Qualifying criteria** (high-confidence bar, mirroring A4.5's
+`invalid`/`out-of-scope` rigor in `idd-suitability.instructions.md`):
+the discovered problem's root cause must be that an
+`idd-template`-sourced instruction/doc/helper's own stated logic is
+self-contradictory, or its steps as written cannot produce the outcome
+it claims. Never for a subjective "unclear wording" complaint, and
+never when the root cause is local to the current repository (its own
+code, config, or a local customization).
+
+- **Qualifying**: a step tells the reader to "proceed to step N" from
+  inside step N itself, with no later step N in the section — the
+  stated control flow cannot be followed as written.
+- **Non-qualifying**: an adopter finds a step confusing given their
+  own branch-naming convention — followable exactly as written; the
+  friction is local interpretation.
+
+**What to do.** Author (or extend, via the normal reuse-first checks)
+a local issue through `skills/issue-authoring/` as usual, additionally
+carrying the GitHub label `status:upstream-candidate` (create it on
+first use) and the hidden marker
+`<!-- {{PROJECT_MARKER_PREFIX}}-upstream-candidate: true -->`.
+
+**What never to do.** Never write to `kurone-kito/idd-skill` or any
+other repository — no comment, no issue, no mutation of any kind.
+Whether to report the local issue upstream is a human decision outside
+this workflow.
+
 ## Project commands
 
 The Project commands table (`fix-validate`, `pre-push-validate`,
