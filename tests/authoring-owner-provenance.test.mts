@@ -290,3 +290,94 @@ test('a same-generation acquire race resolves to the first acquire, never the la
   assert.equal(result.marker?.owner, 'owner-token-1');
   assert.equal(result.recordedBodySha256, sha256(winningGenerationBody));
 });
+
+test('a stale or malformed release-complete for another owner never closes the current generation', () => {
+  // The exact scenario chatgpt-codex-connector's second-round PR #2901
+  // review flagged: acquire A -> a release-complete for a DIFFERENT
+  // owner/set (stale, or from an unrelated malformed generation) ->
+  // competing acquire B. The stray release-complete must not close A's
+  // generation, so B is still a same-generation race, not a fresh
+  // generation -- A must remain the winner.
+  const winningBody = '# Draft\n\nOwned by A.\n';
+  const losingRacerBody = '# Draft\n\nEdited to match B, but B never wins.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody: losingRacerBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(winningBody), {
+          owner: 'owner-token-a',
+        }),
+        createdAt: '2026-09-10T16:48:44Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        // A stale/malformed completion for a DIFFERENT owner/set -- must
+        // be ignored, not treated as closing owner-token-a's generation.
+        body: ownerMarkerBody('release-complete', {
+          owner: 'owner-token-other',
+          snapshotSha256: sha256('unrelated-snapshot'),
+          supersedes: 'owner-token-other',
+        }),
+        createdAt: '2026-09-10T16:49:00Z',
+      },
+      {
+        id: 3,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(losingRacerBody), {
+          owner: 'owner-token-b',
+        }),
+        createdAt: '2026-09-10T16:50:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'mismatch');
+  assert.equal(result.marker?.owner, 'owner-token-a');
+  assert.equal(result.recordedBodySha256, sha256(winningBody));
+});
+
+test('a matching release-complete does close the generation, allowing the next acquire to win', () => {
+  // The positive counterpart: a release-complete that DOES retain the
+  // winning acquire's exact owner/set/session/anchor (and supersedes
+  // that owner) legitimately closes the generation, so the following
+  // acquire is a genuine new generation and wins outright.
+  const firstBody = '# Draft\n\nFirst.\n';
+  const secondBody = '# Draft\n\nSecond, legitimately re-acquired.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody: secondBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(firstBody), { owner: 'owner-token-1' }),
+        createdAt: '2026-09-10T16:48:44Z',
+      },
+      {
+        id: 2,
+        authorLogin: 'kurone-kito',
+        body: ownerMarkerBody('release-complete', {
+          owner: 'owner-token-1',
+          snapshotSha256: sha256('closed-set-snapshot'),
+          supersedes: 'owner-token-1',
+        }),
+        createdAt: '2026-09-10T16:49:00Z',
+      },
+      {
+        id: 3,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(secondBody), { owner: 'owner-token-2' }),
+        createdAt: '2026-09-10T16:50:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'pass');
+  assert.equal(result.marker?.owner, 'owner-token-2');
+});

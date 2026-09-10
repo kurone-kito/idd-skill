@@ -119,12 +119,19 @@ function normalizeMarkerPrefix(prefix: unknown): string {
  * racer or a duplicate — and never overrides the winner (kurone-kito/idd-skill#2891
  * review: this previously picked the globally-last acquire instead,
  * which could authorize the auto-release exception against a losing
- * racer's edited-body digest). A generation closes only on
- * `mode=release-complete`: release / release-guard alone do not,
- * since contract.md allows a new acquisition to start "only once the
- * anchor completion is reconciled" — an acquire after `release` but
- * before `release-complete` is still a same-generation race, not a
- * fresh generation. See this file's header comment for the anchor-only
+ * racer's edited-body digest). A generation closes only on a
+ * `mode=release-complete` that retains the exact owner/set/session/
+ * anchor of the currently open generation's winning acquire and
+ * supersedes that same owner token (`isMatchingCompletion` below) — a
+ * stale or malformed release-complete for a different owner/set never
+ * closes it (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector:
+ * closing on any release-complete for the target, unchecked, could let
+ * an unrelated completion evict a still-legitimate winner). `release` /
+ * `release-guard` alone never close a generation either, since
+ * contract.md allows a new acquisition to start "only once the anchor
+ * completion is reconciled" — an acquire after `release` but before
+ * `release-complete` is still a same-generation race, not a fresh
+ * generation. See this file's header comment for the anchor-only
  * `release-complete` caveat this replay accepts for a non-anchor child
  * target.
  */
@@ -164,11 +171,42 @@ function findWinningAcquire(
         generationOpen = true;
       }
       // else: same-generation race -- the first acquire keeps ownership.
-    } else if (event.parsed.mode === 'release-complete') {
+    } else if (
+      event.parsed.mode === 'release-complete' &&
+      winner &&
+      isMatchingCompletion(event.parsed, winner.parsed)
+    ) {
+      // #2901 review, chatgpt-codex-connector: a release-complete marker
+      // closes the CURRENT generation only when it retains that
+      // generation's exact owner/set/session/anchor and supersedes that
+      // same owner token (contract.md: "It retains the anchor's current
+      // owner, set, anchor, and session, and sets supersedes to that
+      // owner token"). A stale or malformed release-complete for a
+      // different owner/set never closes this generation -- ignoring it
+      // (rather than closing on any release-complete for the target) is
+      // what keeps a still-open generation's winner from being displaced
+      // by an unrelated completion.
       generationOpen = false;
     }
   }
   return winner;
+}
+
+/** True when `completion` (a `mode=release-complete` event) retains the
+ * exact owner/set/session/anchor of `winningAcquire` and supersedes that
+ * same owner token -- the only shape contract.md recognizes as a valid
+ * closure of the generation `winningAcquire` opened. */
+function isMatchingCompletion(
+  completion: ParsedAuthoringOwnerMarker,
+  winningAcquire: ParsedAuthoringOwnerMarker,
+): boolean {
+  return (
+    completion.owner === winningAcquire.owner &&
+    completion.set === winningAcquire.set &&
+    completion.session === winningAcquire.session &&
+    completion.anchor === winningAcquire.anchor &&
+    completion.supersedes === winningAcquire.owner
+  );
 }
 
 /**
@@ -340,14 +378,17 @@ Output schema:
   "target": "owner/repo#2891",
   "verdict": "pass|mismatch|not-found",
   "computedBodySha256": "<64-hex>",
-  "recordedBodySha256": "<64-hex>|null",
-  "marker": {"author": "...", "createdAt": "...", "owner": "...", "set": "...", "session": "...", "bodySha256": "<64-hex>"} | null,
+  "recordedBodySha256": "<64-hex-or-the-literal-string-none>|null",
+  "marker": {"author": "...", "createdAt": "...", "owner": "...", "set": "...", "session": "...", "bodySha256": "<64-hex-or-the-literal-string-none>"} | null,
   "checks": [{"id":"acquire_marker_found","name":"...","result":"pass|fail"}, {"id":"body_sha256_match","name":"...","result":"pass|fail"}]
 }
 
 "not-found" means no trusted mode=acquire authoring-owner marker exists for
 this issue's own target -- never treated as a pass. "mismatch" means the
-live body has changed since the acquire-time marker was posted.
+live body has changed since the acquire-time marker was posted, including
+when the winning acquire's own body-sha256 is the malformed-but-shape-valid
+sentinel "none" -- it can never equal a real 64-hex computed digest, so
+this stays fail-closed rather than silently passing.
 
 --verbose adds an "evidence" string to each checks[] entry (the computed
 and recorded digests, or the winning marker's author/timestamp); omitted by

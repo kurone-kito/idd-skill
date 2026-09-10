@@ -275,11 +275,13 @@ in this preamble, since the fallback differs per helper.
   [kurone-kito/idd-skill#2891](https://github.com/kurone-kito/idd-skill/issues/2891)).
   Replays the target's own marker log to pick the acquire that won its
   last generation (a same-generation race between two competing acquires
-  resolves to the earlier one, per contract.md's deterministic-comment-
-  order tie-break; a generation closes only on `mode=release-complete`),
-  rather than always taking the globally-last acquire comment (PR #2901
-  review, chatgpt-codex-connector: the earlier form could authorize the
-  auto-release exception against a losing racer's edited-body digest).
+  resolves to the earlier one — contract.md: choose the winner by
+  deterministic comment order — and a generation closes only on a
+  `mode=release-complete` that retains that generation's exact
+  owner/set/session/anchor), rather than always taking the globally-last
+  acquire comment (PR #2901 review, chatgpt-codex-connector: the earlier
+  form could authorize the auto-release exception against a losing
+  racer's edited-body digest, or against an unrelated stale completion).
   `mode=release-complete` is anchor-only, so for a non-anchor child in a
   multi-target set this replay cannot see the child's true generation
   boundary and fails closed (`mismatch`, never a false `pass`) instead —
