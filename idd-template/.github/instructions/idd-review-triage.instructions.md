@@ -179,7 +179,7 @@ a CODEOWNER/required-reviewer item (E6's AMD exception applies). Reply
 bundle every item from one cutoff into one follow-up issue per E6's
 follow-up-issue rule, each with an AC bullet and the
 `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
-marker. See
+marker (#2877). See
 [rationale](../../docs/idd-design-rationale.md#e4e5-round-count-defer-cutoff).
 
 ## E6 — Post disposition replies

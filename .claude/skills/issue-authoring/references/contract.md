@@ -1682,14 +1682,49 @@ only approval boundary.
   to the single target carrying the marker, never to a roadmap anchor
   or a sibling target in the same authoring set that lacks it; and a
   marker added after Stage 1 publication never qualifies a target
-  retroactively. This exists because
+  retroactively. **Provenance check (`#2877`):** before honoring this
+  exception, the releasing session must recompute the target's current
+  body-sha256 from a fresh read and compare it against that same
+  target's own `mode=acquire` owner marker's `body-sha256` (hashed from
+  the fresh read taken immediately before that marker was posted, so it
+  already reflects the published body — see "Per-target ownership"
+  above). A mismatch — the body changed since Stage 1 acquire — fails
+  closed: the auto-release exception does not apply for that release
+  attempt (this does not retroactively fail Stage 1 itself), and the
+  target falls back to the ordinary human-release-request precondition.
+  Perform this comparison immediately before the label-removal step
+  itself, not only once earlier in the sequence -- matching the
+  immediately-before-each-removal re-verification discipline this
+  section already requires for owner/set/anchor/session and the
+  expected label/body snapshot -- so a body edit landing between an
+  earlier check and the actual removal cannot silently bypass this
+  precondition. A dedicated helper/test to perform and verify this
+  comparison mechanically is tracked as a follow-up rather than
+  designed here. This
+  exists because
   `idd-review-triage.instructions.md`'s round-count cutoff files this
   exact marker on a follow-up issue during unattended autonomous
   execution, where no human is present to issue a release request —
   left under the ordinary human-gated boundary above, that deferred
   work would sit under the authoring label indefinitely on a fully
   autonomous repository, silently defeating the point of deferring it
-  at all (preventive; no observed incident yet).
+  at all (preventive; no observed incident yet). **Roadmap-anchor
+  scope (accepted limitation, `#2877`):** the "never to a roadmap
+  anchor" exclusion above is permanent, not a gap awaiting a fix — a
+  roadmap anchor carrying this marker under `issue-scope: roadmap`
+  with orphan discovery disabled still requires the ordinary
+  human-gated explicit release request, since this exception's
+  single-target design intentionally does not extend to anchor
+  release. See `docs/idd-autonomy-contract.md`'s Stage 2 label-removal
+  row for the same note in table form. **Sequencing with the
+  originating issue (`#2877`):** the round-count cutoff's follow-up
+  issue also carries a `Refs #<originating-issue>` line back to the
+  deferred work (the D3 follow-up-issue rule in
+  `idd-pr-submit.instructions.md`); `discover-readiness-check.mts`
+  treats that specific `Refs` reference as a hard blocker — resolved
+  the same way an ordinary `Blocked by #<N>` line is — while
+  `#<originating-issue>` stays open, a narrow exception to `Refs`
+  otherwise being non-blocking everywhere else in this workflow.
 
 ## Publication boundary
 
