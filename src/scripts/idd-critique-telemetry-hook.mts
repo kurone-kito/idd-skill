@@ -232,6 +232,16 @@ export interface InvokeCritiqueTelemetryHookOptions {
    * otherwise truncate the JSON the hook receives).
    */
   onPayloadDelivered?: () => void;
+  /**
+   * Injectable for tests, mirroring {@link spawnFn}: overrides
+   * `process.platform` for this invocation's win32-vs-POSIX kill/watchdog
+   * branching (kurone-kito/idd-skill#2892) so the exact `taskkill`/
+   * `powershell.exe` argument construction can be asserted
+   * deterministically from a non-Windows CI runner, the same way a fake
+   * `spawnFn` is already used to assert the POSIX watchdog's arguments.
+   * Defaults to the real `process.platform`.
+   */
+  platform?: NodeJS.Platform;
 }
 
 /**
@@ -298,6 +308,7 @@ export function invokeCritiqueTelemetryHook(
     requestedTimeoutMs >= 0
       ? requestedTimeoutMs
       : DEFAULT_INVOKE_TIMEOUT_MS;
+  const platform = options?.platform ?? process.platform;
   let delivered = false;
   const notifyDelivered = () => {
     if (delivered) {
@@ -338,6 +349,28 @@ export function invokeCritiqueTelemetryHook(
         // `process.exit()` terminates unconditionally regardless of any
         // pending handle's ref status.
         detached: true,
+        // windowsHide (kurone-kito/idd-skill#2892; no-op on POSIX): maps to
+        // Win32's CREATE_NO_WINDOW creation flag *and* STARTUPINFO's
+        // wShowWindow=SW_HIDE. Verified against libuv's own win/process.c
+        // and Microsoft's Process Creation Flags documentation: the
+        // CREATE_NO_WINDOW half is a documented no-op here specifically --
+        // MSDN states it "is ignored if ... used with either
+        // CREATE_NEW_CONSOLE or DETACHED_PROCESS", and `detached: true`
+        // above is what sets DETACHED_PROCESS (required so this child
+        // survives `--invoke`'s `process.exit()`; cannot be dropped). The
+        // wShowWindow=SW_HIDE half is set unconditionally in STARTUPINFO
+        // regardless of DETACHED_PROCESS, but whether `cmd.exe` (the
+        // `shell: true` wrapper on win32) propagates that show-state hint
+        // to the further child it execs for `command` -- the actual
+        // process whose own auto-allocated console is the "large number of
+        // windows" symptom this issue reports -- is unverified from a
+        // non-Windows implementation environment. Kept regardless: no-op
+        // or partial help, never harmful, and matches this option's
+        // documented intent. The bound, reliable mitigation for that
+        // symptom is `killProcessGroup`'s win32 tree-kill below, which
+        // caps the window's lifetime at `timeoutMs` rather than
+        // preventing it outright.
+        windowsHide: true,
       });
     } catch {
       settle(false);
@@ -364,11 +397,11 @@ export function invokeCritiqueTelemetryHook(
     // the *negative* pid reaches the whole tree.
     const watchdog =
       typeof child.pid === 'number' && child.pid > 0
-        ? spawnWatchdog(spawnFn, child.pid, timeoutMs)
+        ? spawnWatchdog(spawnFn, child.pid, timeoutMs, platform)
         : null;
 
     const timer = setTimeout(() => {
-      killProcessGroup(child);
+      killProcessGroup(child, spawnFn, platform);
       settle(false);
     }, timeoutMs);
     // Never block process exit on this timer alone -- resolve() already
@@ -404,13 +437,13 @@ export function invokeCritiqueTelemetryHook(
     // `setsid`/`setpgid` to become a group leader.
     child.on('error', () => {
       clearTimeout(timer);
-      cancelWatchdog(watchdog);
+      cancelWatchdog(watchdog, spawnFn, platform);
       notifyDelivered();
       settle(false);
     });
     child.on('exit', (code) => {
       clearTimeout(timer);
-      cancelWatchdog(watchdog);
+      cancelWatchdog(watchdog, spawnFn, platform);
       settle(code === 0);
     });
     child.stdin?.on('error', () => {
@@ -444,28 +477,62 @@ export function invokeCritiqueTelemetryHook(
 }
 
 /**
- * SIGKILL the whole detached process group `child` leads, falling back to a
- * single-PID kill only when the group-targeted signal itself fails (e.g.
- * `child.pid` is somehow already gone, or a platform without POSIX
- * process-group semantics). Never throws.
+ * On POSIX, SIGKILL the whole detached process group `child` leads, falling
+ * back to a single-PID kill only when the group-targeted signal itself
+ * fails (e.g. `child.pid` is somehow already gone, or a platform without
+ * POSIX process-group semantics). On win32, a negative pid is meaningless
+ * to `process.kill` -- there is no POSIX-style process-group signal to
+ * send -- so this instead delegates to {@link killProcessTreeWindows}, a
+ * real process-*tree* kill via `taskkill /T` (kurone-kito/idd-skill#2892):
+ * `shell: true` makes `child` the `cmd.exe` wrapper, and the actual
+ * invoked command is a *further* child of that wrapper, never reachable by
+ * terminating the wrapper alone -- which is exactly what this file's
+ * previous Windows fallback (`child.kill('SIGKILL')` below) only ever did,
+ * leaving that further child (and its own auto-allocated console window)
+ * orphaned. Never throws.
  *
  * Also used by {@link cancelWatchdog} to disarm the watchdog's own process
- * group (itself `detached: true` -- see {@link spawnWatchdog}) once it is no
- * longer needed; `child` in that call is the watchdog's `sh -c` wrapper, not
- * the hook command.
+ * (itself `detached: true` -- see {@link spawnWatchdogPosix} /
+ * {@link spawnWatchdogWindows}) once it is no longer needed; `child` in
+ * that call is the watchdog's own wrapper process, not the hook command.
  */
-function killProcessGroup(child: ChildProcess): void {
+function killProcessGroup(
+  child: ChildProcess,
+  spawnFn: typeof spawn,
+  platform: NodeJS.Platform,
+): void {
   const pid = child.pid;
-  if (typeof pid === 'number' && pid > 0) {
+  const hasPid = typeof pid === 'number' && pid > 0;
+  if (platform === 'win32') {
+    const spawned = hasPid && killProcessTreeWindows(pid, spawnFn);
+    if (!spawned) {
+      // `spawned` is false either because there was no pid to target at
+      // all (`hasPid` false -- `child.kill('SIGKILL')` below is then a
+      // guaranteed no-op, not a real fallback), or because the `taskkill`
+      // spawn itself threw synchronously (e.g. unresolvable on PATH --
+      // vanishingly rare on a real Windows install). Attempting the
+      // single-process kill regardless is still strictly better than
+      // giving up outright: this is this file's pre-fix Windows
+      // behavior, kept only as a last resort -- it does not reach a
+      // further-descendant grandchild (the bug kurone-kito/idd-skill#2892
+      // fixes), but is better than no attempt when a pid is available.
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // Already exited; ignore.
+      }
+    }
+    return;
+  }
+  if (hasPid) {
     try {
       // A negative pid targets the process *group* with that id -- with
       // `detached: true` above, `child.pid` is both, since the child is
       // its own session/group leader.
-      process.kill(-pid, 'SIGKILL');
+      process.kill(-(pid as number), 'SIGKILL');
       return;
     } catch {
-      // Fall through -- e.g. ESRCH (group leader already exited) or no
-      // POSIX process-group semantics on this platform (Windows).
+      // Fall through -- e.g. ESRCH (group leader already exited).
     }
   }
   try {
@@ -476,36 +543,99 @@ function killProcessGroup(child: ChildProcess): void {
 }
 
 /**
- * Disarm a still-sleeping {@link spawnWatchdog} once the hook it was
- * guarding has already settled on its own (#2685 review, Codex): without
- * this, a hook that exits well inside `timeoutMs` still leaves the watchdog
- * asleep for the remainder of the window, so a PID/process-group id reused
- * by an unrelated process before the watchdog's `sleep` elapses could be
- * killed by mistake. `watchdog` is `null` when {@link spawnWatchdog} itself
- * never ran (no usable `child.pid`) or failed to spawn -- a no-op then, not
- * an error. Reuses {@link killProcessGroup} since the watchdog is itself
- * `detached: true` (its own `sh -c 'sleep ...; kill ...'` wrapper is its own
- * session/group leader); killing it before its `sleep` returns prevents the
- * trailing `kill -9 -<pid>` from ever running.
+ * Best-effort win32 process-*tree* kill (kurone-kito/idd-skill#2892):
+ * spawns `taskkill /PID <pid> /T /F`, which walks and terminates the whole
+ * descendant tree rooted at `pid` -- see {@link killProcessGroup}'s own doc
+ * comment for why a tree-kill, not a single-PID kill, is required here.
+ * Fire-and-forget, matching this file's other spawned helpers: the caller
+ * does not wait for `taskkill` itself to finish, only for this synchronous
+ * spawn *attempt* to be issued -- `settle(false)` in the caller still fires
+ * immediately after, exactly as it already does on the POSIX path.
+ * `windowsHide: true` reliably suppresses `taskkill`'s own window here
+ * (unlike the primary hook spawn and the watchdog below): this spawn is
+ * not `detached: true`, so `CREATE_NO_WINDOW` is not ignored per Windows'
+ * own documented creation-flag precedence (see the primary spawn's own
+ * comment). An `'error'` listener guards against the same asynchronous-
+ * spawn-failure crash {@link spawnWatchdogPosix} already guards against
+ * (e.g. `taskkill.exe` somehow unresolvable) -- this file's "never throws"
+ * contract cannot depend on the environment always having `taskkill` on
+ * `PATH`. Returns `false` only when the synchronous `spawnFn(...)` call
+ * itself threw, so the caller can fall back to a plain single-process kill
+ * instead of silently killing nothing.
  */
-function cancelWatchdog(watchdog: ChildProcess | null): void {
-  if (watchdog) {
-    killProcessGroup(watchdog);
+function killProcessTreeWindows(pid: number, spawnFn: typeof spawn): boolean {
+  try {
+    const killer = spawnFn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    killer.on('error', () => {
+      // Best-effort only -- see doc comment.
+    });
+    killer.unref();
+    return true;
+  } catch {
+    return false;
   }
 }
 
 /**
- * Best-effort, self-contained deadline enforcement that survives this
- * process exiting before `timeoutMs` elapses (`--invoke`'s whole point).
+ * Disarm a still-sleeping {@link spawnWatchdog} once the hook it was
+ * guarding has already settled on its own (#2685 review, Codex): without
+ * this, a hook that exits well inside `timeoutMs` still leaves the watchdog
+ * asleep for the remainder of the window, so a PID/process-group id reused
+ * by an unrelated process before the watchdog's sleep elapses could be
+ * killed by mistake. `watchdog` is `null` when {@link spawnWatchdog} itself
+ * never ran (no usable `child.pid`) or failed to spawn -- a no-op then, not
+ * an error. Reuses {@link killProcessGroup} since the watchdog is itself
+ * `detached: true` (its own wrapper process is its own session/group
+ * leader on POSIX, or the sole watchdog process on win32); killing it
+ * before its sleep returns prevents the trailing kill step from ever
+ * running. See {@link spawnWatchdogWindows}'s own doc comment for a
+ * win32-specific residual this disarming does not fully close (PID reuse
+ * is faster there than the POSIX pid_max-wrap argument assumes).
+ */
+function cancelWatchdog(
+  watchdog: ChildProcess | null,
+  spawnFn: typeof spawn,
+  platform: NodeJS.Platform,
+): void {
+  if (watchdog) {
+    killProcessGroup(watchdog, spawnFn, platform);
+  }
+}
+
+/**
+ * Picks the platform-appropriate backup watchdog (kurone-kito/idd-skill
+ * #2892): {@link spawnWatchdogPosix} or {@link spawnWatchdogWindows}. Both
+ * share the same contract -- best-effort, self-contained deadline
+ * enforcement that survives this process exiting before `timeoutMs`
+ * elapses (`--invoke`'s whole point), returning `null` if the spawn itself
+ * failed, never throwing.
+ */
+function spawnWatchdog(
+  spawnFn: typeof spawn,
+  pid: number,
+  timeoutMs: number,
+  platform: NodeJS.Platform,
+): ChildProcess | null {
+  return platform === 'win32'
+    ? spawnWatchdogWindows(spawnFn, pid, timeoutMs)
+    : spawnWatchdogPosix(spawnFn, pid, timeoutMs);
+}
+
+/**
+ * POSIX half of the backup watchdog pair (see {@link spawnWatchdog}).
  * Spawns a detached, unref'd `sh -c 'sleep <n>; kill -9 -<pid> || true'` --
  * `sleep`/`kill` rather than the `timeout(1)` coreutil, which isn't
  * guaranteed present everywhere. Returns the spawned watchdog so the caller
  * can {@link cancelWatchdog} it once the hook it guards settles on its own,
  * or `null` if the spawn itself failed. Never throws: spawn failure here
- * (no POSIX shell on `PATH`, e.g. a bare Windows environment) silently
- * forfeits this backup and leaves the JS-level timer above as the only
- * enforcement for a caller that stays alive to see it -- an accepted gap on
- * that platform, not a new one this function introduces.
+ * (no POSIX shell on `PATH`, e.g. a bare Windows environment -- handled
+ * instead by {@link spawnWatchdogWindows}) silently forfeits this backup
+ * and leaves the JS-level timer above as the only enforcement for a caller
+ * that stays alive to see it -- an accepted gap on that platform, not a new
+ * one this function introduces.
  *
  * **No `--` before `-<pid>`** (deliberately, empirically verified): `sh`
  * on Debian/Ubuntu (and derivatives) is `dash`, whose `kill` builtin
@@ -526,7 +656,7 @@ function cancelWatchdog(watchdog: ChildProcess | null): void {
  * process) without ever helping the intended case, so it is dropped: once
  * the group-targeted `kill` reports no such group, this watchdog gives up.
  */
-function spawnWatchdog(
+function spawnWatchdogPosix(
   spawnFn: typeof spawn,
   pid: number,
   timeoutMs: number,
@@ -557,6 +687,94 @@ function spawnWatchdog(
     // A no-op listener is all this needs: the caller already treats a
     // missing watchdog as an accepted, silent gap (see this function's own
     // doc comment).
+    watchdog.on('error', () => {
+      // Best-effort only -- see doc comment above and on this function.
+    });
+    watchdog.unref();
+    return watchdog;
+  } catch {
+    // See doc comment: best-effort only.
+    return null;
+  }
+}
+
+/**
+ * Win32 half of the backup watchdog pair (see {@link spawnWatchdog}) --
+ * kurone-kito/idd-skill#2892. Before this, the POSIX-only backup watchdog
+ * silently did nothing useful on Windows (no `sh` on `PATH`), leaving a
+ * native-Windows IDD agent's fire-and-forget `--invoke` with no deadline
+ * enforcement at all once the CLI process itself has already exited (the
+ * primary, JS-level timer in {@link invokeCritiqueTelemetryHook} cannot
+ * fire from a dead process either -- see that function's own comment on
+ * why this backup exists in the first place).
+ *
+ * Spawns `powershell.exe` (Windows PowerShell 5.1, present on every
+ * Windows install since 7 SP1 / Server 2008 R2 -- not `pwsh`/PowerShell
+ * Core, whose presence is not guaranteed) directly, not through another
+ * `shell: true` hop: keeps this watchdog a single process layer, so
+ * {@link cancelWatchdog}'s win32 tree-kill can reach it by pid alone if the
+ * hook it guards settles early.
+ *
+ * `timeout.exe` is deliberately not used for the sleep: with
+ * `stdio: 'ignore'` it fails outright ("Input redirection is not
+ * supported"). `Start-Sleep -Seconds <n>` (a PowerShell built-in cmdlet,
+ * not a further child process) is the sleep primitive instead.
+ *
+ * The kill step is `Start-Process -FilePath taskkill -ArgumentList '/PID',
+ * <pid>,'/T','/F' -WindowStyle Hidden -Wait`, not a bare `taskkill ...`
+ * call inside the `-Command` script: `-WindowStyle Hidden` sets
+ * `STARTF_USESHOWWINDOW`/`wShowWindow=SW_HIDE` directly on *taskkill's
+ * own* STARTUPINFO, so it stays hidden regardless of whatever console
+ * state this watchdog's own `powershell.exe` process ends up with --
+ * unlike a bare `taskkill` invocation, which would simply inherit that
+ * state. `-Wait` keeps this whole script's own execution (and thus the
+ * watchdog process) alive until `taskkill` actually finishes, matching the
+ * POSIX version's `sleep <n>; kill ...` sequencing.
+ *
+ * **Known residual, not present on the POSIX side**: {@link
+ * cancelWatchdog}'s PID-reuse-race argument (see {@link
+ * spawnWatchdogPosix}'s own doc comment) relies on POSIX pid/pgid reuse
+ * requiring the entire process group to exit, be reaped, *and* a full
+ * `pid_max` wrap before the number can be reused. Windows recycles freed
+ * PIDs far faster (observably within seconds under process churn, nothing
+ * resembling a full namespace wrap), so the residual window where a
+ * quick-exit hook's watchdog stays armed against an already-freed pid for
+ * the rest of `timeoutMs` is measurably wider here. `cancelWatchdog`
+ * disarming this watchdog as soon as the hook settles (unchanged from the
+ * POSIX path) is what actually bounds this in practice, not any
+ * Windows-side pid-reuse guarantee -- an unexplained Windows-only flake in
+ * a quick-exit test is the first place to look.
+ *
+ * Never throws: spawn failure here (no `powershell.exe` resolvable --
+ * essentially never on a real Windows install) silently forfeits this
+ * backup, the same accepted gap {@link spawnWatchdogPosix} documents for a
+ * bare environment with no POSIX shell.
+ */
+function spawnWatchdogWindows(
+  spawnFn: typeof spawn,
+  pid: number,
+  timeoutMs: number,
+): ChildProcess | null {
+  try {
+    // Same rounding rationale as spawnWatchdogPosix's own comment.
+    const seconds = Math.ceil(Math.max(timeoutMs, 0) / 1000);
+    const script =
+      `Start-Sleep -Seconds ${seconds}; ` +
+      `Start-Process -FilePath taskkill -ArgumentList '/PID',${pid},'/T','/F' -WindowStyle Hidden -Wait`;
+    const watchdog = spawnFn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-WindowStyle',
+        'Hidden',
+        '-Command',
+        script,
+      ],
+      { detached: true, stdio: 'ignore', windowsHide: true },
+    );
+    // Same asynchronous-spawn-failure rationale as spawnWatchdogPosix's own
+    // comment -- an unresolvable powershell.exe must not crash the caller.
     watchdog.on('error', () => {
       // Best-effort only -- see doc comment above and on this function.
     });

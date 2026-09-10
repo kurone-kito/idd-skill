@@ -159,7 +159,22 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
     } else {
       process.env.NODE_OPTIONS = originalNodeOptions;
     }
-    rmSync(tempRoot, { recursive: true, force: true });
+    // maxRetries/retryDelay (kurone-kito/idd-skill#2892): a caller that
+    // just killed a process launched from this stub (e.g.
+    // idd-critique-telemetry-hook's win32 tree-kill, now a fire-and-forget
+    // `taskkill`/`powershell.exe` spawn rather than a synchronous signal)
+    // can reach this `restore()` slightly before Windows has actually
+    // finished tearing down the `<name>.exe` image this directory holds --
+    // NTFS refuses to delete a still-open executable (EBUSY/EPERM), which
+    // `force: true` alone does not swallow (only ENOENT). Retrying absorbs
+    // that narrow, transient window instead of failing the whole test on a
+    // cleanup race unrelated to what the test itself is asserting.
+    rmSync(tempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
   };
 }
 
