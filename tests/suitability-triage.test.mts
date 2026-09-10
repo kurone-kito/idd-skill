@@ -2774,6 +2774,30 @@ test('trust safety still flags a supplied-content noun after an abbreviation per
   assert.equal(result.pass, false);
 });
 
+// #2767 round 4 (Codex review, PR #2840, on the sibling
+// triage-structural-evidence.mts pattern this one was copied from):
+// ACCEPTANCE_CRITERIA_PATTERN required only `\s*` (zero-or-more) between
+// the ATX `#` run and "Acceptance", so a malformed "##Acceptance
+// Criteria" line -- which CommonMark renders as plain paragraph text, not
+// a heading, since a real ATX heading requires that whitespace -- still
+// matched. Every content shape tried empirically routes to the same
+// pass/fail outcome either way here (checkVerifiability's whole-body
+// "Alternative" fallback independently recognizes the same objective
+// content when the primary AC-section gate does not fire), so this is a
+// source-text structural pin on the corrected pattern itself, the same
+// convention this file already uses for an internal not otherwise
+// observable through a behavioral difference.
+test('ACCEPTANCE_CRITERIA_PATTERN requires whitespace after the ATX # run, matching CommonMark (#2767)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /const ACCEPTANCE_CRITERIA_PATTERN = \/\^#\+\[ \\t\]\+Acceptance/,
+  );
+});
+
 test('verifiability passes a resolved-decision issue with objective criteria', () => {
   // Check 7 false-positive that now passes: the body describes a resolved
   // maintainer decision and carries objective acceptance criteria.

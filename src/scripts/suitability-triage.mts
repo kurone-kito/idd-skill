@@ -819,7 +819,18 @@ function isEnumeratedParentheticalEntry(
   const otherEntries = [...beforeEntries, ...afterEntries];
   return otherEntries.length > 0 && otherEntries.every(looksLikeLabelEntry);
 }
-const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
+// #2767 round 4 (Codex review, PR #2840): required at least one space/tab
+// after the `#` run (`[ \t]+`, not `\s*`) -- CommonMark requires that
+// whitespace (or end of line) for a real ATX heading, so a malformed line
+// like "##Acceptance Criteria" with no space renders as plain paragraph
+// text, never a heading, yet the original `\s*` still matched it (and,
+// since `\s` also matches a newline under the `/m` flag, even matched
+// across a line break, e.g. "#\nAcceptance Criteria"). This is the same
+// pattern triage-structural-evidence.mts's own
+// ACCEPTANCE_CRITERIA_HEADING_PATTERN copied from, and Codex's finding
+// there applies here too -- `[ \t]+` still matches every real heading;
+// only a line Markdown itself would not render as a heading now misses.
+const ACCEPTANCE_CRITERIA_PATTERN = /^#+[ \t]+Acceptance\s+Criteria[ \t]*$/im;
 // #2711 PR #2735 review (Codex): this repo's own "## Candidate files"
 // convention (#2589) names files to EDIT, never a verification signal --
 // matched here (mirroring ACCEPTANCE_CRITERIA_PATTERN's own shape) so the
