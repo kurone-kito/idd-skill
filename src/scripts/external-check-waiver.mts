@@ -110,7 +110,18 @@ interface LinkedIssueWithClaim {
 /** Result of {@link selectLinkedIssueCandidate}. */
 type LinkedIssueSelection =
   | { ok: true; issue: LinkedIssueWithClaim; reason: string }
-  | { ok: false; issue: null; reason: string };
+  | {
+      ok: false;
+      issue: null;
+      reason: string;
+      /** kurone-kito/idd-skill#2657 (Copilot review, PR #2895): the number
+       * of candidates that survived filtering, so a caller can tell a
+       * definitively claimless PR (0) apart from an AMBIGUOUS one (> 1,
+       * some claim resolves, just not uniquely) without string-matching
+       * `reason`. The two are not interchangeable: only the former means
+       * "no claim to bind to at all". */
+      candidateCount: number;
+    };
 
 /** Raw authority evidence accepted by {@link normalizeAuthorityEvidence}. */
 export interface AuthorityEvidenceInput {
@@ -216,14 +227,21 @@ interface ExternalCheckWaiverPlanInput {
    * is evaluated independent of that hatch by design); and `reason` must
    * equal {@link SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON} exactly. Rejects
    * the literal `claimless: true` input outright (redundant with this
-   * flag, so treated as caller error) -- but when no linked issue resolves
+   * flag, so treated as caller error) -- but when NO linked issue resolves
    * a claim at all (a fully claimless allowlisted PR under
    * `advisoryWait.convergenceScope: "all-prs"`, Codex review, PR #2895),
    * this falls back to the SAME `none`-claim-id binding `claimless` would
    * produce, rather than blocking: the auto-bootstrap trust chain never
    * relies on a claim, so there is nothing unsafe about binding claimless
-   * when that is the only option. Binds to the linked issue's real active
-   * claim exactly like the default path whenever one does resolve.
+   * when that is the only option. Restricted to a DEFINITIVELY claimless
+   * PR (zero candidates), never an AMBIGUOUS one (more than one
+   * candidate, Copilot review, PR #2895) -- some claim genuinely exists
+   * there, just not uniquely identified from this input, and this file's
+   * own claim resolution has no way to prove that ambiguity would be
+   * resolved the same way by `advisory-convergence.mts`'s own (different)
+   * claim-resolution mechanism, so it fails closed and blocks instead.
+   * Binds to the linked issue's real active claim exactly like the
+   * default path whenever one does resolve.
    */
   autoBootstrap?: boolean;
   /**
@@ -521,8 +539,28 @@ export function planExternalCheckWaiver(
   // as before this change) or the caller already passed the literal
   // `--claimless` flag (that combination is rejected explicitly below,
   // unaffected by this auto-fallback).
+  //
+  // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): restricted to
+  // `candidateCount === 0` -- a DEFINITIVELY claimless PR, not merely any
+  // failure to resolve. `selectLinkedIssueCandidate` also reports `ok:
+  // false` for an AMBIGUOUS PR (multiple candidates, `candidateCount >
+  // 1`): applicability there is indeterminate, not absent -- some claim
+  // genuinely exists, just not uniquely identified from this input alone.
+  // Falling back to `none` for that case too would still fail closed at
+  // consume time in the ordinary case (the sentinel only matches an
+  // independently-empty active claim there), but this repository's own
+  // gate resolves its claim through a DIFFERENT mechanism than this
+  // file's own multi-candidate scan (`summarizeClaimValidation` over the
+  // linked issue's own claim comments, not `issueCandidates` filtering),
+  // so nothing here can prove the two would always agree on "ambiguous".
+  // Restricting to the unambiguous, provably-empty case removes that
+  // doubt entirely rather than relying on a symmetry this file cannot
+  // verify.
   const autoBootstrapImplicitClaimless =
-    autoBootstrap && !claimless && !linkedIssue.ok;
+    autoBootstrap &&
+    !claimless &&
+    !linkedIssue.ok &&
+    linkedIssue.candidateCount === 0;
 
   const blockingReasons: string[] = [];
   if (String(pr.state ?? 'OPEN').toUpperCase() !== 'OPEN') {
@@ -1586,6 +1624,7 @@ function selectLinkedIssueCandidate(
       issue: null,
       reason:
         'could not resolve a single active linked issue claim on the PR branch',
+      candidateCount: 0,
     };
   }
   return {
@@ -1593,6 +1632,7 @@ function selectLinkedIssueCandidate(
     issue: null,
     reason:
       'multiple linked issues expose active claims on the PR branch; rerun with --issue and --claim-id',
+    candidateCount: filtered.length,
   };
 }
 

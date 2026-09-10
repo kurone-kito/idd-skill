@@ -1420,16 +1420,23 @@ idd-external-check-waiver --pr 123 \
 - it resolves the linked issue's real active claim exactly like the
   ordinary path when exactly one resolves, but falls back to the same
   claimless `none` binding `--claimless` renders (rather than blocking)
-  when no single active claim resolves at all (Codex review, PR #2895) --
-  the fixed workflow invocation never passes `--issue`/`--claim-id`/
+  when ZERO candidates resolve at all (Codex review, PR #2895) -- the
+  fixed workflow invocation never passes `--issue`/`--claim-id`/
   `--claimless`, so a fully claimless allowlisted PR under the default
   `advisoryWait.convergenceScope: "all-prs"` (no linked issue, e.g. a
   human-authored checker-file edit outside IDD) would otherwise be
   permanently unable to post this waiver. Safe because the consumer's own
   `none`-sentinel match (below) only ever succeeds when it independently
   finds no active claim either, so this can never paper over a genuine
-  claim mismatch; explicitly combining the literal `--claimless` flag with
-  `--auto-bootstrap` is still rejected as redundant caller error;
+  claim mismatch. Restricted to the zero-candidate case specifically, not
+  an AMBIGUOUS one (more than one candidate resolves, Copilot review, PR
+  #2895): some claim genuinely exists there, just not uniquely
+  identified from this input, and this file's own claim resolution
+  cannot prove `advisory-convergence.mts`'s own (different)
+  claim-resolution mechanism would treat that ambiguity the same way, so
+  an ambiguous PR still blocks. Explicitly combining the literal
+  `--claimless` flag with `--auto-bootstrap` is still rejected as
+  redundant caller error;
 - it never reuses an existing marker (kurone-kito/idd-skill#2657, Codex
   review round 2, PR #2895): the generic reuse scan every other
   `--apply` invocation runs first (to avoid double-posting on a retry)

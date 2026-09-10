@@ -164,8 +164,28 @@ export function planExternalCheckWaiver(input, options = {}) {
   // as before this change) or the caller already passed the literal
   // `--claimless` flag (that combination is rejected explicitly below,
   // unaffected by this auto-fallback).
+  //
+  // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): restricted to
+  // `candidateCount === 0` -- a DEFINITIVELY claimless PR, not merely any
+  // failure to resolve. `selectLinkedIssueCandidate` also reports `ok:
+  // false` for an AMBIGUOUS PR (multiple candidates, `candidateCount >
+  // 1`): applicability there is indeterminate, not absent -- some claim
+  // genuinely exists, just not uniquely identified from this input alone.
+  // Falling back to `none` for that case too would still fail closed at
+  // consume time in the ordinary case (the sentinel only matches an
+  // independently-empty active claim there), but this repository's own
+  // gate resolves its claim through a DIFFERENT mechanism than this
+  // file's own multi-candidate scan (`summarizeClaimValidation` over the
+  // linked issue's own claim comments, not `issueCandidates` filtering),
+  // so nothing here can prove the two would always agree on "ambiguous".
+  // Restricting to the unambiguous, provably-empty case removes that
+  // doubt entirely rather than relying on a symmetry this file cannot
+  // verify.
   const autoBootstrapImplicitClaimless =
-    autoBootstrap && !claimless && !linkedIssue.ok;
+    autoBootstrap &&
+    !claimless &&
+    !linkedIssue.ok &&
+    linkedIssue.candidateCount === 0;
   const blockingReasons = [];
   if (String(pr.state ?? 'OPEN').toUpperCase() !== 'OPEN') {
     blockingReasons.push(`PR #${pr.number ?? '?'} is not open`);
@@ -1110,6 +1130,7 @@ function selectLinkedIssueCandidate(issueCandidates, options = {}) {
       issue: null,
       reason:
         'could not resolve a single active linked issue claim on the PR branch',
+      candidateCount: 0,
     };
   }
   return {
@@ -1117,6 +1138,7 @@ function selectLinkedIssueCandidate(issueCandidates, options = {}) {
     issue: null,
     reason:
       'multiple linked issues expose active claims on the PR branch; rerun with --issue and --claim-id',
+    candidateCount: filtered.length,
   };
 }
 function normalizeChecks(statusCheckRollup = []) {

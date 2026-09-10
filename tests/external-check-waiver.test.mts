@@ -926,14 +926,15 @@ test('planExternalCheckWaiver: --auto-bootstrap still blocks on an empty actor w
   assert.match(report.blockingReasons.join(' | '), /actor is empty/);
 });
 
-test('planExternalCheckWaiver: --auto-bootstrap still blocks an ambiguous multi-issue PR (Codex review, PR #2895)', () => {
+test('planExternalCheckWaiver: --auto-bootstrap still blocks an ambiguous multi-issue PR (Copilot review, PR #2895)', () => {
   // Two candidates instead of zero -- the OTHER selectLinkedIssueCandidate
-  // failure reason. The auto-bootstrap fallback binds claimless whenever no
-  // SINGLE claim resolves, ambiguous or absent alike; the consumer-side
-  // `none`-sentinel match only ever succeeds on a genuinely claimless PR
-  // (protocol-helpers.mts), so this stays safe even though it is a
-  // different `selectLinkedIssueCandidate` reason than the fully-absent
-  // case above.
+  // failure reason. Unlike the fully-absent case, some claim genuinely
+  // exists here, just not uniquely identified from this input alone --
+  // the implicit-claimless fallback is restricted to `candidateCount ===
+  // 0` precisely so this ambiguous case still blocks instead of silently
+  // binding `none`, since this file's own claim resolution has no way to
+  // prove `advisory-convergence.mts`'s own (different) claim-resolution
+  // mechanism would treat the ambiguity the same way.
   const input = buildAutoBootstrapInput();
   input.actor = 'github-actions[bot]';
   const [issue] = input.issueCandidates;
@@ -947,13 +948,11 @@ test('planExternalCheckWaiver: --auto-bootstrap still blocks an ambiguous multi-
     repoOwner: 'kurone-kito',
   });
 
-  assert.equal(report.canApply, true);
-  assert.equal(report.linkedIssue, null);
-  const parsed = parseExternalCheckWaiverComment(
-    report.body,
-    '2026-08-31T03:13:24Z',
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join(' | '),
+    /multiple linked issues expose active claims/,
   );
-  assert.equal(parsed?.claimId, 'none');
 });
 
 test('planExternalCheckWaiver: --auto-bootstrap renders the run-id field into the marker body', () => {
