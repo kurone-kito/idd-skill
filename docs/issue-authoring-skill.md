@@ -1249,7 +1249,7 @@ Work on its own.
 ### Narrow auto-release exception (review-fix-loop-cutoff)
 
 A follow-up issue whose body carried the exact marker
-`<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->` at
+`<!-- <marker-prefix>-authoring-defer-source: review-fix-loop-cutoff -->` at
 Stage 1 publication time — part of the initial `authoring-publication` body
 write, never added by a later edit — may complete the full release
 checklist and label-removal sequence above without the "user explicitly
@@ -1269,6 +1269,49 @@ request. Left under the ordinary human-gated boundary above, that
 deferred work would sit under the authoring label indefinitely on a
 fully autonomous repository, silently defeating the point of deferring
 it at all (preventive; no observed incident yet).
+
+**Provenance check (`#2877`).** Before honoring this exception, the
+releasing session must recompute the target's current body-sha256 from
+a fresh read and compare it against that same target's own
+`mode=acquire` owner marker's `body-sha256` (hashed from the fresh
+read taken immediately before that marker was posted, so it already
+reflects the published body — see "Per-target ownership" above). A
+mismatch — the body changed since Stage 1 acquire — fails closed: the
+auto-release exception does not apply for that release attempt (this
+does not retroactively fail Stage 1 itself), and the target falls back
+to the ordinary human-release-request precondition. Perform this
+comparison immediately before the label-removal step itself, not only
+once earlier in the sequence — matching this section's existing
+discipline of re-verifying immediately before each removal for
+owner/set/anchor/session and the expected label/body snapshot — so a
+body edit landing between an earlier check and the actual removal
+cannot silently bypass this precondition. A dedicated helper/test to
+perform and verify this comparison mechanically is tracked as a
+follow-up rather than designed here.
+
+**Roadmap-anchor scope (accepted limitation, `#2877`).** The "never a
+roadmap anchor" exclusion above is permanent, not a gap awaiting a fix:
+a roadmap anchor carrying this marker under `issue-scope: roadmap`
+with orphan discovery disabled still requires the ordinary human-gated
+explicit release request, since this exception's single-target design
+intentionally does not extend to anchor release. See
+`docs/idd-autonomy-contract.md`'s Stage 2 label-removal row for the
+same note in table form.
+
+**Sequencing with the originating issue (`#2877`).** The round-count
+cutoff's follow-up issue also carries a `Refs #<originating-issue>`
+line back to the deferred work (the D3 follow-up-issue rule in
+`idd-pr-submit.instructions.md`). `discover-readiness-check.mts`
+treats that specific `Refs` reference as a hard blocker — resolved the
+same way an ordinary `Blocked by #<N>` line is — while
+`#<originating-issue>` stays open, a narrow exception to `Refs`
+otherwise being non-blocking everywhere else in this workflow. The
+marked follow-up must carry exactly one `Refs` keyword line naming
+exactly one issue: nothing in body text lets Discover safely tell the
+true origin apart from an unrelated `Refs` citation that also starts
+its own line, or apart from a second number on the same line, so more
+than one line or more than one number fails closed instead of
+guessing.
 
 ## Reuse-first issue policy
 

@@ -175,13 +175,13 @@ state of its own, but can still match a prior resolved thread's claim.
 **Round-count cutoff (`critiqueLoop.deferAfterRounds`, default `15`).**
 Once the claim's `review-watermark` post count (paginated,
 including minimized ones and this pass's own E1 post) reaches the
-threshold, disposition a still-undispositioned Low-severity (E4) PATH A
+threshold, disposition an undispositioned Low-severity (E4) PATH A
 item **Reject (defer)** instead of the normal judgment — never an
 already-Accepted item mid-fix (`e10NoProgressHoldAfter` unaffected) nor
 a CODEOWNER/required-reviewer item (E6's AMD exception applies). Reply
 `**Rejected** — deferred to follow-up issue #<n> (round
-<round>/<threshold>): {reason}`, resolve per the normal rule, and
-bundle every item from one cutoff into one follow-up issue per E6's
+<round>/<threshold>): {reason}`, resolve normally, and bundle every
+item from this cutoff into one follow-up issue per E6's
 follow-up-issue rule, each with an AC bullet and the
 `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
 marker. See

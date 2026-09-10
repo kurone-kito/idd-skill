@@ -734,7 +734,13 @@
       "id": "idd-review-triage-instructions",
       "source": "idd-template/.github/instructions/idd-review-triage.instructions.md",
       "target": ".github/instructions/idd-review-triage.instructions.md",
-      "mode": "exact"
+      "mode": "concreted",
+      "replacements": [
+        {
+          "from": "{{PROJECT_MARKER_PREFIX}}",
+          "to": "idd-skill"
+        }
+      ]
     },
     {
       "id": "idd-roadmap-audit-instructions",

@@ -43,6 +43,23 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // path runs `extractBlockedByIssueNumbers` (a const declared after that block
 // would be in the temporal dead zone).
 const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?`;
+// Declared here, above the `import.meta.main` CLI block, for the same
+// top-level-await TDZ reason as `DEPENDENCY_LINE_PREFIX` above: the block
+// awaits `evaluateDiscoverReadiness`, whose own synchronous body can call
+// `hasReviewFixLoopCutoffDeferMarker` (#2877) before that promise settles.
+/** The one currently-defined `{markerPrefix}-authoring-defer-source` value
+ * `hasReviewFixLoopCutoffDeferMarker` recognizes. */
+const REVIEW_FIX_LOOP_CUTOFF_DEFER_SOURCE = 'review-fix-loop-cutoff';
+// Declared here (same TDZ reason as the two constants above) for
+// `extractReviewFixLoopCutoffRefsIssueNumbers`'s trailing-reference check
+// (#2877 review fix round 4, Codex P2): matches a bare local `#N` NOT
+// immediately preceded by a word character, `/`, or `-` -- so
+// `other/repo#20` (a cross-repo mention) and a hyphen-joined token do not
+// match, but an ordinary prose reference like `#410` in
+// `(background; originating issue #410)` does. Deliberately not global
+// (`.test()` on a match-only, non-`g` regex is stateless); only existence
+// matters here, not position or count.
+const TRAILING_LOCAL_ISSUE_REF_PATTERN = /(?<![\w/-])#\d+\b/;
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
@@ -326,6 +343,52 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         reasons.add(`blocked_by_open_issue:#${blockedNumber}`);
       }
     }
+    // #2877: a follow-up issue carrying the review-fix-loop-cutoff defer
+    // marker names its originating issue via a `Refs #NNN` line, which is
+    // otherwise non-blocking. Narrow exception: resolve that reference the
+    // same way an ordinary `Blocked by #NNN` is resolved above, so the
+    // follow-up cannot start before the work it was deferred from actually
+    // closes. An issue without the marker is completely unaffected -- its
+    // own `Refs` lines are never inspected here.
+    if (hasReviewFixLoopCutoffDeferMarker(issue.body, resolvedMarkerPrefix)) {
+      const {
+        numbers: deferSourceRefsNumbers,
+        ambiguous: deferSourceRefsAmbiguous,
+      } = extractReviewFixLoopCutoffRefsIssueNumbers(issue.body);
+      // Review fix (#2877): a marked issue with no extracted `Refs` target
+      // at all is a malformed marker -- missing the D3-required
+      // originating-issue line -- and must fail closed (blocked) rather
+      // than silently becoming Discover-ready with no blocker reasons.
+      // Review fix round 2 (#2877, Codex P2): a marked issue with *more
+      // than one* genuine `Refs` keyword line is equally malformed -- D3
+      // requires exactly one, and nothing about body order lets this
+      // function safely guess which line is the true origin -- so this
+      // also fails closed instead of picking one arbitrarily.
+      if (deferSourceRefsAmbiguous) {
+        reasons.add('ambiguous_defer_source_refs_lines');
+      } else if (deferSourceRefsNumbers.length === 0) {
+        reasons.add('missing_defer_source_refs_line');
+      }
+      for (const refsNumber of deferSourceRefsNumbers) {
+        const refsIssue = await getIssue(refsNumber, issueCache, loadIssue);
+        if (!refsIssue || isInaccessibleIssue(refsIssue)) {
+          const refsReason = isInaccessibleIssue(refsIssue)
+            ? 'issue_inaccessible'
+            : 'issue_not_found';
+          reasons.add('unresolvable_defer_source_refs_issue');
+          unresolvable.push({
+            issueNumber: issue.number,
+            kind: 'defer_source_refs_issue',
+            reference: `#${refsNumber}`,
+            reason: refsReason,
+          });
+          continue;
+        }
+        if (refsIssue.state === 'OPEN') {
+          reasons.add(`blocked_by_deferred_refs_issue:#${refsNumber}`);
+        }
+      }
+    }
     for (const marker of extractBlockedByRoadmapMarkers(
       issue.body,
       resolvedMarkerPrefix,
@@ -596,6 +659,115 @@ export function extractDependencyIssueNumbers(body) {
     ...explicitDependencies,
     ...taskListDependencies.map((match) => Number.parseInt(match[1], 10)),
   ]);
+}
+/**
+ * Whether `body` carries the exact
+ * `<!-- {markerPrefix}-authoring-defer-source: review-fix-loop-cutoff -->`
+ * marker (#2877). `idd-review-triage.instructions.md`'s round-count cutoff
+ * writes this marker, once, at Stage 1 publication time, on a follow-up
+ * issue that bundles deferred Low-severity review findings; that issue's
+ * body also carries a `Refs #<originating-issue>` line back to the PR/issue
+ * the deferral came from (the D3 follow-up-issue rule), which this file
+ * otherwise never parses as a dependency -- `Refs` is deliberately
+ * non-blocking everywhere else, including `discover-roadmap-graph`'s cycle
+ * exemption. `skills/issue-authoring/references/contract.md` documents
+ * this marker as valid only when it is part of the initial
+ * `authoring-publication` write, never added by a later edit -- this
+ * function does not itself verify that provenance, it only reads
+ * current body content. That is intentionally fine for Discover's
+ * narrow purpose here: a marker this function should not have honored
+ * (added after publication) can only make a candidate *more* blocked,
+ * never less, so a false positive here fails safe.
+ */
+export function hasReviewFixLoopCutoffDeferMarker(
+  body,
+  markerPrefix = DEFAULT_MARKER_PREFIX,
+) {
+  const pattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-defer-source:\\s*${escapeRegex(REVIEW_FIX_LOOP_CUTOFF_DEFER_SOURCE)}\\s*-->`,
+    'i',
+  );
+  // Strip code regions first, matching the #1121 boundary every other
+  // extractor in this file already applies: an issue that quotes this
+  // marker as inline-code or fenced-example prose (documenting the
+  // mechanism itself, as `#2877` and its own follow-up do) must not be
+  // misread as actually carrying a live marker.
+  return pattern.test(stripMarkdownCodeRegions(body));
+}
+/**
+ * Collect the `#N` reference declared on the body's `Refs` keyword line --
+ * never every `Refs` line the way {@link extractBlockedByIssueNumbers}
+ * collects every `Blocked by` line (#2877 review fix, Codex P2). The D3
+ * follow-up-issue rule requires exactly one `Refs #<originating-issue>`
+ * line naming exactly one issue this marker's target was deferred from.
+ * Reading only the first matching line by body position is order-fragile:
+ * a later, unrelated `Refs #N` citation that also happens to start its
+ * own line (for example a standalone `Refs #900 (non-blocking)` aside) is
+ * textually indistinguishable from the true origin, and nothing in D3
+ * guarantees the origin line comes first (#2877 review fix, Codex P2
+ * round 2). Rather than guess an order, this requires exactly one genuine
+ * `Refs` keyword line: zero yields `{ numbers: [], ambiguous: false }`
+ * (the caller's `missing_defer_source_refs_line` reason covers that);
+ * two or more yields `{ numbers: [], ambiguous: true }`, and the caller
+ * fails closed instead of arbitrarily picking one. The same ambiguity
+ * applies within the sole line itself: `Refs #410, #900` parses as two
+ * valid references (the generic dependency-ref-list grammar this shares
+ * with `Blocked by` intentionally allows a comma-separated list), but
+ * this marker's origin is a single issue, not a list, and this function
+ * cannot tell which of the two is the real origin -- so more than one
+ * extracted number (across the keyword line and any wrapped continuation
+ * lines together) is *also* ambiguous, not a multi-target blocker (#2877
+ * review fix round 3, Codex P2). The same check also inspects the text
+ * `consumeDependencyRefList` leaves unconsumed on the keyword line itself:
+ * that helper stops at the first non-ref-list token and discards the rest
+ * (by design, for the generic `Blocked by`/`Depends on` extractors, where
+ * trailing prose is deliberately not a blocker), so a line like
+ * `Refs #900 (background; originating issue #410)` would otherwise report
+ * the unambiguous single target `[900]` while silently hiding `#410` in
+ * the discarded remainder -- also ambiguous, not a hidden second number
+ * (#2877 review fix round 4, Codex P2). A `Refs` mention that does not
+ * start its own line (ordinary prose citing an issue mid-sentence, like
+ * `See also Refs #900 (non-blocking) for background.`) is not a keyword
+ * line at all and never counts toward any of this. See
+ * {@link hasReviewFixLoopCutoffDeferMarker} for how the caller decides
+ * whether any of this is blocking in the first place.
+ */
+export function extractReviewFixLoopCutoffRefsIssueNumbers(body) {
+  const stripped = stripMarkdownCodeRegions(body);
+  const linePattern = new RegExp(
+    `${DEPENDENCY_LINE_PREFIX}Refs:?[ \\t]+(#\\d+.*)$`,
+    'gim',
+  );
+  const lineMatches = [...stripped.matchAll(linePattern)];
+  if (lineMatches.length === 0) {
+    return { numbers: [], ambiguous: false };
+  }
+  if (lineMatches.length > 1) {
+    return { numbers: [], ambiguous: true };
+  }
+  const [match] = lineMatches;
+  const { numbers, remaining } = consumeDependencyRefList(match[1]);
+  const continuationNumbers = consumeContinuationRefLines(
+    stripped,
+    (match.index ?? 0) + match[0].length,
+  );
+  const allNumbers = dedupeNumbers([...numbers, ...continuationNumbers]);
+  // Round-4 review fix (Codex P2): `consumeDependencyRefList` only consumes
+  // a *contiguous* leading ref-list and silently discards everything after
+  // the first non-separator token -- by design for the generic
+  // `Blocked by`/`Depends on` extractors, where trailing prose is
+  // deliberately not a blocker. For this specific marker's single-origin
+  // requirement, a second local reference hiding in that discarded prose
+  // (e.g. `Refs #900 (background; originating issue #410)`) is just as
+  // disqualifying as a second comma-separated number would be -- checking
+  // only `allNumbers.length` above would miss it entirely.
+  if (
+    allNumbers.length > 1 ||
+    TRAILING_LOCAL_ISSUE_REF_PATTERN.test(remaining)
+  ) {
+    return { numbers: [], ambiguous: true };
+  }
+  return { numbers: allNumbers, ambiguous: false };
 }
 /**
  * Walk `argv` and return every occurrence of the given long-flag literals
