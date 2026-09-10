@@ -1746,12 +1746,13 @@ Interpretation rules:
   Codex P1 -- the mandatory `--read-tokens` check in the Claim
   revalidation gate has no helper-free path without this): resolve the
   same filename for the queried `{claim-id}`, using the same sanitize-
-  then-truncate rule as the write side. Missing file, unparseable JSON,
-  or a parsed `claimId` field that disagrees with the queried
-  `{claim-id}` are all `present: false`/`malformed` -- treat every one
-  of them as absent and fail closed, mirroring the CLI's own
-  `readGeneratedClaimTokens` behavior above; only a well-formed record
-  whose `claimId` field matches is `present: true`.
+  then-truncate rule as the write side, then reproduce the same three
+  outcomes as the CLI's own `--read-tokens` above: a missing file is
+  `present: false`; a file that exists but is unparseable JSON, or whose
+  parsed `claimId` field disagrees with the queried `{claim-id}`, is
+  `present: true, malformed: true`; only a well-formed record whose
+  `claimId` field matches is plain `present: true`. Treat `malformed`
+  the same as absent for the ownership check -- fail closed on both.
 
 ### Clone-scoped lock
 
