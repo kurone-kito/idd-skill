@@ -1241,10 +1241,17 @@ facade and F-phase consumer land. The contract is intentionally
 auditable and fail-closed.
 
 ```md
-<!-- idd-external-check-waiver: {agent-id} {claim-id|none} {head-sha} check:{check-selector} reason:{reason-token} expires:{iso8601} -->
+<!-- idd-external-check-waiver: {agent-id} {claim-id|none} {head-sha} check:{check-selector} reason:{reason-token} expires:{iso8601} run-id:{run-id} -->
 
 _{actor}: external check waiver for IDD F phase._
 ```
+
+`run-id:{run-id}` is an optional trailing field (kurone-kito/idd-skill#2657):
+the posting GitHub Actions run's own `GITHUB_RUN_ID`, carried verbatim (not
+percent-encoded -- it is a numeric run id, not free text). Every
+person-authored waiver omits it and parses exactly as before this field
+existed; it exists only for the automated `self-referential-bootstrap-auto`
+waiver kind below.
 
 Interpretation rules:
 
@@ -1319,6 +1326,70 @@ Interpretation rules:
     marker comments into the PR
   - in solo-maintainer repositories, this helper-generated comment is
     the authorization path; a normal PR approval is not equivalent
+
+#### Automated self-referential-bootstrap-auto waiver (kurone-kito/idd-skill#2657)
+
+A narrow, documented exception to "human maintainer only" above: when a
+PR's own diff touches `idd-advisory-convergence`'s committed trigger-file
+allowlist (the check's own source, its policy inputs, or its workflow
+files -- exactly seven paths, a committed constant, never derived from
+imports), that PR cannot benefit from its own fix to the checker while
+still unmerged. `idd-advisory-convergence.yml` detects this from a
+separate job with `issues: write` as its only write permission (the
+verdict job's own read-only permissions are unchanged) and posts a marker
+as `github-actions[bot]` via `GITHUB_TOKEN`, using the CLI's
+`--auto-bootstrap` mode:
+
+```sh
+idd-external-check-waiver --pr 123 \
+  --check "idd-advisory-convergence" \
+  --reason "self-referential-bootstrap-auto" \
+  --run-id "$GITHUB_RUN_ID" \
+  --auto-bootstrap \
+  --apply --yes
+```
+
+`--auto-bootstrap` differs from ordinary usage in exactly three ways:
+
+- it skips the collaborator-authority check entirely (there is no human
+  actor to authorize -- the trust model below replaces it);
+- `--reason` must equal the literal token `self-referential-bootstrap-auto`
+  (a value the parser rejects for every other purpose) and `--run-id` is
+  required; `--expires`/`--expires-in` are rejected -- the expiry is
+  always computed internally as the PR's HEAD commit timestamp plus a
+  fixed `PT24H`, independent of `advisoryWait.convergenceDeadline`;
+- it still resolves the linked issue's real active claim exactly like the
+  ordinary path (never a claimless `none` waiver) and still requires one
+  to exist.
+
+The marker is honored only when **all four** of the following hold,
+verified by `advisory-convergence.mts` itself (not the generic
+`resolveTrustedCollaboratorMarkerLogins` trust surface, since this check
+needs a live per-marker run lookup no other consumer needs):
+
+1. the comment author is exactly `github-actions[bot]`;
+2. the `reason:` token is exactly `self-referential-bootstrap-auto`;
+3. `GET /repos/{owner}/{repo}/actions/runs/{run-id}` for the marker's
+   `run-id:` returns `path` equal to
+   `.github/workflows/idd-advisory-convergence.yml`, `head_sha` equal to
+   the marker's `{head-sha}`, and `head_repository.full_name` equal to
+   the current repository; and
+4. that same response's `event` field is exactly `pull_request_target`,
+   never `pull_request` -- closing the gap where a same-repository PR
+   editing the workflow YAML can still trigger a `pull_request`-triggered
+   run of it during a `pull_request`/`pull_request_target` migration
+   window (kurone-kito/idd-skill#2764 Phase 1).
+
+A marker missing `run-id:`, whose run cannot be resolved, targets another
+head SHA or repository, or ran under any event other than
+`pull_request_target`, is rejected the same way a manual waiver from an
+untrusted actor is today. Unlike an ordinary maintainer-authorized waiver
+(gated behind `deadlinePassed || terminalUnavailable`), a valid
+self-referential-bootstrap-auto waiver is evaluated **unconditionally** --
+it makes `ready` true immediately, without waiting for the deadline clock
+or a proven Copilot outage, since the whole point is bootstrapping a fix
+to the deadline mechanism itself. Do not widen this exception to any
+other reason token, actor, or check selector.
 
 ### Provider health helper
 
