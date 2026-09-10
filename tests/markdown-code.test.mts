@@ -987,6 +987,28 @@ test('findHtmlBlockRanges opens a custom-tag block right after a thematic break 
   assert.equal(masked.includes('after'), true);
 });
 
+test('findHtmlBlockRanges opens a custom-tag block right after a spaced thematic break (Codex review, PR #2840, round 22)', () => {
+  // A spaced thematic break (`_ _ _`) is CommonMark-valid too, unlike a
+  // tightly-packed one (`---`) it is recognized only by
+  // MARKDOWN_THEMATIC_BREAK_PATTERN, not MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.
+  // `gh api /markdown` confirms it ends its own block the same way.
+  const body = [
+    'Intro',
+    '',
+    '_ _ _',
+    '<x-demo>',
+    '- [ ] one',
+    '- [ ] two',
+    '',
+    'after',
+  ].join('\n');
+  const ranges = findHtmlBlockRanges(body);
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+  assert.equal(masked.includes('[ ] one'), false);
+  assert.equal(masked.includes('[ ] two'), false);
+  assert.equal(masked.includes('after'), true);
+});
+
 test('findHtmlBlockRanges still does not open a custom-tag block right after a list-item line (control, round 20)', () => {
   // A list item's own content line can still be, or start, an open
   // paragraph within that item -- unlike a heading or thematic break, it
