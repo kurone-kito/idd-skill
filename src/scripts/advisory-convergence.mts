@@ -286,6 +286,16 @@ export function resolveSelfReferentialTriggerFiles(
         'yarn.lock',
         ...workflowPaths,
       ];
+    case 'ephemeral-npx':
+      // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 6): an
+      // ephemeral-npx adopter selects its checker version via
+      // `helperRuntime.packageSpec` in `.github/idd/config.json` (see
+      // idd-helper-scripts.md), not a vendored file or a dependency
+      // manifest -- a PR that repoints that pin at a fixed checker
+      // without also touching a workflow file must still be able to
+      // trigger this bypass, or it stays blocked by the very checker
+      // bug this mechanism exists to work around.
+      return ['.github/idd/config.json', ...workflowPaths];
     default:
       return workflowPaths;
   }
@@ -2861,18 +2871,34 @@ export function collectFromGitHub(
   // token's permissions are not fork-restricted for a same-repository
   // PR) and spam arbitrarily many distinct fake `run-id:` values under
   // the correct reason token, each costing a separate serialized
-  // Actions API call. Two additional, independent filters close
-  // this: (1) a local, network-free HEAD-SHA match against this PR's
-  // OWN current HEAD -- cheap and correlates every genuine marker,
-  // since `renderExternalCheckWaiverComment` always binds one to the
-  // HEAD it was posted for; and (2) a hard cap on the number of
-  // distinct run ids ever looked up, taking the EARLIEST candidates by
-  // `createdAt` (mirroring `collectValidWaiverComments`'s own
-  // earliest-wins convention) so a flood of later spam comments can
-  // never crowd out the genuine, normally-single, early post. Five is
-  // generous headroom over the "at most one legitimate marker per
-  // relevant push" steady state while keeping a burst bounded and cheap.
-  const MAX_AUTO_WAIVER_RUN_LOOKUPS = 5;
+  // Actions API call. A local, network-free HEAD-SHA match against
+  // this PR's OWN current HEAD closes most of this cheaply --
+  // `renderExternalCheckWaiverComment` always binds a genuine marker to
+  // the HEAD it was posted for -- but a same-HEAD flood is still
+  // possible, so a hard cap on the number of distinct run ids ever
+  // looked up remains necessary too.
+  //
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 6): an
+  // EARLIEST-first cap (this file's own prior revision) is exactly as
+  // exploitable as a LATEST-first one, just from the opposite
+  // direction -- a same-repository attacker workflow that wins the race
+  // to post before the trusted posting job finishes can crowd out the
+  // genuine, later marker just as reliably as a late flood could crowd
+  // out an early one. No selection ORDER can fully close this without
+  // an API call per candidate, which is the exact cost this prefilter
+  // exists to avoid. This is a bounded-cost, defense-in-depth
+  // optimization, never the authoritative check -- `autoWaiverValid`
+  // below still requires independent Actions-run/allowlist
+  // verification regardless of what this prefilter selects, and the
+  // existing maintainer-authorized waiver remains available as the
+  // documented escape hatch on the rare PR where a flood genuinely
+  // exhausts this budget. Twenty is a deliberately generous bound
+  // (versus the "at most one legitimate marker per relevant push"
+  // steady state) that keeps worst-case API cost small and safe while
+  // making a reliable crowd-out require posting dozens of distinct
+  // spam comments on the PR -- conspicuous, and itself rate-limited by
+  // GitHub's own comment-creation API, unlike an unbounded lookup loop.
+  const MAX_AUTO_WAIVER_RUN_LOOKUPS = 20;
   const autoWaiverCandidates: { runId: string; createdAt: string }[] = [];
   const seenAutoWaiverRunIds = new Set<string>();
   for (const comment of comments) {

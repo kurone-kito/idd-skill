@@ -473,14 +473,16 @@ test("collectFromGitHub never looks up a run id whose own marker HEAD does not m
   });
 });
 
-test('collectFromGitHub bounds the number of run-id lookups, keeping only the earliest candidates by createdAt (Codex review, PR #2895, round 5: DoS-via-comment-flood guard)', () => {
+test('collectFromGitHub bounds the number of run-id lookups, keeping only the earliest candidates by createdAt (Codex review, PR #2895, rounds 5-6: DoS-via-comment-flood guard)', () => {
   withHermeticCwd(() => {
-    // Seven distinct, otherwise-fully-valid candidates -- a same-repository
-    // PR-authored pull_request workflow with issues: write is not
-    // fork-restricted and could post arbitrarily many of these. Only a
-    // hard cap on lookup COUNT closes this, independent of the HEAD/author
-    // filters above (a flood could still share this PR's own real HEAD).
-    const candidateCount = 7;
+    // Twenty-five distinct, otherwise-fully-valid, same-HEAD candidates --
+    // more than the 20-lookup cap -- a same-repository PR-authored
+    // pull_request workflow with issues: write is not fork-restricted and
+    // could post arbitrarily many of these. Only a hard cap on lookup
+    // COUNT closes this, independent of the HEAD/author filters above (a
+    // flood could still share this PR's own real HEAD, which this
+    // scenario deliberately does).
+    const candidateCount = 25;
     const comments = Array.from({ length: candidateCount }, (_, index) => ({
       id: 100 + index,
       body: renderExternalCheckWaiverComment({
@@ -493,10 +495,10 @@ test('collectFromGitHub bounds the number of run-id lookups, keeping only the ea
         actor: 'github-actions[bot]',
         runId: String(index),
       }),
-      // Ascending createdAt -- the earliest five (run ids "0".."4") are
+      // Ascending createdAt -- the earliest twenty (run ids "0".."19") are
       // the ones a bound respecting earliest-wins must keep.
-      createdAt: `2026-07-31T09:00:0${index}Z`,
-      updatedAt: `2026-07-31T09:00:0${index}Z`,
+      createdAt: `2026-07-31T09:00:${String(index).padStart(2, '0')}Z`,
+      updatedAt: `2026-07-31T09:00:${String(index).padStart(2, '0')}Z`,
       authorLogin: 'github-actions[bot]',
     }));
     const workflowRuns: Record<string, unknown> = {};
@@ -522,6 +524,9 @@ test('collectFromGitHub bounds the number of run-id lookups, keeping only the ea
     const lookedUpRunIds = Object.keys(inputs.autoWaiverRunLookups ?? {})
       .map(Number)
       .sort((left, right) => left - right);
-    assert.deepEqual(lookedUpRunIds, [0, 1, 2, 3, 4]);
+    assert.deepEqual(
+      lookedUpRunIds,
+      Array.from({ length: 20 }, (_, index) => index),
+    );
   });
 });

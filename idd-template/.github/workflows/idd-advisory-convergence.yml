@@ -577,6 +577,15 @@ jobs:
                 "yarn.lock"
               )
               ;;
+            ephemeral-npx)
+              # kurone-kito/idd-skill#2657 (Codex review, PR #2895, round
+              # 6): this profile pins its checker version via
+              # helperRuntime.packageSpec in .github/idd/config.json, not
+              # a vendored file or dependency manifest.
+              ALLOWLIST+=(
+                ".github/idd/config.json"
+              )
+              ;;
           esac
           CHANGED=$(gh pr diff "$PR_NUMBER" --name-only)
           TOUCHED=false

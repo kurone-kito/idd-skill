@@ -3692,7 +3692,7 @@ test('resolveSelfReferentialTriggerFiles: a package-manager adopter resolves its
 });
 
 test('resolveSelfReferentialTriggerFiles: an unrecognized or absent profile resolves only the profile-invariant workflow paths', () => {
-  for (const profile of [undefined, 'ephemeral-npx', 'instructions-only']) {
+  for (const profile of [undefined, 'instructions-only']) {
     assert.deepEqual(
       resolveSelfReferentialTriggerFiles(profile, 'someone-else/adopter-repo'),
       [
@@ -3701,6 +3701,24 @@ test('resolveSelfReferentialTriggerFiles: an unrecognized or absent profile reso
       ],
     );
   }
+});
+
+test('resolveSelfReferentialTriggerFiles: an ephemeral-npx adopter resolves its config-pinned package spec too (Codex review, PR #2895, round 6)', () => {
+  // That profile selects its checker version via
+  // helperRuntime.packageSpec in .github/idd/config.json, not a vendored
+  // file or dependency manifest -- a PR repointing that pin at a fixed
+  // checker without also touching a workflow file must still match.
+  assert.deepEqual(
+    resolveSelfReferentialTriggerFiles(
+      'ephemeral-npx',
+      'someone-else/adopter-repo',
+    ),
+    [
+      '.github/idd/config.json',
+      ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+      '.github/workflows/idd-advisory-convergence-comment.yml',
+    ],
+  );
 });
 
 test('self-referential-bootstrap-auto: a vendored-node adopter touching its own compiled .mjs checker is accepted (Codex + Copilot review, PR #2895)', () => {
