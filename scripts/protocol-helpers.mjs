@@ -4963,6 +4963,19 @@ export function summarizeRequiredChecks(
   // downgrade below actually fired for (empty unless it fired). See
   // `identityUnresolvedCheckNames`'s own doc comment above.
   let identityUnresolvedRequiredCheckNames = [];
+  // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
+  // computed unconditionally (not nested inside the `requiredCheckNames.length
+  // > 0` block below) because `resolvePresentRunConclusion` below needs it
+  // too, and that fallback conclusion is consulted precisely when NO
+  // required checks are configured at all -- see its own doc comment for
+  // why an identity-unresolved check name must never let THAT fallback
+  // read 'all-passing' either, closing the alternate route Copilot found
+  // for reopening the same decoy-masking gap on an unprotected branch.
+  const identityUnresolvedNameSet = new Set(
+    Array.isArray(identityUnresolvedCheckNames)
+      ? identityUnresolvedCheckNames.map((name) => String(name ?? '').trim())
+      : [],
+  );
   if (requiredCheckNames.length > 0) {
     const effectiveChecks = matchedRequiredChecks.map((c) =>
       c.coveredByWaiver ? { ...c, state: 'SKIPPED' } : c,
@@ -5010,12 +5023,9 @@ export function summarizeRequiredChecks(
     // status that is already `'missing'`/`'pending'`/`'failed'`, and
     // reassigning an already-`'unknown'` status to `'unknown'` again is a
     // harmless no-op.
-    if (Array.isArray(identityUnresolvedCheckNames)) {
-      const identityUnresolvedSet = new Set(
-        identityUnresolvedCheckNames.map((name) => String(name ?? '').trim()),
-      );
+    if (identityUnresolvedNameSet.size > 0) {
       const affected = requiredCheckNames.filter((name) =>
-        identityUnresolvedSet.has(name),
+        identityUnresolvedNameSet.has(name),
       );
       if (affected.length > 0) {
         identityUnresolvedRequiredCheckNames = affected;
@@ -5051,7 +5061,10 @@ export function summarizeRequiredChecks(
     // message can name the unreadable-read cause specifically instead of a
     // generic "CI is not all-passing".
     protectionReadsUnreadable,
-    presentRunConclusion: resolvePresentRunConclusion(normalizedChecks),
+    presentRunConclusion: resolvePresentRunConclusion(
+      normalizedChecks,
+      identityUnresolvedNameSet,
+    ),
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
     requiredChecksGenerated:
@@ -5090,9 +5103,35 @@ export function summarizeRequiredChecks(
 // skipped), used for the F2 fallback when no required checks are configured:
 // an unprotected branch must not satisfy CI vacuously, so the gate inspects the
 // real run conclusions instead.
-function resolvePresentRunConclusion(normalizedChecks) {
+function resolvePresentRunConclusion(
+  normalizedChecks,
+  // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
+  // check NAMES this collection pass could not fully resolve real
+  // `workflowPath` producer identity for -- see `identityUnresolvedCheckNames`
+  // on `summarizeRequiredChecks` for the full rationale this mirrors. This
+  // fallback conclusion is consulted precisely when NO required checks are
+  // configured at all (`noRequiredChecksConfigured`), so an unresolved
+  // identity here must fail closed too: without this, a decoy workflow
+  // file sharing the checker's display name could still dedupe with (and
+  // mask) the real workflow's FAILURE through the unchanged, absent-
+  // `workflowPath` producer key -- reopening the exact bypass #2919 exists
+  // to close, on an unprotected branch, even though the PRIMARY
+  // required-check gate (`summarizeRequiredChecks`'s own `status`) is
+  // already fixed. Default empty set is backward compatible: every caller
+  // that omits it (none of them do after this fix, but a future direct
+  // caller might) sees unchanged pre-#2919 behavior.
+  identityUnresolvedCheckNames = new Set(),
+) {
   if (normalizedChecks.length === 0) {
     return 'none';
+  }
+  if (
+    identityUnresolvedCheckNames.size > 0 &&
+    normalizedChecks.some((check) =>
+      identityUnresolvedCheckNames.has(check.name),
+    )
+  ) {
+    return 'some-failing';
   }
   const effective = normalizedChecks.map((check) =>
     check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
@@ -6168,16 +6207,62 @@ export function computePreMergeReadinessBlockers(report) {
       identityUnresolvedNames.length > 0
         ? `required ${identityUnresolvedNames.length > 1 ? 'checks' : 'check'} ${identityUnresolvedNames.join(', ')} ${identityUnresolvedNames.length > 1 ? 'have' : 'has'} an unresolved workflow-file producer identity (a transient lookup failure, a malformed run reference, or too many distinct reruns to verify this pass); cannot rule out a same-display-name decoy workflow, so this required check cannot be trusted as passing until it resolves cleanly on a later pass`
         : '';
+    // kurone-kito/idd-skill#2919 (round 4 -- Codex review on PR #2921, P2):
+    // the specific pinned/identity-unresolved causes above must never
+    // SILENTLY suppress a genuinely separate, concurrent CI failure
+    // reason for a DIFFERENT required check -- e.g. one required check is
+    // source-pinned/identity-unresolved while an UNRELATED required check
+    // is actually FAILING/PENDING/MISSING. Without this, an operator
+    // reading only "check X is identity-unresolved" would retry expecting
+    // that alone to unblock the gate, when a clean retry would still be
+    // blocked by the separate failure. Determine whether every required
+    // check OUTSIDE the named causes is itself present and pass-
+    // equivalent; if not, append the generic status detail alongside the
+    // specific cause(s) instead of letting the `||` fully replace it.
+    // Every PRE-#2919 caller (no pinned/identity cause at all) and every
+    // pinned-ONLY caller (that downgrade only ever fires on an otherwise-
+    // clean 'success' classification, so no concurrent cause can exist)
+    // sees byte-identical detail text to before -- this only widens the
+    // detail for the new combined shape.
+    const explainedRequiredCheckNames = new Set([
+      ...sourcePinnedNames,
+      ...identityUnresolvedNames,
+    ]);
+    const allRequiredCheckNames = Array.isArray(ci.requiredCheckNames)
+      ? ci.requiredCheckNames.map((name) => String(name ?? ''))
+      : [];
+    const missingRequiredCheckNamesForDetail = Array.isArray(
+      ci.missingRequiredCheckNames,
+    )
+      ? ci.missingRequiredCheckNames.map((name) => String(name ?? ''))
+      : [];
+    const requiredCheckStateByName = new Map(
+      (Array.isArray(ci.checks) ? ci.checks : [])
+        .filter((check) => check.required === true)
+        .map((check) => [String(check.name ?? ''), String(check.state ?? '')]),
+    );
+    const hasUnexplainedConcurrentCause = allRequiredCheckNames.some((name) => {
+      if (explainedRequiredCheckNames.has(name)) return false;
+      if (missingRequiredCheckNamesForDetail.includes(name)) return true;
+      const state = requiredCheckStateByName.get(name) ?? '';
+      return !['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
+        state,
+      );
+    });
     // #1377: name the masked-403-as-404 cause explicitly when that is why the
     // gate is not all-passing, matching idd-ci.instructions.md's wording,
     // instead of the generic status/noRequiredChecksConfigured detail below.
+    const genericStatusDetail = `CI is not all-passing (status="${String(ci.status ?? '')}", noRequiredChecksConfigured=${Boolean(ci.noRequiredChecksConfigured)}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`;
     let detail =
       ci.protectionReadsUnreadable === true
         ? 'cannot determine required checks: protection/ruleset unreadable'
-        : [sourcePinnedDetail, identityUnresolvedDetail]
+        : [
+            sourcePinnedDetail,
+            identityUnresolvedDetail,
+            hasUnexplainedConcurrentCause ? genericStatusDetail : '',
+          ]
             .filter(Boolean)
-            .join('; ') ||
-          `CI is not all-passing (status="${String(ci.status ?? '')}", noRequiredChecksConfigured=${Boolean(ci.noRequiredChecksConfigured)}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`;
+            .join('; ') || genericStatusDetail;
     // #2021: when the `idd-advisory-convergence` check itself is present,
     // required, and non-passing, and a posted otherwise-valid waiver exists
     // for it but is not yet covering the check because its deadline/

@@ -1389,15 +1389,20 @@ function runSelfWaiverCollection(
               // `staleSelfWaiver` computation now filters on this exact
               // value.
               workflowName: 'IDD advisory-convergence gate',
-              // kurone-kito/idd-skill#2919: no matching `workflowRuns`
-              // fixture entry is registered for run 500 by default, so the
-              // new `workflowPath` enrichment's lookup throws and is
-              // caught -- `workflowPath` stays unpopulated here, exactly
-              // like every test in this file that predates #2919. A test
-              // that wants real enrichment supplies both a
-              // `statusCheckRollup` override with its own `detailsUrl` and
-              // a matching `workflowRuns` entry.
-              detailsUrl: 'https://github.com/o/r/actions/runs/500/job/1',
+              // kurone-kito/idd-skill#2919 (round 4 -- CodeRabbit review on
+              // PR #2921): no `detailsUrl` by default, so zero run ids are
+              // parseable and the whole check name stays on the genuinely
+              // PERMISSIVE zero-parseable-run-id path -- real pre-#2919
+              // behavior, exactly like every test in this file that
+              // predates #2919. A `detailsUrl` with no matching
+              // `workflowRuns` entry would instead exercise the ROUND-2
+              // identity-unresolved (fail-closed to `unknown`) path, which
+              // is a materially different outcome this default fixture
+              // must not silently opt every pre-existing test into. A test
+              // that wants real enrichment (or the identity-unresolved
+              // path specifically) supplies its own `statusCheckRollup`
+              // override with a `detailsUrl` (and, for real enrichment, a
+              // matching `workflowRuns` entry).
             },
           ],
           mergeable: 'MERGEABLE',

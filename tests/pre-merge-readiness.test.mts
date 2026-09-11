@@ -8545,6 +8545,68 @@ test('buildPreMergeReadinessSummary blocks on the ci gate with a specific detail
   assert.equal(trusted.ready, false);
 });
 
+// kurone-kito/idd-skill#2919 (round 4 -- Codex review on PR #2921, P2): the
+// identity-unresolved cause for ONE required check must never silently
+// suppress the generic status detail when a SEPARATE, unrelated required
+// check is genuinely failing -- an operator reading only "idd-advisory-
+// convergence has an unresolved identity" would retry expecting that alone
+// to unblock the gate, when the unrelated `lint` failure would still block
+// a clean retry.
+test('buildPreMergeReadinessSummary names BOTH the identity-unresolved cause and a separate concurrent CI failure, never hiding one behind the other', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = [
+    ...(fixture.input.branchRules as Record<string, unknown>[]).map((rule) =>
+      rule.type === 'required_status_checks'
+        ? {
+            type: 'required_status_checks',
+            parameters: {
+              required_status_checks: [
+                { context: 'lint' },
+                { context: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR },
+              ],
+            },
+          }
+        : rule,
+    ),
+  ];
+  const checks = [
+    // The unrelated required check genuinely FAILS -- a concurrent cause
+    // independent of the identity-unresolved one below.
+    { name: 'lint', state: 'FAILURE', completedAt: '2026-05-11T23:57:00Z' },
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:57:00Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+  ];
+
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules, checks },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      advisoryConvergenceIdentityUnresolved: true,
+    },
+  );
+  assert.deepEqual(
+    (summary.ci as Record<string, unknown>)
+      .identityUnresolvedRequiredCheckNames,
+    [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR],
+  );
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  const ciBlocker = (
+    summary.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.match(
+    ciBlocker?.detail ?? '',
+    /unresolved workflow-file producer identity/,
+  );
+  assert.match(ciBlocker?.detail ?? '', /CI is not all-passing/);
+  assert.equal(summary.ready, false);
+});
+
 // #1380: a masked-403-as-404 on a codeowner-requiring ruleset's *detail*
 // read must block the required-reviews gate with a specific, actionable
 // detail (mirroring #1377's ci-gate detail above) instead of the generic

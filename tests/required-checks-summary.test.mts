@@ -55,6 +55,52 @@ test('unprotected + a failing run: presentRunConclusion is some-failing', () => 
   assert.equal(r.presentRunConclusion, 'some-failing');
 });
 
+// kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921): an
+// identity-unresolved check name must fail closed through the UNPROTECTED-
+// branch `presentRunConclusion` fallback too, not just the primary
+// required-check `status` field -- `isPreMergeCiAllPassing` accepts
+// `presentRunConclusion === 'all-passing'` whenever `noRequiredChecksConfigured`
+// is true, so without this a decoy workflow file sharing the checker's
+// display name could still dedupe with (and mask) the real workflow's own
+// FAILURE through the unchanged, absent-`workflowPath` producer key on an
+// entirely unprotected branch -- reopening the exact bypass #2919 exists
+// to close via a route the primary required-check gate fix alone does not
+// cover. The baseline first assertion documents the would-be masking this
+// fix closes: with no identity-unresolved evidence, the newer SUCCESS
+// (which could be a decoy) dedupes with and hides the older FAILURE.
+test('unprotected branch: an identity-unresolved check name never lets presentRunConclusion read all-passing, closing the same masking route', () => {
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'FAILURE',
+      completedAt: '2026-01-01T00:00:00Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-01-01T00:05:00Z',
+    },
+  ];
+  const withoutFix = summarizeRequiredChecks(checks, [], {});
+  assert.equal(withoutFix.noRequiredChecksConfigured, true);
+  assert.equal(
+    withoutFix.presentRunConclusion,
+    'all-passing',
+    'baseline: absent workflowPath dedupes the two instances by name alone, masking the FAILURE',
+  );
+
+  const withFix = summarizeRequiredChecks(
+    checks,
+    [],
+    {},
+    {
+      identityUnresolvedCheckNames: ['idd-advisory-convergence'],
+    },
+  );
+  assert.equal(withFix.noRequiredChecksConfigured, true);
+  assert.equal(withFix.presentRunConclusion, 'some-failing');
+});
+
 test('unprotected + no runs: presentRunConclusion is none, never vacuously passing', () => {
   const r = summarize([], []);
   assert.equal(r.noRequiredChecksConfigured, true);
