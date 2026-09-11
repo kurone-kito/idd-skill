@@ -798,6 +798,24 @@ Running this variant safely requires:
   reports its final result back to the orchestrator instead of
   independently entering F5's Discover step, so Discover/Claim
   ownership stays with the orchestrator alone.
+- **A delegation brief that requires issue-number-namespaced
+  scratchpad filenames.** Concurrently delegated workers can share
+  the orchestrating session's own scratchpad directory —
+  session-scoped rather than subagent-scoped in at least one harness
+  (e.g. Claude Code) — so a generic filename (`pr-body.md`,
+  `commit-msg.txt`, `plan-draft.md`, etc.) one worker writes under
+  its brief can collide with, and be silently overwritten by, a
+  sibling worker writing the same name under its own brief. Each
+  delegation brief must instruct its worker to prefix every
+  scratchpad file it creates with the issue number (for example
+  `2878-pr-body.md`), or to create and use an issue-numbered
+  scratchpad subdirectory, instead of a generic filename a sibling
+  worker might independently produce too under its own brief
+  (observed 2026-09-10,
+  kurone-kito/idd-skill#2900). This is a separate requirement from
+  the background-wait topology-safety condition above — a
+  namespacing convention for concurrent scratchpad writes, not a
+  wake-up-discipline concern.
 - **The delegation brief carries the claim token verbatim, nonce
   included — and the worker actively revalidates it.** The worker
   adopts the orchestrator's already-verified `{agent-id}` / `{claim-id}`

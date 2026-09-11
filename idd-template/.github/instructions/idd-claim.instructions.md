@@ -519,6 +519,12 @@ variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant));
 without it, a worker can stall indefinitely on an unconfirmed
 backgrounded wait (#2210).
 
+**Restate the scratchpad file-naming requirement.** See
+[docs/idd-workflow.md's Orchestrator fan-out
+variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant):
+each worker must prefix scratchpad filenames with the issue number,
+or use an issue-numbered subdirectory.
+
 ### Hide displaced claim chain on takeover
 
 When the verified new claim used `supersedes: <prior-id>` (stale
