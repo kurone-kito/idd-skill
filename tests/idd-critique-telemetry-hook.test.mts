@@ -422,24 +422,36 @@ async function waitForNonEmptyFile(
   return readFileSync(path, 'utf8').trim();
 }
 
-/** The backup watchdog's own spawned binary name on this platform
- * (kurone-kito/idd-skill#2892): `sh` on POSIX, `powershell.exe` on win32 --
- * used by the spawnFn-spy tests below to pick the watchdog's own spawn
- * call out from every other spawnFn invocation in a round. */
-const WATCHDOG_BINARY = process.platform === 'win32' ? 'powershell.exe' : 'sh';
+/** Identifies the backup watchdog's own spawn call among every spawnFn
+ * invocation in a round (kurone-kito/idd-skill#2892, #2897 CI follow-up):
+ * POSIX spawns `sh` directly as `args[0]`; win32 spawns a single
+ * shell-wrapped command string as `args[0]` (`shell: true`, required --
+ * see spawnWatchdogWindows's own doc comment for why a direct,
+ * non-shell-wrapped `powershell.exe` spawn silently no-ops on native
+ * Windows), so win32 matches by substring instead of exact equality. */
+function isWatchdogSpawnCall(args: Parameters<typeof spawn>): boolean {
+  return process.platform === 'win32'
+    ? typeof args[0] === 'string' &&
+        args[0].includes('powershell.exe') &&
+        args[0].includes('taskkill')
+    : args[0] === 'sh';
+}
 
 /** Extracts the watchdog's own sleep-then-kill script from its captured
  * spawn args, regardless of platform: POSIX passes `['-c', script]` to
- * `sh`; win32 passes `[..., '-Command', script]` to `powershell.exe`. */
-function extractWatchdogScript(args: string[] | undefined): string {
+ * `sh` (a real argv array); win32 spawns one shell-wrapped command string
+ * containing `-Command "<script>"` (`shell: true`), so `args` there is
+ * the single captured command string itself, not an argv array. */
+function extractWatchdogScript(args: string[] | string | undefined): string {
   if (!args) {
     return '';
   }
   if (process.platform === 'win32') {
-    const commandIndex = args.indexOf('-Command');
-    return commandIndex === -1 ? '' : (args[commandIndex + 1] ?? '');
+    const command = args as string;
+    const match = command.match(/-Command "(.*)"$/);
+    return match?.[1] ?? '';
   }
-  return args[1] ?? '';
+  return (args as string[])[1] ?? '';
 }
 
 /**
@@ -663,16 +675,18 @@ test('invokeCritiqueTelemetryHook kills a backgrounded descendant on timeout, no
 
 // --- win32 kill/watchdog argument shape (kurone-kito/idd-skill#2892) -----
 //
-// This implementation environment has no native Windows runtime to
-// verify against -- the new `windows-latest` CI job (added alongside this
-// file) is the actual behavioral verification gate. These two tests give
-// deterministic, non-CI coverage of the *argument construction* for the
-// win32 kill path from any OS, using the injectable `platform` option the
-// same way `spawnFn` is already injected for testability -- overriding
-// `platform` only changes which of `killProcessGroup`/`spawnWatchdog`'s
-// own branches this code takes; it does not change which real shell the
-// still-real `shell: true` spawn below is interpreted by (that is always
-// whatever the host OS actually provides).
+// These two tests give deterministic, non-CI coverage of the *argument
+// construction* for the win32 kill path from any OS, using the injectable
+// `platform` option the same way `spawnFn` is already injected for
+// testability -- overriding `platform` only changes which of
+// `killProcessGroup`/`spawnWatchdog`'s own branches this code takes; it
+// does not change which real shell the still-real `shell: true` spawn
+// below is interpreted by (that is always whatever the host OS actually
+// provides). The `windows-latest` CI job (added alongside this file) is
+// the actual behavioral verification gate on every push; the argument-shape
+// tests below have also since been cross-checked live on native Windows 11
+// during the #2897 CI follow-up (kurone-kito/idd-skill#2892), not only
+// inferred from a non-Windows implementation environment.
 
 test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PID <pid> /T /F) on timeout when platform is overridden to win32', async () => {
   const restore = stubExecutable(
@@ -736,13 +750,25 @@ test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PI
   }
 });
 
-test('invokeCritiqueTelemetryHook spawns a win32 backup watchdog (powershell.exe Start-Sleep + Start-Process taskkill -WindowStyle Hidden) when platform is overridden to win32', async () => {
-  let watchdogArgs: string[] | undefined;
+test('invokeCritiqueTelemetryHook spawns a win32 backup watchdog through a shell hop (cmd.exe -> powershell.exe Start-Sleep + a direct System.Diagnostics.Process taskkill) when platform is overridden to win32', async () => {
+  // The watchdog command is spawned as a single shell-wrapped string, not
+  // a bare `powershell.exe` argv array (kurone-kito/idd-skill#2892, #2897
+  // CI follow-up): a direct spawnFn('powershell.exe', [...], {detached:
+  // true}) was confirmed live on native Windows 11 to exit in ~70-140ms
+  // with code 0 without ever running its script -- see
+  // spawnWatchdogWindows's own doc comment for the full evidence. This
+  // test therefore asserts the shell-wrapped command string and options,
+  // not a bare powershell.exe argv shape.
+  let watchdogCommand: string | undefined;
   let watchdogOptions: Record<string, unknown> | undefined;
   const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
-    if (args[0] === 'powershell.exe') {
-      watchdogArgs = args[1] as string[];
-      watchdogOptions = args[2] as Record<string, unknown>;
+    if (
+      typeof args[0] === 'string' &&
+      args[0].includes('powershell.exe') &&
+      args[0].includes('taskkill')
+    ) {
+      watchdogCommand = args[0];
+      watchdogOptions = args[1] as unknown as Record<string, unknown>;
     }
     return spawn(...args);
   }) as typeof spawn;
@@ -759,32 +785,103 @@ test('invokeCritiqueTelemetryHook spawns a win32 backup watchdog (powershell.exe
     );
     assert.deepEqual(result, { attempted: true, ok: true });
     assert.ok(
-      watchdogArgs,
-      'expected the win32 watchdog (powershell.exe) to have been spawned',
+      watchdogCommand,
+      'expected the win32 watchdog (powershell.exe via a shell hop) to have been spawned',
     );
-    assert.deepEqual(
-      watchdogArgs?.slice(0, 4),
-      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden'],
-      `expected powershell.exe's leading flags, got: ${JSON.stringify(watchdogArgs)}`,
-    );
-    assert.equal(watchdogArgs?.[4], '-Command');
-    const script = watchdogArgs?.[5] ?? '';
     assert.match(
-      script,
-      /^Start-Sleep -Seconds 5; \$p = New-Object System\.Diagnostics\.Process; \$p\.StartInfo\.FileName = 'taskkill'; \$p\.StartInfo\.Arguments = '\/PID \d+ \/T \/F'; \$p\.StartInfo\.UseShellExecute = \$false; \$p\.StartInfo\.CreateNoWindow = \$true; \[void\]\$p\.Start\(\); \$p\.WaitForExit\(\)$/,
-      `expected the win32 watchdog script shape, got: ${script}`,
+      watchdogCommand ?? '',
+      /^powershell\.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Sleep -Seconds 5; \$p = New-Object System\.Diagnostics\.Process; \$p\.StartInfo\.FileName = 'taskkill'; \$p\.StartInfo\.Arguments = '\/PID \d+ \/T \/F'; \$p\.StartInfo\.UseShellExecute = \$false; \$p\.StartInfo\.CreateNoWindow = \$true; \[void\]\$p\.Start\(\); \$p\.WaitForExit\(\)"$/,
+      `expected the win32 watchdog command shape, got: ${watchdogCommand}`,
     );
-    // Also assert the options object, not just argv (C1 review,
-    // kurone-kito/idd-skill#2892): `detached: true` in particular is load-
-    // bearing -- drop it and this watchdog would die together with the
-    // parent the instant `--invoke`'s `process.exit(0)` fires, silently
-    // disabling the entire Windows backup-deadline mechanism this issue
-    // adds, with no argv-only assertion able to catch the regression.
+    // Also assert the options object, not just the command string (C1
+    // review, kurone-kito/idd-skill#2892): `detached: true` in particular
+    // is load-bearing -- drop it and this watchdog would die together
+    // with the parent the instant `--invoke`'s `process.exit(0)` fires,
+    // silently disabling the entire Windows backup-deadline mechanism
+    // this issue adds, with no argv-only assertion able to catch the
+    // regression. `shell: true` (the #2897 follow-up fix) is equally
+    // load-bearing -- see this test's own header comment.
+    assert.equal(watchdogOptions?.shell, true);
     assert.equal(watchdogOptions?.detached, true);
     assert.equal(watchdogOptions?.stdio, 'ignore');
     assert.equal(watchdogOptions?.windowsHide, true);
   } finally {
     restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hung process, not just spawns with correct arguments (#2897 CI follow-up)', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  // Complements the command-shape test above (critique finding on PR
+  // #2897): that test can pass even when the watchdog silently no-ops,
+  // since it only asserts what was spawned, never whether the target
+  // process actually died -- the exact gap that let the
+  // detached-powershell regression ship unnoticed. This test exercises
+  // the real, unmocked win32 path end to end. Runs on real Windows only:
+  // the watchdog is real OS behavior, not something a `platform` override
+  // can usefully fake from a non-Windows host.
+  //
+  // Isolation: the primary JS-level timer's own kill path
+  // (killProcessGroup -> killProcessTreeWindows -> a direct, non-shell
+  // `taskkill /PID <pid> /T /F`) is real and already confirmed working
+  // (see this file's other tests), so left uncontrolled it would kill the
+  // target on its own and this test would pass whether or not the
+  // watchdog itself works. The injected spawnFn below neuters only that
+  // direct taskkill call -- matched by args[0] === 'taskkill', which
+  // never matches the watchdog's own shell-wrapped powershell.exe command
+  // string -- so the watchdog is the only thing that can terminate the
+  // target here.
+  const restore = stubExecutable(
+    'idd-telemetry-hook-watchdog-real-kill',
+    'setInterval(() => {}, 1000);\n',
+  );
+  let hookPid: number | undefined;
+  try {
+    const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+      if (args[0] === 'taskkill') {
+        const fake = new EventEmitter() as unknown as ReturnType<typeof spawn>;
+        (fake as unknown as { unref: () => void }).unref = () => undefined;
+        return fake;
+      }
+      const child = spawn(...args);
+      if (
+        typeof args[0] === 'string' &&
+        args[0].includes('idd-telemetry-hook-watchdog-real-kill')
+      ) {
+        hookPid = child.pid;
+      }
+      return child;
+    }) as typeof spawn;
+    await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-watchdog-real-kill'),
+      samplePayload(),
+      { timeoutMs: 1_000, spawnFn },
+    );
+    assert.ok(hookPid, 'expected the hung hook to have a real pid');
+    // Give the watchdog's own 1-second sleep plus its taskkill call room
+    // to complete -- generous but bounded, matching this file's other
+    // real-timing assertions.
+    await delay(4_000);
+    let stillAlive: boolean;
+    try {
+      const listing = execFileSync('tasklist', ['/FI', `PID eq ${hookPid}`], {
+        encoding: 'utf8',
+      });
+      stillAlive = listing.includes(String(hookPid));
+    } catch {
+      stillAlive = false;
+    }
+    assert.equal(
+      stillAlive,
+      false,
+      `expected the win32 watchdog to have killed pid ${hookPid}, but it is still running`,
+    );
+  } finally {
+    restore();
+    if (hookPid) {
+      cleanupProcessTree(hookPid);
+    }
   }
 });
 
@@ -966,7 +1063,7 @@ test('invokeCritiqueTelemetryHook disarms the watchdog once the hook exits well 
   let watchdogChild: ReturnType<typeof spawn> | undefined;
   const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
     const child = spawn(...args);
-    if (args[0] === WATCHDOG_BINARY) {
+    if (isWatchdogSpawnCall(args)) {
       watchdogChild = child;
     }
     return child;
@@ -1027,7 +1124,7 @@ test("invokeCritiqueTelemetryHook attaches an 'error' listener to the watchdog, 
   let watchdogChild: ReturnType<typeof spawn> | undefined;
   const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
     const child = spawn(...args);
-    if (args[0] === WATCHDOG_BINARY) {
+    if (isWatchdogSpawnCall(args)) {
       watchdogChild = child;
     }
     return child;
@@ -1072,7 +1169,7 @@ test("invokeCritiqueTelemetryHook's onWatchdogArmed waits for the watchdog's own
   let armedCallCount = 0;
   let watchdogSpawnEmitted = false;
   const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
-    if (args[0] === WATCHDOG_BINARY) {
+    if (isWatchdogSpawnCall(args)) {
       const fakeWatchdog = new EventEmitter() as unknown as ReturnType<
         typeof spawn
       >;
@@ -1131,10 +1228,13 @@ test('invokeCritiqueTelemetryHook falls back to the default timeout for a non-fi
   // default) bound. Capture the watchdog's `sleep` argument via a spawnFn
   // spy to prove the sanitized value reached it, rather than waiting out
   // a real default-5s timeout in this test.
-  let watchdogArgs: string[] | undefined;
+  let watchdogArgs: string[] | string | undefined;
   const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
-    if (args[0] === WATCHDOG_BINARY) {
-      watchdogArgs = args[1] as string[];
+    if (isWatchdogSpawnCall(args)) {
+      watchdogArgs =
+        process.platform === 'win32'
+          ? (args[0] as string)
+          : (args[1] as string[]);
     }
     return spawn(...args);
   }) as typeof spawn;
@@ -1172,10 +1272,13 @@ test('spawnWatchdog rounds a fractional timeoutMs up to a whole second (#2685 re
   // watchdog's `sleep` argument is always a whole number, rounded *up*
   // (never down, which could fire the backup before the primary JS-level
   // timer it exists to survive past).
-  let watchdogArgs: string[] | undefined;
+  let watchdogArgs: string[] | string | undefined;
   const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
-    if (args[0] === WATCHDOG_BINARY) {
-      watchdogArgs = args[1] as string[];
+    if (isWatchdogSpawnCall(args)) {
+      watchdogArgs =
+        process.platform === 'win32'
+          ? (args[0] as string)
+          : (args[1] as string[]);
     }
     return spawn(...args);
   }) as typeof spawn;
@@ -1335,7 +1438,20 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
   }
 });
 
-test('CLI --invoke waits for a large payload to fully reach the hook before exiting (#2685 review, CodeRabbit)', async () => {
+test('CLI --invoke waits for a large payload to fully reach the hook before exiting (#2685 review, CodeRabbit)', {
+  // win32 (kurone-kito/idd-skill#2910 follow-up): the production spawn
+  // shape this test exercises -- `shell: true` + `detached: true` + piped
+  // stdin -- never delivers ANY stdin payload to the target command on
+  // native Windows, not just large ones. Confirmed via a size sweep from
+  // 0B to 500KB: every non-empty size fails identically (the grandchild's
+  // stdin never emits 'data' or 'end'), and a native (non-Node) consumer
+  // piped through the same shape is equally affected, isolating the fault
+  // to `cmd.exe`'s own stdin relay under Win32's DETACHED_PROCESS creation
+  // flag rather than anything Node/libuv- or payload-size-specific. This
+  // is a pre-existing defect (predates PR #2897) with no known fix yet --
+  // see #2910 for the full reproduction matrix and candidate designs.
+  skip: process.platform === 'win32',
+}, async () => {
   // Regression fixture: `runInvoke` used to fire `invokeCritiqueTelemetryHook`
   // and call `process.exit(0)` right after, without waiting for the stdin
   // write to the hook's pipe to actually finish -- fine for a small
