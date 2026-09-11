@@ -134,12 +134,19 @@
 // (and is correctly preserved) or entirely after its write (a normal,
 // non-lossy last-writer-wins overwrite), never in between. A guard file
 // orphaned by a killed process (rather than released via a normal
-// `finally`) self-heals after one bounded wait: the critical section it
-// guards is always a handful of synchronous `fs` calls with no `await` in
-// between, so a guard old enough to have outlived one full wait budget is
-// reclaimed as stale (by file modification time) and removed, exactly
-// once per call, rather than blocking every future write against that
-// claim-id forever.
+// `finally`) fails every future write against that claim-id closed with a
+// clear recovery message rather than silently reclaiming itself: an
+// earlier revision self-reclaimed a guard old enough (by file modification
+// time) to have outlived one full wait budget, but three independent
+// reviewers (Codex, Copilot, CodeRabbit) flagged that as its own ABA race
+// -- two callers can both classify the same guard as stale, and the
+// second's unconditional unlink can delete the first reclaimer's fresh
+// replacement (or a still-live holder's own guard), letting both enter
+// the critical section at once and reintroducing the exact clobber this
+// lock exists to prevent. Closing that safely needs a real
+// compare-and-swap or ownership-token primitive this file does not yet
+// have, so failing closed -- explicit operator cleanup required -- is the
+// safer default for now.
 //
 // Scope of the ownership proof (#2879 review, Codex P1): a `present: true`
 // `--read-tokens` result proves "a `--record-tokens` call for this exact
@@ -195,11 +202,12 @@ const MAX_RETRY_ATTEMPTS = 5;
 /**
  * Bounded wait budget for the generated-tokens record's own write-lock
  * (#2922, see {@link withGeneratedTokensWriteLock}). Every critical section
- * it guards is a handful of synchronous, non-blocking-I/O `fs` calls with
- * no `await` in between, so genuine contention is expected to resolve in
- * microseconds; a caller still waiting past this budget has almost
- * certainly hit a guard file orphaned by a killed process rather than a
- * live holder, so it fails loudly instead of hanging forever.
+ * it guards is a handful of synchronous `fs` calls (real disk I/O, not
+ * microseconds-scale, but with no `await` and no external process spawn in
+ * between) -- genuine contention is expected to resolve well under this
+ * budget; a caller still waiting past it has almost certainly hit a guard
+ * file orphaned by a killed process rather than a live holder, so it
+ * fails loudly instead of hanging forever.
  */
 const GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS = 5_000;
 const GENERATED_TOKENS_WRITE_LOCK_RETRY_INTERVAL_MS = 5;
@@ -767,18 +775,29 @@ function resolveGeneratedTokensWriteLockPath(recordPath: string): string {
  * specifically so a *third-party reader* never observes a torn body -- so a
  * plain `wx`-flag exclusive create is sufficient here: POSIX and Windows
  * both make `O_CREAT | O_EXCL` (`CREATE_NEW`) atomic for existence alone,
- * with no partial-content window to close. See
- * {@link GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS} for the bounded-retry
- * rationale, and {@link isStaleGeneratedTokensWriteLock} for the one-shot
- * orphan-reclaim path a caller falls into after that budget is exhausted.
+ * with no partial-content window to close.
+ *
+ * Fails closed after {@link GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS} rather
+ * than self-reclaiming an aged guard (#2922 review -- Codex, Copilot, and
+ * CodeRabbit each independently flagged a since-removed timeout-then-unlink
+ * reclaim path as an ABA race: two callers can both classify the same
+ * guard as stale, and an unconditional `unlinkSync` by the second can
+ * delete the first reclaimer's freshly created replacement -- or a still
+ * genuinely live holder's own guard -- letting two callers enter this
+ * critical section at once, reintroducing the exact clobber this lock
+ * exists to prevent). An orphaned guard (left behind by a process killed
+ * between acquiring it and reaching its own `finally` release) therefore
+ * requires explicit operator cleanup -- removing the reported path -- per
+ * the thrown error's own recovery instructions, rather than an automatic
+ * reclaim this codebase cannot yet prove safe without a real
+ * compare-and-swap or ownership-token primitive.
  */
 function withGeneratedTokensWriteLock<T>(
   recordPath: string,
   critical: () => T,
 ): T {
   const lockPath = resolveGeneratedTokensWriteLockPath(recordPath);
-  let deadline = Date.now() + GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS;
-  let staleReclaimAttempted = false;
+  const deadline = Date.now() + GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS;
   for (;;) {
     try {
       writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
@@ -787,33 +806,15 @@ function withGeneratedTokensWriteLock<T>(
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
         throw error;
       }
-      if (Date.now() < deadline) {
-        sleepSyncMs(GENERATED_TOKENS_WRITE_LOCK_RETRY_INTERVAL_MS);
-        continue;
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Timed out waiting for the generated-tokens write lock at ${lockPath}; ` +
+            `a crashed holder may have left it behind. Remove ${lockPath} ` +
+            `to recover (only safe once you have confirmed no live process ` +
+            `still holds it).`,
+        );
       }
-      // The wait budget is exhausted. Reclaim an orphaned guard exactly
-      // once per call before giving up: every critical section this lock
-      // guards is a handful of synchronous, non-blocking-I/O `fs` calls
-      // with no `await` in between, so a guard old enough to have outlived
-      // one full wait budget was almost certainly abandoned by a killed
-      // process, not a live holder still working.
-      if (!staleReclaimAttempted && isStaleGeneratedTokensWriteLock(lockPath)) {
-        staleReclaimAttempted = true;
-        try {
-          unlinkSync(lockPath);
-        } catch {
-          // A concurrent reclaimer may have already removed it (or a
-          // legitimate holder already released it) -- either way, the
-          // create attempt below decides what happens next.
-        }
-        deadline = Date.now() + GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS;
-        continue;
-      }
-      throw new Error(
-        `Timed out waiting for the generated-tokens write lock at ${lockPath}; ` +
-          `a crashed holder may have left it behind. If this persists, ` +
-          `remove ${lockPath} to recover.`,
-      );
+      sleepSyncMs(GENERATED_TOKENS_WRITE_LOCK_RETRY_INTERVAL_MS);
     }
   }
   try {
@@ -821,37 +822,13 @@ function withGeneratedTokensWriteLock<T>(
   } finally {
     // Best-effort cleanup only: a failure here never masks a real error
     // from `critical()`, and a leaked guard file only costs the next
-    // caller one bounded wait before the stale-reclaim path above removes
-    // it for them.
+    // caller a bounded wait before this same failure mode applies to them
+    // too, per the fail-closed rationale above.
     try {
       unlinkSync(lockPath);
     } catch {
       // ignore
     }
-  }
-}
-
-/**
- * Whether the write-lock guard file at `lockPath` has aged past one full
- * {@link GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS} budget, per its own file
- * modification time -- the sole signal {@link withGeneratedTokensWriteLock}
- * uses to tell an orphaned guard (left behind by a process killed between
- * acquiring it and reaching its own `finally` release) from a still-live
- * holder. This is a safe basis specifically because every critical section
- * this lock guards is synchronous with no `await` in between: a genuine
- * holder writes the guard and releases it again within microseconds, so a
- * guard old enough to have already outlived one full wait budget could
- * never be a live holder still working, only an orphan. `false` on any
- * read failure (absent, or otherwise unreadable) -- not something this
- * call can safely reclaim as stale; the caller's own next create attempt
- * resolves the state either way.
- */
-function isStaleGeneratedTokensWriteLock(lockPath: string): boolean {
-  try {
-    const ageMs = Date.now() - statSync(lockPath).mtimeMs;
-    return ageMs >= GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS;
-  } catch {
-    return false;
   }
 }
 
@@ -864,7 +841,29 @@ export function readGeneratedClaimTokens(
   cwd: string,
   claimId: string,
 ): GeneratedTokensReadResult {
-  const path = resolveGeneratedTokensPath(cwd, claimId);
+  return readGeneratedTokensAtPath(
+    resolveGeneratedTokensPath(cwd, claimId),
+    claimId,
+  );
+}
+
+/**
+ * Path-based counterpart of {@link readGeneratedClaimTokens}, for a caller
+ * that has already resolved the record's path and must not re-resolve it
+ * (#2922 review, CodeRabbit): `resolveGeneratedTokensPath` shells out to
+ * `git rev-parse` via {@link resolveWorktreeAdminDir}, a synchronous child
+ * process spawn that can easily cost tens of milliseconds -- re-running it
+ * from inside a {@link withGeneratedTokensWriteLock} critical section would
+ * needlessly stretch that critical section with work the lock's bounded
+ * wait budget doesn't need to account for at all.
+ * {@link backfillGeneratedClaimTokens} uses this directly with its own
+ * already-resolved `path`, never the
+ * public `cwd`-based function above, once inside that lock.
+ */
+function readGeneratedTokensAtPath(
+  path: string,
+  claimId: string,
+): GeneratedTokensReadResult {
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
@@ -1071,8 +1070,11 @@ export function backfillGeneratedClaimTokens(
     }
 
     // Preserve an existing well-formed record's own nonce, if any -- see
-    // the function-level doc comment above.
-    const existing = readGeneratedClaimTokens(worktree, claimId);
+    // the function-level doc comment above. Uses the already-resolved
+    // `path`, not the public cwd-based `readGeneratedClaimTokens` (#2922
+    // review, CodeRabbit): that would re-run `resolveGeneratedTokensPath`'s
+    // synchronous `git rev-parse` spawn from inside this critical section.
+    const existing = readGeneratedTokensAtPath(path, claimId);
     const nonce =
       existing.status === 'present' ? existing.record.nonce : undefined;
 

@@ -8,7 +8,6 @@ import {
   readFileSync,
   rmSync,
   statSync,
-  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { availableParallelism, devNull, tmpdir } from 'node:os';
@@ -1516,22 +1515,46 @@ const READER_WORKER_CODE = `
 // production terms. It is launched only after the main thread has already
 // confirmed the reader is paused (see the test body), so its own attempt
 // to enter \`withGeneratedTokensWriteLock\` is guaranteed to observe the
-// guard file already held. It signals \`ints[2]\` immediately after its own
-// \`import()\` resolves and right before calling \`recordGeneratedClaimTokens\`,
-// so the main thread's "is the writer genuinely blocked" race window (see
-// the test body) starts only once the writer has actually reached its own
-// lock-acquire attempt -- otherwise a slow cold-start \`import()\` (module
-// bootstrap, first dynamic import of the compiled CLI module) could eat
-// into that window and make the assertion vacuously pass on a loaded host,
-// matching how the pre-existing race test above pays for its own
-// dedicated warm-up round.
+// guard file already held.
+//
+// It signals \`ints[2]\` from inside a test-side \`fs.writeFileSync\`
+// interception (the same propagate-via-\`syncBuiltinESMExports\` technique
+// \`READER_WORKER_CODE\` and the pre-existing race test above both use),
+// the instant its own lock-acquire attempt -- the \`.writelock\`-suffixed,
+// \`{ flag: 'wx' }\` exclusive-create call inside
+// \`withGeneratedTokensWriteLock\` -- actually happens, not merely after its
+// \`import()\` resolves. An earlier revision signaled right after \`import()\`
+// instead, immediately before calling \`recordGeneratedClaimTokens\`; #2922
+// review (Copilot, a suppressed/lower-confidence finding) correctly noted
+// that a worker can still be preempted by the scheduler in the gap between
+// that signal and its first actual lock-acquire attempt, so the main
+// thread's "is the writer genuinely blocked" race window (see the test
+// body) could in
+// principle start slightly before the writer had attempted anything at
+// all. Signaling from inside the intercepted call itself closes that gap
+// completely: the signal and the attempt are now the same synchronous
+// statement, with no scheduling point in between for the writer thread to
+// be preempted at.
 const WRITER_WORKER_CODE = `
   const { workerData, parentPort } = require('node:worker_threads');
+  const fs = require('node:fs');
   const { worktree, agentId, claimId, nonce, sab, cliUrl } = workerData;
   const ints = new Int32Array(sab);
+  const originalWriteFileSync = fs.writeFileSync;
+  fs.writeFileSync = (path, data, opts) => {
+    if (
+      typeof path === 'string' &&
+      path.endsWith('.writelock') &&
+      opts &&
+      opts.flag === 'wx'
+    ) {
+      Atomics.store(ints, 2, 1);
+      Atomics.notify(ints, 2);
+    }
+    return originalWriteFileSync(path, data, opts);
+  };
+  require('node:module').syncBuiltinESMExports();
   import(cliUrl).then(({ recordGeneratedClaimTokens }) => {
-    Atomics.store(ints, 2, 1);
-    Atomics.notify(ints, 2);
     const outcome = recordGeneratedClaimTokens(worktree, {
       agentId,
       claimId,
@@ -1696,50 +1719,6 @@ test('backfill-tokens: a nonce written by a concurrent recordGeneratedClaimToken
       finalRead.status === 'present' && finalRead.record.agentId,
       'agent-writer',
     );
-  } finally {
-    teardown(fixture);
-  }
-});
-
-test('write-lock: an orphaned generated-tokens guard file (left behind by a killed process, not released) self-heals instead of blocking writes forever (#2922)', async () => {
-  // A guard file old enough to have already outlived one full wait budget
-  // can never be a live holder -- every critical section it guards is
-  // synchronous with no `await` in between -- so it must be reclaimed as
-  // stale rather than wedging every future write against this claim-id.
-  // This exercises the real wait budget end to end (no test-only seam
-  // shortens it, matching this suite's existing preference for testing
-  // production code exactly as it runs), so it costs several real seconds
-  // of wall-clock time -- a single test, not a loop, kept to one instance
-  // deliberately for that reason.
-  const fixture = setupLinkedWorktree();
-  try {
-    const claimId = 'claim-orphan-2922';
-    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
-    const guardPath = `${recordPath}.writelock`;
-
-    // Simulate a process that acquired the guard and was killed before its
-    // own `finally` ever ran: the guard file exists, but its modification
-    // time is already well past the wait budget.
-    writeFileSync(guardPath, '999999');
-    const longAgo = new Date(Date.now() - 10 * 60 * 1000);
-    utimesSync(guardPath, longAgo, longAgo);
-
-    const outcome = recordGeneratedClaimTokens(fixture.worktree, {
-      agentId: 'agent-a',
-      claimId,
-      nonce: 'nonce-after-reclaim',
-    });
-    assert.equal(outcome.path, recordPath);
-
-    const read = readGeneratedClaimTokens(fixture.worktree, claimId);
-    assert.equal(read.status, 'present');
-    assert.equal(
-      read.status === 'present' && read.record.nonce,
-      'nonce-after-reclaim',
-    );
-    // The write's own `finally` releases the guard it reclaimed and
-    // re-created, so nothing is left behind for the next caller.
-    assert.equal(existsSync(guardPath), false);
   } finally {
     teardown(fixture);
   }

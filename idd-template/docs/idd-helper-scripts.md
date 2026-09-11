@@ -2204,6 +2204,30 @@ close.
   either, matching `recordGeneratedClaimTokens`'s own absolute
   invariant in `src/scripts/claim-lock.mts` (PR #2879 regression test;
   #2917 review, Copilot); stop fail-closed instead.
+- **`instructions-only` write-lock coordination** (#2922 -- applies to
+  this write side and to the backfill side below, which performs a
+  read-then-write of the same record): before writing, coordinate
+  against a concurrent writer for the same `{claim-id}` the way the
+  CLI's `recordGeneratedClaimTokens` and `backfillGeneratedClaimTokens`
+  do (`withGeneratedTokensWriteLock`, `src/scripts/claim-lock.mts`):
+  atomically create a same-directory `<resolved-path>.writelock` guard
+  file (exclusive create -- fails if it already exists), retrying
+  roughly every 5 ms for up to 5 seconds if it does; only once that
+  create succeeds, perform the write (or, for the backfill side, the
+  read that captures the existing `nonce` and the write that follows
+  it); then remove the guard file when done. The guard file's own
+  content is never read by anything -- its mere existence is the whole
+  coordination signal, so no atomic-visibility trick is needed for it,
+  unlike the lock file's own body. If the 5-second wait budget is
+  exhausted, stop fail-closed and report the guard path for manual
+  removal rather than writing anyway (an earlier revision of the CLI's
+  own lock self-reclaimed an aged guard automatically; three independent
+  reviewers found that unsafe -- see the doc comment on
+  `withGeneratedTokensWriteLock` for why fail-closed is the current
+  answer). Skipping this coordination reopens the exact race #2922
+  reported for the CLI path: a concurrent writer's fresher `nonce` can
+  be silently lost, including between an `instructions-only` session and
+  a helper-runtime session sharing the same worktree.
 - **`instructions-only` helper-free fallback, read side** (#2879 review,
   Codex P1 -- the mandatory `--read-tokens` check in the Claim
   revalidation gate has no helper-free path without this): resolve the
@@ -2229,9 +2253,11 @@ close.
   helper's own `racedCreate: true` marks exactly this case (#2917
   review, Codex). Only when it parses as well-formed and its `claimId`
   field equals the active `{claim-id}` exactly, apply the write-side
-  fallback above using the lock's own `agentId`, carrying forward an
-  existing well-formed record's own `nonce` when present, otherwise no
-  `nonce` (#2917 review, Copilot) -- except when the record's own
+  fallback above -- write-lock coordination included, wrapped around
+  this whole read-then-write, not just the write -- using the lock's
+  own `agentId`, carrying forward an existing well-formed record's own
+  `nonce` when present, otherwise no `nonce` (#2917 review, Copilot) --
+  except when the record's own
   resolved path is already occupied by a directory: leave it and its
   contents untouched and stop fail-closed instead, mirroring the CLI's
   own `record-blocked` status (`backfillGeneratedClaimTokens`,
