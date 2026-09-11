@@ -2006,7 +2006,14 @@ close.
   never adjudicates claim ownership itself. Re-invoking after a
   successful backfill is always a safe, idempotent overwrite (reports
   `backfilled` again), matching `--record-tokens`'s own idempotency
-  contract -- there is no separate `already-present` status.
+  contract -- there is no separate `already-present` status. The Claim
+  revalidation gate (step 5, `idd-overview-core.instructions.md`) only
+  reaches this route when its own initial `--acquire` reported
+  `reacquired: true` -- a fresh `acquired` (lock just created) or
+  `forcedTakeover: true` is never legitimate backfill evidence -- and
+  re-runs `--acquire` once more immediately before the mutation,
+  closing the window this recovery sequence opens (#2917 review,
+  Copilot).
 - No explicit release verb, no cleanup across takeovers: like the lock
   file, the record lives inside the worktree's own private git-admin
   directory, so `git worktree remove` at F4 deletes it together with the
@@ -2058,12 +2065,18 @@ close.
   `--read-tokens` above: a mandatory gate-recovery step needs a
   helper-free path too, and `instructions-only` is the distributed
   default profile): resolve the worktree-local lock file the same way as
-  the lock section above and parse it the same way `--check` does. Only
-  when it parses as well-formed and its `claimId` field equals the
-  active `{claim-id}` exactly, apply the write-side fallback above using
-  the lock's own `agentId` and no `nonce`. An absent lock, a lock that
-  fails to parse, or a lock whose `claimId` differs all leave the
-  existing fail-closed stop unchanged -- write nothing.
+  the lock section above and parse it the same way `--check` does --
+  but only when that lock already existed before this gate's own
+  acquire step (the exclusive create above failed `EEXIST` with a
+  matching holder, never a lock this same attempt just created, #2917
+  review). Only when it parses as well-formed and its `claimId` field
+  equals the active `{claim-id}` exactly, apply the write-side fallback
+  above using the lock's own `agentId`, carrying forward an existing
+  well-formed record's own `nonce` when present, otherwise no `nonce`
+  (#2917 review, Copilot). An absent lock, a lock that fails to parse,
+  a lock whose `claimId` differs, or a lock this same attempt just
+  created all leave the existing fail-closed stop unchanged -- write
+  nothing.
 
 ### Clone-scoped lock
 

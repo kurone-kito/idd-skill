@@ -205,12 +205,12 @@ When in scope, run:
    using the profile-selected `claim-lock` helper
    (`docs/idd-helper-scripts.md`) with `{agent-id}`/`{claim-id}`.
    Under `instructions-only`, use `idd-work.instructions.md`'s
-   helper-free fallback (same `idd-claim.lock` namespace). A `collision`
-   fails closed unless claim revalidation authorizes an explicit
-   takeover. Also confirm `--read-tokens` finds this `{claim-id}`
-   recorded (`idd-claim.instructions.md`); absent/malformed fails closed
-   too, recoverable only via a matching `--check`, `--backfill-tokens`,
-   then retry (`docs/idd-helper-scripts.md`).
+   helper-free fallback. A `collision` fails closed unless claim
+   revalidation authorizes an explicit takeover. Also confirm
+   `--read-tokens` finds this `{claim-id}` recorded; absent/malformed
+   fails closed unless this acquire reported `reacquired: true` (never
+   fresh/takeover) -- only then `--check` -> `--backfill-tokens` ->
+   `--read-tokens` -> a final re-`--acquire` before mutating.
 
 **Recovery if a commit already landed on the wrong branch.** If this gate
 or `idd-doctor` finds a commit on the wrong branch, cherry-pick it onto

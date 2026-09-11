@@ -427,10 +427,10 @@ node scripts/claim-lock.mjs --acquire --worktree <path> \
   --agent-id <agent-id> --claim-id <claim-id>
 ```
 
-Then, separately, run `--read-tokens --worktree <path> --claim-id
-<id>` and require `present: true` with no `malformed`; otherwise
-`--check` match -> `--backfill-tokens` -> retry, else stop
-(`docs/idd-helper-scripts.md`).
+Then run `--read-tokens --worktree <path> --claim-id <id>` and
+require `present: true` with no `malformed`; otherwise, only if this
+re-acquired (never fresh/takeover): `--check` -> `--backfill-tokens`
+-> retry -> re-acquire, else stop.
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
 `{claim-id}` is always a collision — re-run pre-check (c) (`--claim-id`
@@ -447,8 +447,7 @@ first, then `--fresh-claim-gate` if not `already_owned`):
 - `already-claimed` naming a **different** id: a live competitor holds
   it — stop, the claim was lost.
 
-No release step: `git worktree remove` at F4 deletes the lock with the
-worktree.
+No release step (F4 `git worktree remove` deletes it).
 
 Then continue to `idd-work-lite.instructions.md` — except on
 `instructions-only`, where that file declines the profile in its own

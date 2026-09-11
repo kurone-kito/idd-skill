@@ -36,9 +36,10 @@ Before posting the handoff comment, confirm all of the following:
    `docs/idd-helper-scripts.md` if unsure). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
    `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
-   and require `present: true` with no `malformed`; otherwise run
-   `--check`, and on a match run `--backfill-tokens` then retry -- else
-   stop (`docs/idd-helper-scripts.md`).
+   and require `present: true` with no `malformed`; otherwise, only on
+   a matching re-acquire (never a fresh create or takeover), run
+   `--check` -> `--backfill-tokens` -> retry -> re-acquire before
+   mutating -- else stop (`docs/idd-helper-scripts.md`).
 4. If any check fails, stop.
 
 ## F2.5 — Draft and post the handoff comment
