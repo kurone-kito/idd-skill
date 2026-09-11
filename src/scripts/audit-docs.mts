@@ -175,14 +175,15 @@ const ENGINES_RANGE_MIRRORS: EnginesRangeMirrorSpec[] = [
 ];
 
 // Sync pair `id`s allowed to keep a known onboarding placeholder token
-// literal in an `"exact"`-mode source. `"exact"` mode has no `replacements`
-// array, so any other pair whose source still carries one of these tokens
-// would leak it byte-for-byte into this repository's own live mirror --
-// exactly the bug class checkExactModePlaceholders below exists to catch
+// literal in an `"exact"`-mode pair's *post-replacement* source (see
+// checkExactModePlaceholders below -- "exact" mode is not itself
+// substitution-free, since `checkSyncPairs` above and `sync-docs.mts` both
+// apply a pair's own `replacements` array regardless of mode). Any other
+// pair whose post-replacement source still carries one of these tokens
+// would leak it byte-for-byte into this repository's own live mirror
 // (kurone-kito/idd-skill#2899). Each entry needs a one-line justification;
-// prefer flipping the pair to `"mode": "concreted"` with a matching
-// `replacements` entry over adding here, unless the token is genuinely
-// meant to stay literal.
+// prefer adding (or extending) a `replacements` entry that resolves the
+// token over adding here, unless it is genuinely meant to stay literal.
 const EXACT_MODE_PLACEHOLDER_EXEMPTIONS: Readonly<Record<string, string>> = {
   // `docs/customization.md` is the placeholder-mapping table itself: the
   // literal `{{...}}` tokens ARE the reference content this page teaches
