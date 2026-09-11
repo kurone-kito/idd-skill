@@ -142,6 +142,35 @@ specifically because the issue's acceptance criteria only ever
 required an acquire/release interface, never automatic stale-lock
 recovery.
 
+**Third escalation tier (heuristic, not a hard rule): open-ended
+correctness-domain findings against an external spec.** A different
+shape from both tiers above: each new finding is a genuine, distinct
+gap in the feature's own coverage of an open-ended external
+correctness domain (a document/markup grammar, a protocol, a wire
+format), not a symptom of one internal mechanism -- so neither "one
+structural fix" (Tier 1) nor "simplify/remove the mechanism" (Tier 2)
+is available, because the mechanism's correctness against that domain
+**is** the acceptance criterion itself. Reaching "stop for a
+maintainer decision" here does not depend on Tier 2's
+mechanism-simplification precondition, since there is no mechanism
+safe to remove: once several rounds each keep surfacing a genuinely
+new, in-scope spec-coverage gap rather than repeating one, summarize
+the recurring finding category and round count in a PR comment and
+stop for a maintainer decision. Once a maintainer decision accepts the
+residual gaps, apply it via PATH B disposition-and-resolve
+(`idd-review-triage.instructions.md` E4-E7) on the remaining threads,
+and file a scoped follow-up issue for the accepted gaps rather than
+continuing rounds indefinitely. Worked example:
+kurone-kito/idd-skill#2767 (PR kurone-kito/idd-skill#2840) implemented
+a CommonMark-compliant structural-evidence parser
+(`triage-structural-evidence.mts` / `markdown-code.mts`); an
+adversarial automated reviewer kept surfacing genuine, distinct
+CommonMark spec-compliance gaps across 27 review rounds, each an
+in-scope correctness gap rather than a repeating symptom of one
+mechanism -- the loop ended only once the operator accepted 3
+remaining findings as a documented known limitation and filed
+kurone-kito/idd-skill#2865 as the scoped follow-up.
+
 ## E11 — Resolve conflicts with {development-branch}
 
 Same read-only check as
