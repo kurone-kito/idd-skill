@@ -765,15 +765,27 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
   try {
     result = critical();
   } catch (error) {
-    // Best-effort cleanup on a `critical()` failure only: a cleanup
-    // failure here must never mask the real error the caller needs to
-    // see, so it is swallowed -- a leaked guard file in this branch only
-    // costs the next caller a bounded wait before this same fail-closed
-    // behavior applies to them too.
+    // Best-effort cleanup on a `critical()` failure: a cleanup failure
+    // here must never *replace* the real error the caller needs to see,
+    // so on a clean cleanup this rethrows `error` verbatim -- a leaked
+    // guard file then only costs the next caller a bounded wait before
+    // this same fail-closed behavior applies to them too. But when the
+    // cleanup *also* fails, report both instead of silently swallowing
+    // the second failure (#2922 review round 9, Copilot): the caller
+    // would otherwise have no way to learn a guard was left behind until
+    // a later, unrelated caller independently discovers it via its own
+    // timeout -- minutes or more later, and by a completely different
+    // caller than the one whose failure actually caused it.
     try {
       unlinkSync(lockPath);
-    } catch {
-      // ignore
+    } catch (cleanupError) {
+      const combined = new Error(
+        `${error.message} (additionally failed to remove the ` +
+          `generated-tokens write lock guard at ${lockPath} during ` +
+          `cleanup: ${cleanupError.message})`,
+      );
+      combined.cause = error;
+      throw combined;
     }
     throw error;
   }
