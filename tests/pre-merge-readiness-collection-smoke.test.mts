@@ -1827,6 +1827,92 @@ test('collectPreMergeReadiness against a fake provider: #2919 a mixed parseable/
   ]);
 });
 
+// kurone-kito/idd-skill#2919 (round 5 -- E10 critique finding: this branch
+// of the collector's enrichment had no dedicated test): a check name
+// whose live instances cite MORE distinct run ids than the collector's
+// own lookup ceiling (50) is identity-unresolved -- even though every
+// individual run id WOULD have resolved cleanly if attempted (each has a
+// matching `workflowRuns` fixture entry), proving this is specifically
+// the budget-exceeded branch, not a resolution failure.
+test('collectPreMergeReadiness against a fake provider: #2919 a run-id count exceeding the lookup ceiling is identity-unresolved, even though every individual run id would resolve cleanly', () => {
+  const RUN_COUNT = 51;
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const runId = (i: number) => String(90101 + i);
+  const statusCheckRollup = Array.from({ length: RUN_COUNT }, (_, i) => ({
+    __typename: 'CheckRun',
+    name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    status: 'COMPLETED',
+    conclusion: 'SUCCESS',
+    completedAt: `2026-08-01T${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z`,
+    workflowName: 'IDD advisory-convergence gate',
+    detailsUrl: `https://github.com/o/r/actions/runs/${runId(i)}/job/1`,
+  }));
+  const workflowRuns: Record<string, unknown> = {};
+  for (let i = 0; i < RUN_COUNT; i++) {
+    workflowRuns[`o/r/${runId(i)}`] = { path: REAL_PATH };
+  }
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup,
+    workflowRuns,
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    identityUnresolvedRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected exceeding the lookup ceiling to downgrade to identity-unresolved, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+});
+
+// kurone-kito/idd-skill#2919 (round 5 -- E10 critique finding): distinct
+// from the already-tested "lookup throws" branch -- here `getWorkflowRun`
+// resolves SUCCESSFULLY (no thrown error) but returns a falsy/empty
+// `path`, which the collector must treat identically to a thrown lookup
+// (identity-unresolved), not as a resolved-but-empty real path.
+test('collectPreMergeReadiness against a fake provider: #2919 a resolved but empty workflow-run path is identity-unresolved, same as a thrown lookup', () => {
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/80101/job/1',
+      },
+    ],
+    workflowRuns: {
+      // Resolves without throwing, but `path` is empty -- distinct from
+      // omitting the fixture entry entirely (which throws).
+      'o/r/80101': { path: '' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    identityUnresolvedRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected a resolved-but-empty path to downgrade to identity-unresolved, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+});
+
 test('collectPreMergeReadiness against a fake provider: touchesSelfReferentialAllowlist false (this PR never touches the checker allowlist) suppresses the blocker even for an otherwise-verified expired marker -- closes the decisive round-15 forgery/DoS finding', () => {
   const report = runSelfWaiverCollection({
     comments: {

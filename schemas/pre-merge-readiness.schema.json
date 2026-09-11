@@ -899,7 +899,7 @@
         },
         "discardedNonPassingRequiredChecks": {
           "type": "array",
-          "description": "#1745: same-name/type/workflowName required-check instances discarded by the latest-per-producer dedup while the dedup-selected representative for that group is pass-equivalent -- surfaces the exact PR #1741 divergence, where a CANCELLED idd-advisory-convergence instance was masked by a same-name SUCCESS instance even though GitHub's own statusCheckRollup.state disagreed. Empty (never omitted) when no such discarded sibling exists.",
+          "description": "#1745: same-producer (name/type/workflowName/workflowPath -- kurone-kito/idd-skill#2919 widened this from the original name/type/workflowName 3-tuple) required-check instances discarded by the latest-per-producer dedup while the dedup-selected representative for that group is pass-equivalent -- surfaces the exact PR #1741 divergence, where a CANCELLED idd-advisory-convergence instance was masked by a same-producer SUCCESS instance even though GitHub's own statusCheckRollup.state disagreed. Empty (never omitted) when no such discarded sibling exists.",
           "items": {
             "type": "object",
             "required": [
@@ -927,7 +927,7 @@
               },
               "selectedState": {
                 "type": "string",
-                "description": "State of the same-name/type/workflow instance the dedup selected as latest instead of this discarded one.",
+                "description": "State of the same-producer instance the dedup selected as latest instead of this discarded one.",
                 "minLength": 1
               },
               "selectedCompletedAt": {

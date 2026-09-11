@@ -3602,20 +3602,22 @@ export interface CiCheckDiscardedSibling {
 }
 
 /**
- * Detect same-producer `(name, type, workflowName)` groups whose
- * dedup-selected "latest" instance (`selectLatestCheckInstance`) is
- * pass-equivalent (SUCCESS/SKIPPED/NEUTRAL/NOT_APPLICABLE) while a
- * DISCARDED sibling in that same group is genuinely non-passing (see
- * {@link GENUINELY_NON_PASSING_STATES}) -- the live discrepancy PR #1741
- * exhibited (#1745): `classifyCiChecks` reported `success` for a commit
- * whose GitHub `statusCheckRollup.state` was `FAILURE`, because a
- * `CANCELLED` bot-triggered `idd-advisory-convergence` instance existed
- * alongside the `SUCCESS` instance this dedup selected as "latest".
- * Confirming the exact internal GitHub selection is not possible after the
- * fact (see #1745's evidence-durability note), so this reports the
- * discarded-sibling FACT itself -- a same-name non-passing instance existed
- * and was NOT counted -- rather than asserting why GitHub's own rollup
- * disagreed. Pure and read-only: never changes which instance
+ * Detect same-producer `(name, type, workflowName, workflowPath)` groups
+ * (kurone-kito/idd-skill#2919 widened this key from the original 3-tuple
+ * `(name, type, workflowName)` -- see `groupChecksByProducer`'s own doc
+ * comment) whose dedup-selected "latest" instance
+ * (`selectLatestCheckInstance`) is pass-equivalent (SUCCESS/SKIPPED/
+ * NEUTRAL/NOT_APPLICABLE) while a DISCARDED sibling in that same group is
+ * genuinely non-passing (see {@link GENUINELY_NON_PASSING_STATES}) -- the
+ * live discrepancy PR #1741 exhibited (#1745): `classifyCiChecks` reported
+ * `success` for a commit whose GitHub `statusCheckRollup.state` was
+ * `FAILURE`, because a `CANCELLED` bot-triggered `idd-advisory-convergence`
+ * instance existed alongside the `SUCCESS` instance this dedup selected as
+ * "latest". Confirming the exact internal GitHub selection is not possible
+ * after the fact (see #1745's evidence-durability note), so this reports
+ * the discarded-sibling FACT itself -- a same-name non-passing instance
+ * existed and was NOT counted -- rather than asserting why GitHub's own
+ * rollup disagreed. Pure and read-only: never changes which instance
  * `selectLatestCheckPerName` selects, only reports when a discarded sibling
  * makes that selection's "success" verdict less certain than it looks.
  */
@@ -3626,6 +3628,12 @@ function findDiscardedNonPassingSiblings<
     completedAt?: string | null;
     type?: string | null;
     workflowName?: string | null;
+    // kurone-kito/idd-skill#2919: matches `groupChecksByProducer`'s own
+    // generic constraint -- this function calls that one internally
+    // (via `groupChecksByProducer(checks).values()` below), so its own
+    // type signature must document the SAME 4-tuple key, not the
+    // pre-#2919 3-tuple one.
+    workflowPath?: string | null;
   },
 >(checks: T[]): CiCheckDiscardedSibling[] {
   const divergences: CiCheckDiscardedSibling[] = [];
@@ -7829,6 +7837,26 @@ export function computePreMergeReadinessBlockers(
     // `preDowngradeStatus` was already `'success'`, so no concurrent
     // cause can exist) sees byte-identical detail text to before -- this
     // only widens the detail for the new combined shape.
+    // kurone-kito/idd-skill#2919 (round 5 -- E10 critique, latent-trap
+    // note, not a bug today): on a branch with NO required checks
+    // configured at all (`ci.noRequiredChecksConfigured: true`),
+    // `sourcePinnedNames`/`identityUnresolvedNames` are always empty
+    // (both downgrades live entirely inside `summarizeRequiredChecks`'s
+    // `requiredCheckNames.length > 0` block) and `preDowngradeStatus`
+    // stays its unset `'unknown'` default -- so `hasUnexplainedConcurrentCause`
+    // is spuriously `true` here, but harmlessly: `sourcePinnedDetail` and
+    // `identityUnresolvedDetail` below are ALSO both empty in this case,
+    // so the `[...].filter(Boolean).join('; ') || genericStatusDetail`
+    // expression reduces to `genericStatusDetail` either way (identical to
+    // pre-#2919 behavior for the unprotected-branch path; the gate itself
+    // still correctly blocks via `resolvePresentRunConclusion` above,
+    // which IS called unconditionally). If a future change adds an
+    // identity-unresolved-specific detail sentence for THIS
+    // no-required-checks path too, it must also gate
+    // `hasUnexplainedConcurrentCause` on `ci.requiredCheckCount > 0` (or
+    // equivalent) first, or it will reintroduce the exact spurious-
+    // generic-suffix bug this round fixed for the required-checks-
+    // configured path, just on the opposite branch.
     const hasUnexplainedConcurrentCause =
       String(ci.preDowngradeStatus ?? 'unknown') !== 'success';
     // #1377: name the masked-403-as-404 cause explicitly when that is why the
