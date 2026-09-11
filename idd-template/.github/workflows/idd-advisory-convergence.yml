@@ -593,7 +593,13 @@ jobs:
         run: |
           echo "::notice::helperRuntime.profile resolves to instructions-only (no runnable helper command), so idd-advisory-convergence-self-waiver has nothing to run for this PR and exits successfully without posting a waiver. Configure helperRuntime.profile in .github/idd/config.json to enable auto-posting for PRs that touch this check's own trigger-file allowlist."
       - uses: actions/setup-node@v4
-        if: steps.profile.outputs.profile != 'instructions-only'
+        # kurone-kito/idd-skill#2657 (Copilot review, PR #2895, round 16):
+        # also gated on the allowlist-touch result, matching the
+        # profile-specific steps below -- without it, this step still
+        # downloaded/configured Node for every non-`instructions-only` PR
+        # even when `touched=false`, an avoidable network/failure surface
+        # for a PR this job has no reason to act on at all.
+        if: steps.profile.outputs.profile != 'instructions-only' && steps.allowlist.outputs.touched == 'true'
         with:
           node-version: 24.x
       - name: Detect package manager
