@@ -695,10 +695,43 @@ function resolveGeneratedTokensWriteLockPath(recordPath) {
  * the thrown error's own recovery instructions, rather than an automatic
  * reclaim this codebase cannot yet prove safe without a real
  * compare-and-swap or ownership-token primitive.
+ *
+ * Both releases below (the `critical()`-failure cleanup and the
+ * `critical()`-success release) are **token-verified**, not a bare
+ * `unlinkSync(lockPath)` (#2922 review round 10, Copilot): each acquisition
+ * writes a fresh random token into the guard body, and release re-reads the
+ * guard and only unlinks it when that same token is still present. This
+ * mirrors this repository's own existing precedent for exactly this
+ * problem -- `releaseCloneLock` in `clone-lock.mts` -- which likewise
+ * refuses to remove a lock file whose recorded `token` no longer matches
+ * the releasing handle's own. Without this check, a guard manually removed
+ * by an operator (per the timeout error's own recovery instructions) while
+ * the original holder's `critical()` is still genuinely running could be
+ * recreated by a new writer before the original holder's release runs;
+ * that release would then delete the *new* writer's guard instead of a
+ * guard it actually owns, letting two writers believe they hold exclusive
+ * access at once -- the same class of hazard already solved on the
+ * acquire side (see the `openSync`/`writeSync`/`closeSync` ownership
+ * comment above), now closed on the release side too.
+ *
+ * This narrows the guard-recreation window rather than eliminating it:
+ * the same kind of race could still, in principle, land *between* the
+ * token read and the `unlinkSync` call the check guards, because no
+ * `wx`-only filesystem primitive gives a true atomic compare-and-delete.
+ * Closing that residual sliver would need a real compare-and-swap or
+ * `flock(2)`-style primitive this module deliberately avoids taking on
+ * (see the header comment). It is accepted as a known limitation: it only
+ * matters when a live holder's own guard is manually removed while that
+ * holder's `critical()` is still running -- a precondition violation of
+ * the timeout error's own recovery instructions -- and #2922's Acceptance
+ * Criteria only ever covers nonce-preservation under normal concurrent
+ * operation, not safety after an operator has manually intervened on a
+ * guard that turns out not to have been actually orphaned.
  */
 function withGeneratedTokensWriteLock(recordPath, critical) {
   const lockPath = resolveGeneratedTokensWriteLockPath(recordPath);
   const deadline = Date.now() + GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS;
+  const token = randomGeneratedTokensWriteLockToken();
   for (;;) {
     let fd;
     try {
@@ -725,11 +758,15 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
     // is its sole, syscall-proven owner from this point on, so a failure
     // finishing the write below is always safe to clean up.
     try {
-      writeSync(fd, String(process.pid));
+      writeSync(fd, token);
     } catch (error) {
       // `writeSync` failing leaves `fd` genuinely still open (a write
       // failure does not close the descriptor), so this is the correct,
-      // and only, place to close it for this branch.
+      // and only, place to close it for this branch. A bare `unlinkSync`
+      // (not the token-verified {@link releaseGeneratedTokensWriteLockIfOwned})
+      // is safe here: `critical()` has not run yet, so no wall-clock window
+      // has opened in which an operator could have manually removed this
+      // still-fresh guard for a different reason to recreate it.
       try {
         closeSync(fd);
       } catch {
@@ -752,6 +789,8 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
       // exact descriptor number for something else (for example another
       // thread's own `open()`), so a second close attempt on it here
       // could silently disrupt unrelated I/O elsewhere in the process.
+      // A bare `unlinkSync` remains safe for the same reason as the
+      // `writeSync` failure branch above: `critical()` has not run yet.
       try {
         unlinkSync(lockPath);
       } catch {
@@ -775,9 +814,11 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
     // would otherwise have no way to learn a guard was left behind until
     // a later, unrelated caller independently discovers it via its own
     // timeout -- minutes or more later, and by a completely different
-    // caller than the one whose failure actually caused it.
+    // caller than the one whose failure actually caused it. Token-verified
+    // (#2922 review round 10, Copilot): see the function-level doc comment
+    // above for why this must not be a bare `unlinkSync`.
     try {
-      unlinkSync(lockPath);
+      releaseGeneratedTokensWriteLockIfOwned(lockPath, token);
     } catch (cleanupError) {
       const combined = new Error(
         `${error.message} (additionally failed to remove the ` +
@@ -794,9 +835,39 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
   // behind would give the caller no signal that anything needs recovery
   // -- every subsequent write for this claim-id would otherwise just
   // silently wait out a full timeout before failing, with nothing
-  // pointing at the actual cause.
-  unlinkSync(lockPath);
+  // pointing at the actual cause. Token-verified (#2922 review round 10,
+  // Copilot): see the function-level doc comment above.
+  releaseGeneratedTokensWriteLockIfOwned(lockPath, token);
   return result;
+}
+/** Generate a fresh, effectively-unique token for one lock acquisition. */
+function randomGeneratedTokensWriteLockToken() {
+  return `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+/**
+ * Release the generated-tokens write-lock guard at `lockPath` only if it
+ * still holds `token` -- the token this same acquisition wrote when it
+ * created the guard (see {@link withGeneratedTokensWriteLock}'s doc
+ * comment for the full ABA rationale and its residual-race caveat). A
+ * missing guard (already released, or never observed) and a guard whose
+ * token no longer matches (recreated by a different owner) are both
+ * treated as "nothing this call may remove" and silently return, mirroring
+ * `releaseCloneLock`'s own token-mismatch handling in `clone-lock.mts`.
+ */
+function releaseGeneratedTokensWriteLockIfOwned(lockPath, token) {
+  let body;
+  try {
+    body = readFileSync(lockPath, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+  if (body !== token) {
+    return;
+  }
+  unlinkSync(lockPath);
 }
 /**
  * Read-only inspection of the generated-tokens record for `claimId` at

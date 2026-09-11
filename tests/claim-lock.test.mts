@@ -10,6 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { availableParallelism, devNull, tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { test } from 'node:test';
@@ -27,6 +28,12 @@ import {
   resolveGeneratedTokensPath,
 } from '../src/scripts/claim-lock.mts';
 
+// Used only by the token-verified-release test below, to reach the CJS
+// side of the `node:fs` builtin for the same `syncBuiltinESMExports`
+// propagation technique the worker-thread payloads in this file already
+// use -- see that test's own comment for why a main-thread (not
+// worker-thread) patch is sufficient here.
+const require = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/claim-lock.mjs');
@@ -1791,6 +1798,80 @@ test('write-lock: an existing guard file blocks a write until the timeout, then 
     assert.equal(existsSync(guardPath), true);
     assert.equal(readFileSync(guardPath, 'utf8'), 'held-by-another-process');
   } finally {
+    teardown(fixture);
+  }
+});
+
+test("write-lock: a guard recreated by a different owner while critical() is still running is never deleted by the original holder's own release (#2922 review round 10, Copilot)", () => {
+  // Reproduces the ABA hazard the round-10 review flagged on the release
+  // side (the acquire side already has an equivalent test above, and its
+  // own fix predates this one): if a guard this call created is manually
+  // removed and immediately recreated by a different writer *while this
+  // call's own `critical()` is still genuinely running*, an unconditional
+  // `unlinkSync` on release would delete the replacement owner's guard
+  // instead of its own -- letting two writers believe they hold exclusive
+  // access at once. This runs entirely on the main thread (no
+  // worker_threads/Atomics needed, unlike the concurrent-write regression
+  // test above): the whole scenario is deterministically reproducible by
+  // intercepting the one `renameSync` call `critical()` itself makes
+  // (`atomicReplaceFile`'s rename into place) and performing the
+  // simulated "manual remove + recreate by someone else" synchronously
+  // inside that interception, before letting the real rename proceed --
+  // no separate thread or timing race is needed to land it inside the
+  // critical section. The patch reaches the compiled TypeScript source's
+  // own `node:fs` import via `syncBuiltinESMExports`, the same propagation
+  // mechanism the worker-thread payloads elsewhere in this file use for a
+  // CJS-side patch to reach an ESM named import.
+  const fixture = setupLinkedWorktree();
+  const fs = require('node:fs');
+  const originalRenameSync = fs.renameSync;
+  let intercepted = false;
+  const REPLACEMENT_GUARD_BODY = 'replacement-owner-token';
+  try {
+    const claimId = 'claim-aba-release-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+
+    fs.renameSync = (...args: Parameters<typeof originalRenameSync>) => {
+      if (!intercepted && args[1] === recordPath) {
+        intercepted = true;
+        // Simulate an operator manually removing the guard per the
+        // timeout error's own recovery instructions (mistakenly, since
+        // this holder is not actually dead -- its critical() is right
+        // here, still running), immediately followed by a different
+        // writer winning the exclusive-create race and installing its
+        // own guard before this call's own release runs.
+        fs.unlinkSync(guardPath);
+        fs.writeFileSync(guardPath, REPLACEMENT_GUARD_BODY, { flag: 'wx' });
+      }
+      return originalRenameSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+
+    // Must not throw: a content mismatch on release is a silent no-op
+    // (mirroring `releaseCloneLock`'s own token-mismatch handling in
+    // clone-lock.mts), never a thrown error surfaced to this caller.
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId,
+      nonce: 'n1',
+    });
+
+    assert.equal(
+      intercepted,
+      true,
+      'expected the renameSync interception to fire during critical()',
+    );
+    // The record write itself completed normally...
+    const read = readGeneratedClaimTokens(fixture.worktree, claimId);
+    assert.equal(read.status, 'present');
+    // ...but the replacement owner's guard must survive this call's own
+    // release: an unconditional unlinkSync would have deleted it.
+    assert.equal(existsSync(guardPath), true);
+    assert.equal(readFileSync(guardPath, 'utf8'), REPLACEMENT_GUARD_BODY);
+  } finally {
+    fs.renameSync = originalRenameSync;
+    require('node:module').syncBuiltinESMExports();
     teardown(fixture);
   }
 });
