@@ -2811,6 +2811,53 @@ test("classifyThreadAckOnlyPostDisposition rejects a reply combining both the th
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+test("classifyThreadAckOnlyPostDisposition rejects a contrastive adjective inside the fourth shape's own lead-in (Copilot review, #2927, round 2)", () => {
+  // Copilot's round-2 finding: reusing the shared
+  // `CODERABBIT_ACK_CLOSURE_LEADIN_RE` for this fourth shape would
+  // import that regex's own pre-existing gap (guard 7 excludes hedge/
+  // negation/epistemic words from its "the ..." branch but not
+  // CONTRASTIVE adjectives -- the same residual gap (a) documented for
+  // the third shape). "The wrong fix" would otherwise pass that shared
+  // branch ("the" + "wrong" + "fix", within its 1-2 word budget) even
+  // though "wrong fix" plausibly signals a substantive problem. This
+  // fourth shape now uses its own, narrower `CODERABBIT_ACK_MATCHES_
+  // LEADIN_RE` (bare pronoun or the exact literal "the fix" only), so
+  // "The wrong fix" fails to match that literal phrase at all.
+  const thread = {
+    id: 'thread-matches-leadin-contrastive-wrong',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MW-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MW-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The wrong fix matches the ' +
+            'requested behavior.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:45:00Z',
+          updatedAt: '2026-09-11T00:45:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 
