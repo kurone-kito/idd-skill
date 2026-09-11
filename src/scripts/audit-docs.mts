@@ -47,6 +47,7 @@ import {
   collectDocumentedHelperInvocationFlags,
   collectHelperFlagDriftViolations,
 } from './helper-flag-drift.mts';
+import { ONBOARDING_PLACEHOLDERS } from './idd-onboard.mts';
 import type { MarkdownLinkAuditConfig } from './markdown-link-audit.mts';
 import { collectMarkdownLinkAuditViolations } from './markdown-link-audit.mts';
 
@@ -173,6 +174,22 @@ const ENGINES_RANGE_MIRRORS: EnginesRangeMirrorSpec[] = [
   { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
 ];
 
+// Sync pair `id`s allowed to keep a known onboarding placeholder token
+// literal in an `"exact"`-mode source. `"exact"` mode has no `replacements`
+// array, so any other pair whose source still carries one of these tokens
+// would leak it byte-for-byte into this repository's own live mirror --
+// exactly the bug class checkExactModePlaceholders below exists to catch
+// (kurone-kito/idd-skill#2899). Each entry needs a one-line justification;
+// prefer flipping the pair to `"mode": "concreted"` with a matching
+// `replacements` entry over adding here, unless the token is genuinely
+// meant to stay literal.
+const EXACT_MODE_PLACEHOLDER_EXEMPTIONS: Readonly<Record<string, string>> = {
+  // `docs/customization.md` is the placeholder-mapping table itself: the
+  // literal `{{...}}` tokens ARE the reference content this page teaches
+  // adopters, not an unresolved leftover from a live marker instance.
+  'customization-doc': 'documents the placeholder-mapping table for adopters',
+};
+
 checkReadmePairs(manifest.readmePairs ?? []);
 checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
 checkGeneratedBlocks(manifest.generatedBlocks ?? []);
@@ -181,6 +198,7 @@ checkShellFileLists(
   manifest.generatedBlocks ?? [],
 );
 checkSyncPairs(manifest.syncPairs ?? []);
+checkExactModePlaceholders(manifest.syncPairs ?? []);
 checkGeneratedFromBanners(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets);
 {
@@ -611,6 +629,49 @@ function checkSyncPairs(pairs: SyncPair[]) {
     }
 
     errors.push(`${pair.id}: unsupported sync mode ${pair.mode}`);
+  }
+}
+
+// Fails any `"mode": "exact"` sync pair whose source still contains an
+// unresolved onboarding placeholder token from the canonical seven-entry
+// table in `idd-onboard.mts` (ONBOARDING_PLACEHOLDERS, mirroring
+// `idd-template/docs/onboarding/placeholders.md`'s "Final placeholder
+// meanings" table) -- not a bare `{{...}}` scan, which would also flag an
+// unrelated GitHub Actions expression such as `${{ github.token }}` inside
+// an imported workflow file. `"exact"` mode copies bytes verbatim with no
+// substitution step, so a leftover token here always leaks into this
+// repository's own live mirror; `checkSyncPairs` above only compares
+// source and target for byte equality and cannot see this, since an
+// identical placeholder on both sides produces zero drift.
+//
+// `idd-doctor.mts`'s own `checkPlaceholders` (see `findPlaceholders` /
+// `isIddManagedPlaceholderScanPath`) is deliberately left unchanged rather
+// than also fixed for the two gaps that let it miss both known bugs of
+// this class (kurone-kito/idd-skill#2899 Background): it scans
+// already-generated repository files for onboarding hygiene in general,
+// not sync-pair sources specifically, so it is not the right place to
+// special-case one sync mode. This check runs earlier, against the
+// sync-pair source before generation, and is the sufficient
+// complementary guard for this specific bug class -- an unresolved
+// placeholder can no longer reach a committed `"exact"`-mode mirror in
+// the first place, so `idd-doctor.mts`'s post-generation scan gaps stay
+// a documented, intentional residual.
+function checkExactModePlaceholders(pairs: SyncPair[]) {
+  const tokens = ONBOARDING_PLACEHOLDERS.map((entry) => entry.token);
+  for (const pair of pairs) {
+    if (pair.mode !== 'exact') {
+      continue;
+    }
+    if (Object.hasOwn(EXACT_MODE_PLACEHOLDER_EXEMPTIONS, pair.id)) {
+      continue;
+    }
+    const source = readText(pair.source);
+    const hits = tokens.filter((token) => source.includes(token));
+    if (hits.length > 0) {
+      errors.push(
+        `${pair.id}: ${pair.source} is "exact" mode but still contains unresolved placeholder(s) ${hits.join(', ')} -- flip to "mode": "concreted" with a matching replacement, or add "${pair.id}" to EXACT_MODE_PLACEHOLDER_EXEMPTIONS with a one-line justification`,
+      );
+    }
   }
 }
 
