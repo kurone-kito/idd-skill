@@ -147,7 +147,8 @@ file, or a newly added `workflow_dispatch` entry, that exists only on
 the pushed branch. A first-time job needs one minimal bootstrap merge
 -- the trigger wiring alone, job inert or guarded off -- before it can
 be dispatched against a feature branch at all; this pattern applies
-most directly once that scaffolding already exists on main.
+most directly once that scaffolding already exists on the default
+branch.
 
 `on:` is workflow-file-scoped, not job-scoped: adding
 `workflow_dispatch` to an existing multi-job file makes every job in
