@@ -124,5 +124,21 @@ jobs:
               process.exit(1);
             }
           '
+      # --test-force-exit (kurone-kito/idd-skill#2892, #2897 CI follow-up):
+      # this suite's direct-await tests spawn real detached win32 children,
+      # and at least one confirmed defect in that path (stuck stdin writes
+      # to a detached `cmd.exe`, tracked at kurone-kito/idd-skill#2910)
+      # leaves libuv handles the Node process never naturally drains,
+      # hanging `node --test` indefinitely on this runner even though every
+      # test itself has already completed and reported. This flag is
+      # Node's own documented mechanism for exactly that "tests are done
+      # but the process won't exit on its own" case; it does not change
+      # which tests run or their pass/fail outcome. Scoped to only this
+      # file/job rather than the shared `pre-push-validate` command
+      # (`.github/idd/config.json`): the same flag there would mask a
+      # future unrelated hang on any platform, and the added command-string
+      # bytes alone were enough to push the generated
+      # `idd-overview-core.instructions.md` doc over its enforced context-
+      # ceiling budget (#2897 CI follow-up, E10 critique pass).
       - name: Run critique telemetry hook tests
-        run: node --test tests/idd-critique-telemetry-hook.test.mts
+        run: node --test --test-force-exit tests/idd-critique-telemetry-hook.test.mts
