@@ -131,48 +131,48 @@ When this branch's diff introduces a **new** CI job, land it configured
 for `workflow_dispatch` only, not yet wired to `push`/`pull_request`,
 and validate it with manually dispatched runs against the pushed
 branch (for example `gh workflow run <file> --ref <branch>`) before
-making the one remaining edit that flips the trigger to its intended
-final form. GitHub only allows a `workflow_dispatch`-triggered run once
-that trigger is already registered on the repository's default branch:
-`gh workflow run` cannot dispatch a workflow file, or a newly added
-`workflow_dispatch` entry, that exists only on the pushed branch. A
-genuinely first-time job therefore needs one minimal, low-risk
-bootstrap merge -- the trigger wiring alone, with the job itself inert
-or guarded off -- before it can be dispatched against a feature branch
-at all; this dispatch-first pattern applies most directly once that
-scaffolding already exists on the default branch. `on:` is
-workflow-file-scoped, not job-scoped, so adding `workflow_dispatch` to
-an existing multi-job file makes every job in it dispatchable --
-during validation, guard the unproven job, and any existing job that
-assumes `push`/`pull_request` context, with a job-level
-`if: github.event_name == 'workflow_dispatch'` condition, removing it
-together with the trigger-flip edit once validated. This step does
-**not** by itself reduce advisory-bot (for
-example Copilot or Codex) review invocation count -- that is driven by
-push count, not by which CI jobs are wired to which triggers. Its real
-benefit is avoiding wasted CI Actions-minutes and false-failure noise
-from an unproven job auto-running on every unrelated push during the
-same PR's lifetime. See
+making the one remaining edit that flips the trigger to its final
+form. **Commit, re-run pre-push-validate, and push that edit before
+creating the PR (D3)** -- merging with the branch still dispatch-only
+would never enable the job.
+
+GitHub only allows a `workflow_dispatch` run once that trigger is
+registered on the default branch: `gh workflow run` cannot target a
+file, or a newly added `workflow_dispatch` entry, that exists only on
+the pushed branch. A first-time job needs one minimal bootstrap merge
+-- the trigger wiring alone, job inert or guarded off -- before it can
+be dispatched against a feature branch at all; this pattern applies
+most directly once that scaffolding already exists on main.
+
+`on:` is workflow-file-scoped, not job-scoped: adding
+`workflow_dispatch` to an existing multi-job file makes every job in
+it dispatchable. During validation, guard the unproven job with
+`if: github.event_name == 'workflow_dispatch'` (runs only on dispatch)
+and guard any existing job assuming `push`/`pull_request` context with
+the **inverse**, `if: github.event_name != 'workflow_dispatch'` (skips
+only the dispatch run) -- remove both once validated, with the
+trigger-flip edit. This step does **not** by itself reduce advisory-bot
+review invocation count -- that is driven by push count, not trigger
+wiring. Its real benefit is avoiding wasted CI Actions-minutes and
+false-failure noise from an unproven job auto-running on every
+unrelated push. See
 [rationale](../../docs/idd-design-rationale.md#d2--adding-a-new-ci-job-dispatch-first-rollout).
 
 For a job targeting a Linux runner, also validate it locally with
 `nektos/act` before pushing, to catch YAML/step/job-dependency
-mistakes without a push-and-wait round trip. `act`'s normal
-Docker-based execution cannot accurately validate
-`windows-latest`/`macos-latest` runner-specific behavior from a
-WSL/Linux implementation environment -- never treat "validated via
-`act`" as covering a job targeting a Windows or macOS runner.
+mistakes without a push-and-wait round trip. `act`'s Docker-based
+execution cannot validate `windows-latest`/`macos-latest`
+runner-specific behavior from a WSL/Linux environment -- never treat
+"validated via `act`" as covering a Windows or macOS job.
 
-Optionally, for a job targeting a platform `act` cannot validate where
-shakeout is expected to be long or costly, a contributor may iterate it
-on a branch with no open PR yet (or via `workflow_dispatch` runs
-against such a branch), landing only the validated final version on
-the actual PR branch. Review automation that only fires on PR-associated
-pushes never runs during that shakeout, avoiding review cost entirely
-for those iterations -- the one path here that actually reduces it.
-This deviates from the normal early-PR-then-iterate practice, so scope
-it to CI-infrastructure-focused work, and treat it as the implementer's
-choice, not a mandate.
+Optionally, for a job `act` cannot validate where shakeout is long or
+costly, a contributor may iterate it on a branch with no open PR yet,
+landing only the validated final version on the actual PR branch.
+Review automation that only fires on PR-associated pushes never runs
+during that shakeout, avoiding review cost entirely -- the one path
+here that actually reduces it. This deviates from the normal
+early-PR-then-iterate practice, so scope it to CI-infrastructure work,
+as the implementer's choice, not a mandate.
 
 ## D3 — Create PR
 
