@@ -150,9 +150,10 @@ maintainer decision" here does not depend on Tier 2's
 mechanism-simplification precondition, since there is no mechanism
 safe to remove: once several rounds each keep surfacing a genuinely
 new, in-scope spec-coverage gap rather than repeating one, list each
-outstanding gap with its evidence, and the round count, in a PR
+outstanding gap with its evidence, and the round count, in a hold
 comment and stop for a maintainer decision. Once a maintainer decision
-accepts the residual gaps, record the decision and close out the
+accepts the residual gaps as a known limitation, record the decision
+and close out the
 finding the same way this workflow already disposes of any review
 item or resolves any hold (`idd-review-triage.instructions.md`,
 `idd-overview-appendix.instructions.md`), and file any follow-up
