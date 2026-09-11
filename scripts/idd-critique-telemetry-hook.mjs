@@ -275,8 +275,13 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
         // `shell: true` wrapper on win32) propagates that show-state hint
         // to the further child it execs for `command` -- the actual
         // process whose own auto-allocated console is the "large number of
-        // windows" symptom this issue reports -- is unverified from a
-        // non-Windows implementation environment. Kept regardless: no-op
+        // windows" symptom this issue reports -- was not directly
+        // re-checked for visible-window suppression in this session either
+        // (the earlier implementation session's blocker -- no native
+        // Windows access at all -- no longer applies, but this session's
+        // own native-Windows verification work focused on the watchdog and
+        // stdin-delivery defects below, not on visually confirming
+        // console-window suppression specifically). Kept regardless: no-op
         // or partial help, never harmful, and matches this option's
         // documented intent. The bound, reliable mitigation for that
         // symptom is `killProcessGroup`'s win32 tree-kill below, which
@@ -648,10 +653,26 @@ function spawnWatchdogPosix(spawnFn, pid, timeoutMs) {
  *
  * Spawns `powershell.exe` (Windows PowerShell 5.1, present on every
  * Windows install since 7 SP1 / Server 2008 R2 -- not `pwsh`/PowerShell
- * Core, whose presence is not guaranteed) directly, not through another
- * `shell: true` hop: keeps this watchdog a single process layer, so
- * {@link cancelWatchdog}'s win32 tree-kill can reach it by pid alone if the
- * hook it guards settles early.
+ * Core, whose presence is not guaranteed) through a `cmd.exe` hop
+ * (`shell: true`), **not** directly (kurone-kito/idd-skill#2892, #2897 CI
+ * follow-up, confirmed live on native Windows 11): `spawnFn('powershell.exe',
+ * [...], { detached: true, stdio: 'ignore' })` -- no shell hop -- exits in
+ * roughly 70-140ms with code 0 and never runs its `-Command`/`-File`
+ * script at all, a false "success." Verified with the quoting variable
+ * removed entirely (a `-File <script.ps1>` invocation, so no `-Command`
+ * string-escaping is involved): still a same-result no-op under
+ * `detached: true`, while the identical `-File` invocation through a
+ * `cmd.exe` hop runs correctly and survives the caller's own
+ * `process.exit()`. This isolates the cause to `DETACHED_PROCESS` itself
+ * (no console object at all) breaking `powershell.exe`'s ConsoleHost
+ * startup, not this file's own command construction -- adding the
+ * `cmd.exe` hop back (as this file's primary hook spawn already uses for
+ * `command`) is the fix. The extra process layer this reintroduces is
+ * bounded: {@link cancelWatchdog}'s win32 tree-kill already uses
+ * `taskkill /PID <pid> /T /F` (the `/T` flag), which reaches this
+ * watchdog's own `cmd.exe` wrapper *and* the `powershell.exe` it spawns,
+ * so disarming an early-settling hook's watchdog is unaffected by the
+ * extra hop.
  *
  * `timeout.exe` is deliberately not used for the sleep: with
  * `stdio: 'ignore'` it fails outright ("Input redirection is not
@@ -661,27 +682,19 @@ function spawnWatchdogPosix(spawnFn, pid, timeoutMs) {
  * The kill step builds a `System.Diagnostics.Process` directly
  * (`UseShellExecute = $false; CreateNoWindow = $true`) rather than
  * `Start-Process -WindowStyle Hidden` (kurone-kito/idd-skill#2897 CI
- * finding, `windows-latest`): a real `windows-latest` CI round confirmed
- * this watchdog was not actually killing its target -- the CLI-invoked
- * regression test this backup exists for
- * ("does not wait for a hanging resolved hook... still killed after the
- * CLI exits") timed out waiting for the process to die, and it was still
- * running when the job was later force-cancelled, while the *separately*
- * exercised direct-Node `taskkill` path in {@link killProcessTreeWindows}
- * passed cleanly in the same run. `Start-Process -WindowStyle Hidden`
- * launches its target via `ShellExecuteEx`, a documented source of
- * reliability quirks in non-interactive/service-style process contexts
- * distinct from a plain `CreateProcess` launch; `UseShellExecute = $false`
- * bypasses that layer entirely and is the same underlying mechanism
- * Node's own `windowsHide` option (and this file's already-confirmed-
- * working `killProcessTreeWindows`) relies on, so this keeps both
- * `taskkill` call sites on the same, empirically-working process-creation
- * path instead of two different ones. `.Arguments` (a single
- * space-joined string), not the array-based `.ArgumentList`: the latter
- * requires .NET Core 2.1+, unavailable on `powershell.exe` (Windows
- * PowerShell 5.1's .NET Framework runtime). `$p.WaitForExit()` keeps this
- * whole script's own execution (and thus the watchdog process) alive
- * until `taskkill` actually finishes, matching the POSIX version's
+ * finding, `windows-latest`): an earlier `windows-latest` CI round already
+ * showed this watchdog not actually killing its target before the
+ * `DETACHED_PROCESS` no-op above was isolated as the real cause; kept here
+ * regardless since `UseShellExecute = $false` is the same underlying
+ * mechanism Node's own `windowsHide` option (and this file's
+ * already-confirmed-working `killProcessTreeWindows`) relies on, so both
+ * `taskkill` call sites stay on the same, empirically-working
+ * process-creation path instead of two different ones. `.Arguments` (a
+ * single space-joined string), not the array-based `.ArgumentList`: the
+ * latter requires .NET Core 2.1+, unavailable on `powershell.exe`
+ * (Windows PowerShell 5.1's .NET Framework runtime). `$p.WaitForExit()`
+ * keeps this whole script's own execution (and thus the watchdog process)
+ * alive until `taskkill` actually finishes, matching the POSIX version's
  * `sleep <n>; kill ...` sequencing.
  *
  * **Known residual, not present on the POSIX side**: {@link
@@ -698,10 +711,10 @@ function spawnWatchdogPosix(spawnFn, pid, timeoutMs) {
  * Windows-side pid-reuse guarantee -- an unexplained Windows-only flake in
  * a quick-exit test is the first place to look.
  *
- * Never throws: spawn failure here (no `powershell.exe` resolvable --
- * essentially never on a real Windows install) silently forfeits this
- * backup, the same accepted gap {@link spawnWatchdogPosix} documents for a
- * bare environment with no POSIX shell.
+ * Never throws: spawn failure here (no `cmd.exe`/`powershell.exe`
+ * resolvable -- essentially never on a real Windows install) silently
+ * forfeits this backup, the same accepted gap {@link spawnWatchdogPosix}
+ * documents for a bare environment with no POSIX shell.
  */
 function spawnWatchdogWindows(spawnFn, pid, timeoutMs) {
   try {
@@ -716,20 +729,23 @@ function spawnWatchdogWindows(spawnFn, pid, timeoutMs) {
       '$p.StartInfo.CreateNoWindow = $true; ' +
       '[void]$p.Start(); ' +
       '$p.WaitForExit()';
-    const watchdog = spawnFn(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-WindowStyle',
-        'Hidden',
-        '-Command',
-        script,
-      ],
-      { detached: true, stdio: 'ignore', windowsHide: true },
-    );
+    // shell:true (cmd.exe hop) is required -- see the doc comment above
+    // for why a direct spawnFn('powershell.exe', ..., {detached:true})
+    // silently no-ops on this platform. The script itself uses only
+    // single quotes internally, so wrapping the whole -Command argument
+    // in double quotes here needs no further escaping.
+    const command =
+      'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden ' +
+      `-Command "${script}"`;
+    const watchdog = spawnFn(command, {
+      shell: true,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
     // Same asynchronous-spawn-failure rationale as spawnWatchdogPosix's own
-    // comment -- an unresolvable powershell.exe must not crash the caller.
+    // comment -- an unresolvable cmd.exe/powershell.exe must not crash the
+    // caller.
     watchdog.on('error', () => {
       // Best-effort only -- see doc comment above and on this function.
     });
