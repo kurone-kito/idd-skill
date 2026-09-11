@@ -1977,6 +1977,14 @@ close.
   A `holder`
   snapshot of the previous occupant is reported on **both** a plain
   `collision` and an authorized takeover, not only on takeover.
+- `reacquired: true` also carries an optional `racedCreate: true` flag
+  (#2917 review, Codex): set when this exact
+  invocation's own first read found the lock absent and its own
+  exclusive-create attempt then lost a race to a concurrent same-`claim-id`
+  creator, so the eventual match came from a later retry, not the
+  invocation's first look. A caller trusting `reacquired: true` as
+  evidence the lock predates this call (as the backfill-tokens recovery
+  route does) must also require `racedCreate` to be absent/`false`.
 - The `--acquire` CLI exits `0` only for `acquired` and exits `2` for
   `collision`, so a hook can safely chain installation or another mutation
   with `&&`; `--check` remains read-only and exits `0` for a reported state.
@@ -2091,9 +2099,14 @@ close.
   `backfilled`. An absent lock reports `lock-absent`; an unparseable or
   otherwise unreadable lock (for example a directory at the lock path)
   reports `lock-malformed`; a lock present for a different `claimId`
-  reports `lock-mismatch` (naming the actual holder) -- all three write
-  nothing. Exits `0` for `backfilled` and `2` for the three failure
-  statuses, mirroring `--acquire`'s own collision exit-code contract so a
+  reports `lock-mismatch` (naming the actual holder); a matching lock
+  whose own record path is a directory reports `record-blocked` instead
+  of deleting it -- the lock only authenticates the lock, not this
+  separate path, and the path's hash suffix is not collision-proof, so
+  lock authority alone never authorizes replacing it (#2917 review,
+  Copilot) -- all four write nothing. Exits `0` for `backfilled` and `2`
+  for the four failure statuses, mirroring `--acquire`'s own collision
+  exit-code contract so a
   caller can chain `--backfill-tokens && --read-tokens`. Performs no
   GitHub round-trip, matching `--acquire`'s own same-machine, no-network
   design -- the caller is responsible for having already independently
@@ -2104,28 +2117,45 @@ close.
   `backfilled` again), matching `--record-tokens`'s own idempotency
   contract -- there is no separate `already-present` status. The Claim
   revalidation gate (step 5, `idd-overview-core.instructions.md`, and
-  the equivalent step in every lite guard) only reaches this route
-  when its own initial `--acquire` reported `reacquired: true` -- a
-  fresh `acquired` (lock just created) or `forcedTakeover: true` is
-  never legitimate backfill evidence. From there, **each step gates
-  the next** -- proceed to the next step only on the exact result
-  shown, and stop fail-closed on any other result:
+  the equivalent step in every lite guard) reaches this route only
+  through a chain in which **each step gates the next** -- proceed to
+  the next step only on the exact result shown, and stop fail-closed on
+  any other result:
+  0. The gate's own initial `--acquire` reports `reacquired: true` with
+  no `racedCreate` -- a fresh `acquired` (lock just created),
+  `forcedTakeover: true`, or `reacquired: true` with `racedCreate:
+     true` (this call itself raced a concurrent creator for the same
+  claim-id, so the match is not proof the lock predates this gate
+  pass) are never legitimate backfill evidence.
   1. `--check` reports the lock `present`, holder matching
      `{claim-id}`.
   2. `--backfill-tokens` reports `backfilled`.
   3. The retried `--read-tokens` reports `present: true` (no
      `malformed`).
   4. A final `--acquire`, run again immediately before the mutation,
-     reports `reacquired: true` -- not a fresh `acquired`, which
-     would mean the lock vanished mid-recovery (for example a
+     reports `reacquired: true` with no `racedCreate` -- the same
+     requirement as step 0, applied again because a fresh `acquired`
+     here would mean the lock vanished mid-recovery (for example a
      concurrent takeover) and this step would otherwise create a new
      one and let the mutation proceed with no real token evidence.
 
-  This closes two gaps a review round each found real: the window
+  This closes gaps three review rounds each found real: the window
   between the initial acquire and the mutation that a concurrent
-  takeover could exploit, and a literal reading of the sequence as an
-  unconditional run-these-in-order list rather than a chain each
-  link of which must actually succeed (#2917 review, Copilot).
+  takeover could exploit; a literal reading of the sequence as an
+  unconditional run-these-in-order list rather than a chain each link
+  of which must actually succeed; and `reacquired: true` alone being
+  trusted as proof of pre-existence when a same-claim-id race can
+  produce it for a lock that is in fact only microseconds old
+  (`acquireClaimLock`'s own `EEXIST`-retry loop,
+  `src/scripts/claim-lock.mts`) (#2917 review, Codex and Copilot).
+  Residual, named rather than hidden: a _third_ process arriving after
+  such a race has already settled sees `reacquired: true` with no
+  `racedCreate` on its own first read, the same way it would for a
+  lock that is genuinely years old -- this mechanism only ever detects
+  a race this specific call itself observed, never a lock's true age;
+  the Claim revalidation gate's own GitHub-verified claim check (steps
+  1-4 before this one) is the actual authority this is defense in
+  depth for, not a replacement for it.
 - No explicit release verb, no cleanup across takeovers: like the lock
   file, the record lives inside the worktree's own private git-admin
   directory, so `git worktree remove` at F4 deletes it together with the

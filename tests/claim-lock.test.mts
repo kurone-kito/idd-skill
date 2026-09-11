@@ -13,8 +13,9 @@ import {
 import { devNull, tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { Worker } from 'node:worker_threads';
 
 import {
   acquireClaimLock,
@@ -504,6 +505,190 @@ test('acquire: N concurrent forced-takeovers never corrupt the lock — every wr
   }
 });
 
+// Worker-thread payload for the race test below. `eval`-loaded per
+// round rather than a separate fixture file, per this suite's existing
+// preference for self-contained tests. Deliberately imports the
+// *compiled* CLI module (matching the execFileAsync CLI tests
+// elsewhere in this file), not the .mts source, since this string is
+// handed to Worker's own module loader rather than this file's own
+// TypeScript-aware one.
+const RACE_WORKER_CODE = `
+  const { workerData, parentPort } = require('node:worker_threads');
+  const { worktree, sab, cliUrl } = workerData;
+  const ints = new Int32Array(sab);
+  import(cliUrl).then(({ acquireClaimLock }) => {
+    // Signal ready, then block until the main thread releases every
+    // worker in this round at (as close to) the same instant.
+    Atomics.add(ints, 0, 1);
+    Atomics.wait(ints, 1, 0);
+    const outcome = acquireClaimLock(worktree, 'agent-a', 'claim-a', false);
+    parentPort.postMessage(outcome);
+  });
+`;
+
+test('acquire: a same-claim-id race against an absent lock can raise racedCreate, and never fabricates a holder on the pre-existing torn-read gap (PR #2917 review, Codex; torn-read gap tracked in kurone-kito/idd-skill#2920)', async (t) => {
+  // Statistical health check across several rounds, not a proof, like the
+  // concurrent-takeovers test above -- but using worker_threads with an
+  // Atomics ready-count barrier instead of subprocess spawning. The
+  // exclusive-create race window is microseconds wide; process-spawn
+  // overhead (milliseconds) reliably swamps it, so a subprocess batch
+  // (like the takeover test above) essentially never reproduces this
+  // specific race in practice. In-process worker threads sharing one
+  // Node process avoid that overhead and do, on hosts with enough cores
+  // -- see kurone-kito/idd-skill#2920 for the measurements this is based
+  // on and the pre-existing gap the torn-read branch below documents.
+  //
+  // Structural invariants that must hold on every round regardless of
+  // whether a race actually manifests on this host:
+  // - every outcome's mode is 'acquired' or 'collision'
+  // - exactly one outcome is a true fresh create (mode:'acquired', no
+  //   `reacquired`) -- O_EXCL create is atomic at the OS level
+  // - every `racedCreate:true` co-occurs with `reacquired:true`
+  // - every `collision` outcome carries no `holder` -- this batch's own
+  //   lock starts absent and every acquire uses the same claim-id, so a
+  //   genuine different-claim-id collision is impossible here; a
+  //   `collision` can only be the pre-existing torn-read gap (#2920), and
+  //   a `holder` appearing on one would mean a *different*, more serious
+  //   bug than the one this comment documents
+  // - the final lock body still names the single fresh creator
+  //
+  // Whether `racedCreate:true` is actually observed varies with host CPU
+  // count and scheduler noise, so it is soft-checked via a diagnostic
+  // across multiple rounds rather than a hard per-run assertion -- this
+  // test must not fail merely because a given CI runner has few cores.
+  const fixture = setupLinkedWorktree();
+  try {
+    const cliUrl = pathToFileURL(CLI_PATH).href;
+    const lockPath = resolveClaimLockPath(fixture.worktree);
+    const ROUNDS = 5;
+    const CONCURRENT_ACQUIRES = 60;
+    let anyRacedCreate = false;
+    let anyTornReadCollision = false;
+
+    for (let round = 0; round < ROUNDS; round += 1) {
+      rmSync(lockPath, { force: true });
+
+      const sab = new SharedArrayBuffer(8);
+      const ints = new Int32Array(sab);
+      // ints[0]: ready count; ints[1]: go flag.
+      Atomics.store(ints, 0, 0);
+      Atomics.store(ints, 1, 0);
+
+      const workers = Array.from({ length: CONCURRENT_ACQUIRES }, () => {
+        const worker = new Worker(RACE_WORKER_CODE, {
+          eval: true,
+          workerData: { worktree: fixture.worktree, sab, cliUrl },
+        });
+        return new Promise((resolve, reject) => {
+          worker.on('message', (outcome) => {
+            resolve(outcome);
+            void worker.terminate();
+          });
+          worker.on('error', reject);
+        });
+      });
+
+      // Poll until every worker in this round has imported the module
+      // and reached its own Atomics.wait, then release them together.
+      const deadline = Date.now() + 10_000;
+      while (
+        Atomics.load(ints, 0) < CONCURRENT_ACQUIRES &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      Atomics.store(ints, 1, 1);
+      Atomics.notify(ints, 1);
+
+      const outcomes = (await Promise.all(workers)) as Array<{
+        mode: string;
+        reacquired?: boolean;
+        racedCreate?: boolean;
+        holder?: unknown;
+      }>;
+
+      for (const outcome of outcomes) {
+        assert.ok(
+          outcome.mode === 'acquired' || outcome.mode === 'collision',
+          `unexpected mode, got: ${JSON.stringify(outcome)}`,
+        );
+        if (outcome.racedCreate === true) {
+          assert.equal(
+            outcome.reacquired,
+            true,
+            `racedCreate:true without reacquired:true, got: ${JSON.stringify(outcome)}`,
+          );
+          anyRacedCreate = true;
+        }
+        if (outcome.mode === 'collision') {
+          assert.equal(
+            outcome.holder,
+            undefined,
+            `expected a same-claim-id collision in this batch to be the torn-read gap (no holder), got: ${JSON.stringify(outcome)}`,
+          );
+          anyTornReadCollision = true;
+        }
+      }
+
+      const freshCreates = outcomes.filter(
+        (outcome) => outcome.mode === 'acquired' && outcome.reacquired !== true,
+      );
+      assert.equal(
+        freshCreates.length,
+        1,
+        `expected exactly one true fresh create in round ${round}, got: ${JSON.stringify(outcomes)}`,
+      );
+
+      const finalBody = JSON.parse(readFileSync(lockPath, 'utf8'));
+      assert.equal(finalBody.claimId, 'claim-a');
+      assert.equal(finalBody.agentId, 'agent-a');
+    }
+
+    t.diagnostic(
+      anyRacedCreate
+        ? `observed racedCreate:true across ${ROUNDS} round(s)`
+        : `no racedCreate:true observed across ${ROUNDS} round(s) on this host -- the positive path is verified by construction (acquireClaimLock's three reacquired-from-a-retry return sites), not exercised deterministically here`,
+    );
+    t.diagnostic(
+      anyTornReadCollision
+        ? `observed the pre-existing torn-read collision gap (kurone-kito/idd-skill#2920) across ${ROUNDS} round(s)`
+        : `no torn-read collision observed across ${ROUNDS} round(s) on this host`,
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('acquire: a genuinely pre-existing matching lock reacquires with no racedCreate', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const first = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(first.mode, 'acquired');
+    assert.equal(first.reacquired, undefined);
+    assert.equal(first.racedCreate, undefined);
+
+    // A later, separate call against the now-settled, already-present
+    // lock -- the ordinary single-session "before every mutation"
+    // re-check -- must read as unambiguously pre-existing.
+    const second = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(second.mode, 'acquired');
+    assert.equal(second.reacquired, true);
+    assert.equal(second.racedCreate, undefined);
+  } finally {
+    teardown(fixture);
+  }
+});
+
 // Generated-tokens record tests (#2719).
 
 test('generated-tokens: record/read round trip reports the recorded fields', () => {
@@ -981,7 +1166,7 @@ test("backfill-tokens: preserves an existing well-formed record's own nonce rath
   }
 });
 
-test('backfill-tokens: self-heals a stray directory at the generated-tokens path instead of throwing (PR #2917 review, Codex P2)', () => {
+test('backfill-tokens: reports record-blocked instead of deleting a directory at the generated-tokens path (PR #2917 review, Codex P2 then Copilot)', () => {
   const fixture = setupLinkedWorktree();
   try {
     const acquired = acquireClaimLock(
@@ -993,26 +1178,36 @@ test('backfill-tokens: self-heals a stray directory at the generated-tokens path
     assert.equal(acquired.mode, 'acquired');
 
     // Simulate the malformed-token-path-is-a-directory case
-    // `readGeneratedClaimTokens` already reports as `malformed` (read side):
-    // before this fix, the matching write side threw instead of replacing
-    // it, so the documented recovery route this exact `malformed` result
-    // sends a caller to would crash rather than report a clean outcome.
+    // `readGeneratedClaimTokens` already reports as `malformed` (read side).
+    // An earlier fix here made the write side self-heal by deleting the
+    // directory, but a matching `idd-claim.lock` only authenticates the
+    // *lock*, not this separate path, and the path's hash suffix is not
+    // collision-proof -- so a stray/colliding directory's contents must
+    // survive, the same invariant the #2879-review regression test below
+    // already establishes for a plain --record-tokens call.
     const tokensPath = readGeneratedClaimTokens(
       fixture.worktree,
       'claim-a',
     ).path;
     mkdirSync(tokensPath, { recursive: true });
+    writeFileSync(join(tokensPath, 'unrelated-file.txt'), 'do not delete me');
     assert.equal(
       readGeneratedClaimTokens(fixture.worktree, 'claim-a').status,
       'malformed',
     );
 
     const outcome = backfillGeneratedClaimTokens(fixture.worktree, 'claim-a');
-    assert.equal(outcome.status, 'backfilled');
+    assert.equal(outcome.status, 'record-blocked');
 
-    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
-    assert.equal(read.status, 'present');
-    assert.equal(read.status === 'present' && read.record.agentId, 'agent-a');
+    assert.equal(statSync(tokensPath).isDirectory(), true);
+    assert.equal(
+      readFileSync(join(tokensPath, 'unrelated-file.txt'), 'utf8'),
+      'do not delete me',
+    );
+    assert.equal(
+      readGeneratedClaimTokens(fixture.worktree, 'claim-a').status,
+      'malformed',
+    );
   } finally {
     teardown(fixture);
   }
