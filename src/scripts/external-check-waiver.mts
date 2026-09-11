@@ -519,6 +519,11 @@ export function planExternalCheckWaiver(
     issueNumber: input?.issueNumber,
     expectedClaimId: input?.expectedClaimId,
     headRefName: String(pr.headRefName ?? '').trim(),
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): a
+    // branch-mismatched candidate must stay selectable for --auto-bootstrap
+    // -- see resolveLinkedIssueCandidates's enforceBranchMatch doc comment
+    // (external-check-waiver.mts) for the full reasoning this mirrors.
+    enforceBranchMatch: !autoBootstrap,
   });
   const claimless = Boolean(input?.claimless);
   // kurone-kito/idd-skill#2657 (Codex review, PR #2895): when an adopter
@@ -925,6 +930,9 @@ export async function runExternalCheckWaiver(
       issueNumber: args.issueNumber,
       expectedClaimId: args.claimId,
       headRefName: pr.headRefName,
+      // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): see
+      // resolveLinkedIssueCandidates's own enforceBranchMatch doc comment.
+      enforceBranchMatch: !args.autoBootstrap,
       prNumber: args.prNumber,
     });
 
@@ -1324,11 +1332,20 @@ export async function runExternalCheckWaiver(
             issueNumber: args.issueNumber,
             expectedClaimId: '',
             headRefName: pr.headRefName,
+            // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11):
+            // keep this reconcile's candidate resolution symmetric with the
+            // pre-write resolution above, or a branch-mismatch auto-bootstrap
+            // PR would see its post-write binding disagree with what was
+            // actually posted, confusing the concurrent-duplicate check.
+            enforceBranchMatch: !args.autoBootstrap,
             prNumber: args.prNumber,
           }),
         {
           issueNumber: args.issueNumber,
           headRefName: String(pr.headRefName ?? ''),
+          // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11):
+          // symmetric with the resolveLinkedIssueCandidates call just above.
+          enforceBranchMatch: !args.autoBootstrap,
         },
       );
       if (refreshed.ok) {
@@ -1602,14 +1619,29 @@ function selectLinkedIssueCandidate(
     issueNumber?: number;
     expectedClaimId?: string;
     headRefName?: string;
+    /**
+     * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): skip
+     * the branch-match filter below entirely for `--auto-bootstrap`, rather
+     * than passing an empty/undefined `headRefName` -- a real claim's own
+     * (mismatched) `branch` value is never `undefined`, so comparing
+     * against an absent `headRefName` would still filter it out, defeating
+     * the point. See `resolveLinkedIssueCandidates`'s `enforceBranchMatch`
+     * doc comment for the full reasoning this mirrors. Defaults to
+     * enforcing the match (the historical, ordinary-path behavior).
+     */
+    enforceBranchMatch?: boolean;
   } = {},
 ): LinkedIssueSelection {
+  const enforceBranchMatch = options.enforceBranchMatch ?? true;
   const filtered = issueCandidates.filter(
     (candidate): candidate is LinkedIssueWithClaim => {
       if (options.issueNumber && candidate.number !== options.issueNumber) {
         return false;
       }
-      if (candidate.activeClaim?.branch !== options.headRefName) {
+      if (
+        enforceBranchMatch &&
+        candidate.activeClaim?.branch !== options.headRefName
+      ) {
         return false;
       }
       if (
@@ -1798,6 +1830,7 @@ function resolveLinkedIssueCandidates({
   issueNumber,
   expectedClaimId,
   headRefName,
+  enforceBranchMatch,
   prNumber,
 }: {
   owner: string;
@@ -1808,6 +1841,27 @@ function resolveLinkedIssueCandidates({
   issueNumber: number;
   expectedClaimId: string;
   headRefName: string | null | undefined;
+  /**
+   * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): whether a
+   * linked issue's active claim, resolved for a branch OTHER than
+   * `headRefName`, should still be nulled out (the historical, ordinary-path
+   * behavior -- an operator-authorized waiver binding to a claim on the
+   * wrong branch is almost always a mistake, so failing closed there is
+   * right). `--auto-bootstrap` must pass `false`: `computeAdvisoryConvergence
+   * Verdict`'s own `idd-claimed` scope-applicability logic (the pinned
+   * "#1686 path 3 symmetry" test) deliberately keeps a branch-mismatch PR
+   * auto-waivable, PROVIDED the marker binds to the real, known claim id --
+   * never the `none` sentinel. Nulling the claim here for that case fed
+   * `autoBootstrapImplicitClaimless`'s zero-candidate fallback, rendering
+   * `claim-id:none` for a PR the consumer still sees as claimed;
+   * `protocol-helpers.mts`'s `claimBindingSatisfied` check then rejects that
+   * `none` binding outright (a non-empty active claim never accepts the
+   * sentinel), so the auto-waiver could never reach the one path it exists
+   * to unblock. Skipping the branch check for auto-bootstrap lets this
+   * function report the real claim instead, which `selectLinkedIssueCandidate`
+   * then binds the marker to directly.
+   */
+  enforceBranchMatch: boolean;
   prNumber: number;
 }): IssueCandidatePayload[] {
   const issueRefs = (linkedIssues ?? []).filter((issue) => {
@@ -1871,7 +1925,11 @@ function resolveLinkedIssueCandidates({
       });
       continue;
     }
-    if (headRefName && activeClaim.branch !== headRefName) {
+    if (
+      enforceBranchMatch &&
+      headRefName &&
+      activeClaim.branch !== headRefName
+    ) {
       results.push({
         number: issue.number,
         url: issue.url,

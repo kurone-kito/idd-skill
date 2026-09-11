@@ -144,6 +144,11 @@ export function planExternalCheckWaiver(input, options = {}) {
     issueNumber: input?.issueNumber,
     expectedClaimId: input?.expectedClaimId,
     headRefName: String(pr.headRefName ?? '').trim(),
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): a
+    // branch-mismatched candidate must stay selectable for --auto-bootstrap
+    // -- see resolveLinkedIssueCandidates's enforceBranchMatch doc comment
+    // (external-check-waiver.mts) for the full reasoning this mirrors.
+    enforceBranchMatch: !autoBootstrap,
   });
   const claimless = Boolean(input?.claimless);
   // kurone-kito/idd-skill#2657 (Codex review, PR #2895): when an adopter
@@ -536,6 +541,9 @@ export async function runExternalCheckWaiver(options = {}) {
       issueNumber: args.issueNumber,
       expectedClaimId: args.claimId,
       headRefName: pr.headRefName,
+      // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): see
+      // resolveLinkedIssueCandidates's own enforceBranchMatch doc comment.
+      enforceBranchMatch: !args.autoBootstrap,
       prNumber: args.prNumber,
     });
   const resolvedHeadCommittedAt =
@@ -917,11 +925,20 @@ export async function runExternalCheckWaiver(options = {}) {
             issueNumber: args.issueNumber,
             expectedClaimId: '',
             headRefName: pr.headRefName,
+            // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11):
+            // keep this reconcile's candidate resolution symmetric with the
+            // pre-write resolution above, or a branch-mismatch auto-bootstrap
+            // PR would see its post-write binding disagree with what was
+            // actually posted, confusing the concurrent-duplicate check.
+            enforceBranchMatch: !args.autoBootstrap,
             prNumber: args.prNumber,
           }),
         {
           issueNumber: args.issueNumber,
           headRefName: String(pr.headRefName ?? ''),
+          // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11):
+          // symmetric with the resolveLinkedIssueCandidates call just above.
+          enforceBranchMatch: !args.autoBootstrap,
         },
       );
       if (refreshed.ok) {
@@ -1113,11 +1130,15 @@ function selectorRequestsGlob(selector) {
   return /[*]/.test(String(selector ?? ''));
 }
 function selectLinkedIssueCandidate(issueCandidates, options = {}) {
+  const enforceBranchMatch = options.enforceBranchMatch ?? true;
   const filtered = issueCandidates.filter((candidate) => {
     if (options.issueNumber && candidate.number !== options.issueNumber) {
       return false;
     }
-    if (candidate.activeClaim?.branch !== options.headRefName) {
+    if (
+      enforceBranchMatch &&
+      candidate.activeClaim?.branch !== options.headRefName
+    ) {
       return false;
     }
     if (
@@ -1279,6 +1300,7 @@ function resolveLinkedIssueCandidates({
   issueNumber,
   expectedClaimId,
   headRefName,
+  enforceBranchMatch,
   prNumber,
 }) {
   const issueRefs = (linkedIssues ?? []).filter((issue) => {
@@ -1342,7 +1364,11 @@ function resolveLinkedIssueCandidates({
       });
       continue;
     }
-    if (headRefName && activeClaim.branch !== headRefName) {
+    if (
+      enforceBranchMatch &&
+      headRefName &&
+      activeClaim.branch !== headRefName
+    ) {
       results.push({
         number: issue.number,
         url: issue.url,

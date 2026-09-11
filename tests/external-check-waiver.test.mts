@@ -977,6 +977,44 @@ test('planExternalCheckWaiver: --auto-bootstrap still blocks an ambiguous multi-
   );
 });
 
+test('planExternalCheckWaiver: --auto-bootstrap still binds to the real claim on a branch-mismatched linked issue (Codex review, PR #2895, round 11)', () => {
+  // computeAdvisoryConvergenceVerdict's own idd-claimed scope-applicability
+  // logic (the pinned "#1686 path 3 symmetry" test) deliberately keeps a
+  // branch-mismatch PR auto-waivable, PROVIDED the marker binds to the
+  // real, known claim id -- never the `none` sentinel, which
+  // protocol-helpers.mts's claimBindingSatisfied check always rejects when
+  // a non-empty active claim resolves at the gate. Before this fix,
+  // selectLinkedIssueCandidate's own branch filter treated a
+  // branch-mismatched claim exactly like no claim at all, so this case fell
+  // through to the zero-candidate implicit-claimless fallback and rendered
+  // an unbindable `none` marker -- defeating the one path this mechanism
+  // exists to unblock.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  const [issue] = input.issueCandidates;
+  input.issueCandidates = [
+    {
+      ...issue,
+      activeClaim: issue.activeClaim
+        ? { ...issue.activeClaim, branch: 'some-other-branch' }
+        : null,
+    },
+  ];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  const parsed = parseExternalCheckWaiverComment(
+    report.body,
+    '2026-08-31T03:13:24Z',
+  );
+  assert.equal(parsed?.claimId, 'claim-20260517T060713Z-667-7f8f9c0d');
+  assert.equal(parsed?.agentId, 'codex-cli-7f8f9c0d');
+});
+
 test('planExternalCheckWaiver: --auto-bootstrap renders the run-id field into the marker body', () => {
   const report = planExternalCheckWaiver(buildAutoBootstrapInput(), {
     now: new Date('2026-08-31T03:13:24Z'),
