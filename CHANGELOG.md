@@ -14,6 +14,140 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-11
+
+Structural-evidence precision, self-service advisory-convergence
+waivers, and issue-authoring/token-cost maturation release.
+
+### Added
+
+- Structural-evidence signal (#2767): a shared helper recognizes
+  acceptance-criteria-checklist, verification-command, and
+  candidate-files structural evidence and demotes an otherwise-lexical
+  Check 6/7 failure to `warn` in `suitability-triage`,
+  `discover-viability-gate`, and `discover-orphan-filter`.
+- Self-referential advisory-convergence bootstrap waiver (#2657): a
+  new `idd-advisory-convergence-self-waiver` CI job auto-posts a
+  scoped waiver -- via `external-check-waiver`'s new
+  `--auto-bootstrap` posting mode and an optional run-id marker field
+  -- specifically when a same-repository PR edits the checker's own
+  trigger-file allowlist, breaking the deadlock where the checker
+  can't validate a change to itself.
+- Token-cost turn/tool-call percentile tracking end to end: extended
+  schemas and types, per-stage harvest allocation, per-adapter
+  aggregation, and percentile rendering in the report.
+- Issue-authoring: an authoring-owner-provenance helper, a
+  `--deadline-ms` sweep bound, a mechanical minimization-backlog
+  count, coalesced same-owner heartbeats, and narrowed auto-release
+  for defer-cutoff issues.
+- Operational-marker hide policy: a shared hide-policy guard
+  (`marker-helpers`), `post-idd-marker` hiding superseded
+  review-ack/copilot-unavailable markers at post time, and generated
+  claim tokens now persist to disk (`claim`, `claim-lite`) for later
+  on-disk revalidation.
+- `idd-review-triage` defers Low-severity findings after a
+  configurable round-count cutoff; `idd-spec-audit` graduates from a
+  repo-local, dogfood-only skill to a fully distributed bundle
+  (mirrored the same way as `issue-authoring`).
+- `idd-onboard` generates a `strip-untrusted-labels.yml` guard
+  workflow from config, backed by a new
+  `labels.untrustedLabelerLogins` schema field and an
+  `idd-suggest-untrusted-labelers` full-history sweep helper.
+- `idd-work` (B2.2) verifies an issue's cited example field/config
+  names actually exist before implementation starts.
+- `worktree-guard` gains an opt-in `refuseBaseBranchCommits`
+  base-branch-commit refusal; `audit-docs` detects a near-ceiling
+  `limitBytes` ratchet raise.
+- `audit-authored-issue` verifies upstream-candidate pairing behind a
+  new opt-in `upstreamEscalation.enabled` toggle;
+  `discover-readiness-check` now blocks on a deferred follow-up's own
+  `Refs` line.
+- `critique-telemetry-hook` gains a resolve+invoke CLI helper wired to
+  a new `critiqueLoop.telemetryHook` schema field.
+- `verify-install-deps` hints at a missing corepack binary, and the
+  GitHub provider port fetches `userContentEdits` editor identity for
+  other checks to reuse.
+- A new `issueAuthoring.journalIssue` policy field designates a
+  durable repository-level location for a standalone authoring set's
+  pre-create publication-intent record when no existing issue or
+  anchor is available.
+- `audit-authored-issue` gains a `roadmap-tracks-parse` check that
+  flags a roadmap's `## Tracks` checkbox lines that don't actually
+  resolve to a child-issue reference, instead of only checking that
+  the heading exists.
+
+### Changed
+
+- Extensive instruction and documentation precision across
+  `idd-workflow`, `idd-pre-merge`, `idd-pr-submit`, `idd-review-fix`,
+  `idd-review-triage`, `idd-work`, `idd-ci`, `idd-suitability`,
+  `idd-discover`, `idd-claim`, `idd-helper-scripts`, and
+  `customization` guidance (the Grok critique brief's
+  scope/checklist generalization, F2/F3 wording and retry-clause
+  fixes, delegate consultation routing, WorkTrunk approval-hang
+  documentation, the signed-commit-wrapper's PID/index-lock recovery
+  hardening, and related docs-only work).
+- pnpm bumped from v11 to v12 (corepack-pinned), with a new
+  `engines.pnpm` safety net in `package.json`.
+- Policy bundle files reorganized: `bundle-merge`, `bundle-review`,
+  and the near-ceiling bundles split into core-plus-phase-specific
+  parts to keep each bundle under its byte ceiling.
+- `discover-viability-gate`'s collaborator-permission lookup is now
+  cached and shared across issues in one pass, and
+  `suitability-triage`'s either/or escape-hatch search short-circuits
+  per acceptance-criteria item.
+
+### Fixed
+
+- Suitability-triage and structural-evidence Markdown scanning
+  hardened against dozens of edge cases across acceptance-criteria
+  checklists, HTML/Setext block boundaries, code-span and
+  link-bracket masking, list-continuation tracking, and the Check 7
+  either/or escape-hatch detector -- closing ten-plus review-round
+  gaps each in `suitability-triage`, `triage-structural-evidence`,
+  `markdown-code`, `discover-shared-file-overlap`,
+  `discover-viability-gate`, and `discover-orphan-filter`.
+- Advisory-convergence and `external-check-waiver` now fail closed on
+  ambiguous or malformed auto-waiver/claim input, scope the trigger
+  and template allowlists per adopter profile, bound
+  self-referential bootstrap-auto lookups, and correctly
+  restrict/clamp auto-bootstrap waiver reuse and expiry.
+- `protocol-helpers` narrows CodeRabbit ack-closure detection
+  (hedge/negation/epistemic-adverb exclusions, a cross-sentence gap
+  closure, a third ack shape) and resolves a lone `CANCELLED` check
+  run to pending instead of leaving it unresolved.
+- `rerun-advisory-convergence` and the `idd-advisory-convergence`/
+  `idd-advisory-convergence-comment` workflows no longer rerun a live
+  run from a stale check-run row, call `success()` so a classifier
+  failure can't silently skip a review, merge duplicate check-run
+  IDs, and fix several rerun-eligibility and debounce edge cases
+  (`pull_request_target` recognition, in-flight-run waits, stale-HEAD
+  races).
+- `idd-pr-submit`, `idd-review-fix`, and `idd-review-triage` fix
+  several routing and disposition gaps: simplified CI-job guidance,
+  corrected guard direction and trigger-flip sequencing, routed
+  pending `REQUEST_NEEDED` through AW3-S, and anchored the E-phase
+  scope fence to the actual B2 plan snapshot via `userContentEdits`
+  instead of `updatedAt`.
+- `provider-adapter-github` recognizes renamed files by their old
+  path, sorts user-content edits ascending, fails closed on absent
+  edit history, and keeps real GraphQL thread IDs.
+- `marker-helpers` and `post-idd-marker` close a hide-policy
+  `valueOf` leak, require a trusted poster before hiding markers,
+  guard the hide step against HEAD drift, and never hide a comment
+  newer than the one just posted.
+- `idd-comment-minimization` hardens its workflow-run ownership check
+  and simplifies the in-flight cleanup-run wait; `idd-onboard`
+  validates the guard workflow's plan path and skips an unchanged
+  guard-workflow write.
+- `idd-claim` records generated tokens before posting the claim
+  marker rather than after, closing a window where a crash mid-post
+  could leave no on-disk evidence.
+- `audit-authored-issue` no longer fails on Tracks references missing
+  repository context and rejects duplicate upstream markers;
+  `token-cost` schema descriptions and per-stage count types
+  corrected.
+
 ## [0.9.0] - 2026-09-06
 
 Suitability-triage precision, cross-platform test hardening, and
