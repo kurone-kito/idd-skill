@@ -4789,6 +4789,7 @@ export function summarizeRequiredChecks(
     waiverActiveSinceOverride = null,
     treatAsCoveredByWaiver = null,
     treatAsCoveredByWaiverSince = null,
+    identityUnresolvedCheckNames = null,
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -4958,6 +4959,10 @@ export function summarizeRequiredChecks(
   // exists but is unnamed." Lets a blocker detail name the cause even when
   // no specific check name can be cited.
   let sourcePinnedUnresolved = false;
+  // kurone-kito/idd-skill#2919 (round 2): the required-check names the
+  // downgrade below actually fired for (empty unless it fired). See
+  // `identityUnresolvedCheckNames`'s own doc comment above.
+  let identityUnresolvedRequiredCheckNames = [];
   if (requiredCheckNames.length > 0) {
     const effectiveChecks = matchedRequiredChecks.map((c) =>
       c.coveredByWaiver ? { ...c, state: 'SKIPPED' } : c,
@@ -4984,6 +4989,25 @@ export function summarizeRequiredChecks(
       ];
       sourcePinnedUnresolved =
         branchReviewRequirements.requiredCheckSourcePinnedUnresolved;
+    }
+    // kurone-kito/idd-skill#2919 (round 2): a SEPARATE downgrade from the
+    // source-pinned one above -- both can fire independently (a check can
+    // be both source-pinned AND identity-unresolved), so this checks
+    // `status === 'success'` fresh rather than `else if`-chaining off the
+    // block above. Only ever narrows an otherwise-`'success'` verdict,
+    // exactly like the source-pinned downgrade; never touches a status
+    // that is already `'missing'`/`'pending'`/`'failed'`/`'unknown'`.
+    if (status === 'success' && Array.isArray(identityUnresolvedCheckNames)) {
+      const identityUnresolvedSet = new Set(
+        identityUnresolvedCheckNames.map((name) => String(name ?? '').trim()),
+      );
+      const affected = requiredCheckNames.filter((name) =>
+        identityUnresolvedSet.has(name),
+      );
+      if (affected.length > 0) {
+        status = 'unknown';
+        identityUnresolvedRequiredCheckNames = affected;
+      }
     }
     // #1753: computed from the RAW matchedRequiredChecks -- deliberately
     // NOT ciClassification.discardedNonPassingInstances above, which is
@@ -5032,6 +5056,10 @@ export function summarizeRequiredChecks(
     // #1689: see the field's own inline comment above -- `false` unless the
     // downgrade fired AND at least one pinned source was unnamed.
     sourcePinnedUnresolved,
+    // kurone-kito/idd-skill#2919 (round 2): see the field's own inline
+    // comment above -- empty unless the identity-unresolved downgrade
+    // actually fired for this call.
+    identityUnresolvedRequiredCheckNames,
     checks: normalizedChecks.map((check) => ({
       name: check.name,
       state: check.state,
@@ -6109,13 +6137,31 @@ export function computePreMergeReadinessBlockers(report) {
       sourcePinnedDetail =
         'an unresolvable source-pinned required-check requirement is in force (e.g. a ruleset `workflows` rule); producer verification unavailable, and this cause is never covered by the ciGate.trustSourcePinnedRequiredChecks opt-in';
     }
+    // kurone-kito/idd-skill#2919 (round 2): name the identity-unresolved
+    // cause explicitly -- see `summarizeRequiredChecks`'s
+    // `identityUnresolvedRequiredCheckNames` doc comment. Independent of
+    // (and checked alongside, never exclusively with) the source-pinned
+    // cause above: the two downgrades can fire together.
+    const identityUnresolvedNames = Array.isArray(
+      ci.identityUnresolvedRequiredCheckNames,
+    )
+      ? ci.identityUnresolvedRequiredCheckNames.map((name) =>
+          String(name ?? ''),
+        )
+      : [];
+    const identityUnresolvedDetail =
+      identityUnresolvedNames.length > 0
+        ? `required ${identityUnresolvedNames.length > 1 ? 'checks' : 'check'} ${identityUnresolvedNames.join(', ')} ${identityUnresolvedNames.length > 1 ? 'have' : 'has'} an unresolved workflow-file producer identity (a transient lookup failure, a malformed run reference, or too many distinct reruns to verify this pass); cannot rule out a same-display-name decoy workflow, so this required check cannot be trusted as passing until it resolves cleanly on a later pass`
+        : '';
     // #1377: name the masked-403-as-404 cause explicitly when that is why the
     // gate is not all-passing, matching idd-ci.instructions.md's wording,
     // instead of the generic status/noRequiredChecksConfigured detail below.
     let detail =
       ci.protectionReadsUnreadable === true
         ? 'cannot determine required checks: protection/ruleset unreadable'
-        : sourcePinnedDetail ||
+        : [sourcePinnedDetail, identityUnresolvedDetail]
+            .filter(Boolean)
+            .join('; ') ||
           `CI is not all-passing (status="${String(ci.status ?? '')}", noRequiredChecksConfigured=${Boolean(ci.noRequiredChecksConfigured)}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`;
     // #2021: when the `idd-advisory-convergence` check itself is present,
     // required, and non-passing, and a posted otherwise-valid waiver exists
@@ -6812,6 +6858,13 @@ export function buildPreMergeReadinessSummary(
       name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
       options.advisoryConvergenceOutageRelievedSince
         ? options.advisoryConvergenceOutageRelievedSince
+        : null,
+    // kurone-kito/idd-skill#2919 (round 2): only `idd-advisory-convergence`
+    // is a candidate -- it is the sole check name this collector ever
+    // attempts `workflowPath` resolution for (see `pre-merge-readiness.mts`).
+    identityUnresolvedCheckNames:
+      options.advisoryConvergenceIdentityUnresolved === true
+        ? [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR]
         : null,
   });
   // kurone-kito/idd-skill#2911: the OPPOSITE direction from the CI blocker

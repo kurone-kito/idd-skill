@@ -1400,6 +1400,7 @@ const preMergeReadinessFixture = {
     discardedNonPassingRequiredChecks: [],
     sourcePinnedRequiredCheckNames: [],
     sourcePinnedUnresolved: false,
+    identityUnresolvedRequiredCheckNames: [],
     checks: [
       {
         name: 'lint',

@@ -271,6 +271,7 @@ test('required check summaries block when no merge-gate policy evidence exists',
     discardedNonPassingRequiredChecks: [],
     sourcePinnedRequiredCheckNames: [],
     sourcePinnedUnresolved: false,
+    identityUnresolvedRequiredCheckNames: [],
     checks: [],
   });
 });
