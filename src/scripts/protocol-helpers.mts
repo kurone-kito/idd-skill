@@ -2242,6 +2242,21 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 // across three rounds of Codex/Copilot review on this same PR (#2858,
 // PR #2868) -- never apply to the two strong, structurally-safe forms:
 //
+// #2927: a FOURTH shape, weaker-in-kind the same way -- "The fix
+// matches the requested behavior." rather than "addresses the ...
+// concern/finding" -- documented separately, below the lead-in
+// whitelist, as `CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE`, tried
+// after this third form in `isKnownAdvisoryAckTemplate` below --
+// including when this third form's own regex DOES structurally match
+// but that match's own lead-in then fails, not only when this third
+// form's regex fails to match at all (Copilot review, #2927, round 2,
+// on an earlier revision of this sentence that understated it). Each
+// form is checked against its own lead-in independently; see that
+// function's own comment for why. Mentioned here only as an index
+// pointer so this comment block's forward references stay coherent;
+// its own reasoning lives with its own regex, not duplicated into this
+// third form's guard history below.
+//
 // Guard history below reflects the CURRENT implementation as of round 7
 // (Codex/CodeRabbit review on PR #2868) -- Copilot's round-8 review
 // flagged an earlier revision of this comment block for still describing
@@ -2275,8 +2290,9 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 //    Codex): the closure sentence must end in a period immediately
 //    followed by the complete recognized boilerplate shape (see
 //    `CODERABBIT_ACK_CLOSURE_TAIL_SOURCE` below), not merely start with
-//    one of its markers. Every sampled reply (all 20: the original 18
-//    plus these 2) carries real trailing boilerplate, so requiring it
+//    one of its markers. Every sampled reply (all 21: the original 18,
+//    these 2, plus #2927's own sample below) carries real trailing
+//    boilerplate, so requiring it
 //    unconditionally costs no real match; this also rejects a single-
 //    sentence reply with nothing following it at all, such as "`@user`,
 //    confirmed. This partially addresses the concern." with no footer --
@@ -2363,8 +2379,19 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 const CODERABBIT_ACK_STRONG_CLOSURE_RE =
   /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
 
+// Widened to add `almost`/`nearly` (Copilot review, #2927, round 4): a
+// proximity adverb -- "close to, but short of, complete" -- is the same
+// hedged/non-committal degree semantic this enumeration already covers
+// ("partially", "mostly", "largely"), just a different lexical subclass
+// (proximity rather than partiality). "`@user`, thanks. The fix almost
+// matches the requested behavior.\n\n🐇 ✅" states an explicitly
+// INCOMPLETE fix -- the same class of risk guard 5's own reasoning
+// already established for this whole enumeration -- and previously
+// passed the pre-"matches" lookbehind unnoticed, wired into this shared
+// constant so both the third and fourth shapes benefit without
+// duplication.
 const CODERABBIT_ACK_HEDGE_WORDS_SOURCE =
-  'partially|partly|somewhat|mostly|largely|barely|slightly|arguably|in\\s+part|to\\s+some\\s+extent|not\\s+(?:fully|entirely|completely|really)';
+  'partially|partly|somewhat|mostly|largely|barely|slightly|arguably|almost|nearly|in\\s+part|to\\s+some\\s+extent|not\\s+(?:fully|entirely|completely|really)';
 
 // Sibling enumeration to the degree-adverb list above, for the SAME
 // hedged/non-committal semantic class but the ADJECTIVE part of speech
@@ -2533,7 +2560,16 @@ const CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE = 'for|and|nor|but|or|yet|so';
 // sandwiched between the two as if it were all one details block's
 // content. The per-character negative lookahead forbids consuming past
 // the first "</details>" at all, so no such backtrack is possible.
-const CODERABBIT_ACK_CLOSURE_SIGNOFF_SOURCE = '🐇(?:\\s*✓)?';
+// Widened to also accept the ✅ (U+2705, "white heavy check mark")
+// emoji alongside the existing ✓ (U+2713, "check mark") (#2927): the
+// fourth ack shape's real observed sample, documented below
+// `CODERABBIT_ACK_CLOSURE_LEADIN_RE`, signs off with "🐇 ✅" rather
+// than "🐇 ✓" (confirmed byte-exact via the REST comments API, no
+// variation selector). Purely additive -- the ✓ alternative, and every
+// existing regression sample that uses it, still matches unchanged, so
+// this costs nothing against the unchanged-regression requirement
+// (AC2, #2927).
+const CODERABBIT_ACK_CLOSURE_SIGNOFF_SOURCE = '🐇(?:\\s*(?:✓|✅))?';
 const CODERABBIT_ACK_CLOSURE_DETAILS_SOURCE =
   '---\\s*<details>(?:(?!<\\/details>)[\\s\\S])*<\\/details>';
 const CODERABBIT_ACK_CLOSURE_DISCLAIMER_SOURCE =
@@ -2769,6 +2805,138 @@ const CODERABBIT_ACK_CLOSURE_LEADIN_RE = new RegExp(
   'i',
 );
 
+// #2927: a FOURTH ack shape, observed on kurone-kito/idd-skill#2921's
+// review thread `discussion_r3989223825`
+// (<https://github.com/kurone-kito/idd-skill/pull/2921#discussion_r3989223825>),
+// fetched byte-exact via the pulls/comments REST API (the same
+// byte-exact-fixture discipline #2858's own comment above already
+// established for its two samples):
+//
+//   `@kurone-kito`, thanks. The fix matches the requested behavior. The
+//   default fixture now uses the permissive zero-parseable-run-ID path.
+//
+//   🐇 ✅
+//
+//   _You are interacting with an AI system._
+//
+//   <!-- This is an auto-generated reply by CodeRabbit -->
+//
+// Same root cause as the third shape above: this thread was already
+// resolved independently (by this repository's own
+// resolve-review-thread.mjs) before CodeRabbit replied, so it had no
+// resolve-attempt of its own to report -- neither
+// `CODERABBIT_ACK_STRONG_CLOSURE_RE` nor
+// `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` match it: no "Review thread
+// resolved" trailer, and its verb phrase is "matches the requested
+// behavior" rather than "addresses the ... concern/finding".
+//
+// Structurally SIMPLER than the third shape in one respect: "matches
+// the requested behavior" is a fixed, closed phrase with no internal
+// noun-phrase gap to police, unlike "addresses the [1-3 modifier
+// tokens] concern/finding". Guards 1, 2, 4, and 10 above exist only to
+// bound that internal gap, so none of them apply here -- a contrastive
+// insertion such as "matches a different requested behavior" (AC3,
+// #2927's own contrastive example) simply fails to match the fixed
+// phrase at all, rather than needing its own guard.
+//
+// What DOES transfer, for the identical reason guards 5/8/9 exist on
+// the third shape: AC3 (#2927) requires "This partially matches...",
+// "This never matches...", and "This supposedly matches..." to still
+// read as withheld/uncertain, not confirmed. The same closed hedge/
+// negation/epistemic enumerations are reused via an identical negative
+// lookbehind immediately before "matches".
+//
+// A first attempt reused `CODERABBIT_ACK_CLOSURE_LEADIN_RE` unchanged
+// for the opening-to-closure gap, on the theory that the real sample's
+// lead-in, "The fix", already fits that regex's existing "the" + one-
+// word alternative. Copilot review (#2927, round 2) found this reuse
+// carries over a pre-existing gap in that shared regex's OWN "the ..."
+// branch: it excludes hedge/negation/epistemic words (guard 7) but not
+// CONTRASTIVE adjectives, the same residual gap (a) documented above
+// `CODERABBIT_ACK_STRONG_CLOSURE_RE` for the third shape's internal
+// gap. "`@user`, thanks. The wrong fix matches the requested
+// behavior.\n\n🐇 ✅" passes that branch ("the" + "wrong" + "fix", two
+// words, within budget) even though "wrong fix" plausibly signals a
+// substantive problem. For the third shape this gap was accepted as
+// residual risk (no sampled reply has used it); reusing the same
+// broad "the" + 1-2 arbitrary words shape here would import that same
+// risk into a SECOND caller with no sample-based justification of its
+// own. With only ONE real sample and no evidence this shape needs
+// anything broader than the exact phrase actually observed,
+// `CODERABBIT_ACK_MATCHES_LEADIN_RE` below gives this fourth shape its
+// OWN, much narrower lead-in check instead of reusing the shared one:
+// a bare pronoun (`this`/`that`/`it`, the same closed, modifier-free
+// words the shared regex also uses, so no NEW gap there) or the exact
+// literal phrase "the fix" -- not "the" plus any word. This closes the
+// contrastive-adjective gap completely for this shape ("the wrong
+// fix" no longer matches "the fix" literally) without touching the
+// shared regex or the third shape's own established behavior.
+//
+// New wrinkle this shape introduces: the real sample above has ONE
+// more free-text sentence ("The default fixture now uses...") between
+// the closure verb phrase and the boilerplate tail. The third shape's
+// guard 3 requires the boilerplate immediately after its closure
+// sentence, with no bare trailing content allowed at all; reusing that
+// requirement unchanged here would reject the real sample and fail AC1
+// (#2927).
+//
+// A first attempt permitted this trailing sentence via a token-capped,
+// positive-shape grammar (10 `[\w-]+` tokens, closed-class-excluded,
+// determiner-first-token restricted) -- the same STYLE as guard 1's
+// internal "addresses the ... concern" gap. Copilot review (#2927)
+// correctly rejected this as still too permissive: the grammar's own
+// documented residual risk -- a syntactically clean, unhedged,
+// determiner-led sentence with no excluded vocabulary, e.g. "The
+// null-check still remains unresolved in the other branch." (9 tokens,
+// "The" opener, no excluded word) -- structurally satisfies ANY such
+// bounded-but-general grammar while stating a genuine new blocker, and
+// would suppress the merge gate exactly the way this file's fail-closed
+// philosophy exists to prevent. Unlike gap (a) above (contrastive
+// adjectives inside an already-narrow noun-phrase slot, genuinely
+// irreducible without recreating the open-ended "new concern"
+// blocklist), an open determiner-led sentence is not a narrow residual
+// edge -- it is most of the risk surface a "positive-shape grammar"
+// was supposed to close in the first place. The SAME review also found
+// this permissive grammar could absorb the third shape's own "addresses
+// the ... concern/finding" vocabulary as innocuous filler, which could
+// then interact badly with `isKnownAdvisoryAckTemplate`'s own
+// closure-form selection (see that function's own comment for the
+// control-flow half of that fix).
+//
+// With only ONE real observed sample and no broader pattern to derive a
+// general grammar FROM, the trailing sentence is instead permitted only
+// as an EXACT literal match of that one sample's own continuation text
+// -- the same resolution guard 6's lead-in whitelist already applies
+// (enumerate the exact observed shape(s), fail closed on everything
+// else, widen later only when a new real sample demonstrates a genuine
+// second shape) -- rather than a grammar general enough to also accept
+// prose no sample has ever produced. This has no residual risk in this
+// slot at all (a fixed string cannot admit arbitrary new content), and
+// incidentally also closes the cross-shape-vocabulary concern above for
+// free: the literal sample text contains neither "addresses" nor
+// "concern"/"finding".
+const CODERABBIT_ACK_MATCHES_TRAILING_OBSERVED_SENTENCE_SOURCE = escapeRegExp(
+  'The default fixture now uses the permissive zero-parseable-run-ID path.',
+);
+const CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE = new RegExp(
+  `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\s+)` +
+    '\\bmatches\\s+the\\s+requested\\s+behavior\\b\\.\\s*' +
+    `(?:${CODERABBIT_ACK_MATCHES_TRAILING_OBSERVED_SENTENCE_SOURCE}\\s*)?` +
+    CODERABBIT_ACK_CLOSURE_TAIL_SOURCE,
+  'i',
+);
+
+// This fourth shape's own opening-to-closure lead-in check (Copilot
+// review, #2927, round 2) -- deliberately NOT `CODERABBIT_ACK_CLOSURE_
+// LEADIN_RE`; see the doc comment above `CODERABBIT_ACK_MATCHES_
+// BEHAVIOR_CLOSURE_RE` for why reusing that shared regex's broader
+// "the" + 1-2 arbitrary words branch would import its known
+// contrastive-adjective gap into a second caller with no sample-based
+// justification. A bare pronoun or the exact literal phrase "the fix"
+// -- the only lead-in actually observed -- and nothing else.
+const CODERABBIT_ACK_MATCHES_LEADIN_RE =
+  /^[.!]\s+(?:this|that|it|the\s+fix)\s+$/i;
+
 function isKnownAdvisoryAckTemplate(comment: {
   author?: { login?: string | null } | null;
   body?: string | null;
@@ -2785,20 +2953,54 @@ function isKnownAdvisoryAckTemplate(comment: {
   // The two strong forms (CodeRabbit's own resolve-attempt decision) are
   // checked on the whole body with no further guard -- see the comment
   // above `CODERABBIT_ACK_STRONG_CLOSURE_RE` for why the weaker third
-  // form's guards (locality, sentence-boundary, hedge-adverb, opening-
-  // to-closure lead-in whitelist) must never apply here, even when
-  // unrelated hedge-shaped wording happens to appear elsewhere in the
-  // same reply (e.g. a Learnings-used block).
+  // and fourth forms' guards (locality, sentence-boundary, hedge-adverb,
+  // opening-to-closure lead-in whitelist) must never apply here, even
+  // when unrelated hedge-shaped wording happens to appear elsewhere in
+  // the same reply (e.g. a Learnings-used block).
   if (CODERABBIT_ACK_STRONG_CLOSURE_RE.test(body)) {
     return true;
   }
-  const addressesMatch = CODERABBIT_ACK_ADDRESSES_CLOSURE_RE.exec(body);
-  if (!addressesMatch) {
-    return false;
-  }
+  // The third (#2858) and fourth (#2927) forms are tried in the order
+  // they were introduced, each independently and each against its OWN
+  // lead-in check (the third shape's shared `CODERABBIT_ACK_CLOSURE_
+  // LEADIN_RE`; the fourth shape's own, narrower `CODERABBIT_ACK_
+  // MATCHES_LEADIN_RE` -- see that constant's doc comment for why it is
+  // not the shared one). A structural match whose own lead-in fails
+  // does NOT disqualify a later form from also being tried, since a
+  // lead-in check is a per-match verdict, not a whole-body one.
+  // Committing to the first structural match regardless of its own
+  // lead-in outcome was a real bug (Copilot review, #2927, round 1): an
+  // unrelated `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` match elsewhere in
+  // the body, with its own lead-in failing, used to short-circuit this
+  // whole function to `false` without ever trying this fourth shape's
+  // own, separately valid, match -- not only when the third shape's
+  // regex fails to match at all, contrary to an earlier revision of the
+  // index comment above `CODERABBIT_ACK_STRONG_CLOSURE_RE` (Copilot
+  // review, #2927, round 2). See the doc comment above `CODERABBIT_ACK_
+  // MATCHES_BEHAVIOR_CLOSURE_RE` for why its trailing-sentence slot is
+  // ALSO narrowed to an exact literal match rather than relying on this
+  // loop fix alone.
   const openingEnd = openingMatch.index + openingMatch[0].length;
-  const gapToClosure = body.slice(openingEnd, addressesMatch.index);
-  return CODERABBIT_ACK_CLOSURE_LEADIN_RE.test(gapToClosure);
+  for (const { closureRe, leadinRe } of [
+    {
+      closureRe: CODERABBIT_ACK_ADDRESSES_CLOSURE_RE,
+      leadinRe: CODERABBIT_ACK_CLOSURE_LEADIN_RE,
+    },
+    {
+      closureRe: CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE,
+      leadinRe: CODERABBIT_ACK_MATCHES_LEADIN_RE,
+    },
+  ]) {
+    const closureMatch = closureRe.exec(body);
+    if (!closureMatch) {
+      continue;
+    }
+    const gapToClosure = body.slice(openingEnd, closureMatch.index);
+    if (leadinRe.test(gapToClosure)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all

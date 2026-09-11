@@ -2411,6 +2411,496 @@ test('classifyThreadAckOnlyPostDisposition rejects a 2-token conjunction bypass 
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+// #2927: a FOURTH ack shape -- observed byte-exact (fetched via the REST
+// pulls/comments API) on kurone-kito/idd-skill#2921's review thread
+// `discussion_r3989223825`, already resolved independently by this
+// repository's own resolve-review-thread.mjs before CodeRabbit replied,
+// so (like the third shape's #2853 samples above) it carries no "Review
+// thread resolved" trailer of its own. See the doc comment above
+// `CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE` for the full reasoning.
+
+test('classifyThreadAckOnlyPostDisposition recognizes the "matches the requested behavior" closure shape (kurone-kito/idd-skill#2921, #2927)', () => {
+  const thread = {
+    id: 'thread-matches-requested-behavior',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MB-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MB-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The fix matches the requested ' +
+            'behavior. The default fixture now uses the permissive ' +
+            'zero-parseable-run-ID path.\n\n🐇 ✅\n\n_You are ' +
+            'interacting with an AI system._\n\n<!-- This is an ' +
+            'auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-09-11T00:00:00Z',
+          updatedAt: '2026-09-11T00:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a hedge adverb immediately before "matches" (AC3, #2927)', () => {
+  // AC3 (#2927): a reply using similar vocabulary but actually hedging
+  // the outcome must not be misclassified as ack-only. Reuses the same
+  // closed hedge-adverb enumeration guards 5/8/9 already apply before
+  // "addresses", via an identical negative lookbehind before "matches".
+  const thread = {
+    id: 'thread-matches-hedge-partially',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MH-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MH-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. This partially matches the ' +
+            'requested behavior.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:05:00Z',
+          updatedAt: '2026-09-11T00:05:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a proximity-adverb hedge ("almost") immediately before "matches" (Copilot review, #2927, round 4)', () => {
+  // Copilot's round-4 finding: `CODERABBIT_ACK_HEDGE_WORDS_SOURCE`
+  // omitted proximity adverbs ("almost"/"nearly") -- the same hedged,
+  // non-committal degree semantic as "partially"/"mostly" already in
+  // the enumeration, just a different lexical subclass. "The fix
+  // almost matches the requested behavior." states an explicitly
+  // incomplete fix and previously passed the pre-"matches" lookbehind
+  // unnoticed.
+  const thread = {
+    id: 'thread-matches-hedge-almost',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MA-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MA-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The fix almost matches the ' +
+            'requested behavior.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:50:00Z',
+          updatedAt: '2026-09-11T00:50:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a negation adverb immediately before "matches" (AC3, #2927)', () => {
+  const thread = {
+    id: 'thread-matches-negation-never',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MN-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MN-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. This never matches the requested ' +
+            'behavior.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:10:00Z',
+          updatedAt: '2026-09-11T00:10:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a contrastive-adjective variant that no longer matches the fixed closure phrase (AC3, #2927)', () => {
+  // AC3 (#2927)'s own named example: "matches a different requested
+  // behavior" is not a hedge or negation word immediately before
+  // "matches", but the fixed phrase `CODERABBIT_ACK_MATCHES_BEHAVIOR_
+  // CLOSURE_RE` requires ("matches the requested behavior") has no
+  // internal gap for "different" to occupy -- the substitution simply
+  // fails to match the literal phrase at all, unlike the third shape's
+  // "addresses the [gap] concern", which needs an explicit guard for
+  // this same class (residual gap (a) above).
+  const thread = {
+    id: 'thread-matches-contrastive-different',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MC-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MC-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. This matches a different ' +
+            'requested behavior.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:15:00Z',
+          updatedAt: '2026-09-11T00:15:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects an unrelated trailing sentence after "matches the requested behavior" (#2927)', () => {
+  // The trailing sentence permitted after the closure phrase is an
+  // EXACT literal match of the one real #2921 sample's own continuation
+  // text, not a general grammar (Copilot review, #2927 -- see the doc
+  // comment above `CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE`). A
+  // completely unrelated sentence, however clean, simply is not that
+  // literal string, so the optional group fails to match; this fixture
+  // has no boilerplate immediately after "behavior." either, so the
+  // immediate-tail fallback also misses.
+  const thread = {
+    id: 'thread-matches-trailing-unrelated',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MT-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MT-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The fix matches the requested ' +
+            'behavior. The quick brown fox jumps over the lazy dog ' +
+            'again today.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:20:00Z',
+          updatedAt: '2026-09-11T00:20:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a differently-worded trailing sentence after "matches the requested behavior" (#2927)', () => {
+  // A paraphrased trailing sentence -- plausible, similar topic, but not
+  // byte-identical to the one real sample's literal continuation text
+  // -- is rejected the same way any other non-matching text is: the
+  // literal match requires the exact observed string, not "a sentence
+  // about the fix" in general.
+  const thread = {
+    id: 'thread-matches-trailing-comma',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MG-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MG-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The fix matches the requested ' +
+            'behavior. The default fixture, unfortunately, still ' +
+            'needs a follow-up.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:25:00Z',
+          updatedAt: '2026-09-11T00:25:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition rejects a second free sentence appended after a would-be trailing sentence, before the boilerplate tail (#2927)', () => {
+  // Even a body that starts its post-closure text with words resembling
+  // the real sample ("The default fixture now uses...") is rejected the
+  // moment it diverges into a second, genuinely new sentence ("However,
+  // a related issue remains.") before the boilerplate tail: the
+  // permitted trailing text is the ONE exact literal sentence, followed
+  // immediately by the tail, with nothing else admitted in between --
+  // the same "no bare end-of-body fallback" discipline guard 3
+  // established for the third shape, now enforced by exact-match rather
+  // than a general grammar.
+  const thread = {
+    id: 'thread-matches-trailing-second-sentence',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MS-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MS-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The fix matches the requested ' +
+            'behavior. The default fixture now uses a workaround. ' +
+            'However, a related issue remains.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:30:00Z',
+          updatedAt: '2026-09-11T00:30:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test('classifyThreadAckOnlyPostDisposition recognizes the "matches the requested behavior" closure with no trailing sentence at all ("this" lead-in, #2927)', () => {
+  // Variant of the real #2921 sample with no trailing sentence between
+  // the closure phrase and the tail (guard 3's original immediate-
+  // boilerplate fallback still applies when the optional trailing-
+  // sentence group is absent), and the lead-in whitelist's bare "this"
+  // pronoun branch instead of "The fix" -- both already supported
+  // unchanged by the reused `CODERABBIT_ACK_CLOSURE_LEADIN_RE`. Also
+  // exercises the pre-existing ✓ sign-off variant alongside this shape,
+  // confirming the ✅ widening above did not narrow it.
+  const thread = {
+    id: 'thread-matches-no-trailing-sentence',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'ML-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'ML-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. This matches the requested ' +
+            'behavior.\n\n🐇 ✓\n\n_You are interacting with an AI ' +
+            'system._\n\n<!-- This is an auto-generated reply by ' +
+            'CodeRabbit -->',
+          createdAt: '2026-09-11T00:35:00Z',
+          updatedAt: '2026-09-11T00:35:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
+test("classifyThreadAckOnlyPostDisposition rejects a reply combining both the third and fourth shapes' closure vocabulary in one body (Copilot review, #2927)", () => {
+  // Copilot's original finding on this PR (round 1): a permissive
+  // trailing-sentence GRAMMAR could absorb "addresses the security
+  // concern." as innocuous filler -- but that exact substring is ALSO a
+  // structurally valid `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` match
+  // (genuine boilerplate immediately follows it), and
+  // `isKnownAdvisoryAckTemplate` used to commit to that first
+  // structural match, whose own lead-in (spanning the entire preceding
+  // "matches..." sentence) then failed the whitelist, short-circuiting
+  // to `false` without ever trying the fourth shape's own, separately
+  // valid, match. Now fixed two ways that both hold even after round 2
+  // replaced the trailing-sentence grammar with an exact literal match
+  // (see the doc comment above `CODERABBIT_ACK_MATCHES_BEHAVIOR_
+  // CLOSURE_RE`): `isKnownAdvisoryAckTemplate` tries each closure form
+  // independently (still relevant on its own terms), and "The default
+  // fixture addresses the security concern." is simply not the one
+  // literal sentence the trailing slot now accepts, so this combination
+  // stays rejected for two independent reasons.
+  const thread = {
+    id: 'thread-matches-combined-with-addresses',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MX-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MX-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The fix matches the requested ' +
+            'behavior. The default fixture addresses the security ' +
+            'concern.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:40:00Z',
+          updatedAt: '2026-09-11T00:40:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
+test("classifyThreadAckOnlyPostDisposition rejects a contrastive adjective inside the fourth shape's own lead-in (Copilot review, #2927, round 2)", () => {
+  // Copilot's round-2 finding: reusing the shared
+  // `CODERABBIT_ACK_CLOSURE_LEADIN_RE` for this fourth shape would
+  // import that regex's own pre-existing gap (guard 7 excludes hedge/
+  // negation/epistemic words from its "the ..." branch but not
+  // CONTRASTIVE adjectives -- the same residual gap (a) documented for
+  // the third shape). "The wrong fix" would otherwise pass that shared
+  // branch ("the" + "wrong" + "fix", within its 1-2 word budget) even
+  // though "wrong fix" plausibly signals a substantive problem. This
+  // fourth shape now uses its own, narrower `CODERABBIT_ACK_MATCHES_
+  // LEADIN_RE` (bare pronoun or the exact literal "the fix" only), so
+  // "The wrong fix" fails to match that literal phrase at all.
+  const thread = {
+    id: 'thread-matches-leadin-contrastive-wrong',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MW-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MW-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The wrong fix matches the ' +
+            'requested behavior.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:45:00Z',
+          updatedAt: '2026-09-11T00:45:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 
