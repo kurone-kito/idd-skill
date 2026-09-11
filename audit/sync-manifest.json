@@ -592,7 +592,13 @@
       "id": "idd-helper-scripts-doc",
       "source": "idd-template/docs/idd-helper-scripts.md",
       "target": "docs/idd-helper-scripts.md",
-      "mode": "exact"
+      "mode": "concreted",
+      "replacements": [
+        {
+          "from": "{{PROJECT_MARKER_PREFIX}}",
+          "to": "idd-skill"
+        }
+      ]
     },
     {
       "id": "idd-merge-handoff-instructions",
@@ -616,7 +622,13 @@
       "id": "idd-overview-appendix-instructions",
       "source": "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
       "target": ".github/instructions/idd-overview-appendix.instructions.md",
-      "mode": "exact"
+      "mode": "concreted",
+      "replacements": [
+        {
+          "from": "{{PROJECT_MARKER_PREFIX}}",
+          "to": "idd-skill"
+        }
+      ]
     },
     {
       "id": "idd-overview-core-instructions",

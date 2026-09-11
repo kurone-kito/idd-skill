@@ -35,6 +35,7 @@ import {
   collectDocumentedHelperInvocationFlags,
   collectHelperFlagDriftViolations,
 } from './helper-flag-drift.mjs';
+import { ONBOARDING_PLACEHOLDERS } from './idd-onboard.mjs';
 import { collectMarkdownLinkAuditViolations } from './markdown-link-audit.mjs';
 
 const root = process.cwd();
@@ -73,6 +74,22 @@ const ENGINES_RANGE_MIRRORS = [
   { file: 'docs/stalled-session-quiet-check.md', mode: 'components' },
   { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
 ];
+// Sync pair `id`s allowed to keep a known onboarding placeholder token
+// literal in an `"exact"`- or `"concreted"`-mode pair's *post-replacement*
+// source (see checkGeneratedModePlaceholders below -- both modes apply a
+// pair's own `replacements` array the same way; neither is substitution-free
+// by mode name alone). Any other pair whose post-replacement source still
+// carries one of these tokens would leak it byte-for-byte into this
+// repository's own live mirror (kurone-kito/idd-skill#2899, PR #2904
+// review). Each entry needs a one-line justification; prefer adding (or
+// extending) a `replacements` entry that resolves the token over adding
+// here, unless it is genuinely meant to stay literal.
+const GENERATED_MODE_PLACEHOLDER_EXEMPTIONS = {
+  // `docs/customization.md` is the placeholder-mapping table itself: the
+  // literal `{{...}}` tokens ARE the reference content this page teaches
+  // adopters, not an unresolved leftover from a live marker instance.
+  'customization-doc': 'documents the placeholder-mapping table for adopters',
+};
 checkReadmePairs(manifest.readmePairs ?? []);
 checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
 checkGeneratedBlocks(manifest.generatedBlocks ?? []);
@@ -81,6 +98,7 @@ checkShellFileLists(
   manifest.generatedBlocks ?? [],
 );
 checkSyncPairs(manifest.syncPairs ?? []);
+checkGeneratedModePlaceholders(manifest.syncPairs ?? []);
 checkGeneratedFromBanners(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets);
 {
@@ -470,6 +488,59 @@ function checkSyncPairs(pairs) {
       continue;
     }
     errors.push(`${pair.id}: unsupported sync mode ${pair.mode}`);
+  }
+}
+// Fails any `"exact"`- or `"concreted"`-mode sync pair whose
+// *post-replacement* source still contains an unresolved onboarding
+// placeholder token from the canonical seven-entry table in
+// `idd-onboard.mts` (ONBOARDING_PLACEHOLDERS, mirroring `idd-template/docs/
+// onboarding/placeholders.md`'s "Final placeholder meanings" table) -- not
+// a bare `{{...}}` scan, which would also flag an unrelated GitHub Actions
+// expression such as `${{ github.token }}` inside an imported workflow
+// file. Both modes need this check, not just `"exact"`: `checkSyncPairs`
+// above and `sync-docs.mts` treat `"exact"` and `"concreted"` identically
+// (`pair.mode === 'exact' || pair.mode === 'concreted'`), applying
+// `pair.replacements` regardless of mode (`tests/sync-docs.test.mts`
+// covers an `"exact"` pair with a replacement) -- so an incomplete
+// `replacements` array on a `"concreted"` pair (or a new placeholder its
+// existing entries don't cover) is exactly the same live-leak risk as an
+// `"exact"` pair with none at all (kurone-kito/idd-skill#2899, PR #2904
+// review, Codex). A leftover token *after* replacements always leaks into
+// this repository's own live mirror; `checkSyncPairs` only compares
+// source and target for byte equality and cannot see this on its own,
+// since an identical placeholder on both sides produces zero drift.
+//
+// `idd-doctor.mts`'s own `checkPlaceholders` (see `findPlaceholders` /
+// `isIddManagedPlaceholderScanPath`) is deliberately left unchanged rather
+// than also fixed for the two gaps that let it miss both known bugs of
+// this class (kurone-kito/idd-skill#2899 Background): it scans
+// already-generated repository files for onboarding hygiene in general,
+// not sync-pair sources specifically, so it is not the right place to
+// special-case these two sync modes. This check runs earlier, against the
+// sync-pair source before generation, and is the sufficient
+// complementary guard for this specific bug class -- an unresolved
+// placeholder can no longer reach a committed generated mirror in the
+// first place, so `idd-doctor.mts`'s post-generation scan gaps stay a
+// documented, intentional residual.
+function checkGeneratedModePlaceholders(pairs) {
+  const tokens = ONBOARDING_PLACEHOLDERS.map((entry) => entry.token);
+  for (const pair of pairs) {
+    if (pair.mode !== 'exact' && pair.mode !== 'concreted') {
+      continue;
+    }
+    if (Object.hasOwn(GENERATED_MODE_PLACEHOLDER_EXEMPTIONS, pair.id)) {
+      continue;
+    }
+    const source = applyReplacements(
+      readText(pair.source),
+      pair.replacements ?? [],
+    );
+    const hits = tokens.filter((token) => source.includes(token));
+    if (hits.length > 0) {
+      errors.push(
+        `${pair.id}: ${pair.source} is "${pair.mode}" mode but still contains unresolved placeholder(s) ${hits.join(', ')} after applying its replacements -- add or extend a "replacements" entry to resolve them, or add "${pair.id}" to GENERATED_MODE_PLACEHOLDER_EXEMPTIONS with a one-line justification`,
+      );
+    }
   }
 }
 // Verify that every generated instruction target carries the exact

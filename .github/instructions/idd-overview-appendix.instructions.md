@@ -150,7 +150,7 @@ code, config, or a local customization).
 a local issue through `skills/issue-authoring/` as usual, additionally
 carrying the GitHub label `status:upstream-candidate` (create it on
 first use) and the hidden marker
-`<!-- {{PROJECT_MARKER_PREFIX}}-upstream-candidate: true -->`.
+`<!-- idd-skill-upstream-candidate: true -->`.
 
 **What never to do.** Never write to `kurone-kito/idd-skill` or any
 other repository — no comment, no issue, no mutation of any kind.
