@@ -783,6 +783,62 @@ process.stdin.on('end', () => {
   }
 });
 
+test('invokeCritiqueTelemetryHook forwards a compound (a && b) command through the win32 relay when platform is overridden to win32 (kurone-kito/idd-skill#2910 review, Copilot)', async () => {
+  // Issue #2910's own "Proposed change" section requires this fix to
+  // "keep the existing command config contract (an arbitrary shell
+  // command string, including a && b-style compound commands) working
+  // the same way it does on POSIX today, since shell: true exists
+  // specifically to support that". The win32-relay-success test above
+  // only exercises a single executable; this test closes that gap with
+  // a genuine `a && b` compound command, forwarded through the relay's
+  // own inner `shell: true` hop unchanged. The first stub deliberately
+  // does not read stdin (exits synchronously and unconditionally, so it
+  // needs no `stayAliveCommand` positional argument per that helper's
+  // own doc comment), so the full payload reaches the second stub
+  // untouched -- proving the relay does not mangle or truncate the
+  // command string across the `&&` boundary.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-compound-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restoreFirst = stubExecutable(
+    'idd-telemetry-hook-win32-relay-compound-first',
+    'process.exit(0);\n',
+  );
+  const restoreSecond = stubExecutable(
+    'idd-telemetry-hook-win32-relay-compound-second',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  try {
+    const command =
+      'idd-telemetry-hook-win32-relay-compound-first && ' +
+      stayAliveCommand('idd-telemetry-hook-win32-relay-compound-second');
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(command, payload, {
+      timeoutMs: 5_000,
+      platform: 'win32',
+    });
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the second half of the compound command to receive the full, untruncated payload',
+    );
+  } finally {
+    // LIFO order, matching this file's other multi-stub tests.
+    restoreSecond();
+    restoreFirst();
+  }
+});
+
 test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PID <pid> /T /F) on timeout when platform is overridden to win32', async () => {
   const restore = stubExecutable(
     'idd-telemetry-hook-hang-win32',
