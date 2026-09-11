@@ -124,21 +124,24 @@ jobs:
               process.exit(1);
             }
           '
-      # --test-force-exit (kurone-kito/idd-skill#2892, #2897 CI follow-up):
-      # this suite's direct-await tests spawn real detached win32 children,
-      # and at least one confirmed defect in that path (stuck stdin writes
-      # to a detached `cmd.exe`, tracked at kurone-kito/idd-skill#2910)
-      # leaves libuv handles the Node process never naturally drains,
-      # hanging `node --test` indefinitely on this runner even though every
-      # test itself has already completed and reported. This flag is
-      # Node's own documented mechanism for exactly that "tests are done
-      # but the process won't exit on its own" case; it does not change
-      # which tests run or their pass/fail outcome. Scoped to only this
-      # file/job rather than the shared `pre-push-validate` command
-      # (`.github/idd/config.json`): the same flag there would mask a
-      # future unrelated hang on any platform, and the added command-string
-      # bytes alone were enough to push the generated
-      # `idd-overview-core.instructions.md` doc over its enforced context-
-      # ceiling budget (#2897 CI follow-up, E10 critique pass).
+      # `--test-force-exit` (kurone-kito/idd-skill#2892, #2897 CI
+      # follow-up) used to be required here: this suite's direct-await
+      # tests spawn real detached win32 children, and a confirmed defect
+      # in that path (stuck stdin writes to a detached `cmd.exe`) left
+      # libuv handles the Node process never naturally drained, hanging
+      # `node --test` indefinitely on this runner even though every test
+      # itself had already completed and reported. kurone-kito/idd-skill
+      # #2910 fixed that underlying stdin-delivery defect (a win32-only
+      # relay hop replaces the direct `cmd.exe` spawn for the primary
+      # hook command), and this suite's own acceptance criterion for that
+      # fix -- dropping the flag if the file-level hang no longer occurs
+      # -- was confirmed live on native Windows 11: the full suite
+      # (including every direct-await, real-detached-child test) now
+      # completes and exits naturally in ~28s with no flag, every test
+      # passing except the one POSIX-only fixture this suite always
+      # skips on win32 -- no hangs, no failures. Deliberately not
+      # pinning an exact pass count here: this suite's own test count
+      # keeps growing as later rounds add coverage, and a hard-coded
+      # number would drift stale again on the very next addition.
       - name: Run critique telemetry hook tests
-        run: node --test --test-force-exit tests/idd-critique-telemetry-hook.test.mts
+        run: node --test tests/idd-critique-telemetry-hook.test.mts

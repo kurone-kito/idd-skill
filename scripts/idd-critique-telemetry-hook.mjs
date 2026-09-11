@@ -81,6 +81,218 @@ const PAYLOAD_DELIVERY_TIMEOUT_MS = 1_000;
  * where a spawn confirms in low single-digit milliseconds.
  */
 const WATCHDOG_ARMED_TIMEOUT_MS = 3_000;
+/**
+ * Environment-variable name used to hand the real target `command`
+ * string to the win32 relay script (see {@link WIN32_RELAY_SCRIPT})
+ * rather than passing it as an argv element. The relay is spawned with
+ * `shell: false`, so argv escaping is not actually a concern for Node's
+ * own spawn call -- the env-var route is chosen instead because it
+ * keeps the relay's own argv fixed (`['-e', WIN32_RELAY_SCRIPT]`)
+ * regardless of the configured command's own content, and avoids
+ * reasoning twice about how an arbitrary shell command string interacts
+ * with Node's Windows argv-quoting rules (the first time being
+ * `command`'s own later `shell: true` hop inside the relay itself).
+ */
+const WIN32_RELAY_COMMAND_ENV =
+  'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND';
+/**
+ * Environment-variable name used to forward the *caller's own*
+ * `NODE_OPTIONS` value to the win32 relay's inner (real target) spawn,
+ * without letting the relay's own `-e` invocation inherit it directly
+ * (kurone-kito/idd-skill#2910 review, Copilot). See
+ * {@link WIN32_RELAY_SCRIPT}'s own doc comment for the full rationale.
+ */
+const WIN32_RELAY_NODE_OPTIONS_ENV =
+  'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS';
+/**
+ * win32-only relay script (kurone-kito/idd-skill#2910), run via
+ * `spawnFn(process.execPath, ['--input-type=commonjs', '-e',
+ * WIN32_RELAY_SCRIPT], {...})` in {@link invokeCritiqueTelemetryHook}
+ * below -- mirrors this file's
+ * existing precedent of inlining the watchdog's PowerShell script as a
+ * string constant (see {@link spawnWatchdogWindows}). Two `${...}`
+ * substitutions (the two env-var-name constants above) are all this
+ * template literal needs; the rest of the script body contains no
+ * literal `${` sequence of its own, so there is no collision risk with
+ * the outer `.mts` template-literal interpolation to guard against here,
+ * unlike the watchdog's longer, multiply-interpolated PowerShell
+ * one-liner.
+ *
+ * **The relay's own environment is sanitized of `NODE_OPTIONS`**
+ * (kurone-kito/idd-skill#2910 review, Copilot): the relay is itself a
+ * `node` process, so if it inherited the caller's raw `NODE_OPTIONS`
+ * directly, an inherited `--require`/`--import` would execute arbitrary
+ * preload code *inside the relay* before it ever forwards the payload --
+ * confirmed as a real mechanism, not merely hypothetical, by this
+ * repository's own win32 test stubs, which rely on exactly that
+ * `--require <preload>` pattern to inject their behavior (see
+ * `tests/test-utils.mts`'s `stubExecutable`). `invokeCritiqueTelemetryHook`
+ * below therefore does not pass the caller's own `NODE_OPTIONS` through
+ * to the relay's environment at all -- the relay's own process runs
+ * without any inherited `NODE_OPTIONS`, with `--input-type=commonjs`
+ * (kept as defense-in-depth even though the vector it originally guarded
+ * against, an inherited `--input-type=module`, is now also closed by
+ * this sanitization). The caller's *original* `NODE_OPTIONS` value still
+ * needs to reach the real target command two hops down -- POSIX and the
+ * pre-#2910 win32 path both let it through unchanged, and this fix must
+ * not narrow that existing contract -- so it travels through the
+ * separate {@link WIN32_RELAY_NODE_OPTIONS_ENV} channel instead, applied
+ * only to the inner spawn's own environment, never executed by the relay
+ * itself.
+ *
+ * Root cause (verified live on native Windows 11): on win32, `shell:
+ * true` wraps the primary spawn in `cmd.exe` (on POSIX the equivalent
+ * wrapper is `/bin/sh`, unaffected by any of this -- this whole defect
+ * and fix are win32-only). Before this fix, the primary spawn used that
+ * `cmd.exe` wrapper unconditionally on win32 too, and `cmd.exe` never
+ * relays a piped stdin payload to the further child it execs when
+ * `cmd.exe` itself runs under Win32's `DETACHED_PROCESS` creation flag
+ * (what `detached: true` maps to) -- confirmed at every payload size from 0B
+ * to 500KB+, and for a non-Node consumer piped the same way, isolating
+ * the fault to `cmd.exe`'s own stdin-relay plumbing under
+ * `DETACHED_PROCESS` rather than anything Node/libuv- or payload-size-
+ * specific. This is the same "`DETACHED_PROCESS` breaks a
+ * console-subsystem process's own I/O/message-pump initialization"
+ * pattern already root-caused for {@link spawnWatchdogWindows}'s own
+ * `powershell.exe` hop (kurone-kito/idd-skill#2892 / PR #2897),
+ * recurring for `cmd.exe`'s stdin relay instead of `powershell.exe`'s
+ * ConsoleHost startup.
+ *
+ * Fix shape: this script is itself spawned *directly* (`shell: false`)
+ * as a `node.exe` child under `detached: true` -- confirmed live to
+ * deliver a piped stdin payload correctly, at every size from 0B to
+ * 500KB+, once the caller waits for the stream to fully close before
+ * exiting (this file's `onPayloadDelivered` contract already does
+ * exactly that). It then reads its own stdin to completion, and only
+ * *then* re-spawns the real `command` through `shell: true` -- but,
+ * deliberately, NOT `detached` this time: this relay process itself is
+ * what now needs to survive the CLI's `process.exit()`, not the
+ * `cmd.exe` hop underneath it, so `cmd.exe` here is a normal
+ * (non-`DETACHED_PROCESS`) child and does not hit the stdin-relay
+ * defect above. The relay forwards the buffered payload to that
+ * child's stdin (with the relay-command env var above scrubbed from
+ * that inner spawn's own environment, so the configured `command`
+ * never sees an env var it didn't configure) and exits with the same
+ * code, preserving `invokeCritiqueTelemetryHook`'s existing
+ * `ok: code === 0` contract for its caller unchanged.
+ *
+ * `child.pid` (what this file's timeout/kill/watchdog logic already
+ * operates on generically -- see {@link killProcessGroup}) becomes
+ * this relay's pid on win32. Verified live: a
+ * `taskkill /PID <relay-pid> /T /F` (the existing
+ * {@link killProcessTreeWindows} call, unchanged) still reaches and
+ * kills the whole chain -- relay -> `cmd.exe` -> real target -- for
+ * both an already-settled chain and a genuinely hung target, so no
+ * change is needed to {@link killProcessGroup},
+ * {@link killProcessTreeWindows}, or either `spawnWatchdog*` function.
+ *
+ * Never throws from the relay's own perspective: a synchronous spawn
+ * failure or an async `'error'`/non-zero exit all resolve to
+ * `finish(1)` (a non-ok result for the caller), matching this file's
+ * "never throws" contract for the primary hook spawn. Like every other
+ * failure mode this file already absorbs silently (a bad command, a
+ * non-zero exit, a timeout), a defect in this script's own body would
+ * also fail silently in production (its `stdio` discards stderr) --
+ * an accepted extension of the existing contract, not a new risk;
+ * the same gap already exists for the inline PowerShell watchdog
+ * script below, with no unit-level syntax check for either. The tests
+ * this issue adds are the mitigation, run for real (not just
+ * argument-shape asserted) both locally, via the `platform: 'win32'`
+ * override tests below, and on native `windows-latest` CI.
+ */
+const WIN32_RELAY_SCRIPT = `
+const { spawn } = require('node:child_process');
+const command = process.env.${WIN32_RELAY_COMMAND_ENV};
+const chunks = [];
+let settled = false;
+const finish = (code) => {
+  if (settled) return;
+  settled = true;
+  process.exit(code);
+};
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('error', () => finish(1));
+process.stdin.on('end', () => {
+  const payload = Buffer.concat(chunks);
+  const env = { ...process.env };
+  delete env['${WIN32_RELAY_COMMAND_ENV}'];
+  // The relay's OWN process never received the caller's raw NODE_OPTIONS
+  // (see WIN32_RELAY_SCRIPT's own doc comment) -- only this forwarded
+  // copy of it, specifically for the inner spawn below. Strip only
+  // --input-type=... tokens (kurone-kito/idd-skill#2910 follow-up on the
+  // Codex review): Node rejects --input-type outright
+  // (ERR_INPUT_TYPE_NOT_ALLOWED) for any invocation that is not itself
+  // --eval/--print/stdin, which a configured command that happens to run
+  // \`node <file>\` (as this file's own win32 CI test fixtures do) would
+  // be -- while every other flag, notably this repository's own win32
+  // test stubs' inherited --require <preload>, passes through unchanged
+  // (verified live: a --require alongside --input-type survives this
+  // strip and still runs; deleting NODE_OPTIONS wholesale here instead
+  // was tried first and rejected -- it broke every one of those stubs,
+  // confirmed live).
+  //
+  // In-place regex removal within each unquoted segment, not a single
+  // whitespace-tokenizing split/rejoin (kurone-kito/idd-skill#2910
+  // review, Copilot follow-up): an earlier version of this strip
+  // tokenized the whole string on whitespace and rejoined with single
+  // spaces, which is lossy for a quoted --require/--import value
+  // containing its own internal whitespace (for example a Windows path
+  // with a space in a directory name) -- rejoining would silently
+  // corrupt that path. Removing only the matched
+  // \`--input-type=<non-whitespace>\` substring (plus its own leading
+  // separator) leaves every other character of the original string,
+  // including any such quoting, completely untouched.
+  //
+  // Quote-aware (kurone-kito/idd-skill#2910 review round 6, Copilot):
+  // the removal above is itself blind to quoting -- a legitimate quoted
+  // value that happens to contain the literal text \`--input-type=\`
+  // preceded by whitespace (for example a --require path whose own
+  // filename embeds that substring) would still be mangled, since a
+  // single whole-string regex has no notion of "inside a quoted span".
+  // Splitting first on double-quoted spans (keeping each one completely
+  // verbatim, including a backslash-escaped quote inside one, matching
+  // how Node's own NODE_OPTIONS parser treats \\" ) and applying the
+  // removal only to the unquoted segments between them closes that gap
+  // without reintroducing the whitespace-collapsing bug above --
+  // confirmed live: a --require value like
+  // \`"C:/dir/name --input-type=module.cjs"\` now survives unchanged.
+  const forwardedNodeOptions = env['${WIN32_RELAY_NODE_OPTIONS_ENV}'] || '';
+  delete env['${WIN32_RELAY_NODE_OPTIONS_ENV}'];
+  const strippedNodeOptions = forwardedNodeOptions
+    .split(/("(?:[^"\\\\]|\\\\.)*")/g)
+    .map((chunk, i) =>
+      i % 2 === 1 ? chunk : chunk.replace(/(^|\\s)--input-type=\\S+/g, ''),
+    )
+    .join('')
+    .trim();
+  if (strippedNodeOptions) {
+    env.NODE_OPTIONS = strippedNodeOptions;
+  } else {
+    delete env.NODE_OPTIONS;
+  }
+  let child;
+  try {
+    child = spawn(command, {
+      shell: true,
+      stdio: ['pipe', 'ignore', 'ignore'],
+      windowsHide: true,
+      env,
+    });
+  } catch {
+    finish(1);
+    return;
+  }
+  child.on('error', () => finish(1));
+  child.on('exit', (code) => finish(code === null ? 1 : code));
+  child.stdin.on('error', () => {});
+  try {
+    child.stdin.write(payload);
+    child.stdin.end();
+  } catch {
+    // 'error'/'exit' handlers above still settle.
+  }
+});
+`;
 if (import.meta.main) {
   runCli();
 }
@@ -242,48 +454,153 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
     };
     let child;
     try {
-      child = spawnFn(command, {
-        shell: true,
-        stdio: ['pipe', 'ignore', 'ignore'],
-        // `detached: true` (not `child.unref()`) only: this puts the child
-        // in its own session so it survives a signal sent to this
-        // process's group (e.g. the invoking shell's own job-control
-        // teardown), without unref'ing it. Deliberately NOT calling
-        // `child.unref()` here -- that would remove the *only* thing
-        // keeping the event loop alive long enough for the (also unref'd)
-        // timeout timer below to ever fire for a caller that legitimately
-        // awaits this promise (every test in this file does; a future
-        // non-CLI embedder might too) -- with both unref'd, nothing forces
-        // the loop to keep running, so the promise could stay pending
-        // forever once nothing else in the process needs the loop. The
-        // CLI's own `--invoke` mode (below) doesn't need this ref/unref
-        // distinction at all: it never awaits this promise, and
-        // `process.exit()` terminates unconditionally regardless of any
-        // pending handle's ref status.
-        detached: true,
-        // windowsHide (kurone-kito/idd-skill#2892; no-op on POSIX): maps to
-        // Win32's CREATE_NO_WINDOW creation flag *and* STARTUPINFO's
-        // wShowWindow=SW_HIDE. Verified against libuv's own win/process.c
-        // and Microsoft's Process Creation Flags documentation: the
-        // CREATE_NO_WINDOW half is a documented no-op here specifically --
-        // MSDN states it "is ignored if ... used with either
-        // CREATE_NEW_CONSOLE or DETACHED_PROCESS", and `detached: true`
-        // above is what sets DETACHED_PROCESS (required so this child
-        // survives `--invoke`'s `process.exit()`; cannot be dropped). The
-        // wShowWindow=SW_HIDE half is set unconditionally in STARTUPINFO
-        // regardless of DETACHED_PROCESS, and `cmd.exe` (the `shell: true`
-        // wrapper on win32) DOES propagate that show-state hint to the
-        // further child it execs for `command` -- verified live on native
-        // Windows 11 (kurone-kito/idd-skill#2892 review follow-up): a
-        // real, unmocked spawn through this exact path shows
-        // `MainWindowHandle == 0` (Get-Process) for both a quick-exiting
-        // and a hung-then-killed target, for the whole process tree this
-        // creates. The bound, reliable mitigation for a window that
-        // somehow still appears despite this is `killProcessGroup`'s
-        // win32 tree-kill below, which caps its lifetime at `timeoutMs`
-        // rather than preventing it outright.
-        windowsHide: true,
-      });
+      // `detached: true` (not `child.unref()`) only, on both branches
+      // below: this puts the child in its own session so it survives a
+      // signal sent to this process's group (e.g. the invoking shell's
+      // own job-control teardown), without unref'ing it. Deliberately
+      // NOT calling `child.unref()` here -- that would remove the *only*
+      // thing keeping the event loop alive long enough for the (also
+      // unref'd) timeout timer below to ever fire for a caller that
+      // legitimately awaits this promise (every test in this file does;
+      // a future non-CLI embedder might too) -- with both unref'd,
+      // nothing forces the loop to keep running, so the promise could
+      // stay pending forever once nothing else in the process needs the
+      // loop. The CLI's own `--invoke` mode (below) doesn't need this
+      // ref/unref distinction at all: it never awaits this promise, and
+      // `process.exit()` terminates unconditionally regardless of any
+      // pending handle's ref status.
+      //
+      // windowsHide (kurone-kito/idd-skill#2892; no-op on POSIX): maps to
+      // Win32's CREATE_NO_WINDOW creation flag *and* STARTUPINFO's
+      // wShowWindow=SW_HIDE. Verified against libuv's own win/process.c
+      // and Microsoft's Process Creation Flags documentation: the
+      // CREATE_NO_WINDOW half is a documented no-op specifically when
+      // combined with DETACHED_PROCESS (what `detached: true` sets) --
+      // MSDN states it "is ignored if ... used with either
+      // CREATE_NEW_CONSOLE or DETACHED_PROCESS". On the win32 branch
+      // below, that leaves `windowsHide` on the outer (detached) relay
+      // spawn a documented no-op for the same reason `spawnWatchdogWindows`'s
+      // own detached spawn is -- the relay is a plain `node.exe` process
+      // with no console to begin with under DETACHED_PROCESS, so there is
+      // nothing to hide there regardless. The relay's *own* inner spawn of
+      // the real `command` (see `WIN32_RELAY_SCRIPT` below) is NOT
+      // detached, so CREATE_NO_WINDOW is not overridden there and reliably
+      // suppresses that `cmd.exe` hop's own console window directly --
+      // verified live on native Windows 11 (kurone-kito/idd-skill#2892
+      // review follow-up, re-confirmed for kurone-kito/idd-skill#2910's
+      // relay shape): `MainWindowHandle == 0` (Get-Process) for both a
+      // quick-exiting and a hung-then-killed target, for the whole
+      // process tree this creates. The bound, reliable mitigation for a
+      // window that somehow still appears despite this is
+      // `killProcessGroup`'s win32 tree-kill below, which caps the whole
+      // chain's lifetime at `timeoutMs` rather than preventing it
+      // outright.
+      if (platform === 'win32') {
+        // Sanitize NODE_OPTIONS out of the relay's OWN environment
+        // (kurone-kito/idd-skill#2910 review, Copilot): the relay is
+        // itself a `node` process, so passing the caller's raw
+        // NODE_OPTIONS through to it would let an inherited
+        // `--require`/`--import` execute arbitrary preload code *inside
+        // the relay* before it ever forwards the payload -- see
+        // WIN32_RELAY_SCRIPT's own doc comment for the full rationale
+        // and why the original value still reaches the real target
+        // command via a separate channel instead of being dropped.
+        //
+        // Case-insensitive key match (kurone-kito/idd-skill#2910 review,
+        // Copilot follow-up): Windows environment variable names are
+        // case-insensitive at the OS level, but a plain destructure
+        // (`const { NODE_OPTIONS, ...rest } = process.env`) only removes
+        // the exact-case key -- an inherited `Node_Options` or
+        // `node_options` entry (real-world precedent: Windows system
+        // variables like `ComSpec`/`Path` routinely keep non-canonical
+        // casing) would survive into `relayEnv` untouched and still let
+        // the relay load its preload code. Scan every key case-
+        // insensitively instead, keeping the last match's value (in
+        // practice at most one casing is ever actually set).
+        //
+        // Scrub the reserved transport keys from `relayEnv` itself
+        // (kurone-kito/idd-skill#2910 review, Codex follow-up): `relayEnv`
+        // starts as a full copy of `process.env`, so if this hook's own
+        // process somehow already inherited a stale
+        // `WIN32_RELAY_NODE_OPTIONS_ENV` value (for example a leftover
+        // from a nested/prior invocation) while the caller's own
+        // NODE_OPTIONS was unset, `callerNodeOptions` stays undefined and
+        // the conditional spread below contributes nothing -- leaving
+        // that stale value in `relayEnv` to reach the relay untouched,
+        // which would then apply it to the inner spawn as if it were the
+        // real caller's NODE_OPTIONS. Deleting both reserved keys
+        // unconditionally before the conditional re-add closes that gap;
+        // `WIN32_RELAY_COMMAND_ENV` is always overwritten by the
+        // unconditional entry below regardless, but is deleted here too
+        // for symmetry and defense-in-depth.
+        //
+        // Folded into the same case-insensitive scan as NODE_OPTIONS
+        // (kurone-kito/idd-skill#2910 review round 6, Copilot + Codex,
+        // independently): an exact-case-only delete of the two reserved
+        // names above closes the gap only for their canonical spelling --
+        // Windows environment-variable names are case-insensitive at the
+        // OS level (the same reasoning the NODE_OPTIONS scan below already
+        // applies to itself), so a non-canonically-cased duplicate of
+        // either reserved name would still slip through without being
+        // scrubbed. In practice this specific gap is inert today, not a
+        // live leak: the
+        // relay's own lookup of these two names (WIN32_RELAY_SCRIPT's
+        // `env['...']` access) is itself exact-case, so a non-canonical
+        // duplicate reaching the relay is simply never read there either
+        // (confirmed live: a lower-cased reserved key added deliberately
+        // for this fix's own regression test still passed even before this
+        // change landed). Folding both names into one case-insensitive
+        // scan is still correct defense-in-depth against exactly that kind
+        // of exact-case assumption changing on either side in the future,
+        // and matches the NODE_OPTIONS scan's own reasoning rather than
+        // leaving these two names as a narrower, inconsistent special case.
+        const relayEnv = { ...process.env };
+        let callerNodeOptions;
+        for (const key of Object.keys(relayEnv)) {
+          const upperKey = key.toUpperCase();
+          if (upperKey === 'NODE_OPTIONS') {
+            callerNodeOptions = relayEnv[key];
+            delete relayEnv[key];
+          } else if (
+            upperKey === WIN32_RELAY_COMMAND_ENV ||
+            upperKey === WIN32_RELAY_NODE_OPTIONS_ENV
+          ) {
+            delete relayEnv[key];
+          }
+        }
+        child = spawnFn(
+          process.execPath,
+          // `--input-type=commonjs` (kurone-kito/idd-skill#2910 review,
+          // Codex): defense-in-depth alongside the NODE_OPTIONS
+          // sanitization above -- not redundant with `-e`'s own
+          // CommonJS default, since a caller's inherited
+          // `NODE_OPTIONS=--input-type=module` would otherwise make
+          // Node evaluate `WIN32_RELAY_SCRIPT` as ESM, where `require`
+          // is undefined and the relay throws before ever reading its
+          // stdin. Verified live: this flag overrides an inherited
+          // `--input-type=module` and is a no-op otherwise.
+          ['--input-type=commonjs', '-e', WIN32_RELAY_SCRIPT],
+          {
+            stdio: ['pipe', 'ignore', 'ignore'],
+            detached: true,
+            windowsHide: true,
+            env: {
+              ...relayEnv,
+              [WIN32_RELAY_COMMAND_ENV]: command,
+              ...(callerNodeOptions
+                ? { [WIN32_RELAY_NODE_OPTIONS_ENV]: callerNodeOptions }
+                : {}),
+            },
+          },
+        );
+      } else {
+        child = spawnFn(command, {
+          shell: true,
+          stdio: ['pipe', 'ignore', 'ignore'],
+          detached: true,
+          windowsHide: true,
+        });
+      }
     } catch {
       settle(false);
       notifyDelivered();
@@ -421,13 +738,20 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
  * POSIX process-group semantics). On win32, a negative pid is meaningless
  * to `process.kill` -- there is no POSIX-style process-group signal to
  * send -- so this instead delegates to {@link killProcessTreeWindows}, a
- * real process-*tree* kill via `taskkill /T` (kurone-kito/idd-skill#2892):
- * `shell: true` makes `child` the `cmd.exe` wrapper, and the actual
- * invoked command is a *further* child of that wrapper, never reachable by
- * terminating the wrapper alone -- which is exactly what this file's
- * previous Windows fallback (`child.kill('SIGKILL')` below) only ever did,
- * leaving that further child (and its own auto-allocated console window)
- * orphaned. Never throws.
+ * real process-*tree* kill via `taskkill /T` (kurone-kito/idd-skill#2892).
+ * On win32, `child` is the primary spawn's own top-level process:
+ * `cmd.exe` (the `shell: true` wrapper) directly, on POSIX and, before
+ * kurone-kito/idd-skill#2910, on win32 too; since that fix, the win32
+ * `child` is instead the relay process (see `WIN32_RELAY_SCRIPT`), which
+ * itself wraps `cmd.exe` as its own child one level further down. Either
+ * way, the actual invoked command sits one or more levels beneath `child`,
+ * never reachable by terminating `child` alone -- which is exactly what
+ * this file's previous Windows fallback (`child.kill('SIGKILL')` below)
+ * only ever did, leaving that further descendant (and its own
+ * auto-allocated console window) orphaned. `taskkill /T`'s tree-kill
+ * reaches the whole subtree regardless of its depth beneath `child`, so
+ * this function needs no depth-specific knowledge of which shape `child`
+ * is. Never throws.
  *
  * Also used by {@link cancelWatchdog} to disarm the watchdog's own process
  * (itself `detached: true` -- see {@link spawnWatchdogPosix} /

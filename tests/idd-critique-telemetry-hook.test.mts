@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -678,15 +684,604 @@ test('invokeCritiqueTelemetryHook kills a backgrounded descendant on timeout, no
 // These two tests give deterministic, non-CI coverage of the *argument
 // construction* for the win32 kill path from any OS, using the injectable
 // `platform` option the same way `spawnFn` is already injected for
-// testability -- overriding `platform` only changes which of
-// `killProcessGroup`/`spawnWatchdog`'s own branches this code takes; it
-// does not change which real shell the still-real `shell: true` spawn
-// below is interpreted by (that is always whatever the host OS actually
-// provides). The `windows-latest` CI job (added alongside this file) is
-// the actual behavioral verification gate on every push; the argument-shape
-// tests below have also since been cross-checked live on native Windows 11
-// during the #2897 CI follow-up (kurone-kito/idd-skill#2892), not only
-// inferred from a non-Windows implementation environment.
+// testability. Originally (kurone-kito/idd-skill#2892), overriding
+// `platform` only changed which of `killProcessGroup`/`spawnWatchdog`'s
+// own branches the code took, never which real shell the primary
+// `shell: true` spawn was interpreted by (always whatever the host OS
+// actually provides). kurone-kito/idd-skill#2910 extended `platform` to
+// also select the *primary* spawn shape: on any host, an override to
+// `'win32'` now routes that primary spawn through the real
+// `WIN32_RELAY_SCRIPT` (via `node -e`, not mocked), which itself still
+// invokes the host's own real shell for the actual target command one
+// hop further in -- so the win32-specific relay logic gets real,
+// non-CI-only coverage too, not just the kill/watchdog argument shapes
+// this section's own two tests below were originally written for. The
+// `windows-latest` CI job (added alongside this file) remains the actual
+// behavioral verification gate on every push; the argument-shape tests
+// below have also since been cross-checked live on native Windows 11
+// during the #2897 CI follow-up (kurone-kito/idd-skill#2892) and the
+// #2910 relay work, not only inferred from a non-Windows implementation
+// environment.
+
+test('invokeCritiqueTelemetryHook delivers the payload and resolves ok:true through the win32 relay when platform is overridden to win32 (kurone-kito/idd-skill#2910)', async () => {
+  // Complements the win32 hang/kill-path tests below (which all exercise
+  // `ok:false` outcomes) with the relay's own success path: a quick-exiting
+  // target, byte-exact payload delivery, and `ok:true`/exit-code-0
+  // forwarding through the relay -- `platform: 'win32'` routes this call
+  // through the real `WIN32_RELAY_SCRIPT` (via `node -e`, not mocked) even
+  // on this non-Windows test host, the same real-code-path coverage this
+  // file's other `platform: 'win32'`-override tests already rely on.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-success-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-success',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  try {
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-success'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the relay to forward the full, untruncated payload to the real target',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 relay survives an inherited NODE_OPTIONS=--input-type=module (kurone-kito/idd-skill#2910 review, Codex)', async () => {
+  // A caller whose own environment sets NODE_OPTIONS=--input-type=module
+  // -- inherited by the relay spawn via `env: {...process.env, ...}` --
+  // would otherwise make Node evaluate WIN32_RELAY_SCRIPT as ESM, where
+  // `require` is undefined and the relay throws before ever reading its
+  // stdin: verified locally (`NODE_OPTIONS=--input-type=module node -e
+  // "require('node:child_process')"` throws `ReferenceError: require is
+  // not defined in ES module scope`) before this test was written. The
+  // fix passes an explicit `--input-type=commonjs` flag, which overrides
+  // an inherited `--input-type=module`.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-node-options-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  // stubExecutable's own win32 branch already sets process.env.NODE_OPTIONS
+  // (to inject its own `--require <preload>`) as part of the call below --
+  // append to THAT current value, not to whatever NODE_OPTIONS held before
+  // this call. Appending to a pre-stub snapshot instead would silently
+  // discard the stub's own `--require` and break the stub mechanism
+  // itself (confirmed live on native Windows: doing it that way made 10
+  // unrelated win32 tests fail alongside this one, not just this one).
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-node-options',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  const nodeOptionsAfterStub = process.env.NODE_OPTIONS;
+  try {
+    process.env.NODE_OPTIONS = nodeOptionsAfterStub
+      ? `${nodeOptionsAfterStub} --input-type=module`
+      : '--input-type=module';
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-node-options'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the relay to still deliver the payload despite an inherited --input-type=module',
+    );
+  } finally {
+    // Restore to the stub's own NODE_OPTIONS value (pre --input-type
+    // append) before restore() unwinds the stub itself -- restore()
+    // resets to its own pre-stub snapshot regardless, so this step is
+    // only needed if a future edit adds code between here and restore()
+    // that reads process.env.NODE_OPTIONS.
+    if (nodeOptionsAfterStub === undefined) {
+      delete process.env.NODE_OPTIONS;
+    } else {
+      process.env.NODE_OPTIONS = nodeOptionsAfterStub;
+    }
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 relay never executes an inherited NODE_OPTIONS preload itself, though the real target still can (kurone-kito/idd-skill#2910 review, Copilot)', async () => {
+  // The `--input-type=commonjs` flag and the NODE_OPTIONS-sanitization
+  // fix above are meant to stop an inherited `--require`/`--import` from
+  // running arbitrary preload code *inside the relay itself* -- but
+  // neither of the other two NODE_OPTIONS tests in this file actually
+  // proves that: the test above only exercises `--input-type=module`,
+  // which the relay's own explicit `--input-type=commonjs` flag already
+  // neutralizes on its own, with or without the sanitization fix. This
+  // test uses a real `--require` preload instead, and distinguishes "did
+  // the relay's own process load it" from "did the real target's
+  // process load it" (expected -- the original NODE_OPTIONS, minus
+  // --input-type, is deliberately still forwarded there) by having the
+  // preload check for the relay-command env var that only the relay's
+  // own process ever has set.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-preload-'),
+  );
+  const relayPoisonedSentinel = join(sandbox, 'relay-poisoned.txt');
+  const preloadPath = join(sandbox, 'preload.cjs');
+  writeFileSync(
+    preloadPath,
+    `const fs = require('fs');
+if (process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND) {
+  fs.writeFileSync(${JSON.stringify(relayPoisonedSentinel)}, 'relay loaded the inherited preload');
+}
+`,
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-preload-target',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  const nodeOptionsAfterStub = process.env.NODE_OPTIONS;
+  try {
+    // Quoted, and forward-slashed on win32 (kurone-kito/idd-skill#2910
+    // review, Copilot): tmpdir() can contain a space (a real, if
+    // uncommon, path shape on some hosts), and Node's NODE_OPTIONS
+    // parser splits on unquoted whitespace, so an unquoted path there
+    // would silently fail to load and this test would stop exercising
+    // what it claims to. Quoting alone is not enough on win32, though
+    // (empirically verified): inside a quoted NODE_OPTIONS token, Node
+    // treats a backslash as an escape character, so a quoted native
+    // Windows path (`C:\tmp\...`) loses every backslash and fails to
+    // resolve -- confirmed live: `--require "C:\tmp\...\preload.cjs"`
+    // throws `MODULE_NOT_FOUND` for the mangled path
+    // `C:tmp...preload.cjs`. `stubExecutable`'s own `--require` flag
+    // (`tests/test-utils.mts`) already works around exactly this by
+    // converting to forward slashes before quoting -- do the same here.
+    const quotedPreloadPath = `"${preloadPath.replaceAll('\\', '/')}"`;
+    process.env.NODE_OPTIONS = nodeOptionsAfterStub
+      ? `${nodeOptionsAfterStub} --require ${quotedPreloadPath}`
+      : `--require ${quotedPreloadPath}`;
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-preload-target'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.equal(
+      existsSync(relayPoisonedSentinel),
+      false,
+      'expected the relay itself to never load the inherited --require preload',
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the target to still receive the full payload with the preload forwarded',
+    );
+  } finally {
+    if (nodeOptionsAfterStub === undefined) {
+      delete process.env.NODE_OPTIONS;
+    } else {
+      process.env.NODE_OPTIONS = nodeOptionsAfterStub;
+    }
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 relay strips a non-canonically-cased Node_Options key too (kurone-kito/idd-skill#2910 review, Copilot)', async () => {
+  // Every other NODE_OPTIONS test in this file sets the canonical-case
+  // key, which would already pass even with the earlier exact-case-only
+  // `const { NODE_OPTIONS, ...relayEnv } = process.env` destructure --
+  // none of them actually exercises the case-insensitive scrub itself.
+  // Windows environment-variable names are case-insensitive at the OS
+  // level but a plain JS object key is not, so a caller whose own
+  // environment carries a differently-cased entry (real-world
+  // precedent: Windows system variables like ComSpec/Path routinely
+  // keep non-canonical casing) needs the scrub to still catch it.
+  // `process.env` is a plain object on every platform (this test's own
+  // manual assignment below simulates that shape directly, regardless
+  // of what the real OS would produce), so setting a mixed-case key
+  // here exercises the exact same code path a genuine Windows
+  // non-canonical entry would.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-mixed-case-'),
+  );
+  const relayPoisonedSentinel = join(sandbox, 'relay-poisoned.txt');
+  const preloadPath = join(sandbox, 'preload.cjs');
+  writeFileSync(
+    preloadPath,
+    `const fs = require('fs');
+if (process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND) {
+  fs.writeFileSync(${JSON.stringify(relayPoisonedSentinel)}, 'relay loaded the inherited preload');
+}
+`,
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-mixed-case-target',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  // stubExecutable's win32 branch already set the *canonical-case*
+  // process.env.NODE_OPTIONS (to inject its own --require <preload>).
+  // Move that content onto the non-canonically-cased key below instead
+  // of adding a second, separate key alongside it: a real Windows
+  // environment has exactly one such variable, just possibly spelled
+  // non-canonically -- simultaneously having both NODE_OPTIONS and
+  // Node_Options present is not a realistic shape, and this fix's own
+  // key-iteration order would nondeterministically clobber one value
+  // with the other (confirmed live: an earlier version of this test did
+  // exactly that and silently dropped the stub's own --require,
+  // breaking the stub mechanism itself, not the fix under test).
+  const nodeOptionsAfterStub = process.env.NODE_OPTIONS;
+  const hadMixedCaseKey = Object.hasOwn(process.env, 'Node_Options');
+  const previousMixedCaseValue = process.env.Node_Options;
+  try {
+    delete process.env.NODE_OPTIONS;
+    // Deliberately the *non*-canonical casing -- the sanitization fix
+    // under test matches keys case-insensitively via
+    // `key.toUpperCase() === 'NODE_OPTIONS'`, so this specific spelling
+    // exercises that comparison rather than an exact-match shortcut.
+    // Forward-slashed before quoting -- see the sibling preload test
+    // above for why a quoted native Windows backslash path fails to
+    // resolve on win32 (Node strips backslashes as escapes inside a
+    // quoted NODE_OPTIONS token).
+    const myPreloadRequire = `--require "${preloadPath.replaceAll('\\', '/')}"`;
+    process.env.Node_Options = nodeOptionsAfterStub
+      ? `${nodeOptionsAfterStub} ${myPreloadRequire}`
+      : myPreloadRequire;
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-mixed-case-target'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.equal(
+      existsSync(relayPoisonedSentinel),
+      false,
+      'expected the relay itself to never load a preload inherited via a non-canonically-cased NODE_OPTIONS key',
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the target to still receive the full payload with the preload forwarded',
+    );
+  } finally {
+    if (hadMixedCaseKey) {
+      process.env.Node_Options = previousMixedCaseValue;
+    } else {
+      delete process.env.Node_Options;
+    }
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 relay clears a stale inherited reserved NODE_OPTIONS-channel value before spawning (kurone-kito/idd-skill#2910 review, Codex follow-up)', async () => {
+  // The reserved IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS
+  // channel exists purely as transport from the primary process to the
+  // relay's own inner spawn (see WIN32_RELAY_SCRIPT's own doc comment) --
+  // it is never meant to already be present as an ambient variable on
+  // this hook's own process. But if it somehow is (for example leaked
+  // from a nested or prior invocation of this same hook), the primary
+  // spawn's relayEnv -- a full copy of process.env -- inherits it too;
+  // when the real caller's own NODE_OPTIONS happens to be unset,
+  // callerNodeOptions comes back undefined, so the conditional re-add
+  // contributes nothing and nothing else explicitly clears the stale
+  // value out of relayEnv before it reaches the relay. Simulate that leak
+  // directly with an intentionally-broken --require target on the stale
+  // channel: if it reaches the real target's NODE_OPTIONS without being
+  // scrubbed first, the target process fails to even start and the
+  // payload never arrives; with the channel properly cleared, the target
+  // starts clean and receives the payload normally.
+  //
+  // Not `stubExecutable` (confirmed live on native Windows): its own win32
+  // branch unconditionally sets `process.env.NODE_OPTIONS` itself, to make
+  // its exe-copy-plus-preload redirect trick work at all -- deleting
+  // NODE_OPTIONS the way this test needs to would break that redirect and
+  // fail the test regardless of whether the fix under test is applied,
+  // which is exactly what happened when this test was first written
+  // against `stubExecutable`. Building the target directly as `node
+  // <scriptPath>` sidesteps NODE_OPTIONS entirely for the target's own
+  // startup, leaving this test free to control it purely to exercise the
+  // reserved-channel leak.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-stale-channel-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const targetScriptPath = join(sandbox, 'target.cjs');
+  writeFileSync(
+    targetScriptPath,
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  // Two simple quoted paths, no nested quoting or embedded newlines --
+  // deliberately avoids `-e "<script>"` here (unlike this file's other
+  // directly-built commands), since that would need the whole multi-line
+  // script JSON-escaped into one already-quoted command string, which
+  // `cmd.exe`'s own quote parsing (the real win32 shell behind `shell:
+  // true`) does not handle the same way a POSIX shell does.
+  const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(targetScriptPath)}`;
+  const hadNodeOptions = Object.hasOwn(process.env, 'NODE_OPTIONS');
+  const previousNodeOptions = process.env.NODE_OPTIONS;
+  const hadStaleChannelValue = Object.hasOwn(
+    process.env,
+    'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS',
+  );
+  const previousStaleChannelValue =
+    process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS;
+  try {
+    // NODE_OPTIONS itself must stay unset so callerNodeOptions comes back
+    // undefined and the conditional re-add cannot mask the bug under test.
+    delete process.env.NODE_OPTIONS;
+    process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS =
+      '--require /idd-2910-nonexistent-stale-channel-preload.cjs';
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(command, payload, {
+      timeoutMs: 5_000,
+      platform: 'win32',
+    });
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the target to start clean and receive the full payload, with the stale reserved channel value scrubbed rather than leaked through as its NODE_OPTIONS',
+    );
+  } finally {
+    if (hadStaleChannelValue) {
+      process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS =
+        previousStaleChannelValue;
+    } else {
+      delete process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS;
+    }
+    if (hadNodeOptions) {
+      process.env.NODE_OPTIONS = previousNodeOptions;
+    } else {
+      delete process.env.NODE_OPTIONS;
+    }
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 relay preserves a quoted --require path whose own filename embeds "--input-type=" text (kurone-kito/idd-skill#2910 review round 6, Copilot + Codex)', async () => {
+  // The --input-type strip (see WIN32_RELAY_SCRIPT's own doc comment) used
+  // to be one whole-string regex with no notion of "inside a quoted
+  // span" -- so a *legitimate* quoted --require value that happens to
+  // contain the literal text "--input-type=" preceded by whitespace (for
+  // example a filename that itself embeds that substring, a real if
+  // unusual shape) would be mistaken for a genuine top-level option and
+  // stripped, truncating the quoted path and breaking the target's own
+  // --require. Deliberately construct the preload's *filename* to embed
+  // that exact substring, reproducing the review's own repro
+  // (`"C:/dir/name --input-type=module.cjs"`) rather than a synthetic
+  // stand-in.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-quoted-token-'),
+  );
+  const targetPreloadSentinel = join(sandbox, 'target-preload-loaded.txt');
+  const preloadPath = join(sandbox, 'preload --input-type=module.cjs');
+  writeFileSync(
+    preloadPath,
+    `require('fs').writeFileSync(${JSON.stringify(targetPreloadSentinel)}, 'loaded');\n`,
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-quoted-token-target',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  const nodeOptionsAfterStub = process.env.NODE_OPTIONS;
+  try {
+    // Quoted and forward-slashed for the same reasons as this file's
+    // other --require-path tests above (tmpdir() can contain a space;
+    // a quoted native Windows backslash path loses its backslashes).
+    const quotedPreloadPath = `"${preloadPath.replaceAll('\\', '/')}"`;
+    process.env.NODE_OPTIONS = nodeOptionsAfterStub
+      ? `${nodeOptionsAfterStub} --require ${quotedPreloadPath}`
+      : `--require ${quotedPreloadPath}`;
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-quoted-token-target'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the target to receive the full payload',
+    );
+    assert.equal(
+      existsSync(targetPreloadSentinel),
+      true,
+      'expected the target to have loaded the --require preload despite its own filename embedding "--input-type="',
+    );
+  } finally {
+    if (nodeOptionsAfterStub === undefined) {
+      delete process.env.NODE_OPTIONS;
+    } else {
+      process.env.NODE_OPTIONS = nodeOptionsAfterStub;
+    }
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 relay scrubs a non-canonically-cased reserved NODE_OPTIONS-channel key too (kurone-kito/idd-skill#2910 review round 6, Copilot + Codex)', async () => {
+  // Defense-in-depth, not a currently observable leak (no-fabrication
+  // note): the relay's own lookup of these two reserved names
+  // (WIN32_RELAY_SCRIPT's `env['...']` access) is itself exact-case, so a
+  // non-canonically-cased duplicate reaching the relay would already be
+  // inert there today -- confirmed live, this test's own poisoned
+  // lower-cased key produces the same ok:true outcome whether or not the
+  // primary-spawn scrub below runs. What this test actually verifies is
+  // narrower and still worth pinning: the poisoned key itself must not
+  // appear in the env object the primary spawn hands to the relay at
+  // all, closing the gap before it could ever matter (for example if the
+  // relay's own lookup were ever changed to be case-insensitive too,
+  // matching the NODE_OPTIONS scan it already sits next to).
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-mixed-case-reserved',
+    'process.exit(0);\n',
+  );
+  let capturedEnv: NodeJS.ProcessEnv | undefined;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args);
+    // Same discriminator as this file's other win32 argument-shape tests:
+    // the primary spawn is uniquely identified by process.execPath as
+    // args[0] on win32 (the relay itself), unlike the target/taskkill
+    // calls this spawnFn also sees.
+    if (args[0] === process.execPath) {
+      capturedEnv = (args[2] as { env?: NodeJS.ProcessEnv }).env;
+    }
+    return child;
+  }) as typeof spawn;
+  const poisonKey = 'idd_critique_telemetry_hook_win32_relay_node_options';
+  const poisonValue = '--require /idd-2910-poison-reserved-channel.cjs';
+  const hadPoisonKey = Object.hasOwn(process.env, poisonKey);
+  const previousPoisonValue = (process.env as Record<string, string>)[
+    poisonKey
+  ];
+  try {
+    (process.env as Record<string, string>)[poisonKey] = poisonValue;
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-mixed-case-reserved'),
+      samplePayload(),
+      { timeoutMs: 5_000, spawnFn, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    assert.ok(
+      capturedEnv,
+      'expected the primary win32 spawn to have been observed',
+    );
+    // Local const, not the outer `let` (TypeScript's control-flow
+    // narrowing from the `assert.ok` above does not persist into the
+    // filter callback closure below).
+    const observedEnv = capturedEnv;
+    const leaked = Object.keys(observedEnv).filter(
+      (key) =>
+        key.toUpperCase() ===
+          'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS' &&
+        observedEnv[key] === poisonValue,
+    );
+    assert.deepEqual(
+      leaked,
+      [],
+      `expected the poisoned non-canonically-cased reserved key to be scrubbed from the relay's env, found: ${JSON.stringify(leaked)}`,
+    );
+  } finally {
+    if (hadPoisonKey) {
+      (process.env as Record<string, string>)[poisonKey] = previousPoisonValue;
+    } else {
+      delete (process.env as Record<string, string>)[poisonKey];
+    }
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook forwards a compound (a && b) command through the win32 relay when platform is overridden to win32 (kurone-kito/idd-skill#2910 review, Copilot)', async () => {
+  // Issue #2910's own "Proposed change" section requires this fix to
+  // "keep the existing command config contract (an arbitrary shell
+  // command string, including a && b-style compound commands) working
+  // the same way it does on POSIX today, since shell: true exists
+  // specifically to support that". The win32-relay-success test above
+  // only exercises a single executable; this test closes that gap with
+  // a genuine `a && b` compound command, forwarded through the relay's
+  // own inner `shell: true` hop unchanged. The first stub deliberately
+  // does not read stdin (exits synchronously and unconditionally, so it
+  // needs no `stayAliveCommand` positional argument per that helper's
+  // own doc comment), so the full payload reaches the second stub
+  // untouched -- proving the relay does not mangle or truncate the
+  // command string across the `&&` boundary.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-compound-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restoreFirst = stubExecutable(
+    'idd-telemetry-hook-win32-relay-compound-first',
+    'process.exit(0);\n',
+  );
+  const restoreSecond = stubExecutable(
+    'idd-telemetry-hook-win32-relay-compound-second',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  try {
+    const command =
+      'idd-telemetry-hook-win32-relay-compound-first && ' +
+      stayAliveCommand('idd-telemetry-hook-win32-relay-compound-second');
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(command, payload, {
+      timeoutMs: 5_000,
+      platform: 'win32',
+    });
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the second half of the compound command to receive the full, untruncated payload',
+    );
+  } finally {
+    // LIFO order, matching this file's other multi-stub tests.
+    restoreSecond();
+    restoreFirst();
+  }
+});
 
 test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PID <pid> /T /F) on timeout when platform is overridden to win32', async () => {
   const restore = stubExecutable(
@@ -699,7 +1294,12 @@ test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PI
     let taskkillOptions: Record<string, unknown> | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       const child = spawn(...args);
-      if (args[0] === stayAliveCommand('idd-telemetry-hook-hang-win32')) {
+      // kurone-kito/idd-skill#2910: on win32 the primary spawn is the
+      // relay (`process.execPath` with `-e`), not the raw command string
+      // -- `process.execPath` is the one value unique to that call among
+      // everything else this spawnFn sees (the watchdog and `taskkill`
+      // calls both pass a string as args[0]).
+      if (args[0] === process.execPath) {
         primaryChild = child;
       }
       if (args[0] === 'taskkill') {
@@ -836,6 +1436,14 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
     'idd-telemetry-hook-watchdog-real-kill',
     'setInterval(() => {}, 1000);\n',
   );
+  // kurone-kito/idd-skill#2910: on win32 the primary spawn is the relay
+  // (`process.execPath` with `-e`), so `hookPid` below is the relay's
+  // own pid, not the innermost stub script's pid -- exactly what
+  // killProcessGroup/killProcessTreeWindows operate on in production.
+  // The watchdog's `taskkill /PID <relay-pid> /T /F` still has to reach
+  // through the relay's own `cmd.exe` hop to the real stub script to
+  // terminate it, so checking whether the relay's pid is still alive
+  // below still proves the watchdog's tree-kill actually worked.
   let hookPid: number | undefined;
   try {
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
@@ -845,10 +1453,7 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
         return fake;
       }
       const child = spawn(...args);
-      if (
-        typeof args[0] === 'string' &&
-        args[0].includes('idd-telemetry-hook-watchdog-real-kill')
-      ) {
+      if (args[0] === process.execPath) {
         hookPid = child.pid;
       }
       return child;
@@ -858,7 +1463,7 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
       samplePayload(),
       { timeoutMs: 1_000, spawnFn },
     );
-    assert.ok(hookPid, 'expected the hung hook to have a real pid');
+    assert.ok(hookPid, 'expected the relay to have a real pid');
     // Give the watchdog's own 1-second sleep plus its taskkill call room
     // to complete -- generous but bounded, matching this file's other
     // real-timing assertions.
@@ -960,13 +1565,13 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
     await quickPromise;
 
     // Half 2: a command that hangs and is killed on timeout.
+    // kurone-kito/idd-skill#2910: on win32 the primary spawn is the relay
+    // (`process.execPath` with `-e`), so `hangPid` below (used only for
+    // this test's own cleanup, not an assertion) is the relay's pid.
     let hangPid: number | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       const child = spawn(...args);
-      if (
-        typeof args[0] === 'string' &&
-        args[0].includes('idd-telemetry-hook-window-check-hang')
-      ) {
+      if (args[0] === process.execPath) {
         hangPid = child.pid;
       }
       return child;
@@ -1023,7 +1628,10 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
         throw new Error('synthetic taskkill spawn failure');
       }
       const child = spawn(...args);
-      if (args[0] === stayAliveCommand('idd-telemetry-hook-hang-win32-throw')) {
+      // kurone-kito/idd-skill#2910: see the win32 taskkill-on-timeout
+      // test above for why `process.execPath` (not the raw command
+      // string) now uniquely identifies the primary spawn on win32.
+      if (args[0] === process.execPath) {
         primaryChild = child;
       }
       return child;
@@ -1124,10 +1732,10 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
         return fakeKiller;
       }
       const child = spawn(...args);
-      if (
-        args[0] ===
-        stayAliveCommand('idd-telemetry-hook-hang-win32-async-throw')
-      ) {
+      // kurone-kito/idd-skill#2910: see the win32 taskkill-on-timeout
+      // test above for why `process.execPath` (not the raw command
+      // string) now uniquely identifies the primary spawn on win32.
+      if (args[0] === process.execPath) {
         primaryChild = child;
       }
       return child;
@@ -1557,20 +2165,15 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
   }
 });
 
-test('CLI --invoke waits for a large payload to fully reach the hook before exiting (#2685 review, CodeRabbit)', {
-  // win32 (kurone-kito/idd-skill#2910 follow-up): the production spawn
-  // shape this test exercises -- `shell: true` + `detached: true` + piped
-  // stdin -- never delivers ANY stdin payload to the target command on
-  // native Windows, not just large ones. Confirmed via a size sweep from
-  // 0B to 500KB: every non-empty size fails identically (the grandchild's
-  // stdin never emits 'data' or 'end'), and a native (non-Node) consumer
-  // piped through the same shape is equally affected, isolating the fault
-  // to `cmd.exe`'s own stdin relay under Win32's DETACHED_PROCESS creation
-  // flag rather than anything Node/libuv- or payload-size-specific. This
-  // is a pre-existing defect (predates PR #2897) with no known fix yet --
-  // see #2910 for the full reproduction matrix and candidate designs.
-  skip: process.platform === 'win32',
-}, async () => {
+test('CLI --invoke waits for a large payload to fully reach the hook before exiting (#2685 review, CodeRabbit)', async () => {
+  // win32 (kurone-kito/idd-skill#2910): this test used to be skipped on
+  // win32 -- the production spawn shape it exercises, `shell: true` +
+  // `detached: true` + piped stdin, never delivered ANY stdin payload to
+  // the target command on native Windows, at any size. #2910's fix
+  // (a `shell: false` `node.exe` relay hop on win32 only, see
+  // `WIN32_RELAY_SCRIPT`) resolves the underlying defect, so this test
+  // now runs for real on every platform, exercising the fixed,
+  // unmocked `invokeCritiqueTelemetryHook` spawn path end to end.
   // Regression fixture: `runInvoke` used to fire `invokeCritiqueTelemetryHook`
   // and call `process.exit(0)` right after, without waiting for the stdin
   // write to the hook's pipe to actually finish -- fine for a small
@@ -1630,6 +2233,63 @@ process.stdin.on('end', () => {
       received,
       expected,
       'expected the hook to receive the full, untruncated payload',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('CLI --invoke waits for a small payload to fully reach the hook before exiting on win32 (kurone-kito/idd-skill#2910)', {
+  // The large-payload test above already covers win32 for a payload well
+  // over the OS pipe buffer; #2910's own reproduction found the defect
+  // was size-independent (0B and every size up to 500KB+ all failed
+  // identically), so this test closes the acceptance criterion's other
+  // explicit half -- a small (well under 1KB), single-write payload --
+  // on real win32 specifically, where the relay hop actually matters.
+  // POSIX needs no separate small-payload win32 case since it never took
+  // the relay path to begin with.
+  skip: process.platform !== 'win32',
+}, async () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-small-payload-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-capture-stdin-small',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  try {
+    const policyPath = join(sandbox, 'config.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        critiqueLoop: {
+          telemetryHook: {
+            command: stayAliveCommand('idd-telemetry-hook-capture-stdin-small'),
+          },
+        },
+      }),
+    );
+    const expected = JSON.stringify(samplePayload());
+    const { stdout } = runCli(
+      ['--policy', policyPath, '--invoke'],
+      undefined,
+      expected,
+    );
+    assert.equal(stdout, '');
+
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      expected,
+      'expected the hook to receive the full, untruncated small payload',
     );
   } finally {
     restore();
