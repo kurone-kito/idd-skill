@@ -763,7 +763,24 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
     // is its sole, syscall-proven owner from this point on, so a failure
     // finishing the write below is always safe to clean up.
     try {
-      writeSync(fd, token);
+      // A single `writeSync(fd, token)` call is not guaranteed to write
+      // every byte -- `write(2)` (and thus `writeSync`) may legitimately
+      // return fewer bytes than requested without throwing (#2922 review
+      // round 12, Codex and Copilot independently). A truncated guard
+      // body would then never match `token` again: release's own
+      // token-comparison in {@link releaseGeneratedTokensWriteLockIfOwned}
+      // would treat it as "not mine" and leave the guard behind forever,
+      // even though this call's own write, and the caller's `critical()`,
+      // both otherwise succeed -- every later writer for this claim-id
+      // then waits the full timeout and fails closed until an operator
+      // manually removes it. Loop on the buffer form until every byte is
+      // written, the same pattern Node's own `writeFileSync` uses
+      // internally for exactly this reason.
+      const buffer = Buffer.from(token, 'utf8');
+      let written = 0;
+      while (written < buffer.length) {
+        written += writeSync(fd, buffer, written, buffer.length - written);
+      }
     } catch (error) {
       // `writeSync` failing leaves `fd` genuinely still open (a write
       // failure does not close the descriptor), so this is the correct,

@@ -1937,6 +1937,67 @@ test('write-lock: a guard that vanishes between the release-time token read and 
   }
 });
 
+test('write-lock: a short (partial) writeSync while writing the guard token is retried until the full token is written (#2922 review round 12, Codex and Copilot)', () => {
+  // write(2) -- and thus writeSync -- may legitimately return fewer bytes
+  // than requested without throwing. Before this fix, a single
+  // writeSync(fd, token) call trusted it wrote the whole token; a
+  // truncated body would then never match the in-memory token again, so
+  // release's own comparison would treat the guard as "not mine" and
+  // leave it behind forever even though the write and critical() both
+  // otherwise succeeded. Simulates exactly that short return value and
+  // confirms the retry loop still lands the full token, so release still
+  // matches and cleans the guard up normally.
+  const fixture = setupLinkedWorktree();
+  const fs = require('node:fs');
+  const originalWriteSync = fs.writeSync;
+  let shortWriteInjected = false;
+  try {
+    const claimId = 'claim-short-write-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+
+    fs.writeSync = (...args: Parameters<typeof originalWriteSync>) => {
+      const [fd, data, offset, length] = args as unknown as [
+        number,
+        Buffer,
+        number,
+        number,
+      ];
+      if (!shortWriteInjected && Buffer.isBuffer(data) && length > 1) {
+        shortWriteInjected = true;
+        // Simulate write(2) legitimately writing only the first byte of
+        // this call's request.
+        return originalWriteSync(fd, data, offset, 1);
+      }
+      return originalWriteSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+
+    assert.doesNotThrow(() => {
+      recordGeneratedClaimTokens(fixture.worktree, {
+        agentId: 'agent-a',
+        claimId,
+        nonce: 'n1',
+      });
+    });
+
+    assert.equal(
+      shortWriteInjected,
+      true,
+      'expected the short-write interception to fire',
+    );
+    const read = readGeneratedClaimTokens(fixture.worktree, claimId);
+    assert.equal(read.status, 'present');
+    // The guard must be fully released, not left orphaned by a
+    // truncated token that no longer matches on release.
+    assert.equal(existsSync(guardPath), false);
+  } finally {
+    fs.writeSync = originalWriteSync;
+    require('node:module').syncBuiltinESMExports();
+    teardown(fixture);
+  }
+});
+
 test('backfill-tokens: reports record-blocked instead of deleting a directory at the generated-tokens path (PR #2917 review, Codex P2 then Copilot)', () => {
   const fixture = setupLinkedWorktree();
   try {
