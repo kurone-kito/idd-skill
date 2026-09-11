@@ -7,11 +7,17 @@ import { test } from 'node:test';
 import {
   ADVISORY_CONVERGENCE_WORKFLOW_PATH,
   collectFromGitHub,
+  computeAdvisoryConvergenceVerdict,
   parseArgs,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  SELF_REFERENTIAL_WAIVER_JOB_ID,
+  SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
 } from '../src/scripts/advisory-convergence.mts';
 import { DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES } from '../src/scripts/advisory-wait-policy.mts';
-import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
+import {
+  digestExternalCheckWaiverMarkerBody,
+  renderExternalCheckWaiverComment,
+} from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 
 // ---------------------------------------------------------------------------
@@ -250,11 +256,32 @@ function autoWaiverComment() {
     id: 1,
     body: renderExternalCheckWaiverComment({
       agentId: 'github-actions-bot',
-      claimId: 'claim-abc',
+      // kurone-kito/idd-skill#2912 (round 2): 'none', not an arbitrary
+      // claim id -- the end-to-end tests below compute a verdict with
+      // `claimEvents: []` (no active claim resolves), and the sentinel is
+      // the only claimId that satisfies claim-binding when
+      // `activeClaimId` is empty (protocol-helpers.mts's
+      // `claimBindingSatisfied`). A non-'none' claimId there would make
+      // every marker fail claim-binding before the artifact-binding
+      // check under test is ever reached.
+      claimId: 'none',
       headSha: HEAD_SHA,
       checkSelector: 'idd-advisory-convergence',
       reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
-      expiresAt: '2099-01-01T00:00:00Z',
+      // kurone-kito/idd-skill#2912 (round 2): within the default
+      // `ciGate.externalCheckWaivers.maxValidity` window (`PT24H`) of
+      // `createdAt` below -- `summarizeExternalCheckWaivers` re-checks
+      // `expiresAt - createdAt` against that window at consume time
+      // regardless of how far `expiresAt` sits from the CURRENT wall
+      // clock, so a far-future `expiresAt` (e.g. year 2099) with a fixed
+      // 2026 `createdAt` classifies as `expired` there, never reaching
+      // `.valid` at all -- silently short-circuiting every end-to-end
+      // verdict test in this file to `autoWaiverValid: false` for the
+      // WRONG reason regardless of the artifact-binding mechanism under
+      // test. The end-to-end tests below pin `options.now` near
+      // `createdAt` (not real wall-clock time) so this stays valid
+      // there too.
+      expiresAt: '2026-07-31T20:00:00Z',
       actor: 'github-actions[bot]',
       runId: RUN_ID,
     }),
@@ -700,5 +727,457 @@ test('collectFromGitHub rejects a run-id token that is not a canonical positive 
     );
 
     assert.deepEqual(inputs.autoWaiverRunLookups, {});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// run-jobs provenance lookup and duplicate-run-id candidate counting
+// (kurone-kito/idd-skill#2912): closes the residual bearer-evidence gap
+// #2657 round 16 tracked but did not close -- a marker citing a real,
+// legitimate run's id must also be proven to have been POSTED by that
+// run's own idd-advisory-convergence-self-waiver job, not merely to cite
+// a run of the right shape.
+// ---------------------------------------------------------------------------
+
+function acceptedRunJobsFixture() {
+  return {
+    jobs: [
+      {
+        name: SELF_REFERENTIAL_WAIVER_JOB_ID,
+        conclusion: 'success',
+        steps: [
+          {
+            name: SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
+            conclusion: 'success',
+            started_at: '2026-07-31T08:59:30Z',
+            completed_at: '2026-07-31T09:00:30Z',
+          },
+        ],
+      },
+    ],
+  };
+}
+
+test("collectFromGitHub fetches getWorkflowRunJobs and threads the cited run's self-waiver post-step evidence into inputs.autoWaiverRunJobLookups", () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment()] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunJobLookups?.[RUN_ID], {
+      conclusion: 'success',
+      startedAt: '2026-07-31T08:59:30Z',
+      completedAt: '2026-07-31T09:00:30Z',
+    });
+  });
+});
+
+test('collectFromGitHub resolves a candidate run-jobs lookup failure to an {error} entry instead of crashing the whole collection', () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment()] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      // No `workflowRunJobs` fixture entry -- the fake adapter throws on
+      // lookup, matching the real adapter's own no-catch, throw-on-failure
+      // contract for an unresolvable run.
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    const lookup = inputs.autoWaiverRunJobLookups?.[RUN_ID];
+    assert.ok(lookup && 'error' in lookup && lookup.error.length > 0);
+  });
+});
+
+test('collectFromGitHub never fetches getWorkflowRunJobs when no candidate auto-waiver marker is present (no wasted API call)', () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [] },
+      // No `workflowRunJobs` fixture at all -- any lookup attempt would
+      // throw, so a non-empty result below would prove one was attempted.
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunJobLookups, {});
+  });
+});
+
+function forgedSiblingComment() {
+  return {
+    id: 2,
+    body: renderExternalCheckWaiverComment({
+      agentId: 'github-actions-bot',
+      // Same 'none' rationale as autoWaiverComment() above.
+      claimId: 'none',
+      headSha: HEAD_SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      // Same maxValidity rationale as autoWaiverComment() above.
+      expiresAt: '2026-07-31T20:00:05Z',
+      actor: 'github-actions[bot]',
+      runId: RUN_ID,
+    }),
+    createdAt: '2026-07-31T09:00:05Z',
+    updatedAt: '2026-07-31T09:00:05Z',
+    authorLogin: 'github-actions[bot]',
+  };
+}
+
+test("end-to-end: a genuine marker whose comment id matches the cited run's own trusted artifact validates the auto-waiver (positive control, kurone-kito/idd-skill#2912, round 2)", () => {
+  // Proves the artifact-binding mechanism actually ACCEPTS a genuine
+  // marker end to end (collectFromGitHub -> computeAdvisoryConvergenceVerdict),
+  // not merely that it rejects forgeries -- a `false` assertion alone
+  // cannot distinguish "the mechanism correctly rejected this" from "the
+  // mechanism (or the test's own fixture) is broken and rejects
+  // everything".
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment()] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
+      workflowRunArtifacts: {
+        [`o/r/${RUN_ID}`]: {
+          artifacts: [
+            {
+              name: `idd-self-waiver-marker-1-${digestExternalCheckWaiverMarkerBody(autoWaiverComment().body)}`,
+            },
+          ],
+        },
+      },
+      changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
+    });
+
+    const { inputs, options } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    const verdict = computeAdvisoryConvergenceVerdict(
+      { ...inputs, claimEvents: [] },
+      {
+        ...options,
+        // kurone-kito/idd-skill#2912 (round 2): pinned near the fixture
+        // markers' own createdAt/expiresAt (2026-07-31), not real
+        // wall-clock time -- see autoWaiverComment()'s own doc comment
+        // for why an unpinned `now` (whatever `collectFromGitHub`
+        // resolved it to, i.e. actual test-run time) would classify
+        // these markers `expired` regardless of the mechanism under
+        // test.
+        now: '2026-07-31T09:05:00Z',
+        waiverMode: 'maintainer-authorized',
+        waivableSelectors: [
+          { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+        ],
+      },
+    );
+    assert.equal(verdict.waiver.autoWaiverValid, true);
+  });
+});
+
+test('collectFromGitHub records two distinct comments citing the same run id as two candidates, each carrying its own comment id and body digest (autoWaiverRunIdCandidates); the genuine one still validates despite a forged sibling being present (kurone-kito/idd-skill#2912, round 2, extended round 3)', () => {
+  withHermeticCwd(() => {
+    const forgedSibling = forgedSiblingComment();
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment(), forgedSibling] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
+      // The trusted artifact names ONLY the genuine comment's (id, body
+      // digest) pair -- this run's own trusted job posted exactly one
+      // comment.
+      workflowRunArtifacts: {
+        [`o/r/${RUN_ID}`]: {
+          artifacts: [
+            {
+              name: `idd-self-waiver-marker-1-${digestExternalCheckWaiverMarkerBody(autoWaiverComment().body)}`,
+            },
+          ],
+        },
+      },
+      changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
+    });
+
+    const { inputs, options } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunIdCandidates?.[RUN_ID], [
+      {
+        id: '1',
+        createdAt: autoWaiverComment().createdAt,
+        bodyDigest: digestExternalCheckWaiverMarkerBody(
+          autoWaiverComment().body,
+        ),
+      },
+      {
+        id: '2',
+        createdAt: forgedSibling.createdAt,
+        bodyDigest: digestExternalCheckWaiverMarkerBody(forgedSibling.body),
+      },
+    ]);
+    assert.deepEqual(inputs.autoWaiverRunArtifactBindings?.[RUN_ID], [
+      {
+        id: '1',
+        bodyDigest: digestExternalCheckWaiverMarkerBody(
+          autoWaiverComment().body,
+        ),
+      },
+    ]);
+
+    // End-to-end: unlike this file's ROUND-1 mechanism (a bare "no
+    // duplicate visible" scan, which fail-closed BOTH markers the moment
+    // any second candidate for the same run id existed), round 2's
+    // artifact-binding check evaluates each candidate against the
+    // trusted set independently -- the genuine marker (id 1, named by
+    // the artifact) still validates on its own merits even though a
+    // forged sibling (id 2, never named by any artifact) also cites the
+    // same run id. This is a deliberate precision improvement: a forged
+    // sibling can no longer collaterally deny a genuine marker its
+    // auto-waiver, it just never validates itself (see the P1-regression
+    // test below for the case that actually matters -- the genuine one
+    // deleted, only the forged one surviving).
+    const verdict = computeAdvisoryConvergenceVerdict(
+      { ...inputs, claimEvents: [] },
+      {
+        ...options,
+        // kurone-kito/idd-skill#2912 (round 2): pinned near the fixture
+        // markers' own createdAt/expiresAt (2026-07-31), not real
+        // wall-clock time -- see autoWaiverComment()'s own doc comment
+        // for why an unpinned `now` (whatever `collectFromGitHub`
+        // resolved it to, i.e. actual test-run time) would classify
+        // these markers `expired` regardless of the mechanism under
+        // test.
+        now: '2026-07-31T09:05:00Z',
+        waiverMode: 'maintainer-authorized',
+        waivableSelectors: [
+          { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+        ],
+      },
+    );
+    assert.equal(verdict.waiver.autoWaiverValid, true);
+  });
+});
+
+test('end-to-end: a genuine marker deleted after posting leaves a same-run-id forged sibling rejected, never validating the auto-waiver (kurone-kito/idd-skill#2912, round 2 P1: Codex + Copilot review, PR #2914)', () => {
+  withHermeticCwd(() => {
+    const forgedSibling = forgedSiblingComment();
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      // The genuine comment (id 1, `autoWaiverComment()`) has been
+      // deleted -- `issues: write` permits deleting ANY issue comment on
+      // the repository, not only ones the deleting token authored. Only
+      // the forged sibling (id 2) is still live.
+      comments: { [PR_NUMBER]: [forgedSibling] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
+      // The trusted artifact -- uploaded by the run's own trusted job
+      // execution, unaffected by the comment's later deletion -- still
+      // names the GENUINE (now-deleted) comment's (id, original body
+      // digest) pair.
+      workflowRunArtifacts: {
+        [`o/r/${RUN_ID}`]: {
+          artifacts: [
+            {
+              name: `idd-self-waiver-marker-1-${digestExternalCheckWaiverMarkerBody(autoWaiverComment().body)}`,
+            },
+          ],
+        },
+      },
+      changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
+    });
+
+    const { inputs, options } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunIdCandidates?.[RUN_ID], [
+      {
+        id: '2',
+        createdAt: forgedSibling.createdAt,
+        bodyDigest: digestExternalCheckWaiverMarkerBody(forgedSibling.body),
+      },
+    ]);
+    assert.deepEqual(inputs.autoWaiverRunArtifactBindings?.[RUN_ID], [
+      {
+        id: '1',
+        bodyDigest: digestExternalCheckWaiverMarkerBody(
+          autoWaiverComment().body,
+        ),
+      },
+    ]);
+
+    const verdict = computeAdvisoryConvergenceVerdict(
+      { ...inputs, claimEvents: [] },
+      {
+        ...options,
+        // kurone-kito/idd-skill#2912 (round 2): pinned near the fixture
+        // markers' own createdAt/expiresAt (2026-07-31), not real
+        // wall-clock time -- see autoWaiverComment()'s own doc comment
+        // for why an unpinned `now` (whatever `collectFromGitHub`
+        // resolved it to, i.e. actual test-run time) would classify
+        // these markers `expired` regardless of the mechanism under
+        // test.
+        now: '2026-07-31T09:05:00Z',
+        waiverMode: 'maintainer-authorized',
+        waivableSelectors: [
+          { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+        ],
+      },
+    );
+    assert.equal(verdict.waiver.autoWaiverValid, false);
+  });
+});
+
+// kurone-kito/idd-skill#2912 (round 3, Copilot review, PR #2914 round 2):
+// SAME id/createdAt as `autoWaiverComment()`, but rendered with a
+// different `agentId` -- the one field on an external-check-waiver marker
+// no classification/trust condition anywhere in this file's own trust
+// chain consumes (see `parsed.agentId`'s absence from every grep hit in
+// advisory-convergence.mts/protocol-helpers.mts), so this changes the
+// posted body's exact text/digest without ALSO tripping an earlier,
+// unrelated rejection (wrong claim/HEAD/reason/run-id) that would mask
+// which check actually caused `autoWaiverValid: false` below. Models an
+// attacker who edited the genuine, already-artifact-trusted comment in
+// place (`issues: write` permits this) rather than deleting it.
+function editedGenuineComment() {
+  return {
+    id: 1,
+    body: renderExternalCheckWaiverComment({
+      agentId: 'a-different-agent-id',
+      claimId: 'none',
+      headSha: HEAD_SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: '2026-07-31T20:00:00Z',
+      actor: 'github-actions[bot]',
+      runId: RUN_ID,
+    }),
+    createdAt: '2026-07-31T09:00:00Z',
+    updatedAt: '2026-07-31T09:10:00Z',
+    authorLogin: 'github-actions[bot]',
+  };
+}
+
+test('end-to-end: a genuine comment EDITED in place after posting is rejected even though its id and createdAt are unchanged (kurone-kito/idd-skill#2912, round 3 P1: Copilot review, PR #2914 round 2)', () => {
+  withHermeticCwd(() => {
+    const edited = editedGenuineComment();
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      // The SAME comment id (1) as the genuine marker's own -- only the
+      // body has been rewritten in place; the id and createdAt this run's
+      // trusted job originally posted with are unchanged.
+      comments: { [PR_NUMBER]: [edited] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
+      // The trusted artifact still names the digest of the ORIGINAL,
+      // genuine body -- uploaded once, immediately after posting, and
+      // immutable thereafter; it cannot follow a LATER edit to the live
+      // comment.
+      workflowRunArtifacts: {
+        [`o/r/${RUN_ID}`]: {
+          artifacts: [
+            {
+              name: `idd-self-waiver-marker-1-${digestExternalCheckWaiverMarkerBody(autoWaiverComment().body)}`,
+            },
+          ],
+        },
+      },
+      changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
+    });
+
+    const { inputs, options } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    // The live candidate's own digest reflects the EDITED body -- never
+    // equal to the trusted artifact's ORIGINAL digest, since the two
+    // bodies now differ.
+    assert.deepEqual(inputs.autoWaiverRunIdCandidates?.[RUN_ID], [
+      {
+        id: '1',
+        createdAt: edited.createdAt,
+        bodyDigest: digestExternalCheckWaiverMarkerBody(edited.body),
+      },
+    ]);
+    assert.notEqual(
+      inputs.autoWaiverRunIdCandidates?.[RUN_ID]?.[0]?.bodyDigest,
+      inputs.autoWaiverRunArtifactBindings?.[RUN_ID]?.[0]?.bodyDigest,
+    );
+
+    const verdict = computeAdvisoryConvergenceVerdict(
+      { ...inputs, claimEvents: [] },
+      {
+        ...options,
+        now: '2026-07-31T09:05:00Z',
+        waiverMode: 'maintainer-authorized',
+        waivableSelectors: [
+          { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+        ],
+      },
+    );
+    assert.equal(verdict.waiver.autoWaiverValid, false);
   });
 });

@@ -5,6 +5,11 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import {
+  ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+  resolveSelfReferentialTriggerFiles,
+  verifySelfReferentialBootstrapWaiverRun,
+} from './advisory-convergence.mjs';
+import {
   advisoryWaitSectionIsValid,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   resolveAdvisoryConvergenceDeadlineMinutes,
@@ -15,9 +20,10 @@ import {
   resolveAdvisoryWaitPolicy,
   resolveEffectiveAdvisoryTerminalWindowMinutes,
   resolveProviderOutageTerminalWindowMinutes,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
 import { buildCopilotRecoverySummary } from './advisory-wait-state.mjs';
-import { parseCliArgs } from './cli-args.mjs';
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import {
   normalizeAuthorityEvidence,
@@ -38,6 +44,7 @@ import {
   deriveIddAgentLogins,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  parseExternalCheckWaiverComment,
   resolveAdvisoryBotLogins,
   resolveCodeownersForFiles,
   resolvePrFirstCommitAt,
@@ -575,6 +582,212 @@ export function collectPreMergeReadiness(
       waivableCheckSelectors,
       now,
     });
+  // kurone-kito/idd-skill#2911: independent evidence for
+  // `buildPreMergeReadinessSummary`'s `staleSelfWaiver` blocker
+  // (protocol-helpers.mts) -- see that computation's own doc comment for
+  // the full rationale. Performed here (the I/O collector), not inside
+  // that pure function, mirroring this file's own established precedent
+  // for `copilotUnavailable` above ("precompute here rather than inside
+  // `buildPreMergeReadinessSummary`, which cannot import X without an
+  // import cycle" -- `advisory-convergence.mts` already imports FROM
+  // `protocol-helpers.mts`, so the reverse would cycle).
+  //
+  // A local, independently-valued bound rather than importing
+  // `advisory-convergence.mts`'s own `MAX_AUTO_WAIVER_RUN_LOOKUPS`: that
+  // constant is declared inside `collectFromGitHub`'s own function body --
+  // exactly the area kurone-kito/idd-skill#2912 (open now, claimed by a
+  // different session) is expected to rewrite for the same-repository
+  // bearer-evidence provenance gap. Keeping this bound independent avoids
+  // a rebase collision there; the two files must already agree on the
+  // same value by convention, not by import.
+  const MAX_PRE_MERGE_AUTO_WAIVER_RUN_LOOKUPS = 20;
+  // #2657/#2911: the same raw `helperRuntime.profile` config field
+  // `advisory-convergence.mts`'s own `collectFromGitHub` reads directly --
+  // `normalizePolicyConfig` does not carry `helperRuntime` through its
+  // normalized shape (that section is validated, not defaulted,
+  // elsewhere), and `IddConfig`'s index signature already types this
+  // access as `unknown` with no cast needed.
+  const rawHelperRuntime = iddConfig?.helperRuntime;
+  const helperRuntimeProfile =
+    rawHelperRuntime &&
+    typeof rawHelperRuntime === 'object' &&
+    typeof rawHelperRuntime.profile === 'string'
+      ? rawHelperRuntime.profile
+      : undefined;
+  const repositoryFullName = owner && repo ? `${owner}/${repo}` : '';
+  // The load-bearing security boundary (kurone-kito/idd-skill#2911's
+  // decisive finding): fetched independently from THIS PR's own live
+  // diff, never from any comment body, so a forged marker can only ever
+  // affect a PR that already, genuinely touches the checker allowlist --
+  // same mitigation `autoWaiverValid` (advisory-convergence.mts) already
+  // relies on for the identical bearer-evidence gap. Reuses the
+  // ALREADY-FETCHED `changedFiles` above (no extra round-trip) plus a
+  // renamed-from-paths fetch, mirroring `collectFromGitHub`'s own merge
+  // of both sources exactly (a rename-shaped checker repair away from an
+  // allowlisted path must still be recognized).
+  const selfReferentialTriggerFiles = resolveSelfReferentialTriggerFiles(
+    helperRuntimeProfile,
+    repositoryFullName,
+  );
+  const changedFilesTouchSelfReferentialAllowlist = changedFiles.some((path) =>
+    selfReferentialTriggerFiles.includes(String(path)),
+  );
+  // kurone-kito/idd-skill#2911 (Codex + CodeRabbit review, PR #2915): the
+  // renamed-from-paths lookup is a separate paginated `pulls/.../files`
+  // request that duplicates the `changedFiles` fetch above, and its
+  // result can only ever matter for a PR that (a) doesn't already prove
+  // the allowlist touch via `changedFiles` alone AND (b) carries at
+  // least one self-referential-bootstrap-auto marker candidate -- if
+  // neither the ordinary case (no marker at all) nor this case applies,
+  // `touchesSelfReferentialAllowlist`'s value can never affect the
+  // report either way, so skip the extra round-trip entirely. Cheap: the
+  // candidate scan below only re-uses `normalizedComments`, already
+  // fetched, no extra call. Wrapped in try/catch -- unlike every OTHER
+  // unguarded port call earlier in this collector, this one specifically
+  // sits behind an opt-in security gate that most PRs never need at all,
+  // so a transient failure here must not abort report generation for
+  // PRs the gate was never going to affect; fails to `[]` (never widens
+  // trust, matches `getWorkflowRun`'s own fail-closed-to-untrusted
+  // direction below).
+  const hasAnySelfReferentialMarkerCandidate = normalizedComments.some(
+    (comment) =>
+      /^<!--\s*idd-external-check-waiver:/i.test(comment.body) &&
+      comment.author.login.trim().toLowerCase() === 'github-actions[bot]',
+  );
+  let selfReferentialRenamedFromPaths = [];
+  if (
+    !changedFilesTouchSelfReferentialAllowlist &&
+    hasAnySelfReferentialMarkerCandidate
+  ) {
+    try {
+      selfReferentialRenamedFromPaths = port
+        .listChangeRequestRenamedFromPaths(args.prNumber)
+        .filter(Boolean);
+    } catch {
+      selfReferentialRenamedFromPaths = [];
+    }
+  }
+  const touchesSelfReferentialAllowlist =
+    changedFilesTouchSelfReferentialAllowlist ||
+    selfReferentialRenamedFromPaths.some((path) =>
+      selfReferentialTriggerFiles.includes(String(path)),
+    );
+  // Bounded scan for self-referential-bootstrap-auto candidate markers
+  // bound to this PR's own HEAD, mirroring `collectFromGitHub`'s own
+  // anti-flood budget (20, capped) but NOT its earliest-first tie-break:
+  // no selection order fully closes the flood problem, and
+  // `verifySelfReferentialBootstrapWaiverRun` below still requires
+  // independent Actions-run verification regardless of what this
+  // prefilter selects, but the two call sites correlate against
+  // different moments in time, so the same tie-break direction is wrong
+  // for this one. `collectFromGitHub` evaluates the marker for the
+  // checker's OWN in-flight run (implicitly "now"); this call site
+  // instead correlates against `passingCompletedAtMs` -- the ALREADY-
+  // SELECTED newest required-check instance's own `completedAt`, itself
+  // already the most recent of however many reruns exist for this HEAD
+  // (kurone-kito/idd-skill#2911, Codex review on PR #2915, P1): on a
+  // checker-touching PR that sits on one HEAD long enough to accumulate
+  // more than this 20-candidate budget's worth of bootstrap-auto
+  // markers, an earliest-first cap would keep only the OLDEST
+  // candidates -- exactly the ones LEAST likely to correlate with the
+  // most-recent-required-check-instance's `completedAt` -- starving
+  // `autoWaiverRunVerified` of the one marker that actually needs
+  // checking and letting the report incorrectly stay `ready`. Newest-
+  // first keeps the candidates most likely to cover that recent
+  // instance instead.
+  const autoWaiverRunVerified = {};
+  // kurone-kito/idd-skill#2911 (Copilot review, PR #2915): the scan below
+  // and its up-to-20 `getWorkflowRun` lookups are pure overhead whenever
+  // `touchesSelfReferentialAllowlist` is false -- `buildPreMergeReadinessSummary`
+  // never even reaches this evidence in that case (its own `staleSelfWaiver`
+  // computation is unconditionally gated on the identical flag). Skipping
+  // the whole block here means an ordinary PR (the overwhelming majority,
+  // which never touches the checker allowlist at all) can never have a
+  // flood of bot-authored comments force wasted provider round-trips no
+  // matter how many it posts. This does not also gate on the mode-open/
+  // selector-waivable preconditions `buildPreMergeReadinessSummary` checks
+  // (those live behind private matching helpers in `protocol-helpers.mts`
+  // this file deliberately avoids importing, to keep this file's footprint
+  // minimal where kurone-kito/idd-skill#2912 is concurrently working) --
+  // the residual is bounded and harmless: at most 20 avoidable
+  // `getWorkflowRun` calls, only on the narrower set of PRs that already,
+  // genuinely touch the allowlist.
+  if (touchesSelfReferentialAllowlist) {
+    // kurone-kito/idd-skill#2911 (Copilot review, PR #2915): keyed by
+    // `runId` (a Map, not an array + Set) so a SECOND comment citing an
+    // already-seen run id UPDATES that candidate's `createdAt` to the
+    // newer value instead of being silently dropped -- the same run can
+    // legitimately post more than one marker comment over its own
+    // lifetime (e.g. a retry within the run), and comments are typically
+    // returned oldest-first, so keeping only the first occurrence would
+    // anchor that candidate to a stale timestamp and could wrongly push
+    // it out of the newest-first bounded window under a flood.
+    const autoWaiverRunIdCandidates = new Map();
+    const prHeadShaLower = prHeadSha.toLowerCase();
+    for (const comment of normalizedComments) {
+      const body = comment.body;
+      if (!/^<!--\s*idd-external-check-waiver:/i.test(body)) continue;
+      const authorLogin = comment.author.login.trim().toLowerCase();
+      if (authorLogin !== 'github-actions[bot]') continue;
+      const parsed = parseExternalCheckWaiverComment(body, comment.createdAt);
+      // kurone-kito/idd-skill#2911: mirrors `collectFromGitHub`'s own
+      // prefilter conditions verbatim -- a canonical positive-integer
+      // run-id (never percent-decoded/sanitized attacker text reaching
+      // `getWorkflowRun`'s REST path unvalidated), an EXACT (never glob)
+      // checkSelector match, and this PR's own current HEAD -- before a
+      // candidate is ever eligible to spend part of the bounded lookup
+      // budget.
+      if (
+        parsed &&
+        parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
+        parsed.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+        parsed.runId &&
+        parseCanonicalIntegerOrNull(parsed.runId) !== null &&
+        String(parsed.headSha ?? '')
+          .trim()
+          .toLowerCase() === prHeadShaLower
+      ) {
+        const existingCreatedAt = autoWaiverRunIdCandidates.get(parsed.runId);
+        if (
+          existingCreatedAt === undefined ||
+          comment.createdAt.localeCompare(existingCreatedAt) > 0
+        ) {
+          autoWaiverRunIdCandidates.set(parsed.runId, comment.createdAt);
+        }
+      }
+    }
+    const boundedAutoWaiverRunIds = [...autoWaiverRunIdCandidates]
+      .map(([runId, createdAt]) => ({ runId, createdAt }))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, MAX_PRE_MERGE_AUTO_WAIVER_RUN_LOOKUPS)
+      .map((candidate) => candidate.runId);
+    for (const runId of boundedAutoWaiverRunIds) {
+      try {
+        const raw = port.getWorkflowRun(owner, repo, runId);
+        autoWaiverRunVerified[runId] = verifySelfReferentialBootstrapWaiverRun(
+          {
+            path: raw?.path ?? null,
+            headSha: raw?.head_sha ?? null,
+            repositoryFullName: raw?.head_repository?.full_name ?? null,
+            event: raw?.event ?? null,
+          },
+          {
+            path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+            headSha: prHeadSha,
+            repositoryFullName,
+          },
+        );
+      } catch {
+        // Fail closed per run id -- untrusted: a lookup failure (unknown
+        // run, transient API error) must never widen trust, and must
+        // never crash this whole evidence collector either. This is the
+        // deliberate fail-open-for-staleness direction documented on
+        // `buildPreMergeReadinessSummary`'s `staleSelfWaiver` computation:
+        // an unverified run suppresses the blocker rather than firing it.
+        autoWaiverRunVerified[runId] = false;
+      }
+    }
+  }
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
@@ -656,6 +869,8 @@ export function collectPreMergeReadiness(
       viewerAppSlug,
       configuredTrustedActors,
       collaboratorTrustEnabled,
+      touchesSelfReferentialAllowlist,
+      autoWaiverRunVerified,
     },
   );
   return {

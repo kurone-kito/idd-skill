@@ -208,6 +208,14 @@ export interface FakeProviderFixture {
    * `${owner}/${repo}/${runId}`; an absent key throws (matches the
    * adapter's own no-catch, throw-on-failure contract). */
   workflowRuns?: Record<string, unknown>;
+  /** Backs {@link ProviderPort.getWorkflowRunJobs}, keyed by
+   * `${owner}/${repo}/${runId}`; an absent key throws (matches the
+   * adapter's own no-catch, throw-on-failure contract). */
+  workflowRunJobs?: Record<string, unknown>;
+  /** Backs {@link ProviderPort.listWorkflowRunArtifacts}, keyed by
+   * `${owner}/${repo}/${runId}`; an absent key throws (matches the
+   * adapter's own no-catch, throw-on-failure contract). */
+  workflowRunArtifacts?: Record<string, unknown>;
   /** Backs {@link ProviderPort.listWorkflowRuns}, keyed by `${owner}/${repo}/${workflowName}`. */
   workflowRunLists?: Record<
     string,
@@ -763,6 +771,38 @@ export function createFakeProviderAdapter(
       const value = fixture.workflowRuns?.[key];
       if (value === undefined) {
         throw new Error(`fake provider: no workflow-run fixture for ${key}`);
+      }
+      return value;
+    },
+
+    getWorkflowRunJobs(
+      jobsOwner: string,
+      jobsRepo: string,
+      runId: string | number,
+    ): unknown {
+      // Same throw-on-missing contract as getWorkflowRun above.
+      const key = `${jobsOwner}/${jobsRepo}/${runId}`;
+      const value = fixture.workflowRunJobs?.[key];
+      if (value === undefined) {
+        throw new Error(
+          `fake provider: no workflow-run-jobs fixture for ${key}`,
+        );
+      }
+      return value;
+    },
+
+    listWorkflowRunArtifacts(
+      artifactsOwner: string,
+      artifactsRepo: string,
+      runId: string | number,
+    ): unknown {
+      // Same throw-on-missing contract as getWorkflowRunJobs above.
+      const key = `${artifactsOwner}/${artifactsRepo}/${runId}`;
+      const value = fixture.workflowRunArtifacts?.[key];
+      if (value === undefined) {
+        throw new Error(
+          `fake provider: no workflow-run-artifacts fixture for ${key}`,
+        );
       }
       return value;
     },
