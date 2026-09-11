@@ -1857,6 +1857,181 @@ test('getWorkflowRunJobs calls the jobs sub-path and preserves a string runId ab
   assert.deepEqual(result, {});
 });
 
+// kurone-kito/idd-skill#2926
+test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variables and flattens checkSuites.nodes[].checkRuns.nodes[] into {detailsUrl, workflowPath}, resolving workflowPath from checkSuite.workflowRun.file.path (never detailsUrl)', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return JSON.stringify({
+          data: {
+            repository: {
+              object: {
+                checkSuites: {
+                  nodes: [
+                    {
+                      // A suite whose workflow run resolves cleanly.
+                      workflowRun: {
+                        file: { path: '.github/workflows/real.yml' },
+                      },
+                      checkRuns: {
+                        nodes: [
+                          {
+                            detailsUrl:
+                              'https://github.com/o/r/actions/runs/1/job/1',
+                          },
+                        ],
+                      },
+                    },
+                    {
+                      // A suite with no workflowRun association at all
+                      // (e.g. a manually-created check-run with no
+                      // Actions-run provenance) -- must resolve to `null`,
+                      // never an empty-string/absent-permissive value.
+                      workflowRun: null,
+                      checkRuns: {
+                        nodes: [
+                          {
+                            detailsUrl:
+                              'https://github.com/o/r/actions/runs/2/job/1',
+                          },
+                        ],
+                      },
+                    },
+                    {
+                      // A suite matching no check-run by name -- never
+                      // contributes an entry.
+                      workflowRun: {
+                        file: { path: '.github/workflows/unrelated.yml' },
+                      },
+                      checkRuns: { nodes: [] },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  const result = port.listCheckRunWorkflowPaths(
+    'o',
+    'r',
+    'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    'idd-advisory-convergence',
+  );
+  assert.deepEqual(result, [
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+      workflowPath: '.github/workflows/real.yml',
+    },
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
+      workflowPath: null,
+    },
+  ]);
+  assert.ok(
+    capturedArgs?.some(
+      (arg) => arg === 'sha=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    ),
+    `expected the commit oid as a GraphQL variable, got: ${capturedArgs?.join(' ')}`,
+  );
+  assert.ok(
+    capturedArgs?.some((arg) => arg === 'name=idd-advisory-convergence'),
+    `expected the check name as a GraphQL variable, got: ${capturedArgs?.join(' ')}`,
+  );
+  assert.ok(
+    !capturedArgs?.some((arg) => arg.includes('detailsUrl:')),
+    'workflowPath resolution must never reference detailsUrl in the query itself',
+  );
+});
+
+// kurone-kito/idd-skill#2926
+test('listCheckRunWorkflowPaths returns [] when the commit object is absent (e.g. a bad oid), and throws on a GraphQL-level error', () => {
+  const emptyPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => JSON.stringify({ data: { repository: { object: null } } }),
+    }),
+  );
+  assert.deepEqual(
+    emptyPort.listCheckRunWorkflowPaths('o', 'r', 'x'.repeat(40), 'check'),
+    [],
+  );
+
+  const erroringPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({ errors: [{ message: 'something went wrong' }] }),
+    }),
+  );
+  assert.throws(
+    () =>
+      erroringPort.listCheckRunWorkflowPaths('o', 'r', 'x'.repeat(40), 'check'),
+    /listCheckRunWorkflowPaths failed/,
+  );
+});
+
+// kurone-kito/idd-skill#2926 (C1 critique finding): GraphQL can return a
+// `null` list item for a nullable type under a partial-error response --
+// both a `null` checkSuite node and a `null` checkRun node must be skipped
+// cleanly, not thrown as a generic TypeError.
+test('listCheckRunWorkflowPaths skips null checkSuite/checkRun list items instead of throwing', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              object: {
+                checkSuites: {
+                  nodes: [
+                    null,
+                    {
+                      workflowRun: {
+                        file: { path: '.github/workflows/real.yml' },
+                      },
+                      checkRuns: {
+                        nodes: [
+                          null,
+                          {
+                            detailsUrl:
+                              'https://github.com/o/r/actions/runs/1/job/1',
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const result = port.listCheckRunWorkflowPaths(
+    'o',
+    'r',
+    'x'.repeat(40),
+    'idd-advisory-convergence',
+  );
+  assert.deepEqual(result, [
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+      workflowPath: '.github/workflows/real.yml',
+    },
+  ]);
+});
+
 test('listWorkflowRunArtifacts calls the artifacts sub-path and preserves a string runId above Number.MAX_SAFE_INTEGER exactly (kurone-kito/idd-skill#2912, round 2)', () => {
   let capturedArgs: string[] | undefined;
   const port = createGithubProviderAdapter(

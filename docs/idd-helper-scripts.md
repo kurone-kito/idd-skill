@@ -2893,9 +2893,13 @@ reflexively as any other CLI option.
   state was downgraded to `ci.status: "unknown"` because this collection
   pass could not fully resolve their real workflow-file producer identity
   (`workflowPath`) -- a parse failure on some but not all live instances, a
-  thrown workflow-run lookup, an empty resolved path, or a run-id count
-  exceeding the collector's own lookup ceiling. Today this can only ever
-  name `idd-advisory-convergence`, the one check name `pre-merge-readiness`
+  thrown `listCheckRunWorkflowPaths` call, an empty resolved path, a
+  run-id count exceeding the collector's own lookup ceiling, or (kurone-
+  kito/idd-skill#2926) a `detailsUrl` that repeats -- either among the
+  resolved `checkSuite.workflowRun` associations or among the live
+  rollup's own matching instances -- and so cannot be joined back to a
+  single instance safely. Today this can only ever name
+  `idd-advisory-convergence`, the one check name `pre-merge-readiness`
   attempts `workflowPath` resolution for. Evidence only (empty array, never
   omitted, when no such downgrade occurred) -- `computePreMergeReadinessBlockers`
   uses it (alongside `ci.preDowngradeStatus` below) to name the

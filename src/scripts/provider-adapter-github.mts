@@ -38,6 +38,7 @@ import type {
   ProviderChangeRequestReadinessSnapshot,
   ProviderChangeRequestState,
   ProviderChangeRequestSummary,
+  ProviderCheckRunWorkflowPath,
   ProviderClosingPullRequestsPage,
   ProviderCollaboratorPermissionResult,
   ProviderComment,
@@ -2464,6 +2465,106 @@ export function createGithubProviderAdapter(
         GH_TEXT_LOOP_TIMEOUT_OPTIONS,
       );
       return JSON.parse(raw.trim() || '{}');
+    },
+
+    // kurone-kito/idd-skill#2926: a single, bounded (not paginated -- see
+    // the `first:100`/`first:50` rationale below) GraphQL query, matching
+    // this file's other single-shot `gh api graphql` call sites (e.g.
+    // `getMergedChangeRequestMeta` above) rather than the two dedicated
+    // paginated-loop methods further up this file. `checkSuites(first:100)`
+    // is generous against the sole caller's OWN pre-filter
+    // (`pre-merge-readiness.mts`'s `MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS`
+    // caps distinct cited run ids at 50 before this method is ever called,
+    // and each distinct run id lives in its own suite). The per-suite
+    // `checkRuns(first:50, ...)` cap matches that SAME 50 budget instead of
+    // an arbitrary smaller number, so a legitimate burst of same-named
+    // reruns within one suite (this repository's own
+    // `idd-advisory-convergence.yml` "Concurrency-hardening investigation"
+    // comments document up to 5 live runs in quick succession as an
+    // observed incident, #1381) is exactly as unlikely to silently
+    // truncate here as it already is at the caller's own gate. A truncated
+    // result still only ever fails the whole check name CLOSED at the
+    // caller (a missing `detailsUrl` match), never open.
+    listCheckRunWorkflowPaths(
+      pathsOwner: string,
+      pathsRepo: string,
+      headSha: string,
+      checkName: string,
+    ): ProviderCheckRunWorkflowPath[] {
+      const query = `query($owner:String!,$repo:String!,$sha:GitObjectID!,$name:String!){
+  repository(owner:$owner,name:$repo){
+    object(oid:$sha){
+      ... on Commit {
+        checkSuites(first:100){
+          nodes{
+            workflowRun{ file{ path } }
+            checkRuns(first:50, filterBy:{checkName:$name}){
+              nodes{ detailsUrl }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${pathsOwner}`,
+        '-f',
+        `repo=${pathsRepo}`,
+        '-f',
+        `sha=${headSha}`,
+        '-f',
+        `name=${checkName}`,
+      ];
+      const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(raw, 'listCheckRunWorkflowPaths');
+      const parsed = raw as {
+        data?: {
+          repository?: {
+            object?: {
+              checkSuites?: {
+                nodes?: ({
+                  workflowRun?: { file?: { path?: unknown } | null } | null;
+                  checkRuns?: {
+                    nodes?: ({ detailsUrl?: unknown } | null)[];
+                  } | null;
+                } | null)[];
+              } | null;
+            } | null;
+          } | null;
+        };
+      };
+      const suiteNodes = parsed.data?.repository?.object?.checkSuites?.nodes;
+      if (!Array.isArray(suiteNodes)) {
+        return [];
+      }
+      const out: ProviderCheckRunWorkflowPath[] = [];
+      for (const suite of suiteNodes) {
+        // GraphQL can return a `null` list item for a nullable type under a
+        // partial-error response -- guarded explicitly (matching this
+        // file's `Array.isArray` convention above) rather than relying on
+        // the sole caller's try/catch to turn a thrown TypeError into the
+        // same fail-closed outcome a skip already produces here.
+        if (!suite) continue;
+        const path = suite.workflowRun?.file?.path;
+        const workflowPath = path == null ? null : String(path);
+        const checkRunNodes = suite.checkRuns?.nodes;
+        if (!Array.isArray(checkRunNodes)) continue;
+        for (const checkRun of checkRunNodes) {
+          if (!checkRun) continue;
+          out.push({
+            detailsUrl: String(checkRun.detailsUrl ?? ''),
+            workflowPath,
+          });
+        }
+      }
+      return out;
     },
 
     getWorkflowRunJobs(
