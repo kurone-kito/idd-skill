@@ -6198,151 +6198,6 @@ export function computePreMergeReadinessBlockers(report) {
     }
     blockers.push({ gate: 'ci', detail });
   }
-  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12): the
-  // OPPOSITE direction from the block above -- CI currently reports
-  // `idd-advisory-convergence` PASSING, but that pass may rest on a
-  // self-referential-bootstrap-auto marker whose own `expiresAt` has since
-  // elapsed. GitHub does not rerun an already-successful check merely
-  // because its supporting comment expires, so without this, a PR sitting
-  // open past the marker's bounded validity window (with no new triggering
-  // event) could merge on a stale pass with no genuine advisory review
-  // ever having converged. Independent of (and not gated by)
-  // `isPreMergeCiAllPassing` above, since the whole point is to catch a
-  // check that currently LOOKS all-passing.
-  {
-    const advisoryConvergencePreconditionForStaleness = preMergeAsRecord(
-      report.advisoryConvergenceWaiverPrecondition,
-    );
-    const advisoryConvergenceCheckSelectorForStaleness = String(
-      advisoryConvergencePreconditionForStaleness.checkSelector ?? '',
-    );
-    const advisoryConvergencePassingCheckForStaleness =
-      advisoryConvergenceCheckSelectorForStaleness !== '' &&
-      Array.isArray(ci.checks)
-        ? ci.checks.find(
-            (check) =>
-              check?.required === true &&
-              CHECK_PASS_EQUIVALENT_STATES.has(String(check?.state ?? '')) &&
-              matchCheckSelectorLocal(
-                check?.name,
-                advisoryConvergenceCheckSelectorForStaleness,
-              ),
-          )
-        : undefined;
-    if (advisoryConvergencePassingCheckForStaleness) {
-      const autoWaiverEvidenceForStaleness = preMergeAsRecord(
-        report.autoWaiverEvidence,
-      );
-      const autoWaiverExpiredList = Array.isArray(
-        autoWaiverEvidenceForStaleness.expired,
-      )
-        ? autoWaiverEvidenceForStaleness.expired
-        : [];
-      // kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895, round
-      // 13): `expired` accumulates every historical marker ever posted for
-      // this selector, not just the one (if any) that actually covered the
-      // CURRENT pass. Naively matching on author+selector alone means the
-      // blocker never clears once a single marker has ever expired, even
-      // after a genuine fresh rerun (under a newer valid marker, or with no
-      // waiver needed at all) -- so correlate against the passing check's
-      // own `completedAt`: a marker only proves this pass stale when the
-      // check last completed AT OR BEFORE that marker's `expiresAt` (i.e.
-      // the check has not rerun since the marker lapsed). A completedAt
-      // that fails to parse (missing/sentinel) cannot prove the pass is
-      // fresh, so it fails closed and still counts as stale -- a real rerun
-      // clears this cheaply, whereas silently trusting an unparseable
-      // timestamp would not.
-      const passingCheckCompletedAtMs = parseCompletedAt(
-        String(advisoryConvergencePassingCheckForStaleness.completedAt ?? ''),
-      );
-      const staleAutoWaiverEntry = autoWaiverExpiredList.find((entry) => {
-        if (
-          entry?.authorLogin !== 'github-actions[bot]' ||
-          String(entry?.checkSelector ?? '') !==
-            advisoryConvergenceCheckSelectorForStaleness
-        ) {
-          return false;
-        }
-        if (passingCheckCompletedAtMs === null) return true;
-        const entryExpiresAtMs = Date.parse(String(entry?.expiresAt ?? ''));
-        return (
-          Number.isNaN(entryExpiresAtMs) ||
-          entryExpiresAtMs >= passingCheckCompletedAtMs
-        );
-      });
-      // kurone-kito/idd-skill#2657 (Codex P1, PR #2895, round 14): `expired`
-      // is not the only way a self-referential-bootstrap-auto marker stops
-      // covering a check -- `summarizeExternalCheckWaivers` `continue`s a
-      // marker into `wrongClaim` (never even reaching the expiry check)
-      // the moment its bound claim id no longer matches the CURRENT active
-      // claim (or its accepted one-hop predecessor). Two handoffs after the
-      // marker posted can leave it permanently `wrongClaim`, with no expiry
-      // ever recorded -- an expired-only scan can never see this case, so a
-      // passing check whose sole justifying marker is claim-invalid slipped
-      // through unblocked. Correlating this against the check's own
-      // `completedAt` needs a different anchor than expiry uses: a
-      // marker's own `createdAt` is always before any later rerun's
-      // `completedAt`, so comparing against IT would make this permanent
-      // exactly like the expired-only bug round 13 just fixed. The anchor
-      // that actually moves is the CURRENT active claim's own `createdAt`
-      // (when it was installed): a check that last completed AFTER that
-      // moment already ran under the current claim lineage, so its pass
-      // cannot rest on a marker this same gate would now reject as
-      // claim-invalid. Fails closed (blocks) on a missing active claim or
-      // an unparseable claim `createdAt` -- a released claim (or corrupt
-      // evidence) means a fresh rerun would reject the marker too, so
-      // trusting an unprovable "ran under the current claim" would be
-      // unsafe. Deliberately NOT suppressed by a co-existing `valid` marker
-      // for the same selector: this call site's own read-only, ADD-only
-      // contract (see `allowSelfReferentialBootstrapAuto`'s doc comment)
-      // means it must never use `valid` evidence to satisfy a gate, only to
-      // flag one.
-      const autoWaiverWrongClaimList = Array.isArray(
-        autoWaiverEvidenceForStaleness.wrongClaim,
-      )
-        ? autoWaiverEvidenceForStaleness.wrongClaim
-        : [];
-      const claimForStaleness = preMergeAsRecord(report.claim);
-      const activeClaimForStaleness = preMergeAsRecord(
-        claimForStaleness.activeClaim,
-      );
-      const activeClaimCreatedAtMs = parseCompletedAt(
-        String(activeClaimForStaleness.createdAt ?? ''),
-      );
-      const staleWrongClaimEntry = autoWaiverWrongClaimList.find((entry) => {
-        if (
-          entry?.authorLogin !== 'github-actions[bot]' ||
-          String(entry?.checkSelector ?? '') !==
-            advisoryConvergenceCheckSelectorForStaleness
-        ) {
-          return false;
-        }
-        if (passingCheckCompletedAtMs === null) return true;
-        if (activeClaimCreatedAtMs === null) return true;
-        return passingCheckCompletedAtMs < activeClaimCreatedAtMs;
-      });
-      const staleDetail = staleAutoWaiverEntry
-        ? `expired at "${String(staleAutoWaiverEntry.expiresAt ?? 'unknown')}" with no rerun since`
-        : staleWrongClaimEntry
-          ? `was bound to claim "${String(staleWrongClaimEntry.waiverClaimId ?? 'unknown')}", which the current active claim (installed at "${String(activeClaimForStaleness.createdAt ?? '') || 'unknown'}") no longer matches, with no rerun since`
-          : null;
-      if (staleDetail) {
-        blockers.push({
-          gate: 'ci',
-          detail:
-            `"${advisoryConvergenceCheckSelectorForStaleness}" currently ` +
-            `reports a passing conclusion, but the self-referential-` +
-            `bootstrap-auto waiver posted by github-actions[bot] that may ` +
-            `have justified it ${staleDetail} -- GitHub does not ` +
-            `automatically re-evaluate a passing check when its ` +
-            `supporting waiver comment stops being valid. Rerun ` +
-            `"${advisoryConvergenceCheckSelectorForStaleness}" for the ` +
-            'current HEAD before merging so it reflects the current, ' +
-            'unwaived state.',
-        });
-      }
-    }
-  }
   const reviewerStates = preMergeAsRecord(report.reviewerStates);
   if (!isPreMergeReviewSatisfied(reviewerStates)) {
     const selfApproval = preMergeAsRecord(reviewerStates.codeownerSelfApproval);
@@ -6727,35 +6582,6 @@ export function buildPreMergeReadinessSummary(
     maxValidity: options.externalCheckWaiverMaxValidity ?? '',
     mode: options.externalCheckWaiverMode ?? '',
   });
-  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12): a THIRD
-  // authorized `allowSelfReferentialBootstrapAuto` call site (see that
-  // option's own doc comment in this file for the full list and why every
-  // other caller must leave it unset) -- identical to the primary call
-  // above except `trustedMarkerLogins` extended with `github-actions[bot]`,
-  // matching `advisory-convergence.mts`'s own gate-decision call exactly.
-  // Safe for a DIFFERENT reason than that one: this call is read-only and
-  // can only ever ADD a blocker below (a stale-auto-waiver detection),
-  // never make `ready` true -- the opposite direction from the gate-bypass
-  // risk this option otherwise guards against. Exists to close a gap this
-  // very PR's own exclusion created: `idd-advisory-convergence.mts`'s own
-  // verdict only re-evaluates `autoWaiverValid` (including the marker's
-  // expiry) when the check actually RUNS again, but GitHub does not rerun
-  // an already-successful check merely because its supporting comment
-  // expires -- so a PR that sits open past the marker's `expiresAt` with no
-  // new triggering event would otherwise merge on a stale pass, with F2
-  // never noticing the waiver that justified it has since expired (Codex
-  // review finding). See the `autoWaiverExpired`-derived blocker below.
-  const autoWaiverEvidence = summarizeExternalCheckWaivers(comments, {
-    prHeadSha,
-    activeClaimId: claim.activeClaim?.claimId ?? options.activeClaimId ?? '',
-    activeClaimSupersedes: claim.activeClaim?.supersedes ?? '',
-    trustedMarkerLogins: [...trustedMarkerLogins, 'github-actions[bot]'],
-    now,
-    waivableSelectors: waivableCheckSelectors,
-    maxValidity: options.externalCheckWaiverMaxValidity ?? '',
-    mode: options.externalCheckWaiverMode ?? '',
-    allowSelfReferentialBootstrapAuto: true,
-  });
   // #1570: the caller-supplied terminal-unavailability verdict, reused below
   // both for the dedicated `copilot-terminal-unavailable` blocker and (#2021)
   // as one of the two preconditions that must open before an
@@ -6957,7 +6783,6 @@ export function buildPreMergeReadinessSummary(
     ci,
     claim,
     waiverEvidence,
-    autoWaiverEvidence,
     // #2021: the deadline/terminal precondition evaluated above, reported
     // unconditionally as its own field (never folded into `waiverEvidence`,
     // whose shape is the schema-locked `ExternalCheckWaiverEvidence`) so a

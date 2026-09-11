@@ -1216,7 +1216,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     maxValidity: String(options.waiverMaxValidity ?? 'PT24H'),
     mode: waiverMode,
     // kurone-kito/idd-skill#2657 (Codex review, PR #2895): one of exactly
-    // three authorized call sites -- see `allowSelfReferentialBootstrapAuto`'s
+    // two authorized call sites -- see `allowSelfReferentialBootstrapAuto`'s
     // own doc comment in protocol-helpers.mts for the full list and why
     // every other caller must leave this unset. This one is the GATE
     // decision (feeds `autoWaiverValid` directly below), paired with the
