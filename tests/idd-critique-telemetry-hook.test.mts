@@ -1085,6 +1085,148 @@ process.stdin.on('end', () => {
   }
 });
 
+test('invokeCritiqueTelemetryHook win32 relay preserves a quoted --require path whose own filename embeds "--input-type=" text (kurone-kito/idd-skill#2910 review round 6, Copilot + Codex)', async () => {
+  // The --input-type strip (see WIN32_RELAY_SCRIPT's own doc comment) used
+  // to be one whole-string regex with no notion of "inside a quoted
+  // span" -- so a *legitimate* quoted --require value that happens to
+  // contain the literal text "--input-type=" preceded by whitespace (for
+  // example a filename that itself embeds that substring, a real if
+  // unusual shape) would be mistaken for a genuine top-level option and
+  // stripped, truncating the quoted path and breaking the target's own
+  // --require. Deliberately construct the preload's *filename* to embed
+  // that exact substring, reproducing the review's own repro
+  // (`"C:/dir/name --input-type=module.cjs"`) rather than a synthetic
+  // stand-in.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-quoted-token-'),
+  );
+  const targetPreloadSentinel = join(sandbox, 'target-preload-loaded.txt');
+  const preloadPath = join(sandbox, 'preload --input-type=module.cjs');
+  writeFileSync(
+    preloadPath,
+    `require('fs').writeFileSync(${JSON.stringify(targetPreloadSentinel)}, 'loaded');\n`,
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-quoted-token-target',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  const nodeOptionsAfterStub = process.env.NODE_OPTIONS;
+  try {
+    // Quoted and forward-slashed for the same reasons as this file's
+    // other --require-path tests above (tmpdir() can contain a space;
+    // a quoted native Windows backslash path loses its backslashes).
+    const quotedPreloadPath = `"${preloadPath.replaceAll('\\', '/')}"`;
+    process.env.NODE_OPTIONS = nodeOptionsAfterStub
+      ? `${nodeOptionsAfterStub} --require ${quotedPreloadPath}`
+      : `--require ${quotedPreloadPath}`;
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-quoted-token-target'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the target to receive the full payload',
+    );
+    assert.equal(
+      existsSync(targetPreloadSentinel),
+      true,
+      'expected the target to have loaded the --require preload despite its own filename embedding "--input-type="',
+    );
+  } finally {
+    if (nodeOptionsAfterStub === undefined) {
+      delete process.env.NODE_OPTIONS;
+    } else {
+      process.env.NODE_OPTIONS = nodeOptionsAfterStub;
+    }
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 relay scrubs a non-canonically-cased reserved NODE_OPTIONS-channel key too (kurone-kito/idd-skill#2910 review round 6, Copilot + Codex)', async () => {
+  // Defense-in-depth, not a currently observable leak (no-fabrication
+  // note): the relay's own lookup of these two reserved names
+  // (WIN32_RELAY_SCRIPT's `env['...']` access) is itself exact-case, so a
+  // non-canonically-cased duplicate reaching the relay would already be
+  // inert there today -- confirmed live, this test's own poisoned
+  // lower-cased key produces the same ok:true outcome whether or not the
+  // primary-spawn scrub below runs. What this test actually verifies is
+  // narrower and still worth pinning: the poisoned key itself must not
+  // appear in the env object the primary spawn hands to the relay at
+  // all, closing the gap before it could ever matter (for example if the
+  // relay's own lookup were ever changed to be case-insensitive too,
+  // matching the NODE_OPTIONS scan it already sits next to).
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-mixed-case-reserved',
+    'process.exit(0);\n',
+  );
+  let capturedEnv: NodeJS.ProcessEnv | undefined;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args);
+    // Same discriminator as this file's other win32 argument-shape tests:
+    // the primary spawn is uniquely identified by process.execPath as
+    // args[0] on win32 (the relay itself), unlike the target/taskkill
+    // calls this spawnFn also sees.
+    if (args[0] === process.execPath) {
+      capturedEnv = (args[2] as { env?: NodeJS.ProcessEnv }).env;
+    }
+    return child;
+  }) as typeof spawn;
+  const poisonKey = 'idd_critique_telemetry_hook_win32_relay_node_options';
+  const poisonValue = '--require /idd-2910-poison-reserved-channel.cjs';
+  const hadPoisonKey = Object.hasOwn(process.env, poisonKey);
+  const previousPoisonValue = (process.env as Record<string, string>)[
+    poisonKey
+  ];
+  try {
+    (process.env as Record<string, string>)[poisonKey] = poisonValue;
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-mixed-case-reserved'),
+      samplePayload(),
+      { timeoutMs: 5_000, spawnFn, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    assert.ok(
+      capturedEnv,
+      'expected the primary win32 spawn to have been observed',
+    );
+    // Local const, not the outer `let` (TypeScript's control-flow
+    // narrowing from the `assert.ok` above does not persist into the
+    // filter callback closure below).
+    const observedEnv = capturedEnv;
+    const leaked = Object.keys(observedEnv).filter(
+      (key) =>
+        key.toUpperCase() ===
+          'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS' &&
+        observedEnv[key] === poisonValue,
+    );
+    assert.deepEqual(
+      leaked,
+      [],
+      `expected the poisoned non-canonically-cased reserved key to be scrubbed from the relay's env, found: ${JSON.stringify(leaked)}`,
+    );
+  } finally {
+    if (hadPoisonKey) {
+      (process.env as Record<string, string>)[poisonKey] = previousPoisonValue;
+    } else {
+      delete (process.env as Record<string, string>)[poisonKey];
+    }
+    restore();
+  }
+});
+
 test('invokeCritiqueTelemetryHook forwards a compound (a && b) command through the win32 relay when platform is overridden to win32 (kurone-kito/idd-skill#2910 review, Copilot)', async () => {
   // Issue #2910's own "Proposed change" section requires this fix to
   // "keep the existing command config contract (an arbitrary shell

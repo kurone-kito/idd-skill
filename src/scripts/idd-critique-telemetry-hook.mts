@@ -241,20 +241,39 @@ process.stdin.on('end', () => {
   // was tried first and rejected -- it broke every one of those stubs,
   // confirmed live).
   //
-  // In-place regex removal, not split/rejoin (kurone-kito/idd-skill#2910
+  // In-place regex removal within each unquoted segment, not a single
+  // whitespace-tokenizing split/rejoin (kurone-kito/idd-skill#2910
   // review, Copilot follow-up): an earlier version of this strip
-  // tokenized on whitespace and rejoined with single spaces, which is
-  // lossy for a quoted --require/--import value containing its own
-  // internal whitespace (for example a Windows path with a space in a
-  // directory name) -- rejoining would silently corrupt that path.
-  // Removing only the matched \`--input-type=<non-whitespace>\`
-  // substring (plus its own leading separator) leaves every other
-  // character of the original string, including any such quoting,
-  // completely untouched.
+  // tokenized the whole string on whitespace and rejoined with single
+  // spaces, which is lossy for a quoted --require/--import value
+  // containing its own internal whitespace (for example a Windows path
+  // with a space in a directory name) -- rejoining would silently
+  // corrupt that path. Removing only the matched
+  // \`--input-type=<non-whitespace>\` substring (plus its own leading
+  // separator) leaves every other character of the original string,
+  // including any such quoting, completely untouched.
+  //
+  // Quote-aware (kurone-kito/idd-skill#2910 review round 6, Copilot):
+  // the removal above is itself blind to quoting -- a legitimate quoted
+  // value that happens to contain the literal text \`--input-type=\`
+  // preceded by whitespace (for example a --require path whose own
+  // filename embeds that substring) would still be mangled, since a
+  // single whole-string regex has no notion of "inside a quoted span".
+  // Splitting first on double-quoted spans (keeping each one completely
+  // verbatim, including a backslash-escaped quote inside one, matching
+  // how Node's own NODE_OPTIONS parser treats \\" ) and applying the
+  // removal only to the unquoted segments between them closes that gap
+  // without reintroducing the whitespace-collapsing bug above --
+  // confirmed live: a --require value like
+  // \`"C:/dir/name --input-type=module.cjs"\` now survives unchanged.
   const forwardedNodeOptions = env['${WIN32_RELAY_NODE_OPTIONS_ENV}'] || '';
   delete env['${WIN32_RELAY_NODE_OPTIONS_ENV}'];
   const strippedNodeOptions = forwardedNodeOptions
-    .replace(/(^|\\s)--input-type=\\S+/g, '')
+    .split(/("(?:[^"\\\\]|\\\\.)*")/g)
+    .map((chunk, i) =>
+      i % 2 === 1 ? chunk : chunk.replace(/(^|\\s)--input-type=\\S+/g, ''),
+    )
+    .join('')
     .trim();
   if (strippedNodeOptions) {
     env.NODE_OPTIONS = strippedNodeOptions;
@@ -666,18 +685,43 @@ export function invokeCritiqueTelemetryHook(
         // the conditional spread below contributes nothing -- leaving
         // that stale value in `relayEnv` to reach the relay untouched,
         // which would then apply it to the inner spawn as if it were the
-        // real caller's NODE_OPTIONS. Delete both reserved keys
+        // real caller's NODE_OPTIONS. Deleting both reserved keys
         // unconditionally before the conditional re-add closes that gap;
         // `WIN32_RELAY_COMMAND_ENV` is always overwritten by the
         // unconditional entry below regardless, but is deleted here too
         // for symmetry and defense-in-depth.
+        //
+        // Folded into the same case-insensitive scan as NODE_OPTIONS
+        // (kurone-kito/idd-skill#2910 review round 6, Copilot + Codex,
+        // independently): an exact-case-only delete of the two reserved
+        // names above closes the gap only for their canonical spelling --
+        // Windows environment-variable names are case-insensitive at the
+        // OS level (the same reasoning the NODE_OPTIONS scan below already
+        // applies to itself), so a non-canonically-cased duplicate of
+        // either reserved name would still slip through without being
+        // scrubbed. In practice this specific gap is inert today, not a
+        // live leak: the
+        // relay's own lookup of these two names (WIN32_RELAY_SCRIPT's
+        // `env['...']` access) is itself exact-case, so a non-canonical
+        // duplicate reaching the relay is simply never read there either
+        // (confirmed live: a lower-cased reserved key added deliberately
+        // for this fix's own regression test still passed even before this
+        // change landed). Folding both names into one case-insensitive
+        // scan is still correct defense-in-depth against exactly that kind
+        // of exact-case assumption changing on either side in the future,
+        // and matches the NODE_OPTIONS scan's own reasoning rather than
+        // leaving these two names as a narrower, inconsistent special case.
         const relayEnv: NodeJS.ProcessEnv = { ...process.env };
-        delete relayEnv[WIN32_RELAY_COMMAND_ENV];
-        delete relayEnv[WIN32_RELAY_NODE_OPTIONS_ENV];
         let callerNodeOptions: string | undefined;
         for (const key of Object.keys(relayEnv)) {
-          if (key.toUpperCase() === 'NODE_OPTIONS') {
+          const upperKey = key.toUpperCase();
+          if (upperKey === 'NODE_OPTIONS') {
             callerNodeOptions = relayEnv[key];
+            delete relayEnv[key];
+          } else if (
+            upperKey === WIN32_RELAY_COMMAND_ENV ||
+            upperKey === WIN32_RELAY_NODE_OPTIONS_ENV
+          ) {
             delete relayEnv[key];
           }
         }
