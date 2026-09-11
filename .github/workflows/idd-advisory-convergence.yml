@@ -582,15 +582,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        # kurone-kito/idd-skill#2912 (round 2): the CLI's own JSON report
-        # (default `--format json`, never overridden here) is captured to
-        # a file, not just streamed to the log, so the two fields the
-        # NEXT step needs (`applied`, `commentId`) can be read back out --
-        # `node -e` (never `jq`, whose presence on the runner is never
-        # explicitly asserted, unlike Node's own floor above) parses it
-        # defensively: a parse failure (should not happen, `tee` writes
-        # exactly what stdout produced) degrades to "nothing to record",
-        # never a crashed job.
+        # kurone-kito/idd-skill#2912 (round 2, extended round 3): the
+        # CLI's own JSON report (default `--format json`, never overridden
+        # here) is captured to a file, not just streamed to the log, so
+        # the fields the NEXT step needs (`applied`, `commentId`, and --
+        # round 3 -- `bodyDigest`) can be read back out -- `node -e`
+        # (never `jq`, whose presence on the runner is never explicitly
+        # asserted, unlike Node's own floor above) parses it defensively:
+        # a parse failure (should not happen, `tee` writes exactly what
+        # stdout produced) degrades to "nothing to record", never a
+        # crashed job. `bodyDigest` is the SHA-256 hex digest of the
+        # posted comment's body as this CLI read it BACK from the GitHub
+        # API in its own post-write reconcile (never the locally-sent
+        # string) -- see `ExternalCheckWaiverReport.bodyDigest`'s own doc
+        # comment in `external-check-waiver.mts`.
         run: |
           node scripts/external-check-waiver.mjs \
             --pr "$PR_NUMBER" \
@@ -615,34 +620,48 @@ jobs:
               process.stdout.write("");
             }
           ')
+          BODY_DIGEST=$(node -e '
+            try {
+              const report = JSON.parse(require("fs").readFileSync("/tmp/idd-waiver-report.json", "utf8"));
+              process.stdout.write(String(report.bodyDigest ?? ""));
+            } catch {
+              process.stdout.write("");
+            }
+          ')
           echo "applied=$APPLIED" >> "$GITHUB_OUTPUT"
           echo "comment-id=$COMMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "body-digest=$BODY_DIGEST" >> "$GITHUB_OUTPUT"
       - name: Record the posted marker's provenance
-        # kurone-kito/idd-skill#2912 (round 2): a run-scoped Actions
-        # artifact naming the EXACT comment id this run's own trusted job
-        # just posted -- the binding primitive
-        # `verifySelfReferentialBootstrapWaiverArtifactBinding`
+        # kurone-kito/idd-skill#2912 (round 2, extended round 3): a
+        # run-scoped Actions artifact naming the EXACT comment id AND body
+        # digest this run's own trusted job just posted -- the binding
+        # primitive `verifySelfReferentialBootstrapWaiverArtifactBinding`
         # (advisory-convergence.mts) reads to prove a candidate marker
         # IS the one this run's own execution posted, not merely that no
-        # OTHER candidate is currently visible (a property an attacker
-        # with `issues: write` can falsify by deleting the genuine
-        # comment after the fact). Only when a NEW comment was actually
-        # posted this run (`applied == 'true'`) -- the reuse path (an
-        # existing valid waiver found, nothing newly posted) has no
-        # comment of THIS run's own to record. Needs no `permissions:`
-        # entry: `actions/upload-artifact` uses the Actions runtime's own
+        # OTHER candidate is currently visible (round 1's gap) or that
+        # some candidate with a matching id exists regardless of whether
+        # its body was since edited in place (round 2's gap, a
+        # same-repository `issues: write` workflow can rewrite an
+        # existing comment's body without changing its id or createdAt).
+        # Only when a NEW comment was actually posted this run
+        # (`applied == 'true'`) -- the reuse path (an existing valid
+        # waiver found, nothing newly posted) has no comment of THIS
+        # run's own to record. Needs no `permissions:` entry:
+        # `actions/upload-artifact` uses the Actions runtime's own
         # dedicated upload token, entirely separate from `GITHUB_TOKEN`.
-        if: steps.post-waiver.outputs.applied == 'true' && steps.post-waiver.outputs.comment-id != ''
+        if: steps.post-waiver.outputs.applied == 'true' && steps.post-waiver.outputs.comment-id != '' && steps.post-waiver.outputs.body-digest != ''
         env:
           COMMENT_ID: ${{ steps.post-waiver.outputs.comment-id }}
+          BODY_DIGEST: ${{ steps.post-waiver.outputs.body-digest }}
         run: |
           mkdir -p /tmp/idd-self-waiver-marker
-          printf '%s\n' "$COMMENT_ID" > "/tmp/idd-self-waiver-marker/idd-self-waiver-marker-${COMMENT_ID}"
+          printf 'commentId=%s\nbodyDigest=%s\n' "$COMMENT_ID" "$BODY_DIGEST" \
+            > "/tmp/idd-self-waiver-marker/idd-self-waiver-marker-${COMMENT_ID}-${BODY_DIGEST}"
       - name: Upload the posted marker's provenance artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: steps.post-waiver.outputs.applied == 'true' && steps.post-waiver.outputs.comment-id != ''
+        if: steps.post-waiver.outputs.applied == 'true' && steps.post-waiver.outputs.comment-id != '' && steps.post-waiver.outputs.body-digest != ''
         with:
-          name: idd-self-waiver-marker-${{ steps.post-waiver.outputs.comment-id }}
+          name: idd-self-waiver-marker-${{ steps.post-waiver.outputs.comment-id }}-${{ steps.post-waiver.outputs.body-digest }}
           path: /tmp/idd-self-waiver-marker/
           # Loud failure, not a silent empty artifact, if the previous
           # step somehow produced no file -- the consumer's own binding

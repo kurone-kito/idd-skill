@@ -130,6 +130,7 @@ import {
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
+  digestExternalCheckWaiverMarkerBody,
   isValidIsoTimestamp,
   parseClaimComment,
   parseExternalCheckWaiverComment,
@@ -350,6 +351,39 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * findings (and this fix) are framed against. The pre-existing
  * maintainer-authorized waiver remains the documented escape hatch
  * either way.
+ *
+ * kurone-kito/idd-skill#2912 (round 3): round 2's artifact binding had
+ * its own sibling gap, found by a Copilot review of PR #2914's round-2
+ * commit -- it trusted a candidate's comment `id` alone, and `issues:
+ * write` permits EDITING an existing issue comment's body in place, not
+ * only deleting one, which preserves that comment's `id` AND `createdAt`
+ * while replacing its content. An attacker could therefore wait for the
+ * genuine marker to post (its `id` becomes artifact-trusted), then edit
+ * that SAME comment's body to a forged marker citing the same run id --
+ * round 2's check would still accept it, since it never looked at
+ * content. {@link verifySelfReferentialBootstrapWaiverArtifactBinding}
+ * now binds to the pair (comment `id`, SHA-256 digest of that comment's
+ * exact body -- {@link digestExternalCheckWaiverMarkerBody}) rather than
+ * `id` alone: the posting job hashes the body it reads back from the
+ * GitHub API immediately after posting (`external-check-waiver.mts`'s
+ * `ExternalCheckWaiverReport.bodyDigest`) and uploads it as part of the
+ * artifact's name (`idd-self-waiver-marker-<comment-id>-<body-digest>`);
+ * this consumer hashes the SAME live comment's CURRENT body during its
+ * own scan. An edited body digests differently, so the `(id, bodyDigest)`
+ * pair no longer matches any trusted binding and correlation fails
+ * closed -- exactly the "no auto-waiver" degradation round 2 already
+ * guarantees for deletion, now also covering in-place edits. Hashing the
+ * body also transitively binds `headSha` and `run-id`, both embedded in
+ * it, so an edit that tries to redirect a trusted marker at a different
+ * commit or run is caught by the same mechanism, not a separate one. Both
+ * sides hash an API-returned body verbatim whenever that read-back is
+ * available -- a locally-constructed string is only ever a fallback on
+ * the posting side (`ExternalCheckWaiverReport.bodyDigestSource`,
+ * labeled as such rather than treated the same as a GitHub-attested
+ * digest) -- so GitHub-side content normalization (if any) cancels out
+ * identically on both sides in the ordinary case, instead of producing a
+ * false-negative on a genuine, unedited marker -- see that function's own
+ * doc comment for why.
  *
  * Precondition on "the cited job's step conclusion is `success`"
  * actually implying it posted a marker: `runExternalCheckWaiver`'s own
@@ -922,22 +956,33 @@ export interface AdvisoryConvergenceInputs {
    * own) back to the specific live comment it came from, by matching
    * `createdAt` -- ambiguous when two DISTINCT comments citing the same
    * run id share the same wall-clock second, which fails closed for
-   * BOTH rather than guessing (see that function's own doc comment). */
+   * BOTH rather than guessing (see that function's own doc comment).
+   *
+   * kurone-kito/idd-skill#2912 (round 3): also carries each candidate's
+   * own `bodyDigest` -- the SHA-256 hex digest of THIS candidate's live
+   * body ({@link digestExternalCheckWaiverMarkerBody}) -- required,
+   * alongside `id`, for {@link verifySelfReferentialBootstrapWaiverArtifactBinding}
+   * to reject an edited-in-place forgery that kept the genuine comment's
+   * `id` and `createdAt` but replaced its content: `id` alone (round 2)
+   * is no longer sufficient once an attacker can rewrite a trusted
+   * comment's body without changing its `id`. See that function's own
+   * doc comment. */
   autoWaiverRunIdCandidates?: Record<
     string,
-    { id: string; createdAt: string }[]
+    { id: string; createdAt: string; bodyDigest: string }[]
   >;
-  /** kurone-kito/idd-skill#2912 (round 2): the SET of issue-comment ids
-   * a cited run id's own trusted `idd-advisory-convergence-self-waiver`
-   * job execution recorded actually posting, recovered from the `name`
-   * of every `idd-self-waiver-marker-<comment-id>`-prefixed Actions
+  /** kurone-kito/idd-skill#2912 (round 2, extended round 3): the SET of
+   * `(comment id, body digest)` bindings a cited run id's own trusted
+   * `idd-advisory-convergence-self-waiver` job execution recorded
+   * actually posting, recovered from the `name` of every
+   * `idd-self-waiver-marker-<comment-id>-<body-digest>`-prefixed Actions
    * artifact that run uploaded (see
    * {@link SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX}). More than one
-   * id is expected, not anomalous, across a legitimate `gh run rerun`:
-   * each attempt uploads its own artifact rather than replacing the
-   * prior one, so the trusted set only grows: the provenance/window
+   * binding is expected, not anomalous, across a legitimate `gh run
+   * rerun`: each attempt uploads its own artifact rather than replacing
+   * the prior one, so the trusted set only grows: the provenance/window
    * check (`autoWaiverRunJobLookups` above) still disambiguates which
-   * ONE of those ids belongs to the LATEST attempt. `collectFromGitHub`
+   * ONE of those bindings belongs to the LATEST attempt. `collectFromGitHub`
    * fetches this (network, same `MAX_AUTO_WAIVER_RUN_LOOKUPS`-bounded
    * run-id set); this pure verdict function only reads it -- a lookup
    * failure or an absent/empty set both fail closed to "nothing
@@ -950,12 +995,17 @@ export interface AdvisoryConvergenceInputs {
    * scope this file's own comments already assume such an attacker
    * has, permits deleting ANY issue comment on the repository, not only
    * ones the deleting token itself authored) -- leaving the forged
-   * marker as the sole survivor of the scan. See
-   * {@link verifySelfReferentialBootstrapWaiverArtifactBinding}'s own
-   * doc comment for the full exploit and why a run-scoped Actions
-   * artifact (created through a token the shared `GITHUB_TOKEN`
-   * `permissions:` surface cannot reach) closes it. */
-  autoWaiverRunArtifactCommentIds?: Record<string, string[]>;
+   * marker as the sole survivor of the scan. Round 2 bound the id alone;
+   * round 3 additionally binds the exact body a same id must carry
+   * (`bodyDigest`), closing the sibling edit-in-place gap round 2 left
+   * open -- see {@link verifySelfReferentialBootstrapWaiverArtifactBinding}'s
+   * own doc comment for the full exploit chain both rounds close and why
+   * a run-scoped Actions artifact (created through a token the shared
+   * `GITHUB_TOKEN` `permissions:` surface cannot reach) closes it. */
+  autoWaiverRunArtifactBindings?: Record<
+    string,
+    { id: string; bodyDigest: string }[]
+  >;
   /** kurone-kito/idd-skill#2657 (Codex review, PR #2895): the PR's own
    * changed file paths, fetched by `collectFromGitHub` only when at
    * least one candidate self-referential-bootstrap-auto marker exists
@@ -1285,19 +1335,25 @@ function verifySelfReferentialBootstrapWaiverProvenance(
   return markerMs >= startedMs && markerMs <= completedMs;
 }
 
-/** kurone-kito/idd-skill#2912 (round 2): the fixed prefix of the Actions
- * artifact name {@link SELF_REFERENTIAL_WAIVER_JOB_ID}'s own posting job
- * uploads immediately after successfully posting a
+/** kurone-kito/idd-skill#2912 (round 2, extended round 3): the fixed
+ * prefix of the Actions artifact name {@link SELF_REFERENTIAL_WAIVER_JOB_ID}'s
+ * own posting job uploads immediately after successfully posting a
  * `self-referential-bootstrap-auto` marker, followed by the posted
- * comment's own decimal `id` (e.g. `idd-self-waiver-marker-123456789`).
- * The id lives in the artifact's NAME, never its content, so recovering
- * it costs one `list artifacts` JSON call per cited run id -- no zip
- * download/extraction is needed. Kept in sync by hand with
- * `.github/workflows/idd-advisory-convergence.yml`'s own "Upload the
- * posted marker's provenance artifact" step (the `with: name:` value
- * there, not the preceding "Record the posted marker's provenance" step
- * that only stages the local file `actions/upload-artifact` reads), the
- * same convention {@link SELF_REFERENTIAL_WAIVER_JOB_ID} and
+ * comment's own decimal `id`, a literal `-`, and the SHA-256 hex digest
+ * of that comment's exact posted body
+ * ({@link digestExternalCheckWaiverMarkerBody}) -- e.g.
+ * `idd-self-waiver-marker-123456789-<64 lowercase hex characters>`. Round
+ * 2 named the artifact with the id alone; round 3 appends the body digest
+ * because the id alone does not survive an in-place body edit (see
+ * {@link verifySelfReferentialBootstrapWaiverArtifactBinding}'s own doc
+ * comment for that exploit). Both fields live in the artifact's NAME,
+ * never its content, so recovering them costs one `list artifacts` JSON
+ * call per cited run id -- no zip download/extraction is needed. Kept in
+ * sync by hand with `.github/workflows/idd-advisory-convergence.yml`'s
+ * own "Upload the posted marker's provenance artifact" step (the `with:
+ * name:` value there, not the preceding "Record the posted marker's
+ * provenance" step that only stages the local file `actions/upload-artifact`
+ * reads), the same convention {@link SELF_REFERENTIAL_WAIVER_JOB_ID} and
  * {@link SELF_REFERENTIAL_WAIVER_POST_STEP_NAME} already follow; a
  * dedicated test pins all three against the workflow file's own literal
  * text (both the repository-root copy and its `idd-template/` mirror). */
@@ -1305,10 +1361,10 @@ export const SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX =
   'idd-self-waiver-marker-';
 
 /**
- * kurone-kito/idd-skill#2912 (round 2): whether the `.valid` marker
- * `entry` under evaluation is one the cited run id's own trusted
- * {@link SELF_REFERENTIAL_WAIVER_JOB_ID} job execution actually recorded
- * posting, via the run-scoped Actions artifact
+ * kurone-kito/idd-skill#2912 (round 2, extended round 3): whether the
+ * `.valid` marker `entry` under evaluation is one the cited run id's own
+ * trusted {@link SELF_REFERENTIAL_WAIVER_JOB_ID} job execution actually
+ * recorded posting, via the run-scoped Actions artifact
  * {@link SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX} describes. This
  * is the binding step that closes a gap
  * {@link verifySelfReferentialBootstrapWaiverProvenance} alone cannot:
@@ -1323,51 +1379,78 @@ export const SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX =
  * leaving the forged marker as the sole survivor of a plain "no
  * duplicate candidate currently visible" scan, which is exactly the
  * property this file's PRIOR round-1 uniqueness check depended on
- * (kurone-kito/idd-skill#2912, closed here).
+ * (kurone-kito/idd-skill#2912, closed in round 2).
  *
- * `entry` carries no comment `id` of its own (`ExternalCheckWaiverEvidence.valid`
+ * Round 2's id-only binding had its own sibling gap (a Copilot review of
+ * PR #2914's round-2 commit): `issues: write` also permits EDITING an
+ * existing comment's body in place, preserving its `id` AND `createdAt`
+ * while replacing the content -- an attacker could wait for the genuine
+ * marker to post (its `id` becomes artifact-trusted), then rewrite that
+ * SAME comment's body to a forged marker, which round 2's id-only check
+ * would still accept. Round 3 closes this by binding to the PAIR
+ * (comment `id`, SHA-256 digest of that comment's exact body) instead of
+ * `id` alone -- see the module header's round-3 paragraph for the full
+ * exploit and fix description.
+ *
+ * `entry` carries no comment `id`/body of its own (`ExternalCheckWaiverEvidence.valid`
  * is a shared type many other callers use unchanged), so this
  * correlates `entry.createdAt` back to `candidates` -- the SAME
- * `{id, createdAt}` pairs `collectFromGitHub` derived from the identical
- * raw comment scan that produced `entry` in the first place -- and
- * requires the match to be UNIQUE: two distinct candidates sharing the
- * same wall-clock second (a genuine marker and a same-window forged
- * sibling) is ambiguous and fails closed for both, never guesses a
- * winner. The uniquely-correlated candidate's `id` must then appear in
- * `trustedCommentIds` -- the cited run's own artifact-recorded set.
+ * `{id, createdAt, bodyDigest}` triples `collectFromGitHub` derived from
+ * the identical raw comment scan that produced `entry` in the first
+ * place -- and requires the match to be UNIQUE: two distinct candidates
+ * sharing the same wall-clock second (a genuine marker and a same-window
+ * forged sibling) is ambiguous and fails closed for both, never guesses
+ * a winner. `createdAt` alone (not the full pair) still drives THIS
+ * correlation step -- an edited body never changes `createdAt`, only
+ * `id` uniquely names which live comment `entry` came from -- and the
+ * uniquely-correlated candidate's OWN `(id, bodyDigest)` pair must then
+ * appear in `trustedBindings` -- the cited run's own artifact-recorded
+ * set.
  *
  * Because artifacts are scoped to the run that uploaded them by the
  * Actions runtime's own dedicated upload token (never the shared
  * `GITHUB_TOKEN` `permissions:` surface comments and check runs are
  * both mutable through), no unrelated run -- however it scopes its own
  * `permissions:` block -- can add, edit, or remove an entry from
- * `trustedCommentIds`. A forged comment's `id` therefore never appears
- * there regardless of timing or deletion tricks; deleting the GENUINE
- * comment only removes it from `candidates` (a live re-fetch), which
- * degrades this to "no correlated candidate -- fail closed", never "the
- * forged one wins". The one residual: an attacker who additionally
- * self-grants the broader, repository-wide `actions: write` permission
- * (distinct from `issues: write`) could delete the genuine run's
- * artifact through Actions' own artifact-management endpoint, which
- * still only degrades to "no auto-waiver" (fail closed), never "a
- * forged waiver validates" -- and is outside the `issues: write`-scoped
- * threat model this fix (and the two independent review findings that
- * prompted it) are both framed against.
+ * `trustedBindings`. A forged OR edited comment's `(id, bodyDigest)`
+ * pair therefore never appears there regardless of timing, deletion, or
+ * in-place editing tricks; deleting the GENUINE comment only removes it
+ * from `candidates` (a live re-fetch), which degrades this to "no
+ * correlated candidate -- fail closed", never "the forged one wins". The
+ * one residual: an attacker who additionally self-grants the broader,
+ * repository-wide `actions: write` permission (distinct from `issues:
+ * write`) could delete the genuine run's artifact through Actions' own
+ * artifact-management endpoint, which still only degrades to "no
+ * auto-waiver" (fail closed), never "a forged waiver validates" -- and
+ * is outside the `issues: write`-scoped threat model this fix (and the
+ * independent review findings that prompted both rounds) are all framed
+ * against.
  *
  * Pure and fail-closed like every other verification function in this
- * file: an absent/empty `trustedCommentIds`, no unique correlated
- * candidate, or a correlated candidate whose `id` is not in
- * `trustedCommentIds` are all `false`, never a thrown exception.
+ * file: an absent/empty `trustedBindings`, no unique correlated
+ * candidate, or a correlated candidate whose `(id, bodyDigest)` pair is
+ * not in `trustedBindings` are all `false`, never a thrown exception.
  */
 function verifySelfReferentialBootstrapWaiverArtifactBinding(
-  candidates: { id: string; createdAt: string }[] | undefined,
-  trustedCommentIds: string[] | undefined,
+  candidates:
+    | { id: string; createdAt: string; bodyDigest: string }[]
+    | undefined,
+  trustedBindings: { id: string; bodyDigest: string }[] | undefined,
   entryCreatedAt: string,
 ): boolean {
+  const bindingKey = (id: unknown, bodyDigest: unknown): string => {
+    const normalizedId = String(id ?? '').trim();
+    const normalizedDigest = String(bodyDigest ?? '')
+      .trim()
+      .toLowerCase();
+    return normalizedId && normalizedDigest
+      ? `${normalizedId}:${normalizedDigest}`
+      : '';
+  };
   const trusted = new Set(
-    (trustedCommentIds ?? [])
-      .map((id) => String(id ?? '').trim())
-      .filter((id) => id.length > 0),
+    (trustedBindings ?? [])
+      .map((binding) => bindingKey(binding?.id, binding?.bodyDigest))
+      .filter((key) => key.length > 0),
   );
   if (trusted.size === 0) {
     return false;
@@ -1382,7 +1465,8 @@ function verifySelfReferentialBootstrapWaiverArtifactBinding(
     // closed rather than guessing which one `entry` actually is.
     return false;
   }
-  return trusted.has(String(matches[0]?.id ?? '').trim());
+  const key = bindingKey(matches[0]?.id, matches[0]?.bodyDigest);
+  return key.length > 0 && trusted.has(key);
 }
 
 /**
@@ -2245,18 +2329,20 @@ export function computeAdvisoryConvergenceVerdict(
           inputs.autoWaiverRunJobLookups?.[entry.runId],
           entry.createdAt,
         ) &&
-        // kurone-kito/idd-skill#2912 (round 2): prove the cited run's own
-        // trusted execution positively recorded posting THIS EXACT
-        // comment (via a run-scoped Actions artifact only that run's own
-        // upload token could have created), not merely that no OTHER
-        // candidate currently happens to be visible -- see
+        // kurone-kito/idd-skill#2912 (round 2, extended round 3): prove
+        // the cited run's own trusted execution positively recorded
+        // posting THIS EXACT comment, by id AND body content (via a
+        // run-scoped Actions artifact only that run's own upload token
+        // could have created), not merely that no OTHER candidate
+        // currently happens to be visible (round 1) or that some
+        // candidate with a matching id exists regardless of whether its
+        // body was since edited in place (round 2) -- see
         // `verifySelfReferentialBootstrapWaiverArtifactBinding`'s own
-        // doc comment for the comment-deletion forgery this replaces the
-        // file's prior round-1 "no duplicate visible" uniqueness check
-        // to close.
+        // doc comment for the comment-deletion and edit-in-place
+        // forgeries this closes.
         verifySelfReferentialBootstrapWaiverArtifactBinding(
           inputs.autoWaiverRunIdCandidates?.[entry.runId],
-          inputs.autoWaiverRunArtifactCommentIds?.[entry.runId],
+          inputs.autoWaiverRunArtifactBindings?.[entry.runId],
           entry.createdAt,
         ),
     );
@@ -3447,17 +3533,21 @@ export function collectFromGitHub(
   const MAX_AUTO_WAIVER_RUN_LOOKUPS = 20;
   const autoWaiverCandidates: { runId: string; createdAt: string }[] = [];
   const seenAutoWaiverRunIds = new Set<string>();
-  // kurone-kito/idd-skill#2912 (round 2): collected over EVERY qualifying
-  // comment (not deduplicated by `seenAutoWaiverRunIds`, which exists
-  // only to bound the number of Actions-API lookups), each paired with
-  // its own comment `id` -- `verifySelfReferentialBootstrapWaiverArtifactBinding`
-  // needs the id to correlate a `.valid` evidence entry (which carries
-  // no id of its own) back to the specific live comment it came from.
-  // See `AdvisoryConvergenceInputs.autoWaiverRunIdCandidates`'s own doc
+  // kurone-kito/idd-skill#2912 (round 2, extended round 3): collected
+  // over EVERY qualifying comment (not deduplicated by
+  // `seenAutoWaiverRunIds`, which exists only to bound the number of
+  // Actions-API lookups), each paired with its own comment `id` AND
+  // (round 3) a SHA-256 digest of its own live body --
+  // `verifySelfReferentialBootstrapWaiverArtifactBinding` needs the id
+  // to correlate a `.valid` evidence entry (which carries no id of its
+  // own) back to the specific live comment it came from, and the body
+  // digest to detect whether that specific comment's content has since
+  // been edited in place (round 2's id-only binding could not). See
+  // `AdvisoryConvergenceInputs.autoWaiverRunIdCandidates`'s own doc
   // comment for the full correlation contract.
   const autoWaiverRunIdCandidates = new Map<
     string,
-    { id: string; createdAt: string }[]
+    { id: string; createdAt: string; bodyDigest: string }[]
   >();
   for (const comment of comments) {
     const body = String(comment.body ?? '');
@@ -3508,13 +3598,22 @@ export function collectFromGitHub(
         .trim()
         .toLowerCase() === prHeadSha
     ) {
-      // kurone-kito/idd-skill#2912 (round 2): every qualifying comment's
-      // own `id`/`createdAt` pair is recorded against its cited run id,
-      // regardless of whether this is the first (lookup-triggering)
-      // sighting. Appended via `.push`, not a spread-rebuild, so this
-      // stays linear in the comment count (Copilot review, PR #2914).
+      // kurone-kito/idd-skill#2912 (round 2, extended round 3): every
+      // qualifying comment's own `id`/`createdAt`/`bodyDigest` triple is
+      // recorded against its cited run id, regardless of whether this is
+      // the first (lookup-triggering) sighting. Appended via `.push`,
+      // not a spread-rebuild, so this stays linear in the comment count
+      // (Copilot review, PR #2914). `digestExternalCheckWaiverMarkerBody`
+      // hashes `body` verbatim -- the exact string this scan already read
+      // from the live comment -- never a locally-reconstructed one, the
+      // same API-returned-body-on-both-sides contract that function's
+      // own doc comment requires.
       const candidateList = autoWaiverRunIdCandidates.get(parsed.runId);
-      const candidate = { id: String(comment.id ?? ''), createdAt };
+      const candidate = {
+        id: String(comment.id ?? ''),
+        createdAt,
+        bodyDigest: digestExternalCheckWaiverMarkerBody(body),
+      };
       if (candidateList) {
         candidateList.push(candidate);
       } else {
@@ -3609,43 +3708,48 @@ export function collectFromGitHub(
     }
   }
 
-  // kurone-kito/idd-skill#2912 (round 2): a THIRD per-run-id lookup
-  // sharing the exact same `autoWaiverRunIds` budget as the two above
-  // (so worst case triples the lookup call count, still bounded by
-  // `MAX_AUTO_WAIVER_RUN_LOOKUPS`) -- recovers the SET of comment ids
-  // the cited run's own trusted job execution recorded posting, via the
-  // artifact-name convention `SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX`
-  // documents. See `AdvisoryConvergenceInputs.autoWaiverRunArtifactCommentIds`'s
-  // own doc comment for why this closes a gap the run-metadata and
+  // kurone-kito/idd-skill#2912 (round 2, extended round 3): a THIRD
+  // per-run-id lookup sharing the exact same `autoWaiverRunIds` budget
+  // as the two above (so worst case triples the lookup call count,
+  // still bounded by `MAX_AUTO_WAIVER_RUN_LOOKUPS`) -- recovers the SET
+  // of `(comment id, body digest)` bindings the cited run's own trusted
+  // job execution recorded posting, via the artifact-name convention
+  // `SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX` documents (round 3
+  // extended that convention with a trailing `-<body-digest>` segment).
+  // See `AdvisoryConvergenceInputs.autoWaiverRunArtifactBindings`'s own
+  // doc comment for why this closes a gap the run-metadata and
   // job-provenance lookups above cannot.
   const autoWaiverArtifactNamePattern = new RegExp(
-    `^${SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX}([1-9][0-9]*)$`,
+    `^${SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX}([1-9][0-9]*)-([0-9a-f]{64})$`,
   );
-  const autoWaiverRunArtifactCommentIds: NonNullable<
-    AdvisoryConvergenceInputs['autoWaiverRunArtifactCommentIds']
+  const autoWaiverRunArtifactBindings: NonNullable<
+    AdvisoryConvergenceInputs['autoWaiverRunArtifactBindings']
   > = {};
   for (const runId of autoWaiverRunIds) {
     try {
       const raw = port.listWorkflowRunArtifacts(owner, repo, runId) as {
         artifacts?: { name?: string | null }[] | null;
       };
-      const ids: string[] = [];
+      const bindings: { id: string; bodyDigest: string }[] = [];
       for (const artifact of raw?.artifacts ?? []) {
         const match = autoWaiverArtifactNamePattern.exec(
           String(artifact?.name ?? ''),
         );
         if (match) {
-          ids.push(match[1] as string);
+          bindings.push({
+            id: match[1] as string,
+            bodyDigest: match[2] as string,
+          });
         }
       }
-      autoWaiverRunArtifactCommentIds[runId] = ids;
+      autoWaiverRunArtifactBindings[runId] = bindings;
     } catch {
       // Fail closed per run id, mirroring the two lookups above: a
       // lookup failure must never crash the whole collection, and an
-      // empty trusted-id set already means "nothing trusted" to
+      // empty trusted-binding set already means "nothing trusted" to
       // `verifySelfReferentialBootstrapWaiverArtifactBinding` -- no
       // separate `{error}` union variant is needed here.
-      autoWaiverRunArtifactCommentIds[runId] = [];
+      autoWaiverRunArtifactBindings[runId] = [];
     }
   }
 
@@ -3688,7 +3792,7 @@ export function collectFromGitHub(
       autoWaiverRunLookups,
       autoWaiverRunJobLookups,
       autoWaiverRunIdCandidates: Object.fromEntries(autoWaiverRunIdCandidates),
-      autoWaiverRunArtifactCommentIds,
+      autoWaiverRunArtifactBindings,
       changedFilePaths,
     },
     options: {

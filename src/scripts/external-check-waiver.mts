@@ -32,6 +32,7 @@ import type {
   ExternalCheckWaiverEvidence,
 } from './protocol-helpers.mts';
 import {
+  digestExternalCheckWaiverMarkerBody,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
@@ -322,6 +323,36 @@ interface ExternalCheckWaiverReport {
    * `verifySelfReferentialBootstrapWaiverArtifactBinding`'s own doc
    * comment there for the forgery this closes. */
   commentId?: string;
+  /** kurone-kito/idd-skill#2912 (round 3): the SHA-256 hex digest
+   * ({@link digestExternalCheckWaiverMarkerBody}) of `--apply`'s posted
+   * comment's body, computed from the body this helper reads back from
+   * the GitHub API in the post-write reconcile below -- never from
+   * `report.body`, the locally-constructed string this process sent --
+   * so it reflects whatever GitHub actually stored. Absent when the
+   * reconcile could not find the posted comment in its re-read (falls
+   * back to `report.body` and sets `bodyDigestSource: 'constructed'`
+   * instead; see that field). The self-waiver CI job reads this
+   * alongside `commentId` to name the provenance artifact
+   * `idd-self-waiver-marker-<comment-id>-<body-digest>`, closing the
+   * round-2 artifact-binding gap Copilot found in PR #2914's review of
+   * that round: `issues: write` also permits EDITING an existing
+   * comment's body while preserving its `id`/`createdAt`, so trusting
+   * the id alone (round 2) still let a same-repository attacker rewrite
+   * a genuine, already-trusted comment's content in place. Binding to
+   * `(id, bodyDigest)` instead means an edited body no longer matches
+   * the trusted pair `advisory-convergence.mts`'s
+   * `verifySelfReferentialBootstrapWaiverArtifactBinding` looks up. */
+  bodyDigest?: string;
+  /** kurone-kito/idd-skill#2912 (round 3): `'reconciled'` when
+   * {@link bodyDigest} was computed from the post-write re-read of the
+   * actual posted comment (the trustworthy case); `'constructed'` when
+   * the re-read did not find it (the reconcile failed, or raced a
+   * concurrent edit/delete) and this helper fell back to hashing the
+   * locally-built `report.body` instead -- still reported so a genuine
+   * marker is never silently unattested, but weaker: it proves what this
+   * process SENT, not what GitHub stored. Absent alongside an absent
+   * `bodyDigest` (dry-run / non-`--apply` paths never set either). */
+  bodyDigestSource?: 'reconciled' | 'constructed';
   /**
    * #2328: set when `--apply` found an existing valid waiver for this
    * selector and reused it rather than appending a second marker.
@@ -1524,11 +1555,36 @@ export async function runExternalCheckWaiver(
     );
   }
 
+  // kurone-kito/idd-skill#2912 (round 3): hash the body this helper reads
+  // BACK from the GitHub API (the same `postWriteComments` reconcile scan
+  // above), matched by the posted comment's own id -- never `report.body`,
+  // the string this process constructed and sent -- so the digest reflects
+  // what GitHub actually stored, the same guarantee `bodyDigest`'s own doc
+  // comment describes. Fall back to `report.body` only when the reconcile
+  // could not find that comment (a failed re-read, or a race with a
+  // concurrent edit/delete already flagged by `reconcileInconclusive`
+  // above, or -- more simply -- a `postComment` test double that never
+  // reaches `readPrComments()`), and say so via `bodyDigestSource` so a
+  // consumer can tell a GitHub-attested digest from a merely-sent one.
+  const postedCommentId = String(result.id ?? '');
+  const reconciledComment = postWriteComments.find(
+    (comment) => String(comment?.id ?? '') === postedCommentId,
+  );
+  const bodyDigestSource: 'reconciled' | 'constructed' =
+    typeof reconciledComment?.body === 'string' ? 'reconciled' : 'constructed';
+  const bodyDigest = digestExternalCheckWaiverMarkerBody(
+    bodyDigestSource === 'reconciled'
+      ? (reconciledComment?.body as string)
+      : report.body,
+  );
+
   const appliedReport = {
     ...report,
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
-    commentId: String(result.id ?? ''),
+    commentId: postedCommentId,
+    bodyDigest,
+    bodyDigestSource,
     ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
     ...(reconcileInconclusive ? { reconcileInconclusive: true } : {}),
   };

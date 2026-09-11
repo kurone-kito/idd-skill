@@ -27,6 +27,7 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
+  digestExternalCheckWaiverMarkerBody,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
@@ -1097,11 +1098,33 @@ export async function runExternalCheckWaiver(options = {}) {
         'minimize the rest so a later session does not have to disambiguate.\n',
     );
   }
+  // kurone-kito/idd-skill#2912 (round 3): hash the body this helper reads
+  // BACK from the GitHub API (the same `postWriteComments` reconcile scan
+  // above), matched by the posted comment's own id -- never `report.body`,
+  // the string this process constructed and sent -- so the digest reflects
+  // what GitHub actually stored, the same guarantee `bodyDigest`'s own doc
+  // comment describes. Fall back to `report.body` only when the reconcile
+  // could not find that comment (a failed re-read, or a race with a
+  // concurrent edit/delete already flagged by `reconcileInconclusive`
+  // above, or -- more simply -- a `postComment` test double that never
+  // reaches `readPrComments()`), and say so via `bodyDigestSource` so a
+  // consumer can tell a GitHub-attested digest from a merely-sent one.
+  const postedCommentId = String(result.id ?? '');
+  const reconciledComment = postWriteComments.find(
+    (comment) => String(comment?.id ?? '') === postedCommentId,
+  );
+  const bodyDigestSource =
+    typeof reconciledComment?.body === 'string' ? 'reconciled' : 'constructed';
+  const bodyDigest = digestExternalCheckWaiverMarkerBody(
+    bodyDigestSource === 'reconciled' ? reconciledComment?.body : report.body,
+  );
   const appliedReport = {
     ...report,
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
-    commentId: String(result.id ?? ''),
+    commentId: postedCommentId,
+    bodyDigest,
+    bodyDigestSource,
     ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
     ...(reconcileInconclusive ? { reconcileInconclusive: true } : {}),
   };

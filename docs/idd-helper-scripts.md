@@ -1500,16 +1500,27 @@ idd-external-check-waiver --pr 123 \
   accepts any candidate that verifies;
 - when the post succeeds, the job's own workflow steps additionally
   upload a run-scoped GitHub Actions artifact named
-  `idd-self-waiver-marker-<comment-id>` (kurone-kito/idd-skill#2912,
-  round 2) -- the posted comment's own numeric id, and nothing else, as
-  the artifact's name (never its content, so the consumer never needs to
+  `idd-self-waiver-marker-<comment-id>-<body-digest>`
+  (kurone-kito/idd-skill#2912, round 2, extended round 3) -- the posted
+  comment's own numeric id, a literal `-`, and the SHA-256 hex digest of
+  that comment's exact body as this same job read it BACK from the
+  GitHub API immediately after posting, and nothing else, as the
+  artifact's name (never its content, so the consumer never needs to
   download or unzip it). This is the channel condition 7 below reads to
   bind a marker to the run's own trusted execution: artifacts are scoped
   to the run that uploaded them by the Actions runtime's own dedicated
   upload token, never by the shared `GITHUB_TOKEN` `permissions:`
   surface an issue comment (or a check run) is created and mutated
   through, so no OTHER same-repository workflow run can add, edit, or
-  remove an entry from this specific run's own artifact list.
+  remove an entry from this specific run's own artifact list. The body
+  digest is hashed from an API-returned body on BOTH the posting and
+  consuming sides whenever that read-back is available -- a
+  locally-constructed string is only ever a fallback on the posting side,
+  used when its own post-write reconcile could not find the just-posted
+  comment (`ExternalCheckWaiverReport.bodyDigestSource`), and is always
+  labeled as such rather than silently treated the same as a
+  GitHub-attested digest -- so an unedited comment digests identically on
+  both sides in the ordinary case, regardless of which side computed it.
 
 The marker is honored only when **all** of the following hold, verified
 by `advisory-convergence.mts` itself (not the generic
@@ -1554,48 +1565,56 @@ needs a live per-marker run lookup no other consumer needs):
    in a forged marker, satisfying conditions 1-5 without having been
    posted by that run's job at all. Binding to the post step's own
    recorded conclusion and execution window closes this; and
-7. the marker's own comment `id` appears in the SET of comment ids the
-   cited `run-id:`'s own trusted job execution recorded actually posting,
-   recovered from a run-scoped GitHub Actions artifact that job uploads
-   immediately after posting (named `idd-self-waiver-marker-<comment-id>`
-   -- see `listWorkflowRunArtifacts` in `provider-adapter-github.mts`)
-   (kurone-kito/idd-skill#2912, round 2) -- condition 6 above proves only
-   that the cited run's job succeeded and posted SOME comment within a
-   tight execution window, never THIS EXACT comment; a same-repository
+7. the marker's own comment `(id, body digest)` pair appears in the SET
+   of such pairs the cited `run-id:`'s own trusted job execution recorded
+   actually posting, recovered from a run-scoped GitHub Actions artifact
+   that job uploads immediately after posting (named
+   `idd-self-waiver-marker-<comment-id>-<body-digest>` -- see
+   `listWorkflowRunArtifacts` in `provider-adapter-github.mts`)
+   (kurone-kito/idd-skill#2912, round 2, extended round 3) -- condition 6
+   above proves only that the cited run's job succeeded and posted SOME
+   comment within a tight execution window, never THIS EXACT comment (and
+   never that its content stayed unchanged since); a same-repository
    `pull_request`-triggered workflow can post a forged marker inside that
-   same window, wait for the genuine marker to post, and then DELETE it
-   (`issues: write` permits deleting ANY issue comment on the repository,
-   not only ones the deleting token itself authored), leaving the forged
-   marker as the sole survivor of a plain "no duplicate currently
-   visible" scan -- the mechanism this condition replaced. Artifacts
-   close this because they are scoped to the run that uploaded them by
-   the Actions runtime's own dedicated upload token, never by the shared
-   `GITHUB_TOKEN` `permissions:` surface comments (and condition 6's own
-   job/step data) are read and, in the comment's case, mutated through --
-   so no unrelated run can add, edit, or remove an entry from that
-   trusted set regardless of which `permissions:` it self-grants.
-   Deleting the genuine comment only removes it from the live comment
-   scan condition 7 itself needs to correlate an entry back to its own
-   `id` (two distinct candidates sharing the same cited run id AND the
-   same wall-clock second are ambiguous for that correlation and both
-   fail closed, never guessing a winner) -- it degrades this mechanism to
-   "no auto-waiver", never "the forged marker validates". The one
-   residual: an attacker who additionally self-grants the broader,
-   repository-wide `actions: write` permission could delete the genuine
-   run's own artifact through Actions' own artifact-management endpoint,
-   which still only degrades to "no auto-waiver", never a forged one --
-   outside the `issues: write`-scoped threat model this condition (and
-   the two independent review findings that prompted it) are framed
-   against.
+   same window, wait for the genuine marker to post, and then either
+   DELETE it (`issues: write` permits deleting ANY issue comment on the
+   repository, not only ones the deleting token itself authored), leaving
+   the forged marker as the sole survivor of a plain "no duplicate
+   currently visible" scan (round 1's gap), or EDIT it in place --
+   `issues: write` permits rewriting an existing comment's body too,
+   which preserves that comment's `id` and `createdAt` while replacing
+   its content, so binding on `id` alone (round 2) would still accept the
+   rewritten body. Binding on the `(id, body digest)` pair instead of `id`
+   alone closes both: artifacts are scoped to the run that uploaded them
+   by the Actions runtime's own dedicated upload token, never by the
+   shared `GITHUB_TOKEN` `permissions:` surface comments (and condition
+   6's own job/step data) are read and, in the comment's case, mutated
+   through -- so no unrelated run can add, edit, or remove an entry from
+   that trusted set regardless of which `permissions:` it self-grants,
+   and a LATER edit to the live comment changes its digest without being
+   able to retroactively change what the artifact already recorded.
+   Deleting or editing the genuine comment only removes/changes it in the
+   live comment scan condition 7 itself needs to correlate an entry back
+   to its own `id` (two distinct candidates sharing the same cited run id
+   AND the same wall-clock second are ambiguous for that correlation and
+   both fail closed, never guessing a winner) -- it degrades this
+   mechanism to "no auto-waiver", never "the forged or edited marker
+   validates". The one residual: an attacker who additionally
+   self-grants the broader, repository-wide `actions: write` permission
+   could delete the genuine run's own artifact through Actions' own
+   artifact-management endpoint, which still only degrades to "no
+   auto-waiver", never a forged one -- outside the `issues: write`-scoped
+   threat model this condition (and the independent review findings that
+   prompted both rounds) are framed against.
 
 A marker missing `run-id:`, whose run, run-jobs, or run-artifacts data
 cannot be resolved, targets another head SHA or repository, ran under
 any event other than `pull_request_target`, whose PR diff does not touch
 the trigger-file allowlist, whose cited run's own posting step did not
 report `success` within its own execution window, or whose own comment
-`id` is absent from (or ambiguous within) the cited run's artifact-
-recorded trusted set, is rejected the same way a manual waiver from an
-untrusted actor is today. Unlike an ordinary
+`(id, body digest)` pair is absent from (or ambiguous within) the cited
+run's artifact-recorded trusted set, is rejected the same way a manual
+waiver from an untrusted actor is today. Unlike an ordinary
 maintainer-authorized waiver (gated behind
 `deadlinePassed || terminalUnavailable`), a valid
 self-referential-bootstrap-auto waiver is evaluated **unconditionally** --

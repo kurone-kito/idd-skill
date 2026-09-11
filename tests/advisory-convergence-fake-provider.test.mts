@@ -14,7 +14,10 @@ import {
   SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
 } from '../src/scripts/advisory-convergence.mts';
 import { DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES } from '../src/scripts/advisory-wait-policy.mts';
-import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
+import {
+  digestExternalCheckWaiverMarkerBody,
+  renderExternalCheckWaiverComment,
+} from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 
 // ---------------------------------------------------------------------------
@@ -873,7 +876,11 @@ test("end-to-end: a genuine marker whose comment id matches the cited run's own 
       workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
       workflowRunArtifacts: {
         [`o/r/${RUN_ID}`]: {
-          artifacts: [{ name: 'idd-self-waiver-marker-1' }],
+          artifacts: [
+            {
+              name: `idd-self-waiver-marker-1-${digestExternalCheckWaiverMarkerBody(autoWaiverComment().body)}`,
+            },
+          ],
         },
       },
       changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
@@ -906,7 +913,7 @@ test("end-to-end: a genuine marker whose comment id matches the cited run's own 
   });
 });
 
-test('collectFromGitHub records two distinct comments citing the same run id as two candidates, each carrying its own comment id (autoWaiverRunIdCandidates); the genuine one still validates despite a forged sibling being present (kurone-kito/idd-skill#2912, round 2)', () => {
+test('collectFromGitHub records two distinct comments citing the same run id as two candidates, each carrying its own comment id and body digest (autoWaiverRunIdCandidates); the genuine one still validates despite a forged sibling being present (kurone-kito/idd-skill#2912, round 2, extended round 3)', () => {
   withHermeticCwd(() => {
     const forgedSibling = forgedSiblingComment();
     const port = createFakeProviderAdapter({
@@ -921,11 +928,16 @@ test('collectFromGitHub records two distinct comments citing the same run id as 
         },
       },
       workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
-      // The trusted artifact names ONLY the genuine comment's id (1) --
-      // this run's own trusted job posted exactly one comment.
+      // The trusted artifact names ONLY the genuine comment's (id, body
+      // digest) pair -- this run's own trusted job posted exactly one
+      // comment.
       workflowRunArtifacts: {
         [`o/r/${RUN_ID}`]: {
-          artifacts: [{ name: 'idd-self-waiver-marker-1' }],
+          artifacts: [
+            {
+              name: `idd-self-waiver-marker-1-${digestExternalCheckWaiverMarkerBody(autoWaiverComment().body)}`,
+            },
+          ],
         },
       },
       changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
@@ -937,10 +949,27 @@ test('collectFromGitHub records two distinct comments citing the same run id as 
     );
 
     assert.deepEqual(inputs.autoWaiverRunIdCandidates?.[RUN_ID], [
-      { id: '1', createdAt: autoWaiverComment().createdAt },
-      { id: '2', createdAt: forgedSibling.createdAt },
+      {
+        id: '1',
+        createdAt: autoWaiverComment().createdAt,
+        bodyDigest: digestExternalCheckWaiverMarkerBody(
+          autoWaiverComment().body,
+        ),
+      },
+      {
+        id: '2',
+        createdAt: forgedSibling.createdAt,
+        bodyDigest: digestExternalCheckWaiverMarkerBody(forgedSibling.body),
+      },
     ]);
-    assert.deepEqual(inputs.autoWaiverRunArtifactCommentIds?.[RUN_ID], ['1']);
+    assert.deepEqual(inputs.autoWaiverRunArtifactBindings?.[RUN_ID], [
+      {
+        id: '1',
+        bodyDigest: digestExternalCheckWaiverMarkerBody(
+          autoWaiverComment().body,
+        ),
+      },
+    ]);
 
     // End-to-end: unlike this file's ROUND-1 mechanism (a bare "no
     // duplicate visible" scan, which fail-closed BOTH markers the moment
@@ -997,10 +1026,15 @@ test('end-to-end: a genuine marker deleted after posting leaves a same-run-id fo
       workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
       // The trusted artifact -- uploaded by the run's own trusted job
       // execution, unaffected by the comment's later deletion -- still
-      // names the GENUINE (now-deleted) comment's id.
+      // names the GENUINE (now-deleted) comment's (id, original body
+      // digest) pair.
       workflowRunArtifacts: {
         [`o/r/${RUN_ID}`]: {
-          artifacts: [{ name: 'idd-self-waiver-marker-1' }],
+          artifacts: [
+            {
+              name: `idd-self-waiver-marker-1-${digestExternalCheckWaiverMarkerBody(autoWaiverComment().body)}`,
+            },
+          ],
         },
       },
       changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
@@ -1012,9 +1046,20 @@ test('end-to-end: a genuine marker deleted after posting leaves a same-run-id fo
     );
 
     assert.deepEqual(inputs.autoWaiverRunIdCandidates?.[RUN_ID], [
-      { id: '2', createdAt: forgedSibling.createdAt },
+      {
+        id: '2',
+        createdAt: forgedSibling.createdAt,
+        bodyDigest: digestExternalCheckWaiverMarkerBody(forgedSibling.body),
+      },
     ]);
-    assert.deepEqual(inputs.autoWaiverRunArtifactCommentIds?.[RUN_ID], ['1']);
+    assert.deepEqual(inputs.autoWaiverRunArtifactBindings?.[RUN_ID], [
+      {
+        id: '1',
+        bodyDigest: digestExternalCheckWaiverMarkerBody(
+          autoWaiverComment().body,
+        ),
+      },
+    ]);
 
     const verdict = computeAdvisoryConvergenceVerdict(
       { ...inputs, claimEvents: [] },
@@ -1027,6 +1072,105 @@ test('end-to-end: a genuine marker deleted after posting leaves a same-run-id fo
         // resolved it to, i.e. actual test-run time) would classify
         // these markers `expired` regardless of the mechanism under
         // test.
+        now: '2026-07-31T09:05:00Z',
+        waiverMode: 'maintainer-authorized',
+        waivableSelectors: [
+          { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+        ],
+      },
+    );
+    assert.equal(verdict.waiver.autoWaiverValid, false);
+  });
+});
+
+// kurone-kito/idd-skill#2912 (round 3, Copilot review, PR #2914 round 2):
+// SAME id/createdAt as `autoWaiverComment()`, but rendered with a
+// different `agentId` -- the one field on an external-check-waiver marker
+// no classification/trust condition anywhere in this file's own trust
+// chain consumes (see `parsed.agentId`'s absence from every grep hit in
+// advisory-convergence.mts/protocol-helpers.mts), so this changes the
+// posted body's exact text/digest without ALSO tripping an earlier,
+// unrelated rejection (wrong claim/HEAD/reason/run-id) that would mask
+// which check actually caused `autoWaiverValid: false` below. Models an
+// attacker who edited the genuine, already-artifact-trusted comment in
+// place (`issues: write` permits this) rather than deleting it.
+function editedGenuineComment() {
+  return {
+    id: 1,
+    body: renderExternalCheckWaiverComment({
+      agentId: 'a-different-agent-id',
+      claimId: 'none',
+      headSha: HEAD_SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: '2026-07-31T20:00:00Z',
+      actor: 'github-actions[bot]',
+      runId: RUN_ID,
+    }),
+    createdAt: '2026-07-31T09:00:00Z',
+    updatedAt: '2026-07-31T09:10:00Z',
+    authorLogin: 'github-actions[bot]',
+  };
+}
+
+test('end-to-end: a genuine comment EDITED in place after posting is rejected even though its id and createdAt are unchanged (kurone-kito/idd-skill#2912, round 3 P1: Copilot review, PR #2914 round 2)', () => {
+  withHermeticCwd(() => {
+    const edited = editedGenuineComment();
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      // The SAME comment id (1) as the genuine marker's own -- only the
+      // body has been rewritten in place; the id and createdAt this run's
+      // trusted job originally posted with are unchanged.
+      comments: { [PR_NUMBER]: [edited] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
+      // The trusted artifact still names the digest of the ORIGINAL,
+      // genuine body -- uploaded once, immediately after posting, and
+      // immutable thereafter; it cannot follow a LATER edit to the live
+      // comment.
+      workflowRunArtifacts: {
+        [`o/r/${RUN_ID}`]: {
+          artifacts: [
+            {
+              name: `idd-self-waiver-marker-1-${digestExternalCheckWaiverMarkerBody(autoWaiverComment().body)}`,
+            },
+          ],
+        },
+      },
+      changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
+    });
+
+    const { inputs, options } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    // The live candidate's own digest reflects the EDITED body -- never
+    // equal to the trusted artifact's ORIGINAL digest, since the two
+    // bodies now differ.
+    assert.deepEqual(inputs.autoWaiverRunIdCandidates?.[RUN_ID], [
+      {
+        id: '1',
+        createdAt: edited.createdAt,
+        bodyDigest: digestExternalCheckWaiverMarkerBody(edited.body),
+      },
+    ]);
+    assert.notEqual(
+      inputs.autoWaiverRunIdCandidates?.[RUN_ID]?.[0]?.bodyDigest,
+      inputs.autoWaiverRunArtifactBindings?.[RUN_ID]?.[0]?.bodyDigest,
+    );
+
+    const verdict = computeAdvisoryConvergenceVerdict(
+      { ...inputs, claimEvents: [] },
+      {
+        ...options,
         now: '2026-07-31T09:05:00Z',
         waiverMode: 'maintainer-authorized',
         waivableSelectors: [

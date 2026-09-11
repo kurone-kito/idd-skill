@@ -17,7 +17,10 @@ import {
   resolveActorLogin,
   runExternalCheckWaiver,
 } from '../src/scripts/external-check-waiver.mts';
-import { operationalMarkerPrefix } from '../src/scripts/marker-helpers.mts';
+import {
+  digestExternalCheckWaiverMarkerBody,
+  operationalMarkerPrefix,
+} from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
   parseExternalCheckWaiverComment,
@@ -1768,6 +1771,123 @@ test('runExternalCheckWaiver: --auto-bootstrap posts end to end with no viewer-i
   // caller-suppliable and independent of advisoryWait.convergenceDeadline.
   assert.equal(parsed?.expiresAt, '2026-08-31T18:13:24Z');
   assert.equal(parsed?.claimId, 'claim-20260830T222316Z-2328');
+  // kurone-kito/idd-skill#2912 (round 3): `postComment` above returns no
+  // `id`, and `prComments` always resolves to `[]` (no post-write
+  // reconcile fixture data at all), so the reconcile can never find the
+  // posted comment -- `bodyDigest` falls back to hashing `report.body`
+  // (the locally-constructed string), reported as `'constructed'` rather
+  // than `'reconciled'` so a consumer can tell the difference. See the
+  // dedicated 'reconciled' test below for the realistic production path.
+  assert.equal(report?.bodyDigestSource, 'constructed');
+  assert.equal(
+    report?.bodyDigest,
+    digestExternalCheckWaiverMarkerBody(posted?.body ?? ''),
+  );
+});
+
+test('runExternalCheckWaiver: --apply computes bodyDigest from the post-write RECONCILED comment body, never the locally-constructed one (kurone-kito/idd-skill#2912, round 3)', async () => {
+  // The self-waiver CI job's own JSON report is what
+  // `idd-advisory-convergence.yml`'s "Post the self-referential-bootstrap-
+  // auto waiver" step reads `bodyDigest` from, which the trusted job then
+  // uploads as part of the provenance artifact's name -- it must reflect
+  // what GitHub actually STORED (the reconciled re-read), never merely
+  // what this process SENT, so a digest computed from `report.body` could
+  // never mask GitHub-side content normalization this project does not
+  // control. The reconciled fixture's body below is deliberately a
+  // DIFFERENT string from whatever this CLI actually sent, isolating that
+  // `bodyDigest` tracks the RECONCILED value specifically (a regression
+  // that reverted to hashing `report.body` unconditionally would still
+  // produce a real, shape-valid digest here -- just the WRONG one -- so
+  // this test would still catch it).
+  const POSTED_ID = 777;
+  const RECONCILED_BODY = 'this-is-the-body-github-actually-stored';
+  let reads = 0;
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    // First read (pre-write reuse scan): empty. Second read (post-write
+    // reconcile): the just-posted comment, with a body that stands in for
+    // whatever GitHub actually stored.
+    prComments: () => {
+      reads += 1;
+      return reads === 1
+        ? []
+        : [
+            {
+              id: POSTED_ID,
+              html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${POSTED_ID}`,
+              created_at: '2026-08-30T18:20:00Z',
+              user: { login: 'github-actions[bot]' },
+              body: RECONCILED_BODY,
+            },
+          ];
+    },
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T18:20:00Z'),
+    isTTY: false,
+    postComment: () => ({
+      id: POSTED_ID,
+      html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${POSTED_ID}`,
+    }),
+  });
+
+  assert.equal(report?.applied, true);
+  assert.equal(report?.commentId, String(POSTED_ID));
+  assert.equal(report?.bodyDigestSource, 'reconciled');
+  assert.equal(
+    report?.bodyDigest,
+    digestExternalCheckWaiverMarkerBody(RECONCILED_BODY),
+  );
+  // Not merely a different label -- a genuinely different digest than
+  // hashing `report.body` (the locally-constructed string) would have
+  // produced, proving the reconciled value was actually used.
+  assert.notEqual(
+    report?.bodyDigest,
+    digestExternalCheckWaiverMarkerBody(report?.body ?? ''),
+  );
 });
 
 test('runExternalCheckWaiver: --auto-bootstrap never reuses an existing same-reason marker, even one with no verifiable run-id (Codex review, PR #2895, round 2)', async () => {
