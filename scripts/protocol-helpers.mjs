@@ -1473,8 +1473,19 @@ const CODERABBIT_ACK_OPENING_RE = new RegExp(
 //     prose would also still misclassify, for the same reason.
 const CODERABBIT_ACK_STRONG_CLOSURE_RE =
   /✅\s*Review thread resolved\.|I couldn't resolve this review thread on the repository platform/i;
+// Widened to add `almost`/`nearly` (Copilot review, #2927, round 4): a
+// proximity adverb -- "close to, but short of, complete" -- is the same
+// hedged/non-committal degree semantic this enumeration already covers
+// ("partially", "mostly", "largely"), just a different lexical subclass
+// (proximity rather than partiality). "`@user`, thanks. The fix almost
+// matches the requested behavior.\n\n🐇 ✅" states an explicitly
+// INCOMPLETE fix -- the same class of risk guard 5's own reasoning
+// already established for this whole enumeration -- and previously
+// passed the pre-"matches" lookbehind unnoticed, wired into this shared
+// constant so both the third and fourth shapes benefit without
+// duplication.
 const CODERABBIT_ACK_HEDGE_WORDS_SOURCE =
-  'partially|partly|somewhat|mostly|largely|barely|slightly|arguably|in\\s+part|to\\s+some\\s+extent|not\\s+(?:fully|entirely|completely|really)';
+  'partially|partly|somewhat|mostly|largely|barely|slightly|arguably|almost|nearly|in\\s+part|to\\s+some\\s+extent|not\\s+(?:fully|entirely|completely|really)';
 // Sibling enumeration to the degree-adverb list above, for the SAME
 // hedged/non-committal semantic class but the ADJECTIVE part of speech
 // (self-critique, E2 pass on this PR, PR #2868): the adverb list above

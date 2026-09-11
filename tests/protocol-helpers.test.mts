@@ -2498,6 +2498,49 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedge adverb immediately be
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects a proximity-adverb hedge ("almost") immediately before "matches" (Copilot review, #2927, round 4)', () => {
+  // Copilot's round-4 finding: `CODERABBIT_ACK_HEDGE_WORDS_SOURCE`
+  // omitted proximity adverbs ("almost"/"nearly") -- the same hedged,
+  // non-committal degree semantic as "partially"/"mostly" already in
+  // the enumeration, just a different lexical subclass. "The fix
+  // almost matches the requested behavior." states an explicitly
+  // incomplete fix and previously passed the pre-"matches" lookbehind
+  // unnoticed.
+  const thread = {
+    id: 'thread-matches-hedge-almost',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MA-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MA-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The fix almost matches the ' +
+            'requested behavior.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:50:00Z',
+          updatedAt: '2026-09-11T00:50:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 test('classifyThreadAckOnlyPostDisposition rejects a negation adverb immediately before "matches" (AC3, #2927)', () => {
   const thread = {
     id: 'thread-matches-negation-never',
