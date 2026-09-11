@@ -1929,97 +1929,50 @@ const CODERABBIT_ACK_CLOSURE_LEADIN_RE = new RegExp(
 // guard 3 requires the boilerplate immediately after its closure
 // sentence, with no bare trailing content allowed at all; reusing that
 // requirement unchanged here would reject the real sample and fail AC1
-// (#2927). The trailing sentence is therefore permitted, but bounded
-// with the SAME token-capped, positive-shape grammar guard 1 uses for
-// the third shape's internal gap -- not a free `[^.!?]` skip, which
-// this file's own history (guard 2's comment above) already found
-// insufficient once:
-//   - at most 10 space-separated `[\w-]+` tokens total (the real
-//     sample's trailing sentence needs 9: "The default fixture now
-//     uses the permissive zero-parseable-run-ID path"; one token of
-//     headroom, the same ratio guard 1 uses for its own cap);
-//   - the FIRST token must be one of the same closed determiner/
-//     pronoun set the lead-in whitelist already uses (`this`/`that`/
-//     `it`/`the`) -- free against the real sample (its trailing
-//     sentence starts with "The"), and rejects the most natural
-//     new-feedback openers ("Still", "Note", "Please", "However",
-//     "One");
-//   - every token (including the first) is excluded from the same
-//     closed hedge/negation/epistemic/conjunction enumerations already
-//     used throughout this file, PLUS the third shape's own trigger
-//     verb (see `CODERABBIT_ACK_MATCHES_TRAILING_EXCLUDED_VERB_SOURCE`
-//     below);
-//   - no comma, semicolon, apostrophe, or sentence terminator may
-//     appear anywhere inside it: `[\w-]+` tokens separated only by
-//     `\s+` cannot cross any of those characters, so a second, joined
-//     clause ("...behavior. The fix, however, breaks other tests.")
-//     breaks the token chain and the whole optional group fails to
-//     match, falling through to requiring the boilerplate immediately
-//     after "behavior." instead (guard 3's original requirement,
-//     unchanged as the fallback);
-//   - exactly one trailing `.` immediately followed by the same
-//     boilerplate tail is mandatory whenever the group is present at
-//     all -- a SECOND free sentence between this one and the tail is
-//     not reachable within the token cap without crossing a sentence
-//     terminator, which breaks the token chain the same way.
+// (#2927).
 //
-// Copilot review (#2927) found a genuine interaction bug this trailing
-// sentence's grammar makes possible: "The fix matches the requested
-// behavior. The default fixture addresses the security concern.\n\n🐇
-// ✅" -- the trailing sentence, unrestricted, happily absorbs
-// "addresses the security concern." as innocuous filler, but that exact
-// substring is ALSO a structurally valid `CODERABBIT_ACK_ADDRESSES_
-// CLOSURE_RE` match (genuine boilerplate immediately follows it). Two
-// problems compounded: (1) `isKnownAdvisoryAckTemplate` tried the third
-// shape first and committed to its structural match even though that
-// match's OWN lead-in (spanning the whole preceding "matches the
-// requested behavior" sentence) then failed the whitelist, never
-// falling through to try this fourth shape's own, separately valid,
-// match -- fixed below by trying each form independently instead of
-// short-circuiting; (2) even with that fixed, a reply combining BOTH
-// shapes' closure vocabulary in one body is exactly the ambiguous case
-// this file's fail-closed philosophy exists for -- it makes two
-// separate, sequential outcome claims, not a single benign courtesy
-// summary. Rather than accept it once the control-flow bug is fixed,
-// `CODERABBIT_ACK_MATCHES_TRAILING_EXCLUDED_VERB_SOURCE` below excludes
-// the third shape's own trigger verb from this trailing sentence's
-// tokens too, so this exact combination is REJECTED for a principled,
-// closed-class reason (ambiguous cross-shape vocabulary) rather than
-// silently accepted as "purely descriptive" filler.
+// A first attempt permitted this trailing sentence via a token-capped,
+// positive-shape grammar (10 `[\w-]+` tokens, closed-class-excluded,
+// determiner-first-token restricted) -- the same STYLE as guard 1's
+// internal "addresses the ... concern" gap. Copilot review (#2927)
+// correctly rejected this as still too permissive: the grammar's own
+// documented residual risk -- a syntactically clean, unhedged,
+// determiner-led sentence with no excluded vocabulary, e.g. "The
+// null-check still remains unresolved in the other branch." (9 tokens,
+// "The" opener, no excluded word) -- structurally satisfies ANY such
+// bounded-but-general grammar while stating a genuine new blocker, and
+// would suppress the merge gate exactly the way this file's fail-closed
+// philosophy exists to prevent. Unlike gap (a) above (contrastive
+// adjectives inside an already-narrow noun-phrase slot, genuinely
+// irreducible without recreating the open-ended "new concern"
+// blocklist), an open determiner-led sentence is not a narrow residual
+// edge -- it is most of the risk surface a "positive-shape grammar"
+// was supposed to close in the first place. The SAME review also found
+// this permissive grammar could absorb the third shape's own "addresses
+// the ... concern/finding" vocabulary as innocuous filler, which could
+// then interact badly with `isKnownAdvisoryAckTemplate`'s own
+// closure-form selection (see that function's own comment for the
+// control-flow half of that fix).
 //
-// Residual risk, stated rather than papered over, the same standard as
-// every guard above: within the 10-token cap, the determiner-first-
-// token requirement, and the closed-class exclusions (including the
-// address-verb exclusion above), a syntactically clean, unhedged
-// sentence with no excluded vocabulary -- e.g. "The null-check still
-// remains unresolved in the other branch." (9 tokens, starts with
-// "The", no hedge/negation/epistemic/conjunction/address-verb word) --
-// would still be accepted as the permitted trailing sentence and
-// misclassify. This is narrower than the round-6 bypass guard 3 closed
-// for the third shape (that gap was an unbounded `---\n\n`-delimited
-// prose span; this one is capped at 10 clean tokens with a restricted
-// opener and now two excluded vocabulary families), but it is not
-// eliminated -- the same "no sampled reply has used this position to
-// hide substantive feedback" standard as residual gap (a) above. A
-// future sample demonstrating this bypass is a design question for a
-// follow-up issue, the same escalation path residual gap (a) already
-// uses -- not something to chase further here.
-//
-// The third shape's own trigger verb ("addresses"), excluded from this
-// trailing sentence's tokens for the reason above (Copilot review,
-// #2927). `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` only ever matches the
-// literal token "addresses" (not "address"/"addressed"/"addressing"),
-// but the closed word-family is excluded rather than only that one
-// inflection, for the same defense-in-depth reasoning this file applies
-// to its other closed enumerations.
-const CODERABBIT_ACK_MATCHES_TRAILING_EXCLUDED_VERB_SOURCE =
-  'address(?:es|ed|ing)?';
+// With only ONE real observed sample and no broader pattern to derive a
+// general grammar FROM, the trailing sentence is instead permitted only
+// as an EXACT literal match of that one sample's own continuation text
+// -- the same resolution guard 6's lead-in whitelist already applies
+// (enumerate the exact observed shape(s), fail closed on everything
+// else, widen later only when a new real sample demonstrates a genuine
+// second shape) -- rather than a grammar general enough to also accept
+// prose no sample has ever produced. This has no residual risk in this
+// slot at all (a fixed string cannot admit arbitrary new content), and
+// incidentally also closes the cross-shape-vocabulary concern above for
+// free: the literal sample text contains neither "addresses" nor
+// "concern"/"finding".
+const CODERABBIT_ACK_MATCHES_TRAILING_OBSERVED_SENTENCE_SOURCE = escapeRegExp(
+  'The default fixture now uses the permissive zero-parseable-run-ID path.',
+);
 const CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE = new RegExp(
   `(?<!\\b(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE})\\s+)` +
     '\\bmatches\\s+the\\s+requested\\s+behavior\\b\\.\\s*' +
-    '(?:\\b(?:this|that|it|the)\\b' +
-    `(?:\\s+(?!(?:${CODERABBIT_ACK_HEDGE_WORDS_SOURCE}|${CODERABBIT_ACK_NEGATION_WORDS_SOURCE}|${CODERABBIT_ACK_EPISTEMIC_WORDS_SOURCE}|${CODERABBIT_ACK_CONJUNCTION_WORDS_SOURCE}|${CODERABBIT_ACK_MATCHES_TRAILING_EXCLUDED_VERB_SOURCE})\\b)[\\w-]+){0,9}` +
-    '\\.\\s*)?' +
+    `(?:${CODERABBIT_ACK_MATCHES_TRAILING_OBSERVED_SENTENCE_SOURCE}\\s*)?` +
     CODERABBIT_ACK_CLOSURE_TAIL_SOURCE,
   'i',
 );
@@ -2055,8 +2008,8 @@ function isKnownAdvisoryAckTemplate(comment) {
   // function to `false` without ever trying this fourth shape's own,
   // separately valid, match. See the doc comment above
   // `CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE` for the full example
-  // and why the trailing-sentence grammar there is ALSO tightened
-  // rather than relying on this loop fix alone.
+  // and why its trailing-sentence slot is ALSO narrowed to an exact
+  // literal match rather than relying on this loop fix alone.
   const openingEnd = openingMatch.index + openingMatch[0].length;
   for (const closureRe of [
     CODERABBIT_ACK_ADDRESSES_CLOSURE_RE,

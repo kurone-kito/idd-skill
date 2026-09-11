@@ -2578,17 +2578,17 @@ test('classifyThreadAckOnlyPostDisposition rejects a contrastive-adjective varia
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
-test('classifyThreadAckOnlyPostDisposition rejects a trailing sentence over the 10-token cap after "matches the requested behavior" (#2927)', () => {
-  // The trailing free-text sentence permitted after the closure phrase
-  // is capped at 10 space-separated `[\w-]+` tokens (one more than the
-  // real #2921 sample's 9), the same token-capped positive-shape
-  // grammar as guard 1's internal "addresses the ... concern" gap. An
-  // 11-token sentence -- otherwise clean, no excluded vocabulary -- has
-  // no way to reach its own terminating period within the cap, so the
-  // whole optional group fails to match; this fixture has no boilerplate
-  // immediately after "behavior." either, so the fallback also misses.
+test('classifyThreadAckOnlyPostDisposition rejects an unrelated trailing sentence after "matches the requested behavior" (#2927)', () => {
+  // The trailing sentence permitted after the closure phrase is an
+  // EXACT literal match of the one real #2921 sample's own continuation
+  // text, not a general grammar (Copilot review, #2927 -- see the doc
+  // comment above `CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE`). A
+  // completely unrelated sentence, however clean, simply is not that
+  // literal string, so the optional group fails to match; this fixture
+  // has no boilerplate immediately after "behavior." either, so the
+  // immediate-tail fallback also misses.
   const thread = {
-    id: 'thread-matches-trailing-over-cap',
+    id: 'thread-matches-trailing-unrelated',
     isResolved: true,
     updatedAt: '',
     comments: {
@@ -2623,12 +2623,12 @@ test('classifyThreadAckOnlyPostDisposition rejects a trailing sentence over the 
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
-test('classifyThreadAckOnlyPostDisposition rejects a trailing sentence containing a comma after "matches the requested behavior" (#2927)', () => {
-  // The trailing sentence's `[\w-]+` tokens are separated only by
-  // `\s+`; a comma is neither a word/hyphen character nor whitespace,
-  // so it breaks the token chain outright, the same reasoning guard 2's
-  // "word/hyphen-only tokens" comment already established for the third
-  // shape's internal gap.
+test('classifyThreadAckOnlyPostDisposition rejects a differently-worded trailing sentence after "matches the requested behavior" (#2927)', () => {
+  // A paraphrased trailing sentence -- plausible, similar topic, but not
+  // byte-identical to the one real sample's literal continuation text
+  // -- is rejected the same way any other non-matching text is: the
+  // literal match requires the exact observed string, not "a sentence
+  // about the fix" in general.
   const thread = {
     id: 'thread-matches-trailing-comma',
     isResolved: true,
@@ -2665,15 +2665,16 @@ test('classifyThreadAckOnlyPostDisposition rejects a trailing sentence containin
   assert.equal(classification.ackOnlyPostDisposition, false);
 });
 
-test('classifyThreadAckOnlyPostDisposition rejects a second free sentence appended after the permitted trailing sentence, before the boilerplate tail (#2927)', () => {
-  // The permitted trailing sentence must be immediately followed by the
-  // boilerplate tail -- exactly one more sentence, not two. A second
-  // sentence ("However, a related issue remains.") sitting between the
-  // first trailing sentence and the tail is not reachable within the
-  // token cap without crossing the first sentence's own terminating
-  // period, which the token grammar cannot cross either -- the same
-  // "no bare end-of-body fallback" discipline guard 3 established for
-  // the third shape.
+test('classifyThreadAckOnlyPostDisposition rejects a second free sentence appended after a would-be trailing sentence, before the boilerplate tail (#2927)', () => {
+  // Even a body that starts its post-closure text with words resembling
+  // the real sample ("The default fixture now uses...") is rejected the
+  // moment it diverges into a second, genuinely new sentence ("However,
+  // a related issue remains.") before the boilerplate tail: the
+  // permitted trailing text is the ONE exact literal sentence, followed
+  // immediately by the tail, with nothing else admitted in between --
+  // the same "no bare end-of-body fallback" discipline guard 3
+  // established for the third shape, now enforced by exact-match rather
+  // than a general grammar.
   const thread = {
     id: 'thread-matches-trailing-second-sentence',
     isResolved: true,
@@ -2757,22 +2758,23 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "matches the requested
 });
 
 test("classifyThreadAckOnlyPostDisposition rejects a reply combining both the third and fourth shapes' closure vocabulary in one body (Copilot review, #2927)", () => {
-  // Copilot's finding on this PR: the trailing sentence permitted after
-  // "matches the requested behavior." could, before this fix, absorb
-  // "addresses the security concern." as innocuous filler -- but that
-  // exact substring is ALSO a structurally valid
-  // `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` match (genuine boilerplate
-  // immediately follows it). `isKnownAdvisoryAckTemplate` used to
-  // commit to that first structural match, whose own lead-in (spanning
-  // the entire preceding "matches..." sentence) then failed the
-  // whitelist, short-circuiting to `false` without ever trying the
-  // fourth shape's own, separately valid, match. Now fixed two ways:
-  // `isKnownAdvisoryAckTemplate` tries each closure form independently,
-  // AND the trailing sentence additionally excludes the third shape's
-  // own trigger verb ("addresses"), so this specific combination stays
-  // rejected for a principled, closed-class reason (ambiguous
-  // cross-shape vocabulary in one body) rather than being silently
-  // accepted once the control-flow bug alone is fixed.
+  // Copilot's original finding on this PR (round 1): a permissive
+  // trailing-sentence GRAMMAR could absorb "addresses the security
+  // concern." as innocuous filler -- but that exact substring is ALSO a
+  // structurally valid `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` match
+  // (genuine boilerplate immediately follows it), and
+  // `isKnownAdvisoryAckTemplate` used to commit to that first
+  // structural match, whose own lead-in (spanning the entire preceding
+  // "matches..." sentence) then failed the whitelist, short-circuiting
+  // to `false` without ever trying the fourth shape's own, separately
+  // valid, match. Now fixed two ways that both hold even after round 2
+  // replaced the trailing-sentence grammar with an exact literal match
+  // (see the doc comment above `CODERABBIT_ACK_MATCHES_BEHAVIOR_
+  // CLOSURE_RE`): `isKnownAdvisoryAckTemplate` tries each closure form
+  // independently (still relevant on its own terms), and "The default
+  // fixture addresses the security concern." is simply not the one
+  // literal sentence the trailing slot now accepts, so this combination
+  // stays rejected for two independent reasons.
   const thread = {
     id: 'thread-matches-combined-with-addresses',
     isResolved: true,
