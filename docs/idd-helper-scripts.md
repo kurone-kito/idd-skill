@@ -3508,6 +3508,33 @@ complement to the recovery-path re-signing in
 `idd-pr-submit.instructions.md` (Post-rebase verification) and
 `idd-overview-core.instructions.md` (cwd-vs-claim cherry-pick recovery).
 
+This wrapper also applies to an ordinary per-commit `git commit` in B3
+(`idd-work.instructions.md`), not only a merge or rebase continuation:
+
+```sh
+git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true commit -F <message-file>
+```
+
+Unlike the merge case above, a commit-only alias such as `git
+commit-ssh` is sufficient here — a single `commit` invocation needs no
+`--continue` step to re-sign.
+
+**Bounded timeout for every invocation** (commit, merge, or rebase): if
+the wrapper has not completed within 2 minutes, treat it as stuck
+rather than a signing failure worth retrying. First check whether the
+process is still running — per `idd-ci.instructions.md`'s "Wake-up
+discipline" guidance on a heavy local command that auto-backgrounds
+past a tool's default timeout, do not start a second wrapper
+invocation alongside it — then kill it and fall back to the
+already-documented `--no-gpg-sign` last resort
+(`idd-overview-appendix.instructions.md`'s "Commit signing" section)
+rather than waiting indefinitely. For an in-progress merge or rebase,
+complete it with `-c commit.gpgsign=false` on the `--continue` form
+instead — a plain `--continue` re-signs through the stalled primary
+signer, and `--no-gpg-sign` itself is not a `--continue` flag. Observed
+hanging with no output for an extended, unbounded period on 2026-09-10
+(issue #2844 / PR #2870, commit `7be8acc9`, later confirmed unsigned).
+
 ## Friction Inventory
 
 The workflow areas most likely to benefit from optional helpers are:
