@@ -8735,12 +8735,32 @@ export function buildPreMergeReadinessSummary(
     // absent `type` (the pre-#1483 data shape, including this fixture's
     // own base checker instance) still passes through unaffected, same
     // as `groupChecksByProducer`'s own no-conflicting-signal fallback.
+    // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1, fresh
+    // evidence against the type-only filter immediately above): a check
+    // is `type: 'check-run'` for ANY Actions workflow, not only the real
+    // checker -- a second, unrelated workflow file that happens to
+    // publish a check-run under the identical `idd-advisory-convergence`
+    // name would still pass the type filter alone. Declared independently
+    // here (mirroring `MAX_PRE_MERGE_AUTO_WAIVER_RUN_LOOKUPS`'s own
+    // rationale above) rather than importing a shared constant from
+    // `advisory-convergence.mts`, to avoid a rebase collision with
+    // #2912's concurrent work there; a dedicated test pins this literal
+    // against the workflow file's own `name:` field so the two can never
+    // silently drift apart. `workflowName` absent (`''`, the pre-#1483
+    // data shape most fixtures in this suite still use) still passes
+    // through unaffected, same as the type filter's own fallback --
+    // narrowing further only excludes a POSITIVELY different workflow
+    // identity, never an unlabeled one.
+    const ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME =
+      'IDD advisory-convergence gate';
     const selfConvergenceProducerCandidates = selectLatestCheckPerName(
       selfConvergenceRawInstances,
     ).filter(
       (check) =>
         CHECK_PASS_EQUIVALENT_STATES.has(check.state) &&
-        (!check.type || check.type === 'check-run'),
+        (!check.type || check.type === 'check-run') &&
+        (!check.workflowName ||
+          check.workflowName === ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME),
     );
     for (const latestSelfConvergenceCheck of selfConvergenceProducerCandidates) {
       const autoWaiverRunVerified = options.autoWaiverRunVerified ?? {};

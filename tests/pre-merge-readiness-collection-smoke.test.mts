@@ -1373,7 +1373,16 @@ function runSelfWaiverCollection(
               status: 'COMPLETED',
               conclusion: 'SUCCESS',
               completedAt: '2026-08-01T00:00:00Z',
-              workflowName: 'idd-advisory-convergence',
+              // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1):
+              // the REAL workflow display name
+              // (`.github/workflows/idd-advisory-convergence.yml`'s own
+              // `name:` field) -- matches the same literal
+              // `tests/advisory-wait.test.mts`/`tests/pre-merge-readiness.test.mts`
+              // already use, not the check-name selector, which is a
+              // different string. `buildPreMergeReadinessSummary`'s own
+              // `staleSelfWaiver` computation now filters on this exact
+              // value.
+              workflowName: 'IDD advisory-convergence gate',
             },
           ],
           mergeable: 'MERGEABLE',
@@ -1601,4 +1610,54 @@ test('collectPreMergeReadiness against a fake provider (kurone-kito/idd-skill#29
   };
   assert.equal(staleSelfWaiver.stale, true);
   assert.equal(staleSelfWaiver.reason, 'expired');
+});
+
+test('collectPreMergeReadiness against a fake provider (kurone-kito/idd-skill#2911, Copilot review on PR #2915): a run-id cited by more than one comment tracks the NEWEST createdAt among them, so a stale first occurrence can never push the candidate out of the bounded window on its own', () => {
+  // The target run-id posts its marker TWICE (e.g. a retry within the
+  // same run): once very early (would rank last under the pre-fix
+  // "keep first occurrence" behavior) and once very late (would rank
+  // first under the fix). 20 decoys sit strictly BETWEEN the two
+  // target timestamps -- exactly enough to crowd the target out of the
+  // top-20-newest window if its OLD timestamp were the one tracked.
+  const decoys = Array.from({ length: 20 }, (_, index) =>
+    selfWaiverMarkerCollectionComment({
+      id: index + 1,
+      expiresAt: '2026-07-30T12:00:00Z',
+      runId: String(2000 + index),
+      createdAt: `2026-07-30T${String(index + 1).padStart(2, '0')}:00:00Z`,
+    }),
+  );
+  const targetFirstOccurrence = selfWaiverMarkerCollectionComment({
+    id: 21,
+    expiresAt: '2026-08-01T00:05:00Z',
+    runId: '999',
+    createdAt: '2026-07-30T00:00:00Z',
+  });
+  const targetSecondOccurrence = selfWaiverMarkerCollectionComment({
+    id: 22,
+    expiresAt: '2026-08-01T00:05:00Z',
+    runId: '999',
+    createdAt: '2026-07-31T23:50:00Z',
+  });
+  const report = runSelfWaiverCollection({
+    comments: {
+      42: [targetFirstOccurrence, ...decoys, targetSecondOccurrence],
+    },
+    changedFiles: { 42: ['.github/idd/config.json'] },
+    workflowRuns: {
+      'o/r/999': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+        head_sha: SELF_WAIVER_PR_HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      },
+      // No entries for the 20 decoy run-ids (2000-2019): if the bounded
+      // lookup ever selects one instead of the target run-id, the fake
+      // adapter throws and that decoy stays unverified -- harmless
+      // either way, keeping this test's only signal the target's own
+      // inclusion/exclusion.
+    },
+  });
+  const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
+  assert.equal(staleSelfWaiver.stale, true);
 });

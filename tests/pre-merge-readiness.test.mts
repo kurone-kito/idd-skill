@@ -10206,3 +10206,47 @@ test('#2911 (Codex review, PR #2915, P1, fresh evidence against the producer-gro
   );
   assert.equal(staleSelfWaiverOf(summary).stale, false);
 });
+
+test('#2911 (Codex review, PR #2915, P1, fresh evidence against the type-only filter): an unrelated Actions workflow publishing a check-run under the identical name never causes a false positive, even while the real checker workflow is genuinely fresh', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    // The REAL convergence workflow's own instance: fresh, no marker
+    // needed for it at all.
+    'SUCCESS',
+    '2026-05-11T23:55:00Z',
+  );
+  // A second, unrelated Actions workflow that happens to publish a
+  // check-run under the exact same `idd-advisory-convergence` name --
+  // type: 'check-run' alone (pre this fix) would let this producer
+  // through, and its own older instance can independently trigger a
+  // false `stale` regardless of the real checker's fresh state.
+  const checksWithDecoyWorkflowProducer = [
+    ...(base.checks ?? []),
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T20:00:00Z',
+      type: 'check-run',
+      workflowName: 'Some Other Workflow',
+    },
+  ];
+  const withDecoyWorkflowProducer = {
+    ...base,
+    checks: checksWithDecoyWorkflowProducer,
+  };
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-decoy-workflow',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T21:00:00Z',
+    runId: '8181',
+    createdAt: '2026-05-11T19:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...withDecoyWorkflowProducer,
+      comments: [...(withDecoyWorkflowProducer.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '8181': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});

@@ -924,9 +924,16 @@ export function collectPreMergeReadiness(
   // `getWorkflowRun` calls, only on the narrower set of PRs that already,
   // genuinely touch the allowlist.
   if (touchesSelfReferentialAllowlist) {
-    const autoWaiverRunIdCandidates: { runId: string; createdAt: string }[] =
-      [];
-    const seenAutoWaiverRunIds = new Set<string>();
+    // kurone-kito/idd-skill#2911 (Copilot review, PR #2915): keyed by
+    // `runId` (a Map, not an array + Set) so a SECOND comment citing an
+    // already-seen run id UPDATES that candidate's `createdAt` to the
+    // newer value instead of being silently dropped -- the same run can
+    // legitimately post more than one marker comment over its own
+    // lifetime (e.g. a retry within the run), and comments are typically
+    // returned oldest-first, so keeping only the first occurrence would
+    // anchor that candidate to a stale timestamp and could wrongly push
+    // it out of the newest-first bounded window under a flood.
+    const autoWaiverRunIdCandidates = new Map<string, string>();
     const prHeadShaLower = prHeadSha.toLowerCase();
     for (const comment of normalizedComments) {
       const body = comment.body;
@@ -947,19 +954,21 @@ export function collectPreMergeReadiness(
         parsed.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
         parsed.runId &&
         parseCanonicalIntegerOrNull(parsed.runId) !== null &&
-        !seenAutoWaiverRunIds.has(parsed.runId) &&
         String(parsed.headSha ?? '')
           .trim()
           .toLowerCase() === prHeadShaLower
       ) {
-        seenAutoWaiverRunIds.add(parsed.runId);
-        autoWaiverRunIdCandidates.push({
-          runId: parsed.runId,
-          createdAt: comment.createdAt,
-        });
+        const existingCreatedAt = autoWaiverRunIdCandidates.get(parsed.runId);
+        if (
+          existingCreatedAt === undefined ||
+          comment.createdAt.localeCompare(existingCreatedAt) > 0
+        ) {
+          autoWaiverRunIdCandidates.set(parsed.runId, comment.createdAt);
+        }
       }
     }
-    const boundedAutoWaiverRunIds = autoWaiverRunIdCandidates
+    const boundedAutoWaiverRunIds = [...autoWaiverRunIdCandidates]
+      .map(([runId, createdAt]) => ({ runId, createdAt }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, MAX_PRE_MERGE_AUTO_WAIVER_RUN_LOOKUPS)
       .map((candidate) => candidate.runId);
