@@ -663,6 +663,7 @@ jobs:
           printf 'commentId=%s\nbodyDigest=%s\n' "$COMMENT_ID" "$BODY_DIGEST" \
             > "/tmp/idd-self-waiver-marker/idd-self-waiver-marker-${COMMENT_ID}-${BODY_DIGEST}"
       - name: Upload the posted marker's provenance artifact
+        # v4+ has no GHES Artifacts backend (GHES needs v3.2.2); see kurone-kito/idd-skill#2918 and idd-template/docs/onboarding/optional-host-setup.md.
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: steps.post-waiver.outputs.applied == 'true' && steps.post-waiver.outputs.comment-id != '' && steps.post-waiver.outputs.body-digest != ''
         with:
