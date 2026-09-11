@@ -1977,6 +1977,14 @@ close.
   A `holder`
   snapshot of the previous occupant is reported on **both** a plain
   `collision` and an authorized takeover, not only on takeover.
+- `reacquired: true` also carries an optional `racedCreate: true` flag
+  (#2917 review, Codex): set when this exact
+  invocation's own first read found the lock absent and its own
+  exclusive-create attempt then lost a race to a concurrent same-`claim-id`
+  creator, so the eventual match came from a later retry, not the
+  invocation's first look. A caller trusting `reacquired: true` as
+  evidence the lock predates this call (as the backfill-tokens recovery
+  route does) must also require `racedCreate` to be absent/`false`.
 - The `--acquire` CLI exits `0` only for `acquired` and exits `2` for
   `collision`, so a hook can safely chain installation or another mutation
   with `&&`; `--check` remains read-only and exits `0` for a reported state.
@@ -1993,17 +2001,26 @@ close.
   `git worktree remove` at F4 deletes it together with the worktree
 - **`instructions-only` helper-free fallback** (no helper runtime
   available): resolve the private admin directory with
-  `git -C <worktree> rev-parse --absolute-git-dir`, then atomically
-  create an `idd-claim.lock` file there with an exclusive file-create
-  API (`open(..., O_CREAT|O_EXCL)` on POSIX, or the PowerShell
+  `git -C <worktree> rev-parse --absolute-git-dir`, then read the
+  `idd-claim.lock` path first, before writing anything. Present,
+  well-formed, and its holder matches (`agentId`, `claimId`) →
+  re-acquired without writing — this call's own first read found the
+  lock already there, mirroring the helper's `reacquired: true` with no
+  `racedCreate`. Absent → create it with an exclusive file-create API
+  (`open(..., O_CREAT|O_EXCL)` on POSIX, or the PowerShell
   `FileMode.CreateNew` equivalent), writing the same JSON holder shape
-  (`agentId`, `claimId`, `acquiredAt`). A path that already exists is a
-  collision; a matching holder may re-acquire, and a missing,
-  malformed, or unreadable holder is also a collision. Never delete or
-  override a different holder — enable a helper runtime for an
-  authorized takeover instead. Both profiles share the `idd-claim.lock`
-  namespace, so a helper-runtime session and an instructions-only
-  session see the same lock.
+  (`agentId`, `claimId`, `acquiredAt`). If that create then fails
+  because the path now exists (`EEXIST`), a concurrent same-claim-id
+  writer landed between the read and the create; re-read to confirm the
+  holder matches, but treat this outcome as a race, not as evidence the
+  lock predates this call — never equal it to a lock this same read
+  already found present (the helper's `racedCreate: true`, #2917
+  review, Codex). A path that already exists with a non-matching,
+  missing, malformed, or unreadable holder is a collision either way.
+  Never delete or override a different holder — enable a helper runtime
+  for an authorized takeover instead. Both profiles share the
+  `idd-claim.lock` namespace, so a helper-runtime session and an
+  instructions-only session see the same lock.
 
 ### Worktree-local generated-tokens record
 
@@ -2016,8 +2033,10 @@ close.
   [`idd-claim.instructions.md`'s Worktree-local lock file section](../.github/instructions/idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision).
 - Source repo / vendored-node commands:
   `node scripts/claim-lock.mjs --record-tokens --worktree <path>
-  --agent-id <id> --claim-id <id> [--nonce <nonce>]`
-  and `node scripts/claim-lock.mjs --read-tokens --worktree <path>
+  --agent-id <id> --claim-id <id> [--nonce <nonce>]`,
+  `node scripts/claim-lock.mjs --read-tokens --worktree <path>
+  --claim-id <id>`, and
+  `node scripts/claim-lock.mjs --backfill-tokens --worktree <path>
   --claim-id <id>`
 - Package-manager / ephemeral-npx command: use the same profile-selected
   `idd:claim-lock` command as the lock above; the literal invocations are:
@@ -2029,6 +2048,9 @@ close.
 
   npx --yes --package <helper-package-spec> \
     idd-claim-lock --read-tokens --worktree <path> --claim-id <id>
+
+  npx --yes --package <helper-package-spec> \
+    idd-claim-lock --backfill-tokens --worktree <path> --claim-id <id>
   ```
 
 - **When to call `--record-tokens`**: once at A5 claim time, right after
@@ -2066,6 +2088,83 @@ close.
   at); `present: false` means this claim-id was never recorded. Treat
   `malformed` the same as absent for an ownership check — never trust a
   claim-id this record does not affirmatively confirm.
+- **When to call `--backfill-tokens`** (#2884): the recovery route the
+  Claim revalidation gate's step 5 documents for an absent or malformed
+  `--read-tokens` result -- a worktree whose B1 predates this
+  generated-tokens-record feature (a rollout gap: PR #2879 review, Codex
+  P1) never gets a record written, so `--read-tokens` fails closed
+  forever with no recovery otherwise. Reads the existing `idd-claim.lock`
+  file at `<path>` (the same resolution `--check` uses) and writes only
+  when it is present and its own `claimId` matches the given
+  `--claim-id` exactly, using the lock's own `agentId` and no `--nonce`
+  (matching a fresh pre-nonce `--record-tokens` call) unless a
+  well-formed record for this `--claim-id` is already present, in which
+  case its own `nonce` is preserved rather than silently erased (the
+  documented recovery route only ever reaches this command when
+  `--read-tokens` reported absent/malformed -- meaning no well-formed
+  record exists yet -- but the CLI itself does not enforce that
+  precondition, so it guards against a direct out-of-band invocation
+  too, #2917 review): reports
+  `backfilled`. An absent lock reports `lock-absent`; an unparseable or
+  otherwise unreadable lock (for example a directory at the lock path)
+  reports `lock-malformed`; a lock present for a different `claimId`
+  reports `lock-mismatch` (naming the actual holder); a matching lock
+  whose own record path is a directory reports `record-blocked` instead
+  of deleting it -- the lock only authenticates the lock, not this
+  separate path, and the path's hash suffix is not collision-proof, so
+  lock authority alone never authorizes replacing it (#2917 review,
+  Copilot) -- all four write nothing. Exits `0` for `backfilled` and `2`
+  for the four failure statuses, mirroring `--acquire`'s own collision
+  exit-code contract so a
+  caller can chain `--backfill-tokens && --read-tokens`. Performs no
+  GitHub round-trip, matching `--acquire`'s own same-machine, no-network
+  design -- the caller is responsible for having already independently
+  confirmed the live claim-id via GitHub before ever reaching this
+  recovery step; this command only ever reconciles local worktree state,
+  never adjudicates claim ownership itself. Re-invoking after a
+  successful backfill is always a safe, idempotent overwrite (reports
+  `backfilled` again), matching `--record-tokens`'s own idempotency
+  contract -- there is no separate `already-present` status. The Claim
+  revalidation gate (step 5, `idd-overview-core.instructions.md`, and
+  the equivalent step in every lite guard) reaches this route only
+  through a chain in which **each step gates the next** -- proceed to
+  the next step only on the exact result shown, and stop fail-closed on
+  any other result:
+  0. The gate's own initial `--acquire` reports `reacquired: true` with
+  no `racedCreate` -- a fresh `acquired` (lock just created),
+  `forcedTakeover: true`, or `reacquired: true` with `racedCreate:
+     true` (this call itself raced a concurrent creator for the same
+  claim-id, so the match is not proof the lock predates this gate
+  pass) are never legitimate backfill evidence.
+  1. `--check` reports the lock `present`, holder matching
+     `{claim-id}`.
+  2. `--backfill-tokens` reports `backfilled`.
+  3. The retried `--read-tokens` reports `present: true` (no
+     `malformed`).
+  4. A final `--acquire`, run again immediately before the mutation,
+     reports `reacquired: true` with no `racedCreate` -- the same
+     requirement as step 0, applied again because a fresh `acquired`
+     here would mean the lock vanished mid-recovery (for example a
+     concurrent takeover) and this step would otherwise create a new
+     one and let the mutation proceed with no real token evidence.
+
+  This closes gaps three review rounds each found real: the window
+  between the initial acquire and the mutation that a concurrent
+  takeover could exploit; a literal reading of the sequence as an
+  unconditional run-these-in-order list rather than a chain each link
+  of which must actually succeed; and `reacquired: true` alone being
+  trusted as proof of pre-existence when a same-claim-id race can
+  produce it for a lock that is in fact only microseconds old
+  (`acquireClaimLock`'s own `EEXIST`-retry loop,
+  `src/scripts/claim-lock.mts`) (#2917 review, Codex and Copilot).
+  Residual, named rather than hidden: a _third_ process arriving after
+  such a race has already settled sees `reacquired: true` with no
+  `racedCreate` on its own first read, the same way it would for a
+  lock that is genuinely years old -- this mechanism only ever detects
+  a race this specific call itself observed, never a lock's true age;
+  the Claim revalidation gate's own GitHub-verified claim check (steps
+  1-4 before this one) is the actual authority this is defense in
+  depth for, not a replacement for it.
 - No explicit release verb, no cleanup across takeovers: like the lock
   file, the record lives inside the worktree's own private git-admin
   directory, so `git worktree remove` at F4 deletes it together with the
@@ -2100,7 +2199,11 @@ close.
   `{ agentId, claimId, nonce?, recordedAt }`. No
   exclusive-create semantics needed (unlike the lock): a plain atomic
   replace is correct since this is idempotent evidence, not a
-  mutual-exclusion primitive.
+  mutual-exclusion primitive -- except a directory already occupying
+  this exact path, which this fallback never replaces or deletes
+  either, matching `recordGeneratedClaimTokens`'s own absolute
+  invariant in `src/scripts/claim-lock.mts` (PR #2879 regression test;
+  #2917 review, Copilot); stop fail-closed instead.
 - **`instructions-only` helper-free fallback, read side** (#2879 review,
   Codex P1 -- the mandatory `--read-tokens` check in the Claim
   revalidation gate has no helper-free path without this): resolve the
@@ -2112,6 +2215,33 @@ close.
   `present: true, malformed: true`; only a well-formed record whose
   `claimId` field matches is plain `present: true`. Treat `malformed`
   the same as absent for the ownership check -- fail closed on both.
+- **`instructions-only` helper-free fallback, backfill side** (#2884 --
+  the same class of gap PR #2879's Codex P1 review flagged for
+  `--read-tokens` above: a mandatory gate-recovery step needs a
+  helper-free path too, and `instructions-only` is the distributed
+  default profile): resolve the worktree-local lock file the same way as
+  the lock section above and parse it the same way `--check` does --
+  but only when your own _first read_ in the acquire step above already
+  found the lock present and matching, never when it was absent there
+  and your own exclusive-create then failed `EEXIST`. That failure means
+  a concurrent same-claim-id writer landed between your read and your
+  create -- a race, not evidence the lock predates this gate pass; the
+  helper's own `racedCreate: true` marks exactly this case (#2917
+  review, Codex). Only when it parses as well-formed and its `claimId`
+  field equals the active `{claim-id}` exactly, apply the write-side
+  fallback above using the lock's own `agentId`, carrying forward an
+  existing well-formed record's own `nonce` when present, otherwise no
+  `nonce` (#2917 review, Copilot) -- except when the record's own
+  resolved path is already occupied by a directory: leave it and its
+  contents untouched and stop fail-closed instead, mirroring the CLI's
+  own `record-blocked` status (`backfillGeneratedClaimTokens`,
+  `src/scripts/claim-lock.mts`) -- a matching lock authenticates the
+  lock, not that separate path, and the path's hash suffix is not
+  collision-proof, so lock authority alone never authorizes replacing it
+  (#2917 review, Copilot). An absent lock, a lock that fails to parse, a
+  lock whose `claimId` differs, or a lock your own first read did not
+  already find present and matching all leave the existing fail-closed
+  stop unchanged -- write nothing.
 
 ### Clone-scoped lock
 

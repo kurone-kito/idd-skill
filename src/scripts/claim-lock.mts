@@ -77,6 +77,27 @@
 // generated, rather than one merely recalled from (possibly compacted)
 // conversation context.
 //
+// Backfill recovery route (#2884): an adopter who upgrades their
+// `idd-template/` copy to gain the generated-tokens-record feature while a
+// claim already has its B1 worktree (created before this feature existed)
+// never reruns the claim-posting sequence or B1, so no generated-tokens
+// record is ever created in that worktree -- every subsequent
+// `--read-tokens` check then fails closed forever, even though the
+// session still legitimately owns the claim (PR #2879 review, Codex P1).
+// `--backfill-tokens` closes that gap by trusting the worktree's own
+// `idd-claim.lock` file instead of a live GitHub round-trip: that lock
+// already carries the legitimate `agentId` for exactly this scenario, and
+// is mechanically verifiable on disk rather than relying on the current
+// session's own (possibly compacted) recollection. It writes only when
+// the lock is present and its own `claimId` matches the caller's
+// `--claim-id` exactly; an absent, malformed, or mismatched lock all fail
+// closed with a distinct status and write nothing. The caller -- the
+// Claim revalidation gate's documented recovery route -- is responsible
+// for having already independently confirmed the live claim-id via
+// GitHub before ever reaching this step; this command itself never makes
+// a GitHub round-trip, matching `--acquire`'s own same-machine, no-network
+// design.
+//
 // Scope of the ownership proof (#2879 review, Codex P1): a `present: true`
 // `--read-tokens` result proves "a `--record-tokens` call for this exact
 // claim-id landed at this path" -- it does not cryptographically bind that
@@ -146,6 +167,7 @@ const CLAIM_LOCK_FLAG_SPEC = {
   '--check': { type: 'boolean' },
   '--record-tokens': { type: 'boolean' },
   '--read-tokens': { type: 'boolean' },
+  '--backfill-tokens': { type: 'boolean' },
   '--worktree': { type: 'string' },
   '--agent-id': { type: 'string' },
   '--claim-id': { type: 'string' },
@@ -410,11 +432,21 @@ function overwriteLockAtomically(
   });
 }
 
-/** Outcome shape returned by {@link acquireClaimLock}. */
+/**
+ * Outcome shape returned by {@link acquireClaimLock}. `racedCreate` is
+ * only ever set alongside `reacquired: true`: it means this exact
+ * invocation's own first read found the lock absent, and its own
+ * exclusive-create attempt then lost a race to a concurrent same-`claim-id`
+ * creator (#2917 review, Codex) -- so the eventual match
+ * came from a later retry, not this invocation's first look, and is not
+ * proof the lock predates this call. See {@link acquireClaimLock}'s doc
+ * comment for the full rationale.
+ */
 export interface AcquireLockOutcome {
   mode: 'acquired' | 'collision';
   path: string;
   reacquired?: boolean;
+  racedCreate?: boolean;
   forcedTakeover?: boolean;
   holder?: ClaimLockBody;
 }
@@ -432,6 +464,19 @@ export interface AcquireLockOutcome {
  * independently re-verify live claim state (e.g.
  * `resume-claim-routing.mjs --fresh-claim-gate`) before retrying with
  * `takeover: true`.
+ *
+ * `reacquired: true` from this function's very first read (before this
+ * call has attempted any write of its own) means the lock definitely
+ * predates this call. Every other path that produces `reacquired: true`
+ * -- a later loop iteration, or either post-retry fallback below -- is
+ * reached only after this call's own first read found the lock *absent*
+ * and its own create attempt then hit `EEXIST`, meaning some concurrent
+ * writer created the matching lock while this call was still running.
+ * That is a genuine race this call itself observed, not evidence the
+ * lock is old, so those paths also set `racedCreate: true` -- a caller
+ * treating `reacquired: true` as proof of pre-existence (the
+ * `--backfill-tokens` recovery route does) must require `racedCreate` to
+ * be absent too (#2917 review, Codex).
  */
 export function acquireClaimLock(
   worktree: string,
@@ -445,7 +490,9 @@ export function acquireClaimLock(
     const read = readLock(path);
 
     if (read.status === 'present' && read.lock.claimId === claimId) {
-      return { mode: 'acquired', path, reacquired: true };
+      return attempt === 0
+        ? { mode: 'acquired', path, reacquired: true }
+        : { mode: 'acquired', path, reacquired: true, racedCreate: true };
     }
 
     if (read.status === 'absent') {
@@ -457,7 +504,10 @@ export function acquireClaimLock(
           throw error;
         }
         // Raced with a concurrent fresh acquire between the read above and
-        // this create; loop around to re-read and re-decide.
+        // this create; loop around to re-read and re-decide. Any
+        // `reacquired: true` this call reports from here on is no longer
+        // from its own first look, so it also carries `racedCreate: true`
+        // (see the function-level doc comment above).
         continue;
       }
     }
@@ -478,10 +528,13 @@ export function acquireClaimLock(
   // Re-read once after the final EEXIST so a well-formed winner is reported
   // to the caller instead of being returned as an unexplained collision. If
   // the winner disappeared before this read, make one last create attempt so
-  // a transiently absent lock is not reported as a false collision.
+  // a transiently absent lock is not reported as a false collision. Every
+  // return below is reached only after this call's own first read already
+  // found the lock absent (that is how the loop above was entered at all),
+  // so every `reacquired: true` from here on carries `racedCreate: true`.
   const finalRead = readLock(path);
   if (finalRead.status === 'present' && finalRead.lock.claimId === claimId) {
-    return { mode: 'acquired', path, reacquired: true };
+    return { mode: 'acquired', path, reacquired: true, racedCreate: true };
   }
   if (finalRead.status === 'absent') {
     try {
@@ -496,7 +549,7 @@ export function acquireClaimLock(
         racedRead.status === 'present' &&
         racedRead.lock.claimId === claimId
       ) {
-        return { mode: 'acquired', path, reacquired: true };
+        return { mode: 'acquired', path, reacquired: true, racedCreate: true };
       }
       return {
         mode: 'collision',
@@ -626,6 +679,16 @@ export function readGeneratedClaimTokens(
  * claimId}`, again with `{agentId, claimId, nonce}` right before the
  * activation-nonce marker posts, and again in the new sibling worktree at
  * B1) is always a safe, expected, idempotent overwrite of the same path.
+ *
+ * Never replaces a directory occupying the resolved path (regression,
+ * #2879 review): a matching `idd-claim.lock` authenticates the claim
+ * lock, not the token record's own path, and this filename's hash
+ * suffix is not collision-proof, so lock authority alone does not prove
+ * a directory here is disposable -- unlike `overwriteLockAtomically`'s
+ * narrower, GitHub-reverified-takeover-gated grant for the lock file
+ * itself (#2917 review, Copilot). {@link backfillGeneratedClaimTokens}
+ * reports a distinct `record-blocked` status for exactly this case
+ * instead of calling this function at all.
  */
 export function recordGeneratedClaimTokens(
   cwd: string,
@@ -642,11 +705,128 @@ export function recordGeneratedClaimTokens(
   return { path };
 }
 
+/**
+ * Outcome shape returned by {@link backfillGeneratedClaimTokens}. `path` is
+ * the generated-tokens record's own path, reported on every status
+ * (mirroring {@link GeneratedTokensReadResult}'s convention of reporting
+ * `path` even when absent/malformed) since it is resolved from `worktree`
+ * and `claimId` alone, independent of whether the lock read succeeded.
+ * `lockPath` is the separate `idd-claim.lock` path this command reads to
+ * decide. `holder` is populated only for `lock-mismatch`, naming the
+ * lock's actual (different) claim -- mirroring {@link AcquireLockOutcome}'s
+ * own `holder` field on a collision. `agentId` is populated only for
+ * `backfilled`, naming the lock-sourced agent-id that was written.
+ */
+export interface BackfillTokensOutcome {
+  status:
+    | 'backfilled'
+    | 'lock-absent'
+    | 'lock-malformed'
+    | 'lock-mismatch'
+    | 'record-blocked';
+  lockPath: string;
+  path: string;
+  agentId?: string;
+  holder?: ClaimLockBody;
+}
+
+/**
+ * Recovery route (#2884) for a worktree whose generated-tokens record
+ * (#2719) was never created because its B1 worktree predates that
+ * feature: reconstruct it from the worktree's own `idd-claim.lock` file,
+ * which already carries the legitimate `agentId` for exactly this
+ * rollout-gap scenario (PR #2879 review, Codex P1) -- see the header
+ * comment's "Backfill recovery route" paragraph for the full rationale.
+ *
+ * Fails closed -- writes nothing -- unless the lock is present and its
+ * own `claimId` matches `claimId` exactly:
+ *
+ * - Absent lock → `lock-absent`.
+ * - Malformed lock (unparseable, or an unreadable path such as a
+ *   directory) → `lock-malformed`.
+ * - Present lock recorded for a different `claimId` → `lock-mismatch`
+ *   (with `holder` naming the actual lock holder, never silently trusted).
+ * - Present lock whose `claimId` matches, but a directory already
+ *   occupies the generated-tokens record's own path → `record-blocked`.
+ *   A matching lock authenticates the *lock*, not this separate path, and
+ *   the path's hash suffix is not collision-proof, so lock authority
+ *   alone does not prove a directory here is disposable -- this stays
+ *   fail-closed rather than deleting it, unlike the lock file's own
+ *   GitHub-reverified-takeover-gated directory replacement (#2917
+ *   review, Copilot). `--read-tokens` already reports this same
+ *   directory-at-path case as `malformed`, so a caller following the
+ *   documented gated sequence stops here with no further action needed.
+ * - Present lock whose `claimId` matches, and no directory blocks the
+ *   record path → writes the generated-tokens record via
+ *   {@link recordGeneratedClaimTokens}, using the lock's own `agentId`
+ *   and no `nonce` (matching a fresh pre-nonce `--record-tokens` call) →
+ *   `backfilled`. If a well-formed record for this exact `claimId`
+ *   already exists (outside the documented recovery route, which only ever
+ *   reaches this function when `--read-tokens` reported absent/malformed --
+ *   meaning no well-formed record exists yet -- so this is a defensive
+ *   guard against a caller invoking this function directly against
+ *   caller-discipline), its own `nonce` is preserved rather than silently
+ *   erased: {@link recordGeneratedClaimTokens} replaces the whole record,
+ *   so writing with no `nonce` unconditionally would otherwise drop an
+ *   existing one (#2917 review, Copilot).
+ *
+ * Performs no GitHub round-trip on any path, matching `--acquire`'s own
+ * same-machine, no-network design. Re-invoking after a successful backfill
+ * always reports `backfilled` again -- a safe, idempotent overwrite via
+ * `recordGeneratedClaimTokens`'s own existing idempotency contract, not a
+ * separate `already-present` status.
+ */
+export function backfillGeneratedClaimTokens(
+  worktree: string,
+  claimId: string,
+): BackfillTokensOutcome {
+  const lockPath = resolveClaimLockPath(worktree);
+  const path = resolveGeneratedTokensPath(worktree, claimId);
+  const read = readLock(lockPath);
+
+  if (read.status === 'absent') {
+    return { status: 'lock-absent', lockPath, path };
+  }
+  if (read.status === 'malformed') {
+    return { status: 'lock-malformed', lockPath, path };
+  }
+  if (read.lock.claimId !== claimId) {
+    return { status: 'lock-mismatch', lockPath, path, holder: read.lock };
+  }
+
+  // A directory at the record's own path is never authorized to be
+  // replaced here -- see the function-level doc comment above and
+  // recordGeneratedClaimTokens's own doc comment.
+  try {
+    if (statSync(path).isDirectory()) {
+      return { status: 'record-blocked', lockPath, path };
+    }
+  } catch {
+    // Absent, or an unreadable non-directory path: fall through and let
+    // recordGeneratedClaimTokens's own atomic-write handle it the same
+    // way it always has.
+  }
+
+  // Preserve an existing well-formed record's own nonce, if any -- see the
+  // function-level doc comment above.
+  const existing = readGeneratedClaimTokens(worktree, claimId);
+  const nonce =
+    existing.status === 'present' ? existing.record.nonce : undefined;
+
+  recordGeneratedClaimTokens(worktree, {
+    agentId: read.lock.agentId,
+    claimId,
+    ...(nonce === undefined ? {} : { nonce }),
+  });
+  return { status: 'backfilled', lockPath, path, agentId: read.lock.agentId };
+}
+
 interface ParsedArgs {
   acquire: boolean;
   check: boolean;
   recordTokens: boolean;
   readTokens: boolean;
+  backfillTokens: boolean;
   worktree: string | null;
   agentId: string | null;
   claimId: string | null;
@@ -662,6 +842,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     check: Boolean(values.check),
     recordTokens: Boolean(values['record-tokens']),
     readTokens: Boolean(values['read-tokens']),
+    backfillTokens: Boolean(values['backfill-tokens']),
     worktree: typeof values.worktree === 'string' ? values.worktree : null,
     agentId:
       typeof values['agent-id'] === 'string'
@@ -677,11 +858,15 @@ function parseArgs(argv: string[]): ParsedArgs {
   };
 }
 
-/** Exactly one of the four mode flags, for the `runCli` mode-selection error. */
+/** Exactly one of the five mode flags, for the `runCli` mode-selection error. */
 function selectedModeCount(args: ParsedArgs): number {
-  return [args.acquire, args.check, args.recordTokens, args.readTokens].filter(
-    Boolean,
-  ).length;
+  return [
+    args.acquire,
+    args.check,
+    args.recordTokens,
+    args.readTokens,
+    args.backfillTokens,
+  ].filter(Boolean).length;
 }
 
 function runCli(): void {
@@ -692,7 +877,7 @@ function runCli(): void {
   }
   if (selectedModeCount(args) !== 1) {
     throw new Error(
-      'exactly one of --acquire, --check, --record-tokens, or --read-tokens is required',
+      'exactly one of --acquire, --check, --record-tokens, --read-tokens, or --backfill-tokens is required',
     );
   }
   if (args.worktree === null) {
@@ -735,6 +920,18 @@ function runCli(): void {
     return;
   }
 
+  if (args.backfillTokens) {
+    if (args.claimId === null) {
+      throw new Error('--claim-id is required for --backfill-tokens');
+    }
+    const outcome = backfillGeneratedClaimTokens(args.worktree, args.claimId);
+    process.stdout.write(`${JSON.stringify(outcome)}\n`);
+    if (outcome.status !== 'backfilled') {
+      process.exitCode = 2;
+    }
+    return;
+  }
+
   if (args.agentId === null) {
     throw new Error('--agent-id is required for --acquire');
   }
@@ -759,6 +956,7 @@ function printHelp(): void {
   node scripts/claim-lock.mjs --check --worktree <path>
   node scripts/claim-lock.mjs --record-tokens --worktree <path> --agent-id <id> --claim-id <id> [--nonce <nonce>]
   node scripts/claim-lock.mjs --read-tokens --worktree <path> --claim-id <id>
+  node scripts/claim-lock.mjs --backfill-tokens --worktree <path> --claim-id <id>
 
 Worktree-local lock file: a same-machine fast path that complements the
 cross-machine activation-nonce claim check. Resolves the lock file inside
@@ -803,5 +1001,28 @@ recorded (or was recorded under a different claim-id, which resolves to a
 different path). Both \`malformed\` and absent must be treated the same
 way by a caller checking ownership: never trust a claim-id this record
 does not affirmatively confirm.
+
+--backfill-tokens is the recovery route for a worktree whose
+generated-tokens record was never created because its B1 worktree
+predates the record feature: it reads the existing \`idd-claim.lock\` file
+and, only when present with a --claim-id that matches exactly, writes the
+generated-tokens record using the lock's own recorded agent-id, with no
+--nonce unless an existing well-formed record for this --claim-id already
+carries one, which is preserved rather than erased. An absent lock reports
+\`lock-absent\`, an unparseable or
+unreadable lock reports \`lock-malformed\`, a lock recorded for a
+different claim-id reports \`lock-mismatch\` (naming the actual holder),
+and a matching lock whose own record path is blocked by a directory
+reports \`record-blocked\` (a matching lock authenticates the lock, not
+that separate path, so this stays fail-closed rather than deleting it)
+-- all four write nothing. A successful write reports \`backfilled\` and
+exits 0; the four failure statuses exit 2, mirroring --acquire's own
+collision exit-code contract so a caller can chain
+\`--backfill-tokens && --read-tokens\`. Like --acquire, this performs no
+GitHub round-trip -- the caller must have already independently confirmed
+the live claim-id via GitHub before reaching this recovery step.
+Re-invoking after a successful backfill is always a safe, idempotent
+overwrite (reports \`backfilled\` again), matching --record-tokens's own
+idempotency contract.
 `);
 }
