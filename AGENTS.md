@@ -140,6 +140,19 @@ layered on top of the distributed IDD defaults:
   full hour -- a HEAD CodeRabbit has not yet reviewed still waits the
   full configured window unchanged, keeping the wait a fallback for
   genuine secondary-bot degradation rather than a tax on every merge.
+- **New-CI-job dispatch-first rollout**: `idd-pr-submit.instructions.md`'s
+  D2 "Adding a new CI job" guidance (distributed via `idd-template/`, not
+  itself local) requires landing a new CI job `workflow_dispatch`-first.
+  This source repository also records, as a local IDD dogfooding policy
+  (applies only to `kurone-kito/idd-skill`), the motivation for that
+  guidance: this repository's own `copilot_code_review` ruleset, whose
+  Copilot/Codex review cost tracks push count roughly 1:1 regardless of
+  which CI jobs a push touches -- landing a new job
+  `workflow_dispatch`-first does not reduce that review-cost line item
+  by itself, but avoids wasted CI Actions-minutes and false-failure
+  noise from an unproven job auto-running on every unrelated push. See
+  that guidance (and its linked rationale entry) for the mechanics
+  rather than duplicating them here. Refs #2892 (non-blocking).
 
 ## Branch strategy
 
