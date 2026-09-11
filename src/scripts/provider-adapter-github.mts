@@ -2482,6 +2482,24 @@ export function createGithubProviderAdapter(
       return JSON.parse(raw.trim() || '{}');
     },
 
+    listWorkflowRunArtifacts(
+      artifactsOwner: string,
+      artifactsRepo: string,
+      runId: string | number,
+    ): unknown {
+      // Not `--paginate`, same rationale as getWorkflowRunJobs above: a
+      // run legitimately uploads at most a handful of artifacts, well
+      // under the API's own per-page cap.
+      const raw = deps.ghText(
+        [
+          'api',
+          `repos/${artifactsOwner}/${artifactsRepo}/actions/runs/${runId}/artifacts`,
+        ],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      );
+      return JSON.parse(raw.trim() || '{}');
+    },
+
     listWorkflowRuns(
       runsOwner: string,
       runsRepo: string,

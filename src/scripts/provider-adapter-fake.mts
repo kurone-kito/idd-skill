@@ -212,6 +212,10 @@ export interface FakeProviderFixture {
    * `${owner}/${repo}/${runId}`; an absent key throws (matches the
    * adapter's own no-catch, throw-on-failure contract). */
   workflowRunJobs?: Record<string, unknown>;
+  /** Backs {@link ProviderPort.listWorkflowRunArtifacts}, keyed by
+   * `${owner}/${repo}/${runId}`; an absent key throws (matches the
+   * adapter's own no-catch, throw-on-failure contract). */
+  workflowRunArtifacts?: Record<string, unknown>;
   /** Backs {@link ProviderPort.listWorkflowRuns}, keyed by `${owner}/${repo}/${workflowName}`. */
   workflowRunLists?: Record<
     string,
@@ -782,6 +786,22 @@ export function createFakeProviderAdapter(
       if (value === undefined) {
         throw new Error(
           `fake provider: no workflow-run-jobs fixture for ${key}`,
+        );
+      }
+      return value;
+    },
+
+    listWorkflowRunArtifacts(
+      artifactsOwner: string,
+      artifactsRepo: string,
+      runId: string | number,
+    ): unknown {
+      // Same throw-on-missing contract as getWorkflowRunJobs above.
+      const key = `${artifactsOwner}/${artifactsRepo}/${runId}`;
+      const value = fixture.workflowRunArtifacts?.[key];
+      if (value === undefined) {
+        throw new Error(
+          `fake provider: no workflow-run-artifacts fixture for ${key}`,
         );
       }
       return value;

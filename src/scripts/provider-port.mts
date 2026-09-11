@@ -1129,6 +1129,40 @@ export interface ProviderPort {
     runId: string | number,
   ): unknown;
 
+  /** checks. `actions/runs/{runId}/artifacts` -- the run-scoped Actions
+   * artifacts a single workflow run uploaded, raw passthrough (name + id
+   * only; small enough not to need `--paginate` -- a run legitimately
+   * uploads at most a handful). kurone-kito/idd-skill#2912 (round 2):
+   * `advisory-convergence.mts`'s self-referential-bootstrap-auto trust
+   * chain reads this to recover the SET of issue-comment ids the cited
+   * run's own trusted `idd-advisory-convergence-self-waiver` job attests
+   * to having posted, encoded in each artifact's own `name` (never its
+   * content, so no zip download/extraction is needed here -- listing
+   * alone is enough). Artifacts are the correct binding primitive for
+   * this specific purpose because they are scoped to the run that
+   * uploaded them by the Actions runtime's own dedicated upload token,
+   * never by the shared `GITHUB_TOKEN` `permissions:` surface every
+   * OTHER resource this trust chain touches (issue comments, check
+   * runs) is created and mutated through -- so a same-repository
+   * `pull_request`-triggered workflow (untrusted, PR-controlled code)
+   * cannot create, edit, or delete an artifact belonging to a different,
+   * legitimate `pull_request_target` run no matter which `permissions:`
+   * it self-grants, closing the comment-deletion gap a plain "no
+   * duplicate marker currently visible" scan left open (see
+   * `verifySelfReferentialBootstrapWaiverArtifactBinding`'s own doc
+   * comment for the full exploit and residual). Same `string | number`
+   * `runId` type as {@link getWorkflowRun}, for the same above-
+   * `Number.MAX_SAFE_INTEGER` reason; no new `GITHUB_TOKEN` permission is
+   * required -- this endpoint shares the `actions: read` scope
+   * {@link getWorkflowRun} already needs, and uploading the artifact in
+   * the posting job needs no `permissions:` entry at all (the Actions
+   * runtime's upload token is separate from `GITHUB_TOKEN`). */
+  listWorkflowRunArtifacts(
+    owner: string,
+    repo: string,
+    runId: string | number,
+  ): unknown;
+
   /** checks. `gh run list --workflow {name} --limit N --json
    * databaseId,conclusion,status,createdAt` -- distinct `gh run list`
    * shape, not a `gh api` call. */

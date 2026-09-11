@@ -36,6 +36,7 @@ import {
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX,
   SELF_REFERENTIAL_WAIVER_JOB_ID,
   SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
   SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
@@ -3205,8 +3206,19 @@ function acceptedRunJobLookup() {
   };
 }
 
-function acceptedCandidateTimestamps() {
-  return { [RUN_ID]: [RECENT] };
+// kurone-kito/idd-skill#2912 (round 2): the decimal comment id the
+// accepted marker's own comment carries in every test below that reuses
+// these fixtures -- must match `SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX
+// + COMMENT_ID` in `acceptedTrustedCommentIds()` below for
+// `verifySelfReferentialBootstrapWaiverArtifactBinding` to accept it.
+const COMMENT_ID = '987654321';
+
+function acceptedRunIdCandidates() {
+  return { [RUN_ID]: [{ id: COMMENT_ID, createdAt: RECENT }] };
+}
+
+function acceptedTrustedCommentIds() {
+  return { [RUN_ID]: [COMMENT_ID] };
 }
 
 test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true immediately, before deadlinePassed/terminalUnavailable (regression for the 2026-09-10 self-cancellation shape)', () => {
@@ -3223,7 +3235,8 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
       autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
-      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3505,7 +3518,8 @@ test('self-referential-bootstrap-auto: a run reported with different repository-
         },
       },
       autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
-      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3741,7 +3755,8 @@ test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a r
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
       autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
-      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3810,7 +3825,8 @@ test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
       autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
-      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3999,7 +4015,8 @@ test('self-referential-bootstrap-auto: a vendored-node adopter touching its own 
         },
       },
       autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
-      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: ['scripts/advisory-convergence.mjs'],
     }),
     baseOptions({
@@ -4033,7 +4050,8 @@ test('self-referential-bootstrap-auto: a package-manager adopter touching packag
         },
       },
       autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
-      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: ['package.json'],
     }),
     baseOptions({
@@ -4122,13 +4140,64 @@ test('self-referential-bootstrap-auto: this source repository ignores its own co
 // --- cites SOME genuine run of the right shape, never that THAT run's
 // --- own job actually posted THIS comment.
 
-test('self-referential-bootstrap-auto: a forged marker sharing a legitimate run id with a genuine marker is rejected (duplicate run-id, no winner picked)', () => {
-  // A same-repository `pull_request`-triggered workflow can discover
-  // this legitimate run's id via the public Actions API and post its
-  // own forged marker citing it -- both markers here independently
-  // satisfy every other condition (run shape, job success, timing
-  // window), isolating duplicate-run-id detection as the one thing
-  // that rejects this.
+test('self-referential-bootstrap-auto: a genuine marker deleted after posting leaves a same-run-id forged sibling rejected, never the sole winner (kurone-kito/idd-skill#2912, round 2 P1: Codex + Copilot review, PR #2914)', () => {
+  // The genuine marker's own comment id (`COMMENT_ID`) is what the
+  // cited run's OWN trusted job execution recorded posting, via the
+  // artifact-name-encoded `autoWaiverRunArtifactCommentIds` below -- that
+  // record persists even after the comment itself is deleted (`issues:
+  // write` permits deleting ANY comment, not only ones the deleting
+  // token authored). `comments`/`autoWaiverRunIdCandidates` below model
+  // the POST-DELETION state: only the forged sibling (`FORGED_COMMENT_ID`)
+  // is still live, sharing the genuine marker's exact `createdAt` (an
+  // attacker racing to post within the same second the genuine job
+  // posts, then deleting it). The forged id was never, and can never be,
+  // recorded in the trusted set -- no same-repository `pull_request`-
+  // triggered workflow can write to a different run's own artifact list
+  // -- so it is rejected regardless of how convincingly it otherwise
+  // qualifies (right run shape, right job-success window).
+  const FORGED_COMMENT_ID = '111222333';
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          // The forged sibling -- the ONLY comment still live; the
+          // genuine one has been deleted.
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: {
+        [RUN_ID]: [{ id: FORGED_COMMENT_ID, createdAt: RECENT }],
+      },
+      // The trusted set still names the GENUINE (now-deleted) comment's
+      // id -- the artifact the trusted job uploaded is immutable and
+      // unaffected by the deletion.
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: two distinct candidates sharing the same run id and the same wall-clock second are rejected, never picking a winner (round-1 duplicate-run-id property, preserved under the round-2 artifact-binding mechanism)', () => {
+  // A genuine marker and a forged sibling racing to land inside the
+  // SAME execution window, timestamped to the SAME second -- ambiguous
+  // for `verifySelfReferentialBootstrapWaiverArtifactBinding`'s own
+  // createdAt correlation (it cannot tell which of the two live
+  // candidates `entry` actually is), so both fail closed regardless of
+  // which one's id happens to be trusted.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [],
@@ -4139,25 +4208,16 @@ test('self-referential-bootstrap-auto: a forged marker sharing a legitimate run 
           body: autoWaiverBody(),
           createdAt: RECENT,
         },
-        {
-          // The forged sibling: same run id, a moment later, from a
-          // different (attacker-controlled) posting step -- but the
-          // consumer only ever sees another `github-actions[bot]`-
-          // authored comment citing the same run.
-          author: { login: BOT_LOGIN },
-          body: autoWaiverBody(),
-          createdAt: '2026-07-11T10:00:05Z',
-        },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
       autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
-      // Both candidates' own `createdAt` fall inside
-      // acceptedRunJobLookup()'s `[09:59:30, 10:00:30]` window, so both
-      // independently pass provenance -- isolating the uniqueness check
-      // (not a provenance failure) as the one thing that rejects this.
-      autoWaiverRunIdCandidateTimestamps: {
-        [RUN_ID]: [RECENT, '2026-07-11T10:00:05Z'],
+      autoWaiverRunIdCandidates: {
+        [RUN_ID]: [
+          { id: COMMENT_ID, createdAt: RECENT },
+          { id: '444555666', createdAt: RECENT },
+        ],
       },
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -4175,12 +4235,13 @@ test('self-referential-bootstrap-auto: a legitimate CI rerun (second genuine mar
   // `gh run rerun <run-id>` (this repository's own standard automated
   // recovery path, rerun-advisory-convergence.mts) re-executes every
   // job under the SAME run id -- including an already-succeeded
-  // self-waiver job, which posts a second genuine marker. The jobs API
-  // reports only the LATEST attempt's window, so attempt 1's marker
-  // (createdAt far before that window) fails provenance on its own and
-  // must not count toward the uniqueness tally; attempt 2's marker
-  // (createdAt inside the window) is the sole provenance-passing
-  // candidate and must still validate.
+  // self-waiver job, which posts a second genuine marker AND uploads its
+  // own artifact (the trusted set only ever grows across attempts, never
+  // replaces). Attempt 1's own stale candidate (a different `createdAt`,
+  // hours earlier) must not create any ambiguity for attempt 2's own
+  // correlation -- `verifySelfReferentialBootstrapWaiverArtifactBinding`
+  // only ever looks at candidates sharing `entry`'s EXACT `createdAt`.
+  const STALE_ATTEMPT_1_COMMENT_ID = '100200300';
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [],
@@ -4198,12 +4259,20 @@ test('self-referential-bootstrap-auto: a legitimate CI rerun (second genuine mar
       // The jobs API reflects only the latest (attempt 2) run: its own
       // post step succeeded in this window.
       autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
-      autoWaiverRunIdCandidateTimestamps: {
-        // Attempt 1's own (now-stale) genuine marker, from hours
-        // earlier -- structurally qualifies (same run id) but falls
-        // outside attempt 2's window, so it must not count as a
-        // duplicate.
-        [RUN_ID]: ['2026-07-11T06:00:00Z', RECENT],
+      autoWaiverRunIdCandidates: {
+        [RUN_ID]: [
+          // Attempt 1's own (now-stale) genuine marker, from hours
+          // earlier -- structurally qualifies (same run id) but its
+          // `createdAt` never matches attempt 2's, so it is simply
+          // irrelevant to attempt 2's own correlation.
+          { id: STALE_ATTEMPT_1_COMMENT_ID, createdAt: '2026-07-11T06:00:00Z' },
+          { id: COMMENT_ID, createdAt: RECENT },
+        ],
+      },
+      // Both attempts' artifacts persist -- the trusted set grows,
+      // never replaces.
+      autoWaiverRunArtifactCommentIds: {
+        [RUN_ID]: [STALE_ATTEMPT_1_COMMENT_ID, COMMENT_ID],
       },
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
@@ -4240,7 +4309,8 @@ test('self-referential-bootstrap-auto: a marker citing a run whose self-waiver p
       autoWaiverRunJobLookups: {
         [RUN_ID]: { ...acceptedRunJobLookup(), conclusion: 'skipped' },
       },
-      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -4281,7 +4351,8 @@ test("self-referential-bootstrap-auto: a marker created outside the cited run's 
           completedAt: '2026-07-01T00:01:00Z',
         },
       },
-      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -4309,7 +4380,8 @@ test('self-referential-bootstrap-auto: a run-jobs lookup error fails closed the 
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
       autoWaiverRunJobLookups: { [RUN_ID]: { error: 'HTTP 404' } },
-      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: acceptedTrustedCommentIds(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -4323,29 +4395,75 @@ test('self-referential-bootstrap-auto: a run-jobs lookup error fails closed the 
   assert.equal(verdict.ready, false);
 });
 
-test('self-referential-bootstrap-auto: SELF_REFERENTIAL_WAIVER_JOB_ID and SELF_REFERENTIAL_WAIVER_POST_STEP_NAME stay in sync with the workflow file (drift guard)', () => {
-  // Kept in sync by hand with `.github/workflows/idd-advisory-convergence.yml`,
-  // the same convention SELF_REFERENTIAL_WAIVER_TRIGGER_FILES and
-  // ADVISORY_CONVERGENCE_WORKFLOW_PATH already use -- a job id or step
-  // name renamed in the YAML without updating these constants would
-  // silently make `verifySelfReferentialBootstrapWaiverProvenance`
-  // reject every genuine marker (fail closed, but a self-inflicted
-  // outage rather than the workflow file drifting invisibly).
-  const workflow = readFileSync(
-    new URL(
-      '../.github/workflows/idd-advisory-convergence.yml',
-      import.meta.url,
-    ),
-    'utf8',
+test('self-referential-bootstrap-auto: an absent/empty artifact-trusted-id set fails closed (kurone-kito/idd-skill#2912, round 2)', () => {
+  // Mirrors the run-jobs-lookup-error test above, for the THIRD lookup:
+  // an artifact-list fetch failure (`collectFromGitHub` maps it to an
+  // empty array, never an `{error}` entry -- an empty trusted set already
+  // means "nothing trusted") must reject an otherwise fully-qualifying
+  // marker, not silently skip the check.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactCommentIds: { [RUN_ID]: [] },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
   );
-  assert.ok(
-    workflow.includes(`${SELF_REFERENTIAL_WAIVER_JOB_ID}:`),
-    'workflow file no longer declares the expected self-waiver job id',
-  );
-  assert.ok(
-    workflow.includes(`name: ${SELF_REFERENTIAL_WAIVER_POST_STEP_NAME}`),
-    'workflow file no longer declares the expected post-step name',
-  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: SELF_REFERENTIAL_WAIVER_JOB_ID, SELF_REFERENTIAL_WAIVER_POST_STEP_NAME, and SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX stay in sync with BOTH copies of the workflow file (drift guard)', () => {
+  // Kept in sync by hand with `.github/workflows/idd-advisory-convergence.yml`
+  // AND its `idd-template/` mirror, the same convention
+  // SELF_REFERENTIAL_WAIVER_TRIGGER_FILES and
+  // ADVISORY_CONVERGENCE_WORKFLOW_PATH already use -- a job id, step
+  // name, or artifact-name prefix renamed in either copy without
+  // updating these constants would silently make
+  // `verifySelfReferentialBootstrapWaiverProvenance` or
+  // `verifySelfReferentialBootstrapWaiverArtifactBinding` reject every
+  // genuine marker (fail closed, but a self-inflicted outage rather than
+  // a workflow file drifting invisibly). Both copies are checked --
+  // Copilot review, PR #2914 flagged the round-1 version of this test as
+  // checking only the repository-root copy, leaving the `idd-template/`
+  // mirror free to drift unnoticed.
+  for (const relativePath of [
+    '../.github/workflows/idd-advisory-convergence.yml',
+    '../idd-template/.github/workflows/idd-advisory-convergence.yml',
+  ]) {
+    const workflow = readFileSync(
+      new URL(relativePath, import.meta.url),
+      'utf8',
+    );
+    assert.ok(
+      workflow.includes(`${SELF_REFERENTIAL_WAIVER_JOB_ID}:`),
+      `${relativePath}: no longer declares the expected self-waiver job id`,
+    );
+    assert.ok(
+      workflow.includes(`name: ${SELF_REFERENTIAL_WAIVER_POST_STEP_NAME}`),
+      `${relativePath}: no longer declares the expected post-step name`,
+    );
+    assert.ok(
+      workflow.includes(SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX),
+      `${relativePath}: no longer declares the expected artifact-name prefix`,
+    );
+  }
 });
 
 // --- #1570 AC6: no code path this issue adds ever invokes `gh pr merge

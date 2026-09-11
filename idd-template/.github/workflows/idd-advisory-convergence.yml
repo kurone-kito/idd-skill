@@ -676,6 +676,7 @@ jobs:
         # intended route for a profile the "Notice" step above already
         # explained and let pass without failing the job.
         if: steps.allowlist.outputs.touched == 'true' && steps.profile.outputs.profile != 'instructions-only' && github.event.pull_request.head.repo.full_name == github.repository
+        id: post-waiver
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
@@ -683,30 +684,97 @@ jobs:
           PROFILE: ${{ steps.profile.outputs.profile }}
           PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
           MANAGER: ${{ steps.manager.outputs.manager }}
+        # kurone-kito/idd-skill#2912 (round 2): every profile branch below
+        # pipes its own invocation through the SAME `tee`, so the common
+        # post-processing after the `case` (reading `applied`/`commentId`
+        # back out of the CLI's own JSON report) is written once rather
+        # than duplicated per profile. `node -e` (never `jq`, whose
+        # presence on the runner is never explicitly asserted, unlike
+        # Node's own floor above) parses it defensively: a parse failure
+        # (should not happen, `tee` writes exactly what stdout produced)
+        # degrades to "nothing to record", never a crashed job.
         run: |
           case "$PROFILE" in
             vendored-node)
-              node scripts/external-check-waiver.mjs --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+              node scripts/external-check-waiver.mjs --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
               ;;
             package-manager)
               case "$MANAGER" in
                 pnpm)
-                  pnpm exec idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+                  pnpm exec idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
                   ;;
                 yarn)
-                  yarn idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+                  yarn idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
                   ;;
                 *)
-                  npm exec idd-external-check-waiver -- --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+                  npm exec idd-external-check-waiver -- --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
                   ;;
               esac
               ;;
             ephemeral-npx)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
-              npx --yes --package "$SPEC" idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+              npx --yes --package "$SPEC" idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
               ;;
             *)
               echo "::error::unrecognized helper-runtime profile \"$PROFILE\""
               exit 1
               ;;
           esac
+          APPLIED=$(node -e '
+            try {
+              const report = JSON.parse(require("fs").readFileSync("/tmp/idd-waiver-report.json", "utf8"));
+              process.stdout.write(String(report.applied ?? false));
+            } catch {
+              process.stdout.write("false");
+            }
+          ')
+          COMMENT_ID=$(node -e '
+            try {
+              const report = JSON.parse(require("fs").readFileSync("/tmp/idd-waiver-report.json", "utf8"));
+              process.stdout.write(String(report.commentId ?? ""));
+            } catch {
+              process.stdout.write("");
+            }
+          ')
+          echo "applied=$APPLIED" >> "$GITHUB_OUTPUT"
+          echo "comment-id=$COMMENT_ID" >> "$GITHUB_OUTPUT"
+      - name: Record the posted marker's provenance
+        # kurone-kito/idd-skill#2912 (round 2): a run-scoped Actions
+        # artifact naming the EXACT comment id this run's own trusted job
+        # just posted -- the binding primitive
+        # `verifySelfReferentialBootstrapWaiverArtifactBinding`
+        # (advisory-convergence.mts) reads to prove a candidate marker
+        # IS the one this run's own execution posted, not merely that no
+        # OTHER candidate is currently visible (a property an attacker
+        # with `issues: write` can falsify by deleting the genuine
+        # comment after the fact). Only when a NEW comment was actually
+        # posted this run (`applied == 'true'`) -- the reuse path (an
+        # existing valid waiver found, nothing newly posted) has no
+        # comment of THIS run's own to record. Needs no `permissions:`
+        # entry: `actions/upload-artifact` uses the Actions runtime's own
+        # dedicated upload token, entirely separate from `GITHUB_TOKEN`.
+        if: steps.post-waiver.outputs.applied == 'true' && steps.post-waiver.outputs.comment-id != ''
+        env:
+          COMMENT_ID: ${{ steps.post-waiver.outputs.comment-id }}
+        run: |
+          mkdir -p /tmp/idd-self-waiver-marker
+          printf '%s\n' "$COMMENT_ID" > "/tmp/idd-self-waiver-marker/idd-self-waiver-marker-${COMMENT_ID}"
+      - name: Upload the posted marker's provenance artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.post-waiver.outputs.applied == 'true' && steps.post-waiver.outputs.comment-id != ''
+        with:
+          name: idd-self-waiver-marker-${{ steps.post-waiver.outputs.comment-id }}
+          path: /tmp/idd-self-waiver-marker/
+          # Loud failure, not a silent empty artifact, if the previous
+          # step somehow produced no file -- the consumer's own binding
+          # check already fails closed on a missing artifact either way,
+          # but this surfaces the CI-side bug immediately instead of only
+          # as a downstream "no auto-waiver" symptom.
+          if-no-files-found: error
+          # Deliberately NOT retention-days: 1 -- a later re-evaluation
+          # (issue_comment-triggered, or rerun-advisory-convergence.mts)
+          # can run well after this run finishes, and the marker's own
+          # validity window (SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY)
+          # outlives a short artifact retention -- keep the repository
+          # default so the artifact stays listable for the marker's full
+          # validity window.

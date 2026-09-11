@@ -1910,6 +1910,19 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       );
       return JSON.parse(raw.trim() || '{}');
     },
+    listWorkflowRunArtifacts(artifactsOwner, artifactsRepo, runId) {
+      // Not `--paginate`, same rationale as getWorkflowRunJobs above: a
+      // run legitimately uploads at most a handful of artifacts, well
+      // under the API's own per-page cap.
+      const raw = deps.ghText(
+        [
+          'api',
+          `repos/${artifactsOwner}/${artifactsRepo}/actions/runs/${runId}/artifacts`,
+        ],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      );
+      return JSON.parse(raw.trim() || '{}');
+    },
     listWorkflowRuns(runsOwner, runsRepo, workflowName, limit) {
       const raw = deps.ghText(
         [

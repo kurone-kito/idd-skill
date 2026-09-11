@@ -972,6 +972,7 @@ export async function runExternalCheckWaiver(options = {}) {
       applied: false,
       reusedWaiver: existingWaiver,
       commentUrl: existingWaiver.commentUrl,
+      commentId: existingWaiver.commentId,
     };
     renderReport(reusedReport, args.format);
     return { exitCode: 0, report: reusedReport };
@@ -1100,6 +1101,7 @@ export async function runExternalCheckWaiver(options = {}) {
     ...report,
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
+    commentId: String(result.id ?? ''),
     ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
     ...(reconcileInconclusive ? { reconcileInconclusive: true } : {}),
   };

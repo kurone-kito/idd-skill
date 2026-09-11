@@ -310,6 +310,18 @@ interface ExternalCheckWaiverReport {
   body: string;
   applied?: boolean;
   commentUrl?: string;
+  /** kurone-kito/idd-skill#2912 (round 2): the numeric id (as a string)
+   * of the comment this invocation posted (`--apply`, a fresh post) or
+   * reused (`reusedWaiver`'s own `commentId`) -- absent when neither
+   * applies (e.g. a dry-run plan). The self-waiver CI job reads this
+   * from the JSON report to record a run-scoped Actions artifact naming
+   * the posted comment's id, which `advisory-convergence.mts`'s
+   * self-referential-bootstrap-auto trust chain later fetches to bind a
+   * marker to the SPECIFIC comment its own trusted job posted, not
+   * merely "some comment exists" -- see
+   * `verifySelfReferentialBootstrapWaiverArtifactBinding`'s own doc
+   * comment there for the forgery this closes. */
+  commentId?: string;
   /**
    * #2328: set when `--apply` found an existing valid waiver for this
    * selector and reused it rather than appending a second marker.
@@ -351,6 +363,11 @@ interface ExternalCheckWaiverArgs {
 
 /** Posted-comment payload fields consumed by this helper. */
 interface PostedCommentPayload {
+  /** kurone-kito/idd-skill#2912 (round 2): threaded into
+   * `ExternalCheckWaiverReport.commentId` so a caller (the self-waiver
+   * CI job) can record which comment THIS invocation actually posted,
+   * without having to re-derive it from `commentUrl`. */
+  id?: string | number | null;
   html_url?: string | null;
   url?: string | null;
 }
@@ -1375,6 +1392,7 @@ export async function runExternalCheckWaiver(
       applied: false,
       reusedWaiver: existingWaiver,
       commentUrl: existingWaiver.commentUrl,
+      commentId: existingWaiver.commentId,
     };
     renderReport(reusedReport, args.format);
     return { exitCode: 0, report: reusedReport };
@@ -1510,6 +1528,7 @@ export async function runExternalCheckWaiver(
     ...report,
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
+    commentId: String(result.id ?? ''),
     ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
     ...(reconcileInconclusive ? { reconcileInconclusive: true } : {}),
   };

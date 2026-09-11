@@ -177,6 +177,21 @@ test('getWorkflowRun throws on a missing fixture, matching the GitHub adapter', 
   assert.throws(() => port.getWorkflowRun('o', 'r', 456), /no workflow-run/);
 });
 
+test('listWorkflowRunArtifacts throws on a missing fixture, matching the GitHub adapter (kurone-kito/idd-skill#2912, round 2)', () => {
+  const port = createFakeProviderAdapter({
+    workflowRunArtifacts: {
+      'o/r/123': { artifacts: [{ name: 'idd-self-waiver-marker-1' }] },
+    },
+  });
+  assert.deepEqual(port.listWorkflowRunArtifacts('o', 'r', 123), {
+    artifacts: [{ name: 'idd-self-waiver-marker-1' }],
+  });
+  assert.throws(
+    () => port.listWorkflowRunArtifacts('o', 'r', 456),
+    /no workflow-run-artifacts/,
+  );
+});
+
 test('listWorkflowRuns honors limit, matching the GitHub adapter', () => {
   const port = createFakeProviderAdapter({
     workflowRunLists: {

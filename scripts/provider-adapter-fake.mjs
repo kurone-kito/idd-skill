@@ -383,6 +383,17 @@ export function createFakeProviderAdapter(fixture) {
       }
       return value;
     },
+    listWorkflowRunArtifacts(artifactsOwner, artifactsRepo, runId) {
+      // Same throw-on-missing contract as getWorkflowRunJobs above.
+      const key = `${artifactsOwner}/${artifactsRepo}/${runId}`;
+      const value = fixture.workflowRunArtifacts?.[key];
+      if (value === undefined) {
+        throw new Error(
+          `fake provider: no workflow-run-artifacts fixture for ${key}`,
+        );
+      }
+      return value;
+    },
     listWorkflowRuns(runsOwner, runsRepo, workflowName, limit) {
       // Honors `limit`, matching the GitHub adapter's own `gh run list
       // --limit N` call (Copilot review, PR #2429) -- an ignored limit let
