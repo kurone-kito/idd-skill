@@ -18,6 +18,7 @@ import { promisify } from 'node:util';
 
 import {
   acquireClaimLock,
+  backfillGeneratedClaimTokens,
   checkClaimLock,
   readGeneratedClaimTokens,
   recordGeneratedClaimTokens,
@@ -817,6 +818,195 @@ test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', 
     const readMalformedOutcome = JSON.parse(readMalformedResult.stdout);
     assert.equal(readMalformedOutcome.present, true);
     assert.equal(readMalformedOutcome.malformed, true);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+// Backfill-tokens recovery route tests (#2884).
+
+test('backfill-tokens: backfilled — a present, matching lock writes the generated-tokens record using the lock agent-id, with no nonce', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+
+    const outcome = backfillGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(outcome.status, 'backfilled');
+    assert.equal(outcome.agentId, 'agent-a');
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'present');
+    assert.equal(read.status === 'present' && read.record.agentId, 'agent-a');
+    assert.equal(read.status === 'present' && read.record.claimId, 'claim-a');
+    assert.equal(read.status === 'present' && read.record.nonce, undefined);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('backfill-tokens: lock-absent — no lock file exists, writes nothing', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const outcome = backfillGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(outcome.status, 'lock-absent');
+    assert.equal(outcome.holder, undefined);
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'absent');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('backfill-tokens: lock-malformed — an unparseable lock body writes nothing', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const lockPath = resolveClaimLockPath(fixture.worktree);
+    writeFileSync(lockPath, 'not json at all {{{');
+
+    const outcome = backfillGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(outcome.status, 'lock-malformed');
+    assert.equal(outcome.holder, undefined);
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'absent');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('backfill-tokens: lock-malformed — a directory at the lock path writes nothing (same unreadable-path case as --check/--acquire)', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const lockPath = resolveClaimLockPath(fixture.worktree);
+    mkdirSync(lockPath);
+
+    const outcome = backfillGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(outcome.status, 'lock-malformed');
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'absent');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('backfill-tokens: lock-mismatch — a lock present for a different claim-id writes nothing and reports the actual holder', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+
+    const outcome = backfillGeneratedClaimTokens(fixture.worktree, 'claim-b');
+    assert.equal(outcome.status, 'lock-mismatch');
+    assert.equal(outcome.holder?.agentId, 'agent-a');
+    assert.equal(outcome.holder?.claimId, 'claim-a');
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-b');
+    assert.equal(read.status, 'absent');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('backfill-tokens: re-running after a successful backfill is idempotent — reports backfilled again without corrupting the record', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+
+    const first = backfillGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(first.status, 'backfilled');
+
+    const second = backfillGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(second.status, 'backfilled');
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'present');
+    assert.equal(read.status === 'present' && read.record.agentId, 'agent-a');
+    assert.equal(read.status === 'present' && read.record.claimId, 'claim-a');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('CLI: --backfill-tokens writes on a matching lock and exits 0, and exits non-zero with no write on a mismatched claim-id', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+
+    const backfillResult = await execFileAsync(process.execPath, [
+      CLI_PATH,
+      '--backfill-tokens',
+      '--worktree',
+      fixture.worktree,
+      '--claim-id',
+      'claim-a',
+    ]);
+    const backfillOutcome = JSON.parse(backfillResult.stdout);
+    assert.equal(backfillOutcome.status, 'backfilled');
+    assert.equal(backfillOutcome.agentId, 'agent-a');
+
+    const readResult = await execFileAsync(process.execPath, [
+      CLI_PATH,
+      '--read-tokens',
+      '--worktree',
+      fixture.worktree,
+      '--claim-id',
+      'claim-a',
+    ]);
+    const readOutcome = JSON.parse(readResult.stdout);
+    assert.equal(readOutcome.present, true);
+    assert.equal(readOutcome.record.agentId, 'agent-a');
+
+    await assert.rejects(
+      execFileAsync(process.execPath, [
+        CLI_PATH,
+        '--backfill-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--claim-id',
+        'claim-b',
+      ]),
+      (error: NodeJS.ErrnoException & { stdout?: string }) => {
+        assert.equal(error.code, 2);
+        assert.equal(JSON.parse(error.stdout ?? '').status, 'lock-mismatch');
+        return true;
+      },
+    );
+
+    // A different claim-id's record was never written by the failed call.
+    const readOtherResult = await execFileAsync(process.execPath, [
+      CLI_PATH,
+      '--read-tokens',
+      '--worktree',
+      fixture.worktree,
+      '--claim-id',
+      'claim-b',
+    ]);
+    assert.equal(JSON.parse(readOtherResult.stdout).present, false);
   } finally {
     teardown(fixture);
   }
