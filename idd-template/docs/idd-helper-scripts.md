@@ -3538,17 +3538,20 @@ process tree — if `pgrep`/`ps` (or an equivalent process-listing and
 signaling mechanism) are not available on the host, that dependency
 cannot be met: stop and post a hold note rather than falling back
 without the cleanup guarantee, the same fail-closed treatment the
-`lsof` case below already gets. Otherwise, snapshot the full
-descendant PID set by walking from the git PID (for example,
-recursively via `pgrep -P`) and immediately send SIGTERM to every
-recorded PID, not `-9` — git's own signal handler cleans up
-`index.lock`, and a descendant such as the signer subprocess can
-outlive a `kill` scoped to only the git parent (reproduced 2026-09-11
-in PR #2906 review). Snapshot and signal back-to-back, with nothing in
-between: that is what keeps a bare recorded PID number trustworthy
-without needing a separate identity check, since the gap in which an
-exited PID could be reused by an unrelated process stays sub-second on
-any real host. Then wait up to 30 seconds for each recorded PID
+`lsof` case below already gets. Otherwise, snapshot the whole set to
+signal: the git PID itself **and** its descendants, found by walking
+from the git PID (for example, recursively via `pgrep -P`) — a
+"descendant" walk alone omits the root git process, leaving it able to
+keep running (and keep `index.lock` held) after only its children are
+signaled. Immediately send SIGTERM to every recorded PID in that
+whole set, not `-9` — git's own signal handler cleans up `index.lock`,
+and a descendant such as the signer subprocess can outlive a `kill`
+scoped to only the git parent (reproduced 2026-09-11 in PR #2906
+review). Snapshot and signal back-to-back, with nothing in between:
+that is what keeps a bare recorded PID number trustworthy without
+needing a separate identity check, since the gap in which an exited
+PID could be reused by an unrelated process stays sub-second on any
+real host. Then wait up to 30 seconds for each recorded PID
 individually to exit (not a fresh tree walk); SIGTERM is asynchronous,
 so checking state immediately can race git's own unwind (still
 removing `index.lock`) or observe stale state.
