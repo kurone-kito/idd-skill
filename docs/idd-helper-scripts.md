@@ -3527,24 +3527,34 @@ signer subprocess) that applies even to an invocation still producing
 output: an inactivity-only trigger would leave a merge or rebase that
 keeps emitting output free to run indefinitely without ever completing,
 which is not actually bounded (preventive; no observed incident yet —
-raised in PR #2906 review). First check whether the process is
-still running — per `idd-ci.instructions.md`'s "Wake-up discipline"
-guidance on a heavy local command that auto-backgrounds past a tool's
-default timeout, do not start a second wrapper invocation alongside it.
-If it is still running, terminate it **and any descendants** (SIGTERM,
-not `-9` — git's own signal handler cleans up `index.lock`; `-9` skips
-that cleanup and the fallback below then fails on the stale lock; a
-descendant such as the signer subprocess can outlive a `kill` scoped to
-only the git parent, reproduced in PR #2906 review), then **wait for
-that whole process tree to exit** before checking state or falling
-back — SIGTERM is asynchronous, so proceeding immediately can race
-git's own unwind (still removing `index.lock`) or observe stale state.
+raised in PR #2906 review). First check whether the process **tree** —
+the wrapper's git invocation and any descendants such as the signer
+subprocess, not just the top-level command — is still running: per
+`idd-ci.instructions.md`'s "Wake-up discipline" guidance on a heavy
+local command that auto-backgrounds past a tool's default timeout, do
+not start a second wrapper invocation alongside it. If any part of the
+tree is still running, terminate the whole tree with SIGTERM, not
+`-9` — git's own signal handler cleans up `index.lock`, and a
+descendant such as the signer subprocess can outlive a `kill` scoped
+to only the git parent (reproduced 2026-09-11 in PR #2906 review) —
+then wait up to 30 seconds for the tree to exit; SIGTERM is
+asynchronous, so checking state immediately can race git's own unwind
+(still removing `index.lock`) or observe stale state. If the tree is
+still alive after that wait, send SIGKILL to whatever remains and wait
+once more, up to 30 seconds — `-9` skips git's signal handler, so once
+every process in the tree has actually exited, remove a leftover
+`index.lock` yourself
+(`rm -f "$(git rev-parse --git-path index.lock)"`, not a literal
+`.git/index.lock` path, the same linked-worktree rule the rebase-state
+check below uses) before continuing. If the tree is still alive even
+after SIGKILL — for example, a process stuck in uninterruptible I/O —
+stop: post a hold note documenting the surviving PIDs rather than
+waiting any longer.
 
-Either way — the tree exited on its own, or was terminated and waited
-for above — verify
-what actually happened before falling back; a killed or already-exited
-process can leave the operation completed, mid-progress, or never
-started at all:
+Either way — the tree exited on its own, or was terminated and
+confirmed clear above — verify what actually happened before falling
+back; a killed or already-exited process can leave the operation
+completed, mid-progress, or never started at all:
 
 - **Plain commit**: compare `git rev-parse HEAD` before/after the
   wrapper call, the same check B3's "Verify a commit actually landed"
@@ -3567,8 +3577,8 @@ started at all:
   rebase specifically, leave `HEAD` detached at the upstream tip
   without replaying the local commit, the same sibling-worktree failure
   mode `idd-pr-submit.instructions.md`'s D1 "Post-rebase verification"
-  already documents. Verify instead of assuming: current branch
-  non-empty (not detached) and the expected commit present in
+  already documents and defines the same predicate for: current branch
+  non-empty (not detached) and the expected local commit present in
   `origin/{development-branch}..HEAD` for a rebase; for a merge, either
   `HEAD` advanced past its pre-call value or
   `git merge-base --is-ancestor origin/{development-branch} HEAD`
@@ -3583,6 +3593,18 @@ started at all:
   out or still fails the same verification, post a hold note
   documenting the branch state and stop, the same as D1's own recovery
   does when it is exhausted.
+
+No step in this recovery procedure waits indefinitely: the original
+wrapper invocation and every fallback or continuation share the same
+2-minute bound, and the termination wait above has its own 30-second
+bounds — every step that exceeds its bound routes to the same
+terminate-and-verify-or-hold outcome, not a fresh unbounded wait. A
+hook or other non-signing cause can hang the plain-commit
+`--no-gpg-sign` fallback or the `--continue` completion just as it
+hung the original attempt; if either does not itself complete within
+2 minutes, apply the same terminate-and-verify procedure to it, and if
+it still does not resolve, post a hold note and stop rather than
+retrying further.
 
 Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
