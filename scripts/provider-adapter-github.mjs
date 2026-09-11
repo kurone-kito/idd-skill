@@ -1624,13 +1624,29 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       const rows = deps.ghApiJson(`${repoPath}/pulls/${number}/files`, {
         paginate: true,
       });
-      // kurone-kito/idd-skill#2657 (Codex review, PR #2895): include a
-      // renamed file's OLD path alongside its new one. A consumer
-      // matching this list against a committed allowlist of paths (the
-      // self-referential-bootstrap-auto trigger-file check) would
-      // otherwise never recognize a PR that renames one of those exact
-      // paths away, recreating the same self-referential deadlock a
-      // rename-shaped checker repair would otherwise hit.
+      // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12):
+      // current path only -- never a renamed-away `.previous_filename`.
+      // This general-purpose list also backs CODEOWNERS resolution and
+      // required-reviewer pattern matching (pre-merge-readiness.mts),
+      // where a stale rename source could pull in an obsolete owner or
+      // let an approval from it substitute for the destination path's
+      // real owner. See {@link listChangeRequestRenamedFromPaths} for the
+      // one consumer that specifically needs the old path too.
+      return rows.map((row) => String(row.filename ?? ''));
+    },
+    listChangeRequestRenamedFromPaths(number) {
+      const rows = deps.ghApiJson(`${repoPath}/pulls/${number}/files`, {
+        paginate: true,
+      });
+      // kurone-kito/idd-skill#2657 (Codex review, PR #2895): a renamed
+      // file's OLD path, deliberately kept out of the general-purpose
+      // `listChangeRequestChangedFiles` above (see its own doc comment).
+      // A consumer matching changed files against a committed allowlist
+      // of paths (the self-referential-bootstrap-auto trigger-file check)
+      // must recognize a renamed file by its OLD path too, or a
+      // rename-shaped checker repair away from an allowlisted path
+      // recreates the exact self-referential deadlock that mechanism
+      // exists to solve.
       return rows.flatMap((row) => {
         const filename = String(row.filename ?? '');
         const previousFilename =
@@ -1638,8 +1654,8 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             ? row.previous_filename
             : '';
         return previousFilename && previousFilename !== filename
-          ? [filename, previousFilename]
-          : [filename];
+          ? [previousFilename]
+          : [];
       });
     },
     listChangeRequestCommits(number) {

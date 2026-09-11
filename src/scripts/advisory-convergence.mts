@@ -800,7 +800,18 @@ export interface AdvisoryConvergenceInputs {
    * verdict job's own trivially-discoverable `pull_request_target` run
    * id for its own HEAD -- which independently satisfies path/head-
    * SHA/repository/event -- and bypass advisory convergence for a
-   * change that never touched the allowlist at all. */
+   * change that never touched the allowlist at all.
+   *
+   * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12):
+   * `collectFromGitHub` populates this from BOTH
+   * `listChangeRequestChangedFiles` (current paths) AND
+   * `listChangeRequestRenamedFromPaths` (renamed files' OLD paths),
+   * concatenated -- a rename-shaped checker repair away from an
+   * allowlisted path must still be recognized here, even though the
+   * general-purpose changed-file list those OTHER port method's own
+   * consumers key CODEOWNERS/required-reviewer resolution on
+   * deliberately excludes rename sources now (see that method's own
+   * doc comment for the pollution incident this split fixes). */
   changedFilePaths?: string[];
 }
 
@@ -3115,11 +3126,23 @@ export function collectFromGitHub(
   // doc comment for why the pure verdict function needs this
   // independent evidence rather than trusting the posting job's own
   // internal allowlist check.
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12): merge in
+  // `listChangeRequestRenamedFromPaths` too -- the general-purpose
+  // `listChangeRequestChangedFiles` deliberately no longer includes a
+  // renamed file's OLD path (see that port method's own doc comment for
+  // the CODEOWNERS-pollution incident this split fixes), but this
+  // specific allowlist check still needs it: a rename-shaped checker
+  // repair away from an allowlisted path must still be recognized.
   const changedFilePaths =
     autoWaiverRunIds.size > 0
-      ? retryTransientGhFailure(() =>
-          port.listChangeRequestChangedFiles(Number(args.prNumber)),
-        )
+      ? [
+          ...retryTransientGhFailure(() =>
+            port.listChangeRequestChangedFiles(Number(args.prNumber)),
+          ),
+          ...retryTransientGhFailure(() =>
+            port.listChangeRequestRenamedFromPaths(Number(args.prNumber)),
+          ),
+        ]
       : undefined;
 
   return {

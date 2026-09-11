@@ -2413,11 +2413,23 @@ export function collectFromGitHub(
   // doc comment for why the pure verdict function needs this
   // independent evidence rather than trusting the posting job's own
   // internal allowlist check.
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12): merge in
+  // `listChangeRequestRenamedFromPaths` too -- the general-purpose
+  // `listChangeRequestChangedFiles` deliberately no longer includes a
+  // renamed file's OLD path (see that port method's own doc comment for
+  // the CODEOWNERS-pollution incident this split fixes), but this
+  // specific allowlist check still needs it: a rename-shaped checker
+  // repair away from an allowlisted path must still be recognized.
   const changedFilePaths =
     autoWaiverRunIds.size > 0
-      ? retryTransientGhFailure(() =>
-          port.listChangeRequestChangedFiles(Number(args.prNumber)),
-        )
+      ? [
+          ...retryTransientGhFailure(() =>
+            port.listChangeRequestChangedFiles(Number(args.prNumber)),
+          ),
+          ...retryTransientGhFailure(() =>
+            port.listChangeRequestRenamedFromPaths(Number(args.prNumber)),
+          ),
+        ]
       : undefined;
   return {
     inputs: {

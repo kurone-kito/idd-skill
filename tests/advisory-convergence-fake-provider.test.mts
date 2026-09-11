@@ -324,6 +324,46 @@ test('collectFromGitHub fetches and threads listChangeRequestChangedFiles into i
   });
 });
 
+test('collectFromGitHub also merges listChangeRequestRenamedFromPaths into inputs.changedFilePaths (Codex review, PR #2895, round 12)', () => {
+  // listChangeRequestChangedFiles no longer includes a renamed file's OLD
+  // path (round 12 split it out to stop polluting CODEOWNERS resolution),
+  // but this specific allowlist check still needs it -- collectFromGitHub
+  // must fetch and concatenate listChangeRequestRenamedFromPaths too, or a
+  // rename-shaped checker repair away from an allowlisted path would go
+  // unrecognized here again.
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment()] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      changedFiles: {
+        [PR_NUMBER]: ['src/scripts/renamed-checker.mts', 'README.md'],
+      },
+      renamedFromPaths: {
+        [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+      },
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.changedFilePaths, [
+      'src/scripts/renamed-checker.mts',
+      'README.md',
+      ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    ]);
+  });
+});
+
 test('collectFromGitHub never fetches listChangeRequestChangedFiles when no candidate auto-waiver marker is present (no wasted API call)', () => {
   withHermeticCwd(() => {
     const port = createFakeProviderAdapter({

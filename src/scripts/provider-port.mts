@@ -981,8 +981,38 @@ export interface ProviderPort {
     number: number,
   ): string[] | null;
 
-  /** change-requests. REST paginated `pulls/{pr}/files`, flattened to `.filename`. */
+  /**
+   * change-requests. REST paginated `pulls/{pr}/files`, flattened to
+   * `.filename` -- the file's CURRENT path only, never a renamed-away-from
+   * `.previous_filename` (kurone-kito/idd-skill#2657, Codex review, PR
+   * #2895, round 12). This is the general-purpose changed-file list other
+   * consumers (CODEOWNERS resolution, required-reviewer pattern matching)
+   * key their own path-based logic on; including a stale rename source
+   * here once let a renamed-away file's OLD owner enter the same
+   * any-owner-approved set as the destination path's owner, or introduce
+   * an obsolete required reviewer. See
+   * {@link listChangeRequestRenamedFromPaths} for the one consumer (the
+   * self-referential-bootstrap-auto trigger-file allowlist check) that
+   * specifically needs the old path too.
+   */
   listChangeRequestChangedFiles(number: number): string[];
+
+  /**
+   * change-requests. REST paginated `pulls/{pr}/files`, flattened to each
+   * genuinely-renamed row's `.previous_filename` (excluded when it equals
+   * `.filename`) -- deliberately separate from
+   * {@link listChangeRequestChangedFiles} (kurone-kito/idd-skill#2657,
+   * Codex review, PR #2895, round 12). A consumer matching changed files
+   * against a committed allowlist of paths (the self-referential-
+   * bootstrap-auto trigger-file check) must also recognize a renamed file
+   * by its OLD path, or a rename-shaped checker repair away from an
+   * allowlisted path recreates the exact self-referential deadlock that
+   * mechanism exists to solve -- but that need is narrow to this one
+   * consumer, not every general-purpose changed-file consumer (see the
+   * other method's own doc comment for the CODEOWNERS-pollution incident
+   * this split fixes).
+   */
+  listChangeRequestRenamedFromPaths(number: number): string[];
 
   /** change-requests. REST paginated `pulls/{pr}/commits`, raw passthrough. */
   listChangeRequestCommits(number: number): unknown[];

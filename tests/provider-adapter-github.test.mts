@@ -2243,15 +2243,22 @@ test('postWorkItemComment always throws a real Error, even when the underlying f
 });
 
 // ---------------------------------------------------------------------------
-// listChangeRequestChangedFiles (kurone-kito/idd-skill#2657, Codex review,
-// PR #2895): a consumer matching this list against a committed allowlist of
-// paths (the self-referential-bootstrap-auto trigger-file check) must also
-// recognize a renamed file by its OLD path, or a rename-shaped checker
-// repair away from an allowlisted path recreates the exact self-referential
-// deadlock that mechanism exists to solve.
+// listChangeRequestChangedFiles / listChangeRequestRenamedFromPaths
+// (kurone-kito/idd-skill#2657, Codex review, PR #2895, round 12): round 11
+// had the former include a renamed file's OLD path alongside its new one,
+// so the self-referential-bootstrap-auto trigger-file allowlist check would
+// still recognize a rename-shaped checker repair away from an allowlisted
+// path. Round 12 found that polluted every OTHER consumer of the same
+// general-purpose list too -- pre-merge-readiness.mts feeds it directly
+// into CODEOWNERS resolution and required-reviewer pattern matching, where
+// a stale rename source could introduce an obsolete reviewer or let an
+// approval from the old path's owner substitute for the destination's real
+// owner. Split into two methods: the general-purpose one now reports
+// current paths only, and a new, narrowly-scoped one reports just the
+// renamed-from paths for the one consumer that specifically needs them.
 // ---------------------------------------------------------------------------
 
-test("listChangeRequestChangedFiles includes a renamed file's previous path alongside its new one", () => {
+test('listChangeRequestChangedFiles reports only current paths, never a renamed-away previous_filename', () => {
   const port = createGithubProviderAdapter(
     'o',
     'r',
@@ -2269,12 +2276,32 @@ test("listChangeRequestChangedFiles includes a renamed file's previous path alon
 
   assert.deepEqual(port.listChangeRequestChangedFiles(42), [
     'src/scripts/renamed-checker.mts',
-    'src/scripts/advisory-convergence.mts',
     'README.md',
   ]);
 });
 
-test('listChangeRequestChangedFiles never duplicates a path when previous_filename equals filename', () => {
+test("listChangeRequestRenamedFromPaths reports a renamed file's previous path", () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          filename: 'src/scripts/renamed-checker.mts',
+          previous_filename: 'src/scripts/advisory-convergence.mts',
+          status: 'renamed',
+        },
+        { filename: 'README.md', status: 'modified' },
+      ],
+    }),
+  );
+
+  assert.deepEqual(port.listChangeRequestRenamedFromPaths(42), [
+    'src/scripts/advisory-convergence.mts',
+  ]);
+});
+
+test('listChangeRequestRenamedFromPaths omits a path when previous_filename equals filename', () => {
   const port = createGithubProviderAdapter(
     'o',
     'r',
@@ -2289,5 +2316,17 @@ test('listChangeRequestChangedFiles never duplicates a path when previous_filena
     }),
   );
 
-  assert.deepEqual(port.listChangeRequestChangedFiles(42), ['README.md']);
+  assert.deepEqual(port.listChangeRequestRenamedFromPaths(42), []);
+});
+
+test('listChangeRequestRenamedFromPaths returns empty for a PR with no renames', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [{ filename: 'README.md', status: 'modified' }],
+    }),
+  );
+
+  assert.deepEqual(port.listChangeRequestRenamedFromPaths(42), []);
 });
