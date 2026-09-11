@@ -208,9 +208,9 @@ When in scope, run:
    helper-free fallback. A `collision` fails closed unless claim
    revalidation authorizes an explicit takeover. Also confirm
    `--read-tokens` finds this `{claim-id}` recorded; absent/malformed
-   fails closed unless this acquire reported `reacquired: true` (never
-   fresh/takeover) -- only then `--check` -> `--backfill-tokens` ->
-   `--read-tokens` -> a final re-`--acquire` before mutating.
+   recovers only via `docs/idd-helper-scripts.md`'s gated backfill
+   sequence (each step must succeed before the next; `reacquired:
+   true` required at both ends) -- else fails closed.
 
 **Recovery if a commit already landed on the wrong branch.** If this gate
 or `idd-doctor` finds a commit on the wrong branch, cherry-pick it onto

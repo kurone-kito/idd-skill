@@ -51,10 +51,9 @@ request, or other GitHub side effect, confirm all of the following:
    `docs/idd-helper-scripts.md` if unsure). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
    `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
-   and require `present: true` with no `malformed`; otherwise, only on
-   a matching re-acquire (never a fresh create or takeover), run
-   `--check` -> `--backfill-tokens` -> retry -> re-acquire before
-   mutating -- else stop (`docs/idd-helper-scripts.md`).
+   and require `present: true` with no `malformed`; otherwise recover
+   per `docs/idd-helper-scripts.md` (gated: each step succeeds,
+   `reacquired: true` both ends), else stop.
 6. If any check fails, stop.
 
 ## B1 — Create worktree

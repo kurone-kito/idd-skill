@@ -2007,13 +2007,29 @@ close.
   successful backfill is always a safe, idempotent overwrite (reports
   `backfilled` again), matching `--record-tokens`'s own idempotency
   contract -- there is no separate `already-present` status. The Claim
-  revalidation gate (step 5, `idd-overview-core.instructions.md`) only
-  reaches this route when its own initial `--acquire` reported
-  `reacquired: true` -- a fresh `acquired` (lock just created) or
-  `forcedTakeover: true` is never legitimate backfill evidence -- and
-  re-runs `--acquire` once more immediately before the mutation,
-  closing the window this recovery sequence opens (#2917 review,
-  Copilot).
+  revalidation gate (step 5, `idd-overview-core.instructions.md`, and
+  the equivalent step in every lite guard) only reaches this route
+  when its own initial `--acquire` reported `reacquired: true` -- a
+  fresh `acquired` (lock just created) or `forcedTakeover: true` is
+  never legitimate backfill evidence. From there, **each step gates
+  the next** -- proceed to the next step only on the exact result
+  shown, and stop fail-closed on any other result:
+  1. `--check` reports the lock `present`, holder matching
+     `{claim-id}`.
+  2. `--backfill-tokens` reports `backfilled`.
+  3. The retried `--read-tokens` reports `present: true` (no
+     `malformed`).
+  4. A final `--acquire`, run again immediately before the mutation,
+     reports `reacquired: true` -- not a fresh `acquired`, which
+     would mean the lock vanished mid-recovery (for example a
+     concurrent takeover) and this step would otherwise create a new
+     one and let the mutation proceed with no real token evidence.
+
+  This closes two gaps a review round each found real: the window
+  between the initial acquire and the mutation that a concurrent
+  takeover could exploit, and a literal reading of the sequence as an
+  unconditional run-these-in-order list rather than a chain each
+  link of which must actually succeed (#2917 review, Copilot).
 - No explicit release verb, no cleanup across takeovers: like the lock
   file, the record lives inside the worktree's own private git-admin
   directory, so `git worktree remove` at F4 deletes it together with the

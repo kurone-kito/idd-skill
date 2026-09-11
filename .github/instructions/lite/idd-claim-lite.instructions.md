@@ -433,9 +433,9 @@ node scripts/claim-lock.mjs --acquire --worktree <path> \
 ```
 
 Then run `--read-tokens --worktree <path> --claim-id <id>` and
-require `present: true` with no `malformed`; otherwise, only if this
-re-acquired (never fresh/takeover): `--check` -> `--backfill-tokens`
--> retry -> re-acquire, else stop.
+require `present: true` with no `malformed`; otherwise recover per
+`docs/idd-helper-scripts.md` (gated: each step succeeds,
+`reacquired: true` both ends), else stop.
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
 `{claim-id}` is always a collision — re-run pre-check (c) (`--claim-id`
