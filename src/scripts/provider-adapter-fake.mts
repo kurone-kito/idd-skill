@@ -25,6 +25,7 @@ import type {
   ProviderChangeRequestReadinessSnapshot,
   ProviderChangeRequestState,
   ProviderChangeRequestSummary,
+  ProviderCheckRunWorkflowPath,
   ProviderClosingPullRequestsPage,
   ProviderCollaboratorPermissionResult,
   ProviderComment,
@@ -47,6 +48,13 @@ import type {
   ProviderUserContentEdit,
   ProviderWorkItem,
 } from './provider-port.mts';
+// kurone-kito/idd-skill#2926: the fake's `listCheckRunWorkflowPaths`
+// default derivation reuses this same run-id extraction so an unconfigured
+// fixture reproduces the pre-#2926 `detailsUrl`-parsing outcome exactly --
+// see `FakeProviderFixture.checkRunWorkflowPaths`'s own doc comment. No
+// import cycle: `rerun-advisory-convergence.mts` does not import this file
+// (or `provider-port.mts`) at all.
+import { parseRunIdFromUrl } from './rerun-advisory-convergence.mts';
 
 export interface FakeProviderFixture {
   locator?: ProviderRepositoryLocator;
@@ -208,6 +216,22 @@ export interface FakeProviderFixture {
    * `${owner}/${repo}/${runId}`; an absent key throws (matches the
    * adapter's own no-catch, throw-on-failure contract). */
   workflowRuns?: Record<string, unknown>;
+  /** Backs {@link ProviderPort.listCheckRunWorkflowPaths}, keyed by
+   * `${owner}/${repo}/${headSha}/${checkName}`. When a key is absent, the
+   * fake DERIVES its answer from `changeRequestReadinessSnapshots`' own
+   * `statusCheckRollup` (matched by `headSha`) plus `workflowRuns` --
+   * modeling exactly "the honest world where `checkSuite.workflowRun`
+   * agrees with the check-run's own `detailsUrl`" (kurone-kito/idd-skill#2926),
+   * so every pre-#2926 `#2919` test fixture keeps behaving identically
+   * with zero changes. This is NOT a reimplementation of
+   * `pre-merge-readiness.mts`'s own zero-evidence/mixed/budget-ceiling
+   * algorithm -- that stays in that file, and this derived default never
+   * needs to reproduce it (it runs unconditionally over every matching
+   * rollup entry, evidence-gating included). A test that wants to
+   * simulate `checkSuite.workflowRun` DISAGREEING with `detailsUrl` --
+   * the scenario #2926 actually defends against -- supplies this key
+   * explicitly instead of relying on the derived default. */
+  checkRunWorkflowPaths?: Record<string, ProviderCheckRunWorkflowPath[]>;
   /** Backs {@link ProviderPort.getWorkflowRunJobs}, keyed by
    * `${owner}/${repo}/${runId}`; an absent key throws (matches the
    * adapter's own no-catch, throw-on-failure contract). */
@@ -773,6 +797,46 @@ export function createFakeProviderAdapter(
         throw new Error(`fake provider: no workflow-run fixture for ${key}`);
       }
       return value;
+    },
+
+    listCheckRunWorkflowPaths(
+      pathsOwner: string,
+      pathsRepo: string,
+      headSha: string,
+      checkName: string,
+    ): ProviderCheckRunWorkflowPath[] {
+      const explicit =
+        fixture.checkRunWorkflowPaths?.[
+          `${pathsOwner}/${pathsRepo}/${headSha}/${checkName}`
+        ];
+      if (explicit !== undefined) {
+        return explicit;
+      }
+      // Derived default -- see `FakeProviderFixture.checkRunWorkflowPaths`'s
+      // own doc comment for why this reproduces the pre-#2926
+      // `detailsUrl`-parsing outcome rather than the real adapter's own
+      // `checkSuite.workflowRun` GraphQL semantics.
+      const snapshot = Object.values(
+        fixture.changeRequestReadinessSnapshots ?? {},
+      ).find((candidate) => candidate.headSha === headSha);
+      const rollup =
+        (snapshot?.statusCheckRollup as
+          | { name?: unknown; detailsUrl?: unknown }[]
+          | null
+          | undefined) ?? [];
+      return rollup
+        .filter((entry) => entry?.name === checkName)
+        .map((entry) => {
+          const detailsUrl = String(entry.detailsUrl ?? '');
+          const runId = parseRunIdFromUrl(detailsUrl);
+          const runValue = runId
+            ? (fixture.workflowRuns?.[`${pathsOwner}/${pathsRepo}/${runId}`] as
+                | { path?: unknown }
+                | undefined)
+            : undefined;
+          const workflowPath = runValue?.path ? String(runValue.path) : null;
+          return { detailsUrl, workflowPath };
+        });
     },
 
     getWorkflowRunJobs(

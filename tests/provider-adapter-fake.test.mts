@@ -177,6 +177,95 @@ test('getWorkflowRun throws on a missing fixture, matching the GitHub adapter', 
   assert.throws(() => port.getWorkflowRun('o', 'r', 456), /no workflow-run/);
 });
 
+// kurone-kito/idd-skill#2926
+test('listCheckRunWorkflowPaths returns the explicit fixture override for the exact owner/repo/headSha/checkName key', () => {
+  const port = createFakeProviderAdapter({
+    checkRunWorkflowPaths: {
+      'o/r/deadbeef/idd-advisory-convergence': [
+        {
+          detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+          workflowPath: '.github/workflows/real.yml',
+        },
+      ],
+    },
+  });
+  assert.deepEqual(
+    port.listCheckRunWorkflowPaths(
+      'o',
+      'r',
+      'deadbeef',
+      'idd-advisory-convergence',
+    ),
+    [
+      {
+        detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+        workflowPath: '.github/workflows/real.yml',
+      },
+    ],
+  );
+});
+
+// kurone-kito/idd-skill#2926
+test('listCheckRunWorkflowPaths derives its default from statusCheckRollup + workflowRuns when no explicit override is given, matching the pre-#2926 detailsUrl-parsing outcome', () => {
+  const port = createFakeProviderAdapter({
+    changeRequestReadinessSnapshots: {
+      42: {
+        headSha: 'deadbeef',
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/42',
+        authorLogin: 'author',
+        reviewDecision: null,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+          },
+          {
+            __typename: 'CheckRun',
+            name: 'some-other-check',
+            detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
+          },
+        ],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [],
+      },
+    },
+    workflowRuns: { 'o/r/1': { path: '.github/workflows/real.yml' } },
+  });
+  // Only the matching-name entry is returned -- 'some-other-check' is
+  // filtered out even though its run id (2) would also resolve cleanly.
+  assert.deepEqual(
+    port.listCheckRunWorkflowPaths(
+      'o',
+      'r',
+      'deadbeef',
+      'idd-advisory-convergence',
+    ),
+    [
+      {
+        detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+        workflowPath: '.github/workflows/real.yml',
+      },
+    ],
+  );
+});
+
+// kurone-kito/idd-skill#2926
+test('listCheckRunWorkflowPaths returns [] when no override and no snapshot matches the given headSha', () => {
+  const port = createFakeProviderAdapter({});
+  assert.deepEqual(
+    port.listCheckRunWorkflowPaths(
+      'o',
+      'r',
+      'nomatch',
+      'idd-advisory-convergence',
+    ),
+    [],
+  );
+});
+
 test('listWorkflowRunArtifacts throws on a missing fixture, matching the GitHub adapter (kurone-kito/idd-skill#2912, round 2)', () => {
   const port = createFakeProviderAdapter({
     workflowRunArtifacts: {

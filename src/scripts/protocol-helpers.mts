@@ -6333,11 +6333,16 @@ export function summarizeRequiredChecks(
     // kurone-kito/idd-skill#2919 (round 2 -- E10 critique + Codex/Copilot
     // review on PR #2921): check NAMES the caller could not fully resolve
     // real `workflowPath` producer-identity for on this collection pass
-    // (a parse failure on some, but not all, live instances; any thrown
-    // `getWorkflowRun` lookup; an empty resolved path; or a run-id count
-    // exceeding the caller's own lookup ceiling) -- see
-    // `pre-merge-readiness.mts`'s `advisoryConvergenceIdentityUnresolved`
-    // doc comment for the full rationale this mirrors. Mirrors
+    // (a parse failure on some, but not all, live instances; a thrown
+    // `listCheckRunWorkflowPaths` call [kurone-kito/idd-skill#2926;
+    // formerly `getWorkflowRun`]; an empty resolved path; a `detailsUrl`
+    // that repeats -- either among the resolved `checkSuite.workflowRun`
+    // associations or among the live rollup's own matching instances, and
+    // so cannot be joined back to a single instance safely
+    // [kurone-kito/idd-skill#2926]; or a run-id count exceeding the
+    // caller's own lookup ceiling) -- see `pre-merge-readiness.mts`'s
+    // `advisoryConvergenceIdentityUnresolved` doc comment for the full
+    // rationale this mirrors. Mirrors
     // `trustSourcePinnedRequiredChecks`'s downgrade shape below: a NAMED
     // check that would otherwise report `'success'` downgrades to
     // `'unknown'` instead, because an unresolved producer identity means

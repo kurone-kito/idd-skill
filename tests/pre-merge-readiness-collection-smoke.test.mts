@@ -1355,6 +1355,18 @@ function runSelfWaiverCollection(
     // each entry's `detailsUrl` to resolve a run id) or a decoy second
     // producer sharing name/type/workflowName.
     statusCheckRollup?: unknown[];
+    // kurone-kito/idd-skill#2926: explicit override for
+    // `FakeProviderFixture.checkRunWorkflowPaths` (keyed by
+    // `${owner}/${repo}/${headSha}/${checkName}`), for a test that needs
+    // `checkSuite.workflowRun` to DISAGREE with what `workflowRuns` +
+    // `detailsUrl`-parsing alone would derive -- see that fixture field's
+    // own doc comment. Omitted by every test that predates #2926, which
+    // keeps relying on the fake's derived default (byte-for-byte the old
+    // `detailsUrl`-parsing outcome).
+    checkRunWorkflowPaths?: Record<
+      string,
+      { detailsUrl: string; workflowPath: string | null }[]
+    >;
   },
   configOverrides: Record<string, unknown> = {},
 ) {
@@ -1430,6 +1442,7 @@ function runSelfWaiverCollection(
       comments: { 42: [], ...fixtureOverrides.comments },
       changedFiles: { 42: [], ...fixtureOverrides.changedFiles },
       workflowRuns: fixtureOverrides.workflowRuns ?? {},
+      checkRunWorkflowPaths: fixtureOverrides.checkRunWorkflowPaths,
     } as never);
 
     return collectPreMergeReadiness(
@@ -1906,6 +1919,138 @@ test('collectPreMergeReadiness against a fake provider: #2919 a resolved but emp
     ciReport.status,
     'unknown',
     `expected a resolved-but-empty path to downgrade to identity-unresolved, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+});
+
+// ---------------------------------------------------------------------------
+// kurone-kito/idd-skill#2926: `detailsUrl` is free text its own check-run's
+// creator fully controls (confirmed via GitHub Staff response
+// <https://github.com/orgs/community/discussions/24616#discussioncomment-3244677>
+// -- see issue #2926's own verification comment for the full evidence), so
+// pre-#2926 code trusting `getWorkflowRun` on a run id PARSED from it let a
+// same-repository `pull_request`-triggered workflow's check-run cite an
+// arbitrary real run id -- including the genuine checker's own -- and
+// inherit that run's real path. These two tests exercise the fix:
+// `workflowPath` now comes from `listCheckRunWorkflowPaths`'s
+// `checkSuite.workflowRun` association instead, correlated back to each
+// rollup entry by `detailsUrl` used ONLY as an opaque join key (never as a
+// run-id source), with any correlation ambiguity failing the whole check
+// name closed.
+// ---------------------------------------------------------------------------
+
+test('collectPreMergeReadiness against a fake provider: #2926 a forged check-run citing the SAME run id as the genuine checker (via a different job id) still resolves to its own real path through checkSuite.workflowRun, so the genuine FAILURE stays its own group and is never masked', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const ATTACKER_PATH = '.github/workflows/attacker-workflow.yml';
+  const SHARED_RUN_ID = '600001';
+  const genuineDetailsUrl = `https://github.com/o/r/actions/runs/${SHARED_RUN_ID}/job/1`;
+  const forgedDetailsUrl = `https://github.com/o/r/actions/runs/${SHARED_RUN_ID}/job/2`;
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: genuineDetailsUrl,
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        // Both entries cite the SAME run id (only the job id differs) --
+        // `workflowRuns` below would let the PRE-#2926 `getWorkflowRun`
+        // path resolve BOTH to the SAME real path, deduping this forged
+        // SUCCESS with the genuine FAILURE (the vulnerability #2926
+        // closes). `checkRunWorkflowPaths` below is what a real
+        // `checkSuite.workflowRun` lookup would report instead: each
+        // check-run resolves to its OWN true owning workflow file,
+        // regardless of what its `detailsUrl` claims.
+        detailsUrl: forgedDetailsUrl,
+      },
+    ],
+    workflowRuns: {
+      [`o/r/${SHARED_RUN_ID}`]: { path: REAL_PATH },
+    },
+    checkRunWorkflowPaths: {
+      [`o/r/${SELF_WAIVER_PR_HEAD_SHA}/${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR}`]:
+        [
+          { detailsUrl: genuineDetailsUrl, workflowPath: REAL_PATH },
+          { detailsUrl: forgedDetailsUrl, workflowPath: ATTACKER_PATH },
+        ],
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+  };
+  assert.equal(
+    ciReport.status,
+    'failed',
+    `expected checkSuite.workflowRun's own resolution to separate the two check-runs into different groups, keeping the genuine FAILURE visible, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+});
+
+test('collectPreMergeReadiness against a fake provider: #2926 a forged check-run that copies the genuine check-runs own detailsUrl verbatim is identity-unresolved, not silently merged into one instance', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const sharedDetailsUrl = 'https://github.com/o/r/actions/runs/600002/job/1';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: sharedDetailsUrl,
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        // Verbatim copy of the genuine instance's own detailsUrl -- the
+        // most literal form of the citation forgery #2926 documents.
+        detailsUrl: sharedDetailsUrl,
+      },
+    ],
+    workflowRuns: {
+      'o/r/600002': { path: REAL_PATH },
+    },
+    checkRunWorkflowPaths: {
+      [`o/r/${SELF_WAIVER_PR_HEAD_SHA}/${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR}`]:
+        [
+          // Two genuinely distinct check-run nodes (GraphQL still returns
+          // one node per check-run, regardless of a shared `detailsUrl`
+          // string) -- an ambiguous, unresolvable-to-one-instance join.
+          { detailsUrl: sharedDetailsUrl, workflowPath: REAL_PATH },
+          { detailsUrl: sharedDetailsUrl, workflowPath: REAL_PATH },
+        ],
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    identityUnresolvedRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected a duplicate detailsUrl to fail the whole check name closed rather than silently joining to one instance, got: ${JSON.stringify(ciReport)}`,
   );
   assert.equal(ciReport.requiredChecksPassing, false);
   assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [

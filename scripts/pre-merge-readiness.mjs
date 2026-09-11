@@ -63,7 +63,11 @@ import {
 // #2919: reused (not a new regex) to extract a live check-run's owning
 // workflow-run id from its `detailsUrl` for the bounded `workflowPath`
 // enrichment below -- no import cycle (this file already isn't imported
-// by `rerun-advisory-convergence.mts`).
+// by `rerun-advisory-convergence.mts`). kurone-kito/idd-skill#2926: stays
+// the enrichment's EVIDENCE gate (is there a parseable citation at all,
+// is it consistent, is the distinct-citation count in budget) -- the
+// resolved PATH itself no longer comes from this parsed id (see
+// `listCheckRunWorkflowPaths`'s own doc comment in provider-port.mts).
 import { parseRunIdFromUrl } from './rerun-advisory-convergence.mjs';
 import {
   fetchReviewsAndHeadCommit,
@@ -383,8 +387,10 @@ export function collectPreMergeReadiness(
   // check name's live instances cite (no excess bucket, so a genuinely-
   // superseded same-file failure always gets the chance to dedupe with
   // its own later reruns), and treat anything short of full, clean
-  // resolution -- a parse failure on some (but not all) instances, any
-  // thrown/erroring `getWorkflowRun` call, an empty resolved `path`, or
+  // resolution -- a parse failure on some (but not all) instances, a
+  // thrown/erroring `listCheckRunWorkflowPaths` call (kurone-kito/idd-skill#2926;
+  // formerly `getWorkflowRun`), an empty resolved `path`, a `detailsUrl`
+  // that repeats (#2926 -- unresolvable to one instance either way), or
   // the run-id count exceeding the (now generous, DoS-only) ceiling below
   // -- as ONE uniform, whole-check-name "identity unresolved" outcome:
   // `workflowPath` stays absent on every instance (matching this check
@@ -447,30 +453,90 @@ export function collectPreMergeReadiness(
         ) {
           advisoryConvergenceIdentityUnresolved = true;
         } else {
-          const pathsByRunId = new Map();
-          for (const runId of uniqueRunIds) {
-            try {
-              const raw = port.getWorkflowRun(owner, repo, runId);
-              const path = String(raw?.path ?? '');
-              if (!path) {
+          // kurone-kito/idd-skill#2926: `uniqueRunIds`/`runIdsByIndex` above
+          // stay exactly as #2919 left them -- `parseRunIdFromUrl` is still
+          // the EVIDENCE gate (is there a parseable citation at all? is it
+          // the same one for every live instance? is the DISTINCT-citation
+          // count within the DoS budget?), never a path SOURCE. The path
+          // itself now comes from ONE `listCheckRunWorkflowPaths` call,
+          // which resolves each live check-run's workflow FILE from its own
+          // `checkSuite.workflowRun` (GitHub-assigned) instead of trusting
+          // `getWorkflowRun` on a run id parsed from that check-run's own
+          // creator-settable `detailsUrl` -- see that port method's own doc
+          // comment for the full rationale and its documented residual.
+          //
+          // Correlation back to `rawStatusCheckRollup` still has to go
+          // through `detailsUrl` (the fixed `gh pr view --json
+          // statusCheckRollup` shape carries no check-run database id to
+          // join on instead), so this is not yet a full escape from
+          // `detailsUrl` -- but unlike the pre-#2926 code, `detailsUrl` is
+          // now used ONLY as an opaque join key between two independently-
+          // sourced records of the SAME check-run, never to derive the run
+          // id a resolved PATH comes from. A `detailsUrl` that repeats --
+          // whether among the resolved associations or among the rollup's
+          // own live instances -- can never be joined to a single instance
+          // safely (this is exactly what an attacker copying a genuine
+          // check-run's own `detailsUrl` verbatim produces), so any
+          // repetition fails the whole check name closed, same as every
+          // other resolution failure in this block.
+          let associations = [];
+          try {
+            associations = port.listCheckRunWorkflowPaths(
+              owner,
+              repo,
+              prHeadSha,
+              DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+            );
+          } catch {
+            advisoryConvergenceIdentityUnresolved = true;
+          }
+          if (!advisoryConvergenceIdentityUnresolved) {
+            const pathByDetailsUrl = new Map();
+            const duplicateDetailsUrls = new Set();
+            for (const association of associations) {
+              if (pathByDetailsUrl.has(association.detailsUrl)) {
+                duplicateDetailsUrls.add(association.detailsUrl);
+              } else {
+                pathByDetailsUrl.set(
+                  association.detailsUrl,
+                  association.workflowPath,
+                );
+              }
+            }
+            const rollupDetailsUrlCounts = new Map();
+            for (const { index } of advisoryConvergenceCheckEntries) {
+              const detailsUrl = String(
+                rawStatusCheckRollup[index]?.detailsUrl ?? '',
+              );
+              rollupDetailsUrlCounts.set(
+                detailsUrl,
+                (rollupDetailsUrlCounts.get(detailsUrl) ?? 0) + 1,
+              );
+            }
+            const pathsByIndex = new Map();
+            for (const { index } of advisoryConvergenceCheckEntries) {
+              const detailsUrl = String(
+                rawStatusCheckRollup[index]?.detailsUrl ?? '',
+              );
+              const path = pathByDetailsUrl.get(detailsUrl);
+              if (
+                duplicateDetailsUrls.has(detailsUrl) ||
+                (rollupDetailsUrlCounts.get(detailsUrl) ?? 0) > 1 ||
+                !path
+              ) {
                 advisoryConvergenceIdentityUnresolved = true;
                 break;
               }
-              pathsByRunId.set(runId, path);
-            } catch {
-              advisoryConvergenceIdentityUnresolved = true;
-              break;
+              pathsByIndex.set(index, path);
             }
-          }
-          if (!advisoryConvergenceIdentityUnresolved) {
-            checks = checks.map((check, index) => {
-              const runId = runIdsByIndex.get(index);
-              if (runId === undefined) return check;
-              const path = pathsByRunId.get(runId);
-              return path === undefined
-                ? check
-                : { ...check, workflowPath: path };
-            });
+            if (!advisoryConvergenceIdentityUnresolved) {
+              checks = checks.map((check, index) => {
+                const path = pathsByIndex.get(index);
+                return path === undefined
+                  ? check
+                  : { ...check, workflowPath: path };
+              });
+            }
           }
         }
       }

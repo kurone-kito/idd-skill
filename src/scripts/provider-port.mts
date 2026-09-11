@@ -359,6 +359,27 @@ export interface ProviderReviewThreadWithAuthorType {
 }
 
 /**
+ * Backs {@link ProviderPort.listCheckRunWorkflowPaths} -- one entry per LIVE
+ * check-run instance of the queried name on a commit (kurone-kito/idd-skill#2926).
+ * `detailsUrl` is the check-run's own `detailsUrl` value, included ONLY so a
+ * caller can correlate this entry back to the `statusCheckRollup` entry it
+ * describes (that fixed `gh pr view --json statusCheckRollup` shape carries
+ * no check-run database id) -- never re-parsed for a run id or otherwise
+ * treated as evidence here. `workflowPath` is sourced from
+ * `checkSuite.workflowRun.file.path`, GitHub's own check-suite-to-workflow-
+ * run association, `null` when that association (or its `file`) is absent.
+ * A caller must fail closed (never silently proceed) whenever `detailsUrl`
+ * repeats across the returned entries, or across the rollup entries it is
+ * matched against -- see `pre-merge-readiness.mts`'s call site for why an
+ * attacker copying a genuine check-run's own `detailsUrl` verbatim makes
+ * this the only safe outcome.
+ */
+export interface ProviderCheckRunWorkflowPath {
+  detailsUrl: string;
+  workflowPath: string | null;
+}
+
+/**
  * Provider port: the operation surface `discover-*.mts`, `claim-approval-
  * gate.mts`, `post-idd-marker.mts`, `resume-claim-routing.mts`,
  * `resume-route-selection.mts`, `idd-roadmap-audit-execute.mts`, and
@@ -1107,6 +1128,40 @@ export interface ProviderPort {
    * `ci-wait-policy.test.mts`'s "preserves a run id above
    * Number.MAX_SAFE_INTEGER exactly" case). */
   getWorkflowRun(owner: string, repo: string, runId: string | number): unknown;
+
+  /**
+   * checks, GraphQL. All LIVE check-run instances of ONE name on a commit,
+   * each carrying its OWN check-suite-derived workflow FILE path
+   * (`checkSuite.workflowRun.file.path`) instead of one derived by parsing
+   * the check-run's own creator-settable `detailsUrl` and calling
+   * {@link getWorkflowRun} on the parsed id -- kurone-kito/idd-skill#2926.
+   * `checkSuite.workflowRun` is GitHub's own automatic check-suite-to-
+   * workflow-run association: no `check_suite_id` parameter exists on
+   * `POST .../check-runs` for a check-run's own creator to set directly
+   * (confirmed via GitHub Staff response
+   * <https://github.com/orgs/community/discussions/24616#discussioncomment-3244677>),
+   * unlike `detailsUrl`, which is free text that creator fully controls.
+   *
+   * Residual, NOT closed by this method (documented at
+   * `pre-merge-readiness.mts`'s call site, where it is handled by failing
+   * closed rather than trusted): the SAME discussion thread (and
+   * <https://github.com/ScaCap/action-surefire-report/issues/39>)
+   * documents that GitHub's own check-suite assignment can still attach a
+   * newly created check-run to the WRONG pre-existing suite when several
+   * already exist for one commit, rather than to its own creating job's
+   * suite -- so this method closes the trivially-exploitable free-text
+   * `detailsUrl`-citation vector, not every conceivable misattribution.
+   *
+   * Returned in no particular guaranteed order (see
+   * {@link ProviderCheckRunWorkflowPath}'s own doc comment for the
+   * `detailsUrl`-correlation contract this implies for callers).
+   */
+  listCheckRunWorkflowPaths(
+    owner: string,
+    repo: string,
+    headSha: string,
+    checkName: string,
+  ): ProviderCheckRunWorkflowPath[];
 
   /** checks. `actions/runs/{runId}/jobs` -- per-job/per-step status for a
    * single workflow run, raw passthrough. kurone-kito/idd-skill#2912:

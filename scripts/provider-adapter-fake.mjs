@@ -10,6 +10,13 @@
 // passed to `createFakeProviderAdapter`; nothing here spawns a subprocess
 // or makes a network call.
 import { PROVIDER_CAPABILITY_GROUPS } from './provider-contract.mjs';
+// kurone-kito/idd-skill#2926: the fake's `listCheckRunWorkflowPaths`
+// default derivation reuses this same run-id extraction so an unconfigured
+// fixture reproduces the pre-#2926 `detailsUrl`-parsing outcome exactly --
+// see `FakeProviderFixture.checkRunWorkflowPaths`'s own doc comment. No
+// import cycle: `rerun-advisory-convergence.mts` does not import this file
+// (or `provider-port.mts`) at all.
+import { parseRunIdFromUrl } from './rerun-advisory-convergence.mjs';
 
 /**
  * Backs both {@link ProviderPort.getWorkItemUserContentEdits} and
@@ -371,6 +378,34 @@ export function createFakeProviderAdapter(fixture) {
         throw new Error(`fake provider: no workflow-run fixture for ${key}`);
       }
       return value;
+    },
+    listCheckRunWorkflowPaths(pathsOwner, pathsRepo, headSha, checkName) {
+      const explicit =
+        fixture.checkRunWorkflowPaths?.[
+          `${pathsOwner}/${pathsRepo}/${headSha}/${checkName}`
+        ];
+      if (explicit !== undefined) {
+        return explicit;
+      }
+      // Derived default -- see `FakeProviderFixture.checkRunWorkflowPaths`'s
+      // own doc comment for why this reproduces the pre-#2926
+      // `detailsUrl`-parsing outcome rather than the real adapter's own
+      // `checkSuite.workflowRun` GraphQL semantics.
+      const snapshot = Object.values(
+        fixture.changeRequestReadinessSnapshots ?? {},
+      ).find((candidate) => candidate.headSha === headSha);
+      const rollup = snapshot?.statusCheckRollup ?? [];
+      return rollup
+        .filter((entry) => entry?.name === checkName)
+        .map((entry) => {
+          const detailsUrl = String(entry.detailsUrl ?? '');
+          const runId = parseRunIdFromUrl(detailsUrl);
+          const runValue = runId
+            ? fixture.workflowRuns?.[`${pathsOwner}/${pathsRepo}/${runId}`]
+            : undefined;
+          const workflowPath = runValue?.path ? String(runValue.path) : null;
+          return { detailsUrl, workflowPath };
+        });
     },
     getWorkflowRunJobs(jobsOwner, jobsRepo, runId) {
       // Same throw-on-missing contract as getWorkflowRun above.
