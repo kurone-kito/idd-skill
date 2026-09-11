@@ -2196,14 +2196,22 @@ close.
   `{claim-id}`, UTF-8-encoded -- not the sanitized or truncated form,
   so a fallback and the CLI (or two fallback implementations) agree on
   the same path for the same claim-id (#2879 review, Codex P2). Write
-  `{ agentId, claimId, nonce?, recordedAt }`. No
-  exclusive-create semantics needed (unlike the lock): a plain atomic
-  replace is correct since this is idempotent evidence, not a
-  mutual-exclusion primitive -- except a directory already occupying
-  this exact path, which this fallback never replaces or deletes
-  either, matching `recordGeneratedClaimTokens`'s own absolute
-  invariant in `src/scripts/claim-lock.mts` (PR #2879 regression test;
-  #2917 review, Copilot); stop fail-closed instead.
+  `{ agentId, claimId, nonce?, recordedAt }`. No exclusive-create
+  semantics needed for **this record file itself** (unlike the lock
+  file): a plain atomic replace is correct here since the record is
+  idempotent evidence, not a mutual-exclusion primitive -- except a
+  directory already occupying this exact path, which this fallback
+  never replaces or deletes either, matching
+  `recordGeneratedClaimTokens`'s own absolute invariant in
+  `src/scripts/claim-lock.mts` (PR #2879 regression test; #2917 review,
+  Copilot); stop fail-closed instead. **This is scoped to the record
+  file's own replace step only** -- it does not exempt the coordination
+  below: the separate `.writelock` guard the next bullet introduces
+  _does_ need an exclusive create, every time, even though the record
+  replace it wraps does not (#2922 review round 8, Copilot). Skipping
+  the guard because "no exclusive-create semantics needed" was read as
+  covering this whole write reopens the exact nonce-clobber race #2922
+  reported.
 - **`instructions-only` write-lock coordination** (#2922 -- applies to
   this write side and to the backfill side below, which performs a
   read-then-write of the same record): before writing, coordinate

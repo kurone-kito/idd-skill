@@ -726,13 +726,32 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
     // finishing the write below is always safe to clean up.
     try {
       writeSync(fd, String(process.pid));
-      closeSync(fd);
     } catch (error) {
+      // `writeSync` failing leaves `fd` genuinely still open (a write
+      // failure does not close the descriptor), so this is the correct,
+      // and only, place to close it for this branch.
       try {
         closeSync(fd);
       } catch {
-        // Already closed, or otherwise invalid -- ignore.
+        // ignore
       }
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // Best-effort: never mask the real error above.
+      }
+      throw error;
+    }
+    try {
+      closeSync(fd);
+    } catch (error) {
+      // Do NOT retry `closeSync(fd)` here (#2922 review round 8,
+      // Codex): POSIX close() semantics mean the descriptor is no longer
+      // ours to touch once this call has been made, whether or not it
+      // reported an error -- the kernel may already have recycled that
+      // exact descriptor number for something else (for example another
+      // thread's own `open()`), so a second close attempt on it here
+      // could silently disrupt unrelated I/O elsewhere in the process.
       try {
         unlinkSync(lockPath);
       } catch {
