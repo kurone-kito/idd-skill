@@ -1899,6 +1899,30 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       );
       return JSON.parse(raw.trim() || '{}');
     },
+    getWorkflowRunJobs(jobsOwner, jobsRepo, runId) {
+      // Not `--paginate`: bounded to a handful of jobs per run (this
+      // workflow declares two), well under the API's own per-page cap, and
+      // `--paginate` without `--jq` would emit one JSON object per page
+      // rather than a single parseable document.
+      const raw = deps.ghText(
+        ['api', `repos/${jobsOwner}/${jobsRepo}/actions/runs/${runId}/jobs`],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      );
+      return JSON.parse(raw.trim() || '{}');
+    },
+    listWorkflowRunArtifacts(artifactsOwner, artifactsRepo, runId) {
+      // Not `--paginate`, same rationale as getWorkflowRunJobs above: a
+      // run legitimately uploads at most a handful of artifacts, well
+      // under the API's own per-page cap.
+      const raw = deps.ghText(
+        [
+          'api',
+          `repos/${artifactsOwner}/${artifactsRepo}/actions/runs/${runId}/artifacts`,
+        ],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      );
+      return JSON.parse(raw.trim() || '{}');
+    },
     listWorkflowRuns(runsOwner, runsRepo, workflowName, limit) {
       const raw = deps.ghText(
         [

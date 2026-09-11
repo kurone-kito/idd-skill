@@ -46,6 +46,7 @@ const SAMPLE_NAMES = [
   'renderForcedHandoffConsentNote',
   'renderExternalCheckWaiverComment',
   'parseExternalCheckWaiverComment',
+  'digestExternalCheckWaiverMarkerBody',
   'renderProviderOutageDeclarationComment',
   'parseProviderOutageDeclarationComment',
   'renderProviderOutageAdvancedComment',
@@ -83,6 +84,36 @@ test('protocol-helpers re-exports every sampled marker-helpers name by identity'
       `protocol-helpers.mts's ${name} must be the same binding as marker-helpers.mts's (re-export, not a copy)`,
     );
   }
+});
+
+// kurone-kito/idd-skill#2912 (round 3): direct unit coverage for
+// `digestExternalCheckWaiverMarkerBody` -- the artifact-binding primitive
+// `advisory-convergence.mts`'s own trust chain and
+// `external-check-waiver.mts`'s post-write reconcile both rely on to bind
+// an artifact to a marker's EXACT body content, not merely its comment id
+// (closing the round-2 edit-after-post gap Copilot found). Pure hashing
+// logic, so this is deliberately independent of the fuller end-to-end
+// coverage in advisory-convergence.test.mts/advisory-convergence-fake-provider.test.mts.
+test('digestExternalCheckWaiverMarkerBody is deterministic, sensitive to any byte difference, and never normalizes', () => {
+  const body = 'exact body text v1\nwith a trailing newline\n';
+  const digest = direct.digestExternalCheckWaiverMarkerBody(body);
+  assert.match(digest, /^[0-9a-f]{64}$/);
+  // Deterministic: the same input always yields the same digest.
+  assert.equal(direct.digestExternalCheckWaiverMarkerBody(body), digest);
+  // Sensitive to a single trailing-whitespace byte -- deliberately NOT
+  // normalized/trimmed, per this function's own doc comment: both call
+  // sites are expected to pass an API-returned body verbatim, so
+  // normalizing here would let two GENUINELY different stored bodies
+  // collide onto the same digest.
+  assert.notEqual(
+    direct.digestExternalCheckWaiverMarkerBody(`${body} `),
+    digest,
+  );
+  // Sensitive to a single interior character change.
+  assert.notEqual(
+    direct.digestExternalCheckWaiverMarkerBody(body.replace('v1', 'v2')),
+    digest,
+  );
 });
 
 // #2752: guards against the drift issue #1705 hit -- a new marker family

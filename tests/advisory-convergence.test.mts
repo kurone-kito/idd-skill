@@ -36,12 +36,16 @@ import {
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX,
+  SELF_REFERENTIAL_WAIVER_JOB_ID,
+  SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
   SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
   verifySelfReferentialBootstrapWaiverRun,
   viewerProbeGhOptions,
   writeAdvisoryConvergenceCliOutput,
 } from '../src/scripts/advisory-convergence.mts';
 import {
+  digestExternalCheckWaiverMarkerBody,
   renderAdvisoryWaitRecoveryMarker,
   renderExternalCheckWaiverComment,
 } from '../src/scripts/marker-helpers.mts';
@@ -3170,10 +3174,21 @@ function autoWaiverBody(
     runId?: string | null;
     headSha?: string;
     claimId?: string;
+    // kurone-kito/idd-skill#2912 (round 3): `agentId` is never consumed
+    // by any classification/trust condition an external-check-waiver
+    // marker is evaluated against (it names the AGENT that requested
+    // the waiver, not the run/claim/HEAD the marker binds to -- see
+    // `digestExternalCheckWaiverMarkerBody`'s own doc comment for why
+    // that distinction matters), so overriding ONLY this field is the
+    // one way to change a marker's exact body text/digest without also
+    // tripping an earlier, unrelated rejection reason (wrong claim,
+    // wrong HEAD, etc.) -- exactly what the round-3 edit-after-post
+    // regression test below needs to isolate the digest check alone.
+    agentId?: string;
   } = {},
 ): string {
   return renderExternalCheckWaiverComment({
-    agentId: 'github-actions-bot',
+    agentId: overrides.agentId ?? 'github-actions-bot',
     claimId: overrides.claimId ?? CLAIM_ID,
     headSha: overrides.headSha ?? HEAD,
     checkSelector: 'idd-advisory-convergence',
@@ -3193,6 +3208,47 @@ function acceptedRunLookup() {
   };
 }
 
+// kurone-kito/idd-skill#2912: the marker's own `createdAt` in every test
+// below that reuses this fixture is `RECENT` (2026-07-11T10:00:00Z) --
+// this window brackets it, matching a genuine ~1-minute job execution.
+function acceptedRunJobLookup() {
+  return {
+    conclusion: 'success',
+    startedAt: '2026-07-11T09:59:30Z',
+    completedAt: '2026-07-11T10:00:30Z',
+  };
+}
+
+// kurone-kito/idd-skill#2912 (round 2): the decimal comment id the
+// accepted marker's own comment carries in every test below that reuses
+// these fixtures -- must match `SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX
+// + COMMENT_ID` in `acceptedTrustedBindings()` below for
+// `verifySelfReferentialBootstrapWaiverArtifactBinding` to accept it.
+const COMMENT_ID = '987654321';
+
+// kurone-kito/idd-skill#2912 (round 3): the digest both
+// `acceptedRunIdCandidates()` and `acceptedTrustedBindings()` below
+// share, computed the same way `collectFromGitHub`'s live comment scan
+// and the posting CLI's post-write reconcile both do -- hashing
+// `autoWaiverBody()`'s own rendered text, never a hand-typed literal, so
+// this fixture can never silently drift from what the render function
+// actually produces.
+function acceptedBodyDigest() {
+  return digestExternalCheckWaiverMarkerBody(autoWaiverBody());
+}
+
+function acceptedRunIdCandidates() {
+  return {
+    [RUN_ID]: [
+      { id: COMMENT_ID, createdAt: RECENT, bodyDigest: acceptedBodyDigest() },
+    ],
+  };
+}
+
+function acceptedTrustedBindings() {
+  return { [RUN_ID]: [{ id: COMMENT_ID, bodyDigest: acceptedBodyDigest() }] };
+}
+
 test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true immediately, before deadlinePassed/terminalUnavailable (regression for the 2026-09-10 self-cancellation shape)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
@@ -3206,6 +3262,9 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3486,6 +3545,9 @@ test('self-referential-bootstrap-auto: a run reported with different repository-
           repositoryFullName: 'Kurone-Kito/IDD-Skill',
         },
       },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3720,6 +3782,9 @@ test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a r
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3787,6 +3852,9 @@ test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3974,6 +4042,9 @@ test('self-referential-bootstrap-auto: a vendored-node adopter touching its own 
           repositoryFullName: 'someone-else/adopter-repo',
         },
       },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
       changedFilePaths: ['scripts/advisory-convergence.mjs'],
     }),
     baseOptions({
@@ -4006,6 +4077,9 @@ test('self-referential-bootstrap-auto: a package-manager adopter touching packag
           repositoryFullName: 'someone-else/adopter-repo',
         },
       },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
       changedFilePaths: ['package.json'],
     }),
     baseOptions({
@@ -4086,6 +4160,426 @@ test('self-referential-bootstrap-auto: this source repository ignores its own co
   );
   assert.equal(verdict.waiver.autoWaiverValid, false);
   assert.equal(verdict.ready, false);
+});
+
+// --- kurone-kito/idd-skill#2912: run-provenance binding -- closing the
+// --- residual bearer-evidence gap #2657 round 16 tracked but did not
+// --- close: the four run-level trust conditions above prove a marker
+// --- cites SOME genuine run of the right shape, never that THAT run's
+// --- own job actually posted THIS comment.
+
+test('self-referential-bootstrap-auto: a genuine marker deleted after posting leaves a same-run-id forged sibling rejected, never the sole winner (kurone-kito/idd-skill#2912, round 2 P1: Codex + Copilot review, PR #2914)', () => {
+  // The genuine marker's own comment id (`COMMENT_ID`) is what the
+  // cited run's OWN trusted job execution recorded posting, via the
+  // artifact-name-encoded `autoWaiverRunArtifactBindings` below -- that
+  // record persists even after the comment itself is deleted (`issues:
+  // write` permits deleting ANY comment, not only ones the deleting
+  // token authored). `comments`/`autoWaiverRunIdCandidates` below model
+  // the POST-DELETION state: only the forged sibling (`FORGED_COMMENT_ID`)
+  // is still live, sharing the genuine marker's exact `createdAt` (an
+  // attacker racing to post within the same second the genuine job
+  // posts, then deleting it). The forged id was never, and can never be,
+  // recorded in the trusted set -- no same-repository `pull_request`-
+  // triggered workflow can write to a different run's own artifact list
+  // -- so it is rejected regardless of how convincingly it otherwise
+  // qualifies (right run shape, right job-success window, and -- round 3
+  // -- even the identical body text/digest as the genuine marker).
+  const FORGED_COMMENT_ID = '111222333';
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          // The forged sibling -- the ONLY comment still live; the
+          // genuine one has been deleted.
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: {
+        [RUN_ID]: [
+          {
+            id: FORGED_COMMENT_ID,
+            createdAt: RECENT,
+            bodyDigest: acceptedBodyDigest(),
+          },
+        ],
+      },
+      // The trusted set still names the GENUINE (now-deleted) comment's
+      // id -- the artifact the trusted job uploaded is immutable and
+      // unaffected by the deletion.
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a genuine comment EDITED in place after posting is rejected even though its id and createdAt are unchanged (kurone-kito/idd-skill#2912, round 3 P1: Copilot review, PR #2914 round 2)', () => {
+  // Round 2 closed comment DELETION (the genuine marker vanishes, a
+  // forged sibling with a DIFFERENT id survives). This is the sibling
+  // gap Copilot found in round 2's own fix: `issues: write` also
+  // permits EDITING an existing comment's body in place, which
+  // preserves that comment's `id` AND `createdAt` while replacing its
+  // content. `COMMENT_ID`/`RECENT` here are the SAME id/timestamp the
+  // trusted artifact binding (`acceptedTrustedBindings()`) names --
+  // round 2's id-only check would have accepted this. The live body
+  // has been rewritten (a different `agentId`, the one field no
+  // classification/trust condition consumes -- see `autoWaiverBody`'s
+  // own doc comment on that parameter for why: deliberately NOT
+  // `claimId`/`headSha`/`reason`/`runId`, any of which would make this
+  // marker fail an EARLIER, unrelated check first and no longer isolate
+  // the digest mismatch this test exists to exercise), though, so its
+  // digest no longer matches the trusted binding's `bodyDigest` (still
+  // the ORIGINAL, genuine body's digest -- an artifact is immutable
+  // once uploaded, so the trusted record itself cannot follow the
+  // edit). `verifySelfReferentialBootstrapWaiverArtifactBinding` must
+  // reject this on the digest mismatch alone.
+  const editedBody = autoWaiverBody({ agentId: 'a-different-agent-id' });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          // The SAME comment id/createdAt the genuine marker originally
+          // posted with -- only the body has been rewritten in place.
+          author: { login: BOT_LOGIN },
+          body: editedBody,
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: {
+        [RUN_ID]: [
+          {
+            id: COMMENT_ID,
+            createdAt: RECENT,
+            bodyDigest: digestExternalCheckWaiverMarkerBody(editedBody),
+          },
+        ],
+      },
+      // The trusted set still names the digest of the ORIGINAL, genuine
+      // body -- the artifact the trusted job uploaded immediately after
+      // posting is immutable and cannot reflect a LATER edit.
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: two distinct candidates sharing the same run id and the same wall-clock second are rejected, never picking a winner (round-1 duplicate-run-id property, preserved under the round-2/3 artifact-binding mechanism)', () => {
+  // A genuine marker and a forged sibling racing to land inside the
+  // SAME execution window, timestamped to the SAME second -- ambiguous
+  // for `verifySelfReferentialBootstrapWaiverArtifactBinding`'s own
+  // createdAt correlation (it cannot tell which of the two live
+  // candidates `entry` actually is), so both fail closed regardless of
+  // which one's id happens to be trusted.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: {
+        [RUN_ID]: [
+          {
+            id: COMMENT_ID,
+            createdAt: RECENT,
+            bodyDigest: acceptedBodyDigest(),
+          },
+          {
+            id: '444555666',
+            createdAt: RECENT,
+            bodyDigest: acceptedBodyDigest(),
+          },
+        ],
+      },
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a legitimate CI rerun (second genuine marker for the same run id, prior attempt now outside the latest window) still validates (kurone-kito/idd-skill#2912, C1 review finding #2)', () => {
+  // `gh run rerun <run-id>` (this repository's own standard automated
+  // recovery path, rerun-advisory-convergence.mts) re-executes every
+  // job under the SAME run id -- including an already-succeeded
+  // self-waiver job, which posts a second genuine marker AND uploads its
+  // own artifact (the trusted set only ever grows across attempts, never
+  // replaces). Attempt 1's own stale candidate (a different `createdAt`,
+  // hours earlier) must not create any ambiguity for attempt 2's own
+  // correlation -- `verifySelfReferentialBootstrapWaiverArtifactBinding`
+  // only ever looks at candidates sharing `entry`'s EXACT `createdAt`.
+  const STALE_ATTEMPT_1_COMMENT_ID = '100200300';
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          // Attempt 2's genuine marker -- this is the one the consumer
+          // is currently evaluating.
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      // The jobs API reflects only the latest (attempt 2) run: its own
+      // post step succeeded in this window.
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: {
+        [RUN_ID]: [
+          // Attempt 1's own (now-stale) genuine marker, from hours
+          // earlier -- structurally qualifies (same run id) but its
+          // `createdAt` never matches attempt 2's, so it is simply
+          // irrelevant to attempt 2's own correlation.
+          {
+            id: STALE_ATTEMPT_1_COMMENT_ID,
+            createdAt: '2026-07-11T06:00:00Z',
+            bodyDigest: acceptedBodyDigest(),
+          },
+          {
+            id: COMMENT_ID,
+            createdAt: RECENT,
+            bodyDigest: acceptedBodyDigest(),
+          },
+        ],
+      },
+      // Both attempts' artifacts persist -- the trusted set grows,
+      // never replaces.
+      autoWaiverRunArtifactBindings: {
+        [RUN_ID]: [
+          { id: STALE_ATTEMPT_1_COMMENT_ID, bodyDigest: acceptedBodyDigest() },
+          { id: COMMENT_ID, bodyDigest: acceptedBodyDigest() },
+        ],
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: a marker citing a run whose self-waiver post step never succeeded is rejected (job-status evidence insufficient)', () => {
+  // The cited run has the right path/head-sha/repository/event (every
+  // pre-#2912 condition still passes), but its own
+  // idd-advisory-convergence-self-waiver job's post step shows
+  // `skipped`, not `success` -- proving this run's own job never
+  // actually posted a marker, so whatever comment cites it must have
+  // come from somewhere else.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: {
+        [RUN_ID]: { ...acceptedRunJobLookup(), conclusion: 'skipped' },
+      },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test("self-referential-bootstrap-auto: a marker created outside the cited run's post-step execution window is rejected (stale-run reuse)", () => {
+  // The cited run's own post step genuinely succeeded at some point in
+  // the past, but this specific comment's own `createdAt` falls hours
+  // outside that step's `[startedAt, completedAt]` window -- exactly
+  // the shape a forged marker minted long after the genuine run
+  // finished (e.g. once the genuine marker has since expired) would
+  // have, even though the run-level shape and job success both check
+  // out.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: {
+        [RUN_ID]: {
+          conclusion: 'success',
+          startedAt: '2026-07-01T00:00:00Z',
+          completedAt: '2026-07-01T00:01:00Z',
+        },
+      },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run-jobs lookup error fails closed the same way a run lookup error does', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: { error: 'HTTP 404' } },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: an absent/empty artifact-trusted-id set fails closed (kurone-kito/idd-skill#2912, round 2)', () => {
+  // Mirrors the run-jobs-lookup-error test above, for the THIRD lookup:
+  // an artifact-list fetch failure (`collectFromGitHub` maps it to an
+  // empty array, never an `{error}` entry -- an empty trusted set already
+  // means "nothing trusted") must reject an otherwise fully-qualifying
+  // marker, not silently skip the check.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: { [RUN_ID]: [] },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: SELF_REFERENTIAL_WAIVER_JOB_ID, SELF_REFERENTIAL_WAIVER_POST_STEP_NAME, and SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX stay in sync with BOTH copies of the workflow file (drift guard)', () => {
+  // Kept in sync by hand with `.github/workflows/idd-advisory-convergence.yml`
+  // AND its `idd-template/` mirror, the same convention
+  // SELF_REFERENTIAL_WAIVER_TRIGGER_FILES and
+  // ADVISORY_CONVERGENCE_WORKFLOW_PATH already use -- a job id, step
+  // name, or artifact-name prefix renamed in either copy without
+  // updating these constants would silently make
+  // `verifySelfReferentialBootstrapWaiverProvenance` or
+  // `verifySelfReferentialBootstrapWaiverArtifactBinding` reject every
+  // genuine marker (fail closed, but a self-inflicted outage rather than
+  // a workflow file drifting invisibly). Both copies are checked --
+  // Copilot review, PR #2914 flagged the round-1 version of this test as
+  // checking only the repository-root copy, leaving the `idd-template/`
+  // mirror free to drift unnoticed.
+  for (const relativePath of [
+    '../.github/workflows/idd-advisory-convergence.yml',
+    '../idd-template/.github/workflows/idd-advisory-convergence.yml',
+  ]) {
+    const workflow = readFileSync(
+      new URL(relativePath, import.meta.url),
+      'utf8',
+    );
+    assert.ok(
+      workflow.includes(`${SELF_REFERENTIAL_WAIVER_JOB_ID}:`),
+      `${relativePath}: no longer declares the expected self-waiver job id`,
+    );
+    assert.ok(
+      workflow.includes(`name: ${SELF_REFERENTIAL_WAIVER_POST_STEP_NAME}`),
+      `${relativePath}: no longer declares the expected post-step name`,
+    );
+    assert.ok(
+      workflow.includes(SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX),
+      `${relativePath}: no longer declares the expected artifact-name prefix`,
+    );
+  }
 });
 
 // --- #1570 AC6: no code path this issue adds ever invokes `gh pr merge

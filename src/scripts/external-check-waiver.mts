@@ -32,6 +32,7 @@ import type {
   ExternalCheckWaiverEvidence,
 } from './protocol-helpers.mts';
 import {
+  digestExternalCheckWaiverMarkerBody,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
@@ -310,6 +311,51 @@ interface ExternalCheckWaiverReport {
   body: string;
   applied?: boolean;
   commentUrl?: string;
+  /** kurone-kito/idd-skill#2912 (round 2): the numeric id (as a string)
+   * of the comment this invocation posted (`--apply`, a fresh post) or
+   * reused (`reusedWaiver`'s own `commentId`) -- absent when neither
+   * applies (e.g. a dry-run plan). The self-waiver CI job reads this
+   * from the JSON report to record a run-scoped Actions artifact naming
+   * the posted comment's id, which `advisory-convergence.mts`'s
+   * self-referential-bootstrap-auto trust chain later fetches to bind a
+   * marker to the SPECIFIC comment its own trusted job posted, not
+   * merely "some comment exists" -- see
+   * `verifySelfReferentialBootstrapWaiverArtifactBinding`'s own doc
+   * comment there for the forgery this closes. */
+  commentId?: string;
+  /** kurone-kito/idd-skill#2912 (round 4; supersedes round 3's
+   * reconcile-based design): the SHA-256 hex digest
+   * ({@link digestExternalCheckWaiverMarkerBody}) of `--apply`'s posted
+   * comment body, computed ONLY from the `body` field GitHub's own
+   * create-comment response returned for THIS specific POST -- never a
+   * later re-read. Round 3 hashed the body a separate, LATER
+   * `readPrComments()` re-read observed instead, reasoning that it
+   * reflects "whatever GitHub actually stored" -- but Copilot's review of
+   * round 3's own commit (PR #2914) found the gap that reasoning missed:
+   * that later read is itself mutable between the POST and the reconcile,
+   * so a same-repository `issues: write` workflow that edits the
+   * just-posted comment inside that window would have had its FORGED body
+   * hashed and attested as genuine, defeating the very binding round 3
+   * introduced. The create-comment response has no such window: GitHub
+   * returns it atomically, in the same API call that created the comment,
+   * before any other request could possibly have touched it. Absent
+   * whenever that response did not carry a `body` string (an unexpected
+   * API shape, or a `postComment` test double that omits it) --
+   * deliberately NOT backfilled from `report.body` or any later read, so
+   * the workflow's own `body-digest != ''` gate fails closed instead of
+   * uploading a provenance artifact for a digest this process cannot
+   * prove GitHub stored. The self-waiver CI job reads this alongside
+   * `commentId` to name the provenance artifact
+   * `idd-self-waiver-marker-<comment-id>-<body-digest>`, closing the
+   * round-2 artifact-binding gap Copilot found in PR #2914's review of
+   * that round: `issues: write` also permits EDITING an existing
+   * comment's body while preserving its `id`/`createdAt`, so trusting
+   * the id alone (round 2) still let a same-repository attacker rewrite
+   * a genuine, already-trusted comment's content in place. Binding to
+   * `(id, bodyDigest)` instead means an edited body no longer matches
+   * the trusted pair `advisory-convergence.mts`'s
+   * `verifySelfReferentialBootstrapWaiverArtifactBinding` looks up. */
+  bodyDigest?: string;
   /**
    * #2328: set when `--apply` found an existing valid waiver for this
    * selector and reused it rather than appending a second marker.
@@ -351,8 +397,19 @@ interface ExternalCheckWaiverArgs {
 
 /** Posted-comment payload fields consumed by this helper. */
 interface PostedCommentPayload {
+  /** kurone-kito/idd-skill#2912 (round 2): threaded into
+   * `ExternalCheckWaiverReport.commentId` so a caller (the self-waiver
+   * CI job) can record which comment THIS invocation actually posted,
+   * without having to re-derive it from `commentUrl`. */
+  id?: string | number | null;
   html_url?: string | null;
   url?: string | null;
+  /** kurone-kito/idd-skill#2912 (round 4): the created comment's own
+   * body, exactly as GitHub's create-comment response returns it -- the
+   * ONLY source `ExternalCheckWaiverReport.bodyDigest` trusts. See that
+   * field's own doc comment for why a later re-read is deliberately
+   * never used instead. */
+  body?: string | null;
 }
 
 /** GitHub API call result with a parsed JSON body and HTTP status. */
@@ -1375,6 +1432,7 @@ export async function runExternalCheckWaiver(
       applied: false,
       reusedWaiver: existingWaiver,
       commentUrl: existingWaiver.commentUrl,
+      commentId: existingWaiver.commentId,
     };
     renderReport(reusedReport, args.format);
     return { exitCode: 0, report: reusedReport };
@@ -1506,10 +1564,37 @@ export async function runExternalCheckWaiver(
     );
   }
 
+  // kurone-kito/idd-skill#2912 (round 4; supersedes round 3, PR #2914
+  // review): hash the `body` field GitHub's OWN create-comment response
+  // (`result`) returned for THIS exact POST -- never `postWriteComments`,
+  // the LATER, separate `readPrComments()` re-read used above for
+  // concurrent-duplicate detection. Round 3 preferred that later re-read,
+  // reasoning it reflects what GitHub "actually stored" -- but the two
+  // reads are not the same instant: a same-repository `issues: write`
+  // workflow can edit the genuine comment's body in the window between
+  // this POST returning and that later re-read running, and round 3's
+  // reconcile-preferring design would then hash and attest to the FORGED
+  // body as if it were genuine (the P1 Copilot found reviewing round 3's
+  // own commit). The create-comment response has no such window: GitHub
+  // returns it atomically, in the same API call that created the comment,
+  // before any other request could possibly have touched it. Absent
+  // (never backfilled from `postWriteComments` or `report.body`) when
+  // that response did not carry a `body` string -- fails closed via the
+  // workflow's own `body-digest != ''` gate rather than uploading a
+  // provenance artifact for a digest this process cannot prove GitHub
+  // stored.
+  const postedCommentId = String(result.id ?? '');
+  const bodyDigest =
+    typeof result.body === 'string'
+      ? digestExternalCheckWaiverMarkerBody(result.body)
+      : undefined;
+
   const appliedReport = {
     ...report,
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
+    commentId: postedCommentId,
+    ...(typeof bodyDigest === 'string' ? { bodyDigest } : {}),
     ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
     ...(reconcileInconclusive ? { reconcileInconclusive: true } : {}),
   };

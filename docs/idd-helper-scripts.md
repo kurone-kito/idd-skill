@@ -1497,7 +1497,38 @@ idd-external-check-waiver --pr 123 \
   `run-id:` and trick this job into believing a valid waiver already
   exists, skipping its own post. Always attempting to post is at worst
   a harmless extra marker; the consumer's trust check below already
-  accepts any candidate that verifies.
+  accepts any candidate that verifies;
+- when the post succeeds, the job's own workflow steps additionally
+  upload a run-scoped GitHub Actions artifact named
+  `idd-self-waiver-marker-<comment-id>-<body-digest>`
+  (kurone-kito/idd-skill#2912, round 2, extended round 3, extended round
+  4) -- the posted comment's own numeric id, a literal `-`, and the
+  SHA-256 hex digest of that comment's exact body, and nothing else, as
+  the artifact's name (never its content, so the consumer never needs to
+  download or unzip it). This is the channel condition 7 below reads to
+  bind a marker to the run's own trusted execution: artifacts are scoped
+  to the run that uploaded them by the Actions runtime's own dedicated
+  upload token, never by the shared `GITHUB_TOKEN` `permissions:`
+  surface an issue comment (or a check run) is created and mutated
+  through, so no OTHER same-repository workflow run can add, edit, or
+  remove an entry from this specific run's own artifact list. The body
+  digest is hashed from an API-returned body on both the posting and
+  consuming sides, so an unedited comment digests identically regardless
+  of which side computed it -- specifically, the posting side hashes
+  ONLY the `body` field GitHub's create-comment response returns for the
+  exact POST that created the comment, never a later re-read. An earlier
+  design (round 3) instead preferred a body observed in a LATER, separate
+  post-write re-read (falling back to the locally-sent string only when
+  that re-read came up empty, and labeling the result
+  `ExternalCheckWaiverReport.bodyDigestSource: 'constructed'` when it
+  did) -- a Copilot review of that round's own commit found this opened a
+  window: a same-repository `issues: write` workflow could edit the
+  genuine comment's body between the POST returning and that later
+  re-read running, and the reconcile-preferring design would then hash
+  and report the FORGED body as trustworthy. Round 4 removed that
+  fallback entirely; `bodyDigestSource` no longer exists, and the digest
+  is reported only when the create-comment response itself carried a
+  body.
 
 The marker is honored only when **all** of the following hold, verified
 by `advisory-convergence.mts` itself (not the generic
@@ -1515,7 +1546,7 @@ needs a live per-marker run lookup no other consumer needs):
    never `pull_request` -- closing the gap where a same-repository PR
    editing the workflow YAML can still trigger a `pull_request`-triggered
    run of it during a `pull_request`/`pull_request_target` migration
-   window (kurone-kito/idd-skill#2764 Phase 1); and
+   window (kurone-kito/idd-skill#2764 Phase 1);
 5. the PR's own changed files (fetched independently at consume time,
    never trusted from the posting job's own internal check) include at
    least one path from the trigger-file allowlist above
@@ -1526,14 +1557,75 @@ needs a live per-marker run lookup no other consumer needs):
    same-repository PR could forge a marker citing the ordinary verdict
    job's own trivially-discoverable run id for its own HEAD and bypass
    advisory convergence for a change that never touched the allowlist at
-   all.
+   all;
+6. `GET /repos/{owner}/{repo}/actions/runs/{run-id}/jobs` for that same
+   `run-id:` reports the run's own `idd-advisory-convergence-self-waiver`
+   job's "Post the self-referential-bootstrap-auto waiver" step with
+   `conclusion: success`, AND the marker comment's own `createdAt` falls
+   within that step's `[started_at, completed_at]` execution window
+   (kurone-kito/idd-skill#2912) -- conditions 3 and 4 alone prove only
+   that SOME genuine run of the right shape exists, never that THAT run's
+   own job actually posted THIS specific comment; a same-repository
+   `pull_request`-triggered workflow (untrusted, but able to post
+   `github-actions[bot]`-authored comments the same way the genuine
+   posting job does) can discover a legitimate, concurrently running
+   `pull_request_target` run's id via the public Actions API and cite it
+   in a forged marker, satisfying conditions 1-5 without having been
+   posted by that run's job at all. Binding to the post step's own
+   recorded conclusion and execution window closes this; and
+7. the marker's own comment `(id, body digest)` pair appears in the SET
+   of such pairs the cited `run-id:`'s own trusted job execution recorded
+   actually posting, recovered from a run-scoped GitHub Actions artifact
+   that job uploads immediately after posting (named
+   `idd-self-waiver-marker-<comment-id>-<body-digest>` -- see
+   `listWorkflowRunArtifacts` in `provider-adapter-github.mts`)
+   (kurone-kito/idd-skill#2912, round 2, extended round 3, extended round
+   4) -- condition 6
+   above proves only that the cited run's job succeeded and posted SOME
+   comment within a tight execution window, never THIS EXACT comment (and
+   never that its content stayed unchanged since); a same-repository
+   `pull_request`-triggered workflow can post a forged marker inside that
+   same window, wait for the genuine marker to post, and then either
+   DELETE it (`issues: write` permits deleting ANY issue comment on the
+   repository, not only ones the deleting token itself authored), leaving
+   the forged marker as the sole survivor of a plain "no duplicate
+   currently visible" scan (round 1's gap), or EDIT it in place --
+   `issues: write` permits rewriting an existing comment's body too,
+   which preserves that comment's `id` and `createdAt` while replacing
+   its content, so binding on `id` alone (round 2) would still accept the
+   rewritten body. Binding on the `(id, body digest)` pair instead of `id`
+   alone closes both: artifacts are scoped to the run that uploaded them
+   by the Actions runtime's own dedicated upload token, never by the
+   shared `GITHUB_TOKEN` `permissions:` surface comments (and condition
+   6's own job/step data) are read and, in the comment's case, mutated
+   through -- so no unrelated run can add, edit, or remove an entry from
+   that trusted set regardless of which `permissions:` it self-grants,
+   and a LATER edit to the live comment changes its digest without being
+   able to retroactively change what the artifact already recorded.
+   Deleting or editing the genuine comment only removes/changes it in the
+   live comment scan condition 7 itself needs to correlate an entry back
+   to its own `id` (two distinct candidates sharing the same cited run id
+   AND the same wall-clock second are ambiguous for that correlation and
+   both fail closed, never guessing a winner) -- it degrades this
+   mechanism to "no auto-waiver", never "the forged or edited marker
+   validates". The one residual: an attacker who additionally
+   self-grants the broader, repository-wide `actions: write` permission
+   could delete the genuine run's own artifact through Actions' own
+   artifact-management endpoint, which still only degrades to "no
+   auto-waiver", never a forged one -- outside the `issues: write`-scoped
+   threat model this condition (and the independent review findings that
+   prompted both rounds) are framed against.
 
-A marker missing `run-id:`, whose run cannot be resolved, targets another
-head SHA or repository, ran under any event other than
-`pull_request_target`, or whose PR diff does not touch the trigger-file
-allowlist, is rejected the same way a manual waiver from an untrusted
-actor is today. Unlike an ordinary maintainer-authorized waiver
-(gated behind `deadlinePassed || terminalUnavailable`), a valid
+A marker missing `run-id:`, whose run, run-jobs, or run-artifacts data
+cannot be resolved, targets another head SHA or repository, ran under
+any event other than `pull_request_target`, whose PR diff does not touch
+the trigger-file allowlist, whose cited run's own posting step did not
+report `success` within its own execution window, or whose own comment
+`(id, body digest)` pair is absent from (or ambiguous within) the cited
+run's artifact-recorded trusted set, is rejected the same way a manual
+waiver from an untrusted actor is today. Unlike an ordinary
+maintainer-authorized waiver (gated behind
+`deadlinePassed || terminalUnavailable`), a valid
 self-referential-bootstrap-auto waiver is evaluated **unconditionally** --
 it makes `ready` true immediately, without waiting for the deadline clock
 or a proven Copilot outage, since the whole point is bootstrapping a fix
@@ -1555,13 +1647,17 @@ repository's default branch, never the PR head -- required so neither
 job ever executes PR-controlled code with `issues: write` -- so a bug
 specifically WITHIN the code that decides whether/how to invoke
 `--auto-bootstrap` (its own branches in `external-check-waiver.mts`),
-the two Actions-API methods the trust chain above itself calls
-(`getWorkflowRun`, `listChangeRequestChangedFiles` in
-`provider-adapter-github.mts`), or the five conditions' own verification
-functions in `advisory-convergence.mts` cannot be rescued by this
-mechanism: the OLD, buggy version of exactly that code is what would
-have to decide to trust the fix. This is the same fixed point every
-self-hosting bootstrap has, and isolating marker emission into a
+the four Actions-API methods the trust chain above itself calls
+(`getWorkflowRun`, `getWorkflowRunJobs`, `listWorkflowRunArtifacts`,
+`listChangeRequestChangedFiles` in `provider-adapter-github.mts`), or the
+seven conditions' own verification functions in `advisory-convergence.mts`
+(`verifySelfReferentialBootstrapWaiverRun`,
+`verifySelfReferentialBootstrapWaiverProvenance`,
+`verifySelfReferentialBootstrapWaiverArtifactBinding`, and the rest) cannot
+be rescued by this mechanism: the OLD, buggy version of exactly that
+code is what would have to decide to trust the fix. This is the same
+fixed point every self-hosting bootstrap has, and isolating marker
+emission into a
 smaller module would shrink it, never eliminate it. The rest of each
 listed file's surface -- most of it, since each implements far more
 than this one trust path -- remains genuinely bootstrappable as

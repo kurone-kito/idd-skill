@@ -17,7 +17,10 @@ import {
   resolveActorLogin,
   runExternalCheckWaiver,
 } from '../src/scripts/external-check-waiver.mts';
-import { operationalMarkerPrefix } from '../src/scripts/marker-helpers.mts';
+import {
+  digestExternalCheckWaiverMarkerBody,
+  operationalMarkerPrefix,
+} from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
   parseExternalCheckWaiverComment,
@@ -1768,6 +1771,130 @@ test('runExternalCheckWaiver: --auto-bootstrap posts end to end with no viewer-i
   // caller-suppliable and independent of advisoryWait.convergenceDeadline.
   assert.equal(parsed?.expiresAt, '2026-08-31T18:13:24Z');
   assert.equal(parsed?.claimId, 'claim-20260830T222316Z-2328');
+  // kurone-kito/idd-skill#2912 (round 4): `postComment` above returns no
+  // `body` field at all (only `html_url`), so `bodyDigest` is omitted
+  // entirely -- round 4 deliberately never backfills it from
+  // `report.body` (the locally-constructed string) or from any later
+  // re-read; see `ExternalCheckWaiverReport.bodyDigest`'s own doc comment
+  // for why. See the dedicated POST-response test below for the
+  // realistic production path where the create-comment response DOES
+  // carry a body.
+  assert.equal(report?.bodyDigest, undefined);
+});
+
+test('runExternalCheckWaiver: --apply computes bodyDigest from the create-comment POST response body, never a later re-read that could already reflect an edit (kurone-kito/idd-skill#2912, round 4; TOCTOU regression for the P1 Copilot found reviewing round 3, PR #2914)', async () => {
+  // Round 3 hashed the body observed in a LATER, separate post-write
+  // reconcile read (`readPrComments()`, run for the unrelated purpose of
+  // detecting a concurrent duplicate waiver) rather than the body the
+  // create-comment POST response itself returned. That preference opened
+  // a race: a same-repository `issues: write` workflow could edit the
+  // genuine comment's body in the window between the POST returning and
+  // that later reconcile running, and round 3's design would then hash
+  // and report the FORGED body as `bodyDigest` -- exactly what this test
+  // models. `postComment` below returns the GENUINE body (what the
+  // create-comment API call itself returned); the later `prComments`
+  // reconcile read returns the SAME comment id but a DIFFERENT, FORGED
+  // body (modeling an edit that landed in the race window). A correct
+  // round-4 implementation hashes ONLY the POST response's own body and
+  // never even looks at the reconcile read for this purpose, so
+  // `bodyDigest` must equal `digest(GENUINE)`, never `digest(FORGED)`; a
+  // regression back to round 3's reconcile-preferring design would
+  // produce `digest(FORGED)` here instead, which this test would catch.
+  const POSTED_ID = 777;
+  const GENUINE_BODY = 'this-is-the-body-github-actually-created';
+  const FORGED_BODY = 'this-is-a-forged-body-edited-in-the-race-window';
+  let reads = 0;
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    // First read (pre-write reuse scan): empty. Second read (post-write
+    // reconcile, run for the unrelated concurrent-duplicate check): the
+    // same comment id, but a FORGED body -- modeling an edit that landed
+    // in the window between the POST below returning and this reconcile
+    // running. A correct implementation never even looks at this for
+    // `bodyDigest`.
+    prComments: () => {
+      reads += 1;
+      return reads === 1
+        ? []
+        : [
+            {
+              id: POSTED_ID,
+              html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${POSTED_ID}`,
+              created_at: '2026-08-30T18:20:00Z',
+              user: { login: 'github-actions[bot]' },
+              body: FORGED_BODY,
+            },
+          ];
+    },
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T18:20:00Z'),
+    isTTY: false,
+    // The create-comment POST response itself, returned atomically with
+    // no window for an intervening edit -- carries the GENUINE body.
+    postComment: () => ({
+      id: POSTED_ID,
+      html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${POSTED_ID}`,
+      body: GENUINE_BODY,
+    }),
+  });
+
+  assert.equal(report?.applied, true);
+  assert.equal(report?.commentId, String(POSTED_ID));
+  assert.equal(
+    report?.bodyDigest,
+    digestExternalCheckWaiverMarkerBody(GENUINE_BODY),
+  );
+  // The load-bearing assertion: a regression back to round 3's
+  // reconcile-preferring design would produce the FORGED digest here
+  // instead, silently attesting to the forgery as if it were genuine.
+  assert.notEqual(
+    report?.bodyDigest,
+    digestExternalCheckWaiverMarkerBody(FORGED_BODY),
+  );
 });
 
 test('runExternalCheckWaiver: --auto-bootstrap never reuses an existing same-reason marker, even one with no verifiable run-id (Codex review, PR #2895, round 2)', async () => {

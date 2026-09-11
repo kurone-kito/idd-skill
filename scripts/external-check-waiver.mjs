@@ -27,6 +27,7 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
+  digestExternalCheckWaiverMarkerBody,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
@@ -972,6 +973,7 @@ export async function runExternalCheckWaiver(options = {}) {
       applied: false,
       reusedWaiver: existingWaiver,
       commentUrl: existingWaiver.commentUrl,
+      commentId: existingWaiver.commentId,
     };
     renderReport(reusedReport, args.format);
     return { exitCode: 0, report: reusedReport };
@@ -1096,10 +1098,36 @@ export async function runExternalCheckWaiver(options = {}) {
         'minimize the rest so a later session does not have to disambiguate.\n',
     );
   }
+  // kurone-kito/idd-skill#2912 (round 4; supersedes round 3, PR #2914
+  // review): hash the `body` field GitHub's OWN create-comment response
+  // (`result`) returned for THIS exact POST -- never `postWriteComments`,
+  // the LATER, separate `readPrComments()` re-read used above for
+  // concurrent-duplicate detection. Round 3 preferred that later re-read,
+  // reasoning it reflects what GitHub "actually stored" -- but the two
+  // reads are not the same instant: a same-repository `issues: write`
+  // workflow can edit the genuine comment's body in the window between
+  // this POST returning and that later re-read running, and round 3's
+  // reconcile-preferring design would then hash and attest to the FORGED
+  // body as if it were genuine (the P1 Copilot found reviewing round 3's
+  // own commit). The create-comment response has no such window: GitHub
+  // returns it atomically, in the same API call that created the comment,
+  // before any other request could possibly have touched it. Absent
+  // (never backfilled from `postWriteComments` or `report.body`) when
+  // that response did not carry a `body` string -- fails closed via the
+  // workflow's own `body-digest != ''` gate rather than uploading a
+  // provenance artifact for a digest this process cannot prove GitHub
+  // stored.
+  const postedCommentId = String(result.id ?? '');
+  const bodyDigest =
+    typeof result.body === 'string'
+      ? digestExternalCheckWaiverMarkerBody(result.body)
+      : undefined;
   const appliedReport = {
     ...report,
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
+    commentId: postedCommentId,
+    ...(typeof bodyDigest === 'string' ? { bodyDigest } : {}),
     ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
     ...(reconcileInconclusive ? { reconcileInconclusive: true } : {}),
   };

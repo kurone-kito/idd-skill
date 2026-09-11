@@ -454,8 +454,10 @@ jobs:
   # scoped, run-bound `idd-external-check-waiver` marker for exactly that
   # case. See docs/idd-helper-scripts.md's "External-check waiver
   # contract" (self-referential-bootstrap-auto section) for the full
-  # trust model and the five acceptance conditions
-  # `advisory-convergence.mts` verifies before ever honoring the marker;
+  # trust model and the seven acceptance conditions
+  # (kurone-kito/idd-skill#2912 added two run-provenance conditions to
+  # the original five) `advisory-convergence.mts` verifies before ever
+  # honoring the marker;
   # this job's own job is only to detect the trigger and post it --
   # trust is established entirely at consume time, not here.
   #
@@ -564,10 +566,41 @@ jobs:
         # this repository), so this avoids a doomed post and the API
         # calls it would cost.
         if: steps.allowlist.outputs.touched == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        id: post-waiver
+        # kurone-kito/idd-skill#2912 (round 2): this workflow has no
+        # workflow-level `defaults: run: shell: bash` (unlike the
+        # `idd-template/` mirror), so the runner's implicit default shell
+        # for a `run:` step with no explicit `shell:` does NOT set
+        # `pipefail` -- the `| tee` pipe below would otherwise let a
+        # failed CLI invocation still report success (tee's own exit
+        # code), silently swallowing a broken post instead of failing
+        # this step loudly. Explicit `shell: bash` requests GitHub
+        # Actions' own `bash --noprofile --norc -eo pipefail {0}`
+        # invocation, which does set it.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+        # kurone-kito/idd-skill#2912 (round 2, extended round 3, extended
+        # round 4): the CLI's own JSON report (default `--format json`,
+        # never overridden here) is captured to a file, not just streamed
+        # to the log, so the fields the NEXT step needs (`applied`,
+        # `commentId`, and -- round 3 -- `bodyDigest`) can be read back
+        # out -- `node -e` (never `jq`, whose presence on the runner is
+        # never explicitly asserted, unlike Node's own floor above) parses
+        # it defensively: a parse failure (should not happen, `tee` writes
+        # exactly what stdout produced) degrades to "nothing to record",
+        # never a crashed job. `bodyDigest` is the SHA-256 hex digest of
+        # the posted comment's body, taken ONLY from the `body` field
+        # GitHub's create-comment API response returned for this exact
+        # POST -- round 3 originally preferred a LATER, separate re-read
+        # instead, but round 4 removed that in favor of the POST response
+        # alone, which has no window for an intervening edit; see
+        # `ExternalCheckWaiverReport.bodyDigest`'s own doc comment in
+        # `external-check-waiver.mts`. Absent (empty string here) whenever
+        # that response lacked a body -- the two `if:` conditions below
+        # already fail closed on that via `body-digest != ''`.
         run: |
           node scripts/external-check-waiver.mjs \
             --pr "$PR_NUMBER" \
@@ -575,4 +608,76 @@ jobs:
             --reason self-referential-bootstrap-auto \
             --run-id "$GITHUB_RUN_ID" \
             --auto-bootstrap \
-            --apply --yes
+            --apply --yes | tee /tmp/idd-waiver-report.json
+          APPLIED=$(node -e '
+            try {
+              const report = JSON.parse(require("fs").readFileSync("/tmp/idd-waiver-report.json", "utf8"));
+              process.stdout.write(String(report.applied ?? false));
+            } catch {
+              process.stdout.write("false");
+            }
+          ')
+          COMMENT_ID=$(node -e '
+            try {
+              const report = JSON.parse(require("fs").readFileSync("/tmp/idd-waiver-report.json", "utf8"));
+              process.stdout.write(String(report.commentId ?? ""));
+            } catch {
+              process.stdout.write("");
+            }
+          ')
+          BODY_DIGEST=$(node -e '
+            try {
+              const report = JSON.parse(require("fs").readFileSync("/tmp/idd-waiver-report.json", "utf8"));
+              process.stdout.write(String(report.bodyDigest ?? ""));
+            } catch {
+              process.stdout.write("");
+            }
+          ')
+          echo "applied=$APPLIED" >> "$GITHUB_OUTPUT"
+          echo "comment-id=$COMMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "body-digest=$BODY_DIGEST" >> "$GITHUB_OUTPUT"
+      - name: Record the posted marker's provenance
+        # kurone-kito/idd-skill#2912 (round 2, extended round 3): a
+        # run-scoped Actions artifact naming the EXACT comment id AND body
+        # digest this run's own trusted job just posted -- the binding
+        # primitive `verifySelfReferentialBootstrapWaiverArtifactBinding`
+        # (advisory-convergence.mts) reads to prove a candidate marker
+        # IS the one this run's own execution posted, not merely that no
+        # OTHER candidate is currently visible (round 1's gap) or that
+        # some candidate with a matching id exists regardless of whether
+        # its body was since edited in place (round 2's gap, a
+        # same-repository `issues: write` workflow can rewrite an
+        # existing comment's body without changing its id or createdAt).
+        # Only when a NEW comment was actually posted this run
+        # (`applied == 'true'`) -- the reuse path (an existing valid
+        # waiver found, nothing newly posted) has no comment of THIS
+        # run's own to record. Needs no `permissions:` entry:
+        # `actions/upload-artifact` uses the Actions runtime's own
+        # dedicated upload token, entirely separate from `GITHUB_TOKEN`.
+        if: steps.post-waiver.outputs.applied == 'true' && steps.post-waiver.outputs.comment-id != '' && steps.post-waiver.outputs.body-digest != ''
+        env:
+          COMMENT_ID: ${{ steps.post-waiver.outputs.comment-id }}
+          BODY_DIGEST: ${{ steps.post-waiver.outputs.body-digest }}
+        run: |
+          mkdir -p /tmp/idd-self-waiver-marker
+          printf 'commentId=%s\nbodyDigest=%s\n' "$COMMENT_ID" "$BODY_DIGEST" \
+            > "/tmp/idd-self-waiver-marker/idd-self-waiver-marker-${COMMENT_ID}-${BODY_DIGEST}"
+      - name: Upload the posted marker's provenance artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.post-waiver.outputs.applied == 'true' && steps.post-waiver.outputs.comment-id != '' && steps.post-waiver.outputs.body-digest != ''
+        with:
+          name: idd-self-waiver-marker-${{ steps.post-waiver.outputs.comment-id }}-${{ steps.post-waiver.outputs.body-digest }}
+          path: /tmp/idd-self-waiver-marker/
+          # Loud failure, not a silent empty artifact, if the previous
+          # step somehow produced no file -- the consumer's own binding
+          # check already fails closed on a missing artifact either way,
+          # but this surfaces the CI-side bug immediately instead of only
+          # as a downstream "no auto-waiver" symptom.
+          if-no-files-found: error
+          # Deliberately NOT retention-days: 1 -- a later re-evaluation
+          # (issue_comment-triggered, or rerun-advisory-convergence.mts)
+          # can run well after this run finishes, and the marker's own
+          # validity window (SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY)
+          # outlives a short artifact retention -- keep the repository
+          # default so the artifact stays listable for the marker's full
+          # validity window.

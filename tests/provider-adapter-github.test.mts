@@ -1837,6 +1837,46 @@ test('getWorkflowRun preserves a string runId above Number.MAX_SAFE_INTEGER exac
   );
 });
 
+test('getWorkflowRunJobs calls the jobs sub-path and preserves a string runId above Number.MAX_SAFE_INTEGER exactly (kurone-kito/idd-skill#2912)', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return '{}';
+      },
+    }),
+  );
+  const result = port.getWorkflowRunJobs('o', 'r', '9007199254740993');
+  assert.ok(
+    capturedArgs?.includes('repos/o/r/actions/runs/9007199254740993/jobs'),
+    `expected the exact run id in the jobs path, got: ${capturedArgs?.join(' ')}`,
+  );
+  assert.deepEqual(result, {});
+});
+
+test('listWorkflowRunArtifacts calls the artifacts sub-path and preserves a string runId above Number.MAX_SAFE_INTEGER exactly (kurone-kito/idd-skill#2912, round 2)', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return '{}';
+      },
+    }),
+  );
+  const result = port.listWorkflowRunArtifacts('o', 'r', '9007199254740993');
+  assert.ok(
+    capturedArgs?.includes('repos/o/r/actions/runs/9007199254740993/artifacts'),
+    `expected the exact run id in the artifacts path, got: ${capturedArgs?.join(' ')}`,
+  );
+  assert.deepEqual(result, {});
+});
+
 test('listWorkflowRuns preserves a databaseId above Number.MAX_SAFE_INTEGER exactly (Codex review, PR #2429)', () => {
   const port = createGithubProviderAdapter(
     'o',
