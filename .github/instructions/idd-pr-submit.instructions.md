@@ -137,16 +137,22 @@ for `workflow_dispatch` only, not yet wired to `push`/`pull_request`,
 and validate it with manually dispatched runs against the pushed
 branch (for example `gh workflow run <file> --ref <branch>`) before
 making the one remaining edit that flips the trigger to its intended
-final form. GitHub Actions' `on:` trigger is workflow-file-scoped, not
-job-scoped: for a new job added to an existing multi-job workflow file
-that already runs on `push`/`pull_request`, either land the new job in
-its own workflow file instead, or add `workflow_dispatch` to the
-shared file's `on:` block (so `gh workflow run` can target it at all)
-**and** guard only the new job with a job-level
-`if: github.event_name == 'workflow_dispatch'` condition, so it does
-not also run on the file's existing triggers while unproven; remove
-that guard together with the trigger-flip edit once validated. This
-step does **not** by itself reduce advisory-bot (for
+final form. GitHub only allows a `workflow_dispatch`-triggered run once
+that trigger is already registered on the repository's default branch:
+`gh workflow run` cannot dispatch a workflow file, or a newly added
+`workflow_dispatch` entry, that exists only on the pushed branch. A
+genuinely first-time job therefore needs one minimal, low-risk
+bootstrap merge -- the trigger wiring alone, with the job itself inert
+or guarded off -- before it can be dispatched against a feature branch
+at all; this dispatch-first pattern applies most directly once that
+scaffolding already exists on the default branch. `on:` is
+workflow-file-scoped, not job-scoped, so adding `workflow_dispatch` to
+an existing multi-job file makes every job in it dispatchable --
+during validation, guard the unproven job, and any existing job that
+assumes `push`/`pull_request` context, with a job-level
+`if: github.event_name == 'workflow_dispatch'` condition, removing it
+together with the trigger-flip edit once validated. This step does
+**not** by itself reduce advisory-bot (for
 example Copilot or Codex) review invocation count -- that is driven by
 push count, not by which CI jobs are wired to which triggers. Its real
 benefit is avoiding wasted CI Actions-minutes and false-failure noise
