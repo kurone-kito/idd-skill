@@ -125,6 +125,49 @@ that is merely `BEHIND` does not force a branch update by itself unless
 branch protection or explicit repository policy requires an up-to-date
 head before merge.
 
+### Adding a new CI job
+
+When this branch's diff introduces a **new** CI job, land it configured
+for `workflow_dispatch` only, not yet wired to `push`/`pull_request`,
+and validate it with manually dispatched runs against the pushed
+branch (for example `gh workflow run <file> --ref <branch>`) before
+making the one remaining edit that flips the trigger to its intended
+final form. GitHub Actions' `on:` trigger is workflow-file-scoped, not
+job-scoped: for a new job added to an existing multi-job workflow file
+that already runs on `push`/`pull_request`, either land the new job in
+its own workflow file instead, or add `workflow_dispatch` to the
+shared file's `on:` block (so `gh workflow run` can target it at all)
+**and** guard only the new job with a job-level
+`if: github.event_name == 'workflow_dispatch'` condition, so it does
+not also run on the file's existing triggers while unproven; remove
+that guard together with the trigger-flip edit once validated. This
+step does **not** by itself reduce advisory-bot (for
+example Copilot or Codex) review invocation count -- that is driven by
+push count, not by which CI jobs are wired to which triggers. Its real
+benefit is avoiding wasted CI Actions-minutes and false-failure noise
+from an unproven job auto-running on every unrelated push during the
+same PR's lifetime. See
+[rationale](../../docs/idd-design-rationale.md#d2--adding-a-new-ci-job-dispatch-first-rollout).
+
+For a job targeting a Linux runner, also validate it locally with
+`nektos/act` before pushing, to catch YAML/step/job-dependency
+mistakes without a push-and-wait round trip. `act`'s normal
+Docker-based execution cannot accurately validate
+`windows-latest`/`macos-latest` runner-specific behavior from a
+WSL/Linux implementation environment -- never treat "validated via
+`act`" as covering a job targeting a Windows or macOS runner.
+
+Optionally, for a job targeting a platform `act` cannot validate where
+shakeout is expected to be long or costly, a contributor may iterate it
+on a branch with no open PR yet (or via `workflow_dispatch` runs
+against such a branch), landing only the validated final version on
+the actual PR branch. Review automation that only fires on PR-associated
+pushes never runs during that shakeout, avoiding review cost entirely
+for those iterations -- the one path here that actually reduces it.
+This deviates from the normal early-PR-then-iterate practice, so scope
+it to CI-infrastructure-focused work, and treat it as the implementer's
+choice, not a mandate.
+
 ## D3 — Create PR
 
 Before drafting the PR body, check whether the repository defines
