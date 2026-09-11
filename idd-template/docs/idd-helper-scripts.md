@@ -2215,19 +2215,28 @@ close.
   roughly every 5 ms for up to 5 seconds if it does; only once that
   create succeeds, perform the write (or, for the backfill side, the
   read that captures the existing `nonce` and the write that follows
-  it); then remove the guard file when done. The guard file's own
-  content is never read by anything -- its mere existence is the whole
-  coordination signal, so no atomic-visibility trick is needed for it,
-  unlike the lock file's own body. If the 5-second wait budget is
+  it); then remove the guard file **on every exit path, success or
+  failure alike** (a shell `trap`, or the agent's own equivalent of a
+  `finally` block) -- never only on success. An agent that removes the
+  guard solely after a successful write and skips cleanup when that
+  write itself fails leaves the same orphaned-guard problem the CLI's
+  own code was reviewed for (#2922 review round 4, Copilot): every later
+  writer for this exact `{claim-id}` then waits the full 5 seconds and
+  fails closed until an operator manually removes it. The guard file's
+  own content is never read by anything -- its mere existence is the
+  whole coordination signal, so no atomic-visibility trick is needed for
+  it, unlike the lock file's own body. If the 5-second wait budget is
   exhausted, stop fail-closed and report the guard path for manual
   removal rather than writing anyway (an earlier revision of the CLI's
   own lock self-reclaimed an aged guard automatically; three independent
   reviewers found that unsafe -- see the doc comment on
   `withGeneratedTokensWriteLock` for why fail-closed is the current
-  answer). Skipping this coordination reopens the exact race #2922
-  reported for the CLI path: a concurrent writer's fresher `nonce` can
-  be silently lost, including between an `instructions-only` session and
-  a helper-runtime session sharing the same worktree.
+  answer) -- a pre-existing guard this invocation did not itself create
+  is never removed on any path, success or failure. Skipping this
+  coordination reopens the exact race #2922 reported for the CLI path: a
+  concurrent writer's fresher `nonce` can be silently lost, including
+  between an `instructions-only` session and a helper-runtime session
+  sharing the same worktree.
 - **`instructions-only` helper-free fallback, read side** (#2879 review,
   Codex P1 -- the mandatory `--read-tokens` check in the Claim
   revalidation gate has no helper-free path without this): resolve the
