@@ -6310,6 +6310,7 @@ test('waiverEvidence.expired/wrongClaim items validate with the actual runtime s
       reason: 'maintainer-authorized',
       runId: '',
       createdAt: '2026-05-11T23:10:00Z',
+      expiresAt: '2026-05-11T23:30:00Z',
     },
   ];
   assert.deepEqual(validate(withWrongClaimItem, readinessSchema), []);
@@ -10248,5 +10249,76 @@ test('#2911 (Codex review, PR #2915, P1, fresh evidence against the type-only fi
     },
     selfWaiverOptions({ autoWaiverRunVerified: { '8181': true } }),
   );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 (Codex review, PR #2915, P2): a wrongClaim marker that already expired BEFORE the check completed cannot retroactively justify that pass, even though the claim identity later changed again', () => {
+  // Same release -> re-claim shape as the claim-identity-transition-anchor
+  // test above: claim-123 claimed 20:00, released 21:00, claim-456
+  // claimed 22:00 -- so claimIdentityInstalledAt is 22:00, genuinely
+  // AFTER the check's own pass below (this is the load-bearing setup
+  // detail: without it, the wrongClaim branch never fires at all,
+  // pre-fix or post-fix, and this test would prove nothing).
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T20:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T20:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderUnclaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        timestamp: '2026-05-11T21:00:00Z',
+      }),
+      createdAt: '2026-05-11T21:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli-2',
+        claimId: 'claim-456',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    // The check's own genuine pass -- AFTER the marker below already
+    // expired (19:30), but BEFORE claim-456 is installed (22:00).
+    '2026-05-11T20:30:00Z',
+  );
+  // Posted under claim-123 (the OLD claim), and already expired by
+  // 19:30 -- well before the 20:30 pass this test's marker must never
+  // be blamed for.
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-wrongclaim-already-expired',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T19:30:00Z',
+    runId: '9191',
+    createdAt: '2026-05-11T19:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      expectedClaimId: 'claim-456',
+      expectedAgentId: 'github-copilot-cli-2',
+      autoWaiverRunVerified: { '9191': true },
+    }),
+  );
+  // Sanity-check the load-bearing setup detail before asserting on the
+  // fix itself: claimIdentityInstalledAt genuinely postdates the pass.
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
   assert.equal(staleSelfWaiverOf(summary).stale, false);
 });

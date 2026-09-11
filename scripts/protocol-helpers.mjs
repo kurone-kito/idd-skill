@@ -265,6 +265,7 @@ export function summarizeExternalCheckWaivers(
         reason: parsed.reason,
         runId: parsed.runId,
         createdAt: parsed.createdAt,
+        expiresAt: parsed.expiresAt,
       });
       continue;
     }
@@ -7075,6 +7076,19 @@ export function buildPreMergeReadinessSummary(
       // could not have justified that pass either, regardless of the
       // claim-installation comparison below. Same stale-leaning
       // treatment of an unparseable `createdAt`.
+      //
+      // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P2): ALSO
+      // requires the upper bound (`expiresAt >= passingCompletedAtMs`),
+      // mirroring `staleExpiredEntry`'s own two-sided window check --
+      // without it, a marker that had ALREADY expired before the check
+      // even completed (a real scenario here specifically: this
+      // function's own `wrongClaim` classification runs BEFORE the
+      // expiry check, so a marker can be both wrong-claim AND
+      // already-expired yet only ever reach this bucket, never
+      // `expired`) gets treated as if it could have justified a LATER,
+      // genuinely unrelated pass, purely because the claim identity also
+      // happened to change again even later -- an unnecessary blocker
+      // with no real evidence behind it.
       const staleWrongClaimEntry =
         staleExpiredEntry || hasCoveringValidMarker
           ? undefined
@@ -7082,9 +7096,16 @@ export function buildPreMergeReadinessSummary(
               if (!isRunVerifiedSelfWaiverMarker(entry)) return false;
               if (passingCompletedAtMs === null) return true;
               const entryCreatedAtMs = Date.parse(entry.createdAt);
+              const entryExpiresAtMs = Date.parse(entry.expiresAt);
               if (
                 !Number.isNaN(entryCreatedAtMs) &&
                 entryCreatedAtMs > passingCompletedAtMs
+              ) {
+                return false;
+              }
+              if (
+                !Number.isNaN(entryExpiresAtMs) &&
+                entryExpiresAtMs < passingCompletedAtMs
               ) {
                 return false;
               }

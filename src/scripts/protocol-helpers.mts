@@ -393,6 +393,16 @@ export interface ExternalCheckWaiverEvidence {
      * `expired[].createdAt`'s doc comment above -- the identical
      * lower-bound need applies to a `wrongClaim`-classified marker. */
     createdAt: string;
+    /** kurone-kito/idd-skill#2911 (Codex review, PR #2915, P2): the
+     * marker's `expiresAt` field, verbatim -- `wrongClaim` classification
+     * happens BEFORE the expiry check in this function's own pipeline
+     * (see that check's own comment below), so a marker can be BOTH
+     * wrong-claim AND already-expired yet only ever reach the
+     * `wrongClaim` bucket, never `expired`. Without this field, a
+     * stale-self-waiver consumer has no way to exclude a wrong-claim
+     * marker that expired before the check it's being checked against
+     * ever completed -- see that consumer's own upper-bound check. */
+    expiresAt: string;
   }[];
   unauthorized: {
     authorLogin: string;
@@ -920,6 +930,7 @@ export function summarizeExternalCheckWaivers(
         reason: parsed.reason,
         runId: parsed.runId,
         createdAt: parsed.createdAt,
+        expiresAt: parsed.expiresAt,
       });
       continue;
     }
@@ -8862,6 +8873,19 @@ export function buildPreMergeReadinessSummary(
       // could not have justified that pass either, regardless of the
       // claim-installation comparison below. Same stale-leaning
       // treatment of an unparseable `createdAt`.
+      //
+      // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P2): ALSO
+      // requires the upper bound (`expiresAt >= passingCompletedAtMs`),
+      // mirroring `staleExpiredEntry`'s own two-sided window check --
+      // without it, a marker that had ALREADY expired before the check
+      // even completed (a real scenario here specifically: this
+      // function's own `wrongClaim` classification runs BEFORE the
+      // expiry check, so a marker can be both wrong-claim AND
+      // already-expired yet only ever reach this bucket, never
+      // `expired`) gets treated as if it could have justified a LATER,
+      // genuinely unrelated pass, purely because the claim identity also
+      // happened to change again even later -- an unnecessary blocker
+      // with no real evidence behind it.
       const staleWrongClaimEntry =
         staleExpiredEntry || hasCoveringValidMarker
           ? undefined
@@ -8869,9 +8893,16 @@ export function buildPreMergeReadinessSummary(
               if (!isRunVerifiedSelfWaiverMarker(entry)) return false;
               if (passingCompletedAtMs === null) return true;
               const entryCreatedAtMs = Date.parse(entry.createdAt);
+              const entryExpiresAtMs = Date.parse(entry.expiresAt);
               if (
                 !Number.isNaN(entryCreatedAtMs) &&
                 entryCreatedAtMs > passingCompletedAtMs
+              ) {
+                return false;
+              }
+              if (
+                !Number.isNaN(entryExpiresAtMs) &&
+                entryExpiresAtMs < passingCompletedAtMs
               ) {
                 return false;
               }
