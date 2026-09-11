@@ -81,7 +81,9 @@ following:
    `docs/idd-helper-scripts.md` if unsure). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
    `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
-   and require `present: true` with no `malformed`; otherwise stop.
+   and require `present: true` with no `malformed`; otherwise run
+   `--check`, and on a match run `--backfill-tokens` then retry -- else
+   stop (`docs/idd-helper-scripts.md`).
 6. If any check fails, stop.
 
 ## D1 — Sync main before first push
