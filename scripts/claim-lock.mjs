@@ -733,6 +733,30 @@ function resolveGeneratedTokensWriteLockPath(recordPath) {
  * operation, not safety after an operator has manually intervened on a
  * guard that turns out not to have been actually orphaned.
  */
+/**
+ * Combine an original failure with a cleanup failure that happened while
+ * handling it, so neither is silently lost (#2922 review round 9,
+ * Copilot; extended round 12, Codex, to the acquire-phase cleanup
+ * branches below, which had the same gap this originally closed only for
+ * the `critical()`-failure path). Without this, a caller who sees only
+ * `originalError` has no way to learn a guard was also left behind at
+ * `lockPath` until a later, unrelated caller independently discovers it
+ * via its own timeout -- minutes or more later, and attributed to the
+ * wrong operation.
+ */
+function combineGeneratedTokensWriteLockCleanupFailure(
+  originalError,
+  cleanupError,
+  lockPath,
+) {
+  const combined = new Error(
+    `${originalError.message} (additionally failed to remove ` +
+      `the generated-tokens write lock guard at ${lockPath} during ` +
+      `cleanup: ${cleanupError.message})`,
+  );
+  combined.cause = originalError;
+  return combined;
+}
 function withGeneratedTokensWriteLock(recordPath, critical) {
   const lockPath = resolveGeneratedTokensWriteLockPath(recordPath);
   const deadline = Date.now() + GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS;
@@ -794,10 +818,20 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
       } catch {
         // ignore
       }
+      // Report a cleanup-unlink failure alongside the real error rather
+      // than silently swallowing it (#2922 review round 12, Codex):
+      // otherwise a guard left behind here (for example because Windows
+      // still considers the descriptor open) blocks every later writer
+      // for this claim-id until an operator manually removes it, with
+      // nothing in the thrown error pointing at that guard path.
       try {
         unlinkSync(lockPath);
-      } catch {
-        // Best-effort: never mask the real error above.
+      } catch (cleanupError) {
+        throw combineGeneratedTokensWriteLockCleanupFailure(
+          error,
+          cleanupError,
+          lockPath,
+        );
       }
       throw error;
     }
@@ -813,10 +847,20 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
       // could silently disrupt unrelated I/O elsewhere in the process.
       // A bare `unlinkSync` remains safe for the same reason as the
       // `writeSync` failure branch above: `critical()` has not run yet.
+      // Report a cleanup-unlink failure alongside the real error, same
+      // as that branch (#2922 review round 12, Codex) -- this is the
+      // exact scenario the review cited: `closeSync` fails (for example
+      // Windows still considers the guard open) and the cleanup unlink
+      // also fails, so the guard can remain and block every later writer
+      // while the caller is never shown its path.
       try {
         unlinkSync(lockPath);
-      } catch {
-        // Best-effort: never mask the real error above.
+      } catch (cleanupError) {
+        throw combineGeneratedTokensWriteLockCleanupFailure(
+          error,
+          cleanupError,
+          lockPath,
+        );
       }
       throw error;
     }
@@ -842,13 +886,11 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
     try {
       releaseGeneratedTokensWriteLockIfOwned(lockPath, token);
     } catch (cleanupError) {
-      const combined = new Error(
-        `${error.message} (additionally failed to remove the ` +
-          `generated-tokens write lock guard at ${lockPath} during ` +
-          `cleanup: ${cleanupError.message})`,
+      throw combineGeneratedTokensWriteLockCleanupFailure(
+        error,
+        cleanupError,
+        lockPath,
       );
-      combined.cause = error;
-      throw combined;
     }
     throw error;
   }

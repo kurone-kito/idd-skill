@@ -1998,6 +1998,82 @@ test('write-lock: a short (partial) writeSync while writing the guard token is r
   }
 });
 
+test('write-lock: a closeSync failure whose own cleanup unlink also fails reports both, not just the descriptor-close error (#2922 review round 12, Codex)', () => {
+  // Mirrors the exact scenario the review described: closeSync(fd) fails
+  // during acquisition (for example, Windows still considers the guard
+  // open), and the cleanup unlinkSync that follows also fails. Before
+  // this fix, the nested catch discarded the cleanup failure and rethrew
+  // only the descriptor-close error, so a caller had no way to learn the
+  // guard was also left behind -- every later writer for this claim-id
+  // would then silently wait the full timeout and fail closed with
+  // nothing pointing at the actual orphaned-guard cause.
+  const fixture = setupLinkedWorktree();
+  const fs = require('node:fs');
+  const originalCloseSync = fs.closeSync;
+  const originalUnlinkSync = fs.unlinkSync;
+  let closeIntercepted = false;
+  let unlinkIntercepted = false;
+  try {
+    const claimId = 'claim-close-and-unlink-fail-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+
+    fs.closeSync = (...args: Parameters<typeof originalCloseSync>) => {
+      if (!closeIntercepted) {
+        closeIntercepted = true;
+        // Still actually close the real descriptor so the test fixture
+        // itself does not leak an open fd, then report failure the way
+        // a real close failure would.
+        originalCloseSync(...args);
+        throw new Error('simulated closeSync failure (e.g. EBUSY)');
+      }
+      return originalCloseSync(...args);
+    };
+    fs.unlinkSync = (...args: Parameters<typeof originalUnlinkSync>) => {
+      if (!unlinkIntercepted && args[0] === guardPath) {
+        unlinkIntercepted = true;
+        throw new Error('simulated cleanup unlinkSync failure');
+      }
+      return originalUnlinkSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+
+    assert.throws(
+      () => {
+        recordGeneratedClaimTokens(fixture.worktree, {
+          agentId: 'agent-a',
+          claimId,
+          nonce: 'n1',
+        });
+      },
+      (error: unknown) =>
+        error instanceof Error &&
+        error.message.includes('simulated closeSync failure') &&
+        error.message.includes('simulated cleanup unlinkSync failure') &&
+        error.message.includes(guardPath) &&
+        (error as Error & { cause?: unknown }).cause instanceof Error,
+      'expected a combined error naming both failures and the guard path',
+    );
+
+    assert.equal(closeIntercepted, true);
+    assert.equal(unlinkIntercepted, true);
+  } finally {
+    fs.closeSync = originalCloseSync;
+    fs.unlinkSync = originalUnlinkSync;
+    require('node:module').syncBuiltinESMExports();
+    // The simulated failures leave the guard behind for real (the
+    // interception only reported failure -- see above -- it never
+    // actually removed the file), so clean it up before the fixture's
+    // own teardown to avoid leaking it.
+    const recordPath = resolveGeneratedTokensPath(
+      fixture.worktree,
+      'claim-close-and-unlink-fail-2922',
+    );
+    rmSync(`${recordPath}.writelock`, { force: true });
+    teardown(fixture);
+  }
+});
+
 test('backfill-tokens: reports record-blocked instead of deleting a directory at the generated-tokens path (PR #2917 review, Codex P2 then Copilot)', () => {
   const fixture = setupLinkedWorktree();
   try {
