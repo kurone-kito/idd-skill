@@ -3538,50 +3538,46 @@ process tree — if `pgrep`/`ps` (or an equivalent process-listing and
 signaling mechanism) are not available on the host, that dependency
 cannot be met: stop and post a hold note rather than falling back
 without the cleanup guarantee, the same fail-closed treatment the
-`lsof` case below already gets. Otherwise, before signaling anything,
-snapshot the full descendant PID set by walking from the git PID (for
-example, recursively via `pgrep -P`) — walk once, before the first
-signal, and keep that recorded list: re-walking after signaling misses
-a child whose parent the signal already removed, even though the
-child itself is still alive. Record each PID together
-with its process start time (for example, `ps -o lstart=` for that
-PID), not the bare number — a PID that exits during the wait below can
-be reused by an unrelated process before the next signal, and signaling
-by number alone would then hit that unrelated process instead. If any
-part of the tree is still running, send SIGTERM to every recorded PID
-whose start time still matches, not `-9` — git's own signal handler
-cleans up `index.lock`, and a descendant such as the signer subprocess
-can outlive a `kill` scoped to only the git parent (reproduced
-2026-09-11 in PR #2906 review) — then wait up to 30 seconds for each
-recorded PID individually to exit (not a fresh tree walk); SIGTERM is
-asynchronous, so checking state immediately can race git's own unwind
-(still removing `index.lock`) or observe stale state. Even a PID
-snapshot is best-effort, not a guarantee: a child that gets reparented
-(commonly to init) before the snapshot is taken is never recorded at
-all, so it survives untouched no matter how carefully the recorded
-PIDs are signaled and awaited. Whether that is safe to proceed past
-depends on what kind of descendant it can be: a signer subprocess that
-escapes this way is only a resource leak to report, since the unsigned
-fallback below never invokes a signer and so cannot race one — but the
-whole-command timeout this section opens with is root-cause-agnostic
-(it can equally fire on a hung hook, not only a stalled signer), and a
-hook process that escapes the same way could still be reading or
+`lsof` case below already gets. Otherwise, snapshot the full
+descendant PID set by walking from the git PID (for example,
+recursively via `pgrep -P`) and immediately send SIGTERM to every
+recorded PID, not `-9` — git's own signal handler cleans up
+`index.lock`, and a descendant such as the signer subprocess can
+outlive a `kill` scoped to only the git parent (reproduced 2026-09-11
+in PR #2906 review). Snapshot and signal back-to-back, with nothing in
+between: that is what keeps a bare recorded PID number trustworthy
+without needing a separate identity check, since the gap in which an
+exited PID could be reused by an unrelated process stays sub-second on
+any real host. Then wait up to 30 seconds for each recorded PID
+individually to exit (not a fresh tree walk); SIGTERM is asynchronous,
+so checking state immediately can race git's own unwind (still
+removing `index.lock`) or observe stale state.
+
+Even a PID snapshot is best-effort, not a guarantee: a child that gets
+reparented (commonly to init) before the snapshot is taken is never
+recorded at all, so it survives untouched no matter how promptly the
+recorded PIDs are signaled. The same is true of a recorded PID that
+simply outlasts the 30-second wait — for example a process stuck in
+uninterruptible I/O, which cannot receive a signal until it leaves
+that state (preventive; no observed incident yet). Whether either kind
+of survivor is safe to proceed past depends on what it can be: a
+signer subprocess is only a resource leak to report, since the
+unsigned fallback below never invokes one and so cannot race it — but
+the whole-command timeout this section opens with is root-cause-
+agnostic (it can equally fire on a hung hook, not only a stalled
+signer), and a hook process that survives could still be reading or
 writing the working tree or index. Proceeding with the fallback while
 an unidentified or non-signer descendant might still be touching
 repository state risks the fallback's own git operation racing it, so
 treat that case as blocking: stop and post a hold note documenting the
 surviving PID(s) rather than falling back, reserving the
 resource-leak-and-continue treatment for a descendant identifiable as
-the signer itself. Before the next signal, re-check each
-recorded PID's start time again: a mismatch means it already exited
-and the number was reused, so skip signaling it rather than treat the
-new, unrelated process as the same one. If a recorded PID is still
-alive (same start time) after the SIGTERM wait, send SIGKILL to it and
-wait once more, up to 30 seconds — `-9` skips git's signal handler, so a
-leftover `index.lock` can persist even once every process in the
-terminated tree has actually exited, and that alone does not prove
-the lock is this invocation's: a `git status` run by hand, a hook, or
-another command could hold it instead, the same ambiguity the
+the signer itself.
+
+Separately, the lock-ownership check keeps its original (round-6)
+purpose: a leftover `index.lock` after the tree is confirmed gone does
+not prove it belongs to this invocation — a hook, another command, or
+the signer itself could hold it instead, the same ambiguity the
 clone-scoped lock's own "no automatic stale-lock recovery" convention
 already treats as unsafe to guess past. Confirm no other process
 still has the lock file open — a hook or the signer subprocess itself
@@ -3595,21 +3591,28 @@ it yourself
 (`rm -f "$(git rev-parse --git-path index.lock)"`, not a literal
 `.git/index.lock` path, the same linked-worktree rule the rebase-state
 check below uses); if ownership cannot be confirmed, leave the lock in
-place and stop with a hold note instead of forcing the removal. If the
-tree is still alive even after SIGKILL — for example, a process stuck
-in uninterruptible I/O — stop the same way: post a hold note
-documenting the surviving PIDs rather than waiting any longer.
+place and stop with a hold note instead of forcing the removal.
 
-Either way — the tree exited on its own, or was terminated and
-confirmed clear above — verify what actually happened before falling
-back; a killed or already-exited process can leave the operation
-completed, mid-progress, or never started at all:
+Either way — the tree exited on its own, was terminated with nothing
+left but an identified signer leak, or the checks above otherwise
+allow proceeding — verify what actually happened before falling back;
+a killed or already-exited process can leave the operation completed,
+mid-progress, or never started at all:
 
 - **Plain commit**: compare `git rev-parse HEAD` before/after the
   wrapper call, the same check B3's "Verify a commit actually landed"
   paragraph already prescribes. Landed → stop, do not re-commit.
-  Otherwise → fall back to `--no-gpg-sign`
+  Otherwise, before falling back to `--no-gpg-sign`, also compare
+  `git status --porcelain` and `git diff --cached --stat` against
+  their state captured before the wrapper call: a hook that ran before
+  the timeout can leave the index or working tree mutated even though
+  `HEAD` never moved, and the fallback would then commit that
+  mutation alongside the intended change (reproduced 2026-09-11 in PR
+  #2906 review, via a hook that staged an extra file and slept). Both
+  unchanged → fall back to `--no-gpg-sign`
   (`idd-overview-appendix.instructions.md`'s "Commit signing" section).
+  Either changed → stop and post a hold note for review instead of
+  falling back.
 - **Merge or rebase, state still present**: name the state via git, not
   a literal path — in a linked worktree (every B1 sibling worktree)
   `.git` at the worktree root is a _file_ pointing elsewhere, so a
@@ -3656,7 +3659,7 @@ completed, mid-progress, or never started at all:
 No step in this recovery procedure waits indefinitely: the original
 wrapper invocation and every fallback or continuation share the same
 2-minute bound, and the termination wait above has its own 30-second
-bounds — every step that exceeds its bound routes to the same
+bound — every step that exceeds its bound routes to the same
 terminate-and-verify-or-hold outcome, not a fresh unbounded wait. A
 hook or other non-signing cause can hang the plain-commit
 `--no-gpg-sign` fallback or the `--continue` completion just as it
