@@ -7355,6 +7355,151 @@ test('#1570: buildPreMergeReadinessSummary blocks on copilot-terminal-unavailabl
   );
 });
 
+// kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12): GitHub does
+// not rerun an already-successful check merely because its supporting
+// comment expires, so a PR sitting open past a self-referential-bootstrap
+// -auto marker's own expiry (with no new triggering event) could otherwise
+// merge on a stale pass -- F2 previously had no visibility at all into this
+// marker kind (excluded entirely from `waiverEvidence` by design), so it
+// never noticed the waiver justifying a currently-passing check had expired.
+test('buildPreMergeReadinessSummary blocks on a currently-passing idd-advisory-convergence check whose supporting self-referential-bootstrap-auto marker has expired', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const inputWithPassingConvergence = {
+    ...fixture.input,
+    checks: [
+      ...fixture.input.checks,
+      {
+        name: 'idd-advisory-convergence',
+        state: 'SUCCESS',
+        completedAt: '2026-05-11T23:58:00Z',
+      },
+    ],
+    branchRules: [
+      fixture.input.branchRules[0],
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [
+            { context: 'lint' },
+            { context: 'idd-advisory-convergence' },
+          ],
+        },
+      },
+    ],
+  };
+
+  // Sanity baseline: no auto-waiver marker at all -> no stale-auto-waiver
+  // blocker (nothing to be stale).
+  const withoutMarker = buildPreMergeReadinessSummary(
+    inputWithPassingConvergence,
+    fixture.options,
+  );
+  assert.deepEqual(
+    (withoutMarker.autoWaiverEvidence as { expired: unknown[] }).expired,
+    [],
+  );
+  assert.deepEqual(
+    withoutMarker.blockers,
+    computePreMergeReadinessBlockers(withoutMarker),
+  );
+  assert.ok(
+    !(withoutMarker.blockers as { gate: string; detail: string }[]).some(
+      (blocker) => blocker.detail.includes('self-referential-bootstrap-auto'),
+    ),
+  );
+
+  const expiredAutoWaiverBody = renderExternalCheckWaiverComment({
+    agentId: 'github-actions-bot',
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    expiresAt: '2026-05-11T20:00:00Z', // before fixture options.now (00:00)
+    runId: '999',
+  });
+  const withExpiredMarker = buildPreMergeReadinessSummary(
+    {
+      ...inputWithPassingConvergence,
+      comments: [
+        ...fixture.input.comments,
+        {
+          id: 'expired-auto-waiver',
+          author: { login: 'github-actions[bot]' },
+          body: expiredAutoWaiverBody,
+          createdAt: '2026-05-11T18:00:00Z',
+          updatedAt: '2026-05-11T18:00:00Z',
+        },
+      ],
+    },
+    fixture.options,
+  );
+  const withExpiredMarkerAutoWaiverExpired = (
+    withExpiredMarker.autoWaiverEvidence as {
+      expired: { authorLogin: string }[];
+    }
+  ).expired;
+  assert.equal(withExpiredMarkerAutoWaiverExpired.length, 1);
+  assert.equal(
+    withExpiredMarkerAutoWaiverExpired[0].authorLogin,
+    'github-actions[bot]',
+  );
+  const staleGates = (
+    withExpiredMarker.blockers as { gate: string; detail: string }[]
+  ).filter((blocker) => blocker.gate === 'ci');
+  assert.ok(
+    staleGates.some((blocker) =>
+      blocker.detail.includes('self-referential-bootstrap-auto'),
+    ),
+    `expected a stale-auto-waiver ci blocker, got: ${JSON.stringify(staleGates)}`,
+  );
+  assert.equal(withExpiredMarker.ready, false);
+  assert.deepEqual(
+    withExpiredMarker.blockers,
+    computePreMergeReadinessBlockers(withExpiredMarker),
+  );
+
+  // A marker that is STILL within its validity window must never trigger
+  // this blocker (only `expired` entries do).
+  const freshAutoWaiverBody = renderExternalCheckWaiverComment({
+    agentId: 'github-actions-bot',
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    expiresAt: '2026-05-13T00:00:00Z', // after fixture options.now (00:00)
+    runId: '999',
+  });
+  const withFreshMarker = buildPreMergeReadinessSummary(
+    {
+      ...inputWithPassingConvergence,
+      comments: [
+        ...fixture.input.comments,
+        {
+          id: 'fresh-auto-waiver',
+          author: { login: 'github-actions[bot]' },
+          body: freshAutoWaiverBody,
+          createdAt: '2026-05-11T18:00:00Z',
+          updatedAt: '2026-05-11T18:00:00Z',
+        },
+      ],
+    },
+    fixture.options,
+  );
+  assert.deepEqual(
+    (withFreshMarker.autoWaiverEvidence as { expired: unknown[] }).expired,
+    [],
+  );
+  assert.ok(
+    !(withFreshMarker.blockers as { gate: string; detail: string }[]).some(
+      (blocker) => blocker.detail.includes('self-referential-bootstrap-auto'),
+    ),
+  );
+  assert.deepEqual(
+    withFreshMarker.blockers,
+    computePreMergeReadinessBlockers(withFreshMarker),
+  );
+});
+
 // #2021: a posted, otherwise-valid `idd-advisory-convergence` waiver must
 // only make the REQUIRED CHECK itself `coveredByWaiver` once the SAME
 // deadline/terminal precondition `advisory-convergence.mts`'s own gate

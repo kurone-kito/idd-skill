@@ -191,6 +191,16 @@
     "notConfigured": [],
     "modeDisabled": []
   },
+  "autoWaiverEvidence": {
+    "valid": [],
+    "expired": [],
+    "wrongHead": [],
+    "wrongClaim": [],
+    "unauthorized": [],
+    "malformed": [],
+    "notConfigured": [],
+    "modeDisabled": []
+  },
   "advisoryConvergenceWaiverPrecondition": {
     "checkSelector": "idd-advisory-convergence",
     "deadlineMinutes": 1440,
