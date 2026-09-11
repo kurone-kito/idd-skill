@@ -8717,9 +8717,31 @@ export function buildPreMergeReadinessSummary(
         workflowName: check.workflowName ?? null,
       }))
       .filter((check) => ci.requiredCheckNames.includes(check.name));
+    // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1, fresh
+    // evidence against THIS revision's own new per-producer loop): the
+    // producer grouping above intentionally keeps every distinct
+    // producer separate, but a non-Actions producer sharing this name
+    // (e.g. a legacy status context) can never legitimately be covered
+    // by a self-referential-bootstrap-auto marker in the first place --
+    // that marker only ever cites a workflow RUN
+    // (`verifySelfReferentialBootstrapWaiverRun` checks `path`/`event`
+    // against an Actions run), which a status-context producer has none
+    // of. Worse, such a producer typically has no parseable
+    // `completedAt`, which would otherwise hit this loop's stale-leaning
+    // `passingCompletedAtMs === null` branch below and flag a false
+    // positive even while the REAL convergence workflow's own instance
+    // is genuinely fresh. Exclude any producer whose `type` is populated
+    // and is not `'check-run'` before it ever becomes a candidate -- an
+    // absent `type` (the pre-#1483 data shape, including this fixture's
+    // own base checker instance) still passes through unaffected, same
+    // as `groupChecksByProducer`'s own no-conflicting-signal fallback.
     const selfConvergenceProducerCandidates = selectLatestCheckPerName(
       selfConvergenceRawInstances,
-    ).filter((check) => CHECK_PASS_EQUIVALENT_STATES.has(check.state));
+    ).filter(
+      (check) =>
+        CHECK_PASS_EQUIVALENT_STATES.has(check.state) &&
+        (!check.type || check.type === 'check-run'),
+    );
     for (const latestSelfConvergenceCheck of selfConvergenceProducerCandidates) {
       const autoWaiverRunVerified = options.autoWaiverRunVerified ?? {};
       // kurone-kito/idd-skill#2911 (CodeRabbit + Copilot review, PR #2915,

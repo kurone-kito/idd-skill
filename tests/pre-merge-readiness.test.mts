@@ -10116,3 +10116,50 @@ test('#2911 (Copilot review, PR #2915): a marker CREATED after the check already
   );
   assert.equal(staleSelfWaiverOf(summary).stale, false);
 });
+
+test('#2911 (Codex review, PR #2915, P1, fresh evidence against the producer-grouping fix itself): a legacy status-context producer sharing the name never causes a false positive via the null-completedAt fail-closed branch, even while the real checker workflow is genuinely fresh', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    // The REAL convergence workflow's own instance: fresh, no waiver
+    // correlation needed at all -- no marker comment is added for it.
+    'SUCCESS',
+    '2026-05-11T23:55:00Z',
+  );
+  // An unrelated legacy status-context producer sharing the exact same
+  // name, with NO completedAt (typical of a status context) -- pre-fix,
+  // this producer's own candidacy hits the `passingCompletedAtMs ===
+  // null` fail-closed branch, which unconditionally matches ANY
+  // run-verified expired marker regardless of timing. This otherwise
+  // unrelated marker (posted long ago, with no bearing on the REAL
+  // workflow's fresh 23:55 pass) exists purely to give that branch
+  // something to match.
+  const checksWithStatusContextProducer = [
+    ...(base.checks ?? []),
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: null,
+      type: 'status-context',
+      workflowName: '',
+    },
+  ];
+  const withStatusContextProducer = {
+    ...base,
+    checks: checksWithStatusContextProducer,
+  };
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-status-context-decoy',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T20:00:00Z',
+    runId: '7171',
+    createdAt: '2026-05-11T19:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...withStatusContextProducer,
+      comments: [...(withStatusContextProducer.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '7171': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});

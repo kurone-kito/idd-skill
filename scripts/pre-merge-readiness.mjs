@@ -629,13 +629,49 @@ export function collectPreMergeReadiness(
     helperRuntimeProfile,
     repositoryFullName,
   );
-  const selfReferentialRenamedFromPaths = port
-    .listChangeRequestRenamedFromPaths(args.prNumber)
-    .filter(Boolean);
-  const touchesSelfReferentialAllowlist = [
-    ...changedFiles,
-    ...selfReferentialRenamedFromPaths,
-  ].some((path) => selfReferentialTriggerFiles.includes(String(path)));
+  const changedFilesTouchSelfReferentialAllowlist = changedFiles.some((path) =>
+    selfReferentialTriggerFiles.includes(String(path)),
+  );
+  // kurone-kito/idd-skill#2911 (Codex + CodeRabbit review, PR #2915): the
+  // renamed-from-paths lookup is a separate paginated `pulls/.../files`
+  // request that duplicates the `changedFiles` fetch above, and its
+  // result can only ever matter for a PR that (a) doesn't already prove
+  // the allowlist touch via `changedFiles` alone AND (b) carries at
+  // least one self-referential-bootstrap-auto marker candidate -- if
+  // neither the ordinary case (no marker at all) nor this case applies,
+  // `touchesSelfReferentialAllowlist`'s value can never affect the
+  // report either way, so skip the extra round-trip entirely. Cheap: the
+  // candidate scan below only re-uses `normalizedComments`, already
+  // fetched, no extra call. Wrapped in try/catch -- unlike every OTHER
+  // unguarded port call earlier in this collector, this one specifically
+  // sits behind an opt-in security gate that most PRs never need at all,
+  // so a transient failure here must not abort report generation for
+  // PRs the gate was never going to affect; fails to `[]` (never widens
+  // trust, matches `getWorkflowRun`'s own fail-closed-to-untrusted
+  // direction below).
+  const hasAnySelfReferentialMarkerCandidate = normalizedComments.some(
+    (comment) =>
+      /^<!--\s*idd-external-check-waiver:/i.test(comment.body) &&
+      comment.author.login.trim().toLowerCase() === 'github-actions[bot]',
+  );
+  let selfReferentialRenamedFromPaths = [];
+  if (
+    !changedFilesTouchSelfReferentialAllowlist &&
+    hasAnySelfReferentialMarkerCandidate
+  ) {
+    try {
+      selfReferentialRenamedFromPaths = port
+        .listChangeRequestRenamedFromPaths(args.prNumber)
+        .filter(Boolean);
+    } catch {
+      selfReferentialRenamedFromPaths = [];
+    }
+  }
+  const touchesSelfReferentialAllowlist =
+    changedFilesTouchSelfReferentialAllowlist ||
+    selfReferentialRenamedFromPaths.some((path) =>
+      selfReferentialTriggerFiles.includes(String(path)),
+    );
   // Bounded scan for self-referential-bootstrap-auto candidate markers
   // bound to this PR's own HEAD, mirroring `collectFromGitHub`'s own
   // anti-flood budget (20, capped) but NOT its earliest-first tie-break:
