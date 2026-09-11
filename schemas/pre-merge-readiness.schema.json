@@ -19,6 +19,8 @@
     "claim",
     "waiverEvidence",
     "advisoryConvergenceWaiverPrecondition",
+    "claimIdentityInstalledAt",
+    "staleSelfWaiver",
     "branchCurrency",
     "ready",
     "blockers"
@@ -1284,7 +1286,9 @@
             "required": [
               "authorLogin",
               "checkSelector",
-              "expiresAt"
+              "expiresAt",
+              "reason",
+              "runId"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1299,6 +1303,14 @@
               "expiresAt": {
                 "type": "string",
                 "description": "Waiver's recorded expiry timestamp."
+              },
+              "reason": {
+                "type": "string",
+                "description": "kurone-kito/idd-skill#2911: the marker's reason: field, verbatim -- needed to identify a self-referential-bootstrap-auto marker even after it has expired out of the valid bucket."
+              },
+              "runId": {
+                "type": "string",
+                "description": "kurone-kito/idd-skill#2911: the marker's optional run-id: field, verbatim ('' when absent) -- mirrors the valid bucket's own runId field."
               }
             }
           }
@@ -1338,7 +1350,9 @@
             "required": [
               "authorLogin",
               "checkSelector",
-              "waiverClaimId"
+              "waiverClaimId",
+              "reason",
+              "runId"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1353,6 +1367,14 @@
               "waiverClaimId": {
                 "type": "string",
                 "description": "Claim id recorded on the waiver, which does not match the active claim."
+              },
+              "reason": {
+                "type": "string",
+                "description": "kurone-kito/idd-skill#2911: see expired[].reason's description above -- the identical need applies to a wrongClaim-classified marker, which likewise never reaches the valid bucket."
+              },
+              "runId": {
+                "type": "string",
+                "description": "kurone-kito/idd-skill#2911: see expired[].runId's description above."
               }
             }
           }
@@ -1547,6 +1569,45 @@
         "declined": {
           "type": "boolean",
           "description": "#2547: true when the configured secondary advisory bot has definitively declined (a rate-limit / skip-review notice, with no later genuine comment) to review the CURRENT HEAD -- the wait is skipped entirely (elapsed: true, remainingMinutes: 0) rather than requiring the full configured window."
+        }
+      }
+    },
+    "claimIdentityInstalledAt": {
+      "type": "string",
+      "description": "kurone-kito/idd-skill#2911: the non-mutable timestamp at which the active claim's (agentId, claimId) identity was last installed (a fresh claim, a stale takeover, or a forced handoff) -- as opposed to claim.activeClaim.createdAt, which is overwritten on every same-claim heartbeat. '' when no event ever produced an active claim. Deliberately outside claim (not claim.activeClaimInstalledAt): ClaimValidationSummary's shape is embedded in schemas beyond this one, so this stays a top-level, pre-merge-readiness-only field instead."
+    },
+    "staleSelfWaiver": {
+      "type": "object",
+      "description": "kurone-kito/idd-skill#2911: evidence for the stale-self-waiver merge blocker -- whether the currently-passing idd-advisory-convergence check (the deduplicated newest instance) rests on a self-referential-bootstrap-auto waiver that has since gone stale (expired, or claim-invalid across a genuine claim-identity transition), with no rerun since. Reported unconditionally (never omitted); stale is false and reason is null whenever the blocker does not apply (including when touchesSelfReferentialAllowlist was not supplied as true, or the configured ciGate.externalCheckWaivers.mode/waivableSelectors policy could never have made this mechanism's waiver valid).",
+      "required": [
+        "stale",
+        "checkSelector",
+        "reason",
+        "expiresAt",
+        "waiverClaimId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "stale": {
+          "type": "boolean",
+          "description": "True when the currently-passing check's pass rests on a stale, run-verified self-referential-bootstrap-auto waiver."
+        },
+        "checkSelector": {
+          "type": "string",
+          "description": "The advisory-convergence check selector this evidence evaluates."
+        },
+        "reason": {
+          "type": ["string", "null"],
+          "enum": ["expired", "wrong-claim", null],
+          "description": "Which stale condition fired: an expired marker with no rerun since, or a marker bound to a claim identity the current transition no longer matches. null when stale is false."
+        },
+        "expiresAt": {
+          "type": "string",
+          "description": "The stale marker's own recorded expiry timestamp, when reason is 'expired'; '' otherwise."
+        },
+        "waiverClaimId": {
+          "type": "string",
+          "description": "The stale marker's own recorded claim id, when reason is 'wrong-claim'; '' otherwise."
         }
       }
     },

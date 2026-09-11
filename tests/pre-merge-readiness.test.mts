@@ -2,10 +2,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON } from '../src/scripts/advisory-wait-policy.mts';
 import {
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+} from '../src/scripts/advisory-wait-policy.mts';
+import {
+  renderClaimedByMarker,
   renderExternalCheckWaiverComment,
   renderReviewReplyStamp,
+  renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
 import {
   collectPreMergeReadiness,
@@ -9441,4 +9446,573 @@ test('#2272: an unrecognized developmentBranchTarget.status fails closed even wh
   );
   assert.ok(blocker);
   assert.match(blocker.detail, /unrecognized/);
+});
+
+// ---------------------------------------------------------------------------
+// kurone-kito/idd-skill#2911: stale-self-waiver merge blocker.
+//
+// Re-implements (properly, this time) the blocker PR #2895 added and then
+// reverted across three commits (9ecc9954/863c5249/337f4369) after three
+// more review rounds each found a new correctness/trust defect. Each test
+// below is named for the specific finding/constraint it pins so a future
+// edit that regresses one of them fails loudly and specifically, rather
+// than as an opaque diff against a hand-built fixture.
+// ---------------------------------------------------------------------------
+
+const SELF_WAIVER_HEAD_SHA = '1111111111111111111111111111111111111111';
+
+function selfWaiverInputBase(): PreMergeReadinessInput {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  return withAdvisoryConvergenceRequiredCheck(fixture);
+}
+
+function withSelfWaiverCheckState(
+  input: PreMergeReadinessInput,
+  state: string,
+  completedAt?: string,
+): PreMergeReadinessInput {
+  const checks = (input.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? completedAt === undefined
+        ? { name: check.name, state }
+        : { ...check, state, completedAt }
+      : check,
+  );
+  return { ...input, checks };
+}
+
+function selfWaiverMarkerComment(payload: {
+  id: string;
+  claimId: string;
+  expiresAt: string;
+  runId: string;
+  createdAt: string;
+}) {
+  return {
+    id: payload.id,
+    author: { login: 'github-actions[bot]' },
+    body: renderExternalCheckWaiverComment({
+      agentId: 'idd-advisory-convergence-self-waiver',
+      claimId: payload.claimId,
+      headSha: SELF_WAIVER_HEAD_SHA,
+      checkSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: payload.expiresAt,
+      runId: payload.runId,
+    }),
+    createdAt: payload.createdAt,
+    updatedAt: payload.createdAt,
+  };
+}
+
+function selfWaiverOptions(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  return {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    touchesSelfReferentialAllowlist: true,
+    ...overrides,
+  };
+}
+
+function selfWaiverBlockers(summary: unknown) {
+  return (
+    (summary as { blockers: unknown }).blockers as {
+      gate: string;
+      detail: string;
+    }[]
+  ).filter(
+    (blocker) =>
+      blocker.gate === 'ci' &&
+      /self-referential-bootstrap-auto/.test(blocker.detail),
+  );
+}
+
+function staleSelfWaiverOf(summary: unknown): {
+  stale: boolean;
+  checkSelector: string;
+  reason: 'expired' | 'wrong-claim' | null;
+  expiresAt: string;
+  waiverClaimId: string;
+} {
+  return (summary as { staleSelfWaiver: unknown })
+    .staleSelfWaiver as ReturnType<typeof staleSelfWaiverOf>;
+}
+
+function claimIdentityInstalledAtOf(summary: unknown): string {
+  return (summary as { claimIdentityInstalledAt: string })
+    .claimIdentityInstalledAt;
+}
+
+function activeClaimCreatedAtOf(summary: unknown): string {
+  return (summary as { claim: { activeClaim: { createdAt: string } } }).claim
+    .activeClaim.createdAt;
+}
+
+test('#2911 finding 1/round 12: an expired, run-verified self-referential marker blocks a currently-passing check with no rerun since', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+  assert.equal(selfWaiverBlockers(summary).length, 1);
+  assert.deepEqual(
+    (summary as { blockers: unknown }).blockers,
+    computePreMergeReadinessBlockers(summary as Record<string, unknown>),
+  );
+});
+
+test('#2911 finding 2/round 13: a genuine rerun completing AFTER the expired marker clears the blocker', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:45:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-then-rerun',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 acceptance criterion 2 (round 13 commit promised, never implemented -- git show 863c5249): a fresh rerun covered by a DIFFERENT, currently-valid self-referential marker clears the blocker even though an older marker already expired', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:20:00Z',
+  );
+  const staleMarker = selfWaiverMarkerComment({
+    id: 'self-waiver-stale',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T22:00:00Z',
+  });
+  const coveringMarker = selfWaiverMarkerComment({
+    id: 'self-waiver-covering',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '5555',
+    createdAt: '2026-05-11T23:15:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...base,
+      comments: [...(base.comments ?? []), staleMarker, coveringMarker],
+    },
+    selfWaiverOptions({
+      autoWaiverRunVerified: { '4242': true, '5555': true },
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 finding 3/round 14: a wrongClaim self-referential marker blocks when the check completed before the current claim identity was installed', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:10:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-wrong-claim-before',
+    claimId: 'some-other-claim',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T23:20:00Z');
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
+  assert.equal(selfWaiverBlockers(summary).length, 1);
+});
+
+test('#2911 finding 3/round 14: the same wrongClaim marker does not block once the check completed after the current claim identity was installed', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-wrong-claim-after',
+    claimId: 'some-other-claim',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 finding 4/round 15 (Codex P1): the deduplicated NEWEST check instance governs, not a raw first match over a multi-instance list', () => {
+  const inputWithHelper = selfWaiverInputBase();
+  const checks = [
+    // Older instance listed FIRST: if a naive .find()/first-match picked
+    // this one, its completedAt would land inside the stale marker's own
+    // window and wrongly block.
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:20:00Z',
+    },
+    // Newer instance (a genuine rerun), deduplicated-selected as "latest":
+    // completed AFTER the stale marker's own expiry, so it must NOT block.
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:50:00Z',
+    },
+    ...(inputWithHelper.checks ?? []).filter(
+      (check) => check.name !== DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    ),
+  ];
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-dedup',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T22:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...inputWithHelper,
+      checks,
+      comments: [...(inputWithHelper.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 dedup-rewrite asymmetry: a still-PENDING newest instance wins dedup over an older SUCCESS, so the pass-equivalent check never even runs', () => {
+  const inputWithHelper = selfWaiverInputBase();
+  const checks = [
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:20:00Z',
+    },
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'PENDING',
+    },
+    ...(inputWithHelper.checks ?? []).filter(
+      (check) => check.name !== DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    ),
+  ];
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-pending-dedup',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T22:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...inputWithHelper,
+      checks,
+      comments: [...(inputWithHelper.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 dedup-rewrite asymmetry (documented, intentional): a SUCCESS selected instance with an unparseable completedAt still fails closed to stale', () => {
+  const base = withSelfWaiverCheckState(selfWaiverInputBase(), 'SUCCESS');
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-unparseable-completed-at',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T22:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+});
+
+test('#2911 finding 5/round 15 (Codex P2): a same-claim heartbeat after the rerun moves activeClaim.createdAt forward, but claimIdentityInstalledAt stays anchored on the original claim and never false-positives', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:00:00Z',
+  );
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T23:50:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T23:50:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-heartbeat',
+    claimId: 'some-other-claim',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T21:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...base,
+      claimEvents,
+      comments: [...(base.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  // The mutable heartbeat clock moved to 23:50; the non-mutable transition
+  // anchor must stay at the original 22:00 claim.
+  assert.equal(activeClaimCreatedAtOf(summary), '2026-05-11T23:50:00Z');
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 claim-identity transition anchor: a release followed by a fresh re-claim moves claimIdentityInstalledAt to the re-claim, not the original claim or the release', () => {
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T20:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T20:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderUnclaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        timestamp: '2026-05-11T21:00:00Z',
+      }),
+      createdAt: '2026-05-11T21:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli-2',
+        claimId: 'claim-456',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const base = selfWaiverInputBase();
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents },
+    selfWaiverOptions({
+      expectedClaimId: 'claim-456',
+      expectedAgentId: 'github-copilot-cli-2',
+    }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
+});
+
+test('#2911 finding 6/round 15 (Copilot, decisive): touchesSelfReferentialAllowlist false suppresses the blocker even for an otherwise-stale, run-verified marker', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-no-allowlist-touch',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      touchesSelfReferentialAllowlist: false,
+      autoWaiverRunVerified: { '4242': true },
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 finding 6/round 15 (Copilot, decisive): an unverified run (forged or unresolvable citation) suppresses the blocker -- fail-open for staleness, the safe direction', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-unverified-run',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summaryFalse = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': false } }),
+  );
+  assert.equal(staleSelfWaiverOf(summaryFalse).stale, false);
+
+  const summaryAbsent = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({}),
+  );
+  assert.equal(staleSelfWaiverOf(summaryAbsent).stale, false);
+});
+
+test('#2911 (self-critique, mode/waivable gate): an otherwise-stale marker never blocks while ciGate.externalCheckWaivers.mode is not maintainer-authorized (the schema default)', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-mode-disabled',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      autoWaiverRunVerified: { '4242': true },
+      externalCheckWaiverMode: 'disabled',
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 (self-critique, mode/waivable gate): an otherwise-stale marker never blocks when the selector is not on the configured waivable-check surface', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-not-waivable',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      autoWaiverRunVerified: { '4242': true },
+      waivableCheckSelectors: [{ selector: 'lint', matchMode: 'exact' }],
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911: an otherwise-stale marker blocks when mode is explicitly maintainer-authorized and the selector is configured waivable', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-mode-open',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      autoWaiverRunVerified: { '4242': true },
+      externalCheckWaiverMode: 'maintainer-authorized',
+      waivableCheckSelectors: [
+        {
+          selector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+          matchMode: 'exact',
+        },
+      ],
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(selfWaiverBlockers(summary).length, 1);
+});
+
+test('#2911 claimless: an active-claim-bound wrongClaim marker fails closed to stale when no claim identity ever resolves (claimIdentityInstalledAt is empty)', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-claimless',
+    claimId: 'some-claim',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents: [], comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      claimless: true,
+      autoWaiverRunVerified: { '4242': true },
+    }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '');
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
 });

@@ -7,6 +7,11 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+} from '../src/scripts/advisory-wait-policy.mts';
+import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
+import {
   collectPreMergeReadiness,
   normalizeClaimComment,
   normalizeComment,
@@ -1282,4 +1287,262 @@ test('collectPreMergeReadiness: secondaryQuietWindow still blocks for the full w
   );
   assert.equal(status.elapsed, false);
   assert.equal(status.remainingMinutes, 56);
+});
+
+// ---------------------------------------------------------------------------
+// kurone-kito/idd-skill#2911: stale-self-waiver merge blocker, exercised
+// through the REAL collector I/O path (comment scan -> bounded
+// getWorkflowRun lookups -> verifySelfReferentialBootstrapWaiverRun ->
+// buildPreMergeReadinessSummary), per the issue's own acceptance criterion
+// ("verified by a test using the fake provider adapter"). The pure
+// correlation/dedup/claim-anchor logic itself is covered directly in
+// tests/pre-merge-readiness.test.mts; these tests instead pin that the
+// collector's own comment-scan + getWorkflowRun wiring produces the inputs
+// that logic expects, and that a forged/unresolvable run citation is never
+// trusted.
+// ---------------------------------------------------------------------------
+
+const SELF_WAIVER_PR_HEAD_SHA = 'a'.repeat(40);
+
+function selfWaiverFakeProviderConfig(overrides: Record<string, unknown> = {}) {
+  return {
+    ciGate: {
+      externalCheckWaivers: { mode: 'maintainer-authorized' },
+      externalChecks: {
+        waivable: [
+          {
+            selector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+            matchMode: 'exact',
+          },
+        ],
+      },
+    },
+    ...overrides,
+  };
+}
+
+function selfWaiverMarkerCollectionComment(payload: {
+  id: number;
+  expiresAt: string;
+  runId: string;
+  createdAt: string;
+}) {
+  return {
+    id: payload.id,
+    body: renderExternalCheckWaiverComment({
+      agentId: 'idd-advisory-convergence-self-waiver',
+      claimId: 'none',
+      headSha: SELF_WAIVER_PR_HEAD_SHA,
+      checkSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: payload.expiresAt,
+      runId: payload.runId,
+    }),
+    createdAt: payload.createdAt,
+    updatedAt: payload.createdAt,
+    authorLogin: 'github-actions[bot]',
+  };
+}
+
+function runSelfWaiverCollection(
+  fixtureOverrides: {
+    workflowRuns?: Record<string, unknown>;
+    changedFiles?: Record<number, string[]>;
+    comments?: Record<number, unknown[]>;
+  },
+  configOverrides: Record<string, unknown> = {},
+) {
+  const cwdRoot = mkdtempSync(
+    join(tmpdir(), 'idd-pre-merge-fake-self-waiver-'),
+  );
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(cwdRoot);
+    const port = createFakeProviderAdapter({
+      changeRequestReadinessSnapshots: {
+        42: {
+          headSha: SELF_WAIVER_PR_HEAD_SHA,
+          baseRefName: 'main',
+          url: 'https://github.com/o/r/pull/42',
+          authorLogin: 'author-user',
+          reviewDecision: null,
+          statusCheckRollup: [
+            {
+              __typename: 'CheckRun',
+              name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+              status: 'COMPLETED',
+              conclusion: 'SUCCESS',
+              completedAt: '2026-08-01T00:00:00Z',
+              workflowName: 'idd-advisory-convergence',
+            },
+          ],
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          closingIssuesReferences: [],
+        },
+      },
+      branchRules: {
+        'o/r/main': [
+          {
+            type: 'required_status_checks',
+            parameters: {
+              required_status_checks: [
+                { context: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR },
+              ],
+            },
+          },
+        ],
+      },
+      branchProtection: { 'o/r/main': {} },
+      reviewThreadsWithComments: { 42: [] },
+      reviewsWithHeadCommitDate: {
+        42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+      },
+      comments: { 42: [], ...fixtureOverrides.comments },
+      changedFiles: { 42: [], ...fixtureOverrides.changedFiles },
+      workflowRuns: fixtureOverrides.workflowRuns ?? {},
+    } as never);
+
+    return collectPreMergeReadiness(
+      [
+        '--pr',
+        '42',
+        '--claimless',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-08-01T00:10:00Z',
+      ],
+      () => port,
+      () => selfWaiverFakeProviderConfig(configOverrides) as never,
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
+}
+
+test('collectPreMergeReadiness against a fake provider: a genuine, run-verified expired self-referential marker blocks a currently-passing idd-advisory-convergence check', () => {
+  const report = runSelfWaiverCollection({
+    comments: {
+      42: [
+        selfWaiverMarkerCollectionComment({
+          id: 1,
+          expiresAt: '2026-08-01T00:05:00Z',
+          runId: '999',
+          createdAt: '2026-07-31T23:00:00Z',
+        }),
+      ],
+    },
+    changedFiles: { 42: ['.github/idd/config.json'] },
+    workflowRuns: {
+      'o/r/999': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+        head_sha: SELF_WAIVER_PR_HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      },
+    },
+  });
+  const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
+  assert.equal(staleSelfWaiver.stale, true);
+  const blockers = report.blockers as { gate: string; detail: string }[];
+  assert.ok(
+    blockers.some(
+      (blocker) =>
+        blocker.gate === 'ci' &&
+        /self-referential-bootstrap-auto/.test(blocker.detail),
+    ),
+    `expected a self-referential-bootstrap-auto "ci" blocker, got: ${JSON.stringify(blockers)}`,
+  );
+});
+
+test('collectPreMergeReadiness against a fake provider: touchesSelfReferentialAllowlist false (this PR never touches the checker allowlist) suppresses the blocker even for an otherwise-verified expired marker -- closes the decisive round-15 forgery/DoS finding', () => {
+  const report = runSelfWaiverCollection({
+    comments: {
+      42: [
+        selfWaiverMarkerCollectionComment({
+          id: 1,
+          expiresAt: '2026-08-01T00:05:00Z',
+          runId: '999',
+          createdAt: '2026-07-31T23:00:00Z',
+        }),
+      ],
+    },
+    // No changedFiles entry for PR 42 -- it never touches the checker
+    // allowlist, so the blocker must never fire regardless of what the
+    // (here, genuinely run-verified) marker says.
+    changedFiles: {},
+    workflowRuns: {
+      'o/r/999': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+        head_sha: SELF_WAIVER_PR_HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      },
+    },
+  });
+  const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
+  assert.equal(staleSelfWaiver.stale, false);
+});
+
+test('collectPreMergeReadiness against a fake provider: a forged marker citing a real run with the wrong event/path/head/repository is never trusted, no blocker', () => {
+  const genuineRun = {
+    path: '.github/workflows/idd-advisory-convergence.yml',
+    head_sha: SELF_WAIVER_PR_HEAD_SHA,
+    head_repository: { full_name: 'o/r' },
+    event: 'pull_request_target',
+  };
+  const forgedVariants: Record<string, unknown>[] = [
+    { ...genuineRun, event: 'pull_request' },
+    { ...genuineRun, path: '.github/workflows/some-other-workflow.yml' },
+    { ...genuineRun, head_sha: 'b'.repeat(40) },
+    { ...genuineRun, head_repository: { full_name: 'attacker/fork' } },
+  ];
+  for (const [index, forgedRun] of forgedVariants.entries()) {
+    const runId = String(1000 + index);
+    const report = runSelfWaiverCollection({
+      comments: {
+        42: [
+          selfWaiverMarkerCollectionComment({
+            id: index + 1,
+            expiresAt: '2026-08-01T00:05:00Z',
+            runId,
+            createdAt: '2026-07-31T23:00:00Z',
+          }),
+        ],
+      },
+      changedFiles: { 42: ['.github/idd/config.json'] },
+      workflowRuns: { [`o/r/${runId}`]: forgedRun },
+    });
+    const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
+    assert.equal(
+      staleSelfWaiver.stale,
+      false,
+      `forged variant ${index} (${JSON.stringify(forgedRun)}) must not trigger the blocker`,
+    );
+  }
+});
+
+test('collectPreMergeReadiness against a fake provider: a run-id citing a workflow run this repository has no record of (unresolvable lookup) is never trusted, no blocker', () => {
+  const report = runSelfWaiverCollection({
+    comments: {
+      42: [
+        selfWaiverMarkerCollectionComment({
+          id: 1,
+          expiresAt: '2026-08-01T00:05:00Z',
+          runId: '404404',
+          createdAt: '2026-07-31T23:00:00Z',
+        }),
+      ],
+    },
+    changedFiles: { 42: ['.github/idd/config.json'] },
+    // No workflowRuns entry for 404404 -- the fake adapter throws, matching
+    // the real GitHub adapter's own unresolvable-run behavior.
+    workflowRuns: {},
+  });
+  const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
+  assert.equal(staleSelfWaiver.stale, false);
 });

@@ -345,7 +345,24 @@ export interface ExternalCheckWaiverEvidence {
      * of this function is unaffected by its presence. */
     runId: string;
   }[];
-  expired: { authorLogin: string; checkSelector: string; expiresAt: string }[];
+  expired: {
+    authorLogin: string;
+    checkSelector: string;
+    expiresAt: string;
+    /** kurone-kito/idd-skill#2911: the marker's `reason:` field,
+     * verbatim -- needed to identify a `self-referential-bootstrap-auto`
+     * marker even after it has expired (the `valid` bucket's own `reason`
+     * field, added for #2657, is unreachable once a marker expires out of
+     * that bucket). Every other caller of this function is unaffected by
+     * its presence. */
+    reason: string;
+    /** kurone-kito/idd-skill#2911: the marker's optional `run-id:` field,
+     * verbatim (`''` when absent) -- mirrors the `valid` bucket's own
+     * `runId` field (#2657), needed so a stale-self-waiver consumer can
+     * still run the same run-bound trust verification on an EXPIRED
+     * marker. */
+    runId: string;
+  }[];
   wrongHead: {
     authorLogin: string;
     checkSelector: string;
@@ -355,6 +372,13 @@ export interface ExternalCheckWaiverEvidence {
     authorLogin: string;
     checkSelector: string;
     waiverClaimId: string;
+    /** kurone-kito/idd-skill#2911: see `expired[].reason`'s doc comment
+     * above -- the identical need applies to a `wrongClaim`-classified
+     * marker, which likewise never reaches the `valid` bucket. */
+    reason: string;
+    /** kurone-kito/idd-skill#2911: see `expired[].runId`'s doc comment
+     * above. */
+    runId: string;
   }[];
   unauthorized: {
     authorLogin: string;
@@ -727,9 +751,10 @@ export function summarizeExternalCheckWaivers(
     // never merely `unauthorized`/`wrongHead`/etc., since the reason
     // itself disqualifies it regardless of any other field.
     //
-    // Exactly two call sites may set this `true` -- every other caller
-    // (this function's own ordinary-waiver callers, and
-    // `pre-merge-readiness.mts`) must leave it unset:
+    // Exactly three call sites may set this `true` -- every other caller
+    // (this function's own ordinary-waiver callers, including
+    // `buildPreMergeReadinessSummary`'s own PRIMARY `waiverEvidence` call
+    // below) must leave it unset:
     // 1. `advisory-convergence.mts`'s dedicated, isolated auto-waiver
     //    evidence call, whose `valid` classification directly feeds
     //    `autoWaiverValid` -- a GATE decision -- so it is paired with the
@@ -747,6 +772,27 @@ export function summarizeExternalCheckWaivers(
     //    decision that skips posting), so leaving it unset there costs
     //    nothing and keeps the exception as narrow as the decision it
     //    actually affects requires.
+    // 3. `buildPreMergeReadinessSummary`'s (this file's) own DEDICATED
+    //    `autoWaiverEvidence` call (kurone-kito/idd-skill#2911, replacing
+    //    the reverted kurone-kito/idd-skill#2657-era attempt at
+    //    commit 9ecc9954, which this issue's own findings list retired
+    //    across three further review rounds): read-only, feeding only a
+    //    stale-self-waiver merge BLOCKER -- it can add a blocker
+    //    `computePreMergeReadinessBlockers` would not otherwise report,
+    //    never satisfy one or make `ready` true, the opposite direction
+    //    from the gate-bypass risk this option otherwise guards against.
+    //    Trusts a marker as blocker evidence only after the SAME
+    //    run-id/event-type/HEAD/repository verification site 1 performs
+    //    (`verifySelfReferentialBootstrapWaiverRun`, reused verbatim from
+    //    `advisory-convergence.mts`) AND an independently-fetched
+    //    `touchesSelfReferentialAllowlist` precondition -- both computed
+    //    by the collector (`pre-merge-readiness.mts`) and threaded in as
+    //    `options.autoWaiverRunVerified`/`options.touchesSelfReferential-
+    //    Allowlist`, since a bearer-evidence-only citation of a real,
+    //    unrelated run (kurone-kito/idd-skill#2912's own residual gap)
+    //    would otherwise let a forged marker block an unrelated PR's
+    //    merge (the decisive Copilot finding that retired the original
+    //    attempt).
     allowSelfReferentialBootstrapAuto?: boolean;
   } = {},
 ): ExternalCheckWaiverEvidence {
@@ -857,6 +903,8 @@ export function summarizeExternalCheckWaivers(
         authorLogin,
         checkSelector: parsed.checkSelector,
         waiverClaimId: parsed.claimId,
+        reason: parsed.reason,
+        runId: parsed.runId,
       });
       continue;
     }
@@ -867,6 +915,8 @@ export function summarizeExternalCheckWaivers(
         authorLogin,
         checkSelector: parsed.checkSelector,
         expiresAt: parsed.expiresAt,
+        reason: parsed.reason,
+        runId: parsed.runId,
       });
       continue;
     }
@@ -886,6 +936,8 @@ export function summarizeExternalCheckWaivers(
           authorLogin,
           checkSelector: parsed.checkSelector,
           expiresAt: parsed.expiresAt,
+          reason: parsed.reason,
+          runId: parsed.runId,
         });
         continue;
       }
@@ -7179,6 +7231,20 @@ export function summarizeClaimValidation(
     ) => boolean;
     staleAgeMs?: number;
   } = {},
+  /**
+   * kurone-kito/idd-skill#2911: optional out-parameter this function
+   * mutates in place with `resolveActiveClaimWithForcedHandoffTrace`'s
+   * `activeSince` (the non-mutable claim-identity-transition anchor --
+   * see that interface's own doc comment for why `ClaimValidationSummary
+   * .activeClaim.createdAt` is unsuitable for this). Deliberately NOT a
+   * new field on `ClaimValidationSummary` itself: that type's shape is
+   * embedded in multiple schemas beyond `pre-merge-readiness.schema.json`
+   * (e.g. `discover-roadmap-union.schema.json`), so widening it would
+   * ripple into unrelated consumers. Every existing caller passes no 3rd
+   * argument and is completely unaffected; `buildPreMergeReadinessSummary`
+   * is the sole caller that supplies one today.
+   */
+  captureTraceInto?: { activeSince?: string },
 ): ClaimValidationSummary {
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
@@ -7217,31 +7283,43 @@ export function summarizeClaimValidation(
   // for the same corrected-handoff state (resume `already_owned` vs. merge
   // `claimLost`) by design; both still funnel through the single
   // resolveActiveClaim resolver.
-  const activeClaim = resolveActiveClaim(claimEvents, {
-    isTrustedAuthor: trustedAuthorPredicate,
-    isForcedHandoffEnabled:
-      typeof options.isForcedHandoffEnabled === 'function'
-        ? options.isForcedHandoffEnabled
-        : buildForcedHandoffEnableGate({
-            forcedHandoffEnabled: options.forcedHandoffEnabled === true,
-            expectedLinkedPrReferences,
-            prFirstCommitAt: options.prFirstCommitAt ?? null,
-          }),
-    isAuthorizedForcedHandoff:
-      typeof options.isAuthorizedForcedHandoff === 'function'
-        ? options.isAuthorizedForcedHandoff
-        : (forcedBy: string) => {
-            if (authorizedForcedHandoffLogins.size === 0) {
-              return false;
-            }
-            return authorizedForcedHandoffLogins.has(
-              String(forcedBy ?? '')
-                .trim()
-                .toLowerCase(),
-            );
-          },
-    isStale: resolveStalePredicate(options.staleAgeMs),
-  });
+  // kurone-kito/idd-skill#2911: switched from the thin `resolveActiveClaim`
+  // wrapper to the full trace, so `captureTraceInto` (when the caller
+  // supplies it) can recover `activeSince` -- the same single-pass
+  // reduction, just no longer discarding the extra field. Every existing
+  // caller only ever read `.activeClaim` off `resolveActiveClaim`'s own
+  // return, so this is behavior-identical for that value.
+  const { activeClaim, activeSince } = resolveActiveClaimWithForcedHandoffTrace(
+    claimEvents,
+    {
+      isTrustedAuthor: trustedAuthorPredicate,
+      isForcedHandoffEnabled:
+        typeof options.isForcedHandoffEnabled === 'function'
+          ? options.isForcedHandoffEnabled
+          : buildForcedHandoffEnableGate({
+              forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+              expectedLinkedPrReferences,
+              prFirstCommitAt: options.prFirstCommitAt ?? null,
+            }),
+      isAuthorizedForcedHandoff:
+        typeof options.isAuthorizedForcedHandoff === 'function'
+          ? options.isAuthorizedForcedHandoff
+          : (forcedBy: string) => {
+              if (authorizedForcedHandoffLogins.size === 0) {
+                return false;
+              }
+              return authorizedForcedHandoffLogins.has(
+                String(forcedBy ?? '')
+                  .trim()
+                  .toLowerCase(),
+              );
+            },
+      isStale: resolveStalePredicate(options.staleAgeMs),
+    },
+  );
+  if (captureTraceInto) {
+    captureTraceInto.activeSince = activeSince;
+  }
 
   const expectedNonce = String(options.expectedNonce ?? '').trim();
 
@@ -7650,6 +7728,43 @@ export function computePreMergeReadinessBlockers(
     blockers.push({ gate: 'ci', detail });
   }
 
+  // kurone-kito/idd-skill#2911: the OPPOSITE direction from the block
+  // above -- CI may currently report `idd-advisory-convergence` PASSING,
+  // but `buildPreMergeReadinessSummary`'s own `staleSelfWaiver` evidence
+  // (see its computation for the full rationale and the six findings this
+  // closes) may show that pass rests on a self-referential-bootstrap-auto
+  // waiver that has since gone stale, with no rerun since. Independent of
+  // (and not gated by) `isPreMergeCiAllPassing` above, since the whole
+  // point is to catch a check that currently LOOKS all-passing.
+  const staleSelfWaiver = preMergeAsRecord(report.staleSelfWaiver);
+  if (staleSelfWaiver.stale === true) {
+    const staleSelfWaiverCheckSelector = String(
+      staleSelfWaiver.checkSelector ?? '',
+    );
+    const staleReasonDetail =
+      staleSelfWaiver.reason === 'wrong-claim'
+        ? `was bound to claim "${String(
+            staleSelfWaiver.waiverClaimId ?? 'unknown',
+          )}", which the current claim identity (installed at "${
+            String(report.claimIdentityInstalledAt ?? '') || 'unknown'
+          }") no longer matches, with no rerun since`
+        : `expired at "${String(
+            staleSelfWaiver.expiresAt ?? 'unknown',
+          )}" with no rerun since`;
+    blockers.push({
+      gate: 'ci',
+      detail:
+        `"${staleSelfWaiverCheckSelector}" currently reports a passing ` +
+        `conclusion, but the self-referential-bootstrap-auto waiver ` +
+        `posted by github-actions[bot] that may have justified it ` +
+        `${staleReasonDetail} -- GitHub does not automatically ` +
+        're-evaluate a passing check when its supporting waiver comment ' +
+        `stops being valid. Rerun "${staleSelfWaiverCheckSelector}" for ` +
+        'the current HEAD before merging so it reflects the current, ' +
+        'unwaived state.',
+    });
+  }
+
   const reviewerStates = preMergeAsRecord(report.reviewerStates);
   if (!isPreMergeReviewSatisfied(reviewerStates)) {
     const selfApproval = preMergeAsRecord(reviewerStates.codeownerSelfApproval);
@@ -7993,6 +8108,30 @@ export function buildPreMergeReadinessSummary(
     // pre-#2046 behavior); `collectPreMergeReadiness` always sources the
     // policy value (default `disabled`).
     externalCheckWaiverMode?: string;
+    // kurone-kito/idd-skill#2911: caller-precomputed evidence for the
+    // `staleSelfWaiver` blocker above -- see that computation's own doc
+    // comment for the full rationale. Both fields default to the no-op/
+    // suppressed state, so every existing caller/fixture (which omits
+    // them) is unaffected; `collectPreMergeReadiness` is the sole caller
+    // that populates them.
+    //
+    // Independently fetched from THIS PR's own live diff (never from any
+    // comment body) -- whether it touches
+    // `resolveSelfReferentialTriggerFiles`'s allowlist. The load-bearing
+    // security boundary: without this, a forged self-referential-
+    // bootstrap-auto marker citing a real, unrelated run could block a
+    // completely unrelated PR's merge (see the decisive Copilot finding
+    // cited above).
+    touchesSelfReferentialAllowlist?: boolean;
+    // Keyed by the candidate marker's own `run-id:` field; `true` only
+    // when `verifySelfReferentialBootstrapWaiverRun` (reused verbatim from
+    // `advisory-convergence.mts`) confirmed that run id's own
+    // `GET .../actions/runs/{run-id}` lookup matches the expected
+    // workflow path, this PR's own HEAD SHA, this repository, and the
+    // `pull_request_target` event. A run id absent from this map (an
+    // unbounded/unlooked-up id, or a lookup that errored) is treated as
+    // unverified, never as verified.
+    autoWaiverRunVerified?: Record<string, boolean>;
     // Configured `claimTiming.staleAge` (#1310), parsed to milliseconds and
     // threaded to the write-gate claim resolver below so the F2/F3 merge gate
     // honors it instead of the hardcoded 24h `isStaleAt` default. Omitted by
@@ -8229,6 +8368,14 @@ export function buildPreMergeReadinessSummary(
       primaryBotLogin: options.primaryBotLogin,
     },
   );
+  // kurone-kito/idd-skill#2911: captures `resolveActiveClaimWithForcedHandoff
+  // Trace`'s `activeSince` (the non-mutable claim-identity-transition
+  // anchor `summarizeClaimValidation`'s own `captureTraceInto` parameter
+  // exposes) without widening `ClaimValidationSummary` -- see that
+  // parameter's own doc comment. Left `{}` (never populated) on the
+  // `claimless` branch below, matching that branch's own synthetic,
+  // not-applicable claim shape.
+  const claimTrace: { activeSince?: string } = {};
   const claim = options.claimless
     ? {
         expectedClaimId: 'none',
@@ -8245,19 +8392,28 @@ export function buildPreMergeReadinessSummary(
         claimLost: false,
         reason: 'not-applicable',
       }
-    : summarizeClaimValidation(claimEvents, {
-        trustedMarkerLogins,
-        forcedHandoffEnabled: options.forcedHandoffEnabled === true,
-        expectedLinkedPrs: options.expectedLinkedPrs ?? [],
-        prFirstCommitAt: options.prFirstCommitAt ?? null,
-        authorizedForcedHandoffLogins: options.authorizedForcedHandoffLogins,
-        isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
-        isForcedHandoffEnabled: options.isForcedHandoffEnabled,
-        expectedClaimId: options.expectedClaimId,
-        expectedAgentId: options.expectedAgentId,
-        expectedNonce: options.expectedNonce,
-        staleAgeMs: options.staleAgeMs,
-      });
+    : summarizeClaimValidation(
+        claimEvents,
+        {
+          trustedMarkerLogins,
+          forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+          expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+          prFirstCommitAt: options.prFirstCommitAt ?? null,
+          authorizedForcedHandoffLogins: options.authorizedForcedHandoffLogins,
+          isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
+          isForcedHandoffEnabled: options.isForcedHandoffEnabled,
+          expectedClaimId: options.expectedClaimId,
+          expectedAgentId: options.expectedAgentId,
+          expectedNonce: options.expectedNonce,
+          staleAgeMs: options.staleAgeMs,
+        },
+        claimTrace,
+      );
+  // kurone-kito/idd-skill#2911: `''` when no event ever produced an active
+  // claim (including the `claimless` branch above) -- every consumer of
+  // this field must treat that the same as "no anchor available" and fail
+  // closed (never treat an empty string as "installed at the epoch").
+  const claimIdentityInstalledAt = claimTrace.activeSince ?? '';
   const waivableCheckSelectors = options.waivableCheckSelectors ?? null;
   const waiverEvidence = summarizeExternalCheckWaivers(comments, {
     prHeadSha,
@@ -8268,6 +8424,26 @@ export function buildPreMergeReadinessSummary(
     waivableSelectors: waivableCheckSelectors,
     maxValidity: options.externalCheckWaiverMaxValidity ?? '',
     mode: options.externalCheckWaiverMode ?? '',
+  });
+  // kurone-kito/idd-skill#2911: a THIRD authorized `allowSelfReferential-
+  // BootstrapAuto` call site -- see that option's own doc comment in this
+  // file (`summarizeExternalCheckWaivers`) for the full list and why every
+  // other caller must leave it unset. Read-only, feeding only the
+  // `staleSelfWaiver` blocker evidence below; never satisfies a gate or
+  // makes `ready` true. `trustedMarkerLogins` extended with
+  // `github-actions[bot]` identically to `advisory-convergence.mts`'s own
+  // gate-decision call, so a self-referential-bootstrap-auto marker this
+  // repository's own posting job creates is visible to both.
+  const autoWaiverEvidence = summarizeExternalCheckWaivers(comments, {
+    prHeadSha,
+    activeClaimId: claim.activeClaim?.claimId ?? options.activeClaimId ?? '',
+    activeClaimSupersedes: claim.activeClaim?.supersedes ?? '',
+    trustedMarkerLogins: [...trustedMarkerLogins, 'github-actions[bot]'],
+    now,
+    waivableSelectors: waivableCheckSelectors,
+    maxValidity: options.externalCheckWaiverMaxValidity ?? '',
+    mode: options.externalCheckWaiverMode ?? '',
+    allowSelfReferentialBootstrapAuto: true,
   });
 
   // #1570: the caller-supplied terminal-unavailability verdict, reused below
@@ -8379,6 +8555,232 @@ export function buildPreMergeReadinessSummary(
         : null,
   });
 
+  // kurone-kito/idd-skill#2911: the OPPOSITE direction from the CI blocker
+  // below -- CI may currently report `idd-advisory-convergence` PASSING,
+  // but that pass may rest on a self-referential-bootstrap-auto marker
+  // that has since gone stale (expired, or claim-invalid across a genuine
+  // claim transition) with no rerun since. GitHub never reruns an
+  // already-successful check merely because its supporting comment stops
+  // being valid, so without this a PR could merge on a stale pass with no
+  // genuine advisory review (or fresh waiver) ever having covered it.
+  // Consumed by `computePreMergeReadinessBlockers` via
+  // `report.staleSelfWaiver` -- independent of, and never gated by,
+  // `isPreMergeCiAllPassing` there, since the whole point is to catch a
+  // check that currently LOOKS all-passing.
+  //
+  // This re-implements the blocker `9ecc9954`/`863c5249`/`337f4369`
+  // introduced and PR #2895's own review then retired across three more
+  // rounds (kurone-kito/idd-skill#2911's own "Findings" history), fixing
+  // every root cause in one pass rather than live-patching this call site
+  // again:
+  // - Deduplicated newest check instance (`selectLatestCheckInstance`),
+  //   not a raw `.find()` over the full (possibly multi-instance)
+  //   `ci.checks` list (round 15, Codex P1).
+  // - Scans BOTH `expired` and `wrongClaim` (round 14, Codex P1) --
+  //   `wrongClaim` never carries a comparable expiry, so it needs the
+  //   claim-identity-transition anchor below instead.
+  // - Correlates `wrongClaim` against `claimIdentityInstalledAt` (a
+  //   non-mutable claim-identity-transition anchor -- see that field's own
+  //   doc comment), never the mutable `claim.activeClaim.createdAt`
+  //   heartbeat clock (round 15, Codex P2).
+  // - Trusts a candidate marker only after `options.autoWaiverRunVerified`
+  //   confirms the SAME run-bound trust conditions
+  //   `verifySelfReferentialBootstrapWaiverRun` already applies (reused
+  //   verbatim, not reimplemented) AND `options.touchesSelfReferential-
+  //   Allowlist` independently confirms this PR's own diff touches the
+  //   checker allowlist (round 15, Copilot -- the decisive finding: a
+  //   same-repository `pull_request`-triggered workflow with
+  //   `issues: write` could otherwise cite a real, unrelated run (e.g.
+  //   this PR's own required-check instance of `idd-advisory-
+  //   convergence.yml`, which runs for EVERY PR regardless of allowlist
+  //   touch) to forge a marker that blocks a completely unrelated PR's
+  //   merge). Both booleans are precomputed by the collector
+  //   (`pre-merge-readiness.mts`), which does the actual `getWorkflowRun`/
+  //   changed-file I/O -- this function cannot perform it directly without
+  //   an import cycle back through `advisory-convergence.mts` (which
+  //   already imports FROM this file).
+  //
+  // Fail-closed/fail-open asymmetry, by design: an unverified run
+  // (`autoWaiverRunVerified[runId]` false/absent, including a transient
+  // `getWorkflowRun` failure) makes the candidate marker untrusted and
+  // therefore SUPPRESSES this blocker -- the safe direction for the
+  // decisive finding above (a forged-or-unresolvable citation must never
+  // become a merge-denial vector), even though it is the opposite of this
+  // file's usual fail-closed default elsewhere. `touchesSelfReferential-
+  // Allowlist` not `true` (including simply omitted by an older caller)
+  // suppresses the blocker unconditionally, for the identical reason.
+  //
+  // `autoWaiverEvidence` itself (computed just above, alongside the
+  // ordinary `waiverEvidence`) is deliberately NOT added to the returned
+  // `summary`: only this derived `staleSelfWaiver` verdict is schema-
+  // locked, so the raw per-marker bucket shape stays free to evolve
+  // (kurone-kito/idd-skill#2912's own bearer-evidence-vs-provenance work
+  // is a plausible future consumer) without forcing a fixture cascade
+  // across every `fixtures/pre-merge-readiness/*.json` file.
+  //
+  // Residual (documented, not fixed here): the run-id trust check above
+  // proves the cited run has the right shape, never that it actually
+  // posted the marker citing it (kurone-kito/idd-skill#2912 tracks
+  // closing that bearer-evidence gap -- see the identical residual note
+  // on `SELF_REFERENTIAL_WAIVER_TRIGGER_FILES` in advisory-convergence.mts,
+  // ~L277-303). `touchesSelfReferentialAllowlist` bounds the blast radius
+  // to PRs that already, genuinely touch the checker allowlist -- it does
+  // not fully close repeated same-repository forgery against ONE such PR
+  // (each round costs that PR one avoidable rerun, never a bypass).
+  const staleSelfWaiverCheckSelector =
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR;
+  let staleSelfWaiver: {
+    stale: boolean;
+    checkSelector: string;
+    reason: 'expired' | 'wrong-claim' | null;
+    expiresAt: string;
+    waiverClaimId: string;
+  } = {
+    stale: false,
+    checkSelector: staleSelfWaiverCheckSelector,
+    reason: null,
+    expiresAt: '',
+    waiverClaimId: '',
+  };
+  // kurone-kito/idd-skill#2911 (Medium, self-critique against the merged
+  // #2657 gate decision): `summarizeExternalCheckWaivers` classifies a
+  // marker into `expired`/`wrongClaim` BEFORE its own `notConfigured`/
+  // `modeDisabled` checks ever run (both come later in that function's own
+  // pipeline), so those two buckets are populated regardless of
+  // `ciGate.externalCheckWaivers.mode`/`waivableSelectors` policy --
+  // unlike `valid`, which `autoWaiverValid` (advisory-convergence.mts) can
+  // only ever reach once mode/waivable ALREADY gated it. Gate this
+  // blocker on the identical precondition, so an adopter whose policy
+  // (the schema default: `mode: "disabled"`) could never have made this
+  // mechanism's waiver `valid` in the first place never sees a blocker
+  // from its `expired`/`wrongClaim` shadow either.
+  const staleSelfWaiverModeOpen =
+    (options.externalCheckWaiverMode ?? '') === '' ||
+    options.externalCheckWaiverMode === 'maintainer-authorized';
+  const staleSelfWaiverSelectorWaivable =
+    !Array.isArray(waivableCheckSelectors) ||
+    isCheckNameConfiguredWaivable(
+      staleSelfWaiverCheckSelector,
+      waivableCheckSelectors,
+    );
+  if (
+    options.touchesSelfReferentialAllowlist === true &&
+    staleSelfWaiverModeOpen &&
+    staleSelfWaiverSelectorWaivable
+  ) {
+    const selfConvergenceCheckInstances = ci.checks.filter(
+      (check) =>
+        check.required === true &&
+        matchCheckSelectorLocal(check.name, staleSelfWaiverCheckSelector),
+    );
+    const latestSelfConvergenceCheck =
+      selfConvergenceCheckInstances.length > 0
+        ? selectLatestCheckInstance(selfConvergenceCheckInstances)
+        : null;
+    if (
+      latestSelfConvergenceCheck &&
+      CHECK_PASS_EQUIVALENT_STATES.has(latestSelfConvergenceCheck.state)
+    ) {
+      const autoWaiverRunVerified = options.autoWaiverRunVerified ?? {};
+      const isRunVerifiedSelfWaiverMarker = (entry: {
+        authorLogin: string;
+        reason: string;
+        runId: string;
+      }) =>
+        entry.authorLogin === 'github-actions[bot]' &&
+        entry.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
+        entry.runId !== '' &&
+        autoWaiverRunVerified[entry.runId] === true;
+      // A missing/unparseable `completedAt` on the SELECTED instance
+      // fails closed (treated as stale) here, same as the pre-#2911
+      // attempt: a real rerun always posts a parseable `completedAt`, so
+      // this only ever costs one extra, avoidable rerun on malformed
+      // evidence, never a false "not stale".
+      const passingCompletedAtMs = parseCompletedAt(
+        latestSelfConvergenceCheck.completedAt,
+      );
+      // kurone-kito/idd-skill#2911 (acceptance criterion 2, self-critique
+      // against round 13's own commit message -- `git show 863c5249`
+      // promised "correlation to the passing check's own completedAt OR
+      // to a newer valid marker" but its diff only ever implemented the
+      // first half): a candidate `expired`/`wrongClaim` marker proves
+      // nothing when a DIFFERENT, currently-valid, run-verified
+      // self-referential marker's own `[createdAt, expiresAt]` window
+      // already covers the moment the check last completed -- that is
+      // exactly "a fresh rerun under a new valid marker...has already
+      // superseded a stale marker." This is a time-window correlation
+      // over evidence this SAME call site's own `autoWaiverEvidence`
+      // already computed, not a use of `valid` to satisfy or relax the
+      // OVERALL gate (that direction stays exclusively `autoWaiverValid`'s,
+      // per `allowSelfReferentialBootstrapAuto`'s own ADD-only contract) --
+      // it only ever prevents THIS blocker from mis-firing on a pass that
+      // a fresh marker already, genuinely covers; it can never clear a
+      // blocker any OTHER evidence in this file raised.
+      const hasCoveringValidMarker =
+        passingCompletedAtMs !== null &&
+        autoWaiverEvidence.valid.some((entry) => {
+          if (
+            entry.authorLogin !== 'github-actions[bot]' ||
+            entry.reason !== SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON ||
+            entry.checkSelector !== staleSelfWaiverCheckSelector ||
+            entry.runId === '' ||
+            autoWaiverRunVerified[entry.runId] !== true
+          ) {
+            return false;
+          }
+          const createdAtMs = Date.parse(entry.createdAt);
+          const expiresAtMs = Date.parse(entry.expiresAt);
+          return (
+            !Number.isNaN(createdAtMs) &&
+            !Number.isNaN(expiresAtMs) &&
+            createdAtMs <= passingCompletedAtMs &&
+            passingCompletedAtMs <= expiresAtMs
+          );
+        });
+      const staleExpiredEntry = hasCoveringValidMarker
+        ? undefined
+        : autoWaiverEvidence.expired.find((entry) => {
+            if (!isRunVerifiedSelfWaiverMarker(entry)) return false;
+            if (passingCompletedAtMs === null) return true;
+            const entryExpiresAtMs = Date.parse(entry.expiresAt);
+            return (
+              Number.isNaN(entryExpiresAtMs) ||
+              entryExpiresAtMs >= passingCompletedAtMs
+            );
+          });
+      const staleWrongClaimEntry =
+        staleExpiredEntry || hasCoveringValidMarker
+          ? undefined
+          : autoWaiverEvidence.wrongClaim.find((entry) => {
+              if (!isRunVerifiedSelfWaiverMarker(entry)) return false;
+              if (passingCompletedAtMs === null) return true;
+              if (!claimIdentityInstalledAt) return true;
+              const installedAtMs = Date.parse(claimIdentityInstalledAt);
+              return (
+                Number.isNaN(installedAtMs) ||
+                passingCompletedAtMs < installedAtMs
+              );
+            });
+      if (staleExpiredEntry) {
+        staleSelfWaiver = {
+          stale: true,
+          checkSelector: staleSelfWaiverCheckSelector,
+          reason: 'expired',
+          expiresAt: staleExpiredEntry.expiresAt,
+          waiverClaimId: '',
+        };
+      } else if (staleWrongClaimEntry) {
+        staleSelfWaiver = {
+          stale: true,
+          checkSelector: staleSelfWaiverCheckSelector,
+          reason: 'wrong-claim',
+          expiresAt: '',
+          waiverClaimId: staleWrongClaimEntry.waiverClaimId,
+        };
+      }
+    }
+  }
+
   // #1570: reuse the SAME raw waiver evidence above (already validated for
   // selector/HEAD/claim/authority/expiry) to decide whether the caller-
   // supplied terminal-unavailability verdict is also validly waived, filtered
@@ -8487,6 +8889,16 @@ export function buildPreMergeReadinessSummary(
     // blocker detail or a resuming agent can cite the remaining
     // time-to-deadline without re-deriving it.
     advisoryConvergenceWaiverPrecondition,
+    // kurone-kito/idd-skill#2911: reported unconditionally (never omitted),
+    // matching this file's own convention for evidence fields
+    // `computePreMergeReadinessBlockers` consumes -- see `staleSelfWaiver`'s
+    // own computation above for the full contract. Deliberately outside
+    // `claim` (not `claim.activeClaimInstalledAt`): `ClaimValidationSummary`'s
+    // shape is embedded in schemas beyond this one (e.g.
+    // `discover-roadmap-union.schema.json`), so this stays a top-level,
+    // pre-merge-readiness-only field instead.
+    claimIdentityInstalledAt,
+    staleSelfWaiver,
     branchCurrency,
   };
 
@@ -8745,6 +9157,23 @@ export interface ActiveClaimResolution {
    * (e.g. only heartbeats followed the last transition).
    */
   appliedForcedHandoff: ParsedForcedHandoffMarker | null;
+  /**
+   * kurone-kito/idd-skill#2911: the GitHub `createdAt` of the event that
+   * most recently changed `activeClaim`'s `(agentId, claimId)` identity --
+   * a fresh claim, a stale takeover, or a forced handoff -- as opposed to
+   * `activeClaim.createdAt` itself, which `applyClaimEvent`'s heartbeat
+   * branch deliberately overwrites on every SAME-claim heartbeat (that
+   * field is the correct "stale clock" anchor for `idd-claim.instructions.md`'s
+   * staleness rule, but it is NOT a stable "this identity became active
+   * at" anchor -- a long-lived claim's `createdAt` keeps moving forward
+   * with every 12h heartbeat even though its identity never changes).
+   * `''` when no event ever produced a non-null active claim. A release
+   * with no later re-claim leaves this holding the release event's own
+   * `createdAt` (the "identity" transitioned to null then), which is
+   * harmless: callers that care about this field only ever consult it
+   * alongside a non-null `activeClaim`/`activeClaimPresent`.
+   */
+  activeSince: string;
 }
 
 /**
@@ -8774,6 +9203,7 @@ export function resolveActiveClaimWithForcedHandoffTrace(
 
   let active: ParsedClaimMarker | null = null;
   let appliedForcedHandoff: ParsedForcedHandoffMarker | null = null;
+  let activeSince = '';
   for (const event of orderedEvents) {
     const previous = active;
     const next = applyClaimEvent(previous, event, options);
@@ -8795,10 +9225,16 @@ export function resolveActiveClaimWithForcedHandoffTrace(
         candidate.newClaimId === next.claimId
           ? candidate
           : null;
+      // kurone-kito/idd-skill#2911: record the transition's own event
+      // timestamp -- see `ActiveClaimResolution.activeSince`'s doc comment
+      // for why this must be captured here (at the identity-changing step
+      // itself) rather than read back from `next.createdAt`, which a LATER
+      // same-claim heartbeat mutates in place.
+      activeSince = String(event.createdAt ?? '');
     }
     active = next;
   }
-  return { activeClaim: active, appliedForcedHandoff };
+  return { activeClaim: active, appliedForcedHandoff, activeSince };
 }
 
 export function resolveActiveClaim(
