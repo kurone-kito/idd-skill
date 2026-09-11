@@ -781,9 +781,9 @@ degrading every genuine attempt to "no auto-waiver" and leaving only
 the maintainer-authorized waiver path for every such PR (found by a
 Codex review of kurone-kito/idd-skill#2914 during the
 kurone-kito/idd-skill#2912 fix cycle, 2026-09-11). See
-kurone-kito/idd-skill#2918 for the open tradeoff and the rationale for
-keeping the pinned version rather than adding a runner-detection
-branch.
+kurone-kito/idd-skill#2918 for the full tradeoff discussion and the
+rationale for keeping the pinned version rather than adding a
+runner-detection branch.
 
 ## Optional — mark the vendored helper bundle `linguist-vendored`
 
