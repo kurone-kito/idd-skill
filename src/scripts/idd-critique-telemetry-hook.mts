@@ -413,27 +413,31 @@ export function invokeCritiqueTelemetryHook(
         // above is what sets DETACHED_PROCESS (required so this child
         // survives `--invoke`'s `process.exit()`; cannot be dropped). The
         // wShowWindow=SW_HIDE half is set unconditionally in STARTUPINFO
-        // regardless of DETACHED_PROCESS, but whether `cmd.exe` (the
-        // `shell: true` wrapper on win32) propagates that show-state hint
-        // to the further child it execs for `command` -- the actual
-        // process whose own auto-allocated console is the "large number of
-        // windows" symptom this issue reports -- was not directly
-        // re-checked for visible-window suppression in this session either
-        // (the earlier implementation session's blocker -- no native
-        // Windows access at all -- no longer applies, but this session's
-        // own native-Windows verification work focused on the watchdog and
-        // stdin-delivery defects below, not on visually confirming
-        // console-window suppression specifically). Kept regardless: no-op
-        // or partial help, never harmful, and matches this option's
-        // documented intent. The bound, reliable mitigation for that
-        // symptom is `killProcessGroup`'s win32 tree-kill below, which
-        // caps the window's lifetime at `timeoutMs` rather than
-        // preventing it outright.
+        // regardless of DETACHED_PROCESS, and `cmd.exe` (the `shell: true`
+        // wrapper on win32) DOES propagate that show-state hint to the
+        // further child it execs for `command` -- verified live on native
+        // Windows 11 (kurone-kito/idd-skill#2892 review follow-up): a
+        // real, unmocked spawn through this exact path shows
+        // `MainWindowHandle == 0` (Get-Process) for both a quick-exiting
+        // and a hung-then-killed target, for the whole process tree this
+        // creates. The bound, reliable mitigation for a window that
+        // somehow still appears despite this is `killProcessGroup`'s
+        // win32 tree-kill below, which caps its lifetime at `timeoutMs`
+        // rather than preventing it outright.
         windowsHide: true,
       });
     } catch {
       settle(false);
       notifyDelivered();
+      // #2892 review, CodeRabbit: a synchronous spawnFn() throw returns
+      // here before the watchdog is ever wired up below, so nothing else
+      // would ever call onWatchdogArmed -- without this, a caller waiting
+      // on it (invokeAndWaitForDelivery, --invoke's own path) would sit
+      // idle for the full WATCHDOG_ARMED_TIMEOUT_MS before its own
+      // fallback timer rescues it, even though there is plainly no
+      // watchdog to wait for when the primary spawn itself never
+      // happened.
+      options?.onWatchdogArmed?.();
       return;
     }
 
