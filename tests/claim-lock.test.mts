@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { availableParallelism, devNull, tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -526,9 +526,23 @@ const RACE_WORKER_CODE = `
   });
 `;
 
-test('acquire: a same-claim-id race against an absent lock can raise racedCreate, and never fabricates a holder on the pre-existing torn-read gap (PR #2917 review, Codex; torn-read gap tracked in kurone-kito/idd-skill#2920)', async (t) => {
-  // Statistical health check across several rounds, not a proof, like the
-  // concurrent-takeovers test above -- but using worker_threads with an
+// Kept deliberately small: a full worker_threads race harness costs real
+// wall-clock time in CI (measured ~57s at ROUNDS=5, CONCURRENT_ACQUIRES=60
+// on a constrained runner -- PR #2917 review, Codex P2), and the constants
+// below are a proportionality call, not a precision one -- the test's job
+// is verifying hard structural invariants that must hold whenever the race
+// manifests, not maximizing the chance it manifests on any given run. See
+// the test body below for why a deterministic (non-probabilistic)
+// reproduction was rejected instead of tuned down.
+const RACE_TEST_ROUNDS = 2;
+const RACE_TEST_WORKERS_PER_ROUND = Math.min(
+  16,
+  Math.max(8, availableParallelism() * 2),
+);
+
+test('acquire: structural invariants hold under a same-claim-id race against an absent lock (PR #2917 review, Codex; racedCreate observation is a diagnostic, torn-read gap tracked in kurone-kito/idd-skill#2920)', async (t) => {
+  // Statistical health check across a couple of rounds, not a proof, like
+  // the concurrent-takeovers test above -- but using worker_threads with an
   // Atomics ready-count barrier instead of subprocess spawning. The
   // exclusive-create race window is microseconds wide; process-spawn
   // overhead (milliseconds) reliably swamps it, so a subprocess batch
@@ -537,6 +551,21 @@ test('acquire: a same-claim-id race against an absent lock can raise racedCreate
   // Node process avoid that overhead and do, on hosts with enough cores
   // -- see kurone-kito/idd-skill#2920 for the measurements this is based
   // on and the pre-existing gap the torn-read branch below documents.
+  //
+  // A deterministic reproduction (a test-only injection hook forcing the
+  // race window open) was considered and rejected: it would add a
+  // production-code seam whose only consumer is this one test -- its own
+  // reviewable surface, and out of proportion to the field it verifies.
+  // `acquireClaimLock`'s three `reacquired`-from-a-retry return sites
+  // (the source of `racedCreate: true`) are verified by direct code
+  // reading instead, and separately by the deterministic
+  // "genuinely pre-existing matching lock" test below, which exercises the
+  // *no-race* path exactly. This test's positive `racedCreate`/torn-read
+  // observations stay a diagnostic, not a hard assertion, precisely
+  // because a regression that stopped setting `racedCreate` entirely could
+  // still pass a run that never happens to observe the race -- the
+  // structural invariants asserted below are what this test actually
+  // guards on every run, race-observed or not.
   //
   // Structural invariants that must hold on every round regardless of
   // whether a race actually manifests on this host:
@@ -560,8 +589,8 @@ test('acquire: a same-claim-id race against an absent lock can raise racedCreate
   try {
     const cliUrl = pathToFileURL(CLI_PATH).href;
     const lockPath = resolveClaimLockPath(fixture.worktree);
-    const ROUNDS = 5;
-    const CONCURRENT_ACQUIRES = 60;
+    const ROUNDS = RACE_TEST_ROUNDS;
+    const CONCURRENT_ACQUIRES = RACE_TEST_WORKERS_PER_ROUND;
     let anyRacedCreate = false;
     let anyTornReadCollision = false;
 
@@ -574,16 +603,15 @@ test('acquire: a same-claim-id race against an absent lock can raise racedCreate
       Atomics.store(ints, 0, 0);
       Atomics.store(ints, 1, 0);
 
+      const workerRefs: Worker[] = [];
       const workers = Array.from({ length: CONCURRENT_ACQUIRES }, () => {
         const worker = new Worker(RACE_WORKER_CODE, {
           eval: true,
           workerData: { worktree: fixture.worktree, sab, cliUrl },
         });
+        workerRefs.push(worker);
         return new Promise((resolve, reject) => {
-          worker.on('message', (outcome) => {
-            resolve(outcome);
-            void worker.terminate();
-          });
+          worker.on('message', resolve);
           worker.on('error', reject);
         });
       });
@@ -606,6 +634,11 @@ test('acquire: a same-claim-id race against an absent lock can raise racedCreate
         racedCreate?: boolean;
         holder?: unknown;
       }>;
+      // Terminate only after every worker has already posted its
+      // outcome and settled, so tearing one thread down can never
+      // race another round's still-in-flight worker in this same
+      // batch (PR #2917 review, Codex P2).
+      await Promise.all(workerRefs.map((worker) => worker.terminate()));
 
       for (const outcome of outcomes) {
         assert.ok(
