@@ -561,7 +561,15 @@ export function recordGeneratedClaimTokens(cwd, fields) {
  * - Present lock whose `claimId` matches → writes the generated-tokens
  *   record via {@link recordGeneratedClaimTokens}, using the lock's own
  *   `agentId` and no `nonce` (matching a fresh pre-nonce `--record-tokens`
- *   call) → `backfilled`.
+ *   call) → `backfilled`. If a well-formed record for this exact `claimId`
+ *   already exists (outside the documented recovery route, which only ever
+ *   reaches this function when `--read-tokens` reported absent/malformed --
+ *   meaning no well-formed record exists yet -- so this is a defensive
+ *   guard against a caller invoking this function directly against
+ *   caller-discipline), its own `nonce` is preserved rather than silently
+ *   erased: {@link recordGeneratedClaimTokens} replaces the whole record,
+ *   so writing with no `nonce` unconditionally would otherwise drop an
+ *   existing one (#2917 review, Copilot).
  *
  * Performs no GitHub round-trip on any path, matching `--acquire`'s own
  * same-machine, no-network design. Re-invoking after a successful backfill
@@ -582,9 +590,15 @@ export function backfillGeneratedClaimTokens(worktree, claimId) {
   if (read.lock.claimId !== claimId) {
     return { status: 'lock-mismatch', lockPath, path, holder: read.lock };
   }
+  // Preserve an existing well-formed record's own nonce, if any -- see the
+  // function-level doc comment above.
+  const existing = readGeneratedClaimTokens(worktree, claimId);
+  const nonce =
+    existing.status === 'present' ? existing.record.nonce : undefined;
   recordGeneratedClaimTokens(worktree, {
     agentId: read.lock.agentId,
     claimId,
+    ...(nonce === undefined ? {} : { nonce }),
   });
   return { status: 'backfilled', lockPath, path, agentId: read.lock.agentId };
 }
@@ -745,8 +759,10 @@ does not affirmatively confirm.
 generated-tokens record was never created because its B1 worktree
 predates the record feature: it reads the existing \`idd-claim.lock\` file
 and, only when present with a --claim-id that matches exactly, writes the
-generated-tokens record using the lock's own recorded agent-id (no
---nonce). An absent lock reports \`lock-absent\`, an unparseable or
+generated-tokens record using the lock's own recorded agent-id, with no
+--nonce unless an existing well-formed record for this --claim-id already
+carries one, which is preserved rather than erased. An absent lock reports
+\`lock-absent\`, an unparseable or
 unreadable lock reports \`lock-malformed\`, and a lock recorded for a
 different claim-id reports \`lock-mismatch\` (naming the actual holder) --
 all three write nothing. A successful write reports \`backfilled\` and

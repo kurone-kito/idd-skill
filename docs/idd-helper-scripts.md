@@ -1984,7 +1984,14 @@ close.
   file at `<path>` (the same resolution `--check` uses) and writes only
   when it is present and its own `claimId` matches the given
   `--claim-id` exactly, using the lock's own `agentId` and no `--nonce`
-  (matching a fresh pre-nonce `--record-tokens` call): reports
+  (matching a fresh pre-nonce `--record-tokens` call) unless a
+  well-formed record for this `--claim-id` is already present, in which
+  case its own `nonce` is preserved rather than silently erased (the
+  documented recovery route only ever reaches this command when
+  `--read-tokens` reported absent/malformed -- meaning no well-formed
+  record exists yet -- but the CLI itself does not enforce that
+  precondition, so it guards against a direct out-of-band invocation
+  too, #2917 review): reports
   `backfilled`. An absent lock reports `lock-absent`; an unparseable or
   otherwise unreadable lock (for example a directory at the lock path)
   reports `lock-malformed`; a lock present for a different `claimId`

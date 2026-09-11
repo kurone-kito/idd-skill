@@ -946,6 +946,41 @@ test('backfill-tokens: re-running after a successful backfill is idempotent — 
   }
 });
 
+test("backfill-tokens: preserves an existing well-formed record's own nonce rather than erasing it (PR #2917 review, Copilot)", () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+
+    // A nonce-bearing record already exists for this exact claim-id --
+    // outside the documented recovery route (which only ever reaches
+    // --backfill-tokens when --read-tokens reports absent/malformed, i.e.
+    // no well-formed record exists yet), but the CLI itself does not
+    // enforce that precondition, so a direct out-of-band invocation must
+    // not silently erase the nonce.
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId: 'claim-a',
+      nonce: 'nonce-a',
+    });
+
+    const outcome = backfillGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(outcome.status, 'backfilled');
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'present');
+    assert.equal(read.status === 'present' && read.record.agentId, 'agent-a');
+    assert.equal(read.status === 'present' && read.record.nonce, 'nonce-a');
+  } finally {
+    teardown(fixture);
+  }
+});
+
 test('CLI: --backfill-tokens writes on a matching lock and exits 0, and exits non-zero with no write on a mismatched claim-id', async () => {
   const fixture = setupLinkedWorktree();
   try {
