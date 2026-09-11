@@ -3531,11 +3531,17 @@ raised in PR #2906 review). First check whether the process is
 still running — per `idd-ci.instructions.md`'s "Wake-up discipline"
 guidance on a heavy local command that auto-backgrounds past a tool's
 default timeout, do not start a second wrapper invocation alongside it.
-If it is still running, terminate it (a plain `kill`/`SIGTERM`, not
-`-9` — git's own signal handler cleans up `index.lock`; `-9` skips that
-cleanup and the fallback below then fails on the stale lock).
+If it is still running, terminate it **and any descendants** (SIGTERM,
+not `-9` — git's own signal handler cleans up `index.lock`; `-9` skips
+that cleanup and the fallback below then fails on the stale lock; a
+descendant such as the signer subprocess can outlive a `kill` scoped to
+only the git parent, reproduced in PR #2906 review), then **wait for
+that whole process tree to exit** before checking state or falling
+back — SIGTERM is asynchronous, so proceeding immediately can race
+git's own unwind (still removing `index.lock`) or observe stale state.
 
-Either way — just terminated, or already exited on its own — verify
+Either way — the tree exited on its own, or was terminated and waited
+for above — verify
 what actually happened before falling back; a killed or already-exited
 process can leave the operation completed, mid-progress, or never
 started at all:
@@ -3563,16 +3569,20 @@ started at all:
   mode `idd-pr-submit.instructions.md`'s D1 "Post-rebase verification"
   already documents. Verify instead of assuming: current branch
   non-empty (not detached) and the expected commit present in
-  `origin/{development-branch}..HEAD` for a rebase, or `HEAD` advanced
-  past its pre-call value for a merge. Verified → stop. Not verified →
-  re-attach to the branch if detached (`git checkout {branch-name}`;
-  the commit is preserved on the branch ref) and rerun the original
-  merge or rebase command **unsigned** (`git -c commit.gpgsign=false
-  merge …` / `rebase …`, not the SSH-signing wrapper), exactly once —
-  mirroring D1's own bounded auto-recovery. If that single unsigned
-  rerun still fails the same verification, post a hold note documenting
-  the branch state and stop, the same as D1's own recovery does when it
-  is exhausted.
+  `origin/{development-branch}..HEAD` for a rebase; for a merge, either
+  `HEAD` advanced past its pre-call value or
+  `git merge-base --is-ancestor origin/{development-branch} HEAD`
+  already succeeds — an already-current merge exits `0` having created
+  neither a new `HEAD` nor `MERGE_HEAD`, and is success, not a failed
+  attempt. Verified → stop. Not verified → re-attach to the branch if
+  detached (`git checkout {branch-name}`; the commit is preserved on
+  the branch ref) and rerun the original merge or rebase command
+  **unsigned** (`git -c commit.gpgsign=false merge …` / `rebase …`, not
+  the SSH-signing wrapper), exactly once, under this same 2-minute
+  bound — mirroring D1's own bounded auto-recovery. If that rerun times
+  out or still fails the same verification, post a hold note
+  documenting the branch state and stop, the same as D1's own recovery
+  does when it is exhausted.
 
 Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
