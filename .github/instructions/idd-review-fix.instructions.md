@@ -157,15 +157,16 @@ safe to remove: once several rounds each keep surfacing a genuinely
 new, in-scope spec-coverage gap rather than repeating one, summarize
 the recurring finding category and round count in a PR comment and
 stop for a maintainer decision. Once a maintainer decision accepts the
-residual gaps, apply it through whichever path E4 assigned the
-finding: PATH A's `**Awaiting maintainer decision**` resolution
-(`idd-review-triage.instructions.md` E6) for an E10 critique-pass
-finding with no advisory thread of its own, or PATH B
-disposition-and-resolve (E4-E7) for an actual Copilot/CI advisory
-thread. Either way, open the follow-up issue for the accepted gaps
-through `idd-pr-submit.instructions.md` D3's follow-up-issue rule
-(never `gh issue create` directly; use the `issue-authoring` skill)
-rather than continuing rounds indefinitely. Worked example:
+residual gaps, close the hold the same way any other hold resolves
+(`idd-overview-appendix.instructions.md`'s Hold / suspend rules) for a
+session-local E10 critique-pass finding with no advisory thread of its
+own, or apply PATH B disposition-and-resolve
+(`idd-review-triage.instructions.md` E4-E7) when the recurring
+findings did surface through an actual Copilot/CI advisory thread.
+Either way, open the follow-up issue for the accepted gaps through
+`idd-pr-submit.instructions.md` D3's follow-up-issue rule (never
+`gh issue create` directly; use the `issue-authoring` skill) rather
+than continuing rounds indefinitely. Worked example:
 kurone-kito/idd-skill#2767 (PR kurone-kito/idd-skill#2840) implemented
 a CommonMark-compliant structural-evidence parser
 (`triage-structural-evidence.mts` / `markdown-code.mts`); an
