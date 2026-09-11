@@ -3537,24 +3537,32 @@ anything, snapshot the full descendant PID set by walking from the
 git PID (for example, recursively via `pgrep -P`) — walk once, before
 the first signal, and keep that recorded list: re-walking after
 signaling misses a child whose parent the signal already removed,
-even though the child itself is still alive. If any part of the tree
-is still running, send SIGTERM to every recorded PID, not `-9` —
-git's own signal handler cleans up `index.lock`, and a descendant such
-as the signer subprocess can outlive a `kill` scoped to only the git
-parent (reproduced 2026-09-11 in PR #2906 review) — then wait up to
-30 seconds for each recorded PID individually to exit (not a fresh
-tree walk); SIGTERM is asynchronous, so checking state immediately
-can race git's own unwind (still removing `index.lock`) or observe
-stale state. Even a PID snapshot is best-effort, not a guarantee: a
-child that gets reparented (commonly to init) before the snapshot is
-taken is never recorded at all, so it survives untouched no matter
-how carefully the recorded PIDs are signaled and awaited — a signer
-that survives this way is a resource leak to report, not a condition
-this procedure can reliably close; list any surviving PIDs in the
-hold or status note rather than treating any later step as having
-caught it (the unsigned fallback below never invokes the signer, so a
-leaked signer cannot corrupt that path, only waste resources). If any
-recorded PID is still alive after that wait, send SIGKILL to it and
+even though the child itself is still alive. Record each PID together
+with its process start time (for example, `ps -o lstart=` for that
+PID), not the bare number — a PID that exits during the wait below can
+be reused by an unrelated process before the next signal, and signaling
+by number alone would then hit that unrelated process instead. If any
+part of the tree is still running, send SIGTERM to every recorded PID
+whose start time still matches, not `-9` — git's own signal handler
+cleans up `index.lock`, and a descendant such as the signer subprocess
+can outlive a `kill` scoped to only the git parent (reproduced
+2026-09-11 in PR #2906 review) — then wait up to 30 seconds for each
+recorded PID individually to exit (not a fresh tree walk); SIGTERM is
+asynchronous, so checking state immediately can race git's own unwind
+(still removing `index.lock`) or observe stale state. Even a PID
+snapshot is best-effort, not a guarantee: a child that gets reparented
+(commonly to init) before the snapshot is taken is never recorded at
+all, so it survives untouched no matter how carefully the recorded
+PIDs are signaled and awaited — a signer that survives this way is a
+resource leak to report, not a condition this procedure can reliably
+close; list any surviving PIDs in the hold or status note rather than
+treating any later step as having caught it (the unsigned fallback
+below never invokes the signer, so a leaked signer cannot corrupt that
+path, only waste resources). Before the next signal, re-check each
+recorded PID's start time again: a mismatch means it already exited
+and the number was reused, so skip signaling it rather than treat the
+new, unrelated process as the same one. If a recorded PID is still
+alive (same start time) after the SIGTERM wait, send SIGKILL to it and
 wait once more, up to 30 seconds — `-9` skips git's signal handler, so a
 leftover `index.lock` can persist even once every process in the
 terminated tree has actually exited, and that alone does not prove
