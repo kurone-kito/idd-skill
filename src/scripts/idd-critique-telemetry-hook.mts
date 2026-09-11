@@ -277,11 +277,13 @@ export interface InvokeCritiqueTelemetryHookOptions {
    * kill-step script (Start-Process vs. a direct .NET Process call) had
    * no effect on the failure, further narrowing the cause to before that
    * script ever gets a chance to run.
-   * Waiting for this callback (bounded by the same short timeout
-   * {@link InvokeCritiqueTelemetryHookOptions.onPayloadDelivered} already
-   * uses) closes that race for `--invoke`'s fire-and-forget path without
-   * meaningfully slowing it down in the ordinary case, where a spawn
-   * confirms in low single-digit milliseconds.
+   * Waiting for this callback (bounded by its own short timeout,
+   * {@link WATCHDOG_ARMED_TIMEOUT_MS} -- deliberately not the same bound
+   * {@link InvokeCritiqueTelemetryHookOptions.onPayloadDelivered} uses; see
+   * that constant's own doc comment for why) closes that race for
+   * `--invoke`'s fire-and-forget path without meaningfully slowing it down
+   * in the ordinary case, where a spawn confirms in low single-digit
+   * milliseconds.
    */
   onWatchdogArmed?: () => void;
   /**
