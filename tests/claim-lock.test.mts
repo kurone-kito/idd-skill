@@ -10,6 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { availableParallelism, devNull, tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { test } from 'node:test';
@@ -27,6 +28,12 @@ import {
   resolveGeneratedTokensPath,
 } from '../src/scripts/claim-lock.mts';
 
+// Used only by the token-verified-release test below, to reach the CJS
+// side of the `node:fs` builtin for the same `syncBuiltinESMExports`
+// propagation technique the worker-thread payloads in this file already
+// use -- see that test's own comment for why a main-thread (not
+// worker-thread) patch is sufficient here.
+const require = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/claim-lock.mjs');
@@ -1463,6 +1470,606 @@ test("backfill-tokens: preserves an existing well-formed record's own nonce rath
     assert.equal(read.status === 'present' && read.record.agentId, 'agent-a');
     assert.equal(read.status === 'present' && read.record.nonce, 'nonce-a');
   } finally {
+    teardown(fixture);
+  }
+});
+
+// Worker-thread payloads for the concurrent-write regression test below
+// (#2922). Unlike `RACE_WORKER_CODE`/`RACE_READER_CODE` above -- which must
+// *statistically* widen a microseconds-wide race window because #2920's
+// fix is a single atomic syscall with nothing to synchronize against --
+// this race is fully deterministic to reproduce: `withGeneratedTokensWriteLock`
+// gives the test a real, observable synchronization point (the reader
+// worker's own paused `readFileSync`) to drive from, so no fs-interception
+// widening trick is needed, only the same worker_threads + Atomics
+// ready/release-barrier idiom already established above.
+//
+// `READER_WORKER_CODE` calls `backfillGeneratedClaimTokens` itself, but
+// intercepts `fs.readFileSync` (propagated into the compiled CLI module's
+// ESM import via `node:module`'s `syncBuiltinESMExports`, the same
+// mechanism `RACE_WORKER_CODE` above uses) so that specifically its own
+// read of the generated-tokens record path -- not the unrelated
+// `idd-claim.lock` read that happens earlier in the same call -- captures
+// the pre-race body, signals the main thread that it is paused
+// mid-critical-section (holding the write-lock guard the whole time), and
+// blocks until released.
+const READER_WORKER_CODE = `
+  const { workerData, parentPort } = require('node:worker_threads');
+  const fs = require('node:fs');
+  const { worktree, claimId, recordPath, sab, cliUrl } = workerData;
+  const ints = new Int32Array(sab);
+  const originalReadFileSync = fs.readFileSync;
+  fs.readFileSync = (path, opts) => {
+    const result = originalReadFileSync(path, opts);
+    if (path === recordPath) {
+      // Signal "paused mid read-modify-write, still holding the guard
+      // file" and block until the main thread releases it.
+      Atomics.store(ints, 0, 1);
+      Atomics.notify(ints, 0);
+      Atomics.wait(ints, 1, 0);
+    }
+    return result;
+  };
+  require('node:module').syncBuiltinESMExports();
+  import(cliUrl).then(({ backfillGeneratedClaimTokens }) => {
+    const outcome = backfillGeneratedClaimTokens(worktree, claimId);
+    parentPort.postMessage(outcome);
+  });
+`;
+
+// \`WRITER_WORKER_CODE\` is the concurrent plain writer -- the
+// activation-nonce minting flow's own \`--record-tokens --nonce\` call in
+// production terms. It is launched only after the main thread has already
+// confirmed the reader is paused (see the test body), so its own attempt
+// to enter \`withGeneratedTokensWriteLock\` is guaranteed to observe the
+// guard file already held.
+//
+// It signals \`ints[2]\` from a \`finally\` wrapped tightly around a
+// test-side \`fs.openSync\` interception (the same
+// propagate-via-\`syncBuiltinESMExports\` technique \`READER_WORKER_CODE\`
+// and the pre-existing race test above both use) of its own lock-acquire
+// attempt -- the \`.writelock\`-suffixed, \`'wx'\`-flag exclusive-create call
+// inside \`withGeneratedTokensWriteLock\`. This went through several
+// rounds of #2922 review tightening, each closing a smaller residual gap
+// than the last:
+// 1. An earlier revision signaled right after \`import()\` resolved,
+//    immediately before calling \`recordGeneratedClaimTokens\`. Copilot
+//    (a suppressed/lower-confidence finding) noted a worker could still
+//    be preempted between that signal and its first actual lock-acquire
+//    attempt, so the main thread's race-window check could in principle
+//    start before the writer had attempted anything.
+// 2. The fix moved the signal inside an \`fs.writeFileSync\` interception
+//    (production's exclusive-create call at the time), but *before*
+//    delegating to the real call -- closing most of the gap, but leaving
+//    one statement (the delegation itself) between signal and attempt. A
+//    further #2922 review round (Copilot, again suppressed) caught this
+//    remaining sliver.
+// 3. Signaling from a \`finally\` around the real call instead closed the
+//    gap completely: the signal fires only once the attempt has
+//    genuinely completed (an \`EEXIST\` throw or a successful create),
+//    with no scheduling point of its own between the attempt and the
+//    signal.
+// 4. A later #2922 review round (Copilot) flagged that the *production*
+//    exclusive-create itself was not ownership-safe on a non-\`EEXIST\`
+//    failure, so \`withGeneratedTokensWriteLock\` switched from a single
+//    \`fs.writeFileSync(path, ..., { flag: 'wx' })\` call to
+//    \`fs.openSync(path, 'wx')\` (own doc comment has the full rationale)
+//    -- this interception moved with it, from \`fs.writeFileSync\` to
+//    \`fs.openSync\`, to keep testing the exclusive-create call production
+//    code actually makes.
+const WRITER_WORKER_CODE = `
+  const { workerData, parentPort } = require('node:worker_threads');
+  const fs = require('node:fs');
+  const { worktree, agentId, claimId, nonce, sab, cliUrl } = workerData;
+  const ints = new Int32Array(sab);
+  const originalOpenSync = fs.openSync;
+  fs.openSync = (path, flags, mode) => {
+    const isGuardCreateAttempt =
+      typeof path === 'string' && path.endsWith('.writelock') && flags === 'wx';
+    if (!isGuardCreateAttempt) {
+      return originalOpenSync(path, flags, mode);
+    }
+    // Signal from a \`finally\` around the *actual* syscall attempt (#2922
+    // review round 3, Copilot), not before it: signaling first still left
+    // a gap -- between the signal and \`originalOpenSync\` actually
+    // running -- where a preempted worker could let the main thread's
+    // race-window check pass before the writer had touched the guard at
+    // all. A \`finally\` here fires only once the attempt has genuinely
+    // completed (EEXIST throw or successful create), with no scheduling
+    // point of its own in between.
+    try {
+      return originalOpenSync(path, flags, mode);
+    } finally {
+      Atomics.store(ints, 2, 1);
+      Atomics.notify(ints, 2);
+    }
+  };
+  require('node:module').syncBuiltinESMExports();
+  import(cliUrl).then(({ recordGeneratedClaimTokens }) => {
+    const outcome = recordGeneratedClaimTokens(worktree, {
+      agentId,
+      claimId,
+      nonce,
+    });
+    parentPort.postMessage(outcome);
+  });
+`;
+
+test('backfill-tokens: a nonce written by a concurrent recordGeneratedClaimTokens call during the read-modify-write window is never silently overwritten or lost (#2922)', async () => {
+  // Deterministic reproduction of the exact race #2922 describes:
+  // `backfillGeneratedClaimTokens` reads an existing record's `nonce`
+  // (capturing "old-nonce") to preserve it, then a concurrent
+  // `recordGeneratedClaimTokens` call writes a fresher "new-nonce" for the
+  // very same claim-id, then the backfill's own write finally lands.
+  // Pre-fix (plain `atomicReplaceFile`, no synchronization at all), the
+  // concurrent writer's call is never blocked, so it always completes
+  // during the reader's pause and the reader's subsequent write
+  // unconditionally clobbers it back to "old-nonce" -- exactly the bug
+  // report. Post-fix, both calls share one `withGeneratedTokensWriteLock`
+  // critical section keyed by the record's own path, so the writer's call
+  // cannot even begin its own write until the reader's full
+  // read-modify-write finishes and releases the guard -- provably, not
+  // merely statistically, since this test positively asserts the writer's
+  // promise has not yet settled while the reader still holds the pause.
+  const fixture = setupLinkedWorktree();
+  try {
+    const claimId = 'claim-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+
+    // The claim lock `backfillGeneratedClaimTokens` reads to authorize
+    // itself and to source the agentId it writes with.
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-reader',
+      claimId,
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+
+    // Seed a pre-existing well-formed record so the reader's read captures
+    // a real nonce to (attempt to) preserve, matching the "record already
+    // exists" defensive path the sibling test above also exercises.
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-reader',
+      claimId,
+      nonce: 'old-nonce',
+    });
+
+    const cliUrl = pathToFileURL(CLI_PATH).href;
+    const sab = new SharedArrayBuffer(12);
+    const ints = new Int32Array(sab);
+    // ints[0]: reader-paused flag; ints[1]: release flag; ints[2]:
+    // writer-ready-to-attempt-its-own-write flag.
+    Atomics.store(ints, 0, 0);
+    Atomics.store(ints, 1, 0);
+    Atomics.store(ints, 2, 0);
+
+    const reader = new Worker(READER_WORKER_CODE, {
+      eval: true,
+      workerData: {
+        worktree: fixture.worktree,
+        claimId,
+        recordPath,
+        sab,
+        cliUrl,
+      },
+    });
+    const readerDone = new Promise((resolve, reject) => {
+      reader.on('message', resolve);
+      reader.on('error', reject);
+    });
+    try {
+      // Wait for the reader to signal it has read the existing record and
+      // is now paused, still holding the write-lock guard file.
+      const pausedDeadline = Date.now() + 10_000;
+      while (Atomics.load(ints, 0) === 0 && Date.now() < pausedDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(
+        Atomics.load(ints, 0),
+        1,
+        'expected the reader worker to reach its paused read within the deadline',
+      );
+
+      const writer = new Worker(WRITER_WORKER_CODE, {
+        eval: true,
+        workerData: {
+          worktree: fixture.worktree,
+          agentId: 'agent-writer',
+          claimId,
+          nonce: 'new-nonce',
+          sab,
+          cliUrl,
+        },
+      });
+      const writerDone = new Promise((resolve, reject) => {
+        writer.on('message', resolve);
+        writer.on('error', reject);
+      });
+      try {
+        // Wait for the writer's own `import()` to resolve and for it to
+        // reach its own lock-acquire attempt before starting the race
+        // window below -- otherwise a slow cold-start import could eat
+        // into that window and make the next assertion vacuously pass.
+        const writerReadyDeadline = Date.now() + 10_000;
+        while (
+          Atomics.load(ints, 2) === 0 &&
+          Date.now() < writerReadyDeadline
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        assert.equal(
+          Atomics.load(ints, 2),
+          1,
+          'expected the writer worker to reach its own lock-acquire attempt within the deadline',
+        );
+
+        // Positive proof of mutual exclusion, not an assumption: the
+        // writer's own `withGeneratedTokensWriteLock` acquire must still
+        // be blocked (EEXIST-retrying) while the reader holds the guard,
+        // so its promise must not have settled yet.
+        const settledEarly = await Promise.race([
+          writerDone.then(() => true),
+          new Promise((resolve) => setTimeout(() => resolve(false), 250)),
+        ]);
+        assert.equal(
+          settledEarly,
+          false,
+          'expected the concurrent recordGeneratedClaimTokens call to stay blocked on the write-lock guard while the reader is mid-critical-section',
+        );
+
+        // Release the reader; it finishes its own (now-redundant) write
+        // with the stale "old-nonce" it captured, then releases the guard,
+        // finally letting the writer's blocked call proceed.
+        Atomics.store(ints, 1, 1);
+        Atomics.notify(ints, 1);
+
+        const [readerOutcome, writerOutcome] = (await Promise.all([
+          readerDone,
+          writerDone,
+        ])) as [{ status: string }, { path: string }];
+        assert.equal(readerOutcome.status, 'backfilled');
+        assert.ok(writerOutcome.path);
+      } finally {
+        await writer.terminate();
+      }
+    } finally {
+      await reader.terminate();
+    }
+
+    // The writer's later, fully-serialized write must be the final state --
+    // never silently reverted to the reader's stale capture.
+    const finalRead = readGeneratedClaimTokens(fixture.worktree, claimId);
+    assert.equal(finalRead.status, 'present');
+    assert.equal(
+      finalRead.status === 'present' && finalRead.record.nonce,
+      'new-nonce',
+      `expected the concurrently-written nonce to survive, got: ${JSON.stringify(finalRead)}`,
+    );
+    assert.equal(
+      finalRead.status === 'present' && finalRead.record.agentId,
+      'agent-writer',
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('write-lock: an existing guard file blocks a write until the timeout, then fails closed without writing the record or touching the guard (#2922 review round 3, Copilot)', () => {
+  // Coverage the reviewer flagged as missing: the regression test above
+  // only exercises successful contention (a guard released partway
+  // through the wait). This test exercises the *other* documented
+  // outcome -- a guard that is never released -- confirming
+  // `withGeneratedTokensWriteLock` genuinely fails closed rather than
+  // silently reclaiming it or writing anyway, so a future change that
+  // reintroduces an unsafe reclaim (or drops the timeout check entirely)
+  // would break this test. Costs the real ~5s wait budget (no test-only
+  // seam shortens it, matching this suite's existing preference for
+  // testing production code exactly as it runs) -- a single test, not a
+  // loop, deliberately for that reason.
+  const fixture = setupLinkedWorktree();
+  try {
+    const claimId = 'claim-timeout-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+    // Simulate a guard some other holder still owns (orphaned or
+    // genuinely live -- this function cannot tell the difference, and
+    // must fail closed either way).
+    writeFileSync(guardPath, 'held-by-another-process');
+
+    assert.throws(
+      () => {
+        recordGeneratedClaimTokens(fixture.worktree, {
+          agentId: 'agent-a',
+          claimId,
+          nonce: 'should-never-be-written',
+        });
+      },
+      (error: unknown) =>
+        error instanceof Error && error.message.includes(guardPath),
+      'expected a timeout error naming the guard path for manual recovery',
+    );
+
+    // Fails closed, not silently: the record itself was never written.
+    const read = readGeneratedClaimTokens(fixture.worktree, claimId);
+    assert.equal(read.status, 'absent');
+    // The guard is left exactly as found -- this function never removes
+    // a guard it did not itself create.
+    assert.equal(existsSync(guardPath), true);
+    assert.equal(readFileSync(guardPath, 'utf8'), 'held-by-another-process');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test("write-lock: a guard recreated by a different owner while critical() is still running is never deleted by the original holder's own release (#2922 review round 10, Copilot)", () => {
+  // Reproduces the ABA hazard the round-10 review flagged on the release
+  // side (the acquire side already has an equivalent test above, and its
+  // own fix predates this one): if a guard this call created is manually
+  // removed and immediately recreated by a different writer *while this
+  // call's own `critical()` is still genuinely running*, an unconditional
+  // `unlinkSync` on release would delete the replacement owner's guard
+  // instead of its own -- letting two writers believe they hold exclusive
+  // access at once. This runs entirely on the main thread (no
+  // worker_threads/Atomics needed, unlike the concurrent-write regression
+  // test above): the whole scenario is deterministically reproducible by
+  // intercepting the one `renameSync` call `critical()` itself makes
+  // (`atomicReplaceFile`'s rename into place) and performing the
+  // simulated "manual remove + recreate by someone else" synchronously
+  // inside that interception, before letting the real rename proceed --
+  // no separate thread or timing race is needed to land it inside the
+  // critical section. The patch reaches the compiled TypeScript source's
+  // own `node:fs` import via `syncBuiltinESMExports`, the same propagation
+  // mechanism the worker-thread payloads elsewhere in this file use for a
+  // CJS-side patch to reach an ESM named import.
+  const fixture = setupLinkedWorktree();
+  const fs = require('node:fs');
+  const originalRenameSync = fs.renameSync;
+  let intercepted = false;
+  const REPLACEMENT_GUARD_BODY = 'replacement-owner-token';
+  try {
+    const claimId = 'claim-aba-release-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+
+    fs.renameSync = (...args: Parameters<typeof originalRenameSync>) => {
+      if (!intercepted && args[1] === recordPath) {
+        intercepted = true;
+        // Simulate an operator manually removing the guard per the
+        // timeout error's own recovery instructions (mistakenly, since
+        // this holder is not actually dead -- its critical() is right
+        // here, still running), immediately followed by a different
+        // writer winning the exclusive-create race and installing its
+        // own guard before this call's own release runs.
+        fs.unlinkSync(guardPath);
+        fs.writeFileSync(guardPath, REPLACEMENT_GUARD_BODY, { flag: 'wx' });
+      }
+      return originalRenameSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+
+    // Must not throw: a content mismatch on release is a silent no-op
+    // (mirroring `releaseCloneLock`'s own token-mismatch handling in
+    // clone-lock.mts), never a thrown error surfaced to this caller.
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'agent-a',
+      claimId,
+      nonce: 'n1',
+    });
+
+    assert.equal(
+      intercepted,
+      true,
+      'expected the renameSync interception to fire during critical()',
+    );
+    // The record write itself completed normally...
+    const read = readGeneratedClaimTokens(fixture.worktree, claimId);
+    assert.equal(read.status, 'present');
+    // ...but the replacement owner's guard must survive this call's own
+    // release: an unconditional unlinkSync would have deleted it.
+    assert.equal(existsSync(guardPath), true);
+    assert.equal(readFileSync(guardPath, 'utf8'), REPLACEMENT_GUARD_BODY);
+  } finally {
+    fs.renameSync = originalRenameSync;
+    require('node:module').syncBuiltinESMExports();
+    teardown(fixture);
+  }
+});
+
+test('write-lock: a guard that vanishes between the release-time token read and the unlink is a silent no-op, not a thrown ENOENT (#2922 review round 11, Copilot)', () => {
+  // The token-verified release reads the guard, confirms the token still
+  // matches, then unlinks it -- two separate steps, not one atomic
+  // operation. If the guard disappears in the gap between them (an
+  // operator's manual removal landing in that exact narrow window, or any
+  // other legitimate reason -- the guard is simply already gone), the
+  // release must still treat that as "nothing left to remove," per this
+  // helper's own documented no-op contract, matching `releaseCloneLock`'s
+  // identical `ENOENT`-swallowing behavior on its own unlink in
+  // clone-lock.mts. Before this fix, the bare `unlinkSync` after the
+  // token-match check threw `ENOENT` uncaught, incorrectly surfacing a
+  // successful write as a failure.
+  const fixture = setupLinkedWorktree();
+  const fs = require('node:fs');
+  const originalReadFileSync = fs.readFileSync;
+  let intercepted = false;
+  try {
+    const claimId = 'claim-vanish-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+
+    fs.readFileSync = (...args: Parameters<typeof originalReadFileSync>) => {
+      const result = originalReadFileSync(...args);
+      if (!intercepted && args[0] === guardPath && typeof result === 'string') {
+        intercepted = true;
+        // Simulate the guard vanishing right after this release's own
+        // token-match read confirmed ownership, but before its own
+        // unlinkSync call (immediately below, in production code) runs.
+        fs.unlinkSync(guardPath);
+      }
+      return result;
+    };
+    require('node:module').syncBuiltinESMExports();
+
+    // Must not throw: a guard already gone by the time of the unlink is
+    // still a successful release, not a reportable failure.
+    assert.doesNotThrow(() => {
+      recordGeneratedClaimTokens(fixture.worktree, {
+        agentId: 'agent-a',
+        claimId,
+        nonce: 'n1',
+      });
+    });
+
+    assert.equal(
+      intercepted,
+      true,
+      'expected the readFileSync interception to fire during release',
+    );
+    // The record write itself completed normally, and the guard stays
+    // gone (nothing recreated it in this scenario).
+    const read = readGeneratedClaimTokens(fixture.worktree, claimId);
+    assert.equal(read.status, 'present');
+    assert.equal(existsSync(guardPath), false);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+    require('node:module').syncBuiltinESMExports();
+    teardown(fixture);
+  }
+});
+
+test('write-lock: a short (partial) writeSync while writing the guard token is retried until the full token is written (#2922 review round 12, Codex and Copilot)', () => {
+  // write(2) -- and thus writeSync -- may legitimately return fewer bytes
+  // than requested without throwing. Before this fix, a single
+  // writeSync(fd, token) call trusted it wrote the whole token; a
+  // truncated body would then never match the in-memory token again, so
+  // release's own comparison would treat the guard as "not mine" and
+  // leave it behind forever even though the write and critical() both
+  // otherwise succeeded. Simulates exactly that short return value and
+  // confirms the retry loop still lands the full token, so release still
+  // matches and cleans the guard up normally.
+  const fixture = setupLinkedWorktree();
+  const fs = require('node:fs');
+  const originalWriteSync = fs.writeSync;
+  let shortWriteInjected = false;
+  try {
+    const claimId = 'claim-short-write-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+
+    fs.writeSync = (...args: Parameters<typeof originalWriteSync>) => {
+      const [fd, data, offset, length] = args as unknown as [
+        number,
+        Buffer,
+        number,
+        number,
+      ];
+      if (!shortWriteInjected && Buffer.isBuffer(data) && length > 1) {
+        shortWriteInjected = true;
+        // Simulate write(2) legitimately writing only the first byte of
+        // this call's request.
+        return originalWriteSync(fd, data, offset, 1);
+      }
+      return originalWriteSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+
+    assert.doesNotThrow(() => {
+      recordGeneratedClaimTokens(fixture.worktree, {
+        agentId: 'agent-a',
+        claimId,
+        nonce: 'n1',
+      });
+    });
+
+    assert.equal(
+      shortWriteInjected,
+      true,
+      'expected the short-write interception to fire',
+    );
+    const read = readGeneratedClaimTokens(fixture.worktree, claimId);
+    assert.equal(read.status, 'present');
+    // The guard must be fully released, not left orphaned by a
+    // truncated token that no longer matches on release.
+    assert.equal(existsSync(guardPath), false);
+  } finally {
+    fs.writeSync = originalWriteSync;
+    require('node:module').syncBuiltinESMExports();
+    teardown(fixture);
+  }
+});
+
+test('write-lock: a closeSync failure whose own cleanup unlink also fails reports both, not just the descriptor-close error (#2922 review round 12, Codex)', () => {
+  // Mirrors the exact scenario the review described: closeSync(fd) fails
+  // during acquisition (for example, Windows still considers the guard
+  // open), and the cleanup unlinkSync that follows also fails. Before
+  // this fix, the nested catch discarded the cleanup failure and rethrew
+  // only the descriptor-close error, so a caller had no way to learn the
+  // guard was also left behind -- every later writer for this claim-id
+  // would then silently wait the full timeout and fail closed with
+  // nothing pointing at the actual orphaned-guard cause.
+  const fixture = setupLinkedWorktree();
+  const fs = require('node:fs');
+  const originalCloseSync = fs.closeSync;
+  const originalUnlinkSync = fs.unlinkSync;
+  let closeIntercepted = false;
+  let unlinkIntercepted = false;
+  try {
+    const claimId = 'claim-close-and-unlink-fail-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+
+    fs.closeSync = (...args: Parameters<typeof originalCloseSync>) => {
+      if (!closeIntercepted) {
+        closeIntercepted = true;
+        // Still actually close the real descriptor so the test fixture
+        // itself does not leak an open fd, then report failure the way
+        // a real close failure would.
+        originalCloseSync(...args);
+        throw new Error('simulated closeSync failure (e.g. EBUSY)');
+      }
+      return originalCloseSync(...args);
+    };
+    fs.unlinkSync = (...args: Parameters<typeof originalUnlinkSync>) => {
+      if (!unlinkIntercepted && args[0] === guardPath) {
+        unlinkIntercepted = true;
+        throw new Error('simulated cleanup unlinkSync failure');
+      }
+      return originalUnlinkSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+
+    assert.throws(
+      () => {
+        recordGeneratedClaimTokens(fixture.worktree, {
+          agentId: 'agent-a',
+          claimId,
+          nonce: 'n1',
+        });
+      },
+      (error: unknown) =>
+        error instanceof Error &&
+        error.message.includes('simulated closeSync failure') &&
+        error.message.includes('simulated cleanup unlinkSync failure') &&
+        error.message.includes(guardPath) &&
+        (error as Error & { cause?: unknown }).cause instanceof Error,
+      'expected a combined error naming both failures and the guard path',
+    );
+
+    assert.equal(closeIntercepted, true);
+    assert.equal(unlinkIntercepted, true);
+  } finally {
+    fs.closeSync = originalCloseSync;
+    fs.unlinkSync = originalUnlinkSync;
+    require('node:module').syncBuiltinESMExports();
+    // The simulated failures leave the guard behind for real (the
+    // interception only reported failure -- see above -- it never
+    // actually removed the file), so clean it up before the fixture's
+    // own teardown to avoid leaking it.
+    const recordPath = resolveGeneratedTokensPath(
+      fixture.worktree,
+      'claim-close-and-unlink-fail-2922',
+    );
+    rmSync(`${recordPath}.writelock`, { force: true });
     teardown(fixture);
   }
 });
