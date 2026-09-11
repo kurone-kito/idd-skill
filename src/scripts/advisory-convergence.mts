@@ -3072,9 +3072,21 @@ export function collectFromGitHub(
     // before it is ever eligible to become a lookup key; a malformed token
     // fails closed here exactly like every other invalid input in this
     // file, rather than reaching the API call at all.
+    // kurone-kito/idd-skill#2657 (Copilot review, PR #2895, round 13): also
+    // require `parsed.checkSelector` to EXACTLY equal
+    // `ADVISORY_CONVERGENCE_CHECK_SELECTOR` (never a glob/broader match --
+    // the genuine self-waiver job always posts this exact selector).
+    // Without this, a same-repository `pull_request`-triggered workflow
+    // (runs PR-controlled code, unlike the trusted `pull_request_target`
+    // verdict job) could post up to `MAX_AUTO_WAIVER_RUN_LOOKUPS` bot-
+    // authored markers with the reserved reason and current HEAD but an
+    // arbitrary `checkSelector`, consuming the entire bounded lookup
+    // budget before the genuine marker is ever considered -- a denial-of-
+    // service on this deliberately-bounded mechanism.
     if (
       parsed &&
       parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
+      parsed.checkSelector === ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
       parsed.runId &&
       parseCanonicalIntegerOrNull(parsed.runId) !== null &&
       !seenAutoWaiverRunIds.has(parsed.runId) &&

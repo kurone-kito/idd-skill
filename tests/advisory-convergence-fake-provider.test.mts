@@ -576,6 +576,93 @@ test('collectFromGitHub bounds the number of run-id lookups, keeping only the ea
   });
 });
 
+test('collectFromGitHub never counts a wrong-checkSelector marker toward the bounded run-id lookup budget, even with the reserved reason and current HEAD (Copilot review, PR #2895, round 13: budget-exhaustion DoS guard)', () => {
+  withHermeticCwd(() => {
+    // A same-repository `pull_request`-triggered workflow (runs
+    // PR-controlled code, unlike the trusted `pull_request_target` verdict
+    // job) could post bot-authored markers with the reserved reason and
+    // this PR's real HEAD, but an arbitrary `checkSelector` -- these can
+    // never satisfy autoWaiverValid regardless, but before this fix their
+    // distinct run ids still consumed the entire 20-slot lookup budget.
+    // Twenty such forged candidates (created earliest, so an unfiltered
+    // earliest-wins bound would keep exactly them) plus one genuine,
+    // later-created marker with the correct selector: the genuine run id
+    // must still be looked up.
+    const forgedCandidateCount = 20;
+    const forgedComments = Array.from(
+      { length: forgedCandidateCount },
+      (_, index) => ({
+        id: 200 + index,
+        body: renderExternalCheckWaiverComment({
+          agentId: 'github-actions-bot',
+          claimId: 'claim-abc',
+          headSha: HEAD_SHA,
+          checkSelector: 'some-other-check',
+          reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          expiresAt: '2099-01-01T00:00:00Z',
+          actor: 'github-actions[bot]',
+          runId: String(index + 1),
+        }),
+        createdAt: `2026-07-31T09:00:${String(index).padStart(2, '0')}Z`,
+        updatedAt: `2026-07-31T09:00:${String(index).padStart(2, '0')}Z`,
+        authorLogin: 'github-actions[bot]',
+      }),
+    );
+    const genuineRunId = '999';
+    const genuineComment = {
+      id: 999,
+      body: renderExternalCheckWaiverComment({
+        agentId: 'github-actions-bot',
+        claimId: 'claim-abc',
+        headSha: HEAD_SHA,
+        checkSelector: 'idd-advisory-convergence',
+        reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        expiresAt: '2099-01-01T00:00:00Z',
+        actor: 'github-actions[bot]',
+        runId: genuineRunId,
+      }),
+      // Created LAST -- under the pre-fix earliest-wins bound (with no
+      // selector prefilter), the twenty earlier forged candidates alone
+      // would already fill the 20-slot budget and crowd this one out.
+      createdAt: '2026-07-31T09:01:00Z',
+      updatedAt: '2026-07-31T09:01:00Z',
+      authorLogin: 'github-actions[bot]',
+    };
+    const workflowRuns: Record<string, unknown> = {
+      [`o/r/${genuineRunId}`]: {
+        path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+        head_sha: HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      },
+    };
+    // No `workflowRuns` fixture entries for the forged run ids ("1".."20")
+    // -- if any of them were still eligible for lookup, the fake adapter
+    // would throw on that lookup and this test would fail with that
+    // exception rather than the assertion below.
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [...forgedComments, genuineComment] },
+      workflowRuns,
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(Object.keys(inputs.autoWaiverRunLookups ?? {}), [
+      genuineRunId,
+    ]);
+    assert.deepEqual(inputs.autoWaiverRunLookups?.[genuineRunId], {
+      path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+      headSha: HEAD_SHA,
+      repositoryFullName: 'o/r',
+      event: 'pull_request_target',
+    });
+  });
+});
+
 test('collectFromGitHub rejects a run-id token that is not a canonical positive integer, never looking it up (Copilot review, PR #2895)', () => {
   withHermeticCwd(() => {
     // renderExternalCheckWaiverComment's own runId normalization only
