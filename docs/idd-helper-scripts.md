@@ -3539,9 +3539,15 @@ descendant such as the signer subprocess can outlive a `kill` scoped
 to only the git parent (reproduced 2026-09-11 in PR #2906 review) —
 then wait up to 30 seconds for the tree to exit; SIGTERM is
 asynchronous, so checking state immediately can race git's own unwind
-(still removing `index.lock`) or observe stale state. If the tree is
-still alive after that wait, send SIGKILL to whatever remains and wait
-once more, up to 30 seconds — `-9` skips git's signal handler, so a
+(still removing `index.lock`) or observe stale state. Walking
+descendants by PID is best-effort, not a guarantee — a child whose
+immediate parent already exited is reparented (commonly to init) and
+is no longer reachable by walking down from the git PID, so "the tree
+exited" can be wrong even after this wait; that gap is exactly what
+the lock-ownership check below exists to catch, not something this
+step alone can close. If the tree is still alive after that wait, send
+SIGKILL to whatever remains and wait once more, up to 30 seconds —
+`-9` skips git's signal handler, so a
 leftover `index.lock` can persist even once every process in the
 terminated tree has actually exited, and that alone does not prove
 the lock is this invocation's: a `git status` run by hand, a hook, or
@@ -3549,10 +3555,13 @@ another command could hold it instead, the same ambiguity the
 clone-scoped lock's own "no automatic stale-lock recovery" convention
 already treats as unsafe to guess past. Confirm no other process
 still has the lock file open — a hook or the signer subprocess itself
-could hold it, not only another `git` command — for example with
-`lsof` on the `--git-path index.lock` path, or, where it is not
-available, by confirming no process at all still has this worktree as
-its working directory — before removing it yourself
+could hold it, not only another `git` command, and not necessarily
+one running from this worktree's directory (an absolute-path or
+`git -C` invocation holds the same lock without it) — with `lsof` on
+the `--git-path index.lock` path; where `lsof` is not available,
+ownership cannot be reliably confirmed at all, so treat it as
+unconfirmed rather than substituting a weaker check — before removing
+it yourself
 (`rm -f "$(git rev-parse --git-path index.lock)"`, not a literal
 `.git/index.lock` path, the same linked-worktree rule the rebase-state
 check below uses); if ownership cannot be confirmed, leave the lock in
