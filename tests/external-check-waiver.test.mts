@@ -2319,6 +2319,139 @@ test('runExternalCheckWaiver: --auto-bootstrap still posts when no check has bee
   assert.deepEqual(report.blockingReasons, []);
 });
 
+test('planExternalCheckWaiver: --auto-bootstrap still blocks when the requested selector is not registered as waivable AND no live check exists yet (Codex review, PR #2895, round 13)', () => {
+  // The two tests just above prove --auto-bootstrap never blocks on live
+  // check ROLLUP TIMING (already passing, or not created yet). But
+  // combining "no live check yet" with a genuine POLICY misconfiguration
+  // (the selector was never registered under
+  // ciGate.externalChecks.waivable at all) must still block: the
+  // uncoveredChecks guard that would normally catch this only inspects
+  // checks already in matchedChecks, which is empty here for the same
+  // needs:-sequencing reason as the "no check created yet" test above --
+  // so without a policy-only check independent of any live check, this
+  // misconfiguration would silently pass through as canApply: true and
+  // post a marker no consumer can ever honor.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  input.pr.statusCheckRollup = [];
+  input.policy = normalizePolicyConfig({
+    ciGate: {
+      externalChecks: { waivable: [] },
+      externalCheckWaivers: {
+        mode: 'maintainer-authorized',
+        authorityPolicy: 'owners-and-maintainers-only',
+        maxValidity: 'PT24H',
+      },
+    },
+  });
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.deepEqual(report.blockingReasons, [
+    'requested selector idd-advisory-convergence is not configured as a ' +
+      'waivable external check (ciGate.externalChecks.waivable)',
+  ]);
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap exits 0 (graceful skip) when the requested selector is not registered as waivable AND no live check exists yet (Codex review, PR #2895, round 13)', async () => {
+  // Same misconfiguration as the planExternalCheckWaiver-level test above,
+  // exercised end to end: the graceful-skip set must also recognize this
+  // new blocking reason as adopter-configuration-only, matching the
+  // documented unconfigured-policy no-op rather than failing the job.
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-waiver-auto-bootstrap-unregistered-selector-'),
+  );
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github', 'idd', 'config.json'),
+      JSON.stringify({
+        ciGate: {
+          externalChecks: { waivable: [] },
+          externalCheckWaivers: {
+            mode: 'maintainer-authorized',
+            authorityPolicy: 'owners-and-maintainers-only',
+            maxValidity: 'PT24H',
+          },
+        },
+      }),
+    );
+    process.chdir(dir);
+
+    let postCalls = 0;
+    const { exitCode, report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          '--run-id',
+          '555',
+          '--auto-bootstrap',
+          '--apply',
+          '--yes',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+      },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        // No live check for the selector yet -- the same needs:-sequencing
+        // gap the round 12 tests above cover.
+        statusCheckRollup: [],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: () => [],
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T18:20:00Z'),
+      isTTY: false,
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'https://example.invalid/posted' };
+      },
+    });
+
+    assert.equal(
+      exitCode,
+      0,
+      'must exit 0, not throw, for a config-only block',
+    );
+    assert.equal(report?.applied, false);
+    assert.equal(postCalls, 0);
+    assert.ok(
+      report?.blockingReasons?.some((reason) =>
+        reason.includes('is not configured as a waivable external check'),
+      ),
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('runExternalCheckWaiver: --auto-bootstrap clamps its fixed expiry to a configured shorter maxValidity (Codex review, PR #2895)', async () => {
   // The fixed PT24H default is anchored on the HEAD commit timestamp
   // independent of `advisoryWait.convergenceDeadline` (see the test above),

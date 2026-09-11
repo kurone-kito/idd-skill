@@ -719,6 +719,37 @@ export function planExternalCheckWaiver(
       'one or more matched checks are not configured as waivable external checks',
     );
   }
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 13): the
+  // `uncoveredChecks` guard just above only ever inspects checks that are
+  // ALREADY in `matchedChecks` -- exactly the live-check-rollup state round
+  // 12 stopped gating `--auto-bootstrap` on above, since the whole point is
+  // that a genuine auto-bootstrap run has no matching check yet (`needs:`
+  // sequencing). That combination left a real gap: if the requested
+  // selector was never registered under `ciGate.externalChecks.waivable` at
+  // all (a policy misconfiguration, not a timing artifact) AND no live
+  // check exists yet either, NEITHER guard fires, `canApply` reports true,
+  // and a marker posts that `summarizeExternalCheckWaivers` can never treat
+  // as valid (always `notConfigured`) -- silently blocking the very PR this
+  // mechanism exists to unblock. Validate the requested selector against
+  // policy directly, independent of any live check, so this specific gap
+  // (no live check AND not registered) still blocks with an actionable
+  // reason; when a live check DOES exist, `uncoveredChecks` above already
+  // covers it.
+  if (
+    autoBootstrap &&
+    matchedChecks.length === 0 &&
+    !waivableSelectors.some((selector) =>
+      matchCheckSelector(
+        requestedSelector,
+        selector.selector,
+        selector.matchMode,
+      ),
+    )
+  ) {
+    blockingReasons.push(
+      `requested selector ${requestedSelector || '<empty>'} is not configured as a waivable external check (ciGate.externalChecks.waivable)`,
+    );
+  }
 
   // #2328: `idd-advisory-convergence` never treats a posted waiver as active
   // until its own precondition opens, so rendering one before then produces a
@@ -1133,9 +1164,19 @@ export async function runExternalCheckWaiver(
     // reason(s) -- rather than a failed job; any OTHER blocking reason (a
     // genuine problem unrelated to these known-benign shapes) still throws
     // exactly as before.
+    //
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 13): the
+    // "not configured as a waivable external check" reason above covers the
+    // SAME adopter-configuration-only shape as the "not configured as
+    // waivable external checks" reason already in this set, just for the
+    // no-live-check-yet path `planExternalCheckWaiver` gates separately (see
+    // that reason's own doc comment) -- an adopter who never registered the
+    // selector should get the same graceful no-op either way, not a failed
+    // job.
     const benignAutoBootstrapSkipReasons = new Set([
       'external-check waiver mode is disabled',
       'one or more matched checks are not configured as waivable external checks',
+      `requested selector ${report.requested.selector || '<empty>'} is not configured as a waivable external check (ciGate.externalChecks.waivable)`,
     ]);
     // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12): when
     // the policy isn't configured AND the PR also closes multiple actively
