@@ -699,7 +699,12 @@ test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PI
     let taskkillOptions: Record<string, unknown> | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       const child = spawn(...args);
-      if (args[0] === stayAliveCommand('idd-telemetry-hook-hang-win32')) {
+      // kurone-kito/idd-skill#2910: on win32 the primary spawn is the
+      // relay (`process.execPath` with `-e`), not the raw command string
+      // -- `process.execPath` is the one value unique to that call among
+      // everything else this spawnFn sees (the watchdog and `taskkill`
+      // calls both pass a string as args[0]).
+      if (args[0] === process.execPath) {
         primaryChild = child;
       }
       if (args[0] === 'taskkill') {
@@ -836,6 +841,14 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
     'idd-telemetry-hook-watchdog-real-kill',
     'setInterval(() => {}, 1000);\n',
   );
+  // kurone-kito/idd-skill#2910: on win32 the primary spawn is the relay
+  // (`process.execPath` with `-e`), so `hookPid` below is the relay's
+  // own pid, not the innermost stub script's pid -- exactly what
+  // killProcessGroup/killProcessTreeWindows operate on in production.
+  // The watchdog's `taskkill /PID <relay-pid> /T /F` still has to reach
+  // through the relay's own `cmd.exe` hop to the real stub script to
+  // terminate it, so checking whether the relay's pid is still alive
+  // below still proves the watchdog's tree-kill actually worked.
   let hookPid: number | undefined;
   try {
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
@@ -845,10 +858,7 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
         return fake;
       }
       const child = spawn(...args);
-      if (
-        typeof args[0] === 'string' &&
-        args[0].includes('idd-telemetry-hook-watchdog-real-kill')
-      ) {
+      if (args[0] === process.execPath) {
         hookPid = child.pid;
       }
       return child;
@@ -858,7 +868,7 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
       samplePayload(),
       { timeoutMs: 1_000, spawnFn },
     );
-    assert.ok(hookPid, 'expected the hung hook to have a real pid');
+    assert.ok(hookPid, 'expected the relay to have a real pid');
     // Give the watchdog's own 1-second sleep plus its taskkill call room
     // to complete -- generous but bounded, matching this file's other
     // real-timing assertions.
@@ -960,13 +970,13 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
     await quickPromise;
 
     // Half 2: a command that hangs and is killed on timeout.
+    // kurone-kito/idd-skill#2910: on win32 the primary spawn is the relay
+    // (`process.execPath` with `-e`), so `hangPid` below (used only for
+    // this test's own cleanup, not an assertion) is the relay's pid.
     let hangPid: number | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       const child = spawn(...args);
-      if (
-        typeof args[0] === 'string' &&
-        args[0].includes('idd-telemetry-hook-window-check-hang')
-      ) {
+      if (args[0] === process.execPath) {
         hangPid = child.pid;
       }
       return child;
@@ -1023,7 +1033,10 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
         throw new Error('synthetic taskkill spawn failure');
       }
       const child = spawn(...args);
-      if (args[0] === stayAliveCommand('idd-telemetry-hook-hang-win32-throw')) {
+      // kurone-kito/idd-skill#2910: see the win32 taskkill-on-timeout
+      // test above for why `process.execPath` (not the raw command
+      // string) now uniquely identifies the primary spawn on win32.
+      if (args[0] === process.execPath) {
         primaryChild = child;
       }
       return child;
@@ -1124,10 +1137,10 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
         return fakeKiller;
       }
       const child = spawn(...args);
-      if (
-        args[0] ===
-        stayAliveCommand('idd-telemetry-hook-hang-win32-async-throw')
-      ) {
+      // kurone-kito/idd-skill#2910: see the win32 taskkill-on-timeout
+      // test above for why `process.execPath` (not the raw command
+      // string) now uniquely identifies the primary spawn on win32.
+      if (args[0] === process.execPath) {
         primaryChild = child;
       }
       return child;
@@ -1557,20 +1570,15 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
   }
 });
 
-test('CLI --invoke waits for a large payload to fully reach the hook before exiting (#2685 review, CodeRabbit)', {
-  // win32 (kurone-kito/idd-skill#2910 follow-up): the production spawn
-  // shape this test exercises -- `shell: true` + `detached: true` + piped
-  // stdin -- never delivers ANY stdin payload to the target command on
-  // native Windows, not just large ones. Confirmed via a size sweep from
-  // 0B to 500KB: every non-empty size fails identically (the grandchild's
-  // stdin never emits 'data' or 'end'), and a native (non-Node) consumer
-  // piped through the same shape is equally affected, isolating the fault
-  // to `cmd.exe`'s own stdin relay under Win32's DETACHED_PROCESS creation
-  // flag rather than anything Node/libuv- or payload-size-specific. This
-  // is a pre-existing defect (predates PR #2897) with no known fix yet --
-  // see #2910 for the full reproduction matrix and candidate designs.
-  skip: process.platform === 'win32',
-}, async () => {
+test('CLI --invoke waits for a large payload to fully reach the hook before exiting (#2685 review, CodeRabbit)', async () => {
+  // win32 (kurone-kito/idd-skill#2910): this test used to be skipped on
+  // win32 -- the production spawn shape it exercises, `shell: true` +
+  // `detached: true` + piped stdin, never delivered ANY stdin payload to
+  // the target command on native Windows, at any size. #2910's fix
+  // (a `shell: false` `node.exe` relay hop on win32 only, see
+  // `WIN32_RELAY_SCRIPT`) resolves the underlying defect, so this test
+  // now runs for real on every platform, exercising the fixed,
+  // unmocked `invokeCritiqueTelemetryHook` spawn path end to end.
   // Regression fixture: `runInvoke` used to fire `invokeCritiqueTelemetryHook`
   // and call `process.exit(0)` right after, without waiting for the stdin
   // write to the hook's pipe to actually finish -- fine for a small
@@ -1630,6 +1638,63 @@ process.stdin.on('end', () => {
       received,
       expected,
       'expected the hook to receive the full, untruncated payload',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('CLI --invoke waits for a small payload to fully reach the hook before exiting on win32 (kurone-kito/idd-skill#2910)', {
+  // The large-payload test above already covers win32 for a payload well
+  // over the OS pipe buffer; #2910's own reproduction found the defect
+  // was size-independent (0B and every size up to 500KB+ all failed
+  // identically), so this test closes the acceptance criterion's other
+  // explicit half -- a small (well under 1KB), single-write payload --
+  // on real win32 specifically, where the relay hop actually matters.
+  // POSIX needs no separate small-payload win32 case since it never took
+  // the relay path to begin with.
+  skip: process.platform !== 'win32',
+}, async () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-small-payload-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-capture-stdin-small',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  try {
+    const policyPath = join(sandbox, 'config.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        critiqueLoop: {
+          telemetryHook: {
+            command: stayAliveCommand('idd-telemetry-hook-capture-stdin-small'),
+          },
+        },
+      }),
+    );
+    const expected = JSON.stringify(samplePayload());
+    const { stdout } = runCli(
+      ['--policy', policyPath, '--invoke'],
+      undefined,
+      expected,
+    );
+    assert.equal(stdout, '');
+
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      expected,
+      'expected the hook to receive the full, untruncated small payload',
     );
   } finally {
     restore();

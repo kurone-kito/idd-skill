@@ -89,6 +89,131 @@ const PAYLOAD_DELIVERY_TIMEOUT_MS = 1_000;
  */
 const WATCHDOG_ARMED_TIMEOUT_MS = 3_000;
 
+/**
+ * Environment-variable name used to hand the real target `command`
+ * string to the win32 relay script (see {@link WIN32_RELAY_SCRIPT})
+ * rather than passing it as an argv element. The relay is spawned with
+ * `shell: false`, so argv escaping is not actually a concern for Node's
+ * own spawn call -- the env-var route is chosen instead because it
+ * keeps the relay's own argv fixed (`['-e', WIN32_RELAY_SCRIPT]`)
+ * regardless of the configured command's own content, and avoids
+ * reasoning twice about how an arbitrary shell command string interacts
+ * with Node's Windows argv-quoting rules (the first time being
+ * `command`'s own later `shell: true` hop inside the relay itself).
+ */
+const WIN32_RELAY_COMMAND_ENV =
+  'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND';
+
+/**
+ * win32-only relay script (kurone-kito/idd-skill#2910), run via
+ * `spawnFn(process.execPath, ['-e', WIN32_RELAY_SCRIPT], {...})` in
+ * {@link invokeCritiqueTelemetryHook} below -- mirrors this file's
+ * existing precedent of inlining the watchdog's PowerShell script as a
+ * string constant (see {@link spawnWatchdogWindows}). A single `${...}`
+ * substitution (the env-var-name constant above) is all this template
+ * literal needs; the rest of the script body contains no literal `${`
+ * sequence of its own, so there is no collision risk with the outer
+ * `.mts` template-literal interpolation to guard against here, unlike
+ * the watchdog's longer, multiply-interpolated PowerShell one-liner.
+ *
+ * Root cause (verified live on native Windows 11): `cmd.exe` (the
+ * `shell: true` wrapper the primary spawn below uses on POSIX, and used
+ * unconditionally on win32 too before this fix) never relays a piped
+ * stdin payload to the further child it execs when `cmd.exe` itself
+ * runs under Win32's `DETACHED_PROCESS` creation flag (what
+ * `detached: true` maps to) -- confirmed at every payload size from 0B
+ * to 500KB+, and for a non-Node consumer piped the same way, isolating
+ * the fault to `cmd.exe`'s own stdin-relay plumbing under
+ * `DETACHED_PROCESS` rather than anything Node/libuv- or payload-size-
+ * specific. This is the same "`DETACHED_PROCESS` breaks a
+ * console-subsystem process's own I/O/message-pump initialization"
+ * pattern already root-caused for {@link spawnWatchdogWindows}'s own
+ * `powershell.exe` hop (kurone-kito/idd-skill#2892 / PR #2897),
+ * recurring for `cmd.exe`'s stdin relay instead of `powershell.exe`'s
+ * ConsoleHost startup.
+ *
+ * Fix shape: this script is itself spawned *directly* (`shell: false`)
+ * as a `node.exe` child under `detached: true` -- confirmed live to
+ * deliver a piped stdin payload correctly, at every size from 0B to
+ * 500KB+, once the caller waits for the stream to fully close before
+ * exiting (this file's `onPayloadDelivered` contract already does
+ * exactly that). It then reads its own stdin to completion, and only
+ * *then* re-spawns the real `command` through `shell: true` -- but,
+ * deliberately, NOT `detached` this time: this relay process itself is
+ * what now needs to survive the CLI's `process.exit()`, not the
+ * `cmd.exe` hop underneath it, so `cmd.exe` here is a normal
+ * (non-`DETACHED_PROCESS`) child and does not hit the stdin-relay
+ * defect above. The relay forwards the buffered payload to that
+ * child's stdin (with the relay-command env var above scrubbed from
+ * that inner spawn's own environment, so the configured `command`
+ * never sees an env var it didn't configure) and exits with the same
+ * code, preserving `invokeCritiqueTelemetryHook`'s existing
+ * `ok: code === 0` contract for its caller unchanged.
+ *
+ * `child.pid` (what this file's timeout/kill/watchdog logic already
+ * operates on generically -- see {@link killProcessGroup}) becomes
+ * this relay's pid on win32. Verified live: a
+ * `taskkill /PID <relay-pid> /T /F` (the existing
+ * {@link killProcessTreeWindows} call, unchanged) still reaches and
+ * kills the whole chain -- relay -> `cmd.exe` -> real target -- for
+ * both an already-settled chain and a genuinely hung target, so no
+ * change is needed to {@link killProcessGroup},
+ * {@link killProcessTreeWindows}, or either `spawnWatchdog*` function.
+ *
+ * Never throws from the relay's own perspective: a synchronous spawn
+ * failure or an async `'error'`/non-zero exit all resolve to
+ * `finish(1)` (a non-ok result for the caller), matching this file's
+ * "never throws" contract for the primary hook spawn. Like every other
+ * failure mode this file already absorbs silently (a bad command, a
+ * non-zero exit, a timeout), a defect in this script's own body would
+ * also fail silently in production (its `stdio` discards stderr) --
+ * an accepted extension of the existing contract, not a new risk;
+ * the same gap already exists for the inline PowerShell watchdog
+ * script below, with no unit-level syntax check for either. The tests
+ * this issue adds are the mitigation, run for real (not just
+ * argument-shape asserted) both locally, via the `platform: 'win32'`
+ * override tests below, and on native `windows-latest` CI.
+ */
+const WIN32_RELAY_SCRIPT = `
+const { spawn } = require('node:child_process');
+const command = process.env.${WIN32_RELAY_COMMAND_ENV};
+const chunks = [];
+let settled = false;
+const finish = (code) => {
+  if (settled) return;
+  settled = true;
+  process.exit(code);
+};
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('error', () => finish(1));
+process.stdin.on('end', () => {
+  const payload = Buffer.concat(chunks);
+  const env = { ...process.env };
+  delete env['${WIN32_RELAY_COMMAND_ENV}'];
+  let child;
+  try {
+    child = spawn(command, {
+      shell: true,
+      stdio: ['pipe', 'ignore', 'ignore'],
+      windowsHide: true,
+      env,
+    });
+  } catch {
+    finish(1);
+    return;
+  }
+  child.on('error', () => finish(1));
+  child.on('exit', (code) => finish(code === null ? 1 : code));
+  child.stdin.on('error', () => {});
+  try {
+    child.stdin.write(payload);
+    child.stdin.end();
+  } catch {
+    // 'error'/'exit' handlers above still settle.
+  }
+});
+`;
+
 if (import.meta.main) {
   runCli();
 }
@@ -243,15 +368,22 @@ export interface InvokeCritiqueTelemetryHookOptions {
   /** Injectable for tests; defaults to `node:child_process`'s `spawn`. */
   spawnFn?: typeof spawn;
   /**
-   * Called once (at most) as soon as `payload` has been fully handed off to
-   * the child's stdin -- on the stdin stream's `'close'` (fires once the
-   * underlying pipe is closed, whether that followed a clean `'finish'` or
-   * an error) or on a spawn/child `'error'` that means no delivery will
-   * ever happen. Lets a fire-and-forget caller (the CLI's `--invoke`, via
-   * `runInvoke` below) wait for the payload to actually reach the child's
-   * pipe without waiting for the hook *process* to settle (#2685 review,
+   * Called once (at most) as soon as `payload` has been fully **written
+   * to** the child's stdin -- on the stdin stream's `'close'` (fires once
+   * the underlying pipe is closed, whether that followed a clean
+   * `'finish'` or an error) or on a spawn/child `'error'` that means no
+   * delivery will ever happen. This signals the write side flushed into
+   * the OS pipe, not that the child has necessarily read the bytes yet.
+   * Lets a fire-and-forget caller (the CLI's `--invoke`, via `runInvoke`
+   * below) wait for the payload to actually reach the child's pipe
+   * without waiting for the hook *process* to settle (#2685 review,
    * CodeRabbit: `process.exit(0)` racing an in-flight stdin write could
-   * otherwise truncate the JSON the hook receives).
+   * otherwise truncate the JSON the hook receives). On win32
+   * (kurone-kito/idd-skill#2910), `child` is the relay process (see
+   * `WIN32_RELAY_SCRIPT`), so this signal specifically means the payload
+   * reached the *relay*, not yet the real target command one hop further
+   * down -- consistent with this option's existing "reached the child's
+   * pipe", not "the hook finished", contract.
    */
   onPayloadDelivered?: () => void;
   /**
@@ -384,48 +516,61 @@ export function invokeCritiqueTelemetryHook(
 
     let child: ChildProcess;
     try {
-      child = spawnFn(command, {
-        shell: true,
-        stdio: ['pipe', 'ignore', 'ignore'],
-        // `detached: true` (not `child.unref()`) only: this puts the child
-        // in its own session so it survives a signal sent to this
-        // process's group (e.g. the invoking shell's own job-control
-        // teardown), without unref'ing it. Deliberately NOT calling
-        // `child.unref()` here -- that would remove the *only* thing
-        // keeping the event loop alive long enough for the (also unref'd)
-        // timeout timer below to ever fire for a caller that legitimately
-        // awaits this promise (every test in this file does; a future
-        // non-CLI embedder might too) -- with both unref'd, nothing forces
-        // the loop to keep running, so the promise could stay pending
-        // forever once nothing else in the process needs the loop. The
-        // CLI's own `--invoke` mode (below) doesn't need this ref/unref
-        // distinction at all: it never awaits this promise, and
-        // `process.exit()` terminates unconditionally regardless of any
-        // pending handle's ref status.
-        detached: true,
-        // windowsHide (kurone-kito/idd-skill#2892; no-op on POSIX): maps to
-        // Win32's CREATE_NO_WINDOW creation flag *and* STARTUPINFO's
-        // wShowWindow=SW_HIDE. Verified against libuv's own win/process.c
-        // and Microsoft's Process Creation Flags documentation: the
-        // CREATE_NO_WINDOW half is a documented no-op here specifically --
-        // MSDN states it "is ignored if ... used with either
-        // CREATE_NEW_CONSOLE or DETACHED_PROCESS", and `detached: true`
-        // above is what sets DETACHED_PROCESS (required so this child
-        // survives `--invoke`'s `process.exit()`; cannot be dropped). The
-        // wShowWindow=SW_HIDE half is set unconditionally in STARTUPINFO
-        // regardless of DETACHED_PROCESS, and `cmd.exe` (the `shell: true`
-        // wrapper on win32) DOES propagate that show-state hint to the
-        // further child it execs for `command` -- verified live on native
-        // Windows 11 (kurone-kito/idd-skill#2892 review follow-up): a
-        // real, unmocked spawn through this exact path shows
-        // `MainWindowHandle == 0` (Get-Process) for both a quick-exiting
-        // and a hung-then-killed target, for the whole process tree this
-        // creates. The bound, reliable mitigation for a window that
-        // somehow still appears despite this is `killProcessGroup`'s
-        // win32 tree-kill below, which caps its lifetime at `timeoutMs`
-        // rather than preventing it outright.
-        windowsHide: true,
-      });
+      // `detached: true` (not `child.unref()`) only, on both branches
+      // below: this puts the child in its own session so it survives a
+      // signal sent to this process's group (e.g. the invoking shell's
+      // own job-control teardown), without unref'ing it. Deliberately
+      // NOT calling `child.unref()` here -- that would remove the *only*
+      // thing keeping the event loop alive long enough for the (also
+      // unref'd) timeout timer below to ever fire for a caller that
+      // legitimately awaits this promise (every test in this file does;
+      // a future non-CLI embedder might too) -- with both unref'd,
+      // nothing forces the loop to keep running, so the promise could
+      // stay pending forever once nothing else in the process needs the
+      // loop. The CLI's own `--invoke` mode (below) doesn't need this
+      // ref/unref distinction at all: it never awaits this promise, and
+      // `process.exit()` terminates unconditionally regardless of any
+      // pending handle's ref status.
+      //
+      // windowsHide (kurone-kito/idd-skill#2892; no-op on POSIX): maps to
+      // Win32's CREATE_NO_WINDOW creation flag *and* STARTUPINFO's
+      // wShowWindow=SW_HIDE. Verified against libuv's own win/process.c
+      // and Microsoft's Process Creation Flags documentation: the
+      // CREATE_NO_WINDOW half is a documented no-op specifically when
+      // combined with DETACHED_PROCESS (what `detached: true` sets) --
+      // MSDN states it "is ignored if ... used with either
+      // CREATE_NEW_CONSOLE or DETACHED_PROCESS". On the win32 branch
+      // below, that leaves `windowsHide` on the outer (detached) relay
+      // spawn a documented no-op for the same reason `spawnWatchdogWindows`'s
+      // own detached spawn is -- the relay is a plain `node.exe` process
+      // with no console to begin with under DETACHED_PROCESS, so there is
+      // nothing to hide there regardless. The relay's *own* inner spawn of
+      // the real `command` (see `WIN32_RELAY_SCRIPT` below) is NOT
+      // detached, so CREATE_NO_WINDOW is not overridden there and reliably
+      // suppresses that `cmd.exe` hop's own console window directly --
+      // verified live on native Windows 11 (kurone-kito/idd-skill#2892
+      // review follow-up, re-confirmed for kurone-kito/idd-skill#2910's
+      // relay shape): `MainWindowHandle == 0` (Get-Process) for both a
+      // quick-exiting and a hung-then-killed target, for the whole
+      // process tree this creates. The bound, reliable mitigation for a
+      // window that somehow still appears despite this is
+      // `killProcessGroup`'s win32 tree-kill below, which caps the whole
+      // chain's lifetime at `timeoutMs` rather than preventing it
+      // outright.
+      child =
+        platform === 'win32'
+          ? spawnFn(process.execPath, ['-e', WIN32_RELAY_SCRIPT], {
+              stdio: ['pipe', 'ignore', 'ignore'],
+              detached: true,
+              windowsHide: true,
+              env: { ...process.env, [WIN32_RELAY_COMMAND_ENV]: command },
+            })
+          : spawnFn(command, {
+              shell: true,
+              stdio: ['pipe', 'ignore', 'ignore'],
+              detached: true,
+              windowsHide: true,
+            });
     } catch {
       settle(false);
       notifyDelivered();
@@ -568,13 +713,20 @@ export function invokeCritiqueTelemetryHook(
  * POSIX process-group semantics). On win32, a negative pid is meaningless
  * to `process.kill` -- there is no POSIX-style process-group signal to
  * send -- so this instead delegates to {@link killProcessTreeWindows}, a
- * real process-*tree* kill via `taskkill /T` (kurone-kito/idd-skill#2892):
- * `shell: true` makes `child` the `cmd.exe` wrapper, and the actual
- * invoked command is a *further* child of that wrapper, never reachable by
- * terminating the wrapper alone -- which is exactly what this file's
- * previous Windows fallback (`child.kill('SIGKILL')` below) only ever did,
- * leaving that further child (and its own auto-allocated console window)
- * orphaned. Never throws.
+ * real process-*tree* kill via `taskkill /T` (kurone-kito/idd-skill#2892).
+ * On win32, `child` is the primary spawn's own top-level process:
+ * `cmd.exe` (the `shell: true` wrapper) directly, on POSIX and, before
+ * kurone-kito/idd-skill#2910, on win32 too; since that fix, the win32
+ * `child` is instead the relay process (see `WIN32_RELAY_SCRIPT`), which
+ * itself wraps `cmd.exe` as its own child one level further down. Either
+ * way, the actual invoked command sits one or more levels beneath `child`,
+ * never reachable by terminating `child` alone -- which is exactly what
+ * this file's previous Windows fallback (`child.kill('SIGKILL')` below)
+ * only ever did, leaving that further descendant (and its own
+ * auto-allocated console window) orphaned. `taskkill /T`'s tree-kill
+ * reaches the whole subtree regardless of its depth beneath `child`, so
+ * this function needs no depth-specific knowledge of which shape `child`
+ * is. Never throws.
  *
  * Also used by {@link cancelWatchdog} to disarm the watchdog's own process
  * (itself `detached: true` -- see {@link spawnWatchdogPosix} /
