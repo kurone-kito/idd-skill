@@ -1518,11 +1518,11 @@ const READER_WORKER_CODE = `
 // guard file already held.
 //
 // It signals \`ints[2]\` from a \`finally\` wrapped tightly around a
-// test-side \`fs.writeFileSync\` interception (the same
+// test-side \`fs.openSync\` interception (the same
 // propagate-via-\`syncBuiltinESMExports\` technique \`READER_WORKER_CODE\`
 // and the pre-existing race test above both use) of its own lock-acquire
-// attempt -- the \`.writelock\`-suffixed, \`{ flag: 'wx' }\` exclusive-create
-// call inside \`withGeneratedTokensWriteLock\`. This went through two
+// attempt -- the \`.writelock\`-suffixed, \`'wx'\`-flag exclusive-create call
+// inside \`withGeneratedTokensWriteLock\`. This went through several
 // rounds of #2922 review tightening, each closing a smaller residual gap
 // than the last:
 // 1. An earlier revision signaled right after \`import()\` resolved,
@@ -1531,38 +1531,47 @@ const READER_WORKER_CODE = `
 //    be preempted between that signal and its first actual lock-acquire
 //    attempt, so the main thread's race-window check could in principle
 //    start before the writer had attempted anything.
-// 2. The fix moved the signal inside the \`fs.writeFileSync\` interception,
-//    but *before* delegating to the real \`writeFileSync\` call -- closing
-//    most of the gap, but leaving one statement (the delegation itself)
-//    between signal and attempt. A further #2922 review round (Copilot,
-//    again suppressed) caught this remaining sliver.
-// 3. Signaling from a \`finally\` around the real \`writeFileSync\` call
-//    instead closes the gap completely: the signal now fires only once
-//    the attempt has genuinely completed (an \`EEXIST\` throw or a
-//    successful create), with no scheduling point of its own between the
-//    attempt and the signal.
+// 2. The fix moved the signal inside an \`fs.writeFileSync\` interception
+//    (production's exclusive-create call at the time), but *before*
+//    delegating to the real call -- closing most of the gap, but leaving
+//    one statement (the delegation itself) between signal and attempt. A
+//    further #2922 review round (Copilot, again suppressed) caught this
+//    remaining sliver.
+// 3. Signaling from a \`finally\` around the real call instead closed the
+//    gap completely: the signal fires only once the attempt has
+//    genuinely completed (an \`EEXIST\` throw or a successful create),
+//    with no scheduling point of its own between the attempt and the
+//    signal.
+// 4. A later #2922 review round (Copilot) flagged that the *production*
+//    exclusive-create itself was not ownership-safe on a non-\`EEXIST\`
+//    failure, so \`withGeneratedTokensWriteLock\` switched from a single
+//    \`fs.writeFileSync(path, ..., { flag: 'wx' })\` call to
+//    \`fs.openSync(path, 'wx')\` (own doc comment has the full rationale)
+//    -- this interception moved with it, from \`fs.writeFileSync\` to
+//    \`fs.openSync\`, to keep testing the exclusive-create call production
+//    code actually makes.
 const WRITER_WORKER_CODE = `
   const { workerData, parentPort } = require('node:worker_threads');
   const fs = require('node:fs');
   const { worktree, agentId, claimId, nonce, sab, cliUrl } = workerData;
   const ints = new Int32Array(sab);
-  const originalWriteFileSync = fs.writeFileSync;
-  fs.writeFileSync = (path, data, opts) => {
+  const originalOpenSync = fs.openSync;
+  fs.openSync = (path, flags, mode) => {
     const isGuardCreateAttempt =
-      typeof path === 'string' && path.endsWith('.writelock') && opts && opts.flag === 'wx';
+      typeof path === 'string' && path.endsWith('.writelock') && flags === 'wx';
     if (!isGuardCreateAttempt) {
-      return originalWriteFileSync(path, data, opts);
+      return originalOpenSync(path, flags, mode);
     }
     // Signal from a \`finally\` around the *actual* syscall attempt (#2922
     // review round 3, Copilot), not before it: signaling first still left
-    // a gap -- between the signal and \`originalWriteFileSync\` actually
+    // a gap -- between the signal and \`originalOpenSync\` actually
     // running -- where a preempted worker could let the main thread's
     // race-window check pass before the writer had touched the guard at
     // all. A \`finally\` here fires only once the attempt has genuinely
     // completed (EEXIST throw or successful create), with no scheduling
     // point of its own in between.
     try {
-      return originalWriteFileSync(path, data, opts);
+      return originalOpenSync(path, flags, mode);
     } finally {
       Atomics.store(ints, 2, 1);
       Atomics.notify(ints, 2);

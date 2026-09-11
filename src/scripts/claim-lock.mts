@@ -174,13 +174,16 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  closeSync,
   linkSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mts';
@@ -793,6 +796,22 @@ function resolveGeneratedTokensWriteLockPath(recordPath: string): string {
  * both make `O_CREAT | O_EXCL` (`CREATE_NEW`) atomic for existence alone,
  * with no partial-content window to close.
  *
+ * The create step uses {@link openSync}/{@link writeSync}/{@link closeSync}
+ * directly, rather than a single {@link writeFileSync} call, specifically to
+ * track ownership precisely (#2922 review round 5, Copilot): only a
+ * *successful* `openSync(path, 'wx')` proves this call exclusively created
+ * `lockPath` and is its sole owner from that instant on, so only a failure
+ * *after* that point (finishing the write, or closing the descriptor) is
+ * safe to clean up with an unlink. A failure *at* `openSync` itself (for
+ * example `EMFILE`/`ENFILE`, transient descriptor exhaustion) proves the
+ * opposite -- nothing was created by this call -- so nothing is touched;
+ * unlinking there could delete a different, possibly concurrent, holder's
+ * genuine guard, landing right back in the same ABA-race territory as the
+ * stale-guard reclaim already removed below. An earlier revision used the
+ * single-call `writeFileSync(path, ..., { flag: 'wx' })` form and cleaned
+ * up on *any* non-`EEXIST` error, which could not tell these two cases
+ * apart.
+ *
  * Fails closed after {@link GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS} rather
  * than self-reclaiming an aged guard (#2922 review -- Codex, Copilot, and
  * CodeRabbit each independently flagged a since-removed timeout-then-unlink
@@ -815,29 +834,14 @@ function withGeneratedTokensWriteLock<T>(
   const lockPath = resolveGeneratedTokensWriteLockPath(recordPath);
   const deadline = Date.now() + GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS;
   for (;;) {
+    let fd: number;
     try {
-      writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
-      break;
+      fd = openSync(lockPath, 'wx');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-        // Not a collision with an existing guard: `wx`'s own open+write+
-        // close sequence can still leave a file at `lockPath` even though
-        // this call itself threw (#2922 review round 4, Copilot) -- for
-        // example `ENOSPC` failing the write after `O_CREAT | O_EXCL`
-        // already made the (empty or partial) file visible. Unlike the
-        // stale-guard reclaim removed above, cleaning up here carries no
-        // ABA risk: excluding `EEXIST` means this exact call -- never a
-        // prior or concurrent holder -- is the only possible owner of
-        // whatever now exists at `lockPath`, so removing it is always
-        // safe. Best-effort: a cleanup failure must never mask the real
-        // error the caller needs to see (and is also the safe outcome
-        // when nothing was actually created, e.g. the directory itself
-        // was unwritable).
-        try {
-          unlinkSync(lockPath);
-        } catch {
-          // ignore
-        }
+        // `openSync` itself never returned a descriptor, so this call
+        // never became the guard's owner -- see the function-level doc
+        // comment above for why nothing here is safe to touch.
         throw error;
       }
       if (Date.now() >= deadline) {
@@ -849,7 +853,28 @@ function withGeneratedTokensWriteLock<T>(
         );
       }
       sleepSyncMs(GENERATED_TOKENS_WRITE_LOCK_RETRY_INTERVAL_MS);
+      continue;
     }
+    // `openSync` succeeded: this call exclusively created `lockPath` and
+    // is its sole, syscall-proven owner from this point on, so a failure
+    // finishing the write below is always safe to clean up.
+    try {
+      writeSync(fd, String(process.pid));
+      closeSync(fd);
+    } catch (error) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Already closed, or otherwise invalid -- ignore.
+      }
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // Best-effort: never mask the real error above.
+      }
+      throw error;
+    }
+    break;
   }
   let result: T;
   try {
