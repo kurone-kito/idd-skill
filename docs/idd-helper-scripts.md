@@ -3541,15 +3541,25 @@ then wait up to 30 seconds for the tree to exit; SIGTERM is
 asynchronous, so checking state immediately can race git's own unwind
 (still removing `index.lock`) or observe stale state. If the tree is
 still alive after that wait, send SIGKILL to whatever remains and wait
-once more, up to 30 seconds — `-9` skips git's signal handler, so once
-every process in the tree has actually exited, remove a leftover
-`index.lock` yourself
+once more, up to 30 seconds — `-9` skips git's signal handler, so a
+leftover `index.lock` can persist even once every process in the
+terminated tree has actually exited, and that alone does not prove
+the lock is this invocation's: a `git status` run by hand, a hook, or
+another command could hold it instead, the same ambiguity the
+clone-scoped lock's own "no automatic stale-lock recovery" convention
+already treats as unsafe to guess past. Confirm no other process
+still has the lock file open — a hook or the signer subprocess itself
+could hold it, not only another `git` command — for example with
+`lsof` on the `--git-path index.lock` path, or, where it is not
+available, by confirming no process at all still has this worktree as
+its working directory — before removing it yourself
 (`rm -f "$(git rev-parse --git-path index.lock)"`, not a literal
 `.git/index.lock` path, the same linked-worktree rule the rebase-state
-check below uses) before continuing. If the tree is still alive even
-after SIGKILL — for example, a process stuck in uninterruptible I/O —
-stop: post a hold note documenting the surviving PIDs rather than
-waiting any longer.
+check below uses); if ownership cannot be confirmed, leave the lock in
+place and stop with a hold note instead of forcing the removal. If the
+tree is still alive even after SIGKILL — for example, a process stuck
+in uninterruptible I/O — stop the same way: post a hold note
+documenting the surviving PIDs rather than waiting any longer.
 
 Either way — the tree exited on its own, or was terminated and
 confirmed clear above — verify what actually happened before falling
