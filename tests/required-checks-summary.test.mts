@@ -305,6 +305,83 @@ test('the trust opt-in does not mask a genuinely failing source-pinned required 
   assert.equal(r.sourcePinnedUnresolved, false);
 });
 
+// kurone-kito/idd-skill#2919 (round 5 -- advisor review ahead of PR #2921
+// round 5's push): `preDowngradeStatus` is the dedup+waiver-adjusted
+// classification computed via `classifyCiChecks`, not a naive per-check-
+// name reconstruction. Two same-name `build` instances here, deliberately
+// ordered OLDER-FAILURE-last in the raw array (index 0: newer SUCCESS,
+// index 1: older FAILURE) -- a `Map`-keyed-by-name reconstruction that
+// simply iterates the raw array and overwrites would end up with
+// `build -> FAILURE` (whichever instance is LAST wins), while the real
+// dedup-selected "latest" instance (by `completedAt`) is the SUCCESS.
+// `preDowngradeStatus` must reflect the CORRECT dedup-selected verdict
+// (`success`) regardless of raw array order.
+test('preDowngradeStatus reflects the dedup-selected latest instance, not whichever same-name instance is last in raw array order', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: {
+        required_status_checks: [
+          { context: 'lint', app_id: 1 },
+          { context: 'build' },
+        ],
+      },
+    },
+  ];
+  const r = summarizeRequiredChecks(
+    [
+      { name: 'lint', state: 'SUCCESS', completedAt: '2026-05-12T00:32:10Z' },
+      // Newer SUCCESS listed FIRST, older FAILURE listed SECOND -- the
+      // opposite of naive "last wins" order.
+      { name: 'build', state: 'SUCCESS', completedAt: '2026-05-12T00:10:00Z' },
+      { name: 'build', state: 'FAILURE', completedAt: '2026-05-12T00:05:00Z' },
+    ],
+    rules,
+  );
+  assert.equal(r.preDowngradeStatus, 'success');
+  assert.deepEqual(r.sourcePinnedRequiredCheckNames, ['lint']);
+  // The source-pinned downgrade still narrows the overall `status`, but
+  // ONLY because of the pinning -- not because `build` looked like a
+  // concurrent failure.
+  assert.equal(r.status, 'unknown');
+});
+
+// kurone-kito/idd-skill#2919 (round 5 -- advisor review): a genuinely
+// WAIVED required check (raw state FAILURE, but covered by a valid,
+// fresh waiver) must count as passing in `preDowngradeStatus` too -- a
+// naive per-check-name reconstruction that reads each check's RAW state
+// (ignoring `coveredByWaiver`) would incorrectly treat this as an
+// unexplained concurrent failure alongside the source-pinned `lint`.
+test('preDowngradeStatus treats a validly-waived required check as passing, not as an unexplained concurrent failure', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: {
+        required_status_checks: [
+          { context: 'lint', app_id: 1 },
+          { context: 'build' },
+        ],
+      },
+    },
+  ];
+  const r = summarizeRequiredChecks(
+    [
+      { name: 'lint', state: 'SUCCESS', completedAt: '2026-05-12T00:32:10Z' },
+      { name: 'build', state: 'FAILURE', completedAt: '2026-05-12T00:32:10Z' },
+    ],
+    rules,
+    {},
+    {
+      waivers: {
+        valid: [{ checkSelector: 'build', createdAt: '2026-05-01T00:00:00Z' }],
+      },
+    },
+  );
+  assert.equal(r.preDowngradeStatus, 'success');
+  assert.deepEqual(r.sourcePinnedRequiredCheckNames, ['lint']);
+  assert.equal(r.status, 'unknown');
+});
+
 // kurone-kito/idd-skill#2919 (round 3 -- Codex review on PR #2921, P2): a
 // required check that is BOTH source-pinned AND identity-unresolved must
 // still surface the identity-unresolved evidence even though the source-

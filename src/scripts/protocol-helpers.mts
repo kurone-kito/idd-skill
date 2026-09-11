@@ -6286,6 +6286,27 @@ export function summarizeRequiredChecks(
   );
 
   let status = 'unknown';
+  // kurone-kito/idd-skill#2919 (round 5 -- advisor review ahead of PR #2921
+  // round 5's push): `status` right after the missing/`classifyCiChecks`
+  // computation below, BEFORE either the source-pinned or identity-
+  // unresolved downgrade can narrow it. `classifyCiChecks` is called on
+  // `effectiveChecks` -- already waiver-adjusted (`coveredByWaiver` ->
+  // `SKIPPED`) and already deduped per producer via
+  // `selectLatestCheckPerName` -- so this is the EXACT answer to "is there
+  // a genuinely separate, concurrent CI failure reason (an unrelated
+  // required check that is missing/pending/failed/waived) independent of
+  // the two named downgrades below?" `computePreMergeReadinessBlockers`
+  // uses this instead of re-deriving per-check-name pass/fail evidence
+  // from the already-non-deduped, waiver-unaware `checks` array -- an
+  // earlier revision of that blocker-detail fix did exactly that, and
+  // could spuriously append the generic detail for a required check whose
+  // OLDER same-name instance happened to sort after its own already-
+  // superseding SUCCESS in raw array order, or for a genuinely WAIVED
+  // required check (raw state FAILURE, `coveredByWaiver: true`) -- both
+  // cases `classifyCiChecks`'s own dedup+waiver-adjustment already
+  // correctly resolves, so reusing its verdict here is exact by
+  // construction rather than a second, drift-prone reimplementation.
+  let preDowngradeStatus = 'unknown';
   // #1745: discarded non-passing same-name siblings among the REQUIRED
   // checks, e.g. a CANCELLED idd-advisory-convergence instance sitting
   // alongside the SUCCESS instance selectLatestCheckPerName picked as
@@ -6336,6 +6357,7 @@ export function summarizeRequiredChecks(
       missingRequiredCheckNames.length > 0
         ? 'missing'
         : ciClassification.status;
+    preDowngradeStatus = status;
     // #1689: the `trustSourcePinnedRequiredChecks` opt-in only widens the
     // named/resolved case -- an unresolved pinned source (no check name to
     // correlate with a live run at all) always still forces the downgrade,
@@ -6440,6 +6462,15 @@ export function summarizeRequiredChecks(
     // comment above -- empty unless the identity-unresolved downgrade
     // actually fired for this call.
     identityUnresolvedRequiredCheckNames,
+    // kurone-kito/idd-skill#2919 (round 5): see the field's own inline
+    // comment above -- the dedup+waiver-adjusted classification `status`
+    // BEFORE the source-pinned/identity-unresolved downgrades could narrow
+    // it. Lets a caller determine, exactly, whether a genuinely separate
+    // concurrent CI cause exists alongside those two named downgrades,
+    // without re-deriving per-check pass/fail evidence itself. `'unknown'`
+    // when no required checks are configured (mirrors `status`'s own
+    // initial default in that case).
+    preDowngradeStatus,
     checks: normalizedChecks.map((check) => ({
       name: check.name,
       state: check.state,
@@ -6492,6 +6523,16 @@ function resolvePresentRunConclusion(
       identityUnresolvedCheckNames.has(check.name),
     )
   ) {
+    // `'some-failing'`, not `'pending'`: the `#2714` comment above maps a
+    // lone CANCELLED-with-no-successor instance to `'pending'` because
+    // that shape is a plausible rerun-in-progress candidate that can
+    // reasonably resolve on its own without operator action. An
+    // unresolved producer identity has no such self-resolving path -- a
+    // malformed `detailsUrl` or a genuine decoy workflow file will not
+    // become parseable or stop being a decoy on a later poll -- so this
+    // follows the conservative `'some-failing'` default every other
+    // genuinely unrecognized-state `unknown` cause already gets, not the
+    // narrower CANCELLED carve-out.
     return 'some-failing';
   }
   const effective = normalizedChecks.map((check) =>
@@ -7755,50 +7796,41 @@ export function computePreMergeReadinessBlockers(
             identityUnresolvedNames.length > 1 ? 'have' : 'has'
           } an unresolved workflow-file producer identity (a transient lookup failure, a malformed run reference, or too many distinct reruns to verify this pass); cannot rule out a same-display-name decoy workflow, so this required check cannot be trusted as passing until it resolves cleanly on a later pass`
         : '';
-    // kurone-kito/idd-skill#2919 (round 4 -- Codex review on PR #2921, P2):
-    // the specific pinned/identity-unresolved causes above must never
-    // SILENTLY suppress a genuinely separate, concurrent CI failure
-    // reason for a DIFFERENT required check -- e.g. one required check is
-    // source-pinned/identity-unresolved while an UNRELATED required check
-    // is actually FAILING/PENDING/MISSING. Without this, an operator
-    // reading only "check X is identity-unresolved" would retry expecting
-    // that alone to unblock the gate, when a clean retry would still be
-    // blocked by the separate failure. Determine whether every required
-    // check OUTSIDE the named causes is itself present and pass-
-    // equivalent; if not, append the generic status detail alongside the
-    // specific cause(s) instead of letting the `||` fully replace it.
+    // kurone-kito/idd-skill#2919 (round 4 -- Codex review on PR #2921, P2;
+    // round 5 -- advisor review, replacing an earlier per-check-name
+    // reconstruction here): the specific pinned/identity-unresolved causes
+    // above must never SILENTLY suppress a genuinely separate, concurrent
+    // CI failure reason for a DIFFERENT required check -- e.g. one
+    // required check is source-pinned/identity-unresolved while an
+    // UNRELATED required check is actually FAILING/PENDING/MISSING.
+    // Without this, an operator reading only "check X is identity-
+    // unresolved" would retry expecting that alone to unblock the gate,
+    // when a clean retry would still be blocked by the separate failure.
+    //
+    // Uses `ci.preDowngradeStatus` -- `summarizeRequiredChecks`'s own
+    // dedup+waiver-adjusted classification BEFORE either downgrade could
+    // narrow it -- rather than re-deriving per-check pass/fail evidence
+    // from `ci.checks` here. An earlier revision built a `Map` keyed by
+    // check name from the RAW (non-deduped) `ci.checks` array and read
+    // each entry's raw `state`, which is wrong two ways: `Map` keeps
+    // whichever same-name instance happens to appear LAST in rollup
+    // order, not the dedup-selected latest one (a superseded FAILURE
+    // sorted after its own later SUCCESS would spuriously read as the
+    // "current" state), and it ignored `coveredByWaiver` entirely (a
+    // genuinely WAIVED required check, raw state FAILURE, would
+    // spuriously count as an unexplained concurrent cause). Reusing
+    // `preDowngradeStatus` is exact by construction: `success` there
+    // means every OTHER required check was already fully resolved as
+    // passing (through the SAME dedup/waiver logic `classifyCiChecks`
+    // always applies) before either downgrade ran, so any non-success
+    // `status` can only be attributed to the named causes below.
     // Every PRE-#2919 caller (no pinned/identity cause at all) and every
-    // pinned-ONLY caller (that downgrade only ever fires on an otherwise-
-    // clean 'success' classification, so no concurrent cause can exist)
-    // sees byte-identical detail text to before -- this only widens the
-    // detail for the new combined shape.
-    const explainedRequiredCheckNames = new Set([
-      ...sourcePinnedNames,
-      ...identityUnresolvedNames,
-    ]);
-    const allRequiredCheckNames = Array.isArray(ci.requiredCheckNames)
-      ? (ci.requiredCheckNames as unknown[]).map((name) => String(name ?? ''))
-      : [];
-    const missingRequiredCheckNamesForDetail = Array.isArray(
-      ci.missingRequiredCheckNames,
-    )
-      ? (ci.missingRequiredCheckNames as unknown[]).map((name) =>
-          String(name ?? ''),
-        )
-      : [];
-    const requiredCheckStateByName = new Map(
-      (Array.isArray(ci.checks) ? (ci.checks as Record<string, unknown>[]) : [])
-        .filter((check) => check.required === true)
-        .map((check) => [String(check.name ?? ''), String(check.state ?? '')]),
-    );
-    const hasUnexplainedConcurrentCause = allRequiredCheckNames.some((name) => {
-      if (explainedRequiredCheckNames.has(name)) return false;
-      if (missingRequiredCheckNamesForDetail.includes(name)) return true;
-      const state = requiredCheckStateByName.get(name) ?? '';
-      return !['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
-        state,
-      );
-    });
+    // pinned-ONLY caller (that downgrade only ever fires when
+    // `preDowngradeStatus` was already `'success'`, so no concurrent
+    // cause can exist) sees byte-identical detail text to before -- this
+    // only widens the detail for the new combined shape.
+    const hasUnexplainedConcurrentCause =
+      String(ci.preDowngradeStatus ?? 'unknown') !== 'success';
     // #1377: name the masked-403-as-404 cause explicitly when that is why the
     // gate is not all-passing, matching idd-ci.instructions.md's wording,
     // instead of the generic status/noRequiredChecksConfigured detail below.

@@ -272,6 +272,7 @@ test('required check summaries block when no merge-gate policy evidence exists',
     sourcePinnedRequiredCheckNames: [],
     sourcePinnedUnresolved: false,
     identityUnresolvedRequiredCheckNames: [],
+    preDowngradeStatus: 'unknown',
     checks: [],
   });
 });
@@ -8605,6 +8606,64 @@ test('buildPreMergeReadinessSummary names BOTH the identity-unresolved cause and
   );
   assert.match(ciBlocker?.detail ?? '', /CI is not all-passing/);
   assert.equal(summary.ready, false);
+});
+
+// kurone-kito/idd-skill#2919 (round 5 -- advisor review): the NEGATIVE
+// case of the test above -- when the OTHER required check genuinely
+// PASSES (its dedup-selected latest instance is SUCCESS, even though an
+// older same-name FAILURE instance is listed AFTER it in the raw checks
+// array), the blocker detail must name ONLY the identity-unresolved
+// cause, never spuriously append the generic "CI is not all-passing"
+// suffix. Guards the exact bug a naive per-check-name Map reconstruction
+// (keyed by name, "last one in array order wins") would introduce.
+test('buildPreMergeReadinessSummary does not spuriously append a generic detail when the only other required check is passing despite an out-of-order older FAILURE sibling', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = [
+    ...(fixture.input.branchRules as Record<string, unknown>[]).map((rule) =>
+      rule.type === 'required_status_checks'
+        ? {
+            type: 'required_status_checks',
+            parameters: {
+              required_status_checks: [
+                { context: 'lint' },
+                { context: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR },
+              ],
+            },
+          }
+        : rule,
+    ),
+  ];
+  const checks = [
+    // Newer SUCCESS listed FIRST, older FAILURE listed SECOND -- the
+    // dedup-selected "latest" instance is the SUCCESS.
+    { name: 'lint', state: 'SUCCESS', completedAt: '2026-05-11T23:59:00Z' },
+    { name: 'lint', state: 'FAILURE', completedAt: '2026-05-11T23:50:00Z' },
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:57:00Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+  ];
+
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules, checks },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      advisoryConvergenceIdentityUnresolved: true,
+    },
+  );
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  const ciBlocker = (
+    summary.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.match(
+    ciBlocker?.detail ?? '',
+    /unresolved workflow-file producer identity/,
+  );
+  assert.doesNotMatch(ciBlocker?.detail ?? '', /CI is not all-passing/);
 });
 
 // #1380: a masked-403-as-404 on a codeowner-requiring ruleset's *detail*

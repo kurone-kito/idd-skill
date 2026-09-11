@@ -829,6 +829,7 @@
         "sourcePinnedRequiredCheckNames",
         "sourcePinnedUnresolved",
         "identityUnresolvedRequiredCheckNames",
+        "preDowngradeStatus",
         "checks"
       ],
       "additionalProperties": false,
@@ -964,6 +965,17 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "preDowngradeStatus": {
+          "type": "string",
+          "description": "kurone-kito/idd-skill#2919 (round 5): the dedup+waiver-adjusted classification `status` BEFORE the source-pinned/identity-unresolved downgrades above could narrow it -- `success` here means every required check was already fully resolved as passing through `classifyCiChecks`'s own dedup/waiver logic, so any non-success final `status` can only be attributed to those two named downgrades. Lets a caller (`computePreMergeReadinessBlockers`) determine, exactly, whether a genuinely separate concurrent CI cause exists alongside a pinned/identity-unresolved cause, without re-deriving per-check pass/fail evidence itself. `unknown` when no required checks are configured, mirroring `status`'s own initial default in that case.",
+          "enum": [
+            "missing",
+            "success",
+            "pending",
+            "failed",
+            "unknown"
+          ]
         },
         "checks": {
           "type": "array",
