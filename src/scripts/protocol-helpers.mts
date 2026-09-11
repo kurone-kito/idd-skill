@@ -6341,14 +6341,27 @@ export function summarizeRequiredChecks(
       sourcePinnedUnresolved =
         branchReviewRequirements.requiredCheckSourcePinnedUnresolved;
     }
-    // kurone-kito/idd-skill#2919 (round 2): a SEPARATE downgrade from the
-    // source-pinned one above -- both can fire independently (a check can
-    // be both source-pinned AND identity-unresolved), so this checks
-    // `status === 'success'` fresh rather than `else if`-chaining off the
-    // block above. Only ever narrows an otherwise-`'success'` verdict,
-    // exactly like the source-pinned downgrade; never touches a status
-    // that is already `'missing'`/`'pending'`/`'failed'`/`'unknown'`.
-    if (status === 'success' && Array.isArray(identityUnresolvedCheckNames)) {
+    // kurone-kito/idd-skill#2919 (round 3 -- Codex review on PR #2921, P2):
+    // the affected NAMES are computed from `requiredCheckNames` -- the
+    // original classification -- INDEPENDENTLY of whatever `status`
+    // already became from the source-pinned downgrade above, not gated
+    // on `status === 'success'`. An earlier revision gated this whole
+    // block on that condition, so a check that was BOTH source-pinned AND
+    // identity-unresolved silently lost the identity-unresolved evidence
+    // the moment the source-pinned branch above had already downgraded
+    // `status` to `'unknown'` first -- the blocker detail then named only
+    // the source-pinned cause, and once an operator opted into
+    // `ciGate.trustSourcePinnedRequiredChecks` to clear THAT cause, a
+    // later pass would stay blocked with no evidence explaining why.
+    // Mirrors `discardedNonPassingRequiredChecks`'s own "computed
+    // unconditionally ... evidence worth surfacing even when the overall
+    // status already reads non-success for an unrelated cause" precedent
+    // above. The numeric `status` field itself is still only ever
+    // NARROWED when it is currently `'success'` -- this never overrides a
+    // status that is already `'missing'`/`'pending'`/`'failed'`, and
+    // reassigning an already-`'unknown'` status to `'unknown'` again is a
+    // harmless no-op.
+    if (Array.isArray(identityUnresolvedCheckNames)) {
       const identityUnresolvedSet = new Set(
         identityUnresolvedCheckNames.map((name) => String(name ?? '').trim()),
       );
@@ -6356,8 +6369,10 @@ export function summarizeRequiredChecks(
         identityUnresolvedSet.has(name),
       );
       if (affected.length > 0) {
-        status = 'unknown';
         identityUnresolvedRequiredCheckNames = affected;
+        if (status === 'success') {
+          status = 'unknown';
+        }
       }
     }
     // #1753: computed from the RAW matchedRequiredChecks -- deliberately

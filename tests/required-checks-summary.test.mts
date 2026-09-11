@@ -259,6 +259,55 @@ test('the trust opt-in does not mask a genuinely failing source-pinned required 
   assert.equal(r.sourcePinnedUnresolved, false);
 });
 
+// kurone-kito/idd-skill#2919 (round 3 -- Codex review on PR #2921, P2): a
+// required check that is BOTH source-pinned AND identity-unresolved must
+// still surface the identity-unresolved evidence even though the source-
+// pinned downgrade already changed `status` away from `'success'` first.
+// An earlier revision computed `identityUnresolvedRequiredCheckNames` only
+// when `status === 'success'` at that point, so this exact shape silently
+// lost the identity-unresolved evidence -- the blocker detail would then
+// name only the source-pinned cause, and once an operator opted into
+// `ciGate.trustSourcePinnedRequiredChecks` to clear THAT cause, a later
+// pass would stay blocked with no evidence explaining the real remaining
+// reason.
+test('a required check that is both source-pinned AND identity-unresolved reports both causes, even after the source-pinned downgrade already changed status', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: {
+        required_status_checks: [{ context: 'lint', app_id: 1 }],
+      },
+    },
+  ];
+  const r = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    rules,
+    {},
+    { identityUnresolvedCheckNames: ['lint'] },
+  );
+  assert.equal(r.status, 'unknown');
+  assert.equal(r.requiredChecksPassing, false);
+  assert.deepEqual(r.sourcePinnedRequiredCheckNames, ['lint']);
+  assert.deepEqual(r.identityUnresolvedRequiredCheckNames, ['lint']);
+
+  // Once the operator opts into trusting the pinned source, the
+  // source-pinned cause clears -- but the SEPARATE identity-unresolved
+  // cause must still keep the gate blocked and still be attributable.
+  const trusted = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    rules,
+    {},
+    {
+      trustSourcePinnedRequiredChecks: true,
+      identityUnresolvedCheckNames: ['lint'],
+    },
+  );
+  assert.equal(trusted.status, 'unknown');
+  assert.equal(trusted.requiredChecksPassing, false);
+  assert.deepEqual(trusted.sourcePinnedRequiredCheckNames, []);
+  assert.deepEqual(trusted.identityUnresolvedRequiredCheckNames, ['lint']);
+});
+
 // #1377: a masked-403-as-404 on the branch-protection or ruleset reads must
 // not fall through to "no required checks configured" just because the
 // (fallback-empty) reads found nothing — that is indistinguishable from a
