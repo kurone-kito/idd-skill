@@ -3267,6 +3267,55 @@ test('self-referential-bootstrap-auto: an indeterminate idd-claimed scope (stale
   assert.equal(verdict.ready, false);
 });
 
+test('self-referential-bootstrap-auto: ambiguous closing-issue claim candidates reject an otherwise fully valid none-bound marker under the default all-prs scope (Codex review, PR #2895, round 16)', () => {
+  // The round 10 test above closes this same "none-bound marker
+  // validates with no human judgment involved" gap, but only for
+  // `convergenceScope: 'idd-claimed'` -- `scopeIndeterminate` (which
+  // that fix gates on) is never non-trivially true under `all-prs`
+  // scope, this repository's own configured default, so it provided
+  // NO protection there. `claimCandidateAmbiguous` is a SEPARATE
+  // signal from the PR's own claim history (which is empty/unclaimed
+  // here, same as any ordinary non-IDD-claimed PR under `all-prs`
+  // scope) -- it reflects the PR's CLOSING ISSUES each exposing their
+  // own active claim, exactly the shape `selectLinkedIssueCandidate`
+  // (external-check-waiver.mts) refuses to auto-post ANY marker for.
+  // Without gating on it directly here too, a forged `claim-id:none`
+  // marker (citing a legitimate, concurrently running
+  // `pull_request_target` run -- the run-id check proves only the
+  // cited run's own metadata, not that it posted this comment) could
+  // validate on exactly the PR the posting helper itself would refuse.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      // No review at all -- isolates `ready` to the waiver path alone,
+      // same as the OTHER `all-prs`-scope autoWaiverValid tests in this
+      // file (unlike the round 10 `idd-claimed` test above, where
+      // `scopeIndeterminate` halts convergence regardless of review
+      // state through a different mechanism).
+      reviews: [],
+      claimEvents: [], // this PR's own branch is unclaimed -- the normal, common `all-prs` shape
+      claimCandidateAmbiguous: true, // its closing issues expose multiple active claims
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ claimId: 'none' }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      // Deliberately NOT 'idd-claimed' -- defaults to 'all-prs'.
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
 test('self-referential-bootstrap-auto: a PR that does not touch the trigger-file allowlist is rejected even with an otherwise fully valid marker and run (independent allowlist verification, Codex review, PR #2895)', () => {
   // The four trust conditions on the cited run alone only prove the marker
   // cites SOME genuine `pull_request_target`-triggered run of the correct

@@ -248,7 +248,35 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * "maintainer-authorized"` backstop (AGENTS.md's "Advisory-convergence
  * waiver backstop" bullet) is the documented human off-ramp for
  * precisely "the autonomous advisory-convergence loop cannot converge
- * on its own" -- not a gap this constant needs to also close. */
+ * on its own" -- not a gap this constant needs to also close.
+ *
+ * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 16): a
+ * SEPARATE, narrower residual gap in {@link verifySelfReferentialBootstrapWaiverRun}
+ * itself, tracked rather than closed here -- its `run-id:` check proves
+ * only that the CITED run has the right path/head-sha/repository/event,
+ * never that the cited run is the one that actually POSTED this
+ * specific comment. A same-repository `pull_request`-triggered
+ * workflow with `issues: write` (the same actor this file's own
+ * comments already assume can post arbitrary `github-actions[bot]`-
+ * authored comments) can discover a legitimate, concurrently running
+ * `pull_request_target` run of THIS workflow for its own PR and cite
+ * that run's id in a forged marker -- the run-id is bearer evidence,
+ * not provenance-bound. This does NOT widen what such a forgery can
+ * actually waive, though: `touchesSelfReferentialAllowlist` is fetched
+ * independently from the PR's own live file-changes API, never from
+ * the comment, so a forged marker can only cause a PR that genuinely
+ * touches the allowlist to get its (otherwise-legitimate) waiver via
+ * forgery instead of via the real job -- the allowlist check remains
+ * the load-bearing security boundary. The one CONCRETE exploit this
+ * bearer-evidence gap enabled -- a forged `claim-id:none` marker
+ * validating on a PR whose closing issues expose ambiguous, multiple
+ * active claims, a state the posting helper itself always refuses to
+ * post ANY marker for -- is closed directly in `autoWaiverValid`'s own
+ * `claimCandidateAmbiguous` check below. Full provenance binding
+ * (proving WHICH run posted a given comment, not just that some
+ * qualifying run exists) needs new I/O this pure verdict function does
+ * not have (the run's own job/log data) and is out of scope for a
+ * live-review patch; tracked in a follow-up issue. */
 export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   'src/scripts/advisory-convergence.mts',
   'src/scripts/advisory-wait-state.mts',
@@ -1269,9 +1297,28 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // `scopeNotApplicable` alone -- a human maintainer's explicit judgment
   // call, not a mechanical one). `all-prs` scope (the default) never
   // produces `scopeIndeterminate` at all, so this is a no-op there.
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 16): the
+  // round 10 guard just above only ever fires when `scopeIndeterminate`
+  // can be non-trivially true, which per its own doc comment never
+  // happens under `all-prs` scope (this repository's own configured
+  // default) -- so it provides NO protection there against the exact
+  // same "multiple linked issues expose active claims" ambiguity
+  // `selectLinkedIssueCandidate` (`external-check-waiver.mts`) refuses
+  // to auto-post a marker for in the first place. Without this, a
+  // forged `claim-id:none` marker citing a legitimate, concurrently
+  // running `pull_request_target` run's id (the run-id check verifies
+  // only that CITED run's own metadata, not that it actually posted
+  // this comment -- a separate, tracked gap, see the module header's
+  // dead-zone note) could validate on such a PR even though the
+  // legitimate posting helper would have refused to post ANY marker
+  // for it. `claimCandidateAmbiguous` is the SAME signal the producer
+  // uses (`classifyClaimCandidateAmbiguity`), independent of
+  // `convergenceScope`, so gate on it directly here too rather than
+  // only through the scope-specific check above.
   const autoWaiverValid =
     !scopeNotApplicable &&
     !(scopeIndeterminate && !claim.activeClaimPresent) &&
+    !claimCandidateAmbiguous &&
     touchesSelfReferentialAllowlist &&
     autoWaiverEvidence.valid.some(
       (entry) =>
