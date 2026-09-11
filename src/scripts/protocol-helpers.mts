@@ -2086,7 +2086,12 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
 // Opening: an `` `@{login}` `` mention immediately followed by a
 // confirmation/dismissal verb -- the consistent lead-in across every
 // sampled reply (e.g. "`@kurone-kito`, confirmed. ...",
-// "`@kurone-kito` Thanks for the fix. ...", "`@kurone-kito`, agreed. ...").
+// "`@kurone-kito` Thanks for the fix. ...", "`@kurone-kito`, agreed. ...",
+// "`@kurone-kito`, acknowledged. ..." -- kurone-kito/idd-skill#2657, PR
+// #2895 round 17: a freshly observed CodeRabbit reply used this verb,
+// which the original 18-sample derivation never happened to include;
+// added as one more member of the SAME already-covered class (a
+// confirmation/dismissal opener), not a new open-ended category).
 // An optional leading `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` is tolerated
 // before the mention (Copilot review, #2649): CodeRabbit's other marker-led
 // reply form (`classifyRegularBotComment`'s stale review-trigger check
@@ -2095,7 +2100,7 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
 // mention.
 const CODERABBIT_ACK_OPENING_RE = new RegExp(
   `^(?:${escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)}\\s*)?` +
-    '`@[\\w.-]+`[,:]?\\s+(?:thanks?(?:\\s+you)?|confirmed|agreed)\\b',
+    '`@[\\w.-]+`[,:]?\\s+(?:thanks?(?:\\s+you)?|confirmed|agreed|acknowledged)\\b',
   'i',
 );
 
