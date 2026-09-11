@@ -136,35 +136,35 @@ form. **Commit, re-run pre-push-validate, and push that edit before
 creating the PR (D3)** -- merging with the branch still dispatch-only
 would never enable the job.
 
-GitHub only allows a `workflow_dispatch` run once that trigger is
-registered on the default branch: `gh workflow run` cannot target a
-file, or a newly added `workflow_dispatch` entry, that exists only on
-the pushed branch. A first-time job needs one minimal bootstrap merge
--- the trigger wiring alone, job inert or guarded off -- before it can
-be dispatched against a feature branch at all; this pattern applies
-most directly once that scaffolding already exists on the default
-branch.
+GitHub only allows a `workflow_dispatch` run once registered on the
+default branch: `gh workflow run` cannot target a file or trigger that
+exists only on the pushed branch. A first-time job needs a minimal
+bootstrap merge first -- trigger wiring only, job inert -- via its own
+preliminary PR (this repository merges only through PRs); this flow
+then applies to the follow-up PR adding the real job, once that
+scaffolding exists.
 
-`on:` is workflow-file-scoped, not job-scoped: adding
-`workflow_dispatch` to an existing multi-job file makes every job in
-it dispatchable. During validation, guard the unproven job with
-`if: github.event_name == 'workflow_dispatch'` (runs only on dispatch)
-and guard any existing job assuming `push`/`pull_request` context with
-the **inverse**, `if: github.event_name != 'workflow_dispatch'` (skips
-only the dispatch run) -- remove both once validated, with the
-trigger-flip edit. This step does **not** by itself reduce advisory-bot
-review invocation count -- that is driven by push count, not trigger
-wiring. Its real benefit is avoiding wasted CI Actions-minutes and
-false-failure noise from an unproven job auto-running on every
-unrelated push. See
+`on:` is workflow-file-scoped, not job-scoped: a new job in its own
+file needs no cross-job isolation, but adding `workflow_dispatch` to
+an existing multi-job file makes every job in it dispatchable.
+Isolating the unproven job then is ordinary GitHub Actions authoring
+(for example a job-level `if:`), scoped to that file's own jobs and
+dependencies -- keep it minimal, removing it with the trigger-flip
+edit once validated. This step does **not** by itself reduce
+advisory-bot review invocation count -- that is driven by push count,
+not trigger wiring. Its real benefit is avoiding wasted CI
+Actions-minutes and false-failure noise from an unproven job
+auto-running on every unrelated push. See
 [rationale](../../docs/idd-design-rationale.md#d2--adding-a-new-ci-job-dispatch-first-rollout).
 
-For a job targeting a Linux runner, also validate it locally with
-`nektos/act` before pushing, to catch YAML/step/job-dependency
-mistakes without a push-and-wait round trip. `act`'s Docker-based
-execution cannot validate `windows-latest`/`macos-latest`
-runner-specific behavior from a WSL/Linux environment -- never treat
-"validated via `act`" as covering a Windows or macOS job.
+For a Linux-runner job, also validate it locally with `nektos/act`
+before pushing when `act` (and Docker) is available -- per the
+tool-availability convention in `idd-overview-core.instructions.md`'s
+Project commands table, skip this otherwise and rely on the dispatch
+validation above plus CI. `act`'s Docker-based execution cannot
+validate `windows-latest`/`macos-latest` runner-specific behavior from
+a WSL/Linux environment -- never treat "validated via `act`" as
+covering a Windows or macOS job.
 
 Optionally, for a job `act` cannot validate where shakeout is long or
 costly, a contributor may iterate it on a branch with no open PR yet,
