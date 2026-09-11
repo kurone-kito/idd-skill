@@ -3520,40 +3520,59 @@ commit-ssh` is sufficient here — a single `commit` invocation needs no
 `--continue` step to re-sign.
 
 **Bounded timeout for every invocation** (commit, merge, or rebase): if
-the wrapper produces no output for 2 minutes, treat it as stuck rather
-than a signing failure worth retrying — a whole-command,
+the wrapper has not completed within 2 minutes, treat it as stuck
+rather than a signing failure worth retrying — a whole-command,
 root-cause-agnostic bound (it deliberately does not try to isolate the
-signer subprocess). Scope the trigger to _silence_, not merely elapsed
-time: a legitimately long-running rebase that is actively replaying
-commits (and therefore still producing output) is not this case.
-First check whether the process is still running — per
-`idd-ci.instructions.md`'s "Wake-up discipline" guidance on a heavy
-local command that auto-backgrounds past a tool's default timeout, do
-not start a second wrapper invocation alongside it. If it is still
-running, terminate it (a plain `kill`/`SIGTERM`, not `-9` — git's own
-signal handler cleans up `index.lock`; `-9` skips that cleanup and the
-fallback below then fails on the stale lock).
+signer subprocess) that applies even to an invocation still producing
+output: an inactivity-only trigger would leave a merge or rebase that
+keeps emitting output free to run indefinitely without ever completing,
+which is not actually bounded (preventive; no observed incident yet —
+raised in PR #2906 review). First check whether the process is
+still running — per `idd-ci.instructions.md`'s "Wake-up discipline"
+guidance on a heavy local command that auto-backgrounds past a tool's
+default timeout, do not start a second wrapper invocation alongside it.
+If it is still running, terminate it (a plain `kill`/`SIGTERM`, not
+`-9` — git's own signal handler cleans up `index.lock`; `-9` skips that
+cleanup and the fallback below then fails on the stale lock).
 
-Either way — just terminated, or already exited on its own — inspect
-repository state **before** falling back: the process may already have
-updated `HEAD`, or left an in-progress merge/rebase, before it stalled
-or exited.
+Either way — just terminated, or already exited on its own — verify
+what actually happened before falling back; a killed or already-exited
+process can leave the operation completed, mid-progress, or never
+started at all:
 
 - **Plain commit**: compare `git rev-parse HEAD` before/after the
   wrapper call, the same check B3's "Verify a commit actually landed"
-  paragraph already prescribes. If the commit landed, stop — do not
-  re-commit. If it did not, fall back to `--no-gpg-sign`
+  paragraph already prescribes. Landed → stop, do not re-commit.
+  Otherwise → fall back to `--no-gpg-sign`
   (`idd-overview-appendix.instructions.md`'s "Commit signing" section).
-- **Merge or rebase**: name the state via git, not a literal path — in
-  a linked worktree (every B1 sibling worktree) `.git` at the worktree
-  root is a _file_ pointing elsewhere, so a hardcoded `.git/rebase-merge`
-  check silently never matches. Use `git rev-parse -q --verify MERGE_HEAD`
-  for merge, or `test -d "$(git rev-parse --git-path rebase-merge)"`
-  (or `rebase-apply`) for rebase. If the operation already completed,
-  stop. If it is still mid-operation, complete it with
-  `-c commit.gpgsign=false` on the `--continue` form — a plain
-  `--continue` re-signs through the stalled primary signer, and
-  `--no-gpg-sign` itself is not a `--continue` flag.
+- **Merge or rebase, state still present**: name the state via git, not
+  a literal path — in a linked worktree (every B1 sibling worktree)
+  `.git` at the worktree root is a _file_ pointing elsewhere, so a
+  hardcoded `.git/rebase-merge` check silently never matches. Use
+  `git rev-parse -q --verify MERGE_HEAD` for a merge, or
+  `test -d "$(git rev-parse --git-path rebase-merge)"` (or
+  `rebase-apply`) for a rebase. Either succeeding means the operation is
+  mid-progress: complete it with `-c commit.gpgsign=false` on the
+  `--continue` form — a plain `--continue` re-signs through the stalled
+  primary signer, and `--no-gpg-sign` itself is not a `--continue` flag.
+- **Merge or rebase, no state present**: absent state alone does not
+  prove the operation succeeded — the timeout can equally fire before
+  Git ever creates that state (nothing to `--continue`), or, for a
+  rebase specifically, leave `HEAD` detached at the upstream tip
+  without replaying the local commit, the same sibling-worktree failure
+  mode `idd-pr-submit.instructions.md`'s D1 "Post-rebase verification"
+  already documents. Verify instead of assuming: current branch
+  non-empty (not detached) and the expected commit present in
+  `origin/{development-branch}..HEAD` for a rebase, or `HEAD` advanced
+  past its pre-call value for a merge. Verified → stop. Not verified →
+  re-attach to the branch if detached (`git checkout {branch-name}`;
+  the commit is preserved on the branch ref) and rerun the original
+  merge or rebase command **unsigned** (`git -c commit.gpgsign=false
+  merge …` / `rebase …`, not the SSH-signing wrapper), exactly once —
+  mirroring D1's own bounded auto-recovery. If that single unsigned
+  rerun still fails the same verification, post a hold note documenting
+  the branch state and stop, the same as D1's own recovery does when it
+  is exhausted.
 
 Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
