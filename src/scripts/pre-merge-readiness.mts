@@ -849,12 +849,27 @@ export function collectPreMergeReadiness(
 
   // Bounded scan for self-referential-bootstrap-auto candidate markers
   // bound to this PR's own HEAD, mirroring `collectFromGitHub`'s own
-  // anti-flood tie-break exactly (earliest-first, capped): no selection
-  // order fully closes the flood problem, but this bounds worst-case API
-  // cost the same deliberately generous way, and
+  // anti-flood budget (20, capped) but NOT its earliest-first tie-break:
+  // no selection order fully closes the flood problem, and
   // `verifySelfReferentialBootstrapWaiverRun` below still requires
   // independent Actions-run verification regardless of what this
-  // prefilter selects.
+  // prefilter selects, but the two call sites correlate against
+  // different moments in time, so the same tie-break direction is wrong
+  // for this one. `collectFromGitHub` evaluates the marker for the
+  // checker's OWN in-flight run (implicitly "now"); this call site
+  // instead correlates against `passingCompletedAtMs` -- the ALREADY-
+  // SELECTED newest required-check instance's own `completedAt`, itself
+  // already the most recent of however many reruns exist for this HEAD
+  // (kurone-kito/idd-skill#2911, Codex review on PR #2915, P1): on a
+  // checker-touching PR that sits on one HEAD long enough to accumulate
+  // more than this 20-candidate budget's worth of bootstrap-auto
+  // markers, an earliest-first cap would keep only the OLDEST
+  // candidates -- exactly the ones LEAST likely to correlate with the
+  // most-recent-required-check-instance's `completedAt` -- starving
+  // `autoWaiverRunVerified` of the one marker that actually needs
+  // checking and letting the report incorrectly stay `ready`. Newest-
+  // first keeps the candidates most likely to cover that recent
+  // instance instead.
   const autoWaiverRunIdCandidates: { runId: string; createdAt: string }[] = [];
   const seenAutoWaiverRunIds = new Set<string>();
   const prHeadShaLower = prHeadSha.toLowerCase();
@@ -890,7 +905,7 @@ export function collectPreMergeReadiness(
     }
   }
   const boundedAutoWaiverRunIds = autoWaiverRunIdCandidates
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, MAX_PRE_MERGE_AUTO_WAIVER_RUN_LOOKUPS)
     .map((candidate) => candidate.runId);
   const autoWaiverRunVerified: Record<string, boolean> = {};

@@ -1546,3 +1546,59 @@ test('collectPreMergeReadiness against a fake provider: a run-id citing a workfl
   const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
   assert.equal(staleSelfWaiver.stale, false);
 });
+
+test('collectPreMergeReadiness against a fake provider (kurone-kito/idd-skill#2911, Codex review on PR #2915, P1): the bounded run-id lookup prioritizes the NEWEST marker candidates, so a flood of older decoys never crowds out the one marker that actually covers the passing check', () => {
+  // 20 older decoy markers -- enough to fully exhaust the 20-candidate
+  // lookup budget under the pre-fix earliest-first tie-break -- each
+  // posted, and expiring, long before the check's own `completedAt`
+  // (2026-08-01T00:00:00Z), so none of them could ever correlate with it
+  // even if verified. No `workflowRuns` entry is provided for any decoy:
+  // under the OLD earliest-first ordering these would be the ONLY
+  // candidates ever looked up (all 20 slots spent here), so the 21st,
+  // actually-relevant marker below would never even be looked up and this
+  // test would observe `stale: false` -- the exact bug the finding
+  // reports. Under the fix (newest-first), these decoys are the ones
+  // excluded instead.
+  const decoys = Array.from({ length: 20 }, (_, index) =>
+    selfWaiverMarkerCollectionComment({
+      id: index + 1,
+      expiresAt: '2026-07-30T12:00:00Z',
+      runId: String(1000 + index),
+      createdAt: `2026-07-30T00:${String(index).padStart(2, '0')}:00Z`,
+    }),
+  );
+  // The 21st, NEWEST marker -- genuinely covered the passing check at the
+  // time it completed (its `expiresAt` is after `completedAt`), but has
+  // since expired relative to `--now` (2026-08-01T00:10:00Z). This is the
+  // one marker the bounded lookup must not drop.
+  const target = selfWaiverMarkerCollectionComment({
+    id: 21,
+    expiresAt: '2026-08-01T00:05:00Z',
+    runId: '999',
+    createdAt: '2026-07-31T23:50:00Z',
+  });
+  const report = runSelfWaiverCollection({
+    comments: { 42: [...decoys, target] },
+    changedFiles: { 42: ['.github/idd/config.json'] },
+    workflowRuns: {
+      'o/r/999': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+        head_sha: SELF_WAIVER_PR_HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      },
+      // Deliberately no entries for the 20 decoy run-ids (1000-1019): if
+      // the bounded lookup ever selects one of them instead of the
+      // target, the fake adapter throws and that decoy is simply
+      // unverified -- it can never manufacture a false `stale: true` on
+      // its own, keeping this test's only signal the target's own
+      // inclusion/exclusion.
+    },
+  });
+  const staleSelfWaiver = report.staleSelfWaiver as {
+    stale: boolean;
+    reason: string | null;
+  };
+  assert.equal(staleSelfWaiver.stale, true);
+  assert.equal(staleSelfWaiver.reason, 'expired');
+});

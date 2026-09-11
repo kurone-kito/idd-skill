@@ -10016,3 +10016,48 @@ test('#2911 claimless: an active-claim-bound wrongClaim marker fails closed to s
   assert.equal(staleSelfWaiverOf(summary).stale, true);
   assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
 });
+
+test("#2911 (Codex review, PR #2915, P1): a fresher pass from a DIFFERENT producer never masks a stale pass from the checker workflow's own producer", () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  // A second, same-NAME `idd-advisory-convergence` check instance from a
+  // distinct producer (a legacy status context, vs. the checker
+  // workflow's own Actions check-run, which carries no `type`/
+  // `workflowName` in this fixture's base shape) -- genuinely,
+  // independently SUCCESS, completed LATER, with no waiver correlation
+  // needed at all. Pre-fix, `selectLatestCheckInstance` picked a single
+  // "latest" instance across BOTH producers flattened together, so this
+  // fresher instance would have masked the checker's own stale pass
+  // below entirely (`stale` would incorrectly read `false`).
+  const checksWithDistinctProducer = [
+    ...(base.checks ?? []),
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:50:00Z',
+      type: 'status-context',
+      workflowName: '',
+    },
+  ];
+  const withDistinctProducer = { ...base, checks: checksWithDistinctProducer };
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-multi-producer',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4343',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...withDistinctProducer,
+      comments: [...(withDistinctProducer.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4343': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+  assert.equal(selfWaiverBlockers(summary).length, 1);
+});

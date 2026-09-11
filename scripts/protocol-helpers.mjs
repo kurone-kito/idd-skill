@@ -6900,19 +6900,42 @@ export function buildPreMergeReadinessSummary(
     staleSelfWaiverModeOpen &&
     staleSelfWaiverSelectorWaivable
   ) {
-    const selfConvergenceCheckInstances = ci.checks.filter(
-      (check) =>
-        check.required === true &&
+    // kurone-kito/idd-skill#2911 (Codex review on PR #2915, P1): the
+    // pre-fix version filtered `ci.checks` -- already reduced by
+    // `summarizeRequiredChecks` and stripped of its `type`/`workflowName`
+    // producer-identity fields -- and picked a single "latest" instance
+    // with `selectLatestCheckInstance` directly over that flattened list.
+    // When two distinct PRODUCERS (e.g. an Actions check-run and a legacy
+    // status context) share the `idd-advisory-convergence` name, that
+    // flattening could let a later, genuinely-passing instance from an
+    // UNRELATED producer mask an earlier instance from the checker's own
+    // producer that is still resting on a stale waiver, since only the
+    // single most-recent-across-all-producers instance was ever
+    // inspected. Group by producer instead, over the RAW `checks`
+    // parameter (which still carries `type`/`workflowName`, unlike
+    // `ci.checks`), using `selectLatestCheckPerName` -- the identical
+    // producer-identity grouping `classifyCiChecks`/
+    // `findDiscardedNonPassingSiblings` already establish for the same
+    // reason (#1483) -- then evaluate EACH producer's own latest instance
+    // independently below (loop, `break` on the first stale match), so a
+    // fresh pass from one producer can never hide a stale pass from
+    // another.
+    const selfConvergenceRawInstances = checks
+      .filter((check) =>
         matchCheckSelectorLocal(check.name, staleSelfWaiverCheckSelector),
-    );
-    const latestSelfConvergenceCheck =
-      selfConvergenceCheckInstances.length > 0
-        ? selectLatestCheckInstance(selfConvergenceCheckInstances)
-        : null;
-    if (
-      latestSelfConvergenceCheck &&
-      CHECK_PASS_EQUIVALENT_STATES.has(latestSelfConvergenceCheck.state)
-    ) {
+      )
+      .map((check) => ({
+        name: String(check.name ?? ''),
+        state: String(check.state ?? ''),
+        completedAt: check.completedAt ?? null,
+        type: check.type ?? null,
+        workflowName: check.workflowName ?? null,
+      }))
+      .filter((check) => ci.requiredCheckNames.includes(check.name));
+    const selfConvergenceProducerCandidates = selectLatestCheckPerName(
+      selfConvergenceRawInstances,
+    ).filter((check) => CHECK_PASS_EQUIVALENT_STATES.has(check.state));
+    for (const latestSelfConvergenceCheck of selfConvergenceProducerCandidates) {
       const autoWaiverRunVerified = options.autoWaiverRunVerified ?? {};
       const isRunVerifiedSelfWaiverMarker = (entry) =>
         entry.authorLogin === 'github-actions[bot]' &&
@@ -6997,6 +7020,7 @@ export function buildPreMergeReadinessSummary(
           expiresAt: staleExpiredEntry.expiresAt,
           waiverClaimId: '',
         };
+        break;
       } else if (staleWrongClaimEntry) {
         staleSelfWaiver = {
           stale: true,
@@ -7005,6 +7029,7 @@ export function buildPreMergeReadinessSummary(
           expiresAt: '',
           waiverClaimId: staleWrongClaimEntry.waiverClaimId,
         };
+        break;
       }
     }
   }
