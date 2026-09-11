@@ -3532,22 +3532,30 @@ the wrapper's git invocation and any descendants such as the signer
 subprocess, not just the top-level command — is still running: per
 `idd-ci.instructions.md`'s "Wake-up discipline" guidance on a heavy
 local command that auto-backgrounds past a tool's default timeout, do
-not start a second wrapper invocation alongside it. If any part of the
-tree is still running, terminate the whole tree with SIGTERM, not
-`-9` — git's own signal handler cleans up `index.lock`, and a
-descendant such as the signer subprocess can outlive a `kill` scoped
-to only the git parent (reproduced 2026-09-11 in PR #2906 review) —
-then wait up to 30 seconds for the tree to exit; SIGTERM is
-asynchronous, so checking state immediately can race git's own unwind
-(still removing `index.lock`) or observe stale state. Walking
-descendants by PID is best-effort, not a guarantee — a child whose
-immediate parent already exited is reparented (commonly to init) and
-is no longer reachable by walking down from the git PID, so "the tree
-exited" can be wrong even after this wait; that gap is exactly what
-the lock-ownership check below exists to catch, not something this
-step alone can close. If the tree is still alive after that wait, send
-SIGKILL to whatever remains and wait once more, up to 30 seconds —
-`-9` skips git's signal handler, so a
+not start a second wrapper invocation alongside it. Before signaling
+anything, snapshot the full descendant PID set by walking from the
+git PID (for example, recursively via `pgrep -P`) — walk once, before
+the first signal, and keep that recorded list: re-walking after
+signaling misses a child whose parent the signal already removed,
+even though the child itself is still alive. If any part of the tree
+is still running, send SIGTERM to every recorded PID, not `-9` —
+git's own signal handler cleans up `index.lock`, and a descendant such
+as the signer subprocess can outlive a `kill` scoped to only the git
+parent (reproduced 2026-09-11 in PR #2906 review) — then wait up to
+30 seconds for each recorded PID individually to exit (not a fresh
+tree walk); SIGTERM is asynchronous, so checking state immediately
+can race git's own unwind (still removing `index.lock`) or observe
+stale state. Even a PID snapshot is best-effort, not a guarantee: a
+child that gets reparented (commonly to init) before the snapshot is
+taken is never recorded at all, so it survives untouched no matter
+how carefully the recorded PIDs are signaled and awaited — a signer
+that survives this way is a resource leak to report, not a condition
+this procedure can reliably close; list any surviving PIDs in the
+hold or status note rather than treating any later step as having
+caught it (the unsigned fallback below never invokes the signer, so a
+leaked signer cannot corrupt that path, only waste resources). If any
+recorded PID is still alive after that wait, send SIGKILL to it and
+wait once more, up to 30 seconds — `-9` skips git's signal handler, so a
 leftover `index.lock` can persist even once every process in the
 terminated tree has actually exited, and that alone does not prove
 the lock is this invocation's: a `git status` run by hand, a hook, or
@@ -3603,7 +3611,17 @@ completed, mid-progress, or never started at all:
   `git merge-base --is-ancestor origin/{development-branch} HEAD`
   already succeeds — an already-current merge exits `0` having created
   neither a new `HEAD` nor `MERGE_HEAD`, and is success, not a failed
-  attempt. Verified → stop. Not verified → re-attach to the branch if
+  attempt. For a rebase specifically, D1's two checks alone are not
+  enough here: D1 verifies a rebase that already completed, but a
+  timeout that fires **before** the rebase ever starts leaves the
+  untouched, still-behind branch passing both checks trivially (it was
+  never detached, and its own feature commit was already present in
+  `origin/{development-branch}..HEAD` before this attempt began) —
+  require `git merge-base --is-ancestor origin/{development-branch}
+  HEAD` to succeed too, the same upstream-incorporated check the merge
+  case above already uses, so a rebase that never actually ran is not
+  mistaken for one that did. Verified → stop. Not verified → re-attach
+  to the branch if
   detached (`git checkout {branch-name}`; the commit is preserved on
   the branch ref) and rerun the original merge or rebase command
   **unsigned** (`git -c commit.gpgsign=false merge …` / `rebase …`, not
