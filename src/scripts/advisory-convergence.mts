@@ -1010,8 +1010,19 @@ export function reviewPolicyNotApplicableReason(
  * same-repository PR editing the workflow YAML can still trigger a
  * `pull_request`-triggered run of it whose `path`/`head_sha`/
  * `head_repository.full_name` all satisfy the other three conditions.
+ *
+ * kurone-kito/idd-skill#2911: exported (was module-private) so
+ * `pre-merge-readiness.mts`'s own stale-self-waiver merge blocker can
+ * reuse this exact verification rather than reimplementing it -- see
+ * that file's own doc comment on its `autoWaiverRunVerified` option
+ * for the full call site. This remains the bearer-evidence check only
+ * (proves the cited run has the right shape, not that it actually
+ * posted the comment citing it -- kurone-kito/idd-skill#2912 tracks
+ * closing that residual gap); callers still need their own
+ * independent `touchesSelfReferentialAllowlist` precondition to keep
+ * a forged-but-shape-valid citation from affecting an unrelated PR.
  */
-function verifySelfReferentialBootstrapWaiverRun(
+export function verifySelfReferentialBootstrapWaiverRun(
   run:
     | {
         path?: string | null;
@@ -1820,10 +1831,12 @@ export function computeAdvisoryConvergenceVerdict(
     maxValidity: String(options.waiverMaxValidity ?? 'PT24H'),
     mode: waiverMode,
     // kurone-kito/idd-skill#2657 (Codex review, PR #2895): one of exactly
-    // two authorized call sites -- see `allowSelfReferentialBootstrapAuto`'s
-    // own doc comment in protocol-helpers.mts for the full list and why
-    // every other caller must leave this unset. This one is the GATE
-    // decision (feeds `autoWaiverValid` directly below), paired with the
+    // three authorized call sites (kurone-kito/idd-skill#2911 added the
+    // third, in pre-merge-readiness.mts's own stale-self-waiver merge
+    // blocker) -- see `allowSelfReferentialBootstrapAuto`'s own doc
+    // comment in protocol-helpers.mts for the full list and why every
+    // other caller must leave this unset. This one is the GATE decision
+    // (feeds `autoWaiverValid` directly below), paired with the
     // independent run-id/event-type/HEAD/repository/changed-file
     // verification that follows.
     allowSelfReferentialBootstrapAuto: true,

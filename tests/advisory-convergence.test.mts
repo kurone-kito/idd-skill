@@ -37,6 +37,7 @@ import {
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
   SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
+  verifySelfReferentialBootstrapWaiverRun,
   viewerProbeGhOptions,
   writeAdvisoryConvergenceCliOutput,
 } from '../src/scripts/advisory-convergence.mts';
@@ -5557,3 +5558,46 @@ test('retryTransientGhFailure exhausts bounded attempts and rethrows the final e
   assert.equal(calls, 3);
   assert.equal(caught, lastError);
 });
+
+test(
+  'verifySelfReferentialBootstrapWaiverRun stays exported and behaves ' +
+    'identically for the cross-module caller added by ' +
+    'kurone-kito/idd-skill#2911 (pre-merge-readiness.mts reuses this ' +
+    'exact function rather than reimplementing it -- a rename or ' +
+    'signature change here would silently break that import without a ' +
+    'pin like this one)',
+  () => {
+    assert.equal(typeof verifySelfReferentialBootstrapWaiverRun, 'function');
+    const expected = {
+      path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+      headSha: HEAD,
+      repositoryFullName: 'kurone-kito/idd-skill',
+    };
+    assert.equal(
+      verifySelfReferentialBootstrapWaiverRun(
+        {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          headSha: HEAD,
+          repositoryFullName: 'kurone-kito/idd-skill',
+          event: 'pull_request_target',
+        },
+        expected,
+      ),
+      true,
+    );
+    // A mismatched head SHA (the forged-citation shape #2911's decisive
+    // finding is about) must still fail closed through this same export.
+    assert.equal(
+      verifySelfReferentialBootstrapWaiverRun(
+        {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          headSha: OTHER_SHA,
+          repositoryFullName: 'kurone-kito/idd-skill',
+          event: 'pull_request_target',
+        },
+        expected,
+      ),
+      false,
+    );
+  },
+);

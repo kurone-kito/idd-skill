@@ -2,10 +2,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON } from '../src/scripts/advisory-wait-policy.mts';
 import {
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+} from '../src/scripts/advisory-wait-policy.mts';
+import {
+  renderClaimedByMarker,
   renderExternalCheckWaiverComment,
   renderReviewReplyStamp,
+  renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
 import {
   collectPreMergeReadiness,
@@ -6267,6 +6272,50 @@ test('waiverEvidence with wrong-shape valid item fails schema validation', () =>
   );
 });
 
+test('waiverEvidence.expired/wrongClaim items validate with the actual runtime shape (kurone-kito/idd-skill#2911, Codex review, PR #2915, P1): pins reason/runId/createdAt against schema drift', () => {
+  // kurone-kito/idd-skill#2911 originally added `reason`/`runId` (and
+  // later `createdAt`) to `ExternalCheckWaiverEvidence`'s `expired`/
+  // `wrongClaim` item shape -- populated for EVERY marker that lands in
+  // those buckets, not only self-referential ones, so this is reachable
+  // through the ordinary, always-emitted `waiverEvidence` field (unlike
+  // `autoWaiverEvidence`, deliberately never emitted -- see that
+  // decision's own doc comment in protocol-helpers.mts). The schema's
+  // own `additionalProperties: false` on these item shapes previously
+  // drifted out of sync with a runtime field addition once already
+  // (`createdAt` shipped in the runtime type without a matching schema
+  // update) -- this test constructs the actual runtime item shape
+  // directly, rather than relying on any one evidence-routing scenario
+  // to happen to produce a non-empty bucket, so it stays a reliable
+  // regression guard regardless of which code path is exercised.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);
+  const withExpiredItem = JSON.parse(JSON.stringify(summary));
+  withExpiredItem.waiverEvidence.expired = [
+    {
+      authorLogin: 'some-bot[bot]',
+      checkSelector: 'CodeRabbit',
+      expiresAt: '2026-05-11T23:30:00Z',
+      reason: 'maintainer-authorized',
+      runId: '',
+      createdAt: '2026-05-11T23:10:00Z',
+    },
+  ];
+  assert.deepEqual(validate(withExpiredItem, readinessSchema), []);
+  const withWrongClaimItem = JSON.parse(JSON.stringify(summary));
+  withWrongClaimItem.waiverEvidence.wrongClaim = [
+    {
+      authorLogin: 'some-bot[bot]',
+      checkSelector: 'CodeRabbit',
+      waiverClaimId: 'claim-999',
+      reason: 'maintainer-authorized',
+      runId: '',
+      createdAt: '2026-05-11T23:10:00Z',
+      expiresAt: '2026-05-11T23:30:00Z',
+    },
+  ];
+  assert.deepEqual(validate(withWrongClaimItem, readinessSchema), []);
+});
+
 // ---------------------------------------------------------------------------
 // resolveActiveClaimForWriteGate (#1058): the write-side merge-gate revalidator
 // must recognize an operator-approved forced-handoff successor's claim while
@@ -9441,4 +9490,1026 @@ test('#2272: an unrecognized developmentBranchTarget.status fails closed even wh
   );
   assert.ok(blocker);
   assert.match(blocker.detail, /unrecognized/);
+});
+
+// ---------------------------------------------------------------------------
+// kurone-kito/idd-skill#2911: stale-self-waiver merge blocker.
+//
+// Re-implements (properly, this time) the blocker PR #2895 added and then
+// reverted across three commits (9ecc9954/863c5249/337f4369) after three
+// more review rounds each found a new correctness/trust defect. Each test
+// below is named for the specific finding/constraint it pins so a future
+// edit that regresses one of them fails loudly and specifically, rather
+// than as an opaque diff against a hand-built fixture.
+// ---------------------------------------------------------------------------
+
+const SELF_WAIVER_HEAD_SHA = '1111111111111111111111111111111111111111';
+
+function selfWaiverInputBase(): PreMergeReadinessInput {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  return withAdvisoryConvergenceRequiredCheck(fixture);
+}
+
+function withSelfWaiverCheckState(
+  input: PreMergeReadinessInput,
+  state: string,
+  completedAt?: string,
+): PreMergeReadinessInput {
+  const checks = (input.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? completedAt === undefined
+        ? { name: check.name, state }
+        : // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1):
+          // also pins `startedAt` to `completedAt` here -- the base
+          // fixture's own `startedAt` (from
+          // `withAdvisoryConvergenceRequiredCheck`) is a fixed value
+          // unrelated to any given test's own `completedAt`, and once
+          // `passingStartedAtMs` became a real comparison anchor (see
+          // that variable's own doc comment), an unrelated leftover
+          // `startedAt` could silently change a test's outcome. Callers
+          // that need a genuinely distinct `startedAt`/`completedAt`
+          // pair (to exercise that exact race) build their own check
+          // object directly instead of using this helper.
+          { ...check, state, completedAt, startedAt: completedAt }
+      : check,
+  );
+  return { ...input, checks };
+}
+
+function selfWaiverMarkerComment(payload: {
+  id: string;
+  claimId: string;
+  expiresAt: string;
+  runId: string;
+  createdAt: string;
+}) {
+  return {
+    id: payload.id,
+    author: { login: 'github-actions[bot]' },
+    body: renderExternalCheckWaiverComment({
+      agentId: 'idd-advisory-convergence-self-waiver',
+      claimId: payload.claimId,
+      headSha: SELF_WAIVER_HEAD_SHA,
+      checkSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: payload.expiresAt,
+      runId: payload.runId,
+    }),
+    createdAt: payload.createdAt,
+    updatedAt: payload.createdAt,
+  };
+}
+
+function selfWaiverOptions(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  return {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    touchesSelfReferentialAllowlist: true,
+    ...overrides,
+  };
+}
+
+function selfWaiverBlockers(summary: unknown) {
+  return (
+    (summary as { blockers: unknown }).blockers as {
+      gate: string;
+      detail: string;
+    }[]
+  ).filter(
+    (blocker) =>
+      blocker.gate === 'ci' &&
+      /self-referential-bootstrap-auto/.test(blocker.detail),
+  );
+}
+
+function staleSelfWaiverOf(summary: unknown): {
+  stale: boolean;
+  checkSelector: string;
+  reason: 'expired' | 'wrong-claim' | null;
+  expiresAt: string;
+  waiverClaimId: string;
+} {
+  return (summary as { staleSelfWaiver: unknown })
+    .staleSelfWaiver as ReturnType<typeof staleSelfWaiverOf>;
+}
+
+function claimIdentityInstalledAtOf(summary: unknown): string {
+  return (summary as { claimIdentityInstalledAt: string })
+    .claimIdentityInstalledAt;
+}
+
+function activeClaimCreatedAtOf(summary: unknown): string {
+  return (summary as { claim: { activeClaim: { createdAt: string } } }).claim
+    .activeClaim.createdAt;
+}
+
+test('#2911 finding 1/round 12: an expired, run-verified self-referential marker blocks a currently-passing check with no rerun since', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+  assert.equal(selfWaiverBlockers(summary).length, 1);
+  assert.deepEqual(
+    (summary as { blockers: unknown }).blockers,
+    computePreMergeReadinessBlockers(summary as Record<string, unknown>),
+  );
+});
+
+test('#2911 finding 2/round 13: a genuine rerun completing AFTER the expired marker clears the blocker', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:45:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-then-rerun',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 acceptance criterion 2 (round 13 commit promised, never implemented -- git show 863c5249): a fresh rerun covered by a DIFFERENT, currently-valid self-referential marker clears the blocker even though an older marker already expired', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:20:00Z',
+  );
+  const staleMarker = selfWaiverMarkerComment({
+    id: 'self-waiver-stale',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T22:00:00Z',
+  });
+  const coveringMarker = selfWaiverMarkerComment({
+    id: 'self-waiver-covering',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '5555',
+    createdAt: '2026-05-11T23:15:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...base,
+      comments: [...(base.comments ?? []), staleMarker, coveringMarker],
+    },
+    selfWaiverOptions({
+      autoWaiverRunVerified: { '4242': true, '5555': true },
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 finding 3/round 14: a wrongClaim self-referential marker blocks when the check completed before the current claim identity was installed', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:10:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-wrong-claim-before',
+    claimId: 'some-other-claim',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T23:20:00Z');
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
+  assert.equal(selfWaiverBlockers(summary).length, 1);
+});
+
+test('#2911 finding 3/round 14: the same wrongClaim marker does not block once the check completed after the current claim identity was installed', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-wrong-claim-after',
+    claimId: 'some-other-claim',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 finding 4/round 15 (Codex P1): the deduplicated NEWEST check instance governs, not a raw first match over a multi-instance list', () => {
+  const inputWithHelper = selfWaiverInputBase();
+  const checks = [
+    // Older instance listed FIRST: if a naive .find()/first-match picked
+    // this one, its completedAt would land inside the stale marker's own
+    // window and wrongly block.
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:20:00Z',
+    },
+    // Newer instance (a genuine rerun), deduplicated-selected as "latest":
+    // completed AFTER the stale marker's own expiry, so it must NOT block.
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:50:00Z',
+    },
+    ...(inputWithHelper.checks ?? []).filter(
+      (check) => check.name !== DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    ),
+  ];
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-dedup',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T22:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...inputWithHelper,
+      checks,
+      comments: [...(inputWithHelper.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 dedup-rewrite asymmetry: a still-PENDING newest instance wins dedup over an older SUCCESS, so the pass-equivalent check never even runs', () => {
+  const inputWithHelper = selfWaiverInputBase();
+  const checks = [
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:20:00Z',
+    },
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'PENDING',
+    },
+    ...(inputWithHelper.checks ?? []).filter(
+      (check) => check.name !== DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    ),
+  ];
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-pending-dedup',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T22:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...inputWithHelper,
+      checks,
+      comments: [...(inputWithHelper.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 dedup-rewrite asymmetry (documented, intentional): a SUCCESS selected instance with an unparseable completedAt still fails closed to stale', () => {
+  const base = withSelfWaiverCheckState(selfWaiverInputBase(), 'SUCCESS');
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-unparseable-completed-at',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T22:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+});
+
+test('#2911 finding 5/round 15 (Codex P2): a same-claim heartbeat after the rerun moves activeClaim.createdAt forward, but claimIdentityInstalledAt stays anchored on the original claim and never false-positives', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:00:00Z',
+  );
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T23:50:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T23:50:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-heartbeat',
+    claimId: 'some-other-claim',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T21:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...base,
+      claimEvents,
+      comments: [...(base.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  // The mutable heartbeat clock moved to 23:50; the non-mutable transition
+  // anchor must stay at the original 22:00 claim.
+  assert.equal(activeClaimCreatedAtOf(summary), '2026-05-11T23:50:00Z');
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 claim-identity transition anchor: a release followed by a fresh re-claim moves claimIdentityInstalledAt to the re-claim, not the original claim or the release', () => {
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T20:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T20:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderUnclaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        timestamp: '2026-05-11T21:00:00Z',
+      }),
+      createdAt: '2026-05-11T21:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli-2',
+        claimId: 'claim-456',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const base = selfWaiverInputBase();
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents },
+    selfWaiverOptions({
+      expectedClaimId: 'claim-456',
+      expectedAgentId: 'github-copilot-cli-2',
+    }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
+});
+
+test('#2911 finding 6/round 15 (Copilot, decisive): touchesSelfReferentialAllowlist false suppresses the blocker even for an otherwise-stale, run-verified marker', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-no-allowlist-touch',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      touchesSelfReferentialAllowlist: false,
+      autoWaiverRunVerified: { '4242': true },
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 finding 6/round 15 (Copilot, decisive): an unverified run (forged or unresolvable citation) suppresses the blocker -- fail-open for staleness, the safe direction', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-unverified-run',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summaryFalse = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': false } }),
+  );
+  assert.equal(staleSelfWaiverOf(summaryFalse).stale, false);
+
+  const summaryAbsent = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({}),
+  );
+  assert.equal(staleSelfWaiverOf(summaryAbsent).stale, false);
+});
+
+test('#2911 (self-critique, mode/waivable gate): an otherwise-stale marker never blocks while ciGate.externalCheckWaivers.mode is not maintainer-authorized (the schema default)', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-mode-disabled',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      autoWaiverRunVerified: { '4242': true },
+      externalCheckWaiverMode: 'disabled',
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911 (self-critique, mode/waivable gate): an otherwise-stale marker never blocks when the selector is not on the configured waivable-check surface', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-not-waivable',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      autoWaiverRunVerified: { '4242': true },
+      waivableCheckSelectors: [{ selector: 'lint', matchMode: 'exact' }],
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+  assert.equal(selfWaiverBlockers(summary).length, 0);
+});
+
+test('#2911: an otherwise-stale marker blocks when mode is explicitly maintainer-authorized and the selector is configured waivable', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-mode-open',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      autoWaiverRunVerified: { '4242': true },
+      externalCheckWaiverMode: 'maintainer-authorized',
+      waivableCheckSelectors: [
+        {
+          selector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+          matchMode: 'exact',
+        },
+      ],
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(selfWaiverBlockers(summary).length, 1);
+});
+
+test('#2911 claimless: an active-claim-bound wrongClaim marker fails closed to stale when no claim identity ever resolves (claimIdentityInstalledAt is empty)', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-claimless',
+    claimId: 'some-claim',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents: [], comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      claimless: true,
+      autoWaiverRunVerified: { '4242': true },
+    }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '');
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
+});
+
+test("#2911 (Codex review, PR #2915, P1): a fresher pass from a DIFFERENT producer never masks a stale pass from the checker workflow's own producer", () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  // A second, same-NAME `idd-advisory-convergence` check instance from a
+  // distinct producer (a legacy status context, vs. the checker
+  // workflow's own Actions check-run, which carries no `type`/
+  // `workflowName` in this fixture's base shape) -- genuinely,
+  // independently SUCCESS, completed LATER, with no waiver correlation
+  // needed at all. Pre-fix, `selectLatestCheckInstance` picked a single
+  // "latest" instance across BOTH producers flattened together, so this
+  // fresher instance would have masked the checker's own stale pass
+  // below entirely (`stale` would incorrectly read `false`).
+  const checksWithDistinctProducer = [
+    ...(base.checks ?? []),
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:50:00Z',
+      type: 'status-context',
+      workflowName: '',
+    },
+  ];
+  const withDistinctProducer = { ...base, checks: checksWithDistinctProducer };
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-multi-producer',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4343',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...withDistinctProducer,
+      comments: [...(withDistinctProducer.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4343': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+  assert.equal(selfWaiverBlockers(summary).length, 1);
+});
+
+test('#2911 (CodeRabbit + Copilot review, PR #2915, Major): a DIFFERENT-selector marker that reuses an already-verified run-id is never trusted as evidence for idd-advisory-convergence', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const foreignSelectorMarker = {
+    id: 'self-waiver-foreign-selector',
+    author: { login: 'github-actions[bot]' },
+    body: renderExternalCheckWaiverComment({
+      agentId: 'idd-advisory-convergence-self-waiver',
+      claimId: 'claim-123',
+      headSha: SELF_WAIVER_HEAD_SHA,
+      checkSelector: 'some-other-check',
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: '2026-05-11T23:30:00Z',
+      runId: '5151',
+    }),
+    createdAt: '2026-05-11T23:10:00Z',
+    updatedAt: '2026-05-11T23:10:00Z',
+  };
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), foreignSelectorMarker] },
+    // The run-id IS genuinely verified -- just for a marker that claims a
+    // different check selector. Reusing that verification for
+    // idd-advisory-convergence's own stale check would be the bug.
+    selfWaiverOptions({ autoWaiverRunVerified: { '5151': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 (Copilot review, PR #2915): a marker CREATED after the check already passed cannot retroactively justify that pass, even when its expiresAt is later', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-created-after-pass',
+    claimId: 'claim-123',
+    // expiresAt alone (naive upper-bound-only check) would satisfy the
+    // old logic -- it's after the check's own completedAt (23:25).
+    expiresAt: '2026-05-11T23:40:00Z',
+    runId: '6161',
+    // But this marker was CREATED after the check already passed, so it
+    // could never have justified that earlier pass.
+    createdAt: '2026-05-11T23:26:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '6161': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 (Codex review, PR #2915, P1, fresh evidence against the producer-grouping fix itself): a legacy status-context producer sharing the name never causes a false positive via the null-completedAt fail-closed branch, even while the real checker workflow is genuinely fresh', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    // The REAL convergence workflow's own instance: fresh, no waiver
+    // correlation needed at all -- no marker comment is added for it.
+    'SUCCESS',
+    '2026-05-11T23:55:00Z',
+  );
+  // An unrelated legacy status-context producer sharing the exact same
+  // name, with NO completedAt (typical of a status context) -- pre-fix,
+  // this producer's own candidacy hits the `passingCompletedAtMs ===
+  // null` fail-closed branch, which unconditionally matches ANY
+  // run-verified expired marker regardless of timing. This otherwise
+  // unrelated marker (posted long ago, with no bearing on the REAL
+  // workflow's fresh 23:55 pass) exists purely to give that branch
+  // something to match.
+  const checksWithStatusContextProducer = [
+    ...(base.checks ?? []),
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: null,
+      type: 'status-context',
+      workflowName: '',
+    },
+  ];
+  const withStatusContextProducer = {
+    ...base,
+    checks: checksWithStatusContextProducer,
+  };
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-status-context-decoy',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T20:00:00Z',
+    runId: '7171',
+    createdAt: '2026-05-11T19:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...withStatusContextProducer,
+      comments: [...(withStatusContextProducer.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '7171': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 (Codex review, PR #2915, P1, fresh evidence against the type-only filter): an unrelated Actions workflow publishing a check-run under the identical name never causes a false positive, even while the real checker workflow is genuinely fresh', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    // The REAL convergence workflow's own instance: fresh, no marker
+    // needed for it at all.
+    'SUCCESS',
+    '2026-05-11T23:55:00Z',
+  );
+  // A second, unrelated Actions workflow that happens to publish a
+  // check-run under the exact same `idd-advisory-convergence` name --
+  // type: 'check-run' alone (pre this fix) would let this producer
+  // through, and its own older instance can independently trigger a
+  // false `stale` regardless of the real checker's fresh state.
+  const checksWithDecoyWorkflowProducer = [
+    ...(base.checks ?? []),
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T20:00:00Z',
+      type: 'check-run',
+      workflowName: 'Some Other Workflow',
+    },
+  ];
+  const withDecoyWorkflowProducer = {
+    ...base,
+    checks: checksWithDecoyWorkflowProducer,
+  };
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-decoy-workflow',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T21:00:00Z',
+    runId: '8181',
+    createdAt: '2026-05-11T19:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...withDecoyWorkflowProducer,
+      comments: [...(withDecoyWorkflowProducer.comments ?? []), marker],
+    },
+    selfWaiverOptions({ autoWaiverRunVerified: { '8181': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 (Codex review, PR #2915, P2): a wrongClaim marker that already expired BEFORE the check completed cannot retroactively justify that pass, even though the claim identity later changed again', () => {
+  // Same release -> re-claim shape as the claim-identity-transition-anchor
+  // test above: claim-123 claimed 20:00, released 21:00, claim-456
+  // claimed 22:00 -- so claimIdentityInstalledAt is 22:00, genuinely
+  // AFTER the check's own pass below (this is the load-bearing setup
+  // detail: without it, the wrongClaim branch never fires at all,
+  // pre-fix or post-fix, and this test would prove nothing).
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T20:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T20:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderUnclaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        timestamp: '2026-05-11T21:00:00Z',
+      }),
+      createdAt: '2026-05-11T21:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli-2',
+        claimId: 'claim-456',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    // The check's own genuine pass -- AFTER the marker below already
+    // expired (19:30), but BEFORE claim-456 is installed (22:00).
+    '2026-05-11T20:30:00Z',
+  );
+  // Posted under claim-123 (the OLD claim), and already expired by
+  // 19:30 -- well before the 20:30 pass this test's marker must never
+  // be blamed for.
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-wrongclaim-already-expired',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T19:30:00Z',
+    runId: '9191',
+    createdAt: '2026-05-11T19:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      expectedClaimId: 'claim-456',
+      expectedAgentId: 'github-copilot-cli-2',
+      autoWaiverRunVerified: { '9191': true },
+    }),
+  );
+  // Sanity-check the load-bearing setup detail before asserting on the
+  // fix itself: claimIdentityInstalledAt genuinely postdates the pass.
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test("#2911 (Codex review, PR #2915, P1): a claim handoff landing between the run's startedAt and completedAt still counts as wrong-claim-stale, even though completedAt alone reads after the handoff", () => {
+  // The run STARTS (and fetches its comment/waiver evidence) while
+  // claim-123 is still active, but doesn't COMPLETE until after
+  // claim-456 is installed -- the exact race this finding is about.
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T20:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T20:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderUnclaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        timestamp: '2026-05-11T21:00:00Z',
+      }),
+      createdAt: '2026-05-11T21:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli-2',
+        claimId: 'claim-456',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const fixture = selfWaiverInputBase();
+  const checks = (fixture.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          // Started BEFORE the 22:00 handoff, completed AFTER it --
+          // `completedAt` alone would read as "fresh" (>= 22:00), but
+          // the run's own evidence-fetch happened under claim-123.
+          startedAt: '2026-05-11T21:30:00Z',
+          completedAt: '2026-05-11T22:30:00Z',
+        }
+      : check,
+  );
+  const base = { ...fixture, checks };
+  // Covers the 22:30 pass within its own window, so the createdAt/
+  // expiresAt bounds (unaffected by this fix) don't exclude it.
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-started-before-handoff',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:00:00Z',
+    runId: '5252',
+    createdAt: '2026-05-11T21:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      expectedClaimId: 'claim-456',
+      expectedAgentId: 'github-copilot-cli-2',
+      autoWaiverRunVerified: { '5252': true },
+    }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
+});
+
+test('#2911 (Codex review, PR #2915, round 7, P1): a run started at the EXACT same instant a claim handoff installed is still wrong-claim-stale -- a tie is no evidence the run started after the handoff', () => {
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T20:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T20:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderUnclaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        timestamp: '2026-05-11T21:00:00Z',
+      }),
+      createdAt: '2026-05-11T21:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli-2',
+        claimId: 'claim-456',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const fixture = selfWaiverInputBase();
+  const checks = (fixture.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          // startedAt serializes to the EXACT same instant claim-456
+          // installs -- there is no positive evidence the run's own
+          // evidence-fetch happened after the handoff rather than
+          // immediately before it in the same timestamp interval.
+          startedAt: '2026-05-11T22:00:00Z',
+          completedAt: '2026-05-11T22:30:00Z',
+        }
+      : check,
+  );
+  const base = { ...fixture, checks };
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-tied-handoff',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:00:00Z',
+    runId: '5253',
+    createdAt: '2026-05-11T21:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      expectedClaimId: 'claim-456',
+      expectedAgentId: 'github-copilot-cli-2',
+      autoWaiverRunVerified: { '5253': true },
+    }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
+});
+
+test("#2911 (Codex review, PR #2915, round 7, P2): a marker that expires mid-run, before the run's slower completedAt but after its own startedAt, still counts as having covered the pass it correlates to", () => {
+  const base = selfWaiverInputBase();
+  const checks = (base.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          // The run's own evidence-fetch happens near startedAt
+          // (21:00), while the marker below is still valid -- it only
+          // expires (21:30) before the run's slower completedAt
+          // (22:00). Anchoring the upper bound on completedAt alone
+          // would wrongly treat this as "expired before the pass" and
+          // suppress the blocker entirely.
+          startedAt: '2026-05-11T21:00:00Z',
+          completedAt: '2026-05-11T22:00:00Z',
+        }
+      : check,
+  );
+  // Same claim throughout (matches the fixture's default
+  // expectedClaimId/activeClaimId) so this marker is classified purely
+  // by expiry (the `expired` bucket), never `wrongClaim`.
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-mid-run',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T21:30:00Z',
+    runId: '5254',
+    createdAt: '2026-05-11T20:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, checks, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '5254': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
 });
