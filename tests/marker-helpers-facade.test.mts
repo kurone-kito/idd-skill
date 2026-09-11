@@ -95,7 +95,7 @@ test('protocol-helpers re-exports every sampled marker-helpers name by identity'
 // logic, so this is deliberately independent of the fuller end-to-end
 // coverage in advisory-convergence.test.mts/advisory-convergence-fake-provider.test.mts.
 test('digestExternalCheckWaiverMarkerBody is deterministic, sensitive to any byte difference, and never normalizes', () => {
-  const body = 'exact body text\nwith a trailing newline\n';
+  const body = 'exact body text v1\nwith a trailing newline\n';
   const digest = direct.digestExternalCheckWaiverMarkerBody(body);
   assert.match(digest, /^[0-9a-f]{64}$/);
   // Deterministic: the same input always yields the same digest.
@@ -111,7 +111,7 @@ test('digestExternalCheckWaiverMarkerBody is deterministic, sensitive to any byt
   );
   // Sensitive to a single interior character change.
   assert.notEqual(
-    direct.digestExternalCheckWaiverMarkerBody(body.replace('exact', 'exacz')),
+    direct.digestExternalCheckWaiverMarkerBody(body.replace('v1', 'v2')),
     digest,
   );
 });
