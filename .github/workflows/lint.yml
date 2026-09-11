@@ -65,3 +65,80 @@ jobs:
         run: node --test tests/*.test.mts
       - name: Run workshop integrity check
         run: node scripts/verify-workshop-integrity.mjs --format table
+  lint-windows:
+    name: Critique telemetry hook (Windows)
+    runs-on: windows-latest
+    # Regression coverage for kurone-kito/idd-skill#2892: only
+    # idd-critique-telemetry-hook.mts combines `shell: true` with
+    # `detached: true`, which orphaned a grandchild process (and its own
+    # console window) on native Windows because `process.kill(-pid, ...)`
+    # is meaningless there. Pre-fix, this suite's own hang/timeout
+    # fixtures hung indefinitely on native Windows instead of completing,
+    # so this bound is deliberately generous rather than tuned to an
+    # observed duration.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Unlike the `lint` job's `ubuntu-slim` runner, this repository has
+      # no established preinstalled-Node contract for `windows-latest` --
+      # pin explicitly rather than relying on whatever ships in the image.
+      # `24.x` (not a narrower range) matches every other workflow's own
+      # `node-version` in this repository (scheduled-typecheck.yml,
+      # pnpm-boundary.yml, post-merge-cleanup.yml) -- `check-latest: true`
+      # below resolves it to the newest available 24.x patch rather than a
+      # potentially stale cached one.
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          check-latest: true
+          node-version: 24.x
+      # Same defense as the `lint` job's own "Assert Node.js floor" step
+      # above (kurone-kito/idd-skill#2892, Copilot review on PR #2897):
+      # `check-latest: true` makes the 24.0.x/24.1.x window from #1447
+      # unlikely in practice, but not impossible (e.g. a transient
+      # registry lag), and this job runs the exact same `.mts` test-suite
+      # entry point that step guards. `shell: bash` is required here --
+      # unlike the `lint` job's `ubuntu-slim` runner, `windows-latest`'s
+      # default `run:` shell is PowerShell, which cannot parse this
+      # bash/POSIX-quoted script; GitHub's Windows runner images ship
+      # Git for Windows' bash for exactly this cross-shell-reuse case.
+      - name: Assert Node.js floor
+        shell: bash
+        run: |
+          node -e '
+            const versionParts = process.versions.node.split(".");
+            const [major, minor, patch] = versionParts.map(Number);
+            const isPrerelease = versionParts.some((part) => part.includes("-"));
+            const ok =
+              !isPrerelease &&
+              ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||
+                (major === 24 && minor >= 2) ||
+                major >= 26);
+            if (!ok) {
+              console.error(
+                "Node " + process.version + " does not satisfy this " +
+                "repository'"'"'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",
+              );
+              process.exit(1);
+            }
+          '
+      # --test-force-exit (kurone-kito/idd-skill#2892, #2897 CI follow-up):
+      # this suite's direct-await tests spawn real detached win32 children,
+      # and at least one confirmed defect in that path (stuck stdin writes
+      # to a detached `cmd.exe`, tracked at kurone-kito/idd-skill#2910)
+      # leaves libuv handles the Node process never naturally drains,
+      # hanging `node --test` indefinitely on this runner even though every
+      # test itself has already completed and reported. This flag is
+      # Node's own documented mechanism for exactly that "tests are done
+      # but the process won't exit on its own" case; it does not change
+      # which tests run or their pass/fail outcome. Scoped to only this
+      # file/job rather than the shared `pre-push-validate` command
+      # (`.github/idd/config.json`): the same flag there would mask a
+      # future unrelated hang on any platform, and the added command-string
+      # bytes alone were enough to push the generated
+      # `idd-overview-core.instructions.md` doc over its enforced context-
+      # ceiling budget (#2897 CI follow-up, E10 critique pass).
+      - name: Run critique telemetry hook tests
+        run: node --test --test-force-exit tests/idd-critique-telemetry-hook.test.mts
