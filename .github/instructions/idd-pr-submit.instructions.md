@@ -130,6 +130,56 @@ that is merely `BEHIND` does not force a branch update by itself unless
 branch protection or explicit repository policy requires an up-to-date
 head before merge.
 
+### Adding a new CI job
+
+When this branch's diff introduces a **new** CI job, land it configured
+for `workflow_dispatch` only, not yet wired to `push`/`pull_request`,
+and validate it with manually dispatched runs against the pushed
+branch (for example `gh workflow run <file> --ref <branch>`) before
+making the one remaining edit that flips the trigger to its final
+form. **Commit, re-run pre-push-validate, and push that edit before
+creating the PR (D3)** -- merging with the branch still dispatch-only
+would never enable the job.
+
+GitHub only allows a `workflow_dispatch` run once registered on the
+default branch: `gh workflow run` cannot target a file or trigger that
+exists only on the pushed branch. A first-time job needs a minimal
+bootstrap merge first -- trigger wiring only, job inert -- via its own
+preliminary PR (this repository merges only through PRs); this flow
+then applies to the follow-up PR adding the real job, once that
+scaffolding exists.
+
+`on:` is workflow-file-scoped, not job-scoped: a new job in its own
+file needs no cross-job isolation, but adding `workflow_dispatch` to
+an existing multi-job file makes every job in it dispatchable.
+Isolating the unproven job then is ordinary GitHub Actions authoring
+(for example a job-level `if:`), scoped to that file's own jobs and
+dependencies -- keep it minimal, removing it with the trigger-flip
+edit once validated. This step does **not** by itself reduce
+advisory-bot review invocation count -- that is driven by push count,
+not trigger wiring. Its real benefit is avoiding wasted CI
+Actions-minutes and false-failure noise from an unproven job
+auto-running on every unrelated push. See
+[rationale](../../docs/idd-design-rationale.md#d2--adding-a-new-ci-job-dispatch-first-rollout).
+
+For a Linux-runner job, also validate it locally with `nektos/act`
+before pushing when `act` (and Docker) is available -- per the
+tool-availability convention in `idd-overview-core.instructions.md`'s
+Project commands table, skip this otherwise and rely on the dispatch
+validation above plus CI. `act`'s Docker-based execution cannot
+validate `windows-latest`/`macos-latest` runner-specific behavior from
+a WSL/Linux environment -- never treat "validated via `act`" as
+covering a Windows or macOS job.
+
+Optionally, for a job `act` cannot validate where shakeout is long or
+costly, a contributor may iterate it on a branch with no open PR yet,
+landing only the validated final version on the actual PR branch.
+Review automation that only fires on PR-associated pushes never runs
+during that shakeout, avoiding review cost entirely -- the one path
+here that actually reduces it. This deviates from the normal
+early-PR-then-iterate practice, so scope it to CI-infrastructure work,
+as the implementer's choice, not a mandate.
+
 ## D3 — Create PR
 
 Before drafting the PR body, check whether the repository defines

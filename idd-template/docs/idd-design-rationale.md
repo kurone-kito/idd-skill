@@ -696,6 +696,43 @@ same logic -- for the same shape before treating the fix, or a C1
 critique of it, as complete (observed 2026-09-03,
 kurone-kito/idd-skill#2552).
 
+## PR submit
+
+### D2 — Adding a new CI job: dispatch-first rollout
+
+An adopter repository whose review automation (for example a Copilot
+or Codex code-review app) re-runs on every push accumulates review
+cost roughly 1:1 with commit count, independent of which files or CI
+jobs a given push touches. A new CI job whose target runner cannot be
+exercised locally compounds this: each debugging attempt needs a real
+push-and-wait round trip, so every unverified hypothesis about why the
+job fails costs a full review cycle on top of the CI minutes spent.
+Landing the job `workflow_dispatch`-first and validating it via manual
+dispatch runs does not reduce that review cost by itself -- the review
+re-run is driven by the push, not by the job's trigger wiring -- but
+it does stop an unproven job from auto-running (and burning runner
+minutes, and adding failure noise) on every unrelated push during the
+same pull request's remaining lifetime. The one path that does avoid
+review cost entirely is iterating a Windows-/macOS-targeted job on a
+branch with no open PR yet: review automation that only fires on
+PR-associated pushes never runs during that shakeout, so a push to a
+PR-less branch never triggers a review at all -- this is why that
+non-PR shakeout pattern is worth documenting as an option, scoped to
+CI-infrastructure-focused work, even though it deviates from the
+normal early-PR-then-iterate practice.
+
+Observed 2026-09-10 on PR kurone-kito/idd-skill#2897 (issue
+kurone-kito/idd-skill#2892): three independently-reasoned, unverified
+commits debugging a native-Windows-only CI hang in a new
+`lint-windows` job each triggered a fresh full Copilot and Codex
+review and left the job's own regression test failing at a
+near-identical elapsed time each round -- direct evidence none of the
+three changed anything that mattered, and each round could only be
+diagnosed by pushing and waiting on a real run, since the repository's
+own IDD implementation sessions are WSL/Linux-only and cannot exercise
+a `windows-latest` runner locally (kurone-kito/idd-skill#2892,
+non-blocking).
+
 ## Review triage
 
 ### Merge-main livelock under fast-moving `main`
