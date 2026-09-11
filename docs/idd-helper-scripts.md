@@ -3538,9 +3538,26 @@ process tree — if `pgrep`/`ps` (or an equivalent process-listing and
 signaling mechanism) are not available on the host, that dependency
 cannot be met: stop and post a hold note rather than falling back
 without the cleanup guarantee, the same fail-closed treatment the
-`lsof` case below already gets. Otherwise, snapshot the whole set to
-signal: the git PID itself **and** its descendants, found by walking
-from the git PID (for example, recursively via `pgrep -P`) — a
+`lsof` case below already gets. It also depends on already knowing
+which process is this invocation's own: "the git PID" below is the PID
+recorded when this wrapper invocation itself was launched, never one
+recovered afterward by searching the process table — launch the
+wrapper (the original invocation and every fallback or continuation
+alike) as `<wrapper command> & echo "wrapper-pid=$!"; wait "$!"` so the
+PID lands in the tool's own output at launch, an unambiguous launch
+record that survives a later timeout, since shell state such as a bare
+`$!` does not itself persist between separate tool calls. B1's
+sibling-worktree model already puts several concurrent workers on one
+host, so a generic `pgrep`/`ps` pattern match (for example, on the
+command name `git commit`) can just as easily match another worker's
+unrelated git invocation, and signaling that tree would terminate
+someone else's in-progress work instead of this one's (preventive; no
+observed incident yet — raised in PR #2906 review). If no such
+launch-time handle was recorded, that dependency is unmet too: hold,
+the same as the missing-`pgrep`/`ps` case above, rather than search for
+a substitute. Otherwise, snapshot the whole set to signal: the git PID
+itself **and** its descendants, found by walking from the git PID (for
+example, recursively via `pgrep -P`) — a
 "descendant" walk alone omits the root git process, leaving it able to
 keep running (and keep `index.lock` held) after only its children are
 signaled. Immediately send SIGTERM to every recorded PID in that
@@ -3605,17 +3622,24 @@ mid-progress, or never started at all:
 - **Plain commit**: compare `git rev-parse HEAD` before/after the
   wrapper call, the same check B3's "Verify a commit actually landed"
   paragraph already prescribes. Landed → stop, do not re-commit.
-  Otherwise, before falling back to `--no-gpg-sign`, also compare
-  `git status --porcelain` and `git diff --cached --stat` against
-  their state captured before the wrapper call: a hook that ran before
-  the timeout can leave the index or working tree mutated even though
-  `HEAD` never moved, and the fallback would then commit that
-  mutation alongside the intended change (reproduced 2026-09-11 in PR
-  #2906 review, via a hook that staged an extra file and slept). Both
-  unchanged → fall back to `--no-gpg-sign`
+  Otherwise, before falling back to `--no-gpg-sign`, also compare the
+  index's tree hash — from running `git write-tree` before the wrapper
+  call and again now — rather than comparing `git status --porcelain`
+  and `git diff --cached --stat` output: `git commit -F` commits the
+  index, so this content-addressed hash is what actually proves it
+  unchanged, whereas status/diff-stat output only shows that a hook
+  mutated the index without moving `HEAD` (reproduced 2026-09-11 in PR
+  #2906 review, via a hook that staged an extra file and slept) — it
+  cannot also catch a hook that swaps one tracked line's content for
+  another of the same shape, leaving both reports unchanged
+  (preventive; no observed incident yet). Unstaged working-tree
+  changes are intentionally excluded from this check: `git commit -F`
+  alone never commits them, so they cannot reach the fallback commit
+  regardless of what changed there. Unchanged → fall back to
+  `--no-gpg-sign`
   (`idd-overview-appendix.instructions.md`'s "Commit signing" section).
-  Either changed → stop and post a hold note for review instead of
-  falling back.
+  Changed → stop and post a hold note for review instead of falling
+  back.
 - **Merge or rebase, state still present**: name the state via git, not
   a literal path — in a linked worktree (every B1 sibling worktree)
   `.git` at the worktree root is a _file_ pointing elsewhere, so a
