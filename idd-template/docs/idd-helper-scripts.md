@@ -3544,12 +3544,16 @@ or exited.
   paragraph already prescribes. If the commit landed, stop — do not
   re-commit. If it did not, fall back to `--no-gpg-sign`
   (`idd-overview-appendix.instructions.md`'s "Commit signing" section).
-- **Merge or rebase**: check whether `MERGE_HEAD` (merge) or
-  `.git/rebase-merge` / `.git/rebase-apply` (rebase) still exists. If
-  the operation already completed, stop. If it is still mid-operation,
-  complete it with `-c commit.gpgsign=false` on the `--continue` form
-  — a plain `--continue` re-signs through the stalled primary signer,
-  and `--no-gpg-sign` itself is not a `--continue` flag.
+- **Merge or rebase**: name the state via git, not a literal path — in
+  a linked worktree (every B1 sibling worktree) `.git` at the worktree
+  root is a _file_ pointing elsewhere, so a hardcoded `.git/rebase-merge`
+  check silently never matches. Use `git rev-parse -q --verify MERGE_HEAD`
+  for merge, or `test -d "$(git rev-parse --git-path rebase-merge)"`
+  (or `rebase-apply`) for rebase. If the operation already completed,
+  stop. If it is still mid-operation, complete it with
+  `-c commit.gpgsign=false` on the `--continue` form — a plain
+  `--continue` re-signs through the stalled primary signer, and
+  `--no-gpg-sign` itself is not a `--continue` flag.
 
 Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
