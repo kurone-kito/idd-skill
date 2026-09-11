@@ -1349,6 +1349,12 @@ function runSelfWaiverCollection(
     workflowRuns?: Record<string, unknown>;
     changedFiles?: Record<number, string[]>;
     comments?: Record<number, unknown[]>;
+    // kurone-kito/idd-skill#2919: replaces the default single-entry
+    // `statusCheckRollup` below wholesale when provided, so a test can
+    // exercise the collector's own `workflowPath` enrichment (which needs
+    // each entry's `detailsUrl` to resolve a run id) or a decoy second
+    // producer sharing name/type/workflowName.
+    statusCheckRollup?: unknown[];
   },
   configOverrides: Record<string, unknown> = {},
 ) {
@@ -1366,7 +1372,7 @@ function runSelfWaiverCollection(
           url: 'https://github.com/o/r/pull/42',
           authorLogin: 'author-user',
           reviewDecision: null,
-          statusCheckRollup: [
+          statusCheckRollup: fixtureOverrides.statusCheckRollup ?? [
             {
               __typename: 'CheckRun',
               name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
@@ -1383,6 +1389,15 @@ function runSelfWaiverCollection(
               // `staleSelfWaiver` computation now filters on this exact
               // value.
               workflowName: 'IDD advisory-convergence gate',
+              // kurone-kito/idd-skill#2919: no matching `workflowRuns`
+              // fixture entry is registered for run 500 by default, so the
+              // new `workflowPath` enrichment's lookup throws and is
+              // caught -- `workflowPath` stays unpopulated here, exactly
+              // like every test in this file that predates #2919. A test
+              // that wants real enrichment supplies both a
+              // `statusCheckRollup` override with its own `detailsUrl` and
+              // a matching `workflowRuns` entry.
+              detailsUrl: 'https://github.com/o/r/actions/runs/500/job/1',
             },
           ],
           mergeable: 'MERGEABLE',
@@ -1466,6 +1481,98 @@ test('collectPreMergeReadiness against a fake provider: a genuine, run-verified 
     ),
     `expected a self-referential-bootstrap-auto "ci" blocker, got: ${JSON.stringify(blockers)}`,
   );
+});
+
+// kurone-kito/idd-skill#2919: end-to-end wiring check for the collector's
+// own `workflowPath` enrichment (`detailsUrl` -> `parseRunIdFromUrl` ->
+// `port.getWorkflowRun` -> `CheckPayload.workflowPath`) -- a regression
+// guard confirming enrichment reaching a REAL, correctly-resolved path
+// does not change the pre-#2919 outcome above.
+test('collectPreMergeReadiness against a fake provider: #2919 workflowPath enrichment resolving the REAL checker path does not change the expired-marker blocker (regression guard)', () => {
+  const report = runSelfWaiverCollection({
+    comments: {
+      42: [
+        selfWaiverMarkerCollectionComment({
+          id: 1,
+          expiresAt: '2026-08-01T00:05:00Z',
+          runId: '999',
+          createdAt: '2026-07-31T23:00:00Z',
+        }),
+      ],
+    },
+    changedFiles: { 42: ['.github/idd/config.json'] },
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/500/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/999': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+        head_sha: SELF_WAIVER_PR_HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      },
+      'o/r/500': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+      },
+    },
+  });
+  const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
+  assert.equal(staleSelfWaiver.stale, true);
+});
+
+// kurone-kito/idd-skill#2919 (this issue's own motivating vulnerability,
+// exercised through the REAL collector wiring rather than a direct
+// `buildPreMergeReadinessSummary` call): the live `idd-advisory-convergence`
+// check-run resolves to a DIFFERENT workflow FILE than the real checker,
+// despite sharing its display name -- it must be excluded as a candidate,
+// so the otherwise-genuine expired marker never gets a real checker
+// instance to evaluate against.
+test('collectPreMergeReadiness against a fake provider: #2919 a checker check-run resolved to a DIFFERENT workflow file is excluded, closing the display-name-collision gap', () => {
+  const report = runSelfWaiverCollection({
+    comments: {
+      42: [
+        selfWaiverMarkerCollectionComment({
+          id: 1,
+          expiresAt: '2026-08-01T00:05:00Z',
+          runId: '999',
+          createdAt: '2026-07-31T23:00:00Z',
+        }),
+      ],
+    },
+    changedFiles: { 42: ['.github/idd/config.json'] },
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/500/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/999': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+        head_sha: SELF_WAIVER_PR_HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      },
+      'o/r/500': {
+        path: '.github/workflows/some-other-workflow.yml',
+      },
+    },
+  });
+  const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
+  assert.equal(staleSelfWaiver.stale, false);
 });
 
 test('collectPreMergeReadiness against a fake provider: touchesSelfReferentialAllowlist false (this PR never touches the checker allowlist) suppresses the blocker even for an otherwise-verified expired marker -- closes the decisive round-15 forgery/DoS finding', () => {

@@ -507,3 +507,97 @@ test('protected branch: requiredChecksPassing stays false when a same-named comm
   assert.equal(r.requiredChecksPassing, false);
   assert.equal(r.status, 'failed');
 });
+
+// #2919: `workflowName` alone is only the workflow YAML's top-level `name:`
+// display string, which two DIFFERENT workflow FILES can declare
+// identically -- widen the producer key to `(name, type, workflowName,
+// workflowPath)` so a decoy check-run sharing every OTHER discriminator can
+// no longer mask a genuine same-name FAILURE from a different file.
+test('protected branch: requiredChecksPassing stays false when a same-named/type/workflowName check-run success cannot supersede a check-run FAILURE from a DIFFERENT workflow file (#2919)', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'FAILURE',
+        completedAt: '2026-07-17T16:00:06Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+        workflowPath: '.github/workflows/lint.yml',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-17T16:25:47Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+        workflowPath: '.github/workflows/lint-decoy.yml',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.requiredChecksPassing, false);
+  assert.equal(r.status, 'failed');
+});
+
+// #2919 regression guard: a pre-#2919 caller/fixture that never resolves
+// `workflowPath` (absent on every entry, exactly like the pre-#1483
+// absent-`type`/`workflowName` shape) must keep deduping by
+// `(name, type, workflowName)` alone -- this field's addition must never
+// change behavior for a caller that doesn't opt in.
+test('protected branch: absent workflowPath on both sides still dedupes by name/type/workflowName alone (pre-#2919 shape unaffected)', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'FAILURE',
+        completedAt: '2026-07-17T16:00:06Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-17T16:25:47Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.requiredChecksPassing, true);
+  assert.equal(r.status, 'success');
+});
+
+// #2919: the actual motivating scenario from this issue's own Background
+// (this repository's own `.github/workflows/idd-advisory-convergence.yml`)
+// -- two GENUINELY legitimate same-FILE instances (e.g. concurrent
+// `pull_request` / `pull_request_target` variants during a migration
+// window) share `workflowPath` too, so they must still dedupe as one
+// producer, exactly as before this field existed. The issue's own
+// Disposition section is explicit that this case is NOT a false-negative
+// risk this fix should introduce.
+test('protected branch: two same-name/type/workflowName/workflowPath check-run instances (genuine same-file siblings) still dedupe to the latest', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'CANCELLED',
+        completedAt: '2026-07-17T15:59:36Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+        workflowPath: '.github/workflows/lint.yml',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-17T16:25:47Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+        workflowPath: '.github/workflows/lint.yml',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.requiredChecksPassing, true);
+  assert.equal(r.status, 'success');
+});

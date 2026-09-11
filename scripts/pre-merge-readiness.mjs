@@ -60,6 +60,11 @@ import {
   evaluateProviderOutageRelief,
   resolveProviderOutageDeclaration,
 } from './provider-outage-declaration.mjs';
+// #2919: reused (not a new regex) to extract a live check-run's owning
+// workflow-run id from its `detailsUrl` for the bounded `workflowPath`
+// enrichment below -- no import cycle (this file already isn't imported
+// by `rerun-advisory-convergence.mts`).
+import { parseRunIdFromUrl } from './rerun-advisory-convergence.mjs';
 import {
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
@@ -313,9 +318,104 @@ export function collectPreMergeReadiness(
   // successive calls a few seconds apart returned different check-run
   // counts for the same PR), so this is the single source of truth for
   // both the check identity and its dedup discriminator.
-  const checks = (snapshot.statusCheckRollup ?? []).map(
-    normalizeStatusCheckRollupEntry,
-  );
+  const rawStatusCheckRollup = snapshot.statusCheckRollup ?? [];
+  // kurone-kito/idd-skill#2919: `checks` stays index-aligned 1:1 with
+  // `rawStatusCheckRollup` (a bare `.map`, never filtered) so the
+  // workflow-path enrichment immediately below can zip back into
+  // `rawStatusCheckRollup[index].detailsUrl` by plain array index --
+  // inserting a `.filter()`/`.slice()` between this line and that
+  // enrichment would silently break that invariant. `let`, not `const`:
+  // the enrichment step below reassigns it.
+  let checks = rawStatusCheckRollup.map(normalizeStatusCheckRollupEntry);
+  // kurone-kito/idd-skill#2919: resolve each LIVE `idd-advisory-convergence`
+  // check-run instance's own owning workflow FILE path -- distinct from its
+  // display name, which a different workflow file can share (see
+  // `CheckPayload.workflowPath`'s own doc comment and this issue's
+  // Background). Scoped to this ONE check name deliberately: it is the
+  // only one with a documented same-display-name-different-file collision
+  // scenario in this repository today (the concurrent `pull_request`/
+  // `pull_request_target` transition window `.github/workflows/
+  // idd-advisory-convergence.yml` itself documents). The producer-identity
+  // KEY widens for every `groupChecksByProducer` consumer regardless (see
+  // `protocol-helpers.mts`); only the SOURCING of real `workflowPath` data
+  // stays this narrow, so any other check name still benefits the moment a
+  // future caller populates its own `workflowPath` -- Residual (documented,
+  // not fixed here): this collector does not resolve `workflowPath` for
+  // any check name other than `idd-advisory-convergence`.
+  //
+  // Deliberately UNCONDITIONAL (not gated on `touchesSelfReferentialAllowlist`
+  // like the marker-run-verification block further below): that gate exists
+  // there because the stale-waiver computation it feeds is ITSELF gated on
+  // the same flag, so an unconditional lookup would be pure waste. This
+  // enrichment instead feeds `summarizeRequiredChecks`/`classifyCiChecks` --
+  // the PRIMARY required-check gate, which runs on every PR regardless. Cost
+  // stays small on its own: this repository's own live PR rollups show
+  // exactly one `idd-advisory-convergence` check-run entry per PR in the
+  // ordinary case (the `-self-waiver` check is a different name, not
+  // matched here), two-to-three during the documented transition window --
+  // never the up-to-20 budget the marker-verification block below spends.
+  //
+  // All-or-nothing PER CHECK NAME, never partial: if resolving ANY one of
+  // this name's live instances fails (a missing/malformed `detailsUrl`, a
+  // thrown/erroring `getWorkflowRun` call -- e.g. transient rate-limiting,
+  // which this account can be under), `workflowPath` is left unpopulated
+  // for EVERY instance of this name this build. Partial population would
+  // let a transient failure newly SPLIT a producer group that used to
+  // dedupe cleanly -- e.g. the documented same-file
+  // `pull_request`/`pull_request_target` sibling case this issue's own
+  // Background explicitly says is NOT a false-negative risk -- into two,
+  // introducing a NEW false required-check blocker at the primary CI gate
+  // under exactly the concurrent-load conditions most likely to trigger a
+  // rate limit. Fail-closed here means "identical to pre-#2919 behavior",
+  // never a new failure mode.
+  const MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS = 5;
+  const advisoryConvergenceCheckEntries = checks
+    .map((check, index) => ({ check, index }))
+    .filter(
+      ({ check }) =>
+        check.type === 'check-run' &&
+        check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    );
+  if (advisoryConvergenceCheckEntries.length > 0) {
+    const runIdsByIndex = new Map();
+    const uniqueRunIds = new Set();
+    for (const { index } of advisoryConvergenceCheckEntries) {
+      const runId = parseRunIdFromUrl(
+        rawStatusCheckRollup[index]?.detailsUrl ?? '',
+      );
+      if (runId) {
+        runIdsByIndex.set(index, runId);
+        uniqueRunIds.add(runId);
+      }
+    }
+    let resolutionFailed =
+      runIdsByIndex.size !== advisoryConvergenceCheckEntries.length ||
+      uniqueRunIds.size > MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS;
+    const pathsByRunId = new Map();
+    if (!resolutionFailed) {
+      for (const runId of uniqueRunIds) {
+        try {
+          const raw = port.getWorkflowRun(owner, repo, runId);
+          const path = String(raw?.path ?? '');
+          if (!path) {
+            resolutionFailed = true;
+            break;
+          }
+          pathsByRunId.set(runId, path);
+        } catch {
+          resolutionFailed = true;
+          break;
+        }
+      }
+    }
+    if (!resolutionFailed) {
+      checks = checks.map((check, index) => {
+        const runId = runIdsByIndex.get(index);
+        const path = runId === undefined ? undefined : pathsByRunId.get(runId);
+        return path === undefined ? check : { ...check, workflowPath: path };
+      });
+    }
+  }
   const trustEmptyProtectionReads = readTrustEmptyProtectionReads(iddConfig);
   const branchRulesRead = fetchGovernanceJson(
     `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,

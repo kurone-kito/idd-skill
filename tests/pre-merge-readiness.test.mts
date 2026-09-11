@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+// #2919: the real workflow-file-path constant, imported here (a test file,
+// no import-cycle constraint applies) to pin protocol-helpers.mts's own
+// independently-declared `ADVISORY_CONVERGENCE_WORKFLOW_FILE_PATH` literal
+// against it -- see that literal's own doc comment for why it can't be a
+// direct import there.
+import { ADVISORY_CONVERGENCE_WORKFLOW_PATH } from '../src/scripts/advisory-convergence.mts';
 import {
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
@@ -9630,6 +9636,79 @@ test('#2911 finding 1/round 12: an expired, run-verified self-referential marker
     (summary as { blockers: unknown }).blockers,
     computePreMergeReadinessBlockers(summary as Record<string, unknown>),
   );
+});
+
+// #2919: `workflowName` alone is only the workflow YAML's `name:` display
+// string, which a DIFFERENT workflow file can declare identically -- this
+// issue's own Background documents this repository's own
+// `idd-advisory-convergence.yml` running two simultaneous instances during
+// its Phase 1 transition window. Widening the producer key to also
+// consider `workflowPath` must not regress the #2911 finding-1 scenario
+// above when the checker's own live instance carries its REAL path.
+test('#2919: an expired, run-verified self-referential marker still blocks when the checker check-run carries the REAL workflow path', () => {
+  const base = selfWaiverInputBase();
+  const checks = (base.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          completedAt: '2026-05-11T23:25:00Z',
+          startedAt: '2026-05-11T23:25:00Z',
+          type: 'check-run',
+          workflowName: 'IDD advisory-convergence gate',
+          workflowPath: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+        }
+      : check,
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-real-path',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, checks, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+});
+
+// #2919 (this issue's own motivating vulnerability): a decoy check-run
+// sharing `name`/`type`/`workflowName` with the real checker but sourced
+// from a DIFFERENT workflow FILE must never be treated as the checker's
+// own candidate -- it is excluded from `selfConvergenceProducerCandidates`
+// entirely, so the (here, otherwise-genuine) expired marker never gets a
+// real checker instance to evaluate against and the blocker does not fire
+// from this decoy's state.
+test('#2919: a decoy checker check-run sourced from a DIFFERENT workflow FILE is excluded as a candidate even though it shares name/type/workflowName', () => {
+  const base = selfWaiverInputBase();
+  const checks = (base.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          completedAt: '2026-05-11T23:25:00Z',
+          startedAt: '2026-05-11T23:25:00Z',
+          type: 'check-run',
+          workflowName: 'IDD advisory-convergence gate',
+          workflowPath: '.github/workflows/some-other-workflow.yml',
+        }
+      : check,
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-decoy-path',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, checks, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
 });
 
 test('#2911 finding 2/round 13: a genuine rerun completing AFTER the expired marker clears the blocker', () => {

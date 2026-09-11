@@ -2548,19 +2548,22 @@ export function selectLatestCheckInstance(group) {
  * behavior-identical.
  *
  * Residual known limitation: two genuinely independent producers that
- * share both a `name` and a `type` and both lack a `workflowName` (e.g.
- * two different non-Actions GitHub Apps that each post a check-run
- * directly, rather than through a workflow) remain indistinguishable
+ * share a `name`, a `type`, and (when populated) a `workflowName` AND a
+ * `workflowPath` (e.g. two different non-Actions GitHub Apps that each
+ * post a check-run directly, rather than through a workflow -- neither
+ * has a `workflowPath` to disambiguate with) remain indistinguishable
  * here and will still be grouped together. Closing that fully needs a
  * stronger producer identity (e.g. the owning GitHub App) than
  * `gh`/GraphQL's `statusCheckRollup` exposes today; `ci-wait-state.mts`'s
  * own `(checkName, workflowName)` key has the identical accepted gap.
  */
 /**
- * Group check-run instances by the same `(name, type, workflowName)`
- * producer-identity key `selectLatestCheckPerName` reduces to one
- * representative -- shared here so a caller that needs to inspect the
- * DISCARDED siblings, not just the survivor (see
+ * Group check-run instances by the same `(name, type, workflowName,
+ * workflowPath)` producer-identity key (#2919 added `workflowPath`, see
+ * `CheckLike`'s own doc comment for why `workflowName` alone is
+ * insufficient) `selectLatestCheckPerName` reduces to one representative
+ * -- shared here so a caller that needs to inspect the DISCARDED
+ * siblings, not just the survivor (see
  * {@link findDiscardedNonPassingSiblings}), can never drift out of sync
  * with that grouping.
  */
@@ -2579,7 +2582,10 @@ function groupChecksByProducer(checks) {
     const workflowName = check.workflowName
       ? String(check.workflowName).trim()
       : '';
-    const key = `${String(check.name)}\0${type}\0${workflowName}`;
+    const workflowPath = check.workflowPath
+      ? String(check.workflowPath).trim()
+      : '';
+    const key = `${String(check.name)}\0${type}\0${workflowName}\0${workflowPath}`;
     const group = groups.get(key);
     if (group) {
       group.push(check);
@@ -2661,6 +2667,11 @@ export function classifyCiChecks(checks) {
     completedAt: check.completedAt ?? null,
     type: check.type ?? null,
     workflowName: check.workflowName ?? null,
+    // #2919: carried through so a caller that populates it gets the
+    // stronger producer-identity split at this shared dedup/grouping
+    // layer too, not just at the one call site that originally
+    // motivated it -- see `CheckLike`'s own doc comment.
+    workflowPath: check.workflowPath ?? null,
   }));
   // GitHub can report several check-run instances that share the same
   // check `name` (a manual or automatic re-run leaves the earlier instance
@@ -4905,6 +4916,12 @@ export function summarizeRequiredChecks(
       // rerun from a genuinely independent, differently-sourced check.
       type: check.type ? String(check.type) : '',
       workflowName: check.workflowName ? String(check.workflowName).trim() : '',
+      // #2919: carried through so the PRIMARY required-check gate below
+      // (`classifyCiChecks(effectiveChecks)`) shares the same widened
+      // producer key as every other consumer -- see `CheckLike`'s doc
+      // comment. Absent (`''`) for every check this collector doesn't
+      // resolve a path for, which stays permissive/unchanged.
+      workflowPath: check.workflowPath ? String(check.workflowPath).trim() : '',
     };
   });
   const matchedRequiredChecks = normalizedChecks.filter((check) =>
@@ -6930,7 +6947,16 @@ export function buildPreMergeReadinessSummary(
       )
       .map((check) => ({
         name: String(check.name ?? ''),
-        state: String(check.state ?? ''),
+        // Also observed (Copilot, PR #2915, kurone-kito/idd-skill#2919):
+        // case-normalized here (matching `summarizeRequiredChecks`'s own
+        // normalization, which has not run yet at this raw `checks`
+        // read) so a lowercase live `state` can never make the
+        // `CHECK_PASS_EQUIVALENT_STATES` filter below (populated with
+        // uppercase literals) find zero candidates and silently skip
+        // this blocker even while `ci.status` reads passing. Real
+        // GitHub GraphQL enums are already uppercase, so this is
+        // defensive rather than a live behavior change.
+        state: String(check.state ?? '').toUpperCase(),
         completedAt: check.completedAt ?? null,
         // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1): also
         // carried through for the wrongClaim claim-installation
@@ -6939,6 +6965,12 @@ export function buildPreMergeReadinessSummary(
         startedAt: check.startedAt ?? null,
         type: check.type ?? null,
         workflowName: check.workflowName ?? null,
+        // kurone-kito/idd-skill#2919: carried through for the
+        // workflow-FILE-path filter below, which closes the gap
+        // `workflowName` alone leaves open -- two different workflow
+        // FILES can declare the identical `name:` display string (see
+        // `CheckLike`'s own doc comment).
+        workflowPath: check.workflowPath ?? null,
       }))
       .filter((check) => ci.requiredCheckNames.includes(check.name));
     // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1, fresh
@@ -6977,6 +7009,26 @@ export function buildPreMergeReadinessSummary(
     // identity, never an unlabeled one.
     const ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME =
       'IDD advisory-convergence gate';
+    // kurone-kito/idd-skill#2919: this issue's own motivating gap --
+    // `ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME` above is only the
+    // workflow YAML's top-level `name:` string, which a DIFFERENT
+    // workflow file can declare identically (Copilot review, PR #2915:
+    // this repository's own `idd-advisory-convergence.yml` documents
+    // running both `pull_request` and `pull_request_target` instances
+    // of the SAME file simultaneously during its Phase 1 transition
+    // window -- a legitimate same-file case this filter must keep
+    // passing, not the gap this constant closes). Declared as an
+    // independent local literal rather than importing
+    // `ADVISORY_CONVERGENCE_WORKFLOW_PATH` from `advisory-convergence.mts`
+    // -- that file already imports FROM this one (`protocol-helpers.mts`),
+    // so the reverse import would cycle -- mirroring
+    // `ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME`'s own documented
+    // rationale for doing the same thing just above. A dedicated test
+    // (`tests/pre-merge-readiness.test.mts`) imports the real constant
+    // and pins this literal against it so the two can never silently
+    // drift apart.
+    const ADVISORY_CONVERGENCE_WORKFLOW_FILE_PATH =
+      '.github/workflows/idd-advisory-convergence.yml';
     const selfConvergenceProducerCandidates = selectLatestCheckPerName(
       selfConvergenceRawInstances,
     ).filter(
@@ -6984,7 +7036,16 @@ export function buildPreMergeReadinessSummary(
         CHECK_PASS_EQUIVALENT_STATES.has(check.state) &&
         (!check.type || check.type === 'check-run') &&
         (!check.workflowName ||
-          check.workflowName === ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME),
+          check.workflowName === ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME) &&
+        // #2919: `workflowName` alone lets a decoy workflow FILE that
+        // happens to share the real checker's display name masquerade
+        // as a genuine candidate (this issue's own Background). Absent
+        // `workflowPath` (every caller/fixture that doesn't resolve it)
+        // stays permissive, identical to the `workflowName` fallback
+        // just above -- only a POSITIVELY different, resolved path is
+        // ever excluded.
+        (!check.workflowPath ||
+          check.workflowPath === ADVISORY_CONVERGENCE_WORKFLOW_FILE_PATH),
     );
     for (const latestSelfConvergenceCheck of selfConvergenceProducerCandidates) {
       const autoWaiverRunVerified = options.autoWaiverRunVerified ?? {};
