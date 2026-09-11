@@ -9519,7 +9519,18 @@ function withSelfWaiverCheckState(
     check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
       ? completedAt === undefined
         ? { name: check.name, state }
-        : { ...check, state, completedAt }
+        : // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1):
+          // also pins `startedAt` to `completedAt` here -- the base
+          // fixture's own `startedAt` (from
+          // `withAdvisoryConvergenceRequiredCheck`) is a fixed value
+          // unrelated to any given test's own `completedAt`, and once
+          // `passingStartedAtMs` became a real comparison anchor (see
+          // that variable's own doc comment), an unrelated leftover
+          // `startedAt` could silently change a test's outcome. Callers
+          // that need a genuinely distinct `startedAt`/`completedAt`
+          // pair (to exercise that exact race) build their own check
+          // object directly instead of using this helper.
+          { ...check, state, completedAt, startedAt: completedAt }
       : check,
   );
   return { ...input, checks };
@@ -10321,4 +10332,78 @@ test('#2911 (Codex review, PR #2915, P2): a wrongClaim marker that already expir
   // fix itself: claimIdentityInstalledAt genuinely postdates the pass.
   assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
   assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test("#2911 (Codex review, PR #2915, P1): a claim handoff landing between the run's startedAt and completedAt still counts as wrong-claim-stale, even though completedAt alone reads after the handoff", () => {
+  // The run STARTS (and fetches its comment/waiver evidence) while
+  // claim-123 is still active, but doesn't COMPLETE until after
+  // claim-456 is installed -- the exact race this finding is about.
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T20:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T20:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderUnclaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        timestamp: '2026-05-11T21:00:00Z',
+      }),
+      createdAt: '2026-05-11T21:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli-2',
+        claimId: 'claim-456',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const fixture = selfWaiverInputBase();
+  const checks = (fixture.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          // Started BEFORE the 22:00 handoff, completed AFTER it --
+          // `completedAt` alone would read as "fresh" (>= 22:00), but
+          // the run's own evidence-fetch happened under claim-123.
+          startedAt: '2026-05-11T21:30:00Z',
+          completedAt: '2026-05-11T22:30:00Z',
+        }
+      : check,
+  );
+  const base = { ...fixture, checks };
+  // Covers the 22:30 pass within its own window, so the createdAt/
+  // expiresAt bounds (unaffected by this fix) don't exclude it.
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-started-before-handoff',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:00:00Z',
+    runId: '5252',
+    createdAt: '2026-05-11T21:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      expectedClaimId: 'claim-456',
+      expectedAgentId: 'github-copilot-cli-2',
+      autoWaiverRunVerified: { '5252': true },
+    }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
 });

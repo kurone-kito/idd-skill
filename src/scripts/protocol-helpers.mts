@@ -8724,6 +8724,11 @@ export function buildPreMergeReadinessSummary(
         name: String(check.name ?? ''),
         state: String(check.state ?? ''),
         completedAt: check.completedAt ?? null,
+        // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1): also
+        // carried through for the wrongClaim claim-installation
+        // comparison below, which anchors on this instead of
+        // `completedAt` -- see that comparison's own doc comment.
+        startedAt: check.startedAt ?? null,
         type: check.type ?? null,
         workflowName: check.workflowName ?? null,
       }))
@@ -8804,6 +8809,21 @@ export function buildPreMergeReadinessSummary(
       const passingCompletedAtMs = parseCompletedAt(
         latestSelfConvergenceCheck.completedAt,
       );
+      // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1): a
+      // long-running check job observes state (fetches comments/waiver
+      // evidence) starting near its OWN `startedAt`, not its later
+      // `completedAt` -- a claim handoff that lands strictly between
+      // those two moments means the run still evaluated the OLD claim's
+      // waiver even though its `completedAt` now reads after the
+      // handoff. Used only by the wrongClaim claim-installation
+      // comparison below (never the createdAt/expiresAt window checks,
+      // which are about the marker's own lifecycle relative to when the
+      // check's result was finalized, a different question). Falls back
+      // to `passingCompletedAtMs` when `startedAt` is missing/unparseable
+      // (legacy data shape) rather than weakening the comparison.
+      const passingStartedAtMs =
+        parseCompletedAt(latestSelfConvergenceCheck.startedAt) ??
+        passingCompletedAtMs;
       // kurone-kito/idd-skill#2911 (acceptance criterion 2, self-critique
       // against round 13's own commit message -- `git show 863c5249`
       // promised "correlation to the passing check's own completedAt OR
@@ -8908,9 +8928,17 @@ export function buildPreMergeReadinessSummary(
               }
               if (!claimIdentityInstalledAt) return true;
               const installedAtMs = Date.parse(claimIdentityInstalledAt);
+              // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1):
+              // anchors on `passingStartedAtMs`, not `passingCompletedAtMs`
+              // -- see that variable's own doc comment. A claim handoff
+              // landing strictly between the run's start and its
+              // completion still means the run's own evidence-fetch
+              // observed the OLD claim, so this must flag stale even
+              // though the check's `completedAt` now reads after the
+              // handoff.
               return (
                 Number.isNaN(installedAtMs) ||
-                passingCompletedAtMs < installedAtMs
+                (passingStartedAtMs ?? passingCompletedAtMs) < installedAtMs
               );
             });
       if (staleExpiredEntry) {
