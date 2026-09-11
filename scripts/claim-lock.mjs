@@ -634,6 +634,22 @@ function resolveGeneratedTokensWriteLockPath(recordPath) {
  * never a write landing invisibly *inside* backfill's own read-then-write
  * window).
  *
+ * **Scope: writers only, not a general readers/writers lock** (#2922
+ * review, Copilot). A standalone {@link readGeneratedClaimTokens} /
+ * {@link readGeneratedTokensAtPath} call made *outside* another write's own
+ * `critical` callback is never guarded by this lock -- only the two
+ * call sites that mutate the record (this file's own `recordGeneratedClaimTokens`
+ * and `backfillGeneratedClaimTokens`) participate. On Windows,
+ * {@link atomicReplaceFile}'s existing-file branch removes the old target
+ * before renaming the replacement in (see that function's own doc
+ * comment, and `overwriteLockAtomically`'s identical, pre-existing gap
+ * for the claim lock file above), so an unguarded concurrent read can in
+ * principle observe a transient `absent` during any write to this record,
+ * with or without this lock. That gap predates this lock and is
+ * unrelated to the nonce-clobber race it closes; guarding reads too (or
+ * changing the read contract to rule out a transient `absent`) is a
+ * separate, broader design question out of scope for #2922.
+ *
  * `critical` must call only the unlocked write primitive
  * ({@link writeGeneratedClaimTokensRecord}), never the locked
  * {@link recordGeneratedClaimTokens} wrapper -- this guard is not
@@ -683,19 +699,30 @@ function withGeneratedTokensWriteLock(recordPath, critical) {
       sleepSyncMs(GENERATED_TOKENS_WRITE_LOCK_RETRY_INTERVAL_MS);
     }
   }
+  let result;
   try {
-    return critical();
-  } finally {
-    // Best-effort cleanup only: a failure here never masks a real error
-    // from `critical()`, and a leaked guard file only costs the next
-    // caller a bounded wait before this same failure mode applies to them
-    // too, per the fail-closed rationale above.
+    result = critical();
+  } catch (error) {
+    // Best-effort cleanup on a `critical()` failure only: a cleanup
+    // failure here must never mask the real error the caller needs to
+    // see, so it is swallowed -- a leaked guard file in this branch only
+    // costs the next caller a bounded wait before this same fail-closed
+    // behavior applies to them too.
     try {
       unlinkSync(lockPath);
     } catch {
       // ignore
     }
+    throw error;
   }
+  // `critical()` succeeded: do NOT swallow a release failure here (#2922
+  // review, Codex). Reporting success while silently leaving the guard
+  // behind would give the caller no signal that anything needs recovery
+  // -- every subsequent write for this claim-id would otherwise just
+  // silently wait out a full timeout before failing, with nothing
+  // pointing at the actual cause.
+  unlinkSync(lockPath);
+  return result;
 }
 /**
  * Read-only inspection of the generated-tokens record for `claimId` at
