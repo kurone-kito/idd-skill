@@ -7728,19 +7728,81 @@ export function computePreMergeReadinessBlockers(
           entryExpiresAtMs >= passingCheckCompletedAtMs
         );
       });
-      if (staleAutoWaiverEntry) {
+      // kurone-kito/idd-skill#2657 (Codex P1, PR #2895, round 14): `expired`
+      // is not the only way a self-referential-bootstrap-auto marker stops
+      // covering a check -- `summarizeExternalCheckWaivers` `continue`s a
+      // marker into `wrongClaim` (never even reaching the expiry check)
+      // the moment its bound claim id no longer matches the CURRENT active
+      // claim (or its accepted one-hop predecessor). Two handoffs after the
+      // marker posted can leave it permanently `wrongClaim`, with no expiry
+      // ever recorded -- an expired-only scan can never see this case, so a
+      // passing check whose sole justifying marker is claim-invalid slipped
+      // through unblocked. Correlating this against the check's own
+      // `completedAt` needs a different anchor than expiry uses: a
+      // marker's own `createdAt` is always before any later rerun's
+      // `completedAt`, so comparing against IT would make this permanent
+      // exactly like the expired-only bug round 13 just fixed. The anchor
+      // that actually moves is the CURRENT active claim's own `createdAt`
+      // (when it was installed): a check that last completed AFTER that
+      // moment already ran under the current claim lineage, so its pass
+      // cannot rest on a marker this same gate would now reject as
+      // claim-invalid. Fails closed (blocks) on a missing active claim or
+      // an unparseable claim `createdAt` -- a released claim (or corrupt
+      // evidence) means a fresh rerun would reject the marker too, so
+      // trusting an unprovable "ran under the current claim" would be
+      // unsafe. Deliberately NOT suppressed by a co-existing `valid` marker
+      // for the same selector: this call site's own read-only, ADD-only
+      // contract (see `allowSelfReferentialBootstrapAuto`'s doc comment)
+      // means it must never use `valid` evidence to satisfy a gate, only to
+      // flag one.
+      const autoWaiverWrongClaimList = Array.isArray(
+        autoWaiverEvidenceForStaleness.wrongClaim,
+      )
+        ? (autoWaiverEvidenceForStaleness.wrongClaim as Record<
+            string,
+            unknown
+          >[])
+        : [];
+      const claimForStaleness = preMergeAsRecord(report.claim);
+      const activeClaimForStaleness = preMergeAsRecord(
+        claimForStaleness.activeClaim,
+      );
+      const activeClaimCreatedAtMs = parseCompletedAt(
+        String(activeClaimForStaleness.createdAt ?? ''),
+      );
+      const staleWrongClaimEntry = autoWaiverWrongClaimList.find((entry) => {
+        if (
+          entry?.authorLogin !== 'github-actions[bot]' ||
+          String(entry?.checkSelector ?? '') !==
+            advisoryConvergenceCheckSelectorForStaleness
+        ) {
+          return false;
+        }
+        if (passingCheckCompletedAtMs === null) return true;
+        if (activeClaimCreatedAtMs === null) return true;
+        return passingCheckCompletedAtMs < activeClaimCreatedAtMs;
+      });
+      const staleDetail = staleAutoWaiverEntry
+        ? `expired at "${String(staleAutoWaiverEntry.expiresAt ?? 'unknown')}" with no rerun since`
+        : staleWrongClaimEntry
+          ? `was bound to claim "${String(
+              staleWrongClaimEntry.waiverClaimId ?? 'unknown',
+            )}", which the current active claim (installed at "${
+              String(activeClaimForStaleness.createdAt ?? '') || 'unknown'
+            }") no longer matches, with no rerun since`
+          : null;
+      if (staleDetail) {
         blockers.push({
           gate: 'ci',
           detail:
             `"${advisoryConvergenceCheckSelectorForStaleness}" currently ` +
             `reports a passing conclusion, but the self-referential-` +
             `bootstrap-auto waiver posted by github-actions[bot] that may ` +
-            `have justified it expired at ` +
-            `"${String(staleAutoWaiverEntry.expiresAt ?? 'unknown')}" with ` +
-            `no rerun since -- GitHub does not automatically re-evaluate a ` +
-            `passing check when its supporting waiver comment expires. ` +
-            `Rerun "${advisoryConvergenceCheckSelectorForStaleness}" for ` +
-            'the current HEAD before merging so it reflects the current, ' +
+            `have justified it ${staleDetail} -- GitHub does not ` +
+            `automatically re-evaluate a passing check when its ` +
+            `supporting waiver comment stops being valid. Rerun ` +
+            `"${advisoryConvergenceCheckSelectorForStaleness}" for the ` +
+            'current HEAD before merging so it reflects the current, ' +
             'unwaived state.',
         });
       }

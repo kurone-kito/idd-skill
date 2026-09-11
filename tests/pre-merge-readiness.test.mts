@@ -7607,6 +7607,143 @@ test('buildPreMergeReadinessSummary blocks on a currently-passing idd-advisory-c
   );
 });
 
+test('buildPreMergeReadinessSummary blocks on a currently-passing idd-advisory-convergence check whose supporting self-referential-bootstrap-auto marker is wrongClaim, not expired (Codex P1, PR #2895, round 14)', () => {
+  // The test above covers `expired` markers; this covers the OTHER way a
+  // marker stops covering a check -- its bound claim id no longer matches
+  // the current active claim (two claim handoffs after it posted). Such a
+  // marker never reaches the expiry check at all (summarizeExternalCheckWaivers
+  // classifies it wrongClaim first), so the expired-only scan from the test
+  // above can never see it.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  // clean.json's activeClaim.createdAt is "2026-05-11T23:20:00Z" -- the
+  // anchor this correlation uses instead of the marker's own createdAt (see
+  // the fix's own doc comment for why the marker's createdAt would make
+  // this permanent, exactly like the round 13 expired-only bug).
+  const activeClaimCreatedAt = fixture.expected.claim.activeClaim.createdAt;
+  assert.equal(activeClaimCreatedAt, '2026-05-11T23:20:00Z');
+
+  function buildInput(checkCompletedAt: string) {
+    return {
+      ...fixture.input,
+      checks: [
+        ...fixture.input.checks,
+        {
+          name: 'idd-advisory-convergence',
+          state: 'SUCCESS',
+          completedAt: checkCompletedAt,
+        },
+      ],
+      branchRules: [
+        fixture.input.branchRules[0],
+        {
+          type: 'required_status_checks',
+          parameters: {
+            required_status_checks: [
+              { context: 'lint' },
+              { context: 'idd-advisory-convergence' },
+            ],
+          },
+        },
+      ],
+    };
+  }
+
+  const wrongClaimAutoWaiverBody = renderExternalCheckWaiverComment({
+    agentId: 'github-actions-bot',
+    claimId: 'claim-old-superseded-twice',
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    expiresAt: '2099-01-01T00:00:00Z', // never expires -- wrongClaim, not expired
+    runId: '999',
+  });
+  const wrongClaimComment = {
+    id: 'wrong-claim-auto-waiver',
+    author: { login: 'github-actions[bot]' },
+    body: wrongClaimAutoWaiverBody,
+    createdAt: '2026-05-11T18:00:00Z',
+    updatedAt: '2026-05-11T18:00:00Z',
+  };
+
+  // Case 1: the check last completed BEFORE the current claim was
+  // installed -- its pass could not have been evaluated under the current
+  // claim lineage, so the wrongClaim marker's earlier coverage is all it
+  // ever had. Must block.
+  const beforeClaimInstall = buildPreMergeReadinessSummary(
+    {
+      ...buildInput('2026-05-11T23:10:00Z'),
+      comments: [...fixture.input.comments, wrongClaimComment],
+    },
+    fixture.options,
+  );
+  const wrongClaimEvidence = (
+    beforeClaimInstall.autoWaiverEvidence as {
+      wrongClaim: { authorLogin: string }[];
+    }
+  ).wrongClaim;
+  assert.equal(wrongClaimEvidence.length, 1);
+  assert.equal(wrongClaimEvidence[0].authorLogin, 'github-actions[bot]');
+  const beforeStaleGates = (
+    beforeClaimInstall.blockers as { gate: string; detail: string }[]
+  ).filter((blocker) => blocker.gate === 'ci');
+  assert.ok(
+    beforeStaleGates.some((blocker) =>
+      blocker.detail.includes('self-referential-bootstrap-auto'),
+    ),
+    `expected a stale-auto-waiver ci blocker, got: ${JSON.stringify(beforeStaleGates)}`,
+  );
+  assert.deepEqual(
+    beforeClaimInstall.blockers,
+    computePreMergeReadinessBlockers(beforeClaimInstall),
+  );
+
+  // Case 2: the check last completed AFTER the current claim was
+  // installed -- it already ran under the current claim lineage, so its
+  // pass cannot rest on the now-wrongClaim marker. Must NOT block.
+  const afterClaimInstall = buildPreMergeReadinessSummary(
+    {
+      ...buildInput('2026-05-11T23:58:00Z'),
+      comments: [...fixture.input.comments, wrongClaimComment],
+    },
+    fixture.options,
+  );
+  assert.ok(
+    !(afterClaimInstall.blockers as { gate: string; detail: string }[]).some(
+      (blocker) => blocker.detail.includes('self-referential-bootstrap-auto'),
+    ),
+  );
+  assert.deepEqual(
+    afterClaimInstall.blockers,
+    computePreMergeReadinessBlockers(afterClaimInstall),
+  );
+
+  // Case 3: fail closed -- no active claim resolves at all. A released
+  // claim (or corrupt evidence) means a fresh rerun would reject the
+  // marker too, so an unprovable "ran under the current claim" must still
+  // block.
+  const noActiveClaim = buildPreMergeReadinessSummary(
+    {
+      ...buildInput('2026-05-11T23:58:00Z'),
+      comments: [...fixture.input.comments, wrongClaimComment],
+      claimEvents: [],
+    },
+    fixture.options,
+  );
+  const noClaimStaleGates = (
+    noActiveClaim.blockers as { gate: string; detail: string }[]
+  ).filter((blocker) => blocker.gate === 'ci');
+  assert.ok(
+    noClaimStaleGates.some((blocker) =>
+      blocker.detail.includes('self-referential-bootstrap-auto'),
+    ),
+    `expected a fail-closed stale-auto-waiver ci blocker, got: ${JSON.stringify(noClaimStaleGates)}`,
+  );
+  assert.deepEqual(
+    noActiveClaim.blockers,
+    computePreMergeReadinessBlockers(noActiveClaim),
+  );
+});
+
 // #2021: a posted, otherwise-valid `idd-advisory-convergence` waiver must
 // only make the REQUIRED CHECK itself `coveredByWaiver` once the SAME
 // deadline/terminal precondition `advisory-convergence.mts`'s own gate
