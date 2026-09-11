@@ -540,7 +540,7 @@ const RACE_TEST_WORKERS_PER_ROUND = Math.min(
   Math.max(8, availableParallelism() * 2),
 );
 
-test('acquire: structural invariants hold under a same-claim-id race against an absent lock (PR #2917 review, Codex; racedCreate observation is a diagnostic, torn-read gap tracked in kurone-kito/idd-skill#2920)', async (t) => {
+test('acquire: structural invariants hold under a same-claim-id race against an absent lock, including the closed torn-read collision gap (PR #2917 review, Codex; gap closed by #2920)', async (t) => {
   // Statistical health check across a couple of rounds, not a proof, like
   // the concurrent-takeovers test above -- but using worker_threads with an
   // Atomics ready-count barrier instead of subprocess spawning. The
@@ -548,9 +548,7 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
   // overhead (milliseconds) reliably swamps it, so a subprocess batch
   // (like the takeover test above) essentially never reproduces this
   // specific race in practice. In-process worker threads sharing one
-  // Node process avoid that overhead and do, on hosts with enough cores
-  // -- see kurone-kito/idd-skill#2920 for the measurements this is based
-  // on and the pre-existing gap the torn-read branch below documents.
+  // Node process avoid that overhead and do, on hosts with enough cores.
   //
   // A deterministic reproduction (a test-only injection hook forcing the
   // race window open) was considered and rejected: it would add a
@@ -560,25 +558,25 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
   // (the source of `racedCreate: true`) are verified by direct code
   // reading instead, and separately by the deterministic
   // "genuinely pre-existing matching lock" test below, which exercises the
-  // *no-race* path exactly. This test's positive `racedCreate`/torn-read
-  // observations stay a diagnostic, not a hard assertion, precisely
+  // *no-race* path exactly. This test's positive `racedCreate`
+  // observation stays a diagnostic, not a hard assertion, precisely
   // because a regression that stopped setting `racedCreate` entirely could
-  // still pass a run that never happens to observe the race -- the
-  // structural invariants asserted below are what this test actually
-  // guards on every run, race-observed or not.
+  // still pass a run that never happens to observe the race.
   //
   // Structural invariants that must hold on every round regardless of
   // whether a race actually manifests on this host:
-  // - every outcome's mode is 'acquired' or 'collision'
+  // - every outcome's mode is 'acquired' -- **never** 'collision': #2920
+  //   closed the fresh-create path's torn-read window (a same-directory
+  //   temp-write + atomic `linkSync` instead of a direct
+  //   `writeFileSync(path, ..., { flag: 'wx' })`), so a same-claim-id race
+  //   against an absent lock can no longer produce a false collision here;
+  //   this batch's own lock starts absent and every acquire uses the same
+  //   claim-id, so a genuine different-claim-id collision was never
+  //   possible in this scenario either -- any `collision` outcome now
+  //   means a regression, not an accepted pre-existing gap
   // - exactly one outcome is a true fresh create (mode:'acquired', no
-  //   `reacquired`) -- O_EXCL create is atomic at the OS level
+  //   `reacquired`) -- the atomic create is exclusive at the OS level
   // - every `racedCreate:true` co-occurs with `reacquired:true`
-  // - every `collision` outcome carries no `holder` -- this batch's own
-  //   lock starts absent and every acquire uses the same claim-id, so a
-  //   genuine different-claim-id collision is impossible here; a
-  //   `collision` can only be the pre-existing torn-read gap (#2920), and
-  //   a `holder` appearing on one would mean a *different*, more serious
-  //   bug than the one this comment documents
   // - the final lock body still names the single fresh creator
   //
   // Whether `racedCreate:true` is actually observed varies with host CPU
@@ -592,7 +590,6 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
     const ROUNDS = RACE_TEST_ROUNDS;
     const CONCURRENT_ACQUIRES = RACE_TEST_WORKERS_PER_ROUND;
     let anyRacedCreate = false;
-    let anyTornReadCollision = false;
 
     for (let round = 0; round < ROUNDS; round += 1) {
       rmSync(lockPath, { force: true });
@@ -641,9 +638,10 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
       await Promise.all(workerRefs.map((worker) => worker.terminate()));
 
       for (const outcome of outcomes) {
-        assert.ok(
-          outcome.mode === 'acquired' || outcome.mode === 'collision',
-          `unexpected mode, got: ${JSON.stringify(outcome)}`,
+        assert.equal(
+          outcome.mode,
+          'acquired',
+          `expected every same-claim-id racer to acquire (never collision, #2920) -- got: ${JSON.stringify(outcome)}`,
         );
         if (outcome.racedCreate === true) {
           assert.equal(
@@ -652,14 +650,6 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
             `racedCreate:true without reacquired:true, got: ${JSON.stringify(outcome)}`,
           );
           anyRacedCreate = true;
-        }
-        if (outcome.mode === 'collision') {
-          assert.equal(
-            outcome.holder,
-            undefined,
-            `expected a same-claim-id collision in this batch to be the torn-read gap (no holder), got: ${JSON.stringify(outcome)}`,
-          );
-          anyTornReadCollision = true;
         }
       }
 
@@ -681,11 +671,6 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
       anyRacedCreate
         ? `observed racedCreate:true across ${ROUNDS} round(s)`
         : `no racedCreate:true observed across ${ROUNDS} round(s) on this host -- the positive path is verified by construction (acquireClaimLock's three reacquired-from-a-retry return sites), not exercised deterministically here`,
-    );
-    t.diagnostic(
-      anyTornReadCollision
-        ? `observed the pre-existing torn-read collision gap (kurone-kito/idd-skill#2920) across ${ROUNDS} round(s)`
-        : `no torn-read collision observed across ${ROUNDS} round(s) on this host`,
     );
   } finally {
     teardown(fixture);
