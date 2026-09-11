@@ -229,24 +229,33 @@ process.stdin.on('end', () => {
   // The relay's OWN process never received the caller's raw NODE_OPTIONS
   // (see WIN32_RELAY_SCRIPT's own doc comment) -- only this forwarded
   // copy of it, specifically for the inner spawn below. Strip only
-  // whitespace-separated --input-type=... tokens (kurone-kito/idd-skill
-  // #2910 follow-up on the Codex review): Node rejects --input-type
-  // outright (ERR_INPUT_TYPE_NOT_ALLOWED) for any invocation that is not
-  // itself --eval/--print/stdin, which a configured command that happens
-  // to run \`node <file>\` (as this file's own win32 CI test fixtures do)
-  // would be -- while every other flag, notably this repository's own
-  // win32 test stubs' inherited --require <preload>, passes through
-  // unchanged (verified live: a --require alongside --input-type
-  // survives this strip and still runs; deleting NODE_OPTIONS wholesale
-  // here instead was tried first and rejected -- it broke every one of
-  // those stubs, confirmed live).
+  // --input-type=... tokens (kurone-kito/idd-skill#2910 follow-up on the
+  // Codex review): Node rejects --input-type outright
+  // (ERR_INPUT_TYPE_NOT_ALLOWED) for any invocation that is not itself
+  // --eval/--print/stdin, which a configured command that happens to run
+  // \`node <file>\` (as this file's own win32 CI test fixtures do) would
+  // be -- while every other flag, notably this repository's own win32
+  // test stubs' inherited --require <preload>, passes through unchanged
+  // (verified live: a --require alongside --input-type survives this
+  // strip and still runs; deleting NODE_OPTIONS wholesale here instead
+  // was tried first and rejected -- it broke every one of those stubs,
+  // confirmed live).
+  //
+  // In-place regex removal, not split/rejoin (kurone-kito/idd-skill#2910
+  // review, Copilot follow-up): an earlier version of this strip
+  // tokenized on whitespace and rejoined with single spaces, which is
+  // lossy for a quoted --require/--import value containing its own
+  // internal whitespace (for example a Windows path with a space in a
+  // directory name) -- rejoining would silently corrupt that path.
+  // Removing only the matched \`--input-type=<non-whitespace>\`
+  // substring (plus its own leading separator) leaves every other
+  // character of the original string, including any such quoting,
+  // completely untouched.
   const forwardedNodeOptions = env['${WIN32_RELAY_NODE_OPTIONS_ENV}'] || '';
   delete env['${WIN32_RELAY_NODE_OPTIONS_ENV}'];
   const strippedNodeOptions = forwardedNodeOptions
-    .split(/\\s+/)
-    .filter(Boolean)
-    .filter((token) => !token.startsWith('--input-type='))
-    .join(' ');
+    .replace(/(^|\\s)--input-type=\\S+/g, '')
+    .trim();
   if (strippedNodeOptions) {
     env.NODE_OPTIONS = strippedNodeOptions;
   } else {

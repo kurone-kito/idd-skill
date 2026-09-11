@@ -851,9 +851,24 @@ process.stdin.on('end', () => {
   );
   const nodeOptionsAfterStub = process.env.NODE_OPTIONS;
   try {
+    // Quoted, and forward-slashed on win32 (kurone-kito/idd-skill#2910
+    // review, Copilot): tmpdir() can contain a space (a real, if
+    // uncommon, path shape on some hosts), and Node's NODE_OPTIONS
+    // parser splits on unquoted whitespace, so an unquoted path there
+    // would silently fail to load and this test would stop exercising
+    // what it claims to. Quoting alone is not enough on win32, though
+    // (empirically verified): inside a quoted NODE_OPTIONS token, Node
+    // treats a backslash as an escape character, so a quoted native
+    // Windows path (`C:\tmp\...`) loses every backslash and fails to
+    // resolve -- confirmed live: `--require "C:\tmp\...\preload.cjs"`
+    // throws `MODULE_NOT_FOUND` for the mangled path
+    // `C:tmp...preload.cjs`. `stubExecutable`'s own `--require` flag
+    // (`tests/test-utils.mts`) already works around exactly this by
+    // converting to forward slashes before quoting -- do the same here.
+    const quotedPreloadPath = `"${preloadPath.replaceAll('\\', '/')}"`;
     process.env.NODE_OPTIONS = nodeOptionsAfterStub
-      ? `${nodeOptionsAfterStub} --require ${preloadPath}`
-      : `--require ${preloadPath}`;
+      ? `${nodeOptionsAfterStub} --require ${quotedPreloadPath}`
+      : `--require ${quotedPreloadPath}`;
     const payload = samplePayload();
     const result = await invokeCritiqueTelemetryHook(
       stayAliveCommand('idd-telemetry-hook-win32-relay-preload-target'),
@@ -877,6 +892,102 @@ process.stdin.on('end', () => {
       delete process.env.NODE_OPTIONS;
     } else {
       process.env.NODE_OPTIONS = nodeOptionsAfterStub;
+    }
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 relay strips a non-canonically-cased Node_Options key too (kurone-kito/idd-skill#2910 review, Copilot)', async () => {
+  // Every other NODE_OPTIONS test in this file sets the canonical-case
+  // key, which would already pass even with the earlier exact-case-only
+  // `const { NODE_OPTIONS, ...relayEnv } = process.env` destructure --
+  // none of them actually exercises the case-insensitive scrub itself.
+  // Windows environment-variable names are case-insensitive at the OS
+  // level but a plain JS object key is not, so a caller whose own
+  // environment carries a differently-cased entry (real-world
+  // precedent: Windows system variables like ComSpec/Path routinely
+  // keep non-canonical casing) needs the scrub to still catch it.
+  // `process.env` is a plain object on every platform (this test's own
+  // manual assignment below simulates that shape directly, regardless
+  // of what the real OS would produce), so setting a mixed-case key
+  // here exercises the exact same code path a genuine Windows
+  // non-canonical entry would.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-mixed-case-'),
+  );
+  const relayPoisonedSentinel = join(sandbox, 'relay-poisoned.txt');
+  const preloadPath = join(sandbox, 'preload.cjs');
+  writeFileSync(
+    preloadPath,
+    `const fs = require('fs');
+if (process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND) {
+  fs.writeFileSync(${JSON.stringify(relayPoisonedSentinel)}, 'relay loaded the inherited preload');
+}
+`,
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-mixed-case-target',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  // stubExecutable's win32 branch already set the *canonical-case*
+  // process.env.NODE_OPTIONS (to inject its own --require <preload>).
+  // Move that content onto the non-canonically-cased key below instead
+  // of adding a second, separate key alongside it: a real Windows
+  // environment has exactly one such variable, just possibly spelled
+  // non-canonically -- simultaneously having both NODE_OPTIONS and
+  // Node_Options present is not a realistic shape, and this fix's own
+  // key-iteration order would nondeterministically clobber one value
+  // with the other (confirmed live: an earlier version of this test did
+  // exactly that and silently dropped the stub's own --require,
+  // breaking the stub mechanism itself, not the fix under test).
+  const nodeOptionsAfterStub = process.env.NODE_OPTIONS;
+  const hadMixedCaseKey = Object.hasOwn(process.env, 'Node_Options');
+  const previousMixedCaseValue = process.env.Node_Options;
+  try {
+    delete process.env.NODE_OPTIONS;
+    // Deliberately the *non*-canonical casing -- the sanitization fix
+    // under test matches keys case-insensitively via
+    // `key.toUpperCase() === 'NODE_OPTIONS'`, so this specific spelling
+    // exercises that comparison rather than an exact-match shortcut.
+    // Forward-slashed before quoting -- see the sibling preload test
+    // above for why a quoted native Windows backslash path fails to
+    // resolve on win32 (Node strips backslashes as escapes inside a
+    // quoted NODE_OPTIONS token).
+    const myPreloadRequire = `--require "${preloadPath.replaceAll('\\', '/')}"`;
+    process.env.Node_Options = nodeOptionsAfterStub
+      ? `${nodeOptionsAfterStub} ${myPreloadRequire}`
+      : myPreloadRequire;
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-mixed-case-target'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.equal(
+      existsSync(relayPoisonedSentinel),
+      false,
+      'expected the relay itself to never load a preload inherited via a non-canonically-cased NODE_OPTIONS key',
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the target to still receive the full payload with the preload forwarded',
+    );
+  } finally {
+    if (hadMixedCaseKey) {
+      process.env.Node_Options = previousMixedCaseValue;
+    } else {
+      delete process.env.Node_Options;
     }
     restore();
   }

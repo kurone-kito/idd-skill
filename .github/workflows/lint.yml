@@ -137,7 +137,11 @@ jobs:
       # fix -- dropping the flag if the file-level hang no longer occurs
       # -- was confirmed live on native Windows 11: the full suite
       # (including every direct-await, real-detached-child test) now
-      # completes and exits naturally in ~28s with no flag, 40 passed / 1
-      # skipped (a POSIX-only fixture) / 0 failed / 0 hung.
+      # completes and exits naturally in ~28s with no flag, every test
+      # passing except the one POSIX-only fixture this suite always
+      # skips on win32 -- no hangs, no failures. Deliberately not
+      # pinning an exact pass count here: this suite's own test count
+      # keeps growing as later rounds add coverage, and a hard-coded
+      # number would drift stale again on the very next addition.
       - name: Run critique telemetry hook tests
         run: node --test tests/idd-critique-telemetry-hook.test.mts
