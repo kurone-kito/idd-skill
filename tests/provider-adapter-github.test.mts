@@ -1983,7 +1983,7 @@ test('listCheckRunWorkflowPaths returns [] when the commit object is absent (e.g
 // `null` list item for a nullable type under a partial-error response --
 // both a `null` checkSuite node and a `null` checkRun node must be skipped
 // cleanly, not thrown as a generic TypeError.
-test('listCheckRunWorkflowPaths skips null checkSuite/checkRun list items instead of throwing', () => {
+test('listCheckRunWorkflowPaths skips a null checkSuite list item instead of throwing', () => {
   const port = createGithubProviderAdapter(
     'o',
     'r',
@@ -1996,6 +1996,59 @@ test('listCheckRunWorkflowPaths skips null checkSuite/checkRun list items instea
                 checkSuites: {
                   nodes: [
                     null,
+                    {
+                      workflowRun: {
+                        file: { path: '.github/workflows/real.yml' },
+                      },
+                      checkRuns: {
+                        nodes: [
+                          {
+                            detailsUrl:
+                              'https://github.com/o/r/actions/runs/1/job/1',
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const result = port.listCheckRunWorkflowPaths(
+    'o',
+    'r',
+    'x'.repeat(40),
+    'idd-advisory-convergence',
+  );
+  assert.deepEqual(result, [
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+      workflowPath: '.github/workflows/real.yml',
+    },
+  ]);
+});
+
+// kurone-kito/idd-skill#2926 (round 3 -- Copilot review, PR #2930):
+// regression guard for a real bug in round 2's own fix -- filtering `null`
+// checkRun nodes BEFORE counting them let `[validCheckRun, null]` look like
+// a trusted singleton (1 live entry) even though a second, unidentifiable
+// check-run might be hiding behind the `null`. The suspicion count must use
+// the RAW node list (including nulls), not the filtered live list.
+test('listCheckRunWorkflowPaths treats a null checkRun entry alongside a real one as two matches, not a trusted singleton (round 3 fix)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              object: {
+                checkSuites: {
+                  nodes: [
                     {
                       workflowRun: {
                         file: { path: '.github/workflows/real.yml' },
@@ -2027,7 +2080,7 @@ test('listCheckRunWorkflowPaths skips null checkSuite/checkRun list items instea
   assert.deepEqual(result, [
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
-      workflowPath: '.github/workflows/real.yml',
+      workflowPath: null,
     },
   ]);
 });

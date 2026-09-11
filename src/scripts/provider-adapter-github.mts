@@ -203,7 +203,19 @@ const CHECK_RUN_WORKFLOW_PATH_MAX_PAGES = 20;
  * `groupChecksByProducer` dedup this issue exists to close. So a suite
  * with more than one matching check-run reports `workflowPath: null` for
  * ALL of them -- unresolved, never silently trusted -- rather than reports
- * the suite's real path for any of them.
+ * the suite's real path for any of them. This empirically does NOT
+ * conflict with this repository's own `gh run rerun`-based recovery
+ * (`rerun-advisory-convergence.mts`): a live check against this issue's
+ * own PR #2930, whose `idd-advisory-convergence` check was itself rerun 3
+ * times during review, still showed exactly one matching check-run per
+ * suite throughout (Codex review round 3 raised this as a P1 concern;
+ * rejected with that evidence -- see the PR's own review thread).
+ *
+ * The "more than one" count uses the RAW node list, including any `null`
+ * entries (round 3 -- Copilot review, PR #2930): filtering nulls out
+ * first let `[validCheckRun, null]` look like a trusted singleton even
+ * though a second, unidentifiable check-run could be hiding behind the
+ * `null`.
  */
 function checkRunWorkflowPathsFromSuiteNodes(
   suiteNodes: unknown,
@@ -226,10 +238,16 @@ function checkRunWorkflowPathsFromSuiteNodes(
     const workflowPath = path == null ? null : String(path);
     const checkRunNodes = suite.checkRuns?.nodes;
     if (!Array.isArray(checkRunNodes)) continue;
+    // kurone-kito/idd-skill#2926 (round 3 -- Copilot review, PR #2930):
+    // count the RAW node list, INCLUDING any `null` entries, not just the
+    // live ones filtered below -- a `null` item can mask an ADDITIONAL
+    // check-run this defense cannot otherwise identify, so
+    // `[validCheckRun, null]` must be treated exactly like two live
+    // check-runs (unresolved), never silently trusted as a singleton.
+    const suiteWorkflowPath = checkRunNodes.length > 1 ? null : workflowPath;
     const liveCheckRuns = checkRunNodes.filter(
       (checkRun): checkRun is { detailsUrl?: unknown } => !!checkRun,
     );
-    const suiteWorkflowPath = liveCheckRuns.length > 1 ? null : workflowPath;
     for (const checkRun of liveCheckRuns) {
       out.push({
         detailsUrl: String(checkRun.detailsUrl ?? ''),
