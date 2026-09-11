@@ -1876,6 +1876,67 @@ test("write-lock: a guard recreated by a different owner while critical() is sti
   }
 });
 
+test('write-lock: a guard that vanishes between the release-time token read and the unlink is a silent no-op, not a thrown ENOENT (#2922 review round 11, Copilot)', () => {
+  // The token-verified release reads the guard, confirms the token still
+  // matches, then unlinks it -- two separate steps, not one atomic
+  // operation. If the guard disappears in the gap between them (an
+  // operator's manual removal landing in that exact narrow window, or any
+  // other legitimate reason -- the guard is simply already gone), the
+  // release must still treat that as "nothing left to remove," per this
+  // helper's own documented no-op contract, matching `releaseCloneLock`'s
+  // identical `ENOENT`-swallowing behavior on its own unlink in
+  // clone-lock.mts. Before this fix, the bare `unlinkSync` after the
+  // token-match check threw `ENOENT` uncaught, incorrectly surfacing a
+  // successful write as a failure.
+  const fixture = setupLinkedWorktree();
+  const fs = require('node:fs');
+  const originalReadFileSync = fs.readFileSync;
+  let intercepted = false;
+  try {
+    const claimId = 'claim-vanish-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+
+    fs.readFileSync = (...args: Parameters<typeof originalReadFileSync>) => {
+      const result = originalReadFileSync(...args);
+      if (!intercepted && args[0] === guardPath && typeof result === 'string') {
+        intercepted = true;
+        // Simulate the guard vanishing right after this release's own
+        // token-match read confirmed ownership, but before its own
+        // unlinkSync call (immediately below, in production code) runs.
+        fs.unlinkSync(guardPath);
+      }
+      return result;
+    };
+    require('node:module').syncBuiltinESMExports();
+
+    // Must not throw: a guard already gone by the time of the unlink is
+    // still a successful release, not a reportable failure.
+    assert.doesNotThrow(() => {
+      recordGeneratedClaimTokens(fixture.worktree, {
+        agentId: 'agent-a',
+        claimId,
+        nonce: 'n1',
+      });
+    });
+
+    assert.equal(
+      intercepted,
+      true,
+      'expected the readFileSync interception to fire during release',
+    );
+    // The record write itself completed normally, and the guard stays
+    // gone (nothing recreated it in this scenario).
+    const read = readGeneratedClaimTokens(fixture.worktree, claimId);
+    assert.equal(read.status, 'present');
+    assert.equal(existsSync(guardPath), false);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+    require('node:module').syncBuiltinESMExports();
+    teardown(fixture);
+  }
+});
+
 test('backfill-tokens: reports record-blocked instead of deleting a directory at the generated-tokens path (PR #2917 review, Codex P2 then Copilot)', () => {
   const fixture = setupLinkedWorktree();
   try {

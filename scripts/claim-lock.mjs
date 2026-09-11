@@ -658,12 +658,17 @@ function resolveGeneratedTokensWriteLockPath(recordPath) {
  * {@link recordGeneratedClaimTokens} wrapper -- this guard is not
  * re-entrant, and nesting would deadlock a caller against itself.
  *
- * The guard file's own *content* is never read back by anything -- unlike
- * the claim lock's `linkSync`-based fresh-create fix (#2920), which exists
+ * No *contending* reader ever needs to inspect the guard file's content
+ * before the creator finishes writing and closes it -- unlike the claim
+ * lock's `linkSync`-based fresh-create fix (#2920), which exists
  * specifically so a *third-party reader* never observes a torn body -- so a
  * plain `wx`-flag exclusive create is sufficient here: POSIX and Windows
  * both make `O_CREAT | O_EXCL` (`CREATE_NEW`) atomic for existence alone,
- * with no partial-content window to close.
+ * with no partial-content window to close. (This creator's *own* later
+ * release does read the body back, to verify the token it wrote at create
+ * time is still present -- see {@link releaseGeneratedTokensWriteLockIfOwned}
+ * -- #2922 review round 11, Copilot; only a torn-body window relevant to a
+ * different reader is what this paragraph rules out.)
  *
  * The create step uses {@link openSync}/{@link writeSync}/{@link closeSync}
  * directly, rather than a single {@link writeFileSync} call, specifically to
@@ -852,7 +857,13 @@ function randomGeneratedTokensWriteLockToken() {
  * missing guard (already released, or never observed) and a guard whose
  * token no longer matches (recreated by a different owner) are both
  * treated as "nothing this call may remove" and silently return, mirroring
- * `releaseCloneLock`'s own token-mismatch handling in `clone-lock.mts`.
+ * `releaseCloneLock`'s own token-mismatch handling in `clone-lock.mts`. The
+ * guard can also disappear *after* this function's own token read confirms
+ * ownership but *before* its `unlinkSync` call below runs -- swallow that
+ * `ENOENT` the same way (#2922 review round 11, Copilot), matching
+ * `releaseCloneLock`'s identical handling at `clone-lock.mts:329-333`:
+ * a guard that is simply already gone by the time of the unlink is still
+ * "nothing left for this call to remove," not a failure to report.
  */
 function releaseGeneratedTokensWriteLockIfOwned(lockPath, token) {
   let body;
@@ -867,7 +878,13 @@ function releaseGeneratedTokensWriteLockIfOwned(lockPath, token) {
   if (body !== token) {
     return;
   }
-  unlinkSync(lockPath);
+  try {
+    unlinkSync(lockPath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
 }
 /**
  * Read-only inspection of the generated-tokens record for `claimId` at

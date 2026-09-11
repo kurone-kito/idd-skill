@@ -2220,11 +2220,13 @@ close.
   do (`withGeneratedTokensWriteLock`, `src/scripts/claim-lock.mts`):
   atomically create a same-directory `<resolved-path>.writelock` guard
   file (exclusive create -- fails if it already exists), retrying
-  roughly every 5 ms for up to 5 seconds if it does. **Only once that
-  create call itself has actually succeeded** -- never before it, and
-  never merely because this invocation _attempted_ one -- arm a cleanup
-  handler (a shell `trap`, or the agent's own equivalent of a `finally`
-  block) that removes the guard **on every exit path from this point
+  roughly every 5 ms for up to 5 seconds if it does, **writing a fresh,
+  unique per-attempt token as the guard's own body** (a random value,
+  or `pid:timestamp:random` -- any scheme unique per attempt is fine).
+  **Only once that create call itself has actually succeeded** -- never
+  before it, and never merely because this invocation _attempted_ one --
+  arm a cleanup handler (a shell `trap`, or the agent's own equivalent of
+  a `finally` block) that runs on **every exit path from this point
   forward, success or failure alike**, then perform the write (or, for
   the backfill side, the read that captures the existing `nonce` and the
   write that follows it). Arming the handler any earlier (for example a
@@ -2235,26 +2237,45 @@ close.
   concurrent, holder's own guard** instead, reopening the exact ABA race
   #2922's CLI-side fix (`withGeneratedTokensWriteLock`'s own
   `openSync`/`writeSync`/`closeSync` ownership tracking) exists to close
-  (#2922 review round 6, CodeRabbit). An agent that removes the guard
-  solely after a successful write and skips cleanup when that write
-  itself fails leaves the same orphaned-guard problem the CLI's own code
-  was separately reviewed for (#2922 review round 4, Copilot): every
-  later writer for this exact `{claim-id}` then waits the full 5 seconds
-  and fails closed until an operator manually removes it. The guard file's
-  own content is never read by anything -- its mere existence is the
-  whole coordination signal, so no atomic-visibility trick is needed for
-  it, unlike the lock file's own body. If the 5-second wait budget is
-  exhausted, stop fail-closed and report the guard path for manual
-  removal rather than writing anyway (an earlier revision of the CLI's
-  own lock self-reclaimed an aged guard automatically; three independent
-  reviewers found that unsafe -- see the doc comment on
-  `withGeneratedTokensWriteLock` for why fail-closed is the current
-  answer) -- a pre-existing guard this invocation did not itself create
-  is never removed on any path, success or failure. Skipping this
-  coordination reopens the exact race #2922 reported for the CLI path: a
-  concurrent writer's fresher `nonce` can be silently lost, including
-  between an `instructions-only` session and a helper-runtime session
-  sharing the same worktree.
+  (#2922 review round 6, CodeRabbit). The cleanup handler itself must be
+  **token-verified, not unconditional** (#2922 review round 11,
+  Copilot): re-read the guard and remove it only if it still holds the
+  exact token this attempt wrote, mirroring the CLI's own
+  `releaseGeneratedTokensWriteLockIfOwned` (and, before it,
+  `releaseCloneLock` in `src/scripts/clone-lock.mts`) -- an operator can
+  legitimately remove a guard by hand per the fail-closed timeout
+  guidance below while this invocation's own write is still genuinely in
+  flight, and a new writer can recreate it before this invocation's
+  cleanup runs; an unconditional removal there would delete that new
+  writer's guard instead of its own, letting two writers proceed at
+  once. Treat a guard that is simply already gone (removed by hand, or
+  already released) the same as a token mismatch -- nothing left for
+  this cleanup to remove, not an error. This narrows rather than
+  eliminates the race (verifying the token and removing the guard are
+  still two separate steps, not one atomic operation), which is an
+  accepted limitation shared with the CLI's own implementation -- see
+  the doc comment on `withGeneratedTokensWriteLock` in
+  `src/scripts/claim-lock.mts` for the full rationale. An agent that
+  removes the guard solely after a successful write and skips cleanup
+  when that write itself fails leaves the same orphaned-guard problem
+  the CLI's own code was separately reviewed for (#2922 review round 4,
+  Copilot): every later writer for this exact `{claim-id}` then waits
+  the full 5 seconds and fails closed until an operator manually removes
+  it. Unlike the record file's own body, the guard file's content is
+  read back by this same cleanup handler to verify ownership before
+  removing it -- no other, contending reader ever needs to inspect it,
+  so no atomic-visibility trick is needed beyond the exclusive create
+  itself. If the 5-second wait budget is exhausted, stop fail-closed and
+  report the guard path for manual removal rather than writing anyway
+  (an earlier revision of the CLI's own lock self-reclaimed an aged
+  guard automatically; three independent reviewers found that unsafe --
+  see the doc comment on `withGeneratedTokensWriteLock` for why
+  fail-closed is the current answer) -- a pre-existing guard this
+  invocation did not itself create is never removed on any path, success
+  or failure. Skipping this coordination reopens the exact race #2922
+  reported for the CLI path: a concurrent writer's fresher `nonce` can be
+  silently lost, including between an `instructions-only` session and a
+  helper-runtime session sharing the same worktree.
 - **`instructions-only` helper-free fallback, read side** (#2879 review,
   Codex P1 -- the mandatory `--read-tokens` check in the Claim
   revalidation gate has no helper-free path without this): resolve the
