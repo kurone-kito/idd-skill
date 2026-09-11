@@ -3532,12 +3532,18 @@ the wrapper's git invocation and any descendants such as the signer
 subprocess, not just the top-level command — is still running: per
 `idd-ci.instructions.md`'s "Wake-up discipline" guidance on a heavy
 local command that auto-backgrounds past a tool's default timeout, do
-not start a second wrapper invocation alongside it. Before signaling
-anything, snapshot the full descendant PID set by walking from the
-git PID (for example, recursively via `pgrep -P`) — walk once, before
-the first signal, and keep that recorded list: re-walking after
-signaling misses a child whose parent the signal already removed,
-even though the child itself is still alive. Record each PID together
+not start a second wrapper invocation alongside it. This whole
+recovery procedure depends on being able to snapshot and signal the
+process tree — if `pgrep`/`ps` (or an equivalent process-listing and
+signaling mechanism) are not available on the host, that dependency
+cannot be met: stop and post a hold note rather than falling back
+without the cleanup guarantee, the same fail-closed treatment the
+`lsof` case below already gets. Otherwise, before signaling anything,
+snapshot the full descendant PID set by walking from the git PID (for
+example, recursively via `pgrep -P`) — walk once, before the first
+signal, and keep that recorded list: re-walking after signaling misses
+a child whose parent the signal already removed, even though the
+child itself is still alive. Record each PID together
 with its process start time (for example, `ps -o lstart=` for that
 PID), not the bare number — a PID that exits during the wait below can
 be reused by an unrelated process before the next signal, and signaling
@@ -3553,12 +3559,20 @@ asynchronous, so checking state immediately can race git's own unwind
 snapshot is best-effort, not a guarantee: a child that gets reparented
 (commonly to init) before the snapshot is taken is never recorded at
 all, so it survives untouched no matter how carefully the recorded
-PIDs are signaled and awaited — a signer that survives this way is a
-resource leak to report, not a condition this procedure can reliably
-close; list any surviving PIDs in the hold or status note rather than
-treating any later step as having caught it (the unsigned fallback
-below never invokes the signer, so a leaked signer cannot corrupt that
-path, only waste resources). Before the next signal, re-check each
+PIDs are signaled and awaited. Whether that is safe to proceed past
+depends on what kind of descendant it can be: a signer subprocess that
+escapes this way is only a resource leak to report, since the unsigned
+fallback below never invokes a signer and so cannot race one — but the
+whole-command timeout this section opens with is root-cause-agnostic
+(it can equally fire on a hung hook, not only a stalled signer), and a
+hook process that escapes the same way could still be reading or
+writing the working tree or index. Proceeding with the fallback while
+an unidentified or non-signer descendant might still be touching
+repository state risks the fallback's own git operation racing it, so
+treat that case as blocking: stop and post a hold note documenting the
+surviving PID(s) rather than falling back, reserving the
+resource-leak-and-continue treatment for a descendant identifiable as
+the signer itself. Before the next signal, re-check each
 recorded PID's start time again: a mismatch means it already exited
 and the number was reused, so skip signaling it rather than treat the
 new, unrelated process as the same one. If a recorded PID is still
