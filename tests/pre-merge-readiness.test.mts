@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+// #2919: the real workflow-file-path constant, imported here (a test file,
+// no import-cycle constraint applies) to pin protocol-helpers.mts's own
+// independently-declared `ADVISORY_CONVERGENCE_WORKFLOW_FILE_PATH` literal
+// against it -- see that literal's own doc comment for why it can't be a
+// direct import there.
+import { ADVISORY_CONVERGENCE_WORKFLOW_PATH } from '../src/scripts/advisory-convergence.mts';
 import {
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
@@ -265,6 +271,8 @@ test('required check summaries block when no merge-gate policy evidence exists',
     discardedNonPassingRequiredChecks: [],
     sourcePinnedRequiredCheckNames: [],
     sourcePinnedUnresolved: false,
+    identityUnresolvedRequiredCheckNames: [],
+    preDowngradeStatus: 'unknown',
     checks: [],
   });
 });
@@ -8538,6 +8546,126 @@ test('buildPreMergeReadinessSummary blocks on the ci gate with a specific detail
   assert.equal(trusted.ready, false);
 });
 
+// kurone-kito/idd-skill#2919 (round 4 -- Codex review on PR #2921, P2): the
+// identity-unresolved cause for ONE required check must never silently
+// suppress the generic status detail when a SEPARATE, unrelated required
+// check is genuinely failing -- an operator reading only "idd-advisory-
+// convergence has an unresolved identity" would retry expecting that alone
+// to unblock the gate, when the unrelated `lint` failure would still block
+// a clean retry.
+test('buildPreMergeReadinessSummary names BOTH the identity-unresolved cause and a separate concurrent CI failure, never hiding one behind the other', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = [
+    ...(fixture.input.branchRules as Record<string, unknown>[]).map((rule) =>
+      rule.type === 'required_status_checks'
+        ? {
+            type: 'required_status_checks',
+            parameters: {
+              required_status_checks: [
+                { context: 'lint' },
+                { context: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR },
+              ],
+            },
+          }
+        : rule,
+    ),
+  ];
+  const checks = [
+    // The unrelated required check genuinely FAILS -- a concurrent cause
+    // independent of the identity-unresolved one below.
+    { name: 'lint', state: 'FAILURE', completedAt: '2026-05-11T23:57:00Z' },
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:57:00Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+  ];
+
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules, checks },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      advisoryConvergenceIdentityUnresolved: true,
+    },
+  );
+  assert.deepEqual(
+    (summary.ci as Record<string, unknown>)
+      .identityUnresolvedRequiredCheckNames,
+    [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR],
+  );
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  const ciBlocker = (
+    summary.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.match(
+    ciBlocker?.detail ?? '',
+    /unresolved workflow-file producer identity/,
+  );
+  assert.match(ciBlocker?.detail ?? '', /CI is not all-passing/);
+  assert.equal(summary.ready, false);
+});
+
+// kurone-kito/idd-skill#2919 (round 5 -- advisor review): the NEGATIVE
+// case of the test above -- when the OTHER required check genuinely
+// PASSES (its dedup-selected latest instance is SUCCESS, even though an
+// older same-name FAILURE instance is listed AFTER it in the raw checks
+// array), the blocker detail must name ONLY the identity-unresolved
+// cause, never spuriously append the generic "CI is not all-passing"
+// suffix. Guards the exact bug a naive per-check-name Map reconstruction
+// (keyed by name, "last one in array order wins") would introduce.
+test('buildPreMergeReadinessSummary does not spuriously append a generic detail when the only other required check is passing despite an out-of-order older FAILURE sibling', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = [
+    ...(fixture.input.branchRules as Record<string, unknown>[]).map((rule) =>
+      rule.type === 'required_status_checks'
+        ? {
+            type: 'required_status_checks',
+            parameters: {
+              required_status_checks: [
+                { context: 'lint' },
+                { context: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR },
+              ],
+            },
+          }
+        : rule,
+    ),
+  ];
+  const checks = [
+    // Newer SUCCESS listed FIRST, older FAILURE listed SECOND -- the
+    // dedup-selected "latest" instance is the SUCCESS.
+    { name: 'lint', state: 'SUCCESS', completedAt: '2026-05-11T23:59:00Z' },
+    { name: 'lint', state: 'FAILURE', completedAt: '2026-05-11T23:50:00Z' },
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:57:00Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+  ];
+
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules, checks },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      advisoryConvergenceIdentityUnresolved: true,
+    },
+  );
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  const ciBlocker = (
+    summary.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.match(
+    ciBlocker?.detail ?? '',
+    /unresolved workflow-file producer identity/,
+  );
+  assert.doesNotMatch(ciBlocker?.detail ?? '', /CI is not all-passing/);
+});
+
 // #1380: a masked-403-as-404 on a codeowner-requiring ruleset's *detail*
 // read must block the required-reviews gate with a specific, actionable
 // detail (mirroring #1377's ci-gate detail above) instead of the generic
@@ -9630,6 +9758,118 @@ test('#2911 finding 1/round 12: an expired, run-verified self-referential marker
     (summary as { blockers: unknown }).blockers,
     computePreMergeReadinessBlockers(summary as Record<string, unknown>),
   );
+});
+
+// #2919: `workflowName` alone is only the workflow YAML's `name:` display
+// string, which a DIFFERENT workflow file can declare identically -- this
+// issue's own Background documents this repository's own
+// `idd-advisory-convergence.yml` running two simultaneous instances during
+// its Phase 1 transition window. Widening the producer key to also
+// consider `workflowPath` must not regress the #2911 finding-1 scenario
+// above when the checker's own live instance carries its REAL path.
+test('#2919: an expired, run-verified self-referential marker still blocks when the checker check-run carries the REAL workflow path', () => {
+  const base = selfWaiverInputBase();
+  const checks = (base.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          completedAt: '2026-05-11T23:25:00Z',
+          startedAt: '2026-05-11T23:25:00Z',
+          type: 'check-run',
+          workflowName: 'IDD advisory-convergence gate',
+          workflowPath: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+        }
+      : check,
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-real-path',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, checks, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+});
+
+// #2919 (this issue's own motivating vulnerability): a decoy check-run
+// sharing `name`/`type`/`workflowName` with the real checker but sourced
+// from a DIFFERENT workflow FILE must never be treated as the checker's
+// own candidate -- it is excluded from `selfConvergenceProducerCandidates`
+// entirely, so the (here, otherwise-genuine) expired marker never gets a
+// real checker instance to evaluate against and the blocker does not fire
+// from this decoy's state.
+test('#2919: a decoy checker check-run sourced from a DIFFERENT workflow FILE is excluded as a candidate even though it shares name/type/workflowName', () => {
+  const base = selfWaiverInputBase();
+  const checks = (base.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          completedAt: '2026-05-11T23:25:00Z',
+          startedAt: '2026-05-11T23:25:00Z',
+          type: 'check-run',
+          workflowName: 'IDD advisory-convergence gate',
+          workflowPath: '.github/workflows/some-other-workflow.yml',
+        }
+      : check,
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-decoy-path',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, checks, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+// #2919 (Copilot review, PR #2921): `selfConvergenceRawInstances` now
+// case-normalizes `check.state` to uppercase before the
+// `CHECK_PASS_EQUIVALENT_STATES` pass-equivalent filter (matching
+// `summarizeRequiredChecks`'s own normalization, which has already run by
+// the time `ci.status` is computed) -- without it, a lowercase live
+// `state` would make that filter find zero candidates and silently skip
+// this blocker even while `ci.status` reads passing. Real GitHub GraphQL
+// enums are already uppercase, so this regresses only under a
+// non-GraphQL caller/fixture; pin it directly so removing the
+// normalization cannot silently reopen the gap.
+test('#2919: an expired, run-verified self-referential marker still blocks when the checker check-run reports a lowercase state', () => {
+  const base = selfWaiverInputBase();
+  const checks = (base.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'success',
+          completedAt: '2026-05-11T23:25:00Z',
+          startedAt: '2026-05-11T23:25:00Z',
+          type: 'check-run',
+          workflowName: 'IDD advisory-convergence gate',
+        }
+      : check,
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-lowercase-state',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, checks, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
 });
 
 test('#2911 finding 2/round 13: a genuine rerun completing AFTER the expired marker clears the blocker', () => {

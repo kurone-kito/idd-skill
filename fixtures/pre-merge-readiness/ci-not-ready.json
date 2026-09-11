@@ -254,6 +254,8 @@
       "discardedNonPassingRequiredChecks": [],
       "sourcePinnedRequiredCheckNames": [],
       "sourcePinnedUnresolved": false,
+      "identityUnresolvedRequiredCheckNames": [],
+      "preDowngradeStatus": "missing",
       "checks": [
         {
           "name": "lint",

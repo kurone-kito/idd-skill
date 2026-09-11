@@ -55,6 +55,52 @@ test('unprotected + a failing run: presentRunConclusion is some-failing', () => 
   assert.equal(r.presentRunConclusion, 'some-failing');
 });
 
+// kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921): an
+// identity-unresolved check name must fail closed through the UNPROTECTED-
+// branch `presentRunConclusion` fallback too, not just the primary
+// required-check `status` field -- `isPreMergeCiAllPassing` accepts
+// `presentRunConclusion === 'all-passing'` whenever `noRequiredChecksConfigured`
+// is true, so without this a decoy workflow file sharing the checker's
+// display name could still dedupe with (and mask) the real workflow's own
+// FAILURE through the unchanged, absent-`workflowPath` producer key on an
+// entirely unprotected branch -- reopening the exact bypass #2919 exists
+// to close via a route the primary required-check gate fix alone does not
+// cover. The baseline first assertion documents the would-be masking this
+// fix closes: with no identity-unresolved evidence, the newer SUCCESS
+// (which could be a decoy) dedupes with and hides the older FAILURE.
+test('unprotected branch: an identity-unresolved check name never lets presentRunConclusion read all-passing, closing the same masking route', () => {
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'FAILURE',
+      completedAt: '2026-01-01T00:00:00Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-01-01T00:05:00Z',
+    },
+  ];
+  const withoutFix = summarizeRequiredChecks(checks, [], {});
+  assert.equal(withoutFix.noRequiredChecksConfigured, true);
+  assert.equal(
+    withoutFix.presentRunConclusion,
+    'all-passing',
+    'baseline: absent workflowPath dedupes the two instances by name alone, masking the FAILURE',
+  );
+
+  const withFix = summarizeRequiredChecks(
+    checks,
+    [],
+    {},
+    {
+      identityUnresolvedCheckNames: ['idd-advisory-convergence'],
+    },
+  );
+  assert.equal(withFix.noRequiredChecksConfigured, true);
+  assert.equal(withFix.presentRunConclusion, 'some-failing');
+});
+
 test('unprotected + no runs: presentRunConclusion is none, never vacuously passing', () => {
   const r = summarize([], []);
   assert.equal(r.noRequiredChecksConfigured, true);
@@ -257,6 +303,132 @@ test('the trust opt-in does not mask a genuinely failing source-pinned required 
   assert.equal(r.requiredChecksPassing, false);
   assert.deepEqual(r.sourcePinnedRequiredCheckNames, []);
   assert.equal(r.sourcePinnedUnresolved, false);
+});
+
+// kurone-kito/idd-skill#2919 (round 5 -- advisor review ahead of PR #2921
+// round 5's push): `preDowngradeStatus` is the dedup+waiver-adjusted
+// classification computed via `classifyCiChecks`, not a naive per-check-
+// name reconstruction. Two same-name `build` instances here, deliberately
+// ordered OLDER-FAILURE-last in the raw array (index 0: newer SUCCESS,
+// index 1: older FAILURE) -- a `Map`-keyed-by-name reconstruction that
+// simply iterates the raw array and overwrites would end up with
+// `build -> FAILURE` (whichever instance is LAST wins), while the real
+// dedup-selected "latest" instance (by `completedAt`) is the SUCCESS.
+// `preDowngradeStatus` must reflect the CORRECT dedup-selected verdict
+// (`success`) regardless of raw array order.
+test('preDowngradeStatus reflects the dedup-selected latest instance, not whichever same-name instance is last in raw array order', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: {
+        required_status_checks: [
+          { context: 'lint', app_id: 1 },
+          { context: 'build' },
+        ],
+      },
+    },
+  ];
+  const r = summarizeRequiredChecks(
+    [
+      { name: 'lint', state: 'SUCCESS', completedAt: '2026-05-12T00:32:10Z' },
+      // Newer SUCCESS listed FIRST, older FAILURE listed SECOND -- the
+      // opposite of naive "last wins" order.
+      { name: 'build', state: 'SUCCESS', completedAt: '2026-05-12T00:10:00Z' },
+      { name: 'build', state: 'FAILURE', completedAt: '2026-05-12T00:05:00Z' },
+    ],
+    rules,
+  );
+  assert.equal(r.preDowngradeStatus, 'success');
+  assert.deepEqual(r.sourcePinnedRequiredCheckNames, ['lint']);
+  // The source-pinned downgrade still narrows the overall `status`, but
+  // ONLY because of the pinning -- not because `build` looked like a
+  // concurrent failure.
+  assert.equal(r.status, 'unknown');
+});
+
+// kurone-kito/idd-skill#2919 (round 5 -- advisor review): a genuinely
+// WAIVED required check (raw state FAILURE, but covered by a valid,
+// fresh waiver) must count as passing in `preDowngradeStatus` too -- a
+// naive per-check-name reconstruction that reads each check's RAW state
+// (ignoring `coveredByWaiver`) would incorrectly treat this as an
+// unexplained concurrent failure alongside the source-pinned `lint`.
+test('preDowngradeStatus treats a validly-waived required check as passing, not as an unexplained concurrent failure', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: {
+        required_status_checks: [
+          { context: 'lint', app_id: 1 },
+          { context: 'build' },
+        ],
+      },
+    },
+  ];
+  const r = summarizeRequiredChecks(
+    [
+      { name: 'lint', state: 'SUCCESS', completedAt: '2026-05-12T00:32:10Z' },
+      { name: 'build', state: 'FAILURE', completedAt: '2026-05-12T00:32:10Z' },
+    ],
+    rules,
+    {},
+    {
+      waivers: {
+        valid: [{ checkSelector: 'build', createdAt: '2026-05-01T00:00:00Z' }],
+      },
+    },
+  );
+  assert.equal(r.preDowngradeStatus, 'success');
+  assert.deepEqual(r.sourcePinnedRequiredCheckNames, ['lint']);
+  assert.equal(r.status, 'unknown');
+});
+
+// kurone-kito/idd-skill#2919 (round 3 -- Codex review on PR #2921, P2): a
+// required check that is BOTH source-pinned AND identity-unresolved must
+// still surface the identity-unresolved evidence even though the source-
+// pinned downgrade already changed `status` away from `'success'` first.
+// An earlier revision computed `identityUnresolvedRequiredCheckNames` only
+// when `status === 'success'` at that point, so this exact shape silently
+// lost the identity-unresolved evidence -- the blocker detail would then
+// name only the source-pinned cause, and once an operator opted into
+// `ciGate.trustSourcePinnedRequiredChecks` to clear THAT cause, a later
+// pass would stay blocked with no evidence explaining the real remaining
+// reason.
+test('a required check that is both source-pinned AND identity-unresolved reports both causes, even after the source-pinned downgrade already changed status', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: {
+        required_status_checks: [{ context: 'lint', app_id: 1 }],
+      },
+    },
+  ];
+  const r = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    rules,
+    {},
+    { identityUnresolvedCheckNames: ['lint'] },
+  );
+  assert.equal(r.status, 'unknown');
+  assert.equal(r.requiredChecksPassing, false);
+  assert.deepEqual(r.sourcePinnedRequiredCheckNames, ['lint']);
+  assert.deepEqual(r.identityUnresolvedRequiredCheckNames, ['lint']);
+
+  // Once the operator opts into trusting the pinned source, the
+  // source-pinned cause clears -- but the SEPARATE identity-unresolved
+  // cause must still keep the gate blocked and still be attributable.
+  const trusted = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    rules,
+    {},
+    {
+      trustSourcePinnedRequiredChecks: true,
+      identityUnresolvedCheckNames: ['lint'],
+    },
+  );
+  assert.equal(trusted.status, 'unknown');
+  assert.equal(trusted.requiredChecksPassing, false);
+  assert.deepEqual(trusted.sourcePinnedRequiredCheckNames, []);
+  assert.deepEqual(trusted.identityUnresolvedRequiredCheckNames, ['lint']);
 });
 
 // #1377: a masked-403-as-404 on the branch-protection or ruleset reads must
@@ -506,4 +678,98 @@ test('protected branch: requiredChecksPassing stays false when a same-named comm
   );
   assert.equal(r.requiredChecksPassing, false);
   assert.equal(r.status, 'failed');
+});
+
+// #2919: `workflowName` alone is only the workflow YAML's top-level `name:`
+// display string, which two DIFFERENT workflow FILES can declare
+// identically -- widen the producer key to `(name, type, workflowName,
+// workflowPath)` so a decoy check-run sharing every OTHER discriminator can
+// no longer mask a genuine same-name FAILURE from a different file.
+test('protected branch: requiredChecksPassing stays false when a same-named/type/workflowName check-run success cannot supersede a check-run FAILURE from a DIFFERENT workflow file (#2919)', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'FAILURE',
+        completedAt: '2026-07-17T16:00:06Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+        workflowPath: '.github/workflows/lint.yml',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-17T16:25:47Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+        workflowPath: '.github/workflows/lint-decoy.yml',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.requiredChecksPassing, false);
+  assert.equal(r.status, 'failed');
+});
+
+// #2919 regression guard: a pre-#2919 caller/fixture that never resolves
+// `workflowPath` (absent on every entry, exactly like the pre-#1483
+// absent-`type`/`workflowName` shape) must keep deduping by
+// `(name, type, workflowName)` alone -- this field's addition must never
+// change behavior for a caller that doesn't opt in.
+test('protected branch: absent workflowPath on both sides still dedupes by name/type/workflowName alone (pre-#2919 shape unaffected)', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'FAILURE',
+        completedAt: '2026-07-17T16:00:06Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-17T16:25:47Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.requiredChecksPassing, true);
+  assert.equal(r.status, 'success');
+});
+
+// #2919: the actual motivating scenario from this issue's own Background
+// (this repository's own `.github/workflows/idd-advisory-convergence.yml`)
+// -- two GENUINELY legitimate same-FILE instances (e.g. concurrent
+// `pull_request` / `pull_request_target` variants during a migration
+// window) share `workflowPath` too, so they must still dedupe as one
+// producer, exactly as before this field existed. The issue's own
+// Disposition section is explicit that this case is NOT a false-negative
+// risk this fix should introduce.
+test('protected branch: two same-name/type/workflowName/workflowPath check-run instances (genuine same-file siblings) still dedupe to the latest', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'CANCELLED',
+        completedAt: '2026-07-17T15:59:36Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+        workflowPath: '.github/workflows/lint.yml',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-17T16:25:47Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+        workflowPath: '.github/workflows/lint.yml',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.requiredChecksPassing, true);
+  assert.equal(r.status, 'success');
 });

@@ -2847,9 +2847,11 @@ reflexively as any other CLI option.
   is a `branch-currency` merge-gate blocker (see below); `UNKNOWN` is the
   async-still-computing state F1 and the E-phase branch-sync check
   already re-poll, not a blocker here.
-- `ci.discardedNonPassingRequiredChecks` (#1745) surfaces a same-name/type/
-  workflowName required-check instance discarded by the latest-per-producer
-  dedup while the surviving representative is pass-equivalent -- e.g. a
+- `ci.discardedNonPassingRequiredChecks` (#1745) surfaces a same-producer
+  (name/type/workflowName/workflowPath -- kurone-kito/idd-skill#2919 widened
+  this from the original name/type/workflowName 3-tuple) required-check
+  instance discarded by the latest-per-producer dedup while the surviving
+  representative is pass-equivalent -- e.g. a
   `CANCELLED` bot-triggered instance sitting alongside the `SUCCESS`
   instance the dedup selected as "latest", the live PR #1741 divergence
   where `ci.status: "success"` disagreed with GitHub's own
@@ -2885,6 +2887,31 @@ reflexively as any other CLI option.
   `trustSourcePinnedRequiredChecks` opt-in never clears this cause, even
   when a separate, named-and-pinned check on the same required-check set
   would itself qualify.
+- `ci.identityUnresolvedRequiredCheckNames` (kurone-kito/idd-skill#2919,
+  round 2) mirrors `ci.sourcePinnedRequiredCheckNames`'s own shape for a
+  different unverifiable-producer case: required check names whose green
+  state was downgraded to `ci.status: "unknown"` because this collection
+  pass could not fully resolve their real workflow-file producer identity
+  (`workflowPath`) -- a parse failure on some but not all live instances, a
+  thrown workflow-run lookup, an empty resolved path, or a run-id count
+  exceeding the collector's own lookup ceiling. Today this can only ever
+  name `idd-advisory-convergence`, the one check name `pre-merge-readiness`
+  attempts `workflowPath` resolution for. Evidence only (empty array, never
+  omitted, when no such downgrade occurred) -- `computePreMergeReadinessBlockers`
+  uses it (alongside `ci.preDowngradeStatus` below) to name the
+  identity-unresolved cause in the `ci` blocker detail.
+- `ci.preDowngradeStatus` (kurone-kito/idd-skill#2919, round 5) is the
+  dedup+waiver-adjusted `ci.status` classification captured BEFORE either
+  the source-pinned or identity-unresolved downgrade above could narrow
+  it -- `"success"` here means every OTHER required check was already
+  fully resolved as passing, so any non-success final `ci.status` can only
+  be attributed to those two named downgrades. `computePreMergeReadinessBlockers`
+  reads this to decide whether a genuinely separate, concurrent CI failure
+  (an unrelated required check that is actually failing/pending/missing)
+  also needs naming in the `ci` blocker detail, rather than letting a
+  pinned/identity-unresolved cause's own detail text silently replace it.
+  `"unknown"` when no required checks are configured, mirroring
+  `ci.status`'s own initial default in that case.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds

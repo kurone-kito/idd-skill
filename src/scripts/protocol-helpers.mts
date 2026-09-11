@@ -123,6 +123,24 @@ interface ReviewLike {
  * optional so existing callers/fixtures that predate this discriminator
  * (only `name`/`state`/`completedAt`) remain valid -- see
  * `selectLatestCheckPerName` for how an absent discriminator is treated.
+ *
+ * `workflowPath` (#2919) strengthens `workflowName` further: `workflowName`
+ * is only the workflow YAML's top-level `name:` display string, which two
+ * DIFFERENT workflow files can declare identically (this repository's own
+ * `.github/workflows/idd-advisory-convergence.yml` documents running both
+ * `pull_request` and `pull_request_target` instances of the SAME file
+ * simultaneously during its Phase 1 transition window -- a legitimate
+ * same-file case, not the gap this field closes). `workflowPath` is the
+ * check-run's owning workflow FILE path instead, sourced from the GitHub
+ * Actions runs API's own `path` field (`GET
+ * /repos/{owner}/{repo}/actions/runs/{run_id}`), which two genuinely
+ * different workflow files can never share. Optional, absent-permissive
+ * exactly like `type`/`workflowName`: a caller that never resolves it
+ * (most callers -- resolving it costs an extra Actions API call per
+ * distinct run) leaves every producer-key computation unchanged from
+ * before this field existed. See `pre-merge-readiness.mts`'s collector for
+ * the one caller that currently populates it, and that call site's own
+ * comment for why population is scoped narrowly rather than universally.
  */
 interface CheckLike {
   name?: string | null;
@@ -137,6 +155,7 @@ interface CheckLike {
   startedAt?: string | null;
   type?: string | null;
   workflowName?: string | null;
+  workflowPath?: string | null;
 }
 
 /** PR timeline event as consumed by the Copilot-coverage helpers. */
@@ -3487,19 +3506,22 @@ export function selectLatestCheckInstance<
  * behavior-identical.
  *
  * Residual known limitation: two genuinely independent producers that
- * share both a `name` and a `type` and both lack a `workflowName` (e.g.
- * two different non-Actions GitHub Apps that each post a check-run
- * directly, rather than through a workflow) remain indistinguishable
+ * share a `name`, a `type`, and (when populated) a `workflowName` AND a
+ * `workflowPath` (e.g. two different non-Actions GitHub Apps that each
+ * post a check-run directly, rather than through a workflow -- neither
+ * has a `workflowPath` to disambiguate with) remain indistinguishable
  * here and will still be grouped together. Closing that fully needs a
  * stronger producer identity (e.g. the owning GitHub App) than
  * `gh`/GraphQL's `statusCheckRollup` exposes today; `ci-wait-state.mts`'s
  * own `(checkName, workflowName)` key has the identical accepted gap.
  */
 /**
- * Group check-run instances by the same `(name, type, workflowName)`
- * producer-identity key `selectLatestCheckPerName` reduces to one
- * representative -- shared here so a caller that needs to inspect the
- * DISCARDED siblings, not just the survivor (see
+ * Group check-run instances by the same `(name, type, workflowName,
+ * workflowPath)` producer-identity key (#2919 added `workflowPath`, see
+ * `CheckLike`'s own doc comment for why `workflowName` alone is
+ * insufficient) `selectLatestCheckPerName` reduces to one representative
+ * -- shared here so a caller that needs to inspect the DISCARDED
+ * siblings, not just the survivor (see
  * {@link findDiscardedNonPassingSiblings}), can never drift out of sync
  * with that grouping.
  */
@@ -3508,6 +3530,7 @@ function groupChecksByProducer<
     name?: string | null;
     type?: string | null;
     workflowName?: string | null;
+    workflowPath?: string | null;
   },
 >(checks: T[]): Map<string, T[]> {
   // A Map already iterates in first-insertion order, so grouping into one
@@ -3524,7 +3547,10 @@ function groupChecksByProducer<
     const workflowName = check.workflowName
       ? String(check.workflowName).trim()
       : '';
-    const key = `${String(check.name)}\0${type}\0${workflowName}`;
+    const workflowPath = check.workflowPath
+      ? String(check.workflowPath).trim()
+      : '';
+    const key = `${String(check.name)}\0${type}\0${workflowName}\0${workflowPath}`;
     const group = groups.get(key);
     if (group) {
       group.push(check);
@@ -3542,6 +3568,7 @@ function selectLatestCheckPerName<
     completedAt?: string | null;
     type?: string | null;
     workflowName?: string | null;
+    workflowPath?: string | null;
   },
 >(checks: T[]): T[] {
   return [...groupChecksByProducer(checks).values()].map((group) =>
@@ -3575,20 +3602,22 @@ export interface CiCheckDiscardedSibling {
 }
 
 /**
- * Detect same-producer `(name, type, workflowName)` groups whose
- * dedup-selected "latest" instance (`selectLatestCheckInstance`) is
- * pass-equivalent (SUCCESS/SKIPPED/NEUTRAL/NOT_APPLICABLE) while a
- * DISCARDED sibling in that same group is genuinely non-passing (see
- * {@link GENUINELY_NON_PASSING_STATES}) -- the live discrepancy PR #1741
- * exhibited (#1745): `classifyCiChecks` reported `success` for a commit
- * whose GitHub `statusCheckRollup.state` was `FAILURE`, because a
- * `CANCELLED` bot-triggered `idd-advisory-convergence` instance existed
- * alongside the `SUCCESS` instance this dedup selected as "latest".
- * Confirming the exact internal GitHub selection is not possible after the
- * fact (see #1745's evidence-durability note), so this reports the
- * discarded-sibling FACT itself -- a same-name non-passing instance existed
- * and was NOT counted -- rather than asserting why GitHub's own rollup
- * disagreed. Pure and read-only: never changes which instance
+ * Detect same-producer `(name, type, workflowName, workflowPath)` groups
+ * (kurone-kito/idd-skill#2919 widened this key from the original 3-tuple
+ * `(name, type, workflowName)` -- see `groupChecksByProducer`'s own doc
+ * comment) whose dedup-selected "latest" instance
+ * (`selectLatestCheckInstance`) is pass-equivalent (SUCCESS/SKIPPED/
+ * NEUTRAL/NOT_APPLICABLE) while a DISCARDED sibling in that same group is
+ * genuinely non-passing (see {@link GENUINELY_NON_PASSING_STATES}) -- the
+ * live discrepancy PR #1741 exhibited (#1745): `classifyCiChecks` reported
+ * `success` for a commit whose GitHub `statusCheckRollup.state` was
+ * `FAILURE`, because a `CANCELLED` bot-triggered `idd-advisory-convergence`
+ * instance existed alongside the `SUCCESS` instance this dedup selected as
+ * "latest". Confirming the exact internal GitHub selection is not possible
+ * after the fact (see #1745's evidence-durability note), so this reports
+ * the discarded-sibling FACT itself -- a same-name non-passing instance
+ * existed and was NOT counted -- rather than asserting why GitHub's own
+ * rollup disagreed. Pure and read-only: never changes which instance
  * `selectLatestCheckPerName` selects, only reports when a discarded sibling
  * makes that selection's "success" verdict less certain than it looks.
  */
@@ -3599,6 +3628,12 @@ function findDiscardedNonPassingSiblings<
     completedAt?: string | null;
     type?: string | null;
     workflowName?: string | null;
+    // kurone-kito/idd-skill#2919: matches `groupChecksByProducer`'s own
+    // generic constraint -- this function calls that one internally
+    // (via `groupChecksByProducer(checks).values()` below), so its own
+    // type signature must document the SAME 4-tuple key, not the
+    // pre-#2919 3-tuple one.
+    workflowPath?: string | null;
   },
 >(checks: T[]): CiCheckDiscardedSibling[] {
   const divergences: CiCheckDiscardedSibling[] = [];
@@ -3638,6 +3673,11 @@ export function classifyCiChecks(checks: CheckLike[]) {
     completedAt: check.completedAt ?? null,
     type: check.type ?? null,
     workflowName: check.workflowName ?? null,
+    // #2919: carried through so a caller that populates it gets the
+    // stronger producer-identity split at this shared dedup/grouping
+    // layer too, not just at the one call site that originally
+    // motivated it -- see `CheckLike`'s own doc comment.
+    workflowPath: check.workflowPath ?? null,
   }));
   // GitHub can report several check-run instances that share the same
   // check `name` (a manual or automatic re-run leaves the earlier instance
@@ -5989,6 +6029,7 @@ export function summarizeRequiredChecks(
     waiverActiveSinceOverride = null,
     treatAsCoveredByWaiver = null,
     treatAsCoveredByWaiverSince = null,
+    identityUnresolvedCheckNames = null,
   }: {
     waivers?: {
       valid?: { checkSelector?: unknown; createdAt?: unknown }[] | null;
@@ -6087,6 +6128,24 @@ export function summarizeRequiredChecks(
     // and every caller that doesn't pass it) applies no cutoff -- unchanged
     // pre-fix behavior.
     treatAsCoveredByWaiverSince?: ((checkName: string) => string | null) | null;
+    // kurone-kito/idd-skill#2919 (round 2 -- E10 critique + Codex/Copilot
+    // review on PR #2921): check NAMES the caller could not fully resolve
+    // real `workflowPath` producer-identity for on this collection pass
+    // (a parse failure on some, but not all, live instances; any thrown
+    // `getWorkflowRun` lookup; an empty resolved path; or a run-id count
+    // exceeding the caller's own lookup ceiling) -- see
+    // `pre-merge-readiness.mts`'s `advisoryConvergenceIdentityUnresolved`
+    // doc comment for the full rationale this mirrors. Mirrors
+    // `trustSourcePinnedRequiredChecks`'s downgrade shape below: a NAMED
+    // check that would otherwise report `'success'` downgrades to
+    // `'unknown'` instead, because an unresolved producer identity means
+    // this helper cannot rule out that the `'success'` verdict actually
+    // came from a decoy workflow file sharing the same display name (see
+    // `CheckLike`'s own doc comment) -- the exact gap #2919 exists to
+    // close. `null`/omitted (the default, and every caller that predates
+    // this option) downgrades nothing, unchanged pre-#2919-round-2
+    // behavior.
+    identityUnresolvedCheckNames?: string[] | null;
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -6215,6 +6274,12 @@ export function summarizeRequiredChecks(
       // rerun from a genuinely independent, differently-sourced check.
       type: check.type ? String(check.type) : '',
       workflowName: check.workflowName ? String(check.workflowName).trim() : '',
+      // #2919: carried through so the PRIMARY required-check gate below
+      // (`classifyCiChecks(effectiveChecks)`) shares the same widened
+      // producer key as every other consumer -- see `CheckLike`'s doc
+      // comment. Absent (`''`) for every check this collector doesn't
+      // resolve a path for, which stays permissive/unchanged.
+      workflowPath: check.workflowPath ? String(check.workflowPath).trim() : '',
     };
   });
 
@@ -6229,6 +6294,27 @@ export function summarizeRequiredChecks(
   );
 
   let status = 'unknown';
+  // kurone-kito/idd-skill#2919 (round 5 -- advisor review ahead of PR #2921
+  // round 5's push): `status` right after the missing/`classifyCiChecks`
+  // computation below, BEFORE either the source-pinned or identity-
+  // unresolved downgrade can narrow it. `classifyCiChecks` is called on
+  // `effectiveChecks` -- already waiver-adjusted (`coveredByWaiver` ->
+  // `SKIPPED`) and already deduped per producer via
+  // `selectLatestCheckPerName` -- so this is the EXACT answer to "is there
+  // a genuinely separate, concurrent CI failure reason (an unrelated
+  // required check that is missing/pending/failed/waived) independent of
+  // the two named downgrades below?" `computePreMergeReadinessBlockers`
+  // uses this instead of re-deriving per-check-name pass/fail evidence
+  // from the already-non-deduped, waiver-unaware `checks` array -- an
+  // earlier revision of that blocker-detail fix did exactly that, and
+  // could spuriously append the generic detail for a required check whose
+  // OLDER same-name instance happened to sort after its own already-
+  // superseding SUCCESS in raw array order, or for a genuinely WAIVED
+  // required check (raw state FAILURE, `coveredByWaiver: true`) -- both
+  // cases `classifyCiChecks`'s own dedup+waiver-adjustment already
+  // correctly resolves, so reusing its verdict here is exact by
+  // construction rather than a second, drift-prone reimplementation.
+  let preDowngradeStatus = 'unknown';
   // #1745: discarded non-passing same-name siblings among the REQUIRED
   // checks, e.g. a CANCELLED idd-advisory-convergence instance sitting
   // alongside the SUCCESS instance selectLatestCheckPerName picked as
@@ -6253,6 +6339,23 @@ export function summarizeRequiredChecks(
   // exists but is unnamed." Lets a blocker detail name the cause even when
   // no specific check name can be cited.
   let sourcePinnedUnresolved = false;
+  // kurone-kito/idd-skill#2919 (round 2): the required-check names the
+  // downgrade below actually fired for (empty unless it fired). See
+  // `identityUnresolvedCheckNames`'s own doc comment above.
+  let identityUnresolvedRequiredCheckNames: string[] = [];
+  // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
+  // computed unconditionally (not nested inside the `requiredCheckNames.length
+  // > 0` block below) because `resolvePresentRunConclusion` below needs it
+  // too, and that fallback conclusion is consulted precisely when NO
+  // required checks are configured at all -- see its own doc comment for
+  // why an identity-unresolved check name must never let THAT fallback
+  // read 'all-passing' either, closing the alternate route Copilot found
+  // for reopening the same decoy-masking gap on an unprotected branch.
+  const identityUnresolvedNameSet = new Set(
+    Array.isArray(identityUnresolvedCheckNames)
+      ? identityUnresolvedCheckNames.map((name) => String(name ?? '').trim())
+      : [],
+  );
   if (requiredCheckNames.length > 0) {
     const effectiveChecks = matchedRequiredChecks.map((c) =>
       c.coveredByWaiver ? { ...c, state: 'SKIPPED' } : c,
@@ -6262,6 +6365,7 @@ export function summarizeRequiredChecks(
       missingRequiredCheckNames.length > 0
         ? 'missing'
         : ciClassification.status;
+    preDowngradeStatus = status;
     // #1689: the `trustSourcePinnedRequiredChecks` opt-in only widens the
     // named/resolved case -- an unresolved pinned source (no check name to
     // correlate with a live run at all) always still forces the downgrade,
@@ -6279,6 +6383,37 @@ export function summarizeRequiredChecks(
       ];
       sourcePinnedUnresolved =
         branchReviewRequirements.requiredCheckSourcePinnedUnresolved;
+    }
+    // kurone-kito/idd-skill#2919 (round 3 -- Codex review on PR #2921, P2):
+    // the affected NAMES are computed from `requiredCheckNames` -- the
+    // original classification -- INDEPENDENTLY of whatever `status`
+    // already became from the source-pinned downgrade above, not gated
+    // on `status === 'success'`. An earlier revision gated this whole
+    // block on that condition, so a check that was BOTH source-pinned AND
+    // identity-unresolved silently lost the identity-unresolved evidence
+    // the moment the source-pinned branch above had already downgraded
+    // `status` to `'unknown'` first -- the blocker detail then named only
+    // the source-pinned cause, and once an operator opted into
+    // `ciGate.trustSourcePinnedRequiredChecks` to clear THAT cause, a
+    // later pass would stay blocked with no evidence explaining why.
+    // Mirrors `discardedNonPassingRequiredChecks`'s own "computed
+    // unconditionally ... evidence worth surfacing even when the overall
+    // status already reads non-success for an unrelated cause" precedent
+    // above. The numeric `status` field itself is still only ever
+    // NARROWED when it is currently `'success'` -- this never overrides a
+    // status that is already `'missing'`/`'pending'`/`'failed'`, and
+    // reassigning an already-`'unknown'` status to `'unknown'` again is a
+    // harmless no-op.
+    if (identityUnresolvedNameSet.size > 0) {
+      const affected = requiredCheckNames.filter((name) =>
+        identityUnresolvedNameSet.has(name),
+      );
+      if (affected.length > 0) {
+        identityUnresolvedRequiredCheckNames = affected;
+        if (status === 'success') {
+          status = 'unknown';
+        }
+      }
     }
     // #1753: computed from the RAW matchedRequiredChecks -- deliberately
     // NOT ciClassification.discardedNonPassingInstances above, which is
@@ -6308,7 +6443,10 @@ export function summarizeRequiredChecks(
     // message can name the unreadable-read cause specifically instead of a
     // generic "CI is not all-passing".
     protectionReadsUnreadable,
-    presentRunConclusion: resolvePresentRunConclusion(normalizedChecks),
+    presentRunConclusion: resolvePresentRunConclusion(
+      normalizedChecks,
+      identityUnresolvedNameSet,
+    ),
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
     requiredChecksGenerated:
@@ -6328,6 +6466,19 @@ export function summarizeRequiredChecks(
     // #1689: see the field's own inline comment above -- `false` unless the
     // downgrade fired AND at least one pinned source was unnamed.
     sourcePinnedUnresolved,
+    // kurone-kito/idd-skill#2919 (round 2): see the field's own inline
+    // comment above -- empty unless the identity-unresolved downgrade
+    // actually fired for this call.
+    identityUnresolvedRequiredCheckNames,
+    // kurone-kito/idd-skill#2919 (round 5): see the field's own inline
+    // comment above -- the dedup+waiver-adjusted classification `status`
+    // BEFORE the source-pinned/identity-unresolved downgrades could narrow
+    // it. Lets a caller determine, exactly, whether a genuinely separate
+    // concurrent CI cause exists alongside those two named downgrades,
+    // without re-deriving per-check pass/fail evidence itself. `'unknown'`
+    // when no required checks are configured (mirrors `status`'s own
+    // initial default in that case).
+    preDowngradeStatus,
     checks: normalizedChecks.map((check) => ({
       name: check.name,
       state: check.state,
@@ -6352,10 +6503,45 @@ function resolvePresentRunConclusion(
     coveredByWaiver: boolean;
     type: string;
     workflowName: string;
+    workflowPath: string;
   }[],
+  // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
+  // check NAMES this collection pass could not fully resolve real
+  // `workflowPath` producer identity for -- see `identityUnresolvedCheckNames`
+  // on `summarizeRequiredChecks` for the full rationale this mirrors. This
+  // fallback conclusion is consulted precisely when NO required checks are
+  // configured at all (`noRequiredChecksConfigured`), so an unresolved
+  // identity here must fail closed too: without this, a decoy workflow
+  // file sharing the checker's display name could still dedupe with (and
+  // mask) the real workflow's FAILURE through the unchanged, absent-
+  // `workflowPath` producer key -- reopening the exact bypass #2919 exists
+  // to close, on an unprotected branch, even though the PRIMARY
+  // required-check gate (`summarizeRequiredChecks`'s own `status`) is
+  // already fixed. Default empty set is backward compatible: every caller
+  // that omits it (none of them do after this fix, but a future direct
+  // caller might) sees unchanged pre-#2919 behavior.
+  identityUnresolvedCheckNames: ReadonlySet<string> = new Set(),
 ): string {
   if (normalizedChecks.length === 0) {
     return 'none';
+  }
+  if (
+    identityUnresolvedCheckNames.size > 0 &&
+    normalizedChecks.some((check) =>
+      identityUnresolvedCheckNames.has(check.name),
+    )
+  ) {
+    // `'some-failing'`, not `'pending'`: the `#2714` comment above maps a
+    // lone CANCELLED-with-no-successor instance to `'pending'` because
+    // that shape is a plausible rerun-in-progress candidate that can
+    // reasonably resolve on its own without operator action. An
+    // unresolved producer identity has no such self-resolving path -- a
+    // malformed `detailsUrl` or a genuine decoy workflow file will not
+    // become parseable or stop being a decoy on a later poll -- so this
+    // follows the conservative `'some-failing'` default every other
+    // genuinely unrecognized-state `unknown` cause already gets, not the
+    // narrower CANCELLED carve-out.
+    return 'some-failing';
   }
   const effective = normalizedChecks.map((check) =>
     check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
@@ -7598,18 +7784,99 @@ export function computePreMergeReadinessBlockers(
       sourcePinnedDetail =
         'an unresolvable source-pinned required-check requirement is in force (e.g. a ruleset `workflows` rule); producer verification unavailable, and this cause is never covered by the ciGate.trustSourcePinnedRequiredChecks opt-in';
     }
+    // kurone-kito/idd-skill#2919 (round 2): name the identity-unresolved
+    // cause explicitly -- see `summarizeRequiredChecks`'s
+    // `identityUnresolvedRequiredCheckNames` doc comment. Independent of
+    // (and checked alongside, never exclusively with) the source-pinned
+    // cause above: the two downgrades can fire together.
+    const identityUnresolvedNames = Array.isArray(
+      ci.identityUnresolvedRequiredCheckNames,
+    )
+      ? (ci.identityUnresolvedRequiredCheckNames as unknown[]).map((name) =>
+          String(name ?? ''),
+        )
+      : [];
+    const identityUnresolvedDetail =
+      identityUnresolvedNames.length > 0
+        ? `required ${identityUnresolvedNames.length > 1 ? 'checks' : 'check'} ${identityUnresolvedNames.join(
+            ', ',
+          )} ${
+            identityUnresolvedNames.length > 1 ? 'have' : 'has'
+          } an unresolved workflow-file producer identity (a transient lookup failure, a malformed run reference, or too many distinct reruns to verify this pass); cannot rule out a same-display-name decoy workflow, so this required check cannot be trusted as passing until it resolves cleanly on a later pass`
+        : '';
+    // kurone-kito/idd-skill#2919 (round 4 -- Codex review on PR #2921, P2;
+    // round 5 -- advisor review, replacing an earlier per-check-name
+    // reconstruction here): the specific pinned/identity-unresolved causes
+    // above must never SILENTLY suppress a genuinely separate, concurrent
+    // CI failure reason for a DIFFERENT required check -- e.g. one
+    // required check is source-pinned/identity-unresolved while an
+    // UNRELATED required check is actually FAILING/PENDING/MISSING.
+    // Without this, an operator reading only "check X is identity-
+    // unresolved" would retry expecting that alone to unblock the gate,
+    // when a clean retry would still be blocked by the separate failure.
+    //
+    // Uses `ci.preDowngradeStatus` -- `summarizeRequiredChecks`'s own
+    // dedup+waiver-adjusted classification BEFORE either downgrade could
+    // narrow it -- rather than re-deriving per-check pass/fail evidence
+    // from `ci.checks` here. An earlier revision built a `Map` keyed by
+    // check name from the RAW (non-deduped) `ci.checks` array and read
+    // each entry's raw `state`, which is wrong two ways: `Map` keeps
+    // whichever same-name instance happens to appear LAST in rollup
+    // order, not the dedup-selected latest one (a superseded FAILURE
+    // sorted after its own later SUCCESS would spuriously read as the
+    // "current" state), and it ignored `coveredByWaiver` entirely (a
+    // genuinely WAIVED required check, raw state FAILURE, would
+    // spuriously count as an unexplained concurrent cause). Reusing
+    // `preDowngradeStatus` is exact by construction: `success` there
+    // means every OTHER required check was already fully resolved as
+    // passing (through the SAME dedup/waiver logic `classifyCiChecks`
+    // always applies) before either downgrade ran, so any non-success
+    // `status` can only be attributed to the named causes below.
+    // Every PRE-#2919 caller (no pinned/identity cause at all) and every
+    // pinned-ONLY caller (that downgrade only ever fires when
+    // `preDowngradeStatus` was already `'success'`, so no concurrent
+    // cause can exist) sees byte-identical detail text to before -- this
+    // only widens the detail for the new combined shape.
+    // kurone-kito/idd-skill#2919 (round 5 -- E10 critique, latent-trap
+    // note, not a bug today): on a branch with NO required checks
+    // configured at all (`ci.noRequiredChecksConfigured: true`),
+    // `sourcePinnedNames`/`identityUnresolvedNames` are always empty
+    // (both downgrades live entirely inside `summarizeRequiredChecks`'s
+    // `requiredCheckNames.length > 0` block) and `preDowngradeStatus`
+    // stays its unset `'unknown'` default -- so `hasUnexplainedConcurrentCause`
+    // is spuriously `true` here, but harmlessly: `sourcePinnedDetail` and
+    // `identityUnresolvedDetail` below are ALSO both empty in this case,
+    // so the `[...].filter(Boolean).join('; ') || genericStatusDetail`
+    // expression reduces to `genericStatusDetail` either way (identical to
+    // pre-#2919 behavior for the unprotected-branch path; the gate itself
+    // still correctly blocks via `resolvePresentRunConclusion` above,
+    // which IS called unconditionally). If a future change adds an
+    // identity-unresolved-specific detail sentence for THIS
+    // no-required-checks path too, it must also gate
+    // `hasUnexplainedConcurrentCause` on `ci.requiredCheckCount > 0` (or
+    // equivalent) first, or it will reintroduce the exact spurious-
+    // generic-suffix bug this round fixed for the required-checks-
+    // configured path, just on the opposite branch.
+    const hasUnexplainedConcurrentCause =
+      String(ci.preDowngradeStatus ?? 'unknown') !== 'success';
     // #1377: name the masked-403-as-404 cause explicitly when that is why the
     // gate is not all-passing, matching idd-ci.instructions.md's wording,
     // instead of the generic status/noRequiredChecksConfigured detail below.
+    const genericStatusDetail = `CI is not all-passing (status="${String(
+      ci.status ?? '',
+    )}", noRequiredChecksConfigured=${Boolean(
+      ci.noRequiredChecksConfigured,
+    )}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`;
     let detail =
       ci.protectionReadsUnreadable === true
         ? 'cannot determine required checks: protection/ruleset unreadable'
-        : sourcePinnedDetail ||
-          `CI is not all-passing (status="${String(
-            ci.status ?? '',
-          )}", noRequiredChecksConfigured=${Boolean(
-            ci.noRequiredChecksConfigured,
-          )}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`;
+        : [
+            sourcePinnedDetail,
+            identityUnresolvedDetail,
+            hasUnexplainedConcurrentCause ? genericStatusDetail : '',
+          ]
+            .filter(Boolean)
+            .join('; ') || genericStatusDetail;
 
     // #2021: when the `idd-advisory-convergence` check itself is present,
     // required, and non-passing, and a posted otherwise-valid waiver exists
@@ -8087,6 +8354,17 @@ export function buildPreMergeReadinessSummary(
     // unavailable` blocker below, so an unmigrated caller sees unchanged
     // behavior.
     copilotUnavailable?: boolean;
+    // kurone-kito/idd-skill#2919 (round 2): the caller-precomputed verdict
+    // that this collection pass could NOT fully resolve real
+    // `workflowPath` producer-identity for the `idd-advisory-convergence`
+    // check name -- see `pre-merge-readiness.mts`'s option of the same
+    // name for the full rationale, and `summarizeRequiredChecks`'s
+    // `identityUnresolvedCheckNames` for how it is consumed below.
+    // Computed by the CALLER (the `getWorkflowRun` I/O lives in
+    // `pre-merge-readiness.mts`, mirroring `copilotUnavailable`'s own
+    // caller-precomputed pattern). Omitted/false (the default) never
+    // downgrades anything, unchanged pre-#2919-round-2 behavior.
+    advisoryConvergenceIdentityUnresolved?: boolean;
     // #2353: the caller-precomputed provider-outage-declaration relief
     // verdict for the `idd-advisory-convergence` selector (fetch,
     // `resolveProviderOutageDeclaration`, `evaluateProviderOutageRelief`,
@@ -8581,6 +8859,13 @@ export function buildPreMergeReadinessSummary(
       options.advisoryConvergenceOutageRelievedSince
         ? options.advisoryConvergenceOutageRelievedSince
         : null,
+    // kurone-kito/idd-skill#2919 (round 2): only `idd-advisory-convergence`
+    // is a candidate -- it is the sole check name this collector ever
+    // attempts `workflowPath` resolution for (see `pre-merge-readiness.mts`).
+    identityUnresolvedCheckNames:
+      options.advisoryConvergenceIdentityUnresolved === true
+        ? [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR]
+        : null,
   });
 
   // kurone-kito/idd-skill#2911: the OPPOSITE direction from the CI blocker
@@ -8722,7 +9007,16 @@ export function buildPreMergeReadinessSummary(
       )
       .map((check) => ({
         name: String(check.name ?? ''),
-        state: String(check.state ?? ''),
+        // Also observed (Copilot, PR #2915, kurone-kito/idd-skill#2919):
+        // case-normalized here (matching `summarizeRequiredChecks`'s own
+        // normalization, which has not run yet at this raw `checks`
+        // read) so a lowercase live `state` can never make the
+        // `CHECK_PASS_EQUIVALENT_STATES` filter below (populated with
+        // uppercase literals) find zero candidates and silently skip
+        // this blocker even while `ci.status` reads passing. Real
+        // GitHub GraphQL enums are already uppercase, so this is
+        // defensive rather than a live behavior change.
+        state: String(check.state ?? '').toUpperCase(),
         completedAt: check.completedAt ?? null,
         // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1): also
         // carried through for the wrongClaim claim-installation
@@ -8731,6 +9025,12 @@ export function buildPreMergeReadinessSummary(
         startedAt: check.startedAt ?? null,
         type: check.type ?? null,
         workflowName: check.workflowName ?? null,
+        // kurone-kito/idd-skill#2919: carried through for the
+        // workflow-FILE-path filter below, which closes the gap
+        // `workflowName` alone leaves open -- two different workflow
+        // FILES can declare the identical `name:` display string (see
+        // `CheckLike`'s own doc comment).
+        workflowPath: check.workflowPath ?? null,
       }))
       .filter((check) => ci.requiredCheckNames.includes(check.name));
     // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P1, fresh
@@ -8769,6 +9069,26 @@ export function buildPreMergeReadinessSummary(
     // identity, never an unlabeled one.
     const ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME =
       'IDD advisory-convergence gate';
+    // kurone-kito/idd-skill#2919: this issue's own motivating gap --
+    // `ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME` above is only the
+    // workflow YAML's top-level `name:` string, which a DIFFERENT
+    // workflow file can declare identically (Copilot review, PR #2915:
+    // this repository's own `idd-advisory-convergence.yml` documents
+    // running both `pull_request` and `pull_request_target` instances
+    // of the SAME file simultaneously during its Phase 1 transition
+    // window -- a legitimate same-file case this filter must keep
+    // passing, not the gap this constant closes). Declared as an
+    // independent local literal rather than importing
+    // `ADVISORY_CONVERGENCE_WORKFLOW_PATH` from `advisory-convergence.mts`
+    // -- that file already imports FROM this one (`protocol-helpers.mts`),
+    // so the reverse import would cycle -- mirroring
+    // `ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME`'s own documented
+    // rationale for doing the same thing just above. A dedicated test
+    // (`tests/pre-merge-readiness.test.mts`) imports the real constant
+    // and pins this literal against it so the two can never silently
+    // drift apart.
+    const ADVISORY_CONVERGENCE_WORKFLOW_FILE_PATH =
+      '.github/workflows/idd-advisory-convergence.yml';
     const selfConvergenceProducerCandidates = selectLatestCheckPerName(
       selfConvergenceRawInstances,
     ).filter(
@@ -8776,7 +9096,16 @@ export function buildPreMergeReadinessSummary(
         CHECK_PASS_EQUIVALENT_STATES.has(check.state) &&
         (!check.type || check.type === 'check-run') &&
         (!check.workflowName ||
-          check.workflowName === ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME),
+          check.workflowName === ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME) &&
+        // #2919: `workflowName` alone lets a decoy workflow FILE that
+        // happens to share the real checker's display name masquerade
+        // as a genuine candidate (this issue's own Background). Absent
+        // `workflowPath` (every caller/fixture that doesn't resolve it)
+        // stays permissive, identical to the `workflowName` fallback
+        // just above -- only a POSITIVELY different, resolved path is
+        // ever excluded.
+        (!check.workflowPath ||
+          check.workflowPath === ADVISORY_CONVERGENCE_WORKFLOW_FILE_PATH),
     );
     for (const latestSelfConvergenceCheck of selfConvergenceProducerCandidates) {
       const autoWaiverRunVerified = options.autoWaiverRunVerified ?? {};

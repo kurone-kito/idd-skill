@@ -60,6 +60,11 @@ import {
   evaluateProviderOutageRelief,
   resolveProviderOutageDeclaration,
 } from './provider-outage-declaration.mjs';
+// #2919: reused (not a new regex) to extract a live check-run's owning
+// workflow-run id from its `detailsUrl` for the bounded `workflowPath`
+// enrichment below -- no import cycle (this file already isn't imported
+// by `rerun-advisory-convergence.mts`).
+import { parseRunIdFromUrl } from './rerun-advisory-convergence.mjs';
 import {
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
@@ -313,9 +318,164 @@ export function collectPreMergeReadiness(
   // successive calls a few seconds apart returned different check-run
   // counts for the same PR), so this is the single source of truth for
   // both the check identity and its dedup discriminator.
-  const checks = (snapshot.statusCheckRollup ?? []).map(
-    normalizeStatusCheckRollupEntry,
-  );
+  const rawStatusCheckRollup = snapshot.statusCheckRollup ?? [];
+  // kurone-kito/idd-skill#2919: `checks` stays index-aligned 1:1 with
+  // `rawStatusCheckRollup` (a bare `.map`, never filtered) so the
+  // workflow-path enrichment immediately below can zip back into
+  // `rawStatusCheckRollup[index].detailsUrl` by plain array index --
+  // inserting a `.filter()`/`.slice()` between this line and that
+  // enrichment would silently break that invariant. `let`, not `const`:
+  // the enrichment step below reassigns it.
+  let checks = rawStatusCheckRollup.map(normalizeStatusCheckRollupEntry);
+  // kurone-kito/idd-skill#2919: resolve each LIVE `idd-advisory-convergence`
+  // check-run instance's own owning workflow FILE path -- distinct from its
+  // display name, which a different workflow file can share (see
+  // `CheckPayload.workflowPath`'s own doc comment and this issue's
+  // Background). Scoped to this ONE check name deliberately: it is the
+  // only one with a documented same-display-name-different-file collision
+  // scenario in this repository today (the concurrent `pull_request`/
+  // `pull_request_target` transition window `.github/workflows/
+  // idd-advisory-convergence.yml` itself documents). The producer-identity
+  // KEY widens for every `groupChecksByProducer` consumer regardless (see
+  // `protocol-helpers.mts`); only the SOURCING of real `workflowPath` data
+  // stays this narrow, so any other check name still benefits the moment a
+  // future caller populates its own `workflowPath` -- Residual (documented,
+  // not fixed here): this collector does not resolve `workflowPath` for
+  // any check name other than `idd-advisory-convergence`.
+  //
+  // Deliberately UNCONDITIONAL (not gated on `touchesSelfReferentialAllowlist`
+  // like the marker-run-verification block further below): that gate exists
+  // there because the stale-waiver computation it feeds is ITSELF gated on
+  // the same flag, so an unconditional lookup would be pure waste. This
+  // enrichment instead feeds `summarizeRequiredChecks`/`classifyCiChecks` --
+  // the PRIMARY required-check gate, which runs on every PR regardless. Cost
+  // stays small on its own: this repository's own live PR rollups show
+  // exactly one `idd-advisory-convergence` check-run entry per PR in the
+  // ordinary case (the `-self-waiver` check is a different name, not
+  // matched here), two-to-three during the documented transition window --
+  // never the up-to-20 budget the marker-verification block below spends.
+  //
+  // kurone-kito/idd-skill#2919 (round 2 -- Codex + Copilot review on PR
+  // #2921, six new findings against a prior cap+excess-sentinel design):
+  // that design let a check name's own EARLIER, budget-excess instance
+  // become its own permanent, unmergeable producer group even when
+  // later, in-budget reruns of the SAME real workflow file superseded
+  // it -- a self-inflicted stuck-PR risk under this repo's own
+  // `fully_autonomous_merge` + `rerun-advisory-convergence.mjs`
+  // automation (E10 critique finding, confirmed by that design's own
+  // regression test asserting the stuck outcome as "working correctly").
+  // Separately, an in-budget resolution failure still left `workflowPath`
+  // ABSENT (permissive) for that check name, which can still let a
+  // genuinely different decoy workflow file's SUCCESS merge with the
+  // real workflow's FAILURE at the PRIMARY required-check gate under
+  // exactly that failure (Codex finding); and a real checker instance
+  // that itself landed in the excess bucket silently dropped out of
+  // stale-waiver candidacy (a second Codex finding). All four traced to
+  // the same root cause: PARTIAL resolution (mixing resolved-real-path,
+  // unresolved-permissive, and sentinel-excluded instances within one
+  // check name) is unsafe in every direction at once -- a uniform
+  // PERMISSIVE fallback re-admits a decoy (the original #2921 P1), and a
+  // uniform FAIL-CLOSED-BUT-PARTIAL fallback can permanently split a
+  // legitimate group (the round-2 findings).
+  //
+  // Replaced the cap/excess/sentinel machinery with the only design safe
+  // under both constraints at once: resolve EVERY unique run id this
+  // check name's live instances cite (no excess bucket, so a genuinely-
+  // superseded same-file failure always gets the chance to dedupe with
+  // its own later reruns), and treat anything short of full, clean
+  // resolution -- a parse failure on some (but not all) instances, any
+  // thrown/erroring `getWorkflowRun` call, an empty resolved `path`, or
+  // the run-id count exceeding the (now generous, DoS-only) ceiling below
+  // -- as ONE uniform, whole-check-name "identity unresolved" outcome:
+  // `workflowPath` stays absent on every instance (matching this check
+  // name's own pre-#2919 behavior, so `groupChecksByProducer` still
+  // dedupes them together exactly as before), and
+  // `advisoryConvergenceIdentityUnresolved` is reported to
+  // `buildPreMergeReadinessSummary`, which downgrades the PRIMARY
+  // required-check gate's `status` to `'unknown'` for this check name
+  // specifically (mirroring the existing `sourcePinnedRequiredCheckNames`
+  // downgrade convention in `summarizeRequiredChecks`) whenever it would
+  // otherwise report `'success'`. This can never merge a decoy (an
+  // unresolved identity is never reported passing), and can never
+  // permanently strand a legitimate same-file rerun sequence (every run
+  // id is always attempted, every attempt shares the SAME verdict for
+  // the whole check name, and a transient failure degrades to a
+  // blocked-but-recoverable "unknown" -- the same shape every other wait
+  // in this gate already has -- rather than a silent false pass OR an
+  // unrecoverable false block).
+  //
+  // A ZERO-parseable-run-id check name (every live instance's own
+  // `detailsUrl` is missing/malformed) stays fully permissive/unchanged
+  // rather than "identity unresolved": it never had resolvable evidence
+  // to begin with, matching the pre-#1483 absent-discriminator
+  // convention every other `type`/`workflowName`-absent check already
+  // gets. A MIXED check name (some instances parseable, some not) is NOT
+  // given this same pass -- the parseable instances DO have resolvable
+  // identity evidence, so treating the whole name as "no evidence" could
+  // mask a genuine decoy hiding behind one malformed `detailsUrl`
+  // (Copilot finding, round 2); it is instead folded into "identity
+  // unresolved" like any other partial-resolution case.
+  const MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS = 50;
+  const advisoryConvergenceCheckEntries = checks
+    .map((check, index) => ({ check, index }))
+    .filter(
+      ({ check }) =>
+        check.type === 'check-run' &&
+        check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    );
+  // kurone-kito/idd-skill#2919: reported to `buildPreMergeReadinessSummary`
+  // (`advisoryConvergenceIdentityUnresolved` option) so it can downgrade
+  // the primary required-check gate -- see the doc comment above.
+  let advisoryConvergenceIdentityUnresolved = false;
+  if (advisoryConvergenceCheckEntries.length > 0) {
+    const runIdsByIndex = new Map();
+    for (const { index } of advisoryConvergenceCheckEntries) {
+      const runId = parseRunIdFromUrl(
+        rawStatusCheckRollup[index]?.detailsUrl ?? '',
+      );
+      if (runId) runIdsByIndex.set(index, runId);
+    }
+    if (runIdsByIndex.size > 0) {
+      if (runIdsByIndex.size < advisoryConvergenceCheckEntries.length) {
+        // Mixed: at least one live instance has no parseable run id at
+        // all while at least one other does -- see the doc comment above.
+        advisoryConvergenceIdentityUnresolved = true;
+      } else {
+        const uniqueRunIds = [...new Set(runIdsByIndex.values())];
+        if (
+          uniqueRunIds.length > MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS
+        ) {
+          advisoryConvergenceIdentityUnresolved = true;
+        } else {
+          const pathsByRunId = new Map();
+          for (const runId of uniqueRunIds) {
+            try {
+              const raw = port.getWorkflowRun(owner, repo, runId);
+              const path = String(raw?.path ?? '');
+              if (!path) {
+                advisoryConvergenceIdentityUnresolved = true;
+                break;
+              }
+              pathsByRunId.set(runId, path);
+            } catch {
+              advisoryConvergenceIdentityUnresolved = true;
+              break;
+            }
+          }
+          if (!advisoryConvergenceIdentityUnresolved) {
+            checks = checks.map((check, index) => {
+              const runId = runIdsByIndex.get(index);
+              if (runId === undefined) return check;
+              const path = pathsByRunId.get(runId);
+              return path === undefined
+                ? check
+                : { ...check, workflowPath: path };
+            });
+          }
+        }
+      }
+    }
+  }
   const trustEmptyProtectionReads = readTrustEmptyProtectionReads(iddConfig);
   const branchRulesRead = fetchGovernanceJson(
     `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
@@ -840,6 +1000,9 @@ export function collectPreMergeReadiness(
       primaryBotLogin,
       developmentBranchTarget,
       copilotUnavailable,
+      // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
+      // block above -- see its doc comment for the full rationale.
+      advisoryConvergenceIdentityUnresolved,
       advisoryConvergenceOutageRelieved:
         advisoryConvergenceOutageRelief.relieved,
       advisoryConvergenceOutageRelievedSince:

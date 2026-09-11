@@ -1349,6 +1349,12 @@ function runSelfWaiverCollection(
     workflowRuns?: Record<string, unknown>;
     changedFiles?: Record<number, string[]>;
     comments?: Record<number, unknown[]>;
+    // kurone-kito/idd-skill#2919: replaces the default single-entry
+    // `statusCheckRollup` below wholesale when provided, so a test can
+    // exercise the collector's own `workflowPath` enrichment (which needs
+    // each entry's `detailsUrl` to resolve a run id) or a decoy second
+    // producer sharing name/type/workflowName.
+    statusCheckRollup?: unknown[];
   },
   configOverrides: Record<string, unknown> = {},
 ) {
@@ -1366,7 +1372,7 @@ function runSelfWaiverCollection(
           url: 'https://github.com/o/r/pull/42',
           authorLogin: 'author-user',
           reviewDecision: null,
-          statusCheckRollup: [
+          statusCheckRollup: fixtureOverrides.statusCheckRollup ?? [
             {
               __typename: 'CheckRun',
               name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
@@ -1383,6 +1389,20 @@ function runSelfWaiverCollection(
               // `staleSelfWaiver` computation now filters on this exact
               // value.
               workflowName: 'IDD advisory-convergence gate',
+              // kurone-kito/idd-skill#2919 (round 4 -- CodeRabbit review on
+              // PR #2921): no `detailsUrl` by default, so zero run ids are
+              // parseable and the whole check name stays on the genuinely
+              // PERMISSIVE zero-parseable-run-id path -- real pre-#2919
+              // behavior, exactly like every test in this file that
+              // predates #2919. A `detailsUrl` with no matching
+              // `workflowRuns` entry would instead exercise the ROUND-2
+              // identity-unresolved (fail-closed to `unknown`) path, which
+              // is a materially different outcome this default fixture
+              // must not silently opt every pre-existing test into. A test
+              // that wants real enrichment (or the identity-unresolved
+              // path specifically) supplies its own `statusCheckRollup`
+              // override with a `detailsUrl` (and, for real enrichment, a
+              // matching `workflowRuns` entry).
             },
           ],
           mergeable: 'MERGEABLE',
@@ -1466,6 +1486,431 @@ test('collectPreMergeReadiness against a fake provider: a genuine, run-verified 
     ),
     `expected a self-referential-bootstrap-auto "ci" blocker, got: ${JSON.stringify(blockers)}`,
   );
+});
+
+// kurone-kito/idd-skill#2919: end-to-end wiring check for the collector's
+// own `workflowPath` enrichment (`detailsUrl` -> `parseRunIdFromUrl` ->
+// `port.getWorkflowRun` -> `CheckPayload.workflowPath`) -- a regression
+// guard confirming enrichment reaching a REAL, correctly-resolved path
+// does not change the pre-#2919 outcome above.
+test('collectPreMergeReadiness against a fake provider: #2919 workflowPath enrichment resolving the REAL checker path does not change the expired-marker blocker (regression guard)', () => {
+  const report = runSelfWaiverCollection({
+    comments: {
+      42: [
+        selfWaiverMarkerCollectionComment({
+          id: 1,
+          expiresAt: '2026-08-01T00:05:00Z',
+          runId: '999',
+          createdAt: '2026-07-31T23:00:00Z',
+        }),
+      ],
+    },
+    changedFiles: { 42: ['.github/idd/config.json'] },
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/500/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/999': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+        head_sha: SELF_WAIVER_PR_HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      },
+      'o/r/500': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+      },
+    },
+  });
+  const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
+  assert.equal(staleSelfWaiver.stale, true);
+});
+
+// kurone-kito/idd-skill#2919 (this issue's own motivating vulnerability,
+// exercised through the REAL collector wiring rather than a direct
+// `buildPreMergeReadinessSummary` call): the live `idd-advisory-convergence`
+// check-run resolves to a DIFFERENT workflow FILE than the real checker,
+// despite sharing its display name -- it must be excluded as a candidate,
+// so the otherwise-genuine expired marker never gets a real checker
+// instance to evaluate against.
+test('collectPreMergeReadiness against a fake provider: #2919 a checker check-run resolved to a DIFFERENT workflow file is excluded, closing the display-name-collision gap', () => {
+  const report = runSelfWaiverCollection({
+    comments: {
+      42: [
+        selfWaiverMarkerCollectionComment({
+          id: 1,
+          expiresAt: '2026-08-01T00:05:00Z',
+          runId: '999',
+          createdAt: '2026-07-31T23:00:00Z',
+        }),
+      ],
+    },
+    changedFiles: { 42: ['.github/idd/config.json'] },
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/500/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/999': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+        head_sha: SELF_WAIVER_PR_HEAD_SHA,
+        head_repository: { full_name: 'o/r' },
+        event: 'pull_request_target',
+      },
+      'o/r/500': {
+        path: '.github/workflows/some-other-workflow.yml',
+      },
+    },
+  });
+  const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
+  assert.equal(staleSelfWaiver.stale, false);
+});
+
+// kurone-kito/idd-skill#2919 (round 2 -- E10 critique finding against a
+// prior cap+excess-sentinel design): a check name that organically
+// accumulates more distinct run ids than any lookup budget -- plausible
+// under this repo's own `fully_autonomous_merge` +
+// `rerun-advisory-convergence.mjs` automation across a long E-phase
+// review-fix cycle, not only an adversarial scenario -- must never be
+// PERMANENTLY stuck once its early failure is genuinely superseded by
+// later reruns of the SAME real workflow file. 11 distinct run ids, all
+// resolving to the SAME real path: the oldest is the checker's own
+// original FAILURE, every later one a genuine SUCCESS rerun. All 11 sit
+// comfortably under the new (DoS-only) lookup ceiling, so every run id
+// resolves cleanly; `groupChecksByProducer` places them all in ONE
+// producer group (same name/type/workflowName/workflowPath), whose
+// dedup-selected "latest" instance is the newest SUCCESS -- the older
+// FAILURE becomes a discarded (not blocking) sibling instead of its own
+// permanent, unmergeable group.
+test('collectPreMergeReadiness against a fake provider: #2919 a legitimate large rerun sequence of the SAME real workflow file resolves cleanly and never permanently blocks (round 2 fix)', () => {
+  const RUN_COUNT = 11;
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  // `parseRunIdFromUrl` (rerun-advisory-convergence.mts) requires a
+  // canonical numeric run id (`\d+`) -- these must be real digit strings,
+  // not an alphanumeric stand-in, or the collector's own run-id
+  // extraction silently no-ops and this test would exercise nothing.
+  const runId = (i: number) => String(90001 + i);
+  const statusCheckRollup = Array.from({ length: RUN_COUNT }, (_, i) => {
+    const isOldest = i === 0;
+    return {
+      __typename: 'CheckRun',
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      status: 'COMPLETED',
+      // The oldest instance is the checker's own original FAILURE; every
+      // later instance is a genuine same-file rerun that SUCCEEDED.
+      conclusion: isOldest ? 'FAILURE' : 'SUCCESS',
+      completedAt: `2026-08-01T00:${String(i).padStart(2, '0')}:00Z`,
+      workflowName: 'IDD advisory-convergence gate',
+      detailsUrl: `https://github.com/o/r/actions/runs/${runId(i)}/job/1`,
+    };
+  });
+  const workflowRuns: Record<string, unknown> = {};
+  for (let i = 0; i < RUN_COUNT; i++) {
+    workflowRuns[`o/r/${runId(i)}`] = { path: REAL_PATH };
+  }
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup,
+    workflowRuns,
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    identityUnresolvedRequiredCheckNames: string[];
+    discardedNonPassingRequiredChecks: { discardedState: string }[];
+  };
+  assert.equal(
+    ciReport.status,
+    'success',
+    `expected the superseded early FAILURE to dedupe away under its own real workflow file's later reruns, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, true);
+  assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, []);
+  assert.equal(ciReport.discardedNonPassingRequiredChecks.length, 1);
+  assert.equal(
+    ciReport.discardedNonPassingRequiredChecks[0]?.discardedState,
+    'FAILURE',
+  );
+});
+
+// kurone-kito/idd-skill#2919 (regression guard for the ORIGINAL motivating
+// vulnerability, round 2 redesign): a decoy workflow file sharing the
+// checker's display name must still never mask the real workflow file's
+// own FAILURE, even now that the cap/excess-sentinel machinery is gone.
+// Both instances resolve cleanly to DIFFERENT real paths, so
+// `groupChecksByProducer` keeps them in separate producer groups --
+// `classifyCiChecks` fails closed the moment ANY deduped group reports a
+// failure state, regardless of how many OTHER groups for the same check
+// name are passing (see `classifyCiChecks`'s own `failed` filter).
+test('collectPreMergeReadiness against a fake provider: #2919 a decoy workflow file never masks the real workflow file FAILURE when both resolve cleanly', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const DECOY_PATH = '.github/workflows/some-other-workflow.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/80001/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/80002/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/80001': { path: REAL_PATH },
+      'o/r/80002': { path: DECOY_PATH },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+  };
+  assert.equal(
+    ciReport.status,
+    'failed',
+    `expected the real workflow file's own FAILURE to stay its own group and keep the gate failed despite the decoy's SUCCESS, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+});
+
+// kurone-kito/idd-skill#2919 (round 2 -- Codex review on PR #2921): a
+// resolution failure on ANY live instance of this check name must no
+// longer fall back to a PERMISSIVE pass through the old name-only dedup
+// key -- that permissive fallback is exactly what let a genuinely
+// different decoy workflow file's SUCCESS merge with the real workflow's
+// FAILURE at the primary required-check gate under a transient failure
+// (the finding this test used to assert as correct). Two same-name
+// instances: an older FAILURE (whose own run WOULD resolve cleanly) and
+// a newer SUCCESS whose run lookup is deliberately unresolvable (no
+// matching `workflowRuns` fixture, so the fake provider throws). Both
+// stay grouped together by the unchanged `(name, type, workflowName)` key
+// (workflowPath stays absent on both, so `discardedNonPassingRequiredChecks`
+// still surfaces the same divergence evidence as before) -- but `status`
+// itself is now explicitly downgraded to `'unknown'` rather than reported
+// `'success'`, and the blocker names the identity-unresolved cause.
+test('collectPreMergeReadiness against a fake provider: #2919 an unresolvable run id makes the whole check name identity-unresolved, never a permissive pass (round 2 fix)', () => {
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/70001/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/70002/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/70001': { path: '.github/workflows/idd-advisory-convergence.yml' },
+      // Deliberately no 'o/r/70002' fixture -- its lookup throws.
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    identityUnresolvedRequiredCheckNames: string[];
+    discardedNonPassingRequiredChecks: { discardedState: string }[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected an unresolvable lookup to downgrade to identity-unresolved rather than a permissive pass, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+  assert.equal(ciReport.discardedNonPassingRequiredChecks.length, 1);
+  assert.equal(
+    ciReport.discardedNonPassingRequiredChecks[0]?.discardedState,
+    'FAILURE',
+  );
+  const blockers = report.blockers as { gate: string; detail: string }[];
+  assert.ok(
+    blockers.some(
+      (blocker) =>
+        blocker.gate === 'ci' &&
+        /unresolved workflow-file producer identity/.test(blocker.detail),
+    ),
+    `expected a "ci" blocker naming the identity-unresolved cause, got: ${JSON.stringify(blockers)}`,
+  );
+});
+
+// kurone-kito/idd-skill#2919 (round 2 -- Copilot review on PR #2921): a
+// MIXED check name -- at least one live instance has a parseable
+// `detailsUrl`, at least one other doesn't -- must NOT get the same
+// permissive pass a fully-unparseable check name gets. The parseable
+// instance DOES have resolvable identity evidence; silently treating the
+// whole name as "no evidence" could mask a genuine decoy hiding behind
+// one malformed `detailsUrl`. Both instances still dedupe together via
+// the unchanged name-only key (workflowPath stays absent on both), but
+// `status` downgrades to `'unknown'` exactly like a genuine lookup
+// failure, since the check name's producer identity could not be fully
+// verified.
+test('collectPreMergeReadiness against a fake provider: #2919 a mixed parseable/unparseable detailsUrl within one check name is identity-unresolved, not permissive (round 2 fix)', () => {
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/70003/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        // Malformed/missing run id -- `parseRunIdFromUrl` returns null.
+        detailsUrl: 'https://github.com/o/r/actions/runs/not-a-number/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/70003': { path: '.github/workflows/idd-advisory-convergence.yml' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    identityUnresolvedRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected a mixed parseable/unparseable detailsUrl to downgrade to identity-unresolved, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+});
+
+// kurone-kito/idd-skill#2919 (round 5 -- E10 critique finding: this branch
+// of the collector's enrichment had no dedicated test): a check name
+// whose live instances cite MORE distinct run ids than the collector's
+// own lookup ceiling (50) is identity-unresolved -- even though every
+// individual run id WOULD have resolved cleanly if attempted (each has a
+// matching `workflowRuns` fixture entry), proving this is specifically
+// the budget-exceeded branch, not a resolution failure.
+test('collectPreMergeReadiness against a fake provider: #2919 a run-id count exceeding the lookup ceiling is identity-unresolved, even though every individual run id would resolve cleanly', () => {
+  const RUN_COUNT = 51;
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const runId = (i: number) => String(90101 + i);
+  const statusCheckRollup = Array.from({ length: RUN_COUNT }, (_, i) => ({
+    __typename: 'CheckRun',
+    name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    status: 'COMPLETED',
+    conclusion: 'SUCCESS',
+    completedAt: `2026-08-01T${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z`,
+    workflowName: 'IDD advisory-convergence gate',
+    detailsUrl: `https://github.com/o/r/actions/runs/${runId(i)}/job/1`,
+  }));
+  const workflowRuns: Record<string, unknown> = {};
+  for (let i = 0; i < RUN_COUNT; i++) {
+    workflowRuns[`o/r/${runId(i)}`] = { path: REAL_PATH };
+  }
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup,
+    workflowRuns,
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    identityUnresolvedRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected exceeding the lookup ceiling to downgrade to identity-unresolved, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+});
+
+// kurone-kito/idd-skill#2919 (round 5 -- E10 critique finding): distinct
+// from the already-tested "lookup throws" branch -- here `getWorkflowRun`
+// resolves SUCCESSFULLY (no thrown error) but returns a falsy/empty
+// `path`, which the collector must treat identically to a thrown lookup
+// (identity-unresolved), not as a resolved-but-empty real path.
+test('collectPreMergeReadiness against a fake provider: #2919 a resolved but empty workflow-run path is identity-unresolved, same as a thrown lookup', () => {
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/80101/job/1',
+      },
+    ],
+    workflowRuns: {
+      // Resolves without throwing, but `path` is empty -- distinct from
+      // omitting the fixture entry entirely (which throws).
+      'o/r/80101': { path: '' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    identityUnresolvedRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected a resolved-but-empty path to downgrade to identity-unresolved, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
 });
 
 test('collectPreMergeReadiness against a fake provider: touchesSelfReferentialAllowlist false (this PR never touches the checker allowlist) suppresses the blocker even for an otherwise-verified expired marker -- closes the decisive round-15 forgery/DoS finding', () => {
