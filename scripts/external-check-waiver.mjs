@@ -299,12 +299,40 @@ export function planExternalCheckWaiver(input, options = {}) {
       '--auto-bootstrap cannot be combined with --claimless',
     );
   }
-  if (matchedChecks.length === 0) {
+  // kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895, round 12):
+  // both checks below are typo-guards for a human operator picking a
+  // selector by hand -- neither applies to `--auto-bootstrap`, which
+  // hardcodes the exact selector it exists for and is architecturally
+  // DESIGNED to post before the gating verdict job's own check-run entry
+  // for the CURRENT run even exists: the origin workflow's verdict job
+  // declares `needs: idd-advisory-convergence-self-waiver`, so within the
+  // very `pull_request_target` run whose self-waiver job is executing this
+  // code, that run's own verdict job is sequenced to start only AFTER this
+  // job finishes -- it cannot have posted a check-run conclusion yet. Any
+  // "already passing" or "no matching check" snapshot this job reads is
+  // therefore necessarily stale evidence from a DIFFERENT run: either the
+  // untrusted, code-fixed sibling `pull_request`-triggered instance (the
+  // #2764 Phase 1 dual-trigger period; that one runs the PR's OWN new
+  // checker code, so its conclusion says nothing about whether the
+  // sequenced-after `pull_request_target` instance's OLD, base-branch
+  // checker code will also pass) or an earlier `pull_request_target` run
+  // for this same HEAD. Codex found a live case a same-named sibling
+  // instance passing suppressed the only marker the actual gating instance
+  // needed, permanently stranding an eligible PR red -- posting a
+  // redundant marker when one is genuinely unnecessary is harmless (the
+  // consumer just ignores a marker for an already-passing check), so the
+  // safe default is to always let `--auto-bootstrap` attempt to post,
+  // never block on either check's timing snapshot. A bounded wait/retry
+  // cannot substitute for this: the check being waited for is itself
+  // downstream of this job via `needs:`, so it would deadlock rather than
+  // eventually resolve.
+  if (!autoBootstrap && matchedChecks.length === 0) {
     blockingReasons.push(
       `requested selector ${requestedSelector || '<empty>'} did not match any current PR checks`,
     );
   }
   if (
+    !autoBootstrap &&
     matchedChecks.length > 0 &&
     matchedChecks.every((check) => check.successLike)
   ) {
@@ -678,14 +706,18 @@ export async function runExternalCheckWaiver(options = {}) {
     // undocumented as required for this specific job) would otherwise
     // have this job fail on every single allowlisted-touching PR.
     //
-    // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): a
-    // third, unrelated benign shape joins the same graceful-skip
-    // treatment. When the sibling `pull_request` verdict run happens to
-    // finish (and pass) before this `pull_request_target` posting step
-    // reads the rollup, `matchedChecks.every((check) => check.successLike)`
-    // blocks with "matched checks are already passing" -- a genuinely
-    // benign no-op (no waiver is needed once the check already passed),
-    // not a problem, yet it fell outside the set below and still threw.
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11 then
+    // round 12): a "matched checks are already passing" (or "did not match
+    // any current PR checks") entry briefly joined this set, then was
+    // removed again once round 12 established `planExternalCheckWaiver`
+    // should never treat either as blocking for `--auto-bootstrap` in the
+    // first place (see that function's own doc comment on the two checks
+    // it now skips for `autoBootstrap`) -- a same-named sibling check
+    // instance passing or not yet existing proves nothing about whether
+    // the sequenced-after, `needs:`-downstream gating instance still needs
+    // the marker. Neither reason can reach `report.blockingReasons` for
+    // `--auto-bootstrap` anymore, so this set only ever needs the two
+    // adopter-configuration-only reasons below.
     //
     // Treat every blocking reason in this set as a graceful no-op for
     // `--auto-bootstrap` -- exit 0 with a clear notice quoting the exact
@@ -695,7 +727,6 @@ export async function runExternalCheckWaiver(options = {}) {
     const benignAutoBootstrapSkipReasons = new Set([
       'external-check waiver mode is disabled',
       'one or more matched checks are not configured as waivable external checks',
-      'matched checks are already passing',
     ]);
     if (
       args.autoBootstrap &&

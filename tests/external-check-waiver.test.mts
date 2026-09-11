@@ -2152,106 +2152,61 @@ test('runExternalCheckWaiver: --auto-bootstrap still throws on a genuine blockin
   }
 });
 
-test('runExternalCheckWaiver: --auto-bootstrap exits 0 (graceful skip) when the check already reports a passing conclusion (Codex review, PR #2895, round 11)', async () => {
-  // The sibling pull_request verdict run can finish (and pass) before this
-  // pull_request_target posting step reads the rollup -- a benign timing
-  // race, not a problem. planExternalCheckWaiver's pre-existing "matched
-  // checks are already passing" blocker must not throw for --auto-bootstrap
-  // in that case: no waiver is needed once the check already passed.
-  const dir = mkdtempSync(
-    join(tmpdir(), 'idd-waiver-auto-bootstrap-already-passing-'),
-  );
-  const originalCwd = process.cwd();
-  try {
-    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
-    // ciGate fully configured (unlike the config-only skip test above) so
-    // "matched checks are already passing" is the ONLY blocking reason,
-    // isolating this specific fix from the config-only one.
-    writeFileSync(
-      join(dir, '.github', 'idd', 'config.json'),
-      JSON.stringify({
-        ciGate: {
-          externalCheckWaivers: { mode: 'maintainer-authorized' },
-          externalChecks: {
-            waivable: [
-              { selector: 'idd-advisory-convergence', matchMode: 'exact' },
-            ],
-          },
-        },
-      }),
-    );
-    process.chdir(dir);
+test('runExternalCheckWaiver: --auto-bootstrap still posts when a same-named check already reports a passing conclusion (Codex review, PR #2895, round 12)', () => {
+  // Round 11 initially treated this as a benign skip, but Codex's follow-up
+  // (round 12) found that reading is unsafe: the origin workflow's verdict
+  // job declares `needs: idd-advisory-convergence-self-waiver`, so within
+  // the very pull_request_target run whose self-waiver job posts this
+  // marker, that run's OWN verdict job cannot have posted a conclusion yet
+  // -- any "already passing" snapshot is necessarily from a DIFFERENT run,
+  // most notably the untrusted, code-fixed sibling pull_request-triggered
+  // instance during the #2764 Phase 1 dual-trigger period. That sibling's
+  // pass proves nothing about whether the sequenced-after, base-branch-
+  // checker verdict instance still needs the marker -- skipping there would
+  // permanently strand an eligible PR red with no other event to retrigger
+  // it. planExternalCheckWaiver must therefore never treat "matched checks
+  // are already passing" as blocking for --auto-bootstrap at all; posting a
+  // redundant marker when one turns out to be unnecessary is harmless.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  input.pr.statusCheckRollup = [
+    {
+      __typename: 'CheckRun',
+      name: 'idd-advisory-convergence',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+    },
+  ];
 
-    let postCalls = 0;
-    const { exitCode, report } = await runExternalCheckWaiver({
-      args: {
-        ...parseArgs([
-          '--pr',
-          '2325',
-          '--check',
-          'idd-advisory-convergence',
-          '--reason',
-          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
-          '--run-id',
-          '555',
-          '--auto-bootstrap',
-          '--apply',
-          '--yes',
-        ]),
-        repo: 'kurone-kito/idd-skill',
-      },
-      pr: {
-        number: 2325,
-        state: 'OPEN',
-        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
-        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
-        headRefOid: REUSE_HEAD_SHA,
-        statusCheckRollup: [
-          {
-            __typename: 'CheckRun',
-            name: 'idd-advisory-convergence',
-            status: 'COMPLETED',
-            conclusion: 'SUCCESS',
-          },
-        ],
-      },
-      issueCandidates: [
-        {
-          number: 2328,
-          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
-          activeClaim: {
-            agentId: 'claude-6043e89f',
-            claimId: 'claim-20260830T222316Z-2328',
-            supersedes: 'none',
-            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
-            createdAt: '2026-08-30T22:23:26Z',
-          },
-        },
-      ],
-      prComments: () => [],
-      headCommittedAt: '2026-08-30T18:13:24Z',
-      now: new Date('2026-08-30T18:20:00Z'),
-      isTTY: false,
-      postComment: () => {
-        postCalls += 1;
-        return { html_url: 'https://example.invalid/posted' };
-      },
-    });
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
 
-    assert.equal(
-      exitCode,
-      0,
-      'must exit 0, not throw, when the check is already passing',
-    );
-    assert.equal(report?.applied, false);
-    assert.equal(postCalls, 0);
-    assert.deepEqual(report?.blockingReasons, [
-      'matched checks are already passing',
-    ]);
-  } finally {
-    process.chdir(originalCwd);
-    rmSync(dir, { recursive: true, force: true });
-  }
+  assert.equal(report.canApply, true);
+  assert.deepEqual(report.blockingReasons, []);
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap still posts when no check has been created yet for the selector (Copilot review, PR #2895, round 12)', () => {
+  // The same needs:-sequencing deadlock, the other direction: once the
+  // #2764 Phase 1 dual-trigger period ends and only pull_request_target
+  // remains, the verdict job's check-run entry for the CURRENT run is
+  // guaranteed not to exist yet when this job reads the rollup (it is
+  // downstream of this very job). A bounded wait/retry cannot help --
+  // the check being waited for cannot complete until after this job does
+  // -- so planExternalCheckWaiver must never block --auto-bootstrap on
+  // "did not match any current PR checks" either.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  input.pr.statusCheckRollup = [];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.deepEqual(report.blockingReasons, []);
 });
 
 test('runExternalCheckWaiver: --auto-bootstrap clamps its fixed expiry to a configured shorter maxValidity (Codex review, PR #2895)', async () => {
