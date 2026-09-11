@@ -3520,20 +3520,40 @@ commit-ssh` is sufficient here — a single `commit` invocation needs no
 `--continue` step to re-sign.
 
 **Bounded timeout for every invocation** (commit, merge, or rebase): if
-the wrapper has not completed within 2 minutes, treat it as stuck
-rather than a signing failure worth retrying. First check whether the
-process is still running — per `idd-ci.instructions.md`'s "Wake-up
-discipline" guidance on a heavy local command that auto-backgrounds
-past a tool's default timeout, do not start a second wrapper
-invocation alongside it — then kill it and fall back to the
-already-documented `--no-gpg-sign` last resort
-(`idd-overview-appendix.instructions.md`'s "Commit signing" section)
-rather than waiting indefinitely. For an in-progress merge or rebase,
-complete it with `-c commit.gpgsign=false` on the `--continue` form
-instead — a plain `--continue` re-signs through the stalled primary
-signer, and `--no-gpg-sign` itself is not a `--continue` flag. Observed
-hanging with no output for an extended, unbounded period on 2026-09-10
-(issue #2844 / PR #2870, commit `7be8acc9`, later confirmed unsigned).
+the wrapper produces no output for 2 minutes, treat it as stuck rather
+than a signing failure worth retrying — a whole-command,
+root-cause-agnostic bound (it deliberately does not try to isolate the
+signer subprocess). Scope the trigger to _silence_, not merely elapsed
+time: a legitimately long-running rebase that is actively replaying
+commits (and therefore still producing output) is not this case.
+First check whether the process is still running — per
+`idd-ci.instructions.md`'s "Wake-up discipline" guidance on a heavy
+local command that auto-backgrounds past a tool's default timeout, do
+not start a second wrapper invocation alongside it. If it is still
+running, terminate it (a plain `kill`/`SIGTERM`, not `-9` — git's own
+signal handler cleans up `index.lock`; `-9` skips that cleanup and the
+fallback below then fails on the stale lock).
+
+Either way — just terminated, or already exited on its own — inspect
+repository state **before** falling back: the process may already have
+updated `HEAD`, or left an in-progress merge/rebase, before it stalled
+or exited.
+
+- **Plain commit**: compare `git rev-parse HEAD` before/after the
+  wrapper call, the same check B3's "Verify a commit actually landed"
+  paragraph already prescribes. If the commit landed, stop — do not
+  re-commit. If it did not, fall back to `--no-gpg-sign`
+  (`idd-overview-appendix.instructions.md`'s "Commit signing" section).
+- **Merge or rebase**: check whether `MERGE_HEAD` (merge) or
+  `.git/rebase-merge` / `.git/rebase-apply` (rebase) still exists. If
+  the operation already completed, stop. If it is still mid-operation,
+  complete it with `-c commit.gpgsign=false` on the `--continue` form
+  — a plain `--continue` re-signs through the stalled primary signer,
+  and `--no-gpg-sign` itself is not a `--continue` flag.
+
+Observed hanging with no output for an extended, unbounded period on
+2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
+unsigned).
 
 ## Friction Inventory
 
