@@ -885,6 +885,115 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
   }
 });
 
+/**
+ * Lists the PIDs of every currently-running process with a visible top-level
+ * window (a nonzero `MainWindowHandle`) -- the same signal Windows itself
+ * uses to distinguish a console-subsystem process that actually shows a
+ * window from one that does not. Real, unmocked native-Windows check, not an
+ * `args`/option-shape assertion: `windowsHide: true`'s effectiveness is
+ * exactly the kind of claim that a mocked `spawnFn` cannot verify (#2892
+ * review, Copilot).
+ */
+function listVisibleWindowPids(): Set<string> {
+  const out = execFileSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      'Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -ExpandProperty Id',
+    ],
+    { encoding: 'utf8' },
+  );
+  return new Set(
+    out
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  );
+}
+
+test('invokeCritiqueTelemetryHook does not create a visible console window on win32, for a command that exits quickly or one that hangs and is killed (#2892 acceptance criterion, review follow-up)', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  // Issue #2892's third acceptance criterion ("does not create a new
+  // visible console window ... for a command that exits quickly or is
+  // killed on timeout") was left unverified through every prior round of
+  // this fix -- the code comment on `windowsHide` in the source honestly
+  // says so. This test closes that gap with a real, native-Windows check
+  // using the unmocked `invokeCritiqueTelemetryHook` spawn path, covering
+  // both halves of the acceptance criterion's wording.
+  const quickRestore = stubExecutable(
+    'idd-telemetry-hook-window-check-quick',
+    'setTimeout(() => {}, 2_000);\n',
+  );
+  const hangRestore = stubExecutable(
+    'idd-telemetry-hook-window-check-hang',
+    'setInterval(() => {}, 1_000);\n',
+  );
+  try {
+    // Half 1: a command that exits quickly on its own.
+    const beforeQuick = listVisibleWindowPids();
+    await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-window-check-quick'),
+      samplePayload(),
+      { timeoutMs: 5_000 },
+    );
+    const afterQuick = listVisibleWindowPids();
+    const newVisibleQuick = [...afterQuick].filter(
+      (pid) => !beforeQuick.has(pid),
+    );
+    assert.deepEqual(
+      newVisibleQuick,
+      [],
+      `expected no new visible-window process while the quick-exit command ran, saw PIDs: ${newVisibleQuick.join(', ')}`,
+    );
+
+    // Half 2: a command that hangs and is killed on timeout.
+    let hangPid: number | undefined;
+    const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+      const child = spawn(...args);
+      if (
+        typeof args[0] === 'string' &&
+        args[0].includes('idd-telemetry-hook-window-check-hang')
+      ) {
+        hangPid = child.pid;
+      }
+      return child;
+    }) as typeof spawn;
+    const beforeHang = listVisibleWindowPids();
+    const hangPromise = invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-window-check-hang'),
+      samplePayload(),
+      { timeoutMs: 1_000, spawnFn },
+    );
+    await delay(300);
+    const duringHang = listVisibleWindowPids();
+    const newVisibleHang = [...duringHang].filter(
+      (pid) => !beforeHang.has(pid),
+    );
+    assert.deepEqual(
+      newVisibleHang,
+      [],
+      `expected no new visible-window process while the hung command ran (pre-kill), saw PIDs: ${newVisibleHang.join(', ')}`,
+    );
+    await hangPromise;
+    if (hangPid) {
+      cleanupProcessTree(hangPid);
+    }
+  } finally {
+    // LIFO order: each stubExecutable() call captures PATH/NODE_OPTIONS as
+    // they stood immediately before that call, so restoring in creation
+    // order would have hangRestore() (created second, after quickRestore's
+    // own stub was already prepended) overwrite NODE_OPTIONS back to a
+    // `--require <quickRestore's already-deleted preload.cjs>` value --
+    // breaking every subsequent test's own stubExecutable-based child
+    // processes. Restore the most-recently-created stub first instead.
+    hangRestore();
+    quickRestore();
+  }
+});
+
 test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when the win32 taskkill spawn itself throws synchronously', async () => {
   // Covers killProcessGroup's win32 last-resort path (C1 review,
   // kurone-kito/idd-skill#2892): when killProcessTreeWindows's own
