@@ -6216,19 +6216,20 @@ export function computePreMergeReadinessBlockers(report) {
     const advisoryConvergenceCheckSelectorForStaleness = String(
       advisoryConvergencePreconditionForStaleness.checkSelector ?? '',
     );
-    const advisoryConvergenceCheckCurrentlyPassing =
+    const advisoryConvergencePassingCheckForStaleness =
       advisoryConvergenceCheckSelectorForStaleness !== '' &&
-      Array.isArray(ci.checks) &&
-      ci.checks.some(
-        (check) =>
-          check?.required === true &&
-          CHECK_PASS_EQUIVALENT_STATES.has(String(check?.state ?? '')) &&
-          matchCheckSelectorLocal(
-            check?.name,
-            advisoryConvergenceCheckSelectorForStaleness,
-          ),
-      );
-    if (advisoryConvergenceCheckCurrentlyPassing) {
+      Array.isArray(ci.checks)
+        ? ci.checks.find(
+            (check) =>
+              check?.required === true &&
+              CHECK_PASS_EQUIVALENT_STATES.has(String(check?.state ?? '')) &&
+              matchCheckSelectorLocal(
+                check?.name,
+                advisoryConvergenceCheckSelectorForStaleness,
+              ),
+          )
+        : undefined;
+    if (advisoryConvergencePassingCheckForStaleness) {
       const autoWaiverEvidenceForStaleness = preMergeAsRecord(
         report.autoWaiverEvidence,
       );
@@ -6237,12 +6238,38 @@ export function computePreMergeReadinessBlockers(report) {
       )
         ? autoWaiverEvidenceForStaleness.expired
         : [];
-      const staleAutoWaiverEntry = autoWaiverExpiredList.find(
-        (entry) =>
-          entry?.authorLogin === 'github-actions[bot]' &&
-          String(entry?.checkSelector ?? '') ===
-            advisoryConvergenceCheckSelectorForStaleness,
+      // kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895, round
+      // 13): `expired` accumulates every historical marker ever posted for
+      // this selector, not just the one (if any) that actually covered the
+      // CURRENT pass. Naively matching on author+selector alone means the
+      // blocker never clears once a single marker has ever expired, even
+      // after a genuine fresh rerun (under a newer valid marker, or with no
+      // waiver needed at all) -- so correlate against the passing check's
+      // own `completedAt`: a marker only proves this pass stale when the
+      // check last completed AT OR BEFORE that marker's `expiresAt` (i.e.
+      // the check has not rerun since the marker lapsed). A completedAt
+      // that fails to parse (missing/sentinel) cannot prove the pass is
+      // fresh, so it fails closed and still counts as stale -- a real rerun
+      // clears this cheaply, whereas silently trusting an unparseable
+      // timestamp would not.
+      const passingCheckCompletedAtMs = parseCompletedAt(
+        String(advisoryConvergencePassingCheckForStaleness.completedAt ?? ''),
       );
+      const staleAutoWaiverEntry = autoWaiverExpiredList.find((entry) => {
+        if (
+          entry?.authorLogin !== 'github-actions[bot]' ||
+          String(entry?.checkSelector ?? '') !==
+            advisoryConvergenceCheckSelectorForStaleness
+        ) {
+          return false;
+        }
+        if (passingCheckCompletedAtMs === null) return true;
+        const entryExpiresAtMs = Date.parse(String(entry?.expiresAt ?? ''));
+        return (
+          Number.isNaN(entryExpiresAtMs) ||
+          entryExpiresAtMs >= passingCheckCompletedAtMs
+        );
+      });
       if (staleAutoWaiverEntry) {
         blockers.push({
           gate: 'ci',

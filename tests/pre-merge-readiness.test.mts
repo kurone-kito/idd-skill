@@ -7408,13 +7408,19 @@ test('buildPreMergeReadinessSummary blocks on a currently-passing idd-advisory-c
     ),
   );
 
+  // kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895, round 13):
+  // this marker's own `expiresAt` (23:59) sits BETWEEN the passing check's
+  // `completedAt` (23:58, set on `inputWithPassingConvergence` above) and
+  // `fixture.options.now` (00:00) -- i.e. the check last completed BEFORE
+  // this marker lapsed, so its pass genuinely rests on stale coverage with
+  // no rerun since. This is the true-positive shape the blocker exists for.
   const expiredAutoWaiverBody = renderExternalCheckWaiverComment({
     agentId: 'github-actions-bot',
     claimId: fixture.options.expectedClaimId,
     headSha: fixture.input.prHeadSha,
     checkSelector: 'idd-advisory-convergence',
     reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
-    expiresAt: '2026-05-11T20:00:00Z', // before fixture options.now (00:00)
+    expiresAt: '2026-05-11T23:59:00Z', // after completedAt (23:58), before now (00:00)
     runId: '999',
   });
   const withExpiredMarker = buildPreMergeReadinessSummary(
@@ -7458,6 +7464,65 @@ test('buildPreMergeReadinessSummary blocks on a currently-passing idd-advisory-c
     computePreMergeReadinessBlockers(withExpiredMarker),
   );
 
+  // kurone-kito/idd-skill#2657 (Codex P1 + Copilot review, PR #2895, round
+  // 13): an expired marker whose own `expiresAt` predates the passing
+  // check's `completedAt` proves the OPPOSITE of staleness -- the check has
+  // already rerun (and passed) since that marker lapsed, whether under a
+  // newer marker or on its own merits. `.find()`-ing ANY historical expired
+  // entry regardless of this ordering was the exact bug: it made the
+  // blocker permanent and unclearable by a genuine fresh rerun. This is
+  // the original fixture shape from an earlier round of this same test,
+  // which incorrectly asserted a blocker here before the fix.
+  const staleExpiredAutoWaiverBody = renderExternalCheckWaiverComment({
+    agentId: 'github-actions-bot',
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    expiresAt: '2026-05-11T20:00:00Z', // before the check's completedAt (23:58)
+    runId: '999',
+  });
+  const withStaleExpiredMarkerButFreshRerun = buildPreMergeReadinessSummary(
+    {
+      ...inputWithPassingConvergence,
+      comments: [
+        ...fixture.input.comments,
+        {
+          id: 'stale-expired-auto-waiver',
+          author: { login: 'github-actions[bot]' },
+          body: staleExpiredAutoWaiverBody,
+          createdAt: '2026-05-11T18:00:00Z',
+          updatedAt: '2026-05-11T18:00:00Z',
+        },
+      ],
+    },
+    fixture.options,
+  );
+  assert.equal(
+    (
+      withStaleExpiredMarkerButFreshRerun.autoWaiverEvidence as {
+        expired: unknown[];
+      }
+    ).expired.length,
+    1,
+  );
+  assert.ok(
+    !(
+      withStaleExpiredMarkerButFreshRerun.blockers as {
+        gate: string;
+        detail: string;
+      }[]
+    ).some((blocker) =>
+      blocker.detail.includes('self-referential-bootstrap-auto'),
+    ),
+    "an expired marker that predates the check's own completedAt must not " +
+      'block -- the check has already rerun since that marker lapsed',
+  );
+  assert.deepEqual(
+    withStaleExpiredMarkerButFreshRerun.blockers,
+    computePreMergeReadinessBlockers(withStaleExpiredMarkerButFreshRerun),
+  );
+
   // A marker that is STILL within its validity window must never trigger
   // this blocker (only `expired` entries do).
   const freshAutoWaiverBody = renderExternalCheckWaiverComment({
@@ -7497,6 +7562,48 @@ test('buildPreMergeReadinessSummary blocks on a currently-passing idd-advisory-c
   assert.deepEqual(
     withFreshMarker.blockers,
     computePreMergeReadinessBlockers(withFreshMarker),
+  );
+
+  // kurone-kito/idd-skill#2657 (round 13): an unparseable/missing
+  // `completedAt` on the passing check cannot prove the pass postdates the
+  // expired marker, so it fails closed and still blocks -- a genuine rerun
+  // (which always posts a real `completedAt`) clears this cheaply, whereas
+  // silently trusting an unparseable timestamp as "fresh" would not.
+  const inputWithUnparseableCompletedAt = {
+    ...fixture.input,
+    checks: [
+      ...fixture.input.checks,
+      { name: 'idd-advisory-convergence', state: 'SUCCESS', completedAt: null },
+    ],
+    branchRules: inputWithPassingConvergence.branchRules,
+  };
+  const withUnparseableCompletedAt = buildPreMergeReadinessSummary(
+    {
+      ...inputWithUnparseableCompletedAt,
+      comments: [
+        ...fixture.input.comments,
+        {
+          id: 'expired-auto-waiver-unparseable-completed-at',
+          author: { login: 'github-actions[bot]' },
+          body: staleExpiredAutoWaiverBody,
+          createdAt: '2026-05-11T18:00:00Z',
+          updatedAt: '2026-05-11T18:00:00Z',
+        },
+      ],
+    },
+    fixture.options,
+  );
+  assert.ok(
+    (
+      withUnparseableCompletedAt.blockers as { gate: string; detail: string }[]
+    ).some((blocker) =>
+      blocker.detail.includes('self-referential-bootstrap-auto'),
+    ),
+    'an unparseable completedAt must fail closed and still block',
+  );
+  assert.deepEqual(
+    withUnparseableCompletedAt.blockers,
+    computePreMergeReadinessBlockers(withUnparseableCompletedAt),
   );
 });
 
