@@ -688,6 +688,48 @@ test('invokeCritiqueTelemetryHook kills a backgrounded descendant on timeout, no
 // during the #2897 CI follow-up (kurone-kito/idd-skill#2892), not only
 // inferred from a non-Windows implementation environment.
 
+test('invokeCritiqueTelemetryHook delivers the payload and resolves ok:true through the win32 relay when platform is overridden to win32 (kurone-kito/idd-skill#2910)', async () => {
+  // Complements the win32 hang/kill-path tests below (which all exercise
+  // `ok:false` outcomes) with the relay's own success path: a quick-exiting
+  // target, byte-exact payload delivery, and `ok:true`/exit-code-0
+  // forwarding through the relay -- `platform: 'win32'` routes this call
+  // through the real `WIN32_RELAY_SCRIPT` (via `node -e`, not mocked) even
+  // on this non-Windows test host, the same real-code-path coverage this
+  // file's other `platform: 'win32'`-override tests already rely on.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-success-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-success',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  try {
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-success'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the relay to forward the full, untruncated payload to the real target',
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PID <pid> /T /F) on timeout when platform is overridden to win32', async () => {
   const restore = stubExecutable(
     'idd-telemetry-hook-hang-win32',
