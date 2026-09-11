@@ -1517,24 +1517,30 @@ const READER_WORKER_CODE = `
 // to enter \`withGeneratedTokensWriteLock\` is guaranteed to observe the
 // guard file already held.
 //
-// It signals \`ints[2]\` from inside a test-side \`fs.writeFileSync\`
-// interception (the same propagate-via-\`syncBuiltinESMExports\` technique
-// \`READER_WORKER_CODE\` and the pre-existing race test above both use),
-// the instant its own lock-acquire attempt -- the \`.writelock\`-suffixed,
-// \`{ flag: 'wx' }\` exclusive-create call inside
-// \`withGeneratedTokensWriteLock\` -- actually happens, not merely after its
-// \`import()\` resolves. An earlier revision signaled right after \`import()\`
-// instead, immediately before calling \`recordGeneratedClaimTokens\`; #2922
-// review (Copilot, a suppressed/lower-confidence finding) correctly noted
-// that a worker can still be preempted by the scheduler in the gap between
-// that signal and its first actual lock-acquire attempt, so the main
-// thread's "is the writer genuinely blocked" race window (see the test
-// body) could in
-// principle start slightly before the writer had attempted anything at
-// all. Signaling from inside the intercepted call itself closes that gap
-// completely: the signal and the attempt are now the same synchronous
-// statement, with no scheduling point in between for the writer thread to
-// be preempted at.
+// It signals \`ints[2]\` from a \`finally\` wrapped tightly around a
+// test-side \`fs.writeFileSync\` interception (the same
+// propagate-via-\`syncBuiltinESMExports\` technique \`READER_WORKER_CODE\`
+// and the pre-existing race test above both use) of its own lock-acquire
+// attempt -- the \`.writelock\`-suffixed, \`{ flag: 'wx' }\` exclusive-create
+// call inside \`withGeneratedTokensWriteLock\`. This went through two
+// rounds of #2922 review tightening, each closing a smaller residual gap
+// than the last:
+// 1. An earlier revision signaled right after \`import()\` resolved,
+//    immediately before calling \`recordGeneratedClaimTokens\`. Copilot
+//    (a suppressed/lower-confidence finding) noted a worker could still
+//    be preempted between that signal and its first actual lock-acquire
+//    attempt, so the main thread's race-window check could in principle
+//    start before the writer had attempted anything.
+// 2. The fix moved the signal inside the \`fs.writeFileSync\` interception,
+//    but *before* delegating to the real \`writeFileSync\` call -- closing
+//    most of the gap, but leaving one statement (the delegation itself)
+//    between signal and attempt. A further #2922 review round (Copilot,
+//    again suppressed) caught this remaining sliver.
+// 3. Signaling from a \`finally\` around the real \`writeFileSync\` call
+//    instead closes the gap completely: the signal now fires only once
+//    the attempt has genuinely completed (an \`EEXIST\` throw or a
+//    successful create), with no scheduling point of its own between the
+//    attempt and the signal.
 const WRITER_WORKER_CODE = `
   const { workerData, parentPort } = require('node:worker_threads');
   const fs = require('node:fs');
@@ -1542,16 +1548,25 @@ const WRITER_WORKER_CODE = `
   const ints = new Int32Array(sab);
   const originalWriteFileSync = fs.writeFileSync;
   fs.writeFileSync = (path, data, opts) => {
-    if (
-      typeof path === 'string' &&
-      path.endsWith('.writelock') &&
-      opts &&
-      opts.flag === 'wx'
-    ) {
+    const isGuardCreateAttempt =
+      typeof path === 'string' && path.endsWith('.writelock') && opts && opts.flag === 'wx';
+    if (!isGuardCreateAttempt) {
+      return originalWriteFileSync(path, data, opts);
+    }
+    // Signal from a \`finally\` around the *actual* syscall attempt (#2922
+    // review round 3, Copilot), not before it: signaling first still left
+    // a gap -- between the signal and \`originalWriteFileSync\` actually
+    // running -- where a preempted worker could let the main thread's
+    // race-window check pass before the writer had touched the guard at
+    // all. A \`finally\` here fires only once the attempt has genuinely
+    // completed (EEXIST throw or successful create), with no scheduling
+    // point of its own in between.
+    try {
+      return originalWriteFileSync(path, data, opts);
+    } finally {
       Atomics.store(ints, 2, 1);
       Atomics.notify(ints, 2);
     }
-    return originalWriteFileSync(path, data, opts);
   };
   require('node:module').syncBuiltinESMExports();
   import(cliUrl).then(({ recordGeneratedClaimTokens }) => {
@@ -1719,6 +1734,53 @@ test('backfill-tokens: a nonce written by a concurrent recordGeneratedClaimToken
       finalRead.status === 'present' && finalRead.record.agentId,
       'agent-writer',
     );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('write-lock: an existing guard file blocks a write until the timeout, then fails closed without writing the record or touching the guard (#2922 review round 3, Copilot)', () => {
+  // Coverage the reviewer flagged as missing: the regression test above
+  // only exercises successful contention (a guard released partway
+  // through the wait). This test exercises the *other* documented
+  // outcome -- a guard that is never released -- confirming
+  // `withGeneratedTokensWriteLock` genuinely fails closed rather than
+  // silently reclaiming it or writing anyway, so a future change that
+  // reintroduces an unsafe reclaim (or drops the timeout check entirely)
+  // would break this test. Costs the real ~5s wait budget (no test-only
+  // seam shortens it, matching this suite's existing preference for
+  // testing production code exactly as it runs) -- a single test, not a
+  // loop, deliberately for that reason.
+  const fixture = setupLinkedWorktree();
+  try {
+    const claimId = 'claim-timeout-2922';
+    const recordPath = resolveGeneratedTokensPath(fixture.worktree, claimId);
+    const guardPath = `${recordPath}.writelock`;
+    // Simulate a guard some other holder still owns (orphaned or
+    // genuinely live -- this function cannot tell the difference, and
+    // must fail closed either way).
+    writeFileSync(guardPath, 'held-by-another-process');
+
+    assert.throws(
+      () => {
+        recordGeneratedClaimTokens(fixture.worktree, {
+          agentId: 'agent-a',
+          claimId,
+          nonce: 'should-never-be-written',
+        });
+      },
+      (error: unknown) =>
+        error instanceof Error && error.message.includes(guardPath),
+      'expected a timeout error naming the guard path for manual recovery',
+    );
+
+    // Fails closed, not silently: the record itself was never written.
+    const read = readGeneratedClaimTokens(fixture.worktree, claimId);
+    assert.equal(read.status, 'absent');
+    // The guard is left exactly as found -- this function never removes
+    // a guard it did not itself create.
+    assert.equal(existsSync(guardPath), true);
+    assert.equal(readFileSync(guardPath, 'utf8'), 'held-by-another-process');
   } finally {
     teardown(fixture);
   }
