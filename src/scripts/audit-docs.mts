@@ -632,17 +632,23 @@ function checkSyncPairs(pairs: SyncPair[]) {
   }
 }
 
-// Fails any `"mode": "exact"` sync pair whose source still contains an
-// unresolved onboarding placeholder token from the canonical seven-entry
-// table in `idd-onboard.mts` (ONBOARDING_PLACEHOLDERS, mirroring
-// `idd-template/docs/onboarding/placeholders.md`'s "Final placeholder
-// meanings" table) -- not a bare `{{...}}` scan, which would also flag an
-// unrelated GitHub Actions expression such as `${{ github.token }}` inside
-// an imported workflow file. `"exact"` mode copies bytes verbatim with no
-// substitution step, so a leftover token here always leaks into this
-// repository's own live mirror; `checkSyncPairs` above only compares
-// source and target for byte equality and cannot see this, since an
-// identical placeholder on both sides produces zero drift.
+// Fails any `"mode": "exact"` sync pair whose *post-replacement* source
+// still contains an unresolved onboarding placeholder token from the
+// canonical seven-entry table in `idd-onboard.mts` (ONBOARDING_PLACEHOLDERS,
+// mirroring `idd-template/docs/onboarding/placeholders.md`'s "Final
+// placeholder meanings" table) -- not a bare `{{...}}` scan, which would
+// also flag an unrelated GitHub Actions expression such as
+// `${{ github.token }}` inside an imported workflow file. `"exact"` mode is
+// not itself substitution-free: `checkSyncPairs` above and `sync-docs.mts`
+// both apply `pair.replacements` regardless of mode (`tests/sync-docs.
+// test.mts` covers an "exact" pair with a replacement), so this check must
+// apply the same `applyReplacements` step before scanning, or it would
+// reject a pair whose own `replacements` array already resolves the token
+// (kurone-kito/idd-skill#2899, PR #2904 review). A leftover token *after*
+// replacements always leaks into this repository's own live mirror;
+// `checkSyncPairs` only compares source and target for byte equality and
+// cannot see this on its own, since an identical placeholder on both sides
+// produces zero drift.
 //
 // `idd-doctor.mts`'s own `checkPlaceholders` (see `findPlaceholders` /
 // `isIddManagedPlaceholderScanPath`) is deliberately left unchanged rather
@@ -665,11 +671,14 @@ function checkExactModePlaceholders(pairs: SyncPair[]) {
     if (Object.hasOwn(EXACT_MODE_PLACEHOLDER_EXEMPTIONS, pair.id)) {
       continue;
     }
-    const source = readText(pair.source);
+    const source = applyReplacements(
+      readText(pair.source),
+      pair.replacements ?? [],
+    );
     const hits = tokens.filter((token) => source.includes(token));
     if (hits.length > 0) {
       errors.push(
-        `${pair.id}: ${pair.source} is "exact" mode but still contains unresolved placeholder(s) ${hits.join(', ')} -- flip to "mode": "concreted" with a matching replacement, or add "${pair.id}" to EXACT_MODE_PLACEHOLDER_EXEMPTIONS with a one-line justification`,
+        `${pair.id}: ${pair.source} is "exact" mode but still contains unresolved placeholder(s) ${hits.join(', ')} after applying its replacements -- add a "replacements" entry (or flip to "mode": "concreted" with one), or add "${pair.id}" to EXACT_MODE_PLACEHOLDER_EXEMPTIONS with a one-line justification`,
       );
     }
   }

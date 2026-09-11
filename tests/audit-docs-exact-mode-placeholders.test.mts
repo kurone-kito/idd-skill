@@ -9,12 +9,16 @@ import { fileURLToPath } from 'node:url';
 import { fixtureEnv } from './test-utils.mts';
 
 // Coverage for checkExactModePlaceholders in src/scripts/audit-docs.mts
-// (kurone-kito/idd-skill#2899): a `"mode": "exact"` sync pair has no
-// `replacements` array, so an unresolved onboarding placeholder token
-// (e.g. `{{PROJECT_MARKER_PREFIX}}`) left in its source leaks byte-for-byte
-// into this repository's own live mirror -- checkSyncPairs alone cannot see
-// this, since an identical placeholder on both sides of an "exact" pair
-// produces zero drift. Same subprocess-fixture pattern as
+// (kurone-kito/idd-skill#2899): an unresolved onboarding placeholder token
+// (e.g. `{{PROJECT_MARKER_PREFIX}}`) left in a `"mode": "exact"` pair's
+// *post-replacement* source leaks byte-for-byte into this repository's own
+// live mirror -- checkSyncPairs alone cannot see this, since an identical
+// placeholder on both sides of an "exact" pair produces zero drift. "exact"
+// mode is not itself substitution-free (PR #2904 review, Copilot): both
+// checkSyncPairs and sync-docs.mts apply a pair's own `replacements` array
+// regardless of mode, so the guard must do the same before reporting a
+// remaining placeholder, or it would reject a pair whose own replacement
+// already resolves the token. Same subprocess-fixture pattern as
 // tests/audit-docs-file-sets.test.mts (checkExactModePlaceholders is not
 // exported; the module is a top-level side-effecting CLI script).
 
@@ -114,6 +118,38 @@ test('the same pair passes once flipped to "concreted" with a matching replaceme
   writeFile(
     dir,
     'docs/fixture-guide.md',
+    '# Fixture guide\n\nMarker syntax: `<!-- idd-skill-roadmap-id: ... -->`\n',
+  );
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('an "exact" mode pair whose own replacements resolve the placeholder passes', (t) => {
+  // "exact" mode is not substitution-free: checkSyncPairs and sync-docs.mts
+  // both apply `pair.replacements` regardless of mode (tests/sync-
+  // docs.test.mts covers this same "exact" + replacements combination), so
+  // checkExactModePlaceholders must scan the post-replacement source, not
+  // the raw one.
+  const { dir, cleanup } = makeFixture([
+    {
+      id: 'fixture-exact-with-replacement',
+      source: 'idd-template/docs/fixture-resolved.md',
+      target: 'docs/fixture-resolved.md',
+      mode: 'exact',
+      replacements: [{ from: PLACEHOLDER_TOKEN, to: 'idd-skill' }],
+    },
+  ]);
+  t.after(cleanup);
+
+  writeFile(
+    dir,
+    'idd-template/docs/fixture-resolved.md',
+    `# Fixture guide\n\nMarker syntax: \`<!-- ${PLACEHOLDER_TOKEN}-roadmap-id: ... -->\`\n`,
+  );
+  writeFile(
+    dir,
+    'docs/fixture-resolved.md',
     '# Fixture guide\n\nMarker syntax: `<!-- idd-skill-roadmap-id: ... -->`\n',
   );
 
