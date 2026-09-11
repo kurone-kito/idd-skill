@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -795,6 +801,78 @@ process.stdin.on('end', () => {
     // resets to its own pre-stub snapshot regardless, so this step is
     // only needed if a future edit adds code between here and restore()
     // that reads process.env.NODE_OPTIONS.
+    if (nodeOptionsAfterStub === undefined) {
+      delete process.env.NODE_OPTIONS;
+    } else {
+      process.env.NODE_OPTIONS = nodeOptionsAfterStub;
+    }
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook win32 relay never executes an inherited NODE_OPTIONS preload itself, though the real target still can (kurone-kito/idd-skill#2910 review, Copilot)', async () => {
+  // The `--input-type=commonjs` flag and the NODE_OPTIONS-sanitization
+  // fix above are meant to stop an inherited `--require`/`--import` from
+  // running arbitrary preload code *inside the relay itself* -- but
+  // neither of the other two NODE_OPTIONS tests in this file actually
+  // proves that: the test above only exercises `--input-type=module`,
+  // which the relay's own explicit `--input-type=commonjs` flag already
+  // neutralizes on its own, with or without the sanitization fix. This
+  // test uses a real `--require` preload instead, and distinguishes "did
+  // the relay's own process load it" from "did the real target's
+  // process load it" (expected -- the original NODE_OPTIONS, minus
+  // --input-type, is deliberately still forwarded there) by having the
+  // preload check for the relay-command env var that only the relay's
+  // own process ever has set.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-preload-'),
+  );
+  const relayPoisonedSentinel = join(sandbox, 'relay-poisoned.txt');
+  const preloadPath = join(sandbox, 'preload.cjs');
+  writeFileSync(
+    preloadPath,
+    `const fs = require('fs');
+if (process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND) {
+  fs.writeFileSync(${JSON.stringify(relayPoisonedSentinel)}, 'relay loaded the inherited preload');
+}
+`,
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-preload-target',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  const nodeOptionsAfterStub = process.env.NODE_OPTIONS;
+  try {
+    process.env.NODE_OPTIONS = nodeOptionsAfterStub
+      ? `${nodeOptionsAfterStub} --require ${preloadPath}`
+      : `--require ${preloadPath}`;
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-preload-target'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.equal(
+      existsSync(relayPoisonedSentinel),
+      false,
+      'expected the relay itself to never load the inherited --require preload',
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the target to still receive the full payload with the preload forwarded',
+    );
+  } finally {
     if (nodeOptionsAfterStub === undefined) {
       delete process.env.NODE_OPTIONS;
     } else {

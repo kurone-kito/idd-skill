@@ -477,7 +477,26 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
         // WIN32_RELAY_SCRIPT's own doc comment for the full rationale
         // and why the original value still reaches the real target
         // command via a separate channel instead of being dropped.
-        const { NODE_OPTIONS: callerNodeOptions, ...relayEnv } = process.env;
+        //
+        // Case-insensitive key match (kurone-kito/idd-skill#2910 review,
+        // Copilot follow-up): Windows environment variable names are
+        // case-insensitive at the OS level, but a plain destructure
+        // (`const { NODE_OPTIONS, ...rest } = process.env`) only removes
+        // the exact-case key -- an inherited `Node_Options` or
+        // `node_options` entry (real-world precedent: Windows system
+        // variables like `ComSpec`/`Path` routinely keep non-canonical
+        // casing) would survive into `relayEnv` untouched and still let
+        // the relay load its preload code. Scan every key case-
+        // insensitively instead, keeping the last match's value (in
+        // practice at most one casing is ever actually set).
+        const relayEnv = { ...process.env };
+        let callerNodeOptions;
+        for (const key of Object.keys(relayEnv)) {
+          if (key.toUpperCase() === 'NODE_OPTIONS') {
+            callerNodeOptions = relayEnv[key];
+            delete relayEnv[key];
+          }
+        }
         child = spawnFn(
           process.execPath,
           // `--input-type=commonjs` (kurone-kito/idd-skill#2910 review,
