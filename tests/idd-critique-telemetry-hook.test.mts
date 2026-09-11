@@ -678,15 +678,24 @@ test('invokeCritiqueTelemetryHook kills a backgrounded descendant on timeout, no
 // These two tests give deterministic, non-CI coverage of the *argument
 // construction* for the win32 kill path from any OS, using the injectable
 // `platform` option the same way `spawnFn` is already injected for
-// testability -- overriding `platform` only changes which of
-// `killProcessGroup`/`spawnWatchdog`'s own branches this code takes; it
-// does not change which real shell the still-real `shell: true` spawn
-// below is interpreted by (that is always whatever the host OS actually
-// provides). The `windows-latest` CI job (added alongside this file) is
-// the actual behavioral verification gate on every push; the argument-shape
-// tests below have also since been cross-checked live on native Windows 11
-// during the #2897 CI follow-up (kurone-kito/idd-skill#2892), not only
-// inferred from a non-Windows implementation environment.
+// testability. Originally (kurone-kito/idd-skill#2892), overriding
+// `platform` only changed which of `killProcessGroup`/`spawnWatchdog`'s
+// own branches the code took, never which real shell the primary
+// `shell: true` spawn was interpreted by (always whatever the host OS
+// actually provides). kurone-kito/idd-skill#2910 extended `platform` to
+// also select the *primary* spawn shape: on any host, an override to
+// `'win32'` now routes that primary spawn through the real
+// `WIN32_RELAY_SCRIPT` (via `node -e`, not mocked), which itself still
+// invokes the host's own real shell for the actual target command one
+// hop further in -- so the win32-specific relay logic gets real,
+// non-CI-only coverage too, not just the kill/watchdog argument shapes
+// this section's own two tests below were originally written for. The
+// `windows-latest` CI job (added alongside this file) remains the actual
+// behavioral verification gate on every push; the argument-shape tests
+// below have also since been cross-checked live on native Windows 11
+// during the #2897 CI follow-up (kurone-kito/idd-skill#2892) and the
+// #2910 relay work, not only inferred from a non-Windows implementation
+// environment.
 
 test('invokeCritiqueTelemetryHook delivers the payload and resolves ok:true through the win32 relay when platform is overridden to win32 (kurone-kito/idd-skill#2910)', async () => {
   // Complements the win32 hang/kill-path tests below (which all exercise
@@ -740,11 +749,17 @@ test('invokeCritiqueTelemetryHook win32 relay survives an inherited NODE_OPTIONS
   // not defined in ES module scope`) before this test was written. The
   // fix passes an explicit `--input-type=commonjs` flag, which overrides
   // an inherited `--input-type=module`.
-  const originalNodeOptions = process.env.NODE_OPTIONS;
   const sandbox = mkdtempSync(
     join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-node-options-'),
   );
   const receivedPath = join(sandbox, 'received.json');
+  // stubExecutable's own win32 branch already sets process.env.NODE_OPTIONS
+  // (to inject its own `--require <preload>`) as part of the call below --
+  // append to THAT current value, not to whatever NODE_OPTIONS held before
+  // this call. Appending to a pre-stub snapshot instead would silently
+  // discard the stub's own `--require` and break the stub mechanism
+  // itself (confirmed live on native Windows: doing it that way made 10
+  // unrelated win32 tests fail alongside this one, not just this one).
   const restore = stubExecutable(
     'idd-telemetry-hook-win32-relay-node-options',
     `const fs = require('fs');
@@ -756,9 +771,10 @@ process.stdin.on('end', () => {
 });
 `,
   );
+  const nodeOptionsAfterStub = process.env.NODE_OPTIONS;
   try {
-    process.env.NODE_OPTIONS = originalNodeOptions
-      ? `${originalNodeOptions} --input-type=module`
+    process.env.NODE_OPTIONS = nodeOptionsAfterStub
+      ? `${nodeOptionsAfterStub} --input-type=module`
       : '--input-type=module';
     const payload = samplePayload();
     const result = await invokeCritiqueTelemetryHook(
@@ -774,10 +790,15 @@ process.stdin.on('end', () => {
       'expected the relay to still deliver the payload despite an inherited --input-type=module',
     );
   } finally {
-    if (originalNodeOptions === undefined) {
+    // Restore to the stub's own NODE_OPTIONS value (pre --input-type
+    // append) before restore() unwinds the stub itself -- restore()
+    // resets to its own pre-stub snapshot regardless, so this step is
+    // only needed if a future edit adds code between here and restore()
+    // that reads process.env.NODE_OPTIONS.
+    if (nodeOptionsAfterStub === undefined) {
       delete process.env.NODE_OPTIONS;
     } else {
-      process.env.NODE_OPTIONS = originalNodeOptions;
+      process.env.NODE_OPTIONS = nodeOptionsAfterStub;
     }
     restore();
   }

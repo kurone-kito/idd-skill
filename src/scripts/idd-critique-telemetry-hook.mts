@@ -105,24 +105,59 @@ const WIN32_RELAY_COMMAND_ENV =
   'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND';
 
 /**
+ * Environment-variable name used to forward the *caller's own*
+ * `NODE_OPTIONS` value to the win32 relay's inner (real target) spawn,
+ * without letting the relay's own `-e` invocation inherit it directly
+ * (kurone-kito/idd-skill#2910 review, Copilot). See
+ * {@link WIN32_RELAY_SCRIPT}'s own doc comment for the full rationale.
+ */
+const WIN32_RELAY_NODE_OPTIONS_ENV =
+  'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS';
+
+/**
  * win32-only relay script (kurone-kito/idd-skill#2910), run via
  * `spawnFn(process.execPath, ['--input-type=commonjs', '-e',
  * WIN32_RELAY_SCRIPT], {...})` in {@link invokeCritiqueTelemetryHook}
  * below -- mirrors this file's
  * existing precedent of inlining the watchdog's PowerShell script as a
- * string constant (see {@link spawnWatchdogWindows}). A single `${...}`
- * substitution (the env-var-name constant above) is all this template
- * literal needs; the rest of the script body contains no literal `${`
- * sequence of its own, so there is no collision risk with the outer
- * `.mts` template-literal interpolation to guard against here, unlike
- * the watchdog's longer, multiply-interpolated PowerShell one-liner.
+ * string constant (see {@link spawnWatchdogWindows}). Two `${...}`
+ * substitutions (the two env-var-name constants above) are all this
+ * template literal needs; the rest of the script body contains no
+ * literal `${` sequence of its own, so there is no collision risk with
+ * the outer `.mts` template-literal interpolation to guard against here,
+ * unlike the watchdog's longer, multiply-interpolated PowerShell
+ * one-liner.
  *
- * Root cause (verified live on native Windows 11): `cmd.exe` (the
- * `shell: true` wrapper the primary spawn below uses on POSIX, and used
- * unconditionally on win32 too before this fix) never relays a piped
- * stdin payload to the further child it execs when `cmd.exe` itself
- * runs under Win32's `DETACHED_PROCESS` creation flag (what
- * `detached: true` maps to) -- confirmed at every payload size from 0B
+ * **The relay's own environment is sanitized of `NODE_OPTIONS`**
+ * (kurone-kito/idd-skill#2910 review, Copilot): the relay is itself a
+ * `node` process, so if it inherited the caller's raw `NODE_OPTIONS`
+ * directly, an inherited `--require`/`--import` would execute arbitrary
+ * preload code *inside the relay* before it ever forwards the payload --
+ * confirmed as a real mechanism, not merely hypothetical, by this
+ * repository's own win32 test stubs, which rely on exactly that
+ * `--require <preload>` pattern to inject their behavior (see
+ * `tests/test-utils.mts`'s `stubExecutable`). `invokeCritiqueTelemetryHook`
+ * below therefore does not pass the caller's own `NODE_OPTIONS` through
+ * to the relay's environment at all -- the relay's own process runs
+ * without any inherited `NODE_OPTIONS`, with `--input-type=commonjs`
+ * (kept as defense-in-depth even though the vector it originally guarded
+ * against, an inherited `--input-type=module`, is now also closed by
+ * this sanitization). The caller's *original* `NODE_OPTIONS` value still
+ * needs to reach the real target command two hops down -- POSIX and the
+ * pre-#2910 win32 path both let it through unchanged, and this fix must
+ * not narrow that existing contract -- so it travels through the
+ * separate {@link WIN32_RELAY_NODE_OPTIONS_ENV} channel instead, applied
+ * only to the inner spawn's own environment, never executed by the relay
+ * itself.
+ *
+ * Root cause (verified live on native Windows 11): on win32, `shell:
+ * true` wraps the primary spawn in `cmd.exe` (on POSIX the equivalent
+ * wrapper is `/bin/sh`, unaffected by any of this -- this whole defect
+ * and fix are win32-only). Before this fix, the primary spawn used that
+ * `cmd.exe` wrapper unconditionally on win32 too, and `cmd.exe` never
+ * relays a piped stdin payload to the further child it execs when
+ * `cmd.exe` itself runs under Win32's `DETACHED_PROCESS` creation flag
+ * (what `detached: true` maps to) -- confirmed at every payload size from 0B
  * to 500KB+, and for a non-Node consumer piped the same way, isolating
  * the fault to `cmd.exe`'s own stdin-relay plumbing under
  * `DETACHED_PROCESS` rather than anything Node/libuv- or payload-size-
@@ -191,6 +226,32 @@ process.stdin.on('end', () => {
   const payload = Buffer.concat(chunks);
   const env = { ...process.env };
   delete env['${WIN32_RELAY_COMMAND_ENV}'];
+  // The relay's OWN process never received the caller's raw NODE_OPTIONS
+  // (see WIN32_RELAY_SCRIPT's own doc comment) -- only this forwarded
+  // copy of it, specifically for the inner spawn below. Strip only
+  // whitespace-separated --input-type=... tokens (kurone-kito/idd-skill
+  // #2910 follow-up on the Codex review): Node rejects --input-type
+  // outright (ERR_INPUT_TYPE_NOT_ALLOWED) for any invocation that is not
+  // itself --eval/--print/stdin, which a configured command that happens
+  // to run \`node <file>\` (as this file's own win32 CI test fixtures do)
+  // would be -- while every other flag, notably this repository's own
+  // win32 test stubs' inherited --require <preload>, passes through
+  // unchanged (verified live: a --require alongside --input-type
+  // survives this strip and still runs; deleting NODE_OPTIONS wholesale
+  // here instead was tried first and rejected -- it broke every one of
+  // those stubs, confirmed live).
+  const forwardedNodeOptions = env['${WIN32_RELAY_NODE_OPTIONS_ENV}'] || '';
+  delete env['${WIN32_RELAY_NODE_OPTIONS_ENV}'];
+  const strippedNodeOptions = forwardedNodeOptions
+    .split(/\\s+/)
+    .filter(Boolean)
+    .filter((token) => !token.startsWith('--input-type='))
+    .join(' ');
+  if (strippedNodeOptions) {
+    env.NODE_OPTIONS = strippedNodeOptions;
+  } else {
+    delete env.NODE_OPTIONS;
+  }
   let child;
   try {
     child = spawn(command, {
@@ -421,12 +482,17 @@ export interface InvokeCritiqueTelemetryHookOptions {
   onWatchdogArmed?: () => void;
   /**
    * Injectable for tests, mirroring {@link spawnFn}: overrides
-   * `process.platform` for this invocation's win32-vs-POSIX kill/watchdog
-   * branching (kurone-kito/idd-skill#2892) so the exact `taskkill`/
-   * `powershell.exe` argument construction can be asserted
-   * deterministically from a non-Windows CI runner, the same way a fake
-   * `spawnFn` is already used to assert the POSIX watchdog's arguments.
-   * Defaults to the real `process.platform`.
+   * `process.platform` for this invocation's win32-vs-POSIX branching.
+   * Originally scoped to kill/watchdog selection only
+   * (kurone-kito/idd-skill#2892) so the exact `taskkill`/`powershell.exe`
+   * argument construction can be asserted deterministically from a
+   * non-Windows CI runner, the same way a fake `spawnFn` is already used
+   * to assert the POSIX watchdog's arguments; kurone-kito/idd-skill#2910
+   * extended it to also select the *primary* spawn shape (the win32
+   * relay vs. the direct POSIX `shell: true` spawn), so an override now
+   * exercises `WIN32_RELAY_SCRIPT` for real (via `node -e`, not mocked)
+   * from any host, not only the kill/watchdog argument shapes. Defaults
+   * to the real `process.platform`.
    */
   platform?: NodeJS.Platform;
 }
@@ -558,35 +624,50 @@ export function invokeCritiqueTelemetryHook(
       // `killProcessGroup`'s win32 tree-kill below, which caps the whole
       // chain's lifetime at `timeoutMs` rather than preventing it
       // outright.
-      child =
-        platform === 'win32'
-          ? spawnFn(
-              process.execPath,
-              // `--input-type=commonjs` (kurone-kito/idd-skill#2910
-              // review, Codex): explicit and load-bearing, not
-              // redundant with `-e`'s own CommonJS default. A caller
-              // whose own environment sets `NODE_OPTIONS=
-              // --input-type=module` -- inherited below via
-              // `...process.env` -- would otherwise make Node evaluate
-              // `WIN32_RELAY_SCRIPT` as ESM, where `require` is
-              // undefined and the relay throws before ever reading its
-              // stdin. Verified live: this flag overrides an
-              // inherited `--input-type=module` and is a no-op
-              // otherwise.
-              ['--input-type=commonjs', '-e', WIN32_RELAY_SCRIPT],
-              {
-                stdio: ['pipe', 'ignore', 'ignore'],
-                detached: true,
-                windowsHide: true,
-                env: { ...process.env, [WIN32_RELAY_COMMAND_ENV]: command },
-              },
-            )
-          : spawnFn(command, {
-              shell: true,
-              stdio: ['pipe', 'ignore', 'ignore'],
-              detached: true,
-              windowsHide: true,
-            });
+      if (platform === 'win32') {
+        // Sanitize NODE_OPTIONS out of the relay's OWN environment
+        // (kurone-kito/idd-skill#2910 review, Copilot): the relay is
+        // itself a `node` process, so passing the caller's raw
+        // NODE_OPTIONS through to it would let an inherited
+        // `--require`/`--import` execute arbitrary preload code *inside
+        // the relay* before it ever forwards the payload -- see
+        // WIN32_RELAY_SCRIPT's own doc comment for the full rationale
+        // and why the original value still reaches the real target
+        // command via a separate channel instead of being dropped.
+        const { NODE_OPTIONS: callerNodeOptions, ...relayEnv } = process.env;
+        child = spawnFn(
+          process.execPath,
+          // `--input-type=commonjs` (kurone-kito/idd-skill#2910 review,
+          // Codex): defense-in-depth alongside the NODE_OPTIONS
+          // sanitization above -- not redundant with `-e`'s own
+          // CommonJS default, since a caller's inherited
+          // `NODE_OPTIONS=--input-type=module` would otherwise make
+          // Node evaluate `WIN32_RELAY_SCRIPT` as ESM, where `require`
+          // is undefined and the relay throws before ever reading its
+          // stdin. Verified live: this flag overrides an inherited
+          // `--input-type=module` and is a no-op otherwise.
+          ['--input-type=commonjs', '-e', WIN32_RELAY_SCRIPT],
+          {
+            stdio: ['pipe', 'ignore', 'ignore'],
+            detached: true,
+            windowsHide: true,
+            env: {
+              ...relayEnv,
+              [WIN32_RELAY_COMMAND_ENV]: command,
+              ...(callerNodeOptions
+                ? { [WIN32_RELAY_NODE_OPTIONS_ENV]: callerNodeOptions }
+                : {}),
+            },
+          },
+        );
+      } else {
+        child = spawnFn(command, {
+          shell: true,
+          stdio: ['pipe', 'ignore', 'ignore'],
+          detached: true,
+          windowsHide: true,
+        });
+      }
     } catch {
       settle(false);
       notifyDelivered();
