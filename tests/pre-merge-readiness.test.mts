@@ -6272,6 +6272,49 @@ test('waiverEvidence with wrong-shape valid item fails schema validation', () =>
   );
 });
 
+test('waiverEvidence.expired/wrongClaim items validate with the actual runtime shape (kurone-kito/idd-skill#2911, Codex review, PR #2915, P1): pins reason/runId/createdAt against schema drift', () => {
+  // kurone-kito/idd-skill#2911 originally added `reason`/`runId` (and
+  // later `createdAt`) to `ExternalCheckWaiverEvidence`'s `expired`/
+  // `wrongClaim` item shape -- populated for EVERY marker that lands in
+  // those buckets, not only self-referential ones, so this is reachable
+  // through the ordinary, always-emitted `waiverEvidence` field (unlike
+  // `autoWaiverEvidence`, deliberately never emitted -- see that
+  // decision's own doc comment in protocol-helpers.mts). The schema's
+  // own `additionalProperties: false` on these item shapes previously
+  // drifted out of sync with a runtime field addition once already
+  // (`createdAt` shipped in the runtime type without a matching schema
+  // update) -- this test constructs the actual runtime item shape
+  // directly, rather than relying on any one evidence-routing scenario
+  // to happen to produce a non-empty bucket, so it stays a reliable
+  // regression guard regardless of which code path is exercised.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);
+  const withExpiredItem = JSON.parse(JSON.stringify(summary));
+  withExpiredItem.waiverEvidence.expired = [
+    {
+      authorLogin: 'some-bot[bot]',
+      checkSelector: 'CodeRabbit',
+      expiresAt: '2026-05-11T23:30:00Z',
+      reason: 'maintainer-authorized',
+      runId: '',
+      createdAt: '2026-05-11T23:10:00Z',
+    },
+  ];
+  assert.deepEqual(validate(withExpiredItem, readinessSchema), []);
+  const withWrongClaimItem = JSON.parse(JSON.stringify(summary));
+  withWrongClaimItem.waiverEvidence.wrongClaim = [
+    {
+      authorLogin: 'some-bot[bot]',
+      checkSelector: 'CodeRabbit',
+      waiverClaimId: 'claim-999',
+      reason: 'maintainer-authorized',
+      runId: '',
+      createdAt: '2026-05-11T23:10:00Z',
+    },
+  ];
+  assert.deepEqual(validate(withWrongClaimItem, readinessSchema), []);
+});
+
 // ---------------------------------------------------------------------------
 // resolveActiveClaimForWriteGate (#1058): the write-side merge-gate revalidator
 // must recognize an operator-approved forced-handoff successor's claim while

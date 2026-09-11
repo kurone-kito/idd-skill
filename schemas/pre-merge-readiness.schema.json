@@ -1288,7 +1288,8 @@
               "checkSelector",
               "expiresAt",
               "reason",
-              "runId"
+              "runId",
+              "createdAt"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1311,6 +1312,10 @@
               "runId": {
                 "type": "string",
                 "description": "kurone-kito/idd-skill#2911: the marker's optional run-id: field, verbatim ('' when absent) -- mirrors the valid bucket's own runId field."
+              },
+              "createdAt": {
+                "type": "string",
+                "description": "kurone-kito/idd-skill#2911 (Copilot review, PR #2915): the marker comment's own createdAt server timestamp -- the lower bound of the marker's validity window, paired with expiresAt as the upper bound."
               }
             }
           }
@@ -1352,7 +1357,8 @@
               "checkSelector",
               "waiverClaimId",
               "reason",
-              "runId"
+              "runId",
+              "createdAt"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1375,6 +1381,10 @@
               "runId": {
                 "type": "string",
                 "description": "kurone-kito/idd-skill#2911: see expired[].runId's description above."
+              },
+              "createdAt": {
+                "type": "string",
+                "description": "kurone-kito/idd-skill#2911 (Copilot review, PR #2915): see expired[].createdAt's description above -- the identical lower-bound need applies to a wrongClaim-classified marker."
               }
             }
           }
