@@ -2079,6 +2079,116 @@ test('runExternalCheckWaiver: --auto-bootstrap exits 0 (graceful skip) when the 
   }
 });
 
+test('runExternalCheckWaiver: --auto-bootstrap exits 0 (graceful skip) when the policy is disabled AND the PR closes multiple actively claimed issues (Codex review, PR #2895, round 12)', async () => {
+  // Combining the config-only block above with an UNRELATED linked-issue
+  // ambiguity (two closing issues both exposing an active claim) used to
+  // defeat the graceful skip entirely: the original `.every(...)` check
+  // required ALL blocking reasons to be config-only, but the ambiguity
+  // reason was never in that set, so it still threw -- even though posting
+  // was already impossible for the config reason alone, regardless of
+  // which claim would have been chosen. Resolving the claim is moot once
+  // the policy itself rules out posting.
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-waiver-auto-bootstrap-skip-ambiguous-'),
+  );
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(join(dir, '.github', 'idd', 'config.json'), '{}');
+    process.chdir(dir);
+
+    let postCalls = 0;
+    const { exitCode, report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          '--run-id',
+          '555',
+          '--auto-bootstrap',
+          '--apply',
+          '--yes',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+      },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+          },
+        ],
+      },
+      // TWO closing issues, both exposing an active claim on the PR
+      // branch -- the ambiguous-claim shape.
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+        {
+          number: 2329,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2329',
+          activeClaim: {
+            agentId: 'claude-8888',
+            claimId: 'claim-20260830T222316Z-2329',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: () => [],
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T18:20:00Z'),
+      isTTY: false,
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'https://example.invalid/posted' };
+      },
+    });
+
+    assert.equal(
+      exitCode,
+      0,
+      'must exit 0, not throw, when policy-disabled combines with claim ambiguity',
+    );
+    assert.equal(report?.applied, false);
+    assert.equal(postCalls, 0);
+    assert.ok(
+      report?.blockingReasons?.includes(
+        'external-check waiver mode is disabled',
+      ),
+    );
+    assert.ok(
+      report?.blockingReasons?.includes(
+        'multiple linked issues expose active claims on the PR branch; rerun with --issue and --claim-id',
+      ),
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('runExternalCheckWaiver: --auto-bootstrap still throws on a genuine blocking reason, not only a config-only one (Codex review, PR #2895)', async () => {
   // The graceful skip above must stay narrowly scoped to the two known
   // adopter-configuration-only reasons -- a REAL problem (here: the PR
@@ -2392,6 +2502,86 @@ test('runExternalCheckWaiver: --auto-bootstrap anchors expiry on "now" when the 
   );
   // Anchored on "now" (2026-09-01T12:00:00Z) + PT24H, not the stale HEAD
   // commit timestamp.
+  assert.equal(parsed?.expiresAt, '2026-09-02T12:00:00Z');
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap clamps expiry when the HEAD commit timestamp is future-dated (Codex review, PR #2895, round 12)', async () => {
+  // A HEAD commit timestamp even slightly ahead of the runner clock
+  // (author-supplied Git timestamp, or clock skew) previously computed
+  // `headMs + clampedDurationMs` later than `now + maxValidity`, so
+  // planExternalCheckWaiver's own "expiry exceeds configured maxValidity"
+  // check rejected the marker -- leaving an eligible checker-edit PR unable
+  // to bootstrap. Anchoring on min(headMs, nowMs) caps the anchor at "now"
+  // instead.
+  let posted: { prNumber: number; body: string } | undefined;
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: () => [],
+    // 12 hours ahead of "now" below -- HEAD + PT24H would be
+    // 2026-09-03T00:00:00Z, later than now + PT24H (2026-09-02T12:00:00Z).
+    headCommittedAt: '2026-09-02T00:00:00Z',
+    now: new Date('2026-09-01T12:00:00Z'),
+    isTTY: false,
+    postComment: (prNumber, body) => {
+      posted = { prNumber, body };
+      return { html_url: 'https://example.invalid/posted' };
+    },
+  });
+
+  assert.equal(
+    report?.applied,
+    true,
+    'a future-dated HEAD commit timestamp must not block the auto-bootstrap marker',
+  );
+  const parsed = parseExternalCheckWaiverComment(
+    posted?.body ?? '',
+    '2026-09-01T12:00:00Z',
+  );
+  // Anchored on "now" (2026-09-01T12:00:00Z) + PT24H, not the future-dated
+  // HEAD commit timestamp.
   assert.equal(parsed?.expiresAt, '2026-09-02T12:00:00Z');
 });
 

@@ -640,10 +640,25 @@ export async function runExternalCheckWaiver(options = {}) {
     // unconditionally would defeat the whole point of this waiver being
     // HEAD-anchored rather than now-anchored (the 2026-09-10
     // self-cancellation bug this design already avoids elsewhere).
-    const headAnchoredExpiryMs = headMs + clampedDurationMs;
     const nowMs = (
       options.now instanceof Date ? options.now : new Date()
     ).getTime();
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12): cap
+    // the anchor at "now" before adding the duration -- a future-dated
+    // HEAD commit timestamp (clock skew, or an author-supplied Git
+    // timestamp ahead of the runner clock) would otherwise compute
+    // `headMs + clampedDurationMs` later than `nowMs + maxValidity`,
+    // failing `withinMaxValidity` even though `clampedDurationMs` itself
+    // never exceeds the configured ceiling. `Math.min(headMs, nowMs)`
+    // subsumes the stale-HEAD fallback above in the same expression: a
+    // stale (past) HEAD leaves the anchor unchanged (`headMs`, still
+    // possibly non-future once duration is added, caught by the
+    // fallback below exactly as before), and a future-dated HEAD clamps
+    // the anchor down to `nowMs`, producing exactly the same
+    // `nowMs + clampedDurationMs` result the fallback already computes
+    // for the stale case -- both edge cases collapse to the same safe
+    // anchor, never past `nowMs`.
+    const headAnchoredExpiryMs = Math.min(headMs, nowMs) + clampedDurationMs;
     const expiryMs =
       headAnchoredExpiryMs > nowMs
         ? headAnchoredExpiryMs
@@ -728,11 +743,35 @@ export async function runExternalCheckWaiver(options = {}) {
       'external-check waiver mode is disabled',
       'one or more matched checks are not configured as waivable external checks',
     ]);
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12): when
+    // the policy isn't configured AND the PR also closes multiple actively
+    // claimed issues, `selectLinkedIssueCandidate`'s own ambiguity guard
+    // pushes this reason alongside a `benignAutoBootstrapSkipReasons`
+    // entry -- the original `.every(...)` check then required BOTH to be
+    // benign, but this one wasn't in the set, so it still threw despite
+    // posting being impossible either way (no policy means nothing can
+    // ever be posted, regardless of which specific claim would have been
+    // chosen). Short-circuit on policy alone: resolving the claim is moot
+    // once posting can never happen, so suppress ambiguity blocking
+    // specifically WHEN a benign policy reason is also present, while still
+    // enforcing it exactly as before when the policy IS configured (the
+    // pinned "still blocks an ambiguous multi-issue PR" test never sets a
+    // benign reason, so this change never reaches it). Every OTHER
+    // blocking reason (a genuine problem unrelated to policy or claim
+    // ambiguity, e.g. the PR itself being closed) still throws regardless.
+    const claimAmbiguityMootWhenPolicyDisabled =
+      'multiple linked issues expose active claims on the PR branch; rerun with --issue and --claim-id';
+    const hasBenignPolicyReason = report.blockingReasons.some((reason) =>
+      benignAutoBootstrapSkipReasons.has(reason),
+    );
     if (
       args.autoBootstrap &&
       report.blockingReasons.length > 0 &&
-      report.blockingReasons.every((reason) =>
-        benignAutoBootstrapSkipReasons.has(reason),
+      hasBenignPolicyReason &&
+      report.blockingReasons.every(
+        (reason) =>
+          benignAutoBootstrapSkipReasons.has(reason) ||
+          reason === claimAmbiguityMootWhenPolicyDisabled,
       )
     ) {
       process.stderr.write(
