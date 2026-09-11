@@ -2001,17 +2001,26 @@ close.
   `git worktree remove` at F4 deletes it together with the worktree
 - **`instructions-only` helper-free fallback** (no helper runtime
   available): resolve the private admin directory with
-  `git -C <worktree> rev-parse --absolute-git-dir`, then atomically
-  create an `idd-claim.lock` file there with an exclusive file-create
-  API (`open(..., O_CREAT|O_EXCL)` on POSIX, or the PowerShell
+  `git -C <worktree> rev-parse --absolute-git-dir`, then read the
+  `idd-claim.lock` path first, before writing anything. Present,
+  well-formed, and its holder matches (`agentId`, `claimId`) →
+  re-acquired without writing — this call's own first read found the
+  lock already there, mirroring the helper's `reacquired: true` with no
+  `racedCreate`. Absent → create it with an exclusive file-create API
+  (`open(..., O_CREAT|O_EXCL)` on POSIX, or the PowerShell
   `FileMode.CreateNew` equivalent), writing the same JSON holder shape
-  (`agentId`, `claimId`, `acquiredAt`). A path that already exists is a
-  collision; a matching holder may re-acquire, and a missing,
-  malformed, or unreadable holder is also a collision. Never delete or
-  override a different holder — enable a helper runtime for an
-  authorized takeover instead. Both profiles share the `idd-claim.lock`
-  namespace, so a helper-runtime session and an instructions-only
-  session see the same lock.
+  (`agentId`, `claimId`, `acquiredAt`). If that create then fails
+  because the path now exists (`EEXIST`), a concurrent same-claim-id
+  writer landed between the read and the create; re-read to confirm the
+  holder matches, but treat this outcome as a race, not as evidence the
+  lock predates this call — never equal it to a lock this same read
+  already found present (the helper's `racedCreate: true`, #2917
+  review, Codex). A path that already exists with a non-matching,
+  missing, malformed, or unreadable holder is a collision either way.
+  Never delete or override a different holder — enable a helper runtime
+  for an authorized takeover instead. Both profiles share the
+  `idd-claim.lock` namespace, so a helper-runtime session and an
+  instructions-only session see the same lock.
 
 ### Worktree-local generated-tokens record
 
@@ -2190,7 +2199,11 @@ close.
   `{ agentId, claimId, nonce?, recordedAt }`. No
   exclusive-create semantics needed (unlike the lock): a plain atomic
   replace is correct since this is idempotent evidence, not a
-  mutual-exclusion primitive.
+  mutual-exclusion primitive -- except a directory already occupying
+  this exact path, which this fallback never replaces or deletes
+  either, matching `recordGeneratedClaimTokens`'s own absolute
+  invariant in `src/scripts/claim-lock.mts` (PR #2879 regression test;
+  #2917 review, Copilot); stop fail-closed instead.
 - **`instructions-only` helper-free fallback, read side** (#2879 review,
   Codex P1 -- the mandatory `--read-tokens` check in the Claim
   revalidation gate has no helper-free path without this): resolve the
@@ -2208,17 +2221,27 @@ close.
   helper-free path too, and `instructions-only` is the distributed
   default profile): resolve the worktree-local lock file the same way as
   the lock section above and parse it the same way `--check` does --
-  but only when that lock already existed before this gate's own
-  acquire step (the exclusive create above failed `EEXIST` with a
-  matching holder, never a lock this same attempt just created, #2917
-  review). Only when it parses as well-formed and its `claimId` field
-  equals the active `{claim-id}` exactly, apply the write-side fallback
-  above using the lock's own `agentId`, carrying forward an existing
-  well-formed record's own `nonce` when present, otherwise no `nonce`
-  (#2917 review, Copilot). An absent lock, a lock that fails to parse,
-  a lock whose `claimId` differs, or a lock this same attempt just
-  created all leave the existing fail-closed stop unchanged -- write
-  nothing.
+  but only when your own _first read_ in the acquire step above already
+  found the lock present and matching, never when it was absent there
+  and your own exclusive-create then failed `EEXIST`. That failure means
+  a concurrent same-claim-id writer landed between your read and your
+  create -- a race, not evidence the lock predates this gate pass; the
+  helper's own `racedCreate: true` marks exactly this case (#2917
+  review, Codex). Only when it parses as well-formed and its `claimId`
+  field equals the active `{claim-id}` exactly, apply the write-side
+  fallback above using the lock's own `agentId`, carrying forward an
+  existing well-formed record's own `nonce` when present, otherwise no
+  `nonce` (#2917 review, Copilot) -- except when the record's own
+  resolved path is already occupied by a directory: leave it and its
+  contents untouched and stop fail-closed instead, mirroring the CLI's
+  own `record-blocked` status (`backfillGeneratedClaimTokens`,
+  `src/scripts/claim-lock.mts`) -- a matching lock authenticates the
+  lock, not that separate path, and the path's hash suffix is not
+  collision-proof, so lock authority alone never authorizes replacing it
+  (#2917 review, Copilot). An absent lock, a lock that fails to parse, a
+  lock whose `claimId` differs, or a lock your own first read did not
+  already find present and matching all leave the existing fail-closed
+  stop unchanged -- write nothing.
 
 ### Clone-scoped lock
 
