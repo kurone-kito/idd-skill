@@ -97,8 +97,9 @@ const WIN32_RELAY_COMMAND_ENV =
   'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND';
 /**
  * win32-only relay script (kurone-kito/idd-skill#2910), run via
- * `spawnFn(process.execPath, ['-e', WIN32_RELAY_SCRIPT], {...})` in
- * {@link invokeCritiqueTelemetryHook} below -- mirrors this file's
+ * `spawnFn(process.execPath, ['--input-type=commonjs', '-e',
+ * WIN32_RELAY_SCRIPT], {...})` in {@link invokeCritiqueTelemetryHook}
+ * below -- mirrors this file's
  * existing precedent of inlining the watchdog's PowerShell script as a
  * string constant (see {@link spawnWatchdogWindows}). A single `${...}`
  * substitution (the env-var-name constant above) is all this template
@@ -408,12 +409,27 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
       // outright.
       child =
         platform === 'win32'
-          ? spawnFn(process.execPath, ['-e', WIN32_RELAY_SCRIPT], {
-              stdio: ['pipe', 'ignore', 'ignore'],
-              detached: true,
-              windowsHide: true,
-              env: { ...process.env, [WIN32_RELAY_COMMAND_ENV]: command },
-            })
+          ? spawnFn(
+              process.execPath,
+              // `--input-type=commonjs` (kurone-kito/idd-skill#2910
+              // review, Codex): explicit and load-bearing, not
+              // redundant with `-e`'s own CommonJS default. A caller
+              // whose own environment sets `NODE_OPTIONS=
+              // --input-type=module` -- inherited below via
+              // `...process.env` -- would otherwise make Node evaluate
+              // `WIN32_RELAY_SCRIPT` as ESM, where `require` is
+              // undefined and the relay throws before ever reading its
+              // stdin. Verified live: this flag overrides an
+              // inherited `--input-type=module` and is a no-op
+              // otherwise.
+              ['--input-type=commonjs', '-e', WIN32_RELAY_SCRIPT],
+              {
+                stdio: ['pipe', 'ignore', 'ignore'],
+                detached: true,
+                windowsHide: true,
+                env: { ...process.env, [WIN32_RELAY_COMMAND_ENV]: command },
+              },
+            )
           : spawnFn(command, {
               shell: true,
               stdio: ['pipe', 'ignore', 'ignore'],

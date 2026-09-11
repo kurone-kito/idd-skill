@@ -730,6 +730,59 @@ process.stdin.on('end', () => {
   }
 });
 
+test('invokeCritiqueTelemetryHook win32 relay survives an inherited NODE_OPTIONS=--input-type=module (kurone-kito/idd-skill#2910 review, Codex)', async () => {
+  // A caller whose own environment sets NODE_OPTIONS=--input-type=module
+  // -- inherited by the relay spawn via `env: {...process.env, ...}` --
+  // would otherwise make Node evaluate WIN32_RELAY_SCRIPT as ESM, where
+  // `require` is undefined and the relay throws before ever reading its
+  // stdin: verified locally (`NODE_OPTIONS=--input-type=module node -e
+  // "require('node:child_process')"` throws `ReferenceError: require is
+  // not defined in ES module scope`) before this test was written. The
+  // fix passes an explicit `--input-type=commonjs` flag, which overrides
+  // an inherited `--input-type=module`.
+  const originalNodeOptions = process.env.NODE_OPTIONS;
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-node-options-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const restore = stubExecutable(
+    'idd-telemetry-hook-win32-relay-node-options',
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  try {
+    process.env.NODE_OPTIONS = originalNodeOptions
+      ? `${originalNodeOptions} --input-type=module`
+      : '--input-type=module';
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-win32-relay-node-options'),
+      payload,
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the relay to still deliver the payload despite an inherited --input-type=module',
+    );
+  } finally {
+    if (originalNodeOptions === undefined) {
+      delete process.env.NODE_OPTIONS;
+    } else {
+      process.env.NODE_OPTIONS = originalNodeOptions;
+    }
+    restore();
+  }
+});
+
 test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PID <pid> /T /F) on timeout when platform is overridden to win32', async () => {
   const restore = stubExecutable(
     'idd-telemetry-hook-hang-win32',
