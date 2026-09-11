@@ -1575,6 +1575,129 @@ test('collectPreMergeReadiness against a fake provider: #2919 a checker check-ru
   assert.equal(staleSelfWaiver.stale, false);
 });
 
+// kurone-kito/idd-skill#2919 (Codex review, PR #2921, P1): when the live
+// rollup carries MORE distinct `idd-advisory-convergence` run ids than the
+// collector's lookup budget, the excess (oldest) run ids must each get
+// their OWN per-run-id sentinel -- never fall back to a SHARED "absent"
+// value that would let them re-merge with a resolved, differently-pathed
+// producer. 11 distinct run ids against a budget of 10: the oldest
+// (`s1`, the real checker's own FAILURE) is excess and gets a sentinel;
+// nine in-budget "genuine rerun" SUCCESS instances resolve to the same
+// real path and dedupe together; the newest, a decoy SUCCESS from a
+// DIFFERENT workflow file, resolves to its own (different) real path. A
+// `workflowRuns` fixture is deliberately registered for `s1` too (the
+// REAL path, matching the genuine reruns) as a trap: if a regression ever
+// lets the excess run id be resolved and merged with the genuine-rerun
+// group, this test's expected `status` flips to `success` and the
+// assertion catches it.
+test('collectPreMergeReadiness against a fake provider: #2919 an excess run id beyond the lookup budget gets its own sentinel, never masking the real FAILURE behind a decoy SUCCESS', () => {
+  const RUN_COUNT = 11;
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const DECOY_PATH = '.github/workflows/some-other-workflow.yml';
+  // `parseRunIdFromUrl` (rerun-advisory-convergence.mts) requires a
+  // canonical numeric run id (`\d+`) -- these must be real digit strings,
+  // not an alphanumeric stand-in, or the collector's own run-id
+  // extraction silently no-ops and this test would exercise nothing.
+  const runId = (i: number) => String(90001 + i);
+  const statusCheckRollup = Array.from({ length: RUN_COUNT }, (_, i) => {
+    const isOldest = i === 0;
+    return {
+      __typename: 'CheckRun',
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      status: 'COMPLETED',
+      // The oldest instance is the real checker's own current FAILURE;
+      // every other instance (in-budget reruns, and the newest decoy)
+      // reports SUCCESS.
+      conclusion: isOldest ? 'FAILURE' : 'SUCCESS',
+      completedAt: `2026-08-01T00:${String(i).padStart(2, '0')}:00Z`,
+      workflowName: 'IDD advisory-convergence gate',
+      detailsUrl: `https://github.com/o/r/actions/runs/${runId(i)}/job/1`,
+    };
+  });
+  const workflowRuns: Record<string, unknown> = {};
+  for (let i = 0; i < RUN_COUNT; i++) {
+    const isNewest = i === RUN_COUNT - 1;
+    workflowRuns[`o/r/${runId(i)}`] = {
+      path: isNewest ? DECOY_PATH : REAL_PATH,
+    };
+  }
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup,
+    workflowRuns,
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+  };
+  assert.equal(
+    ciReport.status,
+    'failed',
+    `expected the excess (oldest) FAILURE instance to stay its own group and keep the gate failed, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+});
+
+// kurone-kito/idd-skill#2919 (Copilot review, PR #2921): the all-or-nothing
+// guarantee itself -- an IN-BUDGET run id whose lookup fails must leave
+// `workflowPath` unpopulated for EVERY instance of this check name, not
+// just the one that failed -- was previously only exercised by fixtures
+// with a single live instance, which cannot distinguish "all-or-nothing"
+// from "partial population" (both produce the same one-instance outcome).
+// Two same-name instances here: an older FAILURE (whose own run WOULD
+// resolve cleanly) and a newer SUCCESS whose run lookup is deliberately
+// unresolvable (no matching `workflowRuns` fixture, so the fake provider
+// throws). If either got a partially-resolved `workflowPath`, they would
+// split into two groups; the assertions below confirm they instead still
+// dedupe by `(name, type, workflowName)` alone -- the pre-#2919 shape --
+// with the newer SUCCESS masking the older FAILURE exactly as before,
+// and the FAILURE surfacing only via `discardedNonPassingRequiredChecks`.
+test('collectPreMergeReadiness against a fake provider: #2919 an unresolvable in-budget run id leaves EVERY instance of that check name unpopulated, not just the one that failed', () => {
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/70001/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/70002/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/70001': { path: '.github/workflows/idd-advisory-convergence.yml' },
+      // Deliberately no 'o/r/70002' fixture -- its lookup throws.
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    discardedNonPassingRequiredChecks: { discardedState: string }[];
+  };
+  assert.equal(
+    ciReport.status,
+    'success',
+    `expected the unresolvable-lookup fallback to reproduce pre-#2919 name-only dedup (newer SUCCESS wins), got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, true);
+  assert.equal(ciReport.discardedNonPassingRequiredChecks.length, 1);
+  assert.equal(
+    ciReport.discardedNonPassingRequiredChecks[0]?.discardedState,
+    'FAILURE',
+  );
+});
+
 test('collectPreMergeReadiness against a fake provider: touchesSelfReferentialAllowlist false (this PR never touches the checker allowlist) suppresses the blocker even for an otherwise-verified expired marker -- closes the decisive round-15 forgery/DoS finding', () => {
   const report = runSelfWaiverCollection({
     comments: {

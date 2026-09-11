@@ -9711,6 +9711,45 @@ test('#2919: a decoy checker check-run sourced from a DIFFERENT workflow FILE is
   assert.equal(staleSelfWaiverOf(summary).stale, false);
 });
 
+// #2919 (Copilot review, PR #2921): `selfConvergenceRawInstances` now
+// case-normalizes `check.state` to uppercase before the
+// `CHECK_PASS_EQUIVALENT_STATES` pass-equivalent filter (matching
+// `summarizeRequiredChecks`'s own normalization, which has already run by
+// the time `ci.status` is computed) -- without it, a lowercase live
+// `state` would make that filter find zero candidates and silently skip
+// this blocker even while `ci.status` reads passing. Real GitHub GraphQL
+// enums are already uppercase, so this regresses only under a
+// non-GraphQL caller/fixture; pin it directly so removing the
+// normalization cannot silently reopen the gap.
+test('#2919: an expired, run-verified self-referential marker still blocks when the checker check-run reports a lowercase state', () => {
+  const base = selfWaiverInputBase();
+  const checks = (base.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'success',
+          completedAt: '2026-05-11T23:25:00Z',
+          startedAt: '2026-05-11T23:25:00Z',
+          type: 'check-run',
+          workflowName: 'IDD advisory-convergence gate',
+        }
+      : check,
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-lowercase-state',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:30:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, checks, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '4242': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+});
+
 test('#2911 finding 2/round 13: a genuine rerun completing AFTER the expired marker clears the blocker', () => {
   const base = withSelfWaiverCheckState(
     selfWaiverInputBase(),

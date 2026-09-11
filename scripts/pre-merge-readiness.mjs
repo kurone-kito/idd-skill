@@ -355,20 +355,54 @@ export function collectPreMergeReadiness(
   // matched here), two-to-three during the documented transition window --
   // never the up-to-20 budget the marker-verification block below spends.
   //
-  // All-or-nothing PER CHECK NAME, never partial: if resolving ANY one of
-  // this name's live instances fails (a missing/malformed `detailsUrl`, a
-  // thrown/erroring `getWorkflowRun` call -- e.g. transient rate-limiting,
-  // which this account can be under), `workflowPath` is left unpopulated
-  // for EVERY instance of this name this build. Partial population would
-  // let a transient failure newly SPLIT a producer group that used to
-  // dedupe cleanly -- e.g. the documented same-file
-  // `pull_request`/`pull_request_target` sibling case this issue's own
-  // Background explicitly says is NOT a false-negative risk -- into two,
-  // introducing a NEW false required-check blocker at the primary CI gate
-  // under exactly the concurrent-load conditions most likely to trigger a
-  // rate limit. Fail-closed here means "identical to pre-#2919 behavior",
-  // never a new failure mode.
-  const MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS = 5;
+  // Within-budget resolution is all-or-nothing PER CHECK NAME, never
+  // partial: if resolving ANY in-budget run id fails (a thrown/erroring
+  // `getWorkflowRun` call -- e.g. transient rate-limiting, which this
+  // account can be under), `workflowPath` is left unpopulated (absent,
+  // permissive) for every IN-BUDGET instance rather than partially.
+  // Partial population would let a transient failure newly SPLIT a
+  // producer group that used to dedupe cleanly -- e.g. the documented
+  // same-file `pull_request`/`pull_request_target` sibling case this
+  // issue's own Background explicitly says is NOT a false-negative risk
+  // -- into two, introducing a NEW false required-check blocker at the
+  // primary CI gate under exactly the concurrent-load conditions most
+  // likely to trigger a rate limit. Fail-closed here means "identical to
+  // pre-#2919 behavior", never a new failure mode. An entry with no
+  // parseable run id at all (missing/malformed `detailsUrl`) is treated
+  // the same permissive way -- it never had resolvable evidence to begin
+  // with, matching the pre-#1483 absent-discriminator convention.
+  //
+  // kurone-kito/idd-skill#2919 (Codex review, PR #2921, P1): the
+  // all-or-nothing rule above must NEVER apply to a run id EXCLUDED by
+  // the lookup budget below -- an earlier revision set `resolutionFailed`
+  // (and left `workflowPath` unset for the WHOLE check name) the moment
+  // `uniqueRunIds.size` exceeded the cap, which silently reverted
+  // `groupChecksByProducer`'s key back to the pre-#1483 `(name, type,
+  // workflowName)` shape for every instance, including the ones that
+  // WOULD have resolved cleanly. A PR accumulating more distinct
+  // `idd-advisory-convergence` run ids than the budget (plausible on a
+  // long E-phase review-fix cycle under this repo's own
+  // `rerun-advisory-convergence.mjs` automation, not only an adversarial
+  // scenario) would then let a genuinely different workflow file's later
+  // SUCCESS supersede the real workflow's FAILURE in the merged group --
+  // reopening the exact bypass this whole fix exists to close, at BOTH
+  // the stale-waiver call site AND the primary required-check gate.
+  // Fixed by splitting the two failure modes: an IN-BUDGET run id that
+  // fails to resolve still triggers the permissive all-or-nothing
+  // fallback above (a transient, not attacker-controllable, failure);
+  // an EXCESS run id (beyond budget) instead gets its own per-run-id
+  // sentinel below -- never attempted, and never treated as
+  // interchangeable with either a resolved real path OR another
+  // genuinely different run's sentinel. A sentinel is a real (non-empty)
+  // string that can never equal an actual workflow file path, so it (a)
+  // never dedupes with a resolved real-path instance in
+  // `groupChecksByProducer`'s key -- closing Codex's finding -- and (b)
+  // never passes the stale-waiver call site's own exact-match filter
+  // either, correctly excluding an unverifiable-identity instance from
+  // candidacy there too. Two check-run rows citing the SAME excess run
+  // id still share the SAME sentinel (they are the same real Actions
+  // run), so they still correctly dedupe with each other.
+  const MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS = 10;
   const advisoryConvergenceCheckEntries = checks
     .map((check, index) => ({ check, index }))
     .filter(
@@ -378,43 +412,59 @@ export function collectPreMergeReadiness(
     );
   if (advisoryConvergenceCheckEntries.length > 0) {
     const runIdsByIndex = new Map();
-    const uniqueRunIds = new Set();
-    for (const { index } of advisoryConvergenceCheckEntries) {
+    // Newest-first per unique run id (by the latest `completedAt` among
+    // its own entries), so a budget-bounded lookup always prefers the
+    // instances most likely to represent this build's CURRENT truth --
+    // mirrors `MAX_PRE_MERGE_AUTO_WAIVER_RUN_LOOKUPS`'s own newest-first
+    // rationale below for the same reason.
+    const latestCompletedAtByRunId = new Map();
+    for (const { check, index } of advisoryConvergenceCheckEntries) {
       const runId = parseRunIdFromUrl(
         rawStatusCheckRollup[index]?.detailsUrl ?? '',
       );
-      if (runId) {
-        runIdsByIndex.set(index, runId);
-        uniqueRunIds.add(runId);
+      if (!runId) continue;
+      runIdsByIndex.set(index, runId);
+      const completedAt = String(check.completedAt ?? '');
+      const existing = latestCompletedAtByRunId.get(runId);
+      if (existing === undefined || completedAt > existing) {
+        latestCompletedAtByRunId.set(runId, completedAt);
       }
     }
-    let resolutionFailed =
-      runIdsByIndex.size !== advisoryConvergenceCheckEntries.length ||
-      uniqueRunIds.size > MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS;
+    const orderedRunIds = [...latestCompletedAtByRunId.entries()]
+      .sort((left, right) => right[1].localeCompare(left[1]))
+      .map(([runId]) => runId);
+    const inBudgetRunIds = new Set(
+      orderedRunIds.slice(0, MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS),
+    );
+    const excessRunIds = new Set(
+      orderedRunIds.slice(MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS),
+    );
+    let inBudgetResolutionFailed = false;
     const pathsByRunId = new Map();
-    if (!resolutionFailed) {
-      for (const runId of uniqueRunIds) {
-        try {
-          const raw = port.getWorkflowRun(owner, repo, runId);
-          const path = String(raw?.path ?? '');
-          if (!path) {
-            resolutionFailed = true;
-            break;
-          }
-          pathsByRunId.set(runId, path);
-        } catch {
-          resolutionFailed = true;
+    for (const runId of inBudgetRunIds) {
+      try {
+        const raw = port.getWorkflowRun(owner, repo, runId);
+        const path = String(raw?.path ?? '');
+        if (!path) {
+          inBudgetResolutionFailed = true;
           break;
         }
+        pathsByRunId.set(runId, path);
+      } catch {
+        inBudgetResolutionFailed = true;
+        break;
       }
     }
-    if (!resolutionFailed) {
-      checks = checks.map((check, index) => {
-        const runId = runIdsByIndex.get(index);
-        const path = runId === undefined ? undefined : pathsByRunId.get(runId);
-        return path === undefined ? check : { ...check, workflowPath: path };
-      });
-    }
+    checks = checks.map((check, index) => {
+      const runId = runIdsByIndex.get(index);
+      if (runId === undefined) return check;
+      if (excessRunIds.has(runId)) {
+        return { ...check, workflowPath: `\0unresolved-excess:${runId}` };
+      }
+      if (inBudgetResolutionFailed) return check;
+      const path = pathsByRunId.get(runId);
+      return path === undefined ? check : { ...check, workflowPath: path };
+    });
   }
   const trustEmptyProtectionReads = readTrustEmptyProtectionReads(iddConfig);
   const branchRulesRead = fetchGovernanceJson(
