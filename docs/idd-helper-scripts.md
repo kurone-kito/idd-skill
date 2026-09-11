@@ -2212,17 +2212,27 @@ close.
   do (`withGeneratedTokensWriteLock`, `src/scripts/claim-lock.mts`):
   atomically create a same-directory `<resolved-path>.writelock` guard
   file (exclusive create -- fails if it already exists), retrying
-  roughly every 5 ms for up to 5 seconds if it does; only once that
-  create succeeds, perform the write (or, for the backfill side, the
-  read that captures the existing `nonce` and the write that follows
-  it); then remove the guard file **on every exit path, success or
-  failure alike** (a shell `trap`, or the agent's own equivalent of a
-  `finally` block) -- never only on success. An agent that removes the
-  guard solely after a successful write and skips cleanup when that
-  write itself fails leaves the same orphaned-guard problem the CLI's
-  own code was reviewed for (#2922 review round 4, Copilot): every later
-  writer for this exact `{claim-id}` then waits the full 5 seconds and
-  fails closed until an operator manually removes it. The guard file's
+  roughly every 5 ms for up to 5 seconds if it does. **Only once that
+  create call itself has actually succeeded** -- never before it, and
+  never merely because this invocation _attempted_ one -- arm a cleanup
+  handler (a shell `trap`, or the agent's own equivalent of a `finally`
+  block) that removes the guard **on every exit path from this point
+  forward, success or failure alike**, then perform the write (or, for
+  the backfill side, the read that captures the existing `nonce` and the
+  write that follows it). Arming the handler any earlier (for example a
+  `trap` set up before the create attempt) is not ownership-safe: a
+  failed create -- whether from `EEXIST` or from exhausting the 5-second
+  wait budget below -- proves nothing was created by this invocation, so
+  a handler armed that early would remove a **different, possibly
+  concurrent, holder's own guard** instead, reopening the exact ABA race
+  #2922's CLI-side fix (`withGeneratedTokensWriteLock`'s own
+  `openSync`/`writeSync`/`closeSync` ownership tracking) exists to close
+  (#2922 review round 6, CodeRabbit). An agent that removes the guard
+  solely after a successful write and skips cleanup when that write
+  itself fails leaves the same orphaned-guard problem the CLI's own code
+  was separately reviewed for (#2922 review round 4, Copilot): every
+  later writer for this exact `{claim-id}` then waits the full 5 seconds
+  and fails closed until an operator manually removes it. The guard file's
   own content is never read by anything -- its mere existence is the
   whole coordination signal, so no atomic-visibility trick is needed for
   it, unlike the lock file's own body. If the 5-second wait budget is
