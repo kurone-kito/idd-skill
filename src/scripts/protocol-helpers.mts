@@ -8841,6 +8841,32 @@ export function buildPreMergeReadinessSummary(
       // it only ever prevents THIS blocker from mis-firing on a pass that
       // a fresh marker already, genuinely covers; it can never clear a
       // blocker any OTHER evidence in this file raised.
+      //
+      // kurone-kito/idd-skill#2911 (design model, stated once here so a
+      // future review pass reads it instead of re-deriving it): the
+      // underlying question for ALL THREE finders below is interval
+      // overlap -- could this marker's own validity window,
+      // `[createdAt, expiresAt]`, have overlapped the run's observation
+      // window, `[startedAt, completedAt]`? That is
+      // `createdAt <= completedAt && expiresAt >= startedAt`. The LOWER
+      // bound stays anchored on `completedAt` (not `startedAt`)
+      // deliberately: the marker is posted BY the run itself, so its
+      // `createdAt` falls somewhere mid-run, between the run's own
+      // `startedAt` and `completedAt` -- anchoring the lower bound on
+      // `startedAt` instead would make a run's own marker unable to
+      // cover its own pass, breaking acceptance criterion 2 outright.
+      // The UPPER bound anchors on `startedAt` (via `passingStartedAtMs`,
+      // falling back to `passingCompletedAtMs` when unparseable): the run
+      // reads waiver evidence near its own start, so a marker that was
+      // still valid then, but expires before the run's slower
+      // `completedAt`, must not be misread as "expired before this pass"
+      // (Codex review, PR #2915, round 7, P2) -- the accepted residual is
+      // that a marker which expired early in the run, strictly before the
+      // run's own evidence-fetch instant (which this code cannot observe
+      // directly), still gets flagged and costs one avoidable rerun,
+      // never a false "not stale": the alternative of anchoring on
+      // `completedAt` instead risks the false negative Codex identified,
+      // which is the worse failure for a security-relevant blocker.
       const hasCoveringValidMarker =
         passingCompletedAtMs !== null &&
         autoWaiverEvidence.valid.some((entry) => {
@@ -8863,16 +8889,25 @@ export function buildPreMergeReadinessSummary(
           );
         });
       // kurone-kito/idd-skill#2911 (Copilot review, PR #2915): checking
-      // only `expiresAt >= passingCompletedAtMs` (the upper bound) is not
-      // enough on its own -- a marker CREATED after the check already
-      // completed could not possibly have justified that earlier pass no
-      // matter how far its `expiresAt` reaches, so the LOWER bound
+      // only `expiresAt >= ...` (the upper bound) is not enough on its
+      // own -- a marker CREATED after the check already completed could
+      // not possibly have justified that earlier pass no matter how far
+      // its `expiresAt` reaches, so the LOWER bound
       // (`createdAt <= passingCompletedAtMs`) must also hold before an
       // entry counts as having plausibly covered the pass. An unparseable
       // boundary on either side still counts (stale-leaning, matching this
       // blocker's established fail-toward-flagging asymmetry) -- only a
       // POSITIVE, parseable `createdAt` strictly after the pass excludes
       // an entry.
+      //
+      // kurone-kito/idd-skill#2911 (Codex review, PR #2915, round 7, P2):
+      // the UPPER bound anchors on `passingStartedAtMs` (falling back to
+      // `passingCompletedAtMs`), not `passingCompletedAtMs` directly --
+      // see the interval-overlap model documented above
+      // `hasCoveringValidMarker`. A marker that was still valid when the
+      // run observed it near its own start, but expires before the run's
+      // slower `completedAt`, must not be misread as having expired
+      // before the pass it actually covered.
       const staleExpiredEntry = hasCoveringValidMarker
         ? undefined
         : autoWaiverEvidence.expired.find((entry) => {
@@ -8880,9 +8915,11 @@ export function buildPreMergeReadinessSummary(
             if (passingCompletedAtMs === null) return true;
             const entryExpiresAtMs = Date.parse(entry.expiresAt);
             const entryCreatedAtMs = Date.parse(entry.createdAt);
+            const runObservationBoundMs =
+              passingStartedAtMs ?? passingCompletedAtMs;
             return (
               (Number.isNaN(entryExpiresAtMs) ||
-                entryExpiresAtMs >= passingCompletedAtMs) &&
+                entryExpiresAtMs >= runObservationBoundMs) &&
               (Number.isNaN(entryCreatedAtMs) ||
                 entryCreatedAtMs <= passingCompletedAtMs)
             );
@@ -8895,17 +8932,23 @@ export function buildPreMergeReadinessSummary(
       // treatment of an unparseable `createdAt`.
       //
       // kurone-kito/idd-skill#2911 (Codex review, PR #2915, P2): ALSO
-      // requires the upper bound (`expiresAt >= passingCompletedAtMs`),
-      // mirroring `staleExpiredEntry`'s own two-sided window check --
-      // without it, a marker that had ALREADY expired before the check
-      // even completed (a real scenario here specifically: this
-      // function's own `wrongClaim` classification runs BEFORE the
-      // expiry check, so a marker can be both wrong-claim AND
-      // already-expired yet only ever reach this bucket, never
-      // `expired`) gets treated as if it could have justified a LATER,
-      // genuinely unrelated pass, purely because the claim identity also
-      // happened to change again even later -- an unnecessary blocker
-      // with no real evidence behind it.
+      // requires the upper bound, mirroring `staleExpiredEntry`'s own
+      // two-sided window check -- without it, a marker that had ALREADY
+      // expired before the check even completed (a real scenario here
+      // specifically: this function's own `wrongClaim` classification
+      // runs BEFORE the expiry check, so a marker can be both
+      // wrong-claim AND already-expired yet only ever reach this bucket,
+      // never `expired`) gets treated as if it could have justified a
+      // LATER, genuinely unrelated pass, purely because the claim
+      // identity also happened to change again even later -- an
+      // unnecessary blocker with no real evidence behind it.
+      //
+      // kurone-kito/idd-skill#2911 (Codex review, PR #2915, round 7, P2):
+      // the upper-bound comparison anchors on `passingStartedAtMs`
+      // (falling back to `passingCompletedAtMs`), the same
+      // run-observation-bound reasoning as `staleExpiredEntry` above --
+      // see the interval-overlap model documented above
+      // `hasCoveringValidMarker`.
       const staleWrongClaimEntry =
         staleExpiredEntry || hasCoveringValidMarker
           ? undefined
@@ -8914,6 +8957,8 @@ export function buildPreMergeReadinessSummary(
               if (passingCompletedAtMs === null) return true;
               const entryCreatedAtMs = Date.parse(entry.createdAt);
               const entryExpiresAtMs = Date.parse(entry.expiresAt);
+              const runObservationBoundMs =
+                passingStartedAtMs ?? passingCompletedAtMs;
               if (
                 !Number.isNaN(entryCreatedAtMs) &&
                 entryCreatedAtMs > passingCompletedAtMs
@@ -8922,7 +8967,7 @@ export function buildPreMergeReadinessSummary(
               }
               if (
                 !Number.isNaN(entryExpiresAtMs) &&
-                entryExpiresAtMs < passingCompletedAtMs
+                entryExpiresAtMs < runObservationBoundMs
               ) {
                 return false;
               }
@@ -8936,9 +8981,19 @@ export function buildPreMergeReadinessSummary(
               // observed the OLD claim, so this must flag stale even
               // though the check's `completedAt` now reads after the
               // handoff.
+              //
+              // kurone-kito/idd-skill#2911 (Codex review, PR #2915,
+              // round 7, P1): uses `<=`, not `<` -- when the run's own
+              // observation bound and the claim-installation instant
+              // serialize to the EXACT same timestamp, there is no
+              // positive evidence the run's evidence-fetch actually
+              // happened after the handoff (a run can begin and read the
+              // old claim immediately before a handoff inside the same
+              // timestamp interval), so a tie must be treated as stale,
+              // not fresh.
               return (
                 Number.isNaN(installedAtMs) ||
-                (passingStartedAtMs ?? passingCompletedAtMs) < installedAtMs
+                runObservationBoundMs <= installedAtMs
               );
             });
       if (staleExpiredEntry) {

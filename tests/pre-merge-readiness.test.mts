@@ -10407,3 +10407,109 @@ test("#2911 (Codex review, PR #2915, P1): a claim handoff landing between the ru
   assert.equal(staleSelfWaiverOf(summary).stale, true);
   assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
 });
+
+test('#2911 (Codex review, PR #2915, round 7, P1): a run started at the EXACT same instant a claim handoff installed is still wrong-claim-stale -- a tie is no evidence the run started after the handoff', () => {
+  const claimEvents = [
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        supersedes: 'none',
+        timestamp: '2026-05-11T20:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T20:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderUnclaimedByMarker({
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-123',
+        timestamp: '2026-05-11T21:00:00Z',
+      }),
+      createdAt: '2026-05-11T21:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+    {
+      body: renderClaimedByMarker({
+        agentId: 'github-copilot-cli-2',
+        claimId: 'claim-456',
+        supersedes: 'none',
+        timestamp: '2026-05-11T22:00:00Z',
+        branch: 'issue/309-pre-merge-readiness',
+      }),
+      createdAt: '2026-05-11T22:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const fixture = selfWaiverInputBase();
+  const checks = (fixture.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          // startedAt serializes to the EXACT same instant claim-456
+          // installs -- there is no positive evidence the run's own
+          // evidence-fetch happened after the handoff rather than
+          // immediately before it in the same timestamp interval.
+          startedAt: '2026-05-11T22:00:00Z',
+          completedAt: '2026-05-11T22:30:00Z',
+        }
+      : check,
+  );
+  const base = { ...fixture, checks };
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-tied-handoff',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T23:00:00Z',
+    runId: '5253',
+    createdAt: '2026-05-11T21:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      expectedClaimId: 'claim-456',
+      expectedAgentId: 'github-copilot-cli-2',
+      autoWaiverRunVerified: { '5253': true },
+    }),
+  );
+  assert.equal(claimIdentityInstalledAtOf(summary), '2026-05-11T22:00:00Z');
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
+});
+
+test("#2911 (Codex review, PR #2915, round 7, P2): a marker that expires mid-run, before the run's slower completedAt but after its own startedAt, still counts as having covered the pass it correlates to", () => {
+  const base = selfWaiverInputBase();
+  const checks = (base.checks ?? []).map((check) =>
+    check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? {
+          ...check,
+          state: 'SUCCESS',
+          // The run's own evidence-fetch happens near startedAt
+          // (21:00), while the marker below is still valid -- it only
+          // expires (21:30) before the run's slower completedAt
+          // (22:00). Anchoring the upper bound on completedAt alone
+          // would wrongly treat this as "expired before the pass" and
+          // suppress the blocker entirely.
+          startedAt: '2026-05-11T21:00:00Z',
+          completedAt: '2026-05-11T22:00:00Z',
+        }
+      : check,
+  );
+  // Same claim throughout (matches the fixture's default
+  // expectedClaimId/activeClaimId) so this marker is classified purely
+  // by expiry (the `expired` bucket), never `wrongClaim`.
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-expired-mid-run',
+    claimId: 'claim-123',
+    expiresAt: '2026-05-11T21:30:00Z',
+    runId: '5254',
+    createdAt: '2026-05-11T20:00:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, checks, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '5254': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+});
