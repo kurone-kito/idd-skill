@@ -37,6 +37,23 @@
 // path is the other recovery exception: an authorized takeover removes that
 // exact directory before installing the replacement.
 //
+// Fresh-create atomicity (#2920): the very first `--acquire` against an
+// absent lock also writes to the lock path, via `createLockFileExclusively`
+// below -- a same-directory temp-write + `linkSync` (atomic, EEXIST-exclusive
+// hard link), never a direct `writeFileSync(path, ..., { flag: 'wx' })`. A
+// direct `wx` create leaves a window between the file becoming visible at
+// `path` (open+create) and its content finishing (write) where a concurrent
+// `readLock` can observe a torn/partial body and misclassify it as
+// `malformed` -- producing a false `collision` result even when the same
+// `claimId` is about to win the race. Writing the full body to a temp file
+// first (fully written and closed before it is ever linked in) and then
+// atomically hard-linking it into place closes that window structurally: a
+// concurrent reader can only ever observe "absent" or a fully-formed body at
+// `path`, never a partial one. `linkSync` is create-only (no replace
+// semantics), so unlike the takeover path's `renameSync` fallback above, it
+// needs no Windows-specific recovery branch -- `CreateHardLinkW` fails
+// cleanly with `EEXIST` there too when the destination already exists.
+//
 // This lock intentionally does not try to perfectly serialize two
 // concurrent authorized takeovers of the same worktree -- that is a much
 // narrower race than the collision above, and the claim revalidation gate
@@ -122,6 +139,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  linkSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -382,6 +400,49 @@ function overwriteLockAtomically(path, agentId, claimId) {
   });
 }
 /**
+ * Create the lock file at `path` atomically, only when nothing exists there
+ * yet (#2920). Writes the full lock body to a same-directory temp file first
+ * -- fully written and closed before it is ever linked in -- then
+ * `linkSync`s that temp file into `path`. `linkSync` is both atomic and
+ * `EEXIST`-exclusive: a losing concurrent caller gets a clean `EEXIST`, never
+ * a chance to observe partial content at `path` mid-write, unlike a direct
+ * `writeFileSync(path, ..., { flag: 'wx' })` (open+create, then a separate
+ * write). Returns `'created'` on success or `'exists'` on a losing race
+ * (`EEXIST`); any other error rethrows -- deliberately, rather than falling
+ * back to the direct `wx` write this function replaces: a worktree's private
+ * git-admin directory lives on the same filesystem as the rest of the git
+ * repository, so the mainstream, hard-link-capable filesystems this
+ * repository already depends on elsewhere (ext4, APFS, NTFS) cover the
+ * supported case. A filesystem that rejects `linkSync` entirely (no
+ * hard-link support) fails this call loudly instead of silently
+ * reintroducing the exact torn-read race this function exists to close.
+ */
+function createLockFileExclusively(path, agentId, claimId) {
+  const tmpPath = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  writeFileSync(tmpPath, renderLockBody(agentId, claimId), { flag: 'wx' });
+  try {
+    linkSync(tmpPath, path);
+    return 'created';
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      return 'exists';
+    }
+    throw error;
+  } finally {
+    // Unlike `atomicReplaceFile`'s finally (where a successful `renameSync`
+    // already moved `tmpPath` away, making this a no-op ENOENT), a
+    // successful `linkSync` here leaves `tmpPath` in place as a second,
+    // now-redundant hard link to the same content -- this unlink is what
+    // actually removes it. Best-effort: a cleanup failure here never masks
+    // a real create/link error, and a leaked temp file is harmless.
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+  }
+}
+/**
  * Acquire (or idempotently re-acquire) the worktree-local claim lock.
  * Safe to call before every mutation, not just once at worktree creation.
  *
@@ -418,20 +479,15 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
         : { mode: 'acquired', path, reacquired: true, racedCreate: true };
     }
     if (read.status === 'absent') {
-      try {
-        writeFileSync(path, renderLockBody(agentId, claimId), { flag: 'wx' });
+      if (createLockFileExclusively(path, agentId, claimId) === 'created') {
         return { mode: 'acquired', path };
-      } catch (error) {
-        if (error.code !== 'EEXIST') {
-          throw error;
-        }
-        // Raced with a concurrent fresh acquire between the read above and
-        // this create; loop around to re-read and re-decide. Any
-        // `reacquired: true` this call reports from here on is no longer
-        // from its own first look, so it also carries `racedCreate: true`
-        // (see the function-level doc comment above).
-        continue;
       }
+      // Raced with a concurrent fresh acquire between the read above and
+      // this create; loop around to re-read and re-decide. Any
+      // `reacquired: true` this call reports from here on is no longer
+      // from its own first look, so it also carries `racedCreate: true`
+      // (see the function-level doc comment above).
+      continue;
     }
     // Either a different claim-id, or a malformed body whose holder can't
     // be determined safely: always a same-machine collision either way.
@@ -457,26 +513,18 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
     return { mode: 'acquired', path, reacquired: true, racedCreate: true };
   }
   if (finalRead.status === 'absent') {
-    try {
-      writeFileSync(path, renderLockBody(agentId, claimId), { flag: 'wx' });
+    if (createLockFileExclusively(path, agentId, claimId) === 'created') {
       return { mode: 'acquired', path };
-    } catch (error) {
-      if (error.code !== 'EEXIST') {
-        throw error;
-      }
-      const racedRead = readLock(path);
-      if (
-        racedRead.status === 'present' &&
-        racedRead.lock.claimId === claimId
-      ) {
-        return { mode: 'acquired', path, reacquired: true, racedCreate: true };
-      }
-      return {
-        mode: 'collision',
-        path,
-        holder: racedRead.status === 'present' ? racedRead.lock : undefined,
-      };
     }
+    const racedRead = readLock(path);
+    if (racedRead.status === 'present' && racedRead.lock.claimId === claimId) {
+      return { mode: 'acquired', path, reacquired: true, racedCreate: true };
+    }
+    return {
+      mode: 'collision',
+      path,
+      holder: racedRead.status === 'present' ? racedRead.lock : undefined,
+    };
   }
   return {
     mode: 'collision',

@@ -66,7 +66,7 @@ jobs:
       - name: Run workshop integrity check
         run: node scripts/verify-workshop-integrity.mjs --format table
   lint-windows:
-    name: Critique telemetry hook (Windows)
+    name: Windows platform tests
     runs-on: windows-latest
     # Regression coverage for kurone-kito/idd-skill#2892: only
     # idd-critique-telemetry-hook.mts combines `shell: true` with
@@ -145,3 +145,36 @@ jobs:
       # number would drift stale again on the very next addition.
       - name: Run critique telemetry hook tests
         run: node --test tests/idd-critique-telemetry-hook.test.mts
+      # `acquireClaimLock`'s fresh-create path (#2920) deliberately
+      # depends on `linkSync` returning `EEXIST` for an existing
+      # destination -- true on POSIX, but Windows uses a different
+      # syscall (`CreateHardLinkW`) under the hood, and #2920's own
+      # acceptance criterion #2 requires that behavior verified on this
+      # platform explicitly, not assumed by POSIX analogy (Copilot
+      # review, PR #2923: this job previously never ran any part of
+      # `tests/claim-lock.test.mts`, leaving that criterion unexercised
+      # in CI). Run a narrow subset rather than the whole file: this
+      # suite also has POSIX-only fixtures (e.g. permission-bit tests
+      # via `chmodSync`, meaningless on Windows' ACL model) that were
+      # never vetted for this runner, and this job was deliberately
+      # narrowed after the #2892/#2910 hangs above -- widening it
+      # wholesale reintroduces that risk for coverage this fix does not
+      # need. The three selected tests are exactly the ones that
+      # exercise `createLockFileExclusively`'s `linkSync` path: a plain
+      # fresh acquire (create succeeds), the worker-thread race test
+      # (concurrent create -- exactly one exclusive winner, every loser
+      # observes `EEXIST` and reacquires), and the pre-existing-lock
+      # reacquire (confirms the *no-create* fast path stays untouched).
+      - name: Run claim-lock Windows-relevant tests
+        # The pattern is deliberately ASCII-only (no em dash), unlike the
+        # test titles themselves: this `run:` step has no `shell: bash`
+        # override, so it executes as PowerShell on this runner, and a
+        # non-ASCII argument's encoding through PowerShell-to-node argv
+        # on Windows is untested here -- safer to match on a unique
+        # substring that avoids the question entirely.
+        run: >-
+          node --test --test-name-pattern
+          "fresh acquire succeeds with no prior lock|structural invariants
+          hold under a same-claim-id race|genuinely pre-existing matching
+          lock reacquires with no racedCreate"
+          tests/claim-lock.test.mts

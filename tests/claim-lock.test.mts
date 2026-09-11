@@ -514,8 +514,47 @@ test('acquire: N concurrent forced-takeovers never corrupt the lock — every wr
 // TypeScript-aware one.
 const RACE_WORKER_CODE = `
   const { workerData, parentPort } = require('node:worker_threads');
+  const fs = require('node:fs');
   const { worktree, sab, cliUrl } = workerData;
   const ints = new Int32Array(sab);
+  // Deterministically widen the fresh-create race window (PR #2923
+  // review, Copilot -- a scheduler could otherwise run every acquirer
+  // to completion before any reader gets a timeslice, so the readers
+  // only prove they saw the stable final file, not the write itself).
+  // Intercept any exclusive-create write ({ flag: 'wx' }) this
+  // worker's own acquireClaimLock call makes, and yield the CPU for a
+  // bounded pause between the file becoming visible (open) and its
+  // content finishing (write) -- long enough that a busy-spinning
+  // reader on another OS thread is virtually guaranteed to be
+  // scheduled during it, on any host including a constrained CI
+  // runner. This turns "readers probably sample the window" into
+  // "readers provably do," entirely test-side: the patch lives only
+  // in this worker's own module registry, propagated from the CJS
+  // \`fs\` export object to the compiled CLI module's ESM named
+  // import of the same function via node:module's
+  // syncBuiltinESMExports (a documented Node mechanism for exactly
+  // this). A production-code injection hook was considered instead
+  // and rejected as its own reviewable surface for a single test; this
+  // needs none.
+  const originalWriteFileSync = fs.writeFileSync;
+  fs.writeFileSync = (path, data, opts) => {
+    if (!opts || opts.flag !== 'wx') {
+      return originalWriteFileSync(path, data, opts);
+    }
+    const fd = fs.openSync(path, 'wx');
+    Atomics.add(ints, 4, 1);
+    try {
+      // ints[5] is never written elsewhere, so this always times out --
+      // a bounded, scheduler-yielding pause, not a real wait for a
+      // signal.
+      Atomics.wait(ints, 5, 0, 20);
+    } finally {
+      Atomics.sub(ints, 4, 1);
+    }
+    fs.writeSync(fd, data);
+    fs.closeSync(fd);
+  };
+  require('node:module').syncBuiltinESMExports();
   import(cliUrl).then(({ acquireClaimLock }) => {
     // Signal ready, then block until the main thread releases every
     // worker in this round at (as close to) the same instant.
@@ -526,21 +565,124 @@ const RACE_WORKER_CODE = `
   });
 `;
 
+// Reader-thread payload for the same race test: a pure `readFileSync`
+// spinner with no `acquireClaimLock` call and therefore no internal
+// `execFileSync('git', ...)` spawn (PR #2923 review, Copilot). The
+// acquirer race window would otherwise be microseconds wide, and
+// process-spawn overhead inside `acquireClaimLock` itself can serialize
+// the acquirer workers past it on some hosts (observed: 0/7
+// reproductions at up to N=150 acquirer-only workers on a 24-core
+// sandbox host) -- an outcome-shape assertion alone could therefore
+// miss a regression on such a host. This reader busy-loops
+// `readFileSync` on the same lock path from the same release barrier,
+// with no spawn overhead of its own, so it can sample many times inside
+// the widened window (see `RACE_WORKER_CODE` above) and catch a
+// regression to a non-atomic fresh-create directly: any read that
+// succeeds but is not a complete, well-formed lock body is a torn read
+// the atomic `linkSync` fresh-create path (#2920) must make impossible.
+// The shape check mirrors `readLock`'s own validator
+// (`src/scripts/claim-lock.mts`), including `acquiredAt`, not just
+// `claimId`/`agentId` (CodeRabbit + Copilot review, PR #2923) -- a body
+// missing only that field would otherwise pass this check while
+// production code classifies it malformed.
+const RACE_READER_CODE = `
+  const { workerData, parentPort } = require('node:worker_threads');
+  const { readFileSync } = require('node:fs');
+  const { lockPath, sab } = workerData;
+  const ints = new Int32Array(sab);
+  Atomics.add(ints, 0, 1);
+  Atomics.wait(ints, 1, 0);
+  const badReads = [];
+  let readCount = 0;
+  let nonEnoentReadCount = 0;
+  let readsDuringWindow = 0;
+  // Must exceed the main thread's release-barrier budget (10s) plus its
+  // reader-coverage wait (2s), so the stop flag -- not this fallback --
+  // is what normally ends the loop; this is only a last-resort backstop
+  // against a hung round (CodeRabbit review, PR #2923).
+  const deadline = Date.now() + 20_000;
+  while (Atomics.load(ints, 2) === 0 && Date.now() < deadline) {
+    readCount += 1;
+    // ints[4] > 0 means some acquirer is currently paused between
+    // opening its exclusive-create file and finishing its content
+    // write (see RACE_WORKER_CODE) -- count every read attempted in
+    // that window, regardless of outcome, as evidence this reader was
+    // actually scheduled during it rather than only after it closed.
+    if (Atomics.load(ints, 4) > 0) {
+      readsDuringWindow += 1;
+    }
+    let body;
+    try {
+      body = readFileSync(lockPath, 'utf8');
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        continue;
+      }
+      badReads.push({
+        kind: 'read-error',
+        code: error && error.code,
+        message: String(error && error.message),
+      });
+      continue;
+    }
+    if (nonEnoentReadCount === 0) {
+      // Report this reader's first non-ENOENT read so the main thread
+      // can wait for every reader to have genuinely sampled the file
+      // at least once before signaling stop (CodeRabbit review, PR
+      // #2923) -- otherwise a reader the scheduler never got around to
+      // before the acquirer race settled could report zero reads and
+      // silently contribute no coverage on that run.
+      Atomics.add(ints, 3, 1);
+    }
+    nonEnoentReadCount += 1;
+    if (body.length === 0) {
+      badReads.push({ kind: 'empty' });
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(body);
+      if (
+        !parsed ||
+        typeof parsed.claimId !== 'string' ||
+        typeof parsed.agentId !== 'string' ||
+        typeof parsed.acquiredAt !== 'string'
+      ) {
+        badReads.push({ kind: 'malformed-shape', body });
+      }
+    } catch {
+      badReads.push({ kind: 'parse-error', body });
+    }
+  }
+  parentPort.postMessage({
+    badReads,
+    readCount,
+    nonEnoentReadCount,
+    readsDuringWindow,
+  });
+`;
+
 // Kept deliberately small: a full worker_threads race harness costs real
 // wall-clock time in CI (measured ~57s at ROUNDS=5, CONCURRENT_ACQUIRES=60
 // on a constrained runner -- PR #2917 review, Codex P2), and the constants
 // below are a proportionality call, not a precision one -- the test's job
 // is verifying hard structural invariants that must hold whenever the race
 // manifests, not maximizing the chance it manifests on any given run. See
-// the test body below for why a deterministic (non-probabilistic)
-// reproduction was rejected instead of tuned down.
+// the test body below for why a *production*-code deterministic-reproduction
+// hook was rejected in favor of a spawn-free reader plus a test-side `fs`
+// interposition in the acquirer worker (`RACE_WORKER_CODE`) that
+// deterministically widens the race window instead.
 const RACE_TEST_ROUNDS = 2;
 const RACE_TEST_WORKERS_PER_ROUND = Math.min(
   16,
   Math.max(8, availableParallelism() * 2),
 );
+// Small and fixed rather than scaled with CONCURRENT_ACQUIRES: readers
+// pay no per-worker git-spawn cost, so a handful spinning for the whole
+// release window already samples the race far more densely than adding
+// more acquirers would.
+const RACE_TEST_READERS_PER_ROUND = 4;
 
-test('acquire: structural invariants hold under a same-claim-id race against an absent lock (PR #2917 review, Codex; racedCreate observation is a diagnostic, torn-read gap tracked in kurone-kito/idd-skill#2920)', async (t) => {
+test('acquire: structural invariants hold under a same-claim-id race against an absent lock, including the closed torn-read collision gap (PR #2917 review, Codex; gap closed by #2920)', async (t) => {
   // Statistical health check across a couple of rounds, not a proof, like
   // the concurrent-takeovers test above -- but using worker_threads with an
   // Atomics ready-count barrier instead of subprocess spawning. The
@@ -548,37 +690,67 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
   // overhead (milliseconds) reliably swamps it, so a subprocess batch
   // (like the takeover test above) essentially never reproduces this
   // specific race in practice. In-process worker threads sharing one
-  // Node process avoid that overhead and do, on hosts with enough cores
-  // -- see kurone-kito/idd-skill#2920 for the measurements this is based
-  // on and the pre-existing gap the torn-read branch below documents.
+  // Node process avoid that overhead and do, on hosts with enough cores.
   //
-  // A deterministic reproduction (a test-only injection hook forcing the
-  // race window open) was considered and rejected: it would add a
-  // production-code seam whose only consumer is this one test -- its own
-  // reviewable surface, and out of proportion to the field it verifies.
+  // A *production*-code injection hook forcing the race window open was
+  // considered and rejected: it would add a production seam whose only
+  // consumer is this one test -- its own reviewable surface, and out of
+  // proportion to the field it verifies. Instead, two test-side
+  // mechanisms combine to make the race deterministic without touching
+  // production code:
+  // - `RACE_WORKER_CODE` (the acquirer payload) intercepts its own
+  //   worker's exclusive-create write ({ flag: 'wx' }) via a CJS-side
+  //   `fs.writeFileSync` patch synced into the compiled CLI module's ESM
+  //   import (`node:module`'s `syncBuiltinESMExports`), and yields the
+  //   CPU for a bounded pause between the file becoming visible and its
+  //   content finishing -- widening a window that would otherwise be
+  //   microseconds wide into one busy-spinning readers on other OS
+  //   threads are virtually guaranteed to be scheduled during, on any
+  //   host including a constrained CI runner.
+  // - `RACE_READER_CODE` (the reader payload) busy-loops `readFileSync`
+  //   on the lock path from the same release barrier as the acquirers,
+  //   with no git-spawn overhead of its own, and a hard assertion below
+  //   requires every read it observes to be either absent (`ENOENT`) or
+  //   a complete, well-formed lock body -- never torn -- plus a separate
+  //   hard assertion that at least one read across all readers actually
+  //   landed inside the widened window each round, so the mechanism's
+  //   own liveness is verified rather than assumed.
+  // Together these directly catch a regression to a non-atomic
+  // fresh-create deterministically, not merely with high probability (PR
+  // #2923 review, Copilot -- outcome-shape assertions alone do not
+  // reliably exercise the race, and a reader that only ever observes the
+  // settled post-write file does not either, per #2920's own acceptance
+  // criterion).
   // `acquireClaimLock`'s three `reacquired`-from-a-retry return sites
   // (the source of `racedCreate: true`) are verified by direct code
-  // reading instead, and separately by the deterministic
+  // reading, and separately by the deterministic
   // "genuinely pre-existing matching lock" test below, which exercises the
-  // *no-race* path exactly. This test's positive `racedCreate`/torn-read
-  // observations stay a diagnostic, not a hard assertion, precisely
+  // *no-race* path exactly. This test's positive `racedCreate`
+  // observation stays a diagnostic, not a hard assertion, precisely
   // because a regression that stopped setting `racedCreate` entirely could
-  // still pass a run that never happens to observe the race -- the
-  // structural invariants asserted below are what this test actually
-  // guards on every run, race-observed or not.
+  // still pass a run that never happens to observe the race.
   //
   // Structural invariants that must hold on every round regardless of
   // whether a race actually manifests on this host:
-  // - every outcome's mode is 'acquired' or 'collision'
+  // - every outcome's mode is 'acquired' -- **never** 'collision': #2920
+  //   closed the fresh-create path's torn-read window (a same-directory
+  //   temp-write + atomic `linkSync` instead of a direct
+  //   `writeFileSync(path, ..., { flag: 'wx' })`), so a same-claim-id race
+  //   against an absent lock can no longer produce a false collision here;
+  //   this batch's own lock starts absent and every acquire uses the same
+  //   claim-id, so a genuine different-claim-id collision was never
+  //   possible in this scenario either -- any `collision` outcome now
+  //   means a regression, not an accepted pre-existing gap
+  // - every reader's spin-loop over the same window never observes a
+  //   torn (empty, partial, or malformed) lock body -- deterministically
+  //   exercised via the widened window above, regardless of whether the
+  //   acquirer-only race additionally collides on this host
+  // - at least one reader read lands inside the widened window each
+  //   round -- proof the interception/yield mechanism itself is live,
+  //   not merely assumed to be
   // - exactly one outcome is a true fresh create (mode:'acquired', no
-  //   `reacquired`) -- O_EXCL create is atomic at the OS level
+  //   `reacquired`) -- the atomic create is exclusive at the OS level
   // - every `racedCreate:true` co-occurs with `reacquired:true`
-  // - every `collision` outcome carries no `holder` -- this batch's own
-  //   lock starts absent and every acquire uses the same claim-id, so a
-  //   genuine different-claim-id collision is impossible here; a
-  //   `collision` can only be the pre-existing torn-read gap (#2920), and
-  //   a `holder` appearing on one would mean a *different*, more serious
-  //   bug than the one this comment documents
   // - the final lock body still names the single fresh creator
   //
   // Whether `racedCreate:true` is actually observed varies with host CPU
@@ -591,36 +763,78 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
     const lockPath = resolveClaimLockPath(fixture.worktree);
     const ROUNDS = RACE_TEST_ROUNDS;
     const CONCURRENT_ACQUIRES = RACE_TEST_WORKERS_PER_ROUND;
+    const READERS = RACE_TEST_READERS_PER_ROUND;
     let anyRacedCreate = false;
-    let anyTornReadCollision = false;
+    let totalReads = 0;
+    let totalNonEnoentReads = 0;
+    let totalReadsDuringWindow = 0;
 
-    for (let round = 0; round < ROUNDS; round += 1) {
+    // Round -1 is an unasserted warm-up, not part of ROUNDS. A fresh
+    // process's very first worker_threads batch pays one-time costs
+    // (V8 isolate/module bootstrap, first-ever dynamic `import()` of the
+    // compiled CLI module, first-ever `git` spawn) that can stretch an
+    // acquirer's own pre-pause work well past the intended 20ms window,
+    // observed directly: round "0" without this warm-up sometimes showed
+    // 0 reader reads landing inside the window even though acquirers did
+    // reach and execute it, purely because the round finished before a
+    // still-warming-up reader's busy-loop or the still-warming-up
+    // acquirers' pauses ever overlapped in wall-clock time. Every
+    // measured round after the first one reliably shows the window
+    // covering most of that round's reads (tens of thousands observed
+    // locally), so one throwaway round absorbs the one-time cost instead
+    // of the assertions having to tolerate it.
+    for (let round = -1; round < ROUNDS; round += 1) {
+      const isWarmup = round === -1;
       rmSync(lockPath, { force: true });
 
-      const sab = new SharedArrayBuffer(8);
+      const sab = new SharedArrayBuffer(32);
       const ints = new Int32Array(sab);
-      // ints[0]: ready count; ints[1]: go flag.
+      // ints[0]: ready count; ints[1]: go flag; ints[2]: reader-stop
+      // flag; ints[3]: count of readers that have had at least one
+      // non-ENOENT read; ints[4]: count of acquirers currently paused
+      // between opening their exclusive-create file and finishing its
+      // content write (RACE_WORKER_CODE's deterministic window); ints[5]
+      // is a dedicated always-zero Atomics.wait target used only to
+      // yield the CPU for that pause, never written elsewhere.
       Atomics.store(ints, 0, 0);
       Atomics.store(ints, 1, 0);
+      Atomics.store(ints, 2, 0);
+      Atomics.store(ints, 3, 0);
+      Atomics.store(ints, 4, 0);
+      Atomics.store(ints, 5, 0);
 
-      const workerRefs: Worker[] = [];
-      const workers = Array.from({ length: CONCURRENT_ACQUIRES }, () => {
+      const acquirerRefs: Worker[] = [];
+      const acquirers = Array.from({ length: CONCURRENT_ACQUIRES }, () => {
         const worker = new Worker(RACE_WORKER_CODE, {
           eval: true,
           workerData: { worktree: fixture.worktree, sab, cliUrl },
         });
-        workerRefs.push(worker);
+        acquirerRefs.push(worker);
         return new Promise((resolve, reject) => {
           worker.on('message', resolve);
           worker.on('error', reject);
         });
       });
 
-      // Poll until every worker in this round has imported the module
-      // and reached its own Atomics.wait, then release them together.
+      const readerRefs: Worker[] = [];
+      const readers = Array.from({ length: READERS }, () => {
+        const worker = new Worker(RACE_READER_CODE, {
+          eval: true,
+          workerData: { lockPath, sab },
+        });
+        readerRefs.push(worker);
+        return new Promise((resolve, reject) => {
+          worker.on('message', resolve);
+          worker.on('error', reject);
+        });
+      });
+
+      // Poll until every worker in this round -- acquirers and readers
+      // alike -- has reached its own Atomics.wait, then release them
+      // together.
       const deadline = Date.now() + 10_000;
       while (
-        Atomics.load(ints, 0) < CONCURRENT_ACQUIRES &&
+        Atomics.load(ints, 0) < CONCURRENT_ACQUIRES + READERS &&
         Date.now() < deadline
       ) {
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -628,22 +842,69 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
       Atomics.store(ints, 1, 1);
       Atomics.notify(ints, 1);
 
-      const outcomes = (await Promise.all(workers)) as Array<{
+      const outcomes = (await Promise.all(acquirers)) as Array<{
         mode: string;
         reacquired?: boolean;
         racedCreate?: boolean;
         holder?: unknown;
       }>;
-      // Terminate only after every worker has already posted its
-      // outcome and settled, so tearing one thread down can never
-      // race another round's still-in-flight worker in this same
-      // batch (PR #2917 review, Codex P2).
-      await Promise.all(workerRefs.map((worker) => worker.terminate()));
+      let readerReports: Array<{
+        badReads: Array<{ kind: string }>;
+        readCount: number;
+        nonEnoentReadCount: number;
+        readsDuringWindow: number;
+      }>;
+      if (isWarmup) {
+        // Skip the reader-coverage wait during warm-up -- its own
+        // purpose is priming the JIT/worker-creation machinery, not
+        // proving coverage, and would be subject to the exact same
+        // cold-start variance this round exists to absorb.
+        Atomics.store(ints, 2, 1);
+        readerReports = (await Promise.all(readers)) as typeof readerReports;
+      } else {
+        // Every acquirer has settled and the winning lock body is
+        // already final on disk, so wait for every reader to have
+        // observed at least one non-ENOENT read before signaling stop
+        // (CodeRabbit review, PR #2923) -- otherwise a reader the
+        // scheduler never got around to during the race window could
+        // report zero reads and silently contribute no coverage on
+        // this run. The file is stably present at this point, so this
+        // wait is expected to resolve almost immediately; a real
+        // timeout means a reader never ran at all, worth failing
+        // loudly on rather than passing silently.
+        const readersSeenDeadline = Date.now() + 2_000;
+        while (
+          Atomics.load(ints, 3) < READERS &&
+          Date.now() < readersSeenDeadline
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        assert.equal(
+          Atomics.load(ints, 3),
+          READERS,
+          `expected all ${READERS} reader(s) to observe at least one non-ENOENT read in round ${round} before stopping; only ${Atomics.load(ints, 3)} did -- a reader may never have been scheduled`,
+        );
+        // Tell the readers to stop spinning and collect their reports.
+        Atomics.store(ints, 2, 1);
+        readerReports = (await Promise.all(readers)) as typeof readerReports;
+      }
+      // Terminate only after every worker (acquirers and readers) has
+      // already posted its outcome and settled, so tearing one thread
+      // down can never race another round's still-in-flight worker in
+      // this same batch (PR #2917 review, Codex P2).
+      await Promise.all(
+        [...acquirerRefs, ...readerRefs].map((worker) => worker.terminate()),
+      );
+
+      if (isWarmup) {
+        continue;
+      }
 
       for (const outcome of outcomes) {
-        assert.ok(
-          outcome.mode === 'acquired' || outcome.mode === 'collision',
-          `unexpected mode, got: ${JSON.stringify(outcome)}`,
+        assert.equal(
+          outcome.mode,
+          'acquired',
+          `expected every same-claim-id racer to acquire (never collision, #2920) -- got: ${JSON.stringify(outcome)}`,
         );
         if (outcome.racedCreate === true) {
           assert.equal(
@@ -653,15 +914,24 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
           );
           anyRacedCreate = true;
         }
-        if (outcome.mode === 'collision') {
-          assert.equal(
-            outcome.holder,
-            undefined,
-            `expected a same-claim-id collision in this batch to be the torn-read gap (no holder), got: ${JSON.stringify(outcome)}`,
-          );
-          anyTornReadCollision = true;
-        }
       }
+
+      let roundReadsDuringWindow = 0;
+      for (const report of readerReports) {
+        assert.deepEqual(
+          report.badReads,
+          [],
+          `reader observed a torn/malformed lock-file read in round ${round} (regression to a non-atomic fresh-create, #2920): ${JSON.stringify(report.badReads)}`,
+        );
+        totalReads += report.readCount;
+        totalNonEnoentReads += report.nonEnoentReadCount;
+        roundReadsDuringWindow += report.readsDuringWindow;
+      }
+      totalReadsDuringWindow += roundReadsDuringWindow;
+      assert.ok(
+        roundReadsDuringWindow > 0,
+        `expected at least one reader read to land inside the widened exclusive-create window in round ${round} -- got 0, meaning the deterministic-window mechanism itself did not fire or no reader was scheduled during it (PR #2923 review, Copilot)`,
+      );
 
       const freshCreates = outcomes.filter(
         (outcome) => outcome.mode === 'acquired' && outcome.reacquired !== true,
@@ -683,9 +953,7 @@ test('acquire: structural invariants hold under a same-claim-id race against an 
         : `no racedCreate:true observed across ${ROUNDS} round(s) on this host -- the positive path is verified by construction (acquireClaimLock's three reacquired-from-a-retry return sites), not exercised deterministically here`,
     );
     t.diagnostic(
-      anyTornReadCollision
-        ? `observed the pre-existing torn-read collision gap (kurone-kito/idd-skill#2920) across ${ROUNDS} round(s)`
-        : `no torn-read collision observed across ${ROUNDS} round(s) on this host`,
+      `readers performed ${totalReads} read attempt(s) (${totalNonEnoentReads} non-ENOENT, ${totalReadsDuringWindow} inside the widened exclusive-create window) across ${ROUNDS} round(s); zero torn/malformed reads observed`,
     );
   } finally {
     teardown(fixture);
