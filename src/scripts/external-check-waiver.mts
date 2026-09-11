@@ -1071,27 +1071,35 @@ export async function runExternalCheckWaiver(
     // `ciGate.externalChecks.waivable` (a non-obvious co-requisite,
     // undocumented as required for this specific job) would otherwise
     // have this job fail on every single allowlisted-touching PR.
-    // Treat that specific, adopter-configuration-only blocking shape as
-    // a graceful no-op for `--auto-bootstrap` -- exit 0 with a clear
-    // notice -- rather than a failed job; any OTHER blocking reason
-    // (a genuine problem unrelated to this opt-in policy) still throws
+    //
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): a
+    // third, unrelated benign shape joins the same graceful-skip
+    // treatment. When the sibling `pull_request` verdict run happens to
+    // finish (and pass) before this `pull_request_target` posting step
+    // reads the rollup, `matchedChecks.every((check) => check.successLike)`
+    // blocks with "matched checks are already passing" -- a genuinely
+    // benign no-op (no waiver is needed once the check already passed),
+    // not a problem, yet it fell outside the set below and still threw.
+    //
+    // Treat every blocking reason in this set as a graceful no-op for
+    // `--auto-bootstrap` -- exit 0 with a clear notice quoting the exact
+    // reason(s) -- rather than a failed job; any OTHER blocking reason (a
+    // genuine problem unrelated to these known-benign shapes) still throws
     // exactly as before.
-    const configOnlyBlockingReasons = new Set([
+    const benignAutoBootstrapSkipReasons = new Set([
       'external-check waiver mode is disabled',
       'one or more matched checks are not configured as waivable external checks',
+      'matched checks are already passing',
     ]);
     if (
       args.autoBootstrap &&
       report.blockingReasons.length > 0 &&
       report.blockingReasons.every((reason) =>
-        configOnlyBlockingReasons.has(reason),
+        benignAutoBootstrapSkipReasons.has(reason),
       )
     ) {
       process.stderr.write(
-        `::notice::--auto-bootstrap skipped: this repository has not opted into ` +
-          `ciGate.externalCheckWaivers.mode "maintainer-authorized" with this ` +
-          `selector registered under ciGate.externalChecks.waivable, so the ` +
-          `self-referential-bootstrap-auto waiver cannot be posted yet ` +
+        `::notice::--auto-bootstrap skipped: no waiver is needed right now ` +
           `(${report.blockingReasons.join('; ')}). See docs/customization.md.\n`,
       );
       const skippedReport = { ...report, applied: false };

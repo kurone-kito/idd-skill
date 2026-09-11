@@ -2152,6 +2152,108 @@ test('runExternalCheckWaiver: --auto-bootstrap still throws on a genuine blockin
   }
 });
 
+test('runExternalCheckWaiver: --auto-bootstrap exits 0 (graceful skip) when the check already reports a passing conclusion (Codex review, PR #2895, round 11)', async () => {
+  // The sibling pull_request verdict run can finish (and pass) before this
+  // pull_request_target posting step reads the rollup -- a benign timing
+  // race, not a problem. planExternalCheckWaiver's pre-existing "matched
+  // checks are already passing" blocker must not throw for --auto-bootstrap
+  // in that case: no waiver is needed once the check already passed.
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-waiver-auto-bootstrap-already-passing-'),
+  );
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    // ciGate fully configured (unlike the config-only skip test above) so
+    // "matched checks are already passing" is the ONLY blocking reason,
+    // isolating this specific fix from the config-only one.
+    writeFileSync(
+      join(dir, '.github', 'idd', 'config.json'),
+      JSON.stringify({
+        ciGate: {
+          externalCheckWaivers: { mode: 'maintainer-authorized' },
+          externalChecks: {
+            waivable: [
+              { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+            ],
+          },
+        },
+      }),
+    );
+    process.chdir(dir);
+
+    let postCalls = 0;
+    const { exitCode, report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          '--run-id',
+          '555',
+          '--auto-bootstrap',
+          '--apply',
+          '--yes',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+      },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'SUCCESS',
+          },
+        ],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: () => [],
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T18:20:00Z'),
+      isTTY: false,
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'https://example.invalid/posted' };
+      },
+    });
+
+    assert.equal(
+      exitCode,
+      0,
+      'must exit 0, not throw, when the check is already passing',
+    );
+    assert.equal(report?.applied, false);
+    assert.equal(postCalls, 0);
+    assert.deepEqual(report?.blockingReasons, [
+      'matched checks are already passing',
+    ]);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('runExternalCheckWaiver: --auto-bootstrap clamps its fixed expiry to a configured shorter maxValidity (Codex review, PR #2895)', async () => {
   // The fixed PT24H default is anchored on the HEAD commit timestamp
   // independent of `advisoryWait.convergenceDeadline` (see the test above),
