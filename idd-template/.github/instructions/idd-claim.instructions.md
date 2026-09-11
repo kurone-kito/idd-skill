@@ -596,8 +596,8 @@ session's leftover lock resolves the same way. See
 mechanical detail.
 
 **Generated-tokens record.** Re-check with `--read-tokens` alongside
-`--acquire` before trusting a recalled `{claim-id}`. See
-`docs/idd-helper-scripts.md`.
+`--acquire`; absent/malformed recovers via `--backfill-tokens`
+(`docs/idd-helper-scripts.md`).
 
 Then continue to `idd-work.instructions.md`.
 
