@@ -648,10 +648,24 @@ export function readGeneratedClaimTokens(
  * claimId}`, again with `{agentId, claimId, nonce}` right before the
  * activation-nonce marker posts, and again in the new sibling worktree at
  * B1) is always a safe, expected, idempotent overwrite of the same path.
+ *
+ * `replaceDirectory` defaults to `false` here -- a plain `--record-tokens`
+ * call must never silently delete a directory occupying the resolved path
+ * (regression, #2879 review) -- mirroring {@link overwriteLockAtomically}'s
+ * own narrower authorized-only grant for the lock file. Only
+ * {@link backfillGeneratedClaimTokens} passes `true`: it has already
+ * confirmed the worktree's own `idd-claim.lock` matches `claimId` before
+ * ever reaching this write, which is the same kind of local authorization
+ * `overwriteLockAtomically`'s authorized-takeover caller has, and without
+ * it the write this function performs for exactly the
+ * `malformed`-because-directory case would throw an uncaught `EISDIR`
+ * instead of reporting the documented `backfilled` outcome (#2917 review,
+ * Codex P2).
  */
 export function recordGeneratedClaimTokens(
   cwd: string,
   fields: { agentId: string; claimId: string; nonce?: string },
+  options: { replaceDirectory?: boolean } = {},
 ): { path: string } {
   const path = resolveGeneratedTokensPath(cwd, fields.claimId);
   const body: GeneratedTokensBody = {
@@ -660,7 +674,9 @@ export function recordGeneratedClaimTokens(
     ...(fields.nonce === undefined ? {} : { nonce: fields.nonce }),
     recordedAt: new Date().toISOString(),
   };
-  atomicReplaceFile(path, JSON.stringify(body));
+  atomicReplaceFile(path, JSON.stringify(body), {
+    replaceDirectory: options.replaceDirectory ?? false,
+  });
   return { path };
 }
 
@@ -743,11 +759,20 @@ export function backfillGeneratedClaimTokens(
   const nonce =
     existing.status === 'present' ? existing.record.nonce : undefined;
 
-  recordGeneratedClaimTokens(worktree, {
-    agentId: read.lock.agentId,
-    claimId,
-    ...(nonce === undefined ? {} : { nonce }),
-  });
+  recordGeneratedClaimTokens(
+    worktree,
+    {
+      agentId: read.lock.agentId,
+      claimId,
+      ...(nonce === undefined ? {} : { nonce }),
+    },
+    // Authorized here (unlike a plain --record-tokens call, #2879 review):
+    // the lock read above already confirmed a matching claimId, so a
+    // directory at this exact sanitized, hash-suffixed path is tampering,
+    // not a legitimate concurrent claim -- see the doc comment on
+    // recordGeneratedClaimTokens.
+    { replaceDirectory: true },
+  );
   return { status: 'backfilled', lockPath, path, agentId: read.lock.agentId };
 }
 

@@ -981,6 +981,43 @@ test("backfill-tokens: preserves an existing well-formed record's own nonce rath
   }
 });
 
+test('backfill-tokens: self-heals a stray directory at the generated-tokens path instead of throwing (PR #2917 review, Codex P2)', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+
+    // Simulate the malformed-token-path-is-a-directory case
+    // `readGeneratedClaimTokens` already reports as `malformed` (read side):
+    // before this fix, the matching write side threw instead of replacing
+    // it, so the documented recovery route this exact `malformed` result
+    // sends a caller to would crash rather than report a clean outcome.
+    const tokensPath = readGeneratedClaimTokens(
+      fixture.worktree,
+      'claim-a',
+    ).path;
+    mkdirSync(tokensPath, { recursive: true });
+    assert.equal(
+      readGeneratedClaimTokens(fixture.worktree, 'claim-a').status,
+      'malformed',
+    );
+
+    const outcome = backfillGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(outcome.status, 'backfilled');
+
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-a');
+    assert.equal(read.status, 'present');
+    assert.equal(read.status === 'present' && read.record.agentId, 'agent-a');
+  } finally {
+    teardown(fixture);
+  }
+});
+
 test('CLI: --backfill-tokens writes on a matching lock and exits 0, and exits non-zero with no write on a mismatched claim-id', async () => {
   const fixture = setupLinkedWorktree();
   try {
