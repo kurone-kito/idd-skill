@@ -820,6 +820,24 @@ function withGeneratedTokensWriteLock<T>(
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        // Not a collision with an existing guard: `wx`'s own open+write+
+        // close sequence can still leave a file at `lockPath` even though
+        // this call itself threw (#2922 review round 4, Copilot) -- for
+        // example `ENOSPC` failing the write after `O_CREAT | O_EXCL`
+        // already made the (empty or partial) file visible. Unlike the
+        // stale-guard reclaim removed above, cleaning up here carries no
+        // ABA risk: excluding `EEXIST` means this exact call -- never a
+        // prior or concurrent holder -- is the only possible owner of
+        // whatever now exists at `lockPath`, so removing it is always
+        // safe. Best-effort: a cleanup failure must never mask the real
+        // error the caller needs to see (and is also the safe outcome
+        // when nothing was actually created, e.g. the directory itself
+        // was unwritable).
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // ignore
+        }
         throw error;
       }
       if (Date.now() >= deadline) {
