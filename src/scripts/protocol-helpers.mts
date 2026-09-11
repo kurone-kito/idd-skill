@@ -362,6 +362,16 @@ export interface ExternalCheckWaiverEvidence {
      * still run the same run-bound trust verification on an EXPIRED
      * marker. */
     runId: string;
+    /** kurone-kito/idd-skill#2911 (Copilot review, PR #2915): the marker
+     * comment's own `createdAt` (server timestamp, never the marker's
+     * `created-at:` body field, mirroring how `parsed.createdAt` is
+     * already sourced elsewhere in this function) -- a stale-self-waiver
+     * consumer needs this as the LOWER bound of the marker's validity
+     * window (paired with `expiresAt` as the upper bound): a marker
+     * created AFTER a required check already completed could not
+     * possibly have justified that earlier pass, no matter how far in
+     * the future its `expiresAt` reaches. */
+    createdAt: string;
   }[];
   wrongHead: {
     authorLogin: string;
@@ -379,6 +389,10 @@ export interface ExternalCheckWaiverEvidence {
     /** kurone-kito/idd-skill#2911: see `expired[].runId`'s doc comment
      * above. */
     runId: string;
+    /** kurone-kito/idd-skill#2911 (Copilot review, PR #2915): see
+     * `expired[].createdAt`'s doc comment above -- the identical
+     * lower-bound need applies to a `wrongClaim`-classified marker. */
+    createdAt: string;
   }[];
   unauthorized: {
     authorLogin: string;
@@ -905,6 +919,7 @@ export function summarizeExternalCheckWaivers(
         waiverClaimId: parsed.claimId,
         reason: parsed.reason,
         runId: parsed.runId,
+        createdAt: parsed.createdAt,
       });
       continue;
     }
@@ -917,6 +932,7 @@ export function summarizeExternalCheckWaivers(
         expiresAt: parsed.expiresAt,
         reason: parsed.reason,
         runId: parsed.runId,
+        createdAt: parsed.createdAt,
       });
       continue;
     }
@@ -938,6 +954,7 @@ export function summarizeExternalCheckWaivers(
           expiresAt: parsed.expiresAt,
           reason: parsed.reason,
           runId: parsed.runId,
+          createdAt: parsed.createdAt,
         });
         continue;
       }
@@ -8705,12 +8722,24 @@ export function buildPreMergeReadinessSummary(
     ).filter((check) => CHECK_PASS_EQUIVALENT_STATES.has(check.state));
     for (const latestSelfConvergenceCheck of selfConvergenceProducerCandidates) {
       const autoWaiverRunVerified = options.autoWaiverRunVerified ?? {};
+      // kurone-kito/idd-skill#2911 (CodeRabbit + Copilot review, PR #2915,
+      // Major): `autoWaiverRunVerified` is keyed by `runId` alone. Without
+      // also requiring `checkSelector === staleSelfWaiverCheckSelector`
+      // here, a DIFFERENT-selector marker (this function's own
+      // `autoWaiverEvidence` is never filtered to one selector -- see its
+      // own call site above) that happens to reuse an already-verified
+      // `idd-advisory-convergence` run-id would be accepted as if it were
+      // evidence about THIS check, letting an unrelated check's waiver
+      // wrongly set `staleSelfWaiver` (`hasCoveringValidMarker` is already
+      // selector-scoped and cannot compensate for this gap on its own).
       const isRunVerifiedSelfWaiverMarker = (entry: {
         authorLogin: string;
+        checkSelector: string;
         reason: string;
         runId: string;
       }) =>
         entry.authorLogin === 'github-actions[bot]' &&
+        entry.checkSelector === staleSelfWaiverCheckSelector &&
         entry.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
         entry.runId !== '' &&
         autoWaiverRunVerified[entry.runId] === true;
@@ -8760,23 +8789,50 @@ export function buildPreMergeReadinessSummary(
             passingCompletedAtMs <= expiresAtMs
           );
         });
+      // kurone-kito/idd-skill#2911 (Copilot review, PR #2915): checking
+      // only `expiresAt >= passingCompletedAtMs` (the upper bound) is not
+      // enough on its own -- a marker CREATED after the check already
+      // completed could not possibly have justified that earlier pass no
+      // matter how far its `expiresAt` reaches, so the LOWER bound
+      // (`createdAt <= passingCompletedAtMs`) must also hold before an
+      // entry counts as having plausibly covered the pass. An unparseable
+      // boundary on either side still counts (stale-leaning, matching this
+      // blocker's established fail-toward-flagging asymmetry) -- only a
+      // POSITIVE, parseable `createdAt` strictly after the pass excludes
+      // an entry.
       const staleExpiredEntry = hasCoveringValidMarker
         ? undefined
         : autoWaiverEvidence.expired.find((entry) => {
             if (!isRunVerifiedSelfWaiverMarker(entry)) return false;
             if (passingCompletedAtMs === null) return true;
             const entryExpiresAtMs = Date.parse(entry.expiresAt);
+            const entryCreatedAtMs = Date.parse(entry.createdAt);
             return (
-              Number.isNaN(entryExpiresAtMs) ||
-              entryExpiresAtMs >= passingCompletedAtMs
+              (Number.isNaN(entryExpiresAtMs) ||
+                entryExpiresAtMs >= passingCompletedAtMs) &&
+              (Number.isNaN(entryCreatedAtMs) ||
+                entryCreatedAtMs <= passingCompletedAtMs)
             );
           });
+      // kurone-kito/idd-skill#2911 (Copilot review, PR #2915): the
+      // identical lower-bound reasoning as `staleExpiredEntry` above --
+      // a `wrongClaim` marker created AFTER the check already completed
+      // could not have justified that pass either, regardless of the
+      // claim-installation comparison below. Same stale-leaning
+      // treatment of an unparseable `createdAt`.
       const staleWrongClaimEntry =
         staleExpiredEntry || hasCoveringValidMarker
           ? undefined
           : autoWaiverEvidence.wrongClaim.find((entry) => {
               if (!isRunVerifiedSelfWaiverMarker(entry)) return false;
               if (passingCompletedAtMs === null) return true;
+              const entryCreatedAtMs = Date.parse(entry.createdAt);
+              if (
+                !Number.isNaN(entryCreatedAtMs) &&
+                entryCreatedAtMs > passingCompletedAtMs
+              ) {
+                return false;
+              }
               if (!claimIdentityInstalledAt) return true;
               const installedAtMs = Date.parse(claimIdentityInstalledAt);
               return (

@@ -659,69 +659,87 @@ export function collectPreMergeReadiness(
   // checking and letting the report incorrectly stay `ready`. Newest-
   // first keeps the candidates most likely to cover that recent
   // instance instead.
-  const autoWaiverRunIdCandidates = [];
-  const seenAutoWaiverRunIds = new Set();
-  const prHeadShaLower = prHeadSha.toLowerCase();
-  for (const comment of normalizedComments) {
-    const body = comment.body;
-    if (!/^<!--\s*idd-external-check-waiver:/i.test(body)) continue;
-    const authorLogin = comment.author.login.trim().toLowerCase();
-    if (authorLogin !== 'github-actions[bot]') continue;
-    const parsed = parseExternalCheckWaiverComment(body, comment.createdAt);
-    // kurone-kito/idd-skill#2911: mirrors `collectFromGitHub`'s own
-    // prefilter conditions verbatim -- a canonical positive-integer
-    // run-id (never percent-decoded/sanitized attacker text reaching
-    // `getWorkflowRun`'s REST path unvalidated), an EXACT (never glob)
-    // checkSelector match, and this PR's own current HEAD -- before a
-    // candidate is ever eligible to spend part of the bounded lookup
-    // budget.
-    if (
-      parsed &&
-      parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
-      parsed.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
-      parsed.runId &&
-      parseCanonicalIntegerOrNull(parsed.runId) !== null &&
-      !seenAutoWaiverRunIds.has(parsed.runId) &&
-      String(parsed.headSha ?? '')
-        .trim()
-        .toLowerCase() === prHeadShaLower
-    ) {
-      seenAutoWaiverRunIds.add(parsed.runId);
-      autoWaiverRunIdCandidates.push({
-        runId: parsed.runId,
-        createdAt: comment.createdAt,
-      });
-    }
-  }
-  const boundedAutoWaiverRunIds = autoWaiverRunIdCandidates
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-    .slice(0, MAX_PRE_MERGE_AUTO_WAIVER_RUN_LOOKUPS)
-    .map((candidate) => candidate.runId);
   const autoWaiverRunVerified = {};
-  for (const runId of boundedAutoWaiverRunIds) {
-    try {
-      const raw = port.getWorkflowRun(owner, repo, runId);
-      autoWaiverRunVerified[runId] = verifySelfReferentialBootstrapWaiverRun(
-        {
-          path: raw?.path ?? null,
-          headSha: raw?.head_sha ?? null,
-          repositoryFullName: raw?.head_repository?.full_name ?? null,
-          event: raw?.event ?? null,
-        },
-        {
-          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
-          headSha: prHeadSha,
-          repositoryFullName,
-        },
-      );
-    } catch {
-      // Fail closed per run id -- untrusted: a lookup failure (unknown
-      // run, transient API error) must never widen trust, and must never
-      // crash this whole evidence collector either. This is the
-      // deliberate fail-open-for-staleness direction documented on
-      // `buildPreMergeReadinessSummary`'s `staleSelfWaiver` computation:
-      // an unverified run suppresses the blocker rather than firing it.
-      autoWaiverRunVerified[runId] = false;
+  // kurone-kito/idd-skill#2911 (Copilot review, PR #2915): the scan below
+  // and its up-to-20 `getWorkflowRun` lookups are pure overhead whenever
+  // `touchesSelfReferentialAllowlist` is false -- `buildPreMergeReadinessSummary`
+  // never even reaches this evidence in that case (its own `staleSelfWaiver`
+  // computation is unconditionally gated on the identical flag). Skipping
+  // the whole block here means an ordinary PR (the overwhelming majority,
+  // which never touches the checker allowlist at all) can never have a
+  // flood of bot-authored comments force wasted provider round-trips no
+  // matter how many it posts. This does not also gate on the mode-open/
+  // selector-waivable preconditions `buildPreMergeReadinessSummary` checks
+  // (those live behind private matching helpers in `protocol-helpers.mts`
+  // this file deliberately avoids importing, to keep this file's footprint
+  // minimal where kurone-kito/idd-skill#2912 is concurrently working) --
+  // the residual is bounded and harmless: at most 20 avoidable
+  // `getWorkflowRun` calls, only on the narrower set of PRs that already,
+  // genuinely touch the allowlist.
+  if (touchesSelfReferentialAllowlist) {
+    const autoWaiverRunIdCandidates = [];
+    const seenAutoWaiverRunIds = new Set();
+    const prHeadShaLower = prHeadSha.toLowerCase();
+    for (const comment of normalizedComments) {
+      const body = comment.body;
+      if (!/^<!--\s*idd-external-check-waiver:/i.test(body)) continue;
+      const authorLogin = comment.author.login.trim().toLowerCase();
+      if (authorLogin !== 'github-actions[bot]') continue;
+      const parsed = parseExternalCheckWaiverComment(body, comment.createdAt);
+      // kurone-kito/idd-skill#2911: mirrors `collectFromGitHub`'s own
+      // prefilter conditions verbatim -- a canonical positive-integer
+      // run-id (never percent-decoded/sanitized attacker text reaching
+      // `getWorkflowRun`'s REST path unvalidated), an EXACT (never glob)
+      // checkSelector match, and this PR's own current HEAD -- before a
+      // candidate is ever eligible to spend part of the bounded lookup
+      // budget.
+      if (
+        parsed &&
+        parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
+        parsed.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+        parsed.runId &&
+        parseCanonicalIntegerOrNull(parsed.runId) !== null &&
+        !seenAutoWaiverRunIds.has(parsed.runId) &&
+        String(parsed.headSha ?? '')
+          .trim()
+          .toLowerCase() === prHeadShaLower
+      ) {
+        seenAutoWaiverRunIds.add(parsed.runId);
+        autoWaiverRunIdCandidates.push({
+          runId: parsed.runId,
+          createdAt: comment.createdAt,
+        });
+      }
+    }
+    const boundedAutoWaiverRunIds = autoWaiverRunIdCandidates
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, MAX_PRE_MERGE_AUTO_WAIVER_RUN_LOOKUPS)
+      .map((candidate) => candidate.runId);
+    for (const runId of boundedAutoWaiverRunIds) {
+      try {
+        const raw = port.getWorkflowRun(owner, repo, runId);
+        autoWaiverRunVerified[runId] = verifySelfReferentialBootstrapWaiverRun(
+          {
+            path: raw?.path ?? null,
+            headSha: raw?.head_sha ?? null,
+            repositoryFullName: raw?.head_repository?.full_name ?? null,
+            event: raw?.event ?? null,
+          },
+          {
+            path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+            headSha: prHeadSha,
+            repositoryFullName,
+          },
+        );
+      } catch {
+        // Fail closed per run id -- untrusted: a lookup failure (unknown
+        // run, transient API error) must never widen trust, and must
+        // never crash this whole evidence collector either. This is the
+        // deliberate fail-open-for-staleness direction documented on
+        // `buildPreMergeReadinessSummary`'s `staleSelfWaiver` computation:
+        // an unverified run suppresses the blocker rather than firing it.
+        autoWaiverRunVerified[runId] = false;
+      }
     }
   }
   const summary = buildPreMergeReadinessSummary(

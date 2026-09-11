@@ -10061,3 +10061,58 @@ test("#2911 (Codex review, PR #2915, P1): a fresher pass from a DIFFERENT produc
   assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
   assert.equal(selfWaiverBlockers(summary).length, 1);
 });
+
+test('#2911 (CodeRabbit + Copilot review, PR #2915, Major): a DIFFERENT-selector marker that reuses an already-verified run-id is never trusted as evidence for idd-advisory-convergence', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const foreignSelectorMarker = {
+    id: 'self-waiver-foreign-selector',
+    author: { login: 'github-actions[bot]' },
+    body: renderExternalCheckWaiverComment({
+      agentId: 'idd-advisory-convergence-self-waiver',
+      claimId: 'claim-123',
+      headSha: SELF_WAIVER_HEAD_SHA,
+      checkSelector: 'some-other-check',
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: '2026-05-11T23:30:00Z',
+      runId: '5151',
+    }),
+    createdAt: '2026-05-11T23:10:00Z',
+    updatedAt: '2026-05-11T23:10:00Z',
+  };
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), foreignSelectorMarker] },
+    // The run-id IS genuinely verified -- just for a marker that claims a
+    // different check selector. Reusing that verification for
+    // idd-advisory-convergence's own stale check would be the bug.
+    selfWaiverOptions({ autoWaiverRunVerified: { '5151': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
+
+test('#2911 (Copilot review, PR #2915): a marker CREATED after the check already passed cannot retroactively justify that pass, even when its expiresAt is later', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-created-after-pass',
+    claimId: 'claim-123',
+    // expiresAt alone (naive upper-bound-only check) would satisfy the
+    // old logic -- it's after the check's own completedAt (23:25).
+    expiresAt: '2026-05-11T23:40:00Z',
+    runId: '6161',
+    // But this marker was CREATED after the check already passed, so it
+    // could never have justified that earlier pass.
+    createdAt: '2026-05-11T23:26:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({ autoWaiverRunVerified: { '6161': true } }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, false);
+});
