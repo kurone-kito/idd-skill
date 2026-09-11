@@ -766,6 +766,25 @@ original, and the portable stub this template mirrors at
 `.github/workflows/idd-advisory-convergence.yml` in your own
 repository does not carry it.
 
+**The self-waiver provenance artifact is unavailable on GHES.** The
+`idd-advisory-convergence-self-waiver` job's "Upload the posted
+marker's provenance artifact" step pins `actions/upload-artifact` v4+
+(currently `v7.0.1`), which needs the newer Artifacts service backend
+that GitHub Enterprise Server does not support; GHES instead needs the
+`v3.2.2` (or `v3.2.2-node20`) release, itself deprecated on
+github.com. Because the
+self-waiver mechanism fails closed, this never lets a forged waiver
+through on GHES — the upload step simply fails, or produces no
+artifact — but it does mean the self-referential-bootstrap-auto
+mechanism can never actually complete on a GHES-hosted adopter,
+degrading every genuine attempt to "no auto-waiver" and leaving only
+the maintainer-authorized waiver path for every such PR (found by a
+Codex review of kurone-kito/idd-skill#2914 during the
+kurone-kito/idd-skill#2912 fix cycle, 2026-09-11). See
+kurone-kito/idd-skill#2918 for the open tradeoff and the rationale for
+keeping the pinned version rather than adding a runner-detection
+branch.
+
 ## Optional — mark the vendored helper bundle `linguist-vendored`
 
 This step applies **only to the `vendored-node` profile** (the only
