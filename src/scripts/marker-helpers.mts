@@ -1269,26 +1269,34 @@ export function renderExternalCheckWaiverComment(
  * replacing the content -- round 2's check alone would still accept the
  * edited body because it only ever looked at the id.
  *
- * Every caller on both sides of this check (the posting CLI's post-write
- * reconcile in `external-check-waiver.mts`, and
- * `advisory-convergence.mts`'s live comment scan) SHOULD hash a body
- * obtained the SAME way -- read back from the GitHub API, not a
- * locally-constructed string -- so an unedited comment always digests
- * identically regardless of which side computed it. Hashing a
- * writer-constructed string against a GitHub-returned one risks a
- * false-negative on any GitHub-side content normalization this project
- * does not control (trailing-newline handling, etc.). No normalization is
- * applied here for that reason: both sides are expected to pass an
- * API-returned body verbatim in the ordinary case. The one documented
- * exception is the posting CLI's own fallback when its post-write
- * reconcile cannot find the just-posted comment: it hashes the
- * locally-sent body instead and labels the result accordingly
- * (`ExternalCheckWaiverReport.bodyDigestSource: 'constructed'`) rather
- * than presenting it as a GitHub-attested digest. This follows the same
- * `bodySha256` / `body-sha256` convention `authoring-owner-provenance.mts`
- * and the issue-authoring skill already use for the identical purpose
- * (binding a marker to an exact API-observed body rather than trusting an
- * id alone).
+ * Every caller on both sides of this check (the posting CLI in
+ * `external-check-waiver.mts`, and `advisory-convergence.mts`'s live
+ * comment scan) MUST hash a body obtained the SAME way -- read back from
+ * the GitHub API, not a locally-constructed string -- so an unedited
+ * comment always digests identically regardless of which side computed
+ * it. Hashing a writer-constructed string against a GitHub-returned one
+ * risks a false-negative on any GitHub-side content normalization this
+ * project does not control (trailing-newline handling, etc.). No
+ * normalization is applied here for that reason: both sides are expected
+ * to pass an API-returned body verbatim.
+ *
+ * Round 3 initially let the posting CLI hash a body observed in a LATER,
+ * separate re-read (its own post-write reconcile) when available, falling
+ * back to the locally-sent string only when that reconcile came up empty.
+ * Copilot's review of round 3's own commit (PR #2914) found this
+ * introduced a race: the later re-read is mutable in a way the original
+ * POST response is not, so a same-repository `issues: write` workflow
+ * that edited the genuine comment's body in the window between POST and
+ * reconcile would have its forged body hashed and attested as genuine.
+ * Round 4 removed that fallback entirely -- the posting CLI now hashes
+ * ONLY the `body` field GitHub's create-comment response returns for the
+ * exact POST that created the comment, atomically, with no such window;
+ * see `ExternalCheckWaiverReport.bodyDigest`'s own doc comment
+ * (external-check-waiver.mts) for the full reasoning. This follows the
+ * same `bodySha256` / `body-sha256` convention
+ * `authoring-owner-provenance.mts` and the issue-authoring skill already
+ * use for the identical purpose (binding a marker to an exact
+ * API-observed body rather than trusting an id alone).
  */
 export function digestExternalCheckWaiverMarkerBody(body: string): string {
   return createHash('sha256').update(body, 'utf8').digest('hex');

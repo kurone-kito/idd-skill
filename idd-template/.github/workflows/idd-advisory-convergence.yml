@@ -684,20 +684,26 @@ jobs:
           PROFILE: ${{ steps.profile.outputs.profile }}
           PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
           MANAGER: ${{ steps.manager.outputs.manager }}
-        # kurone-kito/idd-skill#2912 (round 2, extended round 3): every
-        # profile branch below pipes its own invocation through the SAME
-        # `tee`, so the common post-processing after the `case` (reading
-        # `applied`/`commentId`/`bodyDigest` back out of the CLI's own
-        # JSON report) is written once rather than duplicated per profile.
-        # `node -e` (never `jq`, whose presence on the runner is never
-        # explicitly asserted, unlike Node's own floor above) parses it
-        # defensively: a parse failure (should not happen, `tee` writes
-        # exactly what stdout produced) degrades to "nothing to record",
-        # never a crashed job. `bodyDigest` is the SHA-256 hex digest of
-        # the posted comment's body as the CLI read it BACK from the
-        # GitHub API in its own post-write reconcile (never the locally-
-        # sent string) -- see `ExternalCheckWaiverReport.bodyDigest`'s own
-        # doc comment in `external-check-waiver.mts`.
+        # kurone-kito/idd-skill#2912 (round 2, extended round 3, extended
+        # round 4): every profile branch below pipes its own invocation
+        # through the SAME `tee`, so the common post-processing after the
+        # `case` (reading `applied`/`commentId`/`bodyDigest` back out of
+        # the CLI's own JSON report) is written once rather than
+        # duplicated per profile. `node -e` (never `jq`, whose presence on
+        # the runner is never explicitly asserted, unlike Node's own floor
+        # above) parses it defensively: a parse failure (should not
+        # happen, `tee` writes exactly what stdout produced) degrades to
+        # "nothing to record", never a crashed job. `bodyDigest` is the
+        # SHA-256 hex digest of the posted comment's body, taken ONLY from
+        # the `body` field GitHub's create-comment API response returned
+        # for this exact POST -- round 3 originally preferred a LATER,
+        # separate re-read instead, but round 4 removed that in favor of
+        # the POST response alone, which has no window for an intervening
+        # edit; see `ExternalCheckWaiverReport.bodyDigest`'s own doc
+        # comment in `external-check-waiver.mts`. Absent (empty string
+        # here) whenever that response lacked a body -- the two `if:`
+        # conditions below already fail closed on that via
+        # `body-digest != ''`.
         run: |
           case "$PROFILE" in
             vendored-node)
@@ -709,7 +715,37 @@ jobs:
                   pnpm exec idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
                   ;;
                 yarn)
-                  yarn idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
+                  # kurone-kito/idd-skill#2912 (round 4, Codex review, PR
+                  # #2914): Yarn Classic (v1) writes its own banner
+                  # ("yarn run v1.x.x") and trailer ("Done in Ns.") lines
+                  # to stdout around the wrapped script's own output --
+                  # unlike `pnpm exec`/`npm exec` above, neither of which
+                  # does this. Left unsilenced, those lines land inside
+                  # the same `tee`'d file the `node -e` steps below parse
+                  # as JSON, breaking every `JSON.parse` call on this
+                  # profile (including `bodyDigest`, so the provenance
+                  # artifact silently stops being recorded even on a
+                  # successful post). `--silent` (a Yarn 1 global flag,
+                  # placed immediately after `yarn`) suppresses Yarn's own
+                  # console output while leaving the wrapped script's
+                  # stdout untouched -- but Yarn Berry (2+, also matched
+                  # by this same "yarn" branch: `steps.manager` never
+                  # distinguishes majors) already produces clean stdout
+                  # with no banner to suppress, and its clipanion CLI
+                  # parser does not recognize a bare `--silent` before the
+                  # script name at all -- it exits with "Unknown Syntax
+                  # Error" on stdout instead of ever running the script,
+                  # corrupting the capture worse than the bug this exists
+                  # to fix (self-review of this round's own commit caught
+                  # this empirically, running both `yarn@1` and `yarn@4`).
+                  # Detect the installed major at run time and apply
+                  # `--silent` only for v1, never unconditionally.
+                  YARN_MAJOR="$(yarn --version 2>/dev/null | cut -d. -f1)"
+                  if [ "$YARN_MAJOR" = "1" ]; then
+                    yarn --silent idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
+                  else
+                    yarn idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
+                  fi
                   ;;
                 *)
                   npm exec idd-external-check-waiver -- --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json

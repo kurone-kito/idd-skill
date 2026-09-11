@@ -1098,33 +1098,36 @@ export async function runExternalCheckWaiver(options = {}) {
         'minimize the rest so a later session does not have to disambiguate.\n',
     );
   }
-  // kurone-kito/idd-skill#2912 (round 3): hash the body this helper reads
-  // BACK from the GitHub API (the same `postWriteComments` reconcile scan
-  // above), matched by the posted comment's own id -- never `report.body`,
-  // the string this process constructed and sent -- so the digest reflects
-  // what GitHub actually stored, the same guarantee `bodyDigest`'s own doc
-  // comment describes. Fall back to `report.body` only when the reconcile
-  // could not find that comment (a failed re-read, or a race with a
-  // concurrent edit/delete already flagged by `reconcileInconclusive`
-  // above, or -- more simply -- a `postComment` test double that never
-  // reaches `readPrComments()`), and say so via `bodyDigestSource` so a
-  // consumer can tell a GitHub-attested digest from a merely-sent one.
+  // kurone-kito/idd-skill#2912 (round 4; supersedes round 3, PR #2914
+  // review): hash the `body` field GitHub's OWN create-comment response
+  // (`result`) returned for THIS exact POST -- never `postWriteComments`,
+  // the LATER, separate `readPrComments()` re-read used above for
+  // concurrent-duplicate detection. Round 3 preferred that later re-read,
+  // reasoning it reflects what GitHub "actually stored" -- but the two
+  // reads are not the same instant: a same-repository `issues: write`
+  // workflow can edit the genuine comment's body in the window between
+  // this POST returning and that later re-read running, and round 3's
+  // reconcile-preferring design would then hash and attest to the FORGED
+  // body as if it were genuine (the P1 Copilot found reviewing round 3's
+  // own commit). The create-comment response has no such window: GitHub
+  // returns it atomically, in the same API call that created the comment,
+  // before any other request could possibly have touched it. Absent
+  // (never backfilled from `postWriteComments` or `report.body`) when
+  // that response did not carry a `body` string -- fails closed via the
+  // workflow's own `body-digest != ''` gate rather than uploading a
+  // provenance artifact for a digest this process cannot prove GitHub
+  // stored.
   const postedCommentId = String(result.id ?? '');
-  const reconciledComment = postWriteComments.find(
-    (comment) => String(comment?.id ?? '') === postedCommentId,
-  );
-  const bodyDigestSource =
-    typeof reconciledComment?.body === 'string' ? 'reconciled' : 'constructed';
-  const bodyDigest = digestExternalCheckWaiverMarkerBody(
-    bodyDigestSource === 'reconciled' ? reconciledComment?.body : report.body,
-  );
+  const bodyDigest =
+    typeof result.body === 'string'
+      ? digestExternalCheckWaiverMarkerBody(result.body)
+      : undefined;
   const appliedReport = {
     ...report,
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
     commentId: postedCommentId,
-    bodyDigest,
-    bodyDigestSource,
+    ...(typeof bodyDigest === 'string' ? { bodyDigest } : {}),
     ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
     ...(reconcileInconclusive ? { reconcileInconclusive: true } : {}),
   };

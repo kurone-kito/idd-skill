@@ -582,20 +582,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        # kurone-kito/idd-skill#2912 (round 2, extended round 3): the
-        # CLI's own JSON report (default `--format json`, never overridden
-        # here) is captured to a file, not just streamed to the log, so
-        # the fields the NEXT step needs (`applied`, `commentId`, and --
-        # round 3 -- `bodyDigest`) can be read back out -- `node -e`
-        # (never `jq`, whose presence on the runner is never explicitly
-        # asserted, unlike Node's own floor above) parses it defensively:
-        # a parse failure (should not happen, `tee` writes exactly what
-        # stdout produced) degrades to "nothing to record", never a
-        # crashed job. `bodyDigest` is the SHA-256 hex digest of the
-        # posted comment's body as this CLI read it BACK from the GitHub
-        # API in its own post-write reconcile (never the locally-sent
-        # string) -- see `ExternalCheckWaiverReport.bodyDigest`'s own doc
-        # comment in `external-check-waiver.mts`.
+        # kurone-kito/idd-skill#2912 (round 2, extended round 3, extended
+        # round 4): the CLI's own JSON report (default `--format json`,
+        # never overridden here) is captured to a file, not just streamed
+        # to the log, so the fields the NEXT step needs (`applied`,
+        # `commentId`, and -- round 3 -- `bodyDigest`) can be read back
+        # out -- `node -e` (never `jq`, whose presence on the runner is
+        # never explicitly asserted, unlike Node's own floor above) parses
+        # it defensively: a parse failure (should not happen, `tee` writes
+        # exactly what stdout produced) degrades to "nothing to record",
+        # never a crashed job. `bodyDigest` is the SHA-256 hex digest of
+        # the posted comment's body, taken ONLY from the `body` field
+        # GitHub's create-comment API response returned for this exact
+        # POST -- round 3 originally preferred a LATER, separate re-read
+        # instead, but round 4 removed that in favor of the POST response
+        # alone, which has no window for an intervening edit; see
+        # `ExternalCheckWaiverReport.bodyDigest`'s own doc comment in
+        # `external-check-waiver.mts`. Absent (empty string here) whenever
+        # that response lacked a body -- the two `if:` conditions below
+        # already fail closed on that via `body-digest != ''`.
         run: |
           node scripts/external-check-waiver.mjs \
             --pr "$PR_NUMBER" \

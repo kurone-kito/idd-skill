@@ -376,14 +376,37 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * body also transitively binds `headSha` and `run-id`, both embedded in
  * it, so an edit that tries to redirect a trusted marker at a different
  * commit or run is caught by the same mechanism, not a separate one. Both
- * sides hash an API-returned body verbatim whenever that read-back is
- * available -- a locally-constructed string is only ever a fallback on
- * the posting side (`ExternalCheckWaiverReport.bodyDigestSource`,
- * labeled as such rather than treated the same as a GitHub-attested
- * digest) -- so GitHub-side content normalization (if any) cancels out
- * identically on both sides in the ordinary case, instead of producing a
- * false-negative on a genuine, unedited marker -- see that function's own
- * doc comment for why.
+ * sides hash an API-returned body verbatim -- so GitHub-side content
+ * normalization (if any) cancels out identically on both sides in the
+ * ordinary case, instead of producing a false-negative on a genuine,
+ * unedited marker -- see {@link digestExternalCheckWaiverMarkerBody}'s own
+ * doc comment for why, and round 4 immediately below for exactly which
+ * API-returned body the posting side now hashes.
+ *
+ * kurone-kito/idd-skill#2912 (round 4): round 3's posting side had its
+ * own race, found by a Copilot review of PR #2914's round-3 commit --
+ * `ExternalCheckWaiverReport.bodyDigest` preferred a body observed in a
+ * LATER, separate post-write re-read (`external-check-waiver.mts`'s own
+ * `readPrComments()` reconcile, run for an unrelated reason: detecting a
+ * concurrent duplicate waiver) over the body GitHub's create-comment API
+ * call itself returned, falling back to the locally-sent string only when
+ * that later re-read came up empty. That preference opened the same class
+ * of window round 3 closes on THIS consumer's side: a same-repository
+ * `issues: write` workflow could edit the genuine comment's body in the
+ * interval between the POST returning and that later re-read running, and
+ * the posting side would then hash and report the FORGED body as
+ * `bodyDigest` -- which this consumer's own live-body scan (reading that
+ * SAME, now-edited comment) would then match, validating the edit as if
+ * the trusted job had posted it verbatim. Round 4 removes that fallback
+ * entirely: the posting side now hashes ONLY the `body` field the
+ * create-comment response returns for the exact POST that created the
+ * comment -- returned atomically, in the same API call, with no window
+ * for an intervening edit -- and reports no `bodyDigest` at all (never
+ * substituting a later, mutable read) when that response lacks a body
+ * string. This consumer needs no change for round 4: it already hashes
+ * the live comment's CURRENT body during its own scan, and a body edited
+ * after posting already fails to match the (now correctly
+ * POST-response-bound) trusted digest either way.
  *
  * Precondition on "the cited job's step conclusion is `success`"
  * actually implying it posted a marker: `runExternalCheckWaiver`'s own

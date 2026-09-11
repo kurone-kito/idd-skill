@@ -1771,36 +1771,38 @@ test('runExternalCheckWaiver: --auto-bootstrap posts end to end with no viewer-i
   // caller-suppliable and independent of advisoryWait.convergenceDeadline.
   assert.equal(parsed?.expiresAt, '2026-08-31T18:13:24Z');
   assert.equal(parsed?.claimId, 'claim-20260830T222316Z-2328');
-  // kurone-kito/idd-skill#2912 (round 3): `postComment` above returns no
-  // `id`, and `prComments` always resolves to `[]` (no post-write
-  // reconcile fixture data at all), so the reconcile can never find the
-  // posted comment -- `bodyDigest` falls back to hashing `report.body`
-  // (the locally-constructed string), reported as `'constructed'` rather
-  // than `'reconciled'` so a consumer can tell the difference. See the
-  // dedicated 'reconciled' test below for the realistic production path.
-  assert.equal(report?.bodyDigestSource, 'constructed');
-  assert.equal(
-    report?.bodyDigest,
-    digestExternalCheckWaiverMarkerBody(posted?.body ?? ''),
-  );
+  // kurone-kito/idd-skill#2912 (round 4): `postComment` above returns no
+  // `body` field at all (only `html_url`), so `bodyDigest` is omitted
+  // entirely -- round 4 deliberately never backfills it from
+  // `report.body` (the locally-constructed string) or from any later
+  // re-read; see `ExternalCheckWaiverReport.bodyDigest`'s own doc comment
+  // for why. See the dedicated POST-response test below for the
+  // realistic production path where the create-comment response DOES
+  // carry a body.
+  assert.equal(report?.bodyDigest, undefined);
 });
 
-test('runExternalCheckWaiver: --apply computes bodyDigest from the post-write RECONCILED comment body, never the locally-constructed one (kurone-kito/idd-skill#2912, round 3)', async () => {
-  // The self-waiver CI job's own JSON report is what
-  // `idd-advisory-convergence.yml`'s "Post the self-referential-bootstrap-
-  // auto waiver" step reads `bodyDigest` from, which the trusted job then
-  // uploads as part of the provenance artifact's name -- it must reflect
-  // what GitHub actually STORED (the reconciled re-read), never merely
-  // what this process SENT, so a digest computed from `report.body` could
-  // never mask GitHub-side content normalization this project does not
-  // control. The reconciled fixture's body below is deliberately a
-  // DIFFERENT string from whatever this CLI actually sent, isolating that
-  // `bodyDigest` tracks the RECONCILED value specifically (a regression
-  // that reverted to hashing `report.body` unconditionally would still
-  // produce a real, shape-valid digest here -- just the WRONG one -- so
-  // this test would still catch it).
+test('runExternalCheckWaiver: --apply computes bodyDigest from the create-comment POST response body, never a later re-read that could already reflect an edit (kurone-kito/idd-skill#2912, round 4; TOCTOU regression for the P1 Copilot found reviewing round 3, PR #2914)', async () => {
+  // Round 3 hashed the body observed in a LATER, separate post-write
+  // reconcile read (`readPrComments()`, run for the unrelated purpose of
+  // detecting a concurrent duplicate waiver) rather than the body the
+  // create-comment POST response itself returned. That preference opened
+  // a race: a same-repository `issues: write` workflow could edit the
+  // genuine comment's body in the window between the POST returning and
+  // that later reconcile running, and round 3's design would then hash
+  // and report the FORGED body as `bodyDigest` -- exactly what this test
+  // models. `postComment` below returns the GENUINE body (what the
+  // create-comment API call itself returned); the later `prComments`
+  // reconcile read returns the SAME comment id but a DIFFERENT, FORGED
+  // body (modeling an edit that landed in the race window). A correct
+  // round-4 implementation hashes ONLY the POST response's own body and
+  // never even looks at the reconcile read for this purpose, so
+  // `bodyDigest` must equal `digest(GENUINE)`, never `digest(FORGED)`; a
+  // regression back to round 3's reconcile-preferring design would
+  // produce `digest(FORGED)` here instead, which this test would catch.
   const POSTED_ID = 777;
-  const RECONCILED_BODY = 'this-is-the-body-github-actually-stored';
+  const GENUINE_BODY = 'this-is-the-body-github-actually-created';
+  const FORGED_BODY = 'this-is-a-forged-body-edited-in-the-race-window';
   let reads = 0;
 
   const { report } = await runExternalCheckWaiver({
@@ -1849,8 +1851,11 @@ test('runExternalCheckWaiver: --apply computes bodyDigest from the post-write RE
       },
     ],
     // First read (pre-write reuse scan): empty. Second read (post-write
-    // reconcile): the just-posted comment, with a body that stands in for
-    // whatever GitHub actually stored.
+    // reconcile, run for the unrelated concurrent-duplicate check): the
+    // same comment id, but a FORGED body -- modeling an edit that landed
+    // in the window between the POST below returning and this reconcile
+    // running. A correct implementation never even looks at this for
+    // `bodyDigest`.
     prComments: () => {
       reads += 1;
       return reads === 1
@@ -1861,32 +1866,34 @@ test('runExternalCheckWaiver: --apply computes bodyDigest from the post-write RE
               html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${POSTED_ID}`,
               created_at: '2026-08-30T18:20:00Z',
               user: { login: 'github-actions[bot]' },
-              body: RECONCILED_BODY,
+              body: FORGED_BODY,
             },
           ];
     },
     headCommittedAt: '2026-08-30T18:13:24Z',
     now: new Date('2026-08-30T18:20:00Z'),
     isTTY: false,
+    // The create-comment POST response itself, returned atomically with
+    // no window for an intervening edit -- carries the GENUINE body.
     postComment: () => ({
       id: POSTED_ID,
       html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${POSTED_ID}`,
+      body: GENUINE_BODY,
     }),
   });
 
   assert.equal(report?.applied, true);
   assert.equal(report?.commentId, String(POSTED_ID));
-  assert.equal(report?.bodyDigestSource, 'reconciled');
   assert.equal(
     report?.bodyDigest,
-    digestExternalCheckWaiverMarkerBody(RECONCILED_BODY),
+    digestExternalCheckWaiverMarkerBody(GENUINE_BODY),
   );
-  // Not merely a different label -- a genuinely different digest than
-  // hashing `report.body` (the locally-constructed string) would have
-  // produced, proving the reconciled value was actually used.
+  // The load-bearing assertion: a regression back to round 3's
+  // reconcile-preferring design would produce the FORGED digest here
+  // instead, silently attesting to the forgery as if it were genuine.
   assert.notEqual(
     report?.bodyDigest,
-    digestExternalCheckWaiverMarkerBody(report?.body ?? ''),
+    digestExternalCheckWaiverMarkerBody(FORGED_BODY),
   );
 });
 

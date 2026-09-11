@@ -1501,11 +1501,10 @@ idd-external-check-waiver --pr 123 \
 - when the post succeeds, the job's own workflow steps additionally
   upload a run-scoped GitHub Actions artifact named
   `idd-self-waiver-marker-<comment-id>-<body-digest>`
-  (kurone-kito/idd-skill#2912, round 2, extended round 3) -- the posted
-  comment's own numeric id, a literal `-`, and the SHA-256 hex digest of
-  that comment's exact body as this same job read it BACK from the
-  GitHub API immediately after posting, and nothing else, as the
-  artifact's name (never its content, so the consumer never needs to
+  (kurone-kito/idd-skill#2912, round 2, extended round 3, extended round
+  4) -- the posted comment's own numeric id, a literal `-`, and the
+  SHA-256 hex digest of that comment's exact body, and nothing else, as
+  the artifact's name (never its content, so the consumer never needs to
   download or unzip it). This is the channel condition 7 below reads to
   bind a marker to the run's own trusted execution: artifacts are scoped
   to the run that uploaded them by the Actions runtime's own dedicated
@@ -1513,14 +1512,23 @@ idd-external-check-waiver --pr 123 \
   surface an issue comment (or a check run) is created and mutated
   through, so no OTHER same-repository workflow run can add, edit, or
   remove an entry from this specific run's own artifact list. The body
-  digest is hashed from an API-returned body on BOTH the posting and
-  consuming sides whenever that read-back is available -- a
-  locally-constructed string is only ever a fallback on the posting side,
-  used when its own post-write reconcile could not find the just-posted
-  comment (`ExternalCheckWaiverReport.bodyDigestSource`), and is always
-  labeled as such rather than silently treated the same as a
-  GitHub-attested digest -- so an unedited comment digests identically on
-  both sides in the ordinary case, regardless of which side computed it.
+  digest is hashed from an API-returned body on both the posting and
+  consuming sides, so an unedited comment digests identically regardless
+  of which side computed it -- specifically, the posting side hashes
+  ONLY the `body` field GitHub's create-comment response returns for the
+  exact POST that created the comment, never a later re-read. An earlier
+  design (round 3) instead preferred a body observed in a LATER, separate
+  post-write re-read (falling back to the locally-sent string only when
+  that re-read came up empty, and labeling the result
+  `ExternalCheckWaiverReport.bodyDigestSource: 'constructed'` when it
+  did) -- a Copilot review of that round's own commit found this opened a
+  window: a same-repository `issues: write` workflow could edit the
+  genuine comment's body between the POST returning and that later
+  re-read running, and the reconcile-preferring design would then hash
+  and report the FORGED body as trustworthy. Round 4 removed that
+  fallback entirely; `bodyDigestSource` no longer exists, and the digest
+  is reported only when the create-comment response itself carried a
+  body.
 
 The marker is honored only when **all** of the following hold, verified
 by `advisory-convergence.mts` itself (not the generic
@@ -1571,7 +1579,8 @@ needs a live per-marker run lookup no other consumer needs):
    that job uploads immediately after posting (named
    `idd-self-waiver-marker-<comment-id>-<body-digest>` -- see
    `listWorkflowRunArtifacts` in `provider-adapter-github.mts`)
-   (kurone-kito/idd-skill#2912, round 2, extended round 3) -- condition 6
+   (kurone-kito/idd-skill#2912, round 2, extended round 3, extended round
+   4) -- condition 6
    above proves only that the cited run's job succeeded and posted SOME
    comment within a tight execution window, never THIS EXACT comment (and
    never that its content stayed unchanged since); a same-repository
