@@ -114,6 +114,39 @@
 // a GitHub round-trip, matching `--acquire`'s own same-machine, no-network
 // design.
 //
+// Generated-tokens write lock (#2922): `--backfill-tokens` preserves an
+// existing record's own `nonce` by reading it, then writing the backfilled
+// record back with that captured value -- a read-modify-write with nothing
+// serializing it against a concurrent plain `--record-tokens --nonce` call
+// (the activation-nonce minting flow's own second write) landing in
+// between. Because every write to this file was previously a plain
+// `atomicReplaceFile` replace, not a compare-and-swap, that interleaving
+// could silently clobber a fresher nonce with the stale value the backfill
+// captured moments earlier. Both call sites now share one
+// `withGeneratedTokensWriteLock` critical section, keyed by the record's
+// own path: a same-directory `.writelock` guard file created via a plain
+// `wx`-flag exclusive create (existence alone needs no atomic-visibility
+// trick, unlike the claim lock body `linkSync` closes for #2920 above --
+// nothing ever reads this guard file's content). This makes the two writers
+// fully mutually exclusive rather than merely narrowing the window: a
+// concurrent write either completes entirely before the backfill's read
+// (and is correctly preserved) or entirely after its write (a normal,
+// non-lossy last-writer-wins overwrite), never in between. A guard file
+// orphaned by a killed process (rather than released via a normal
+// `finally`) fails every future write against that claim-id closed with a
+// clear recovery message rather than silently reclaiming itself: an
+// earlier revision self-reclaimed a guard old enough (by file modification
+// time) to have outlived one full wait budget, but three independent
+// reviewers (Codex, Copilot, CodeRabbit) flagged that as its own ABA race
+// -- two callers can both classify the same guard as stale, and the
+// second's unconditional unlink can delete the first reclaimer's fresh
+// replacement (or a still-live holder's own guard), letting both enter
+// the critical section at once and reintroducing the exact clobber this
+// lock exists to prevent. Closing that safely needs a real
+// compare-and-swap or ownership-token primitive this file does not yet
+// have, so failing closed -- explicit operator cleanup required -- is the
+// safer default for now.
+//
 // Scope of the ownership proof (#2879 review, Codex P1): a `present: true`
 // `--read-tokens` result proves "a `--record-tokens` call for this exact
 // claim-id landed at this path" -- it does not cryptographically bind that
@@ -139,13 +172,16 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  closeSync,
   linkSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
@@ -153,6 +189,18 @@ import { parseCliArgs } from './cli-args.mjs';
 const CLAIM_LOCK_FILE_NAME = 'idd-claim.lock';
 const GENERATED_TOKENS_FILE_PREFIX = 'idd-generated-tokens';
 const MAX_RETRY_ATTEMPTS = 5;
+/**
+ * Bounded wait budget for the generated-tokens record's own write-lock
+ * (#2922, see {@link withGeneratedTokensWriteLock}). Every critical section
+ * it guards is a handful of synchronous `fs` calls (real disk I/O, not
+ * microseconds-scale, but with no `await` and no external process spawn in
+ * between) -- genuine contention is expected to resolve well under this
+ * budget; a caller still waiting past it has almost certainly hit a guard
+ * file orphaned by a killed process rather than a live holder, so it
+ * fails loudly instead of hanging forever.
+ */
+const GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS = 5_000;
+const GENERATED_TOKENS_WRITE_LOCK_RETRY_INTERVAL_MS = 5;
 /**
  * Cap on the sanitized-claim-id portion of a generated-tokens filename
  * (see {@link sanitizeClaimIdForFilename}). A claim-id is an opaque
@@ -557,12 +605,371 @@ function isGeneratedTokensBody(value) {
   );
 }
 /**
+ * Block the calling thread for `ms` milliseconds. Node's main thread (unlike
+ * a browser UI thread) permits a blocking `Atomics.wait`, so a private,
+ * never-`notify`'d `SharedArrayBuffer` slot works as a plain synchronous
+ * sleep -- there is no cross-process or cross-thread signalling involved,
+ * only a timer, matching this CLI's fully synchronous execution model.
+ */
+function sleepSyncMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+/** Resolve the write-lock guard path for the generated-tokens record at `recordPath`. */
+function resolveGeneratedTokensWriteLockPath(recordPath) {
+  return `${recordPath}.writelock`;
+}
+/**
+ * Serialize every critical section that reads and/or writes the
+ * generated-tokens record at `recordPath` against every other one for that
+ * same path (#2922). Closes the race where {@link backfillGeneratedClaimTokens}
+ * captures an existing record's `nonce` via {@link readGeneratedClaimTokens},
+ * then a concurrent plain write -- the activation-nonce minting flow's own
+ * `--record-tokens --nonce` call, via {@link recordGeneratedClaimTokens} --
+ * lands in between, and backfill's own subsequent write (a plain
+ * {@link atomicReplaceFile} replace, not a compare-and-swap) silently
+ * clobbers that fresher nonce with the stale value it captured moments
+ * earlier. Both call sites resolve to the same lock path for the same
+ * `(cwd, claimId)` pair (they share {@link resolveGeneratedTokensPath}), so
+ * true mutual exclusion holds between them: a plain write either completes
+ * entirely before backfill's read (and backfill observes it, preserving its
+ * nonce correctly) or entirely after backfill's write (and simply
+ * overwrites, which is the expected, non-lossy last-writer-wins outcome --
+ * never a write landing invisibly *inside* backfill's own read-then-write
+ * window).
+ *
+ * **Scope: writers only, not a general readers/writers lock** (#2922
+ * review, Copilot). A standalone {@link readGeneratedClaimTokens} /
+ * {@link readGeneratedTokensAtPath} call made *outside* another write's own
+ * `critical` callback is never guarded by this lock -- only the two
+ * call sites that mutate the record (this file's own `recordGeneratedClaimTokens`
+ * and `backfillGeneratedClaimTokens`) participate. On Windows,
+ * {@link atomicReplaceFile}'s existing-file branch removes the old target
+ * before renaming the replacement in (see that function's own doc
+ * comment, and `overwriteLockAtomically`'s identical, pre-existing gap
+ * for the claim lock file above), so an unguarded concurrent read can in
+ * principle observe a transient `absent` during any write to this record,
+ * with or without this lock. That gap predates this lock and is
+ * unrelated to the nonce-clobber race it closes; guarding reads too (or
+ * changing the read contract to rule out a transient `absent`) is a
+ * separate, broader design question out of scope for #2922.
+ *
+ * `critical` must call only the unlocked write primitive
+ * ({@link writeGeneratedClaimTokensRecord}), never the locked
+ * {@link recordGeneratedClaimTokens} wrapper -- this guard is not
+ * re-entrant, and nesting would deadlock a caller against itself.
+ *
+ * No *contending* reader ever needs to inspect the guard file's content
+ * before the creator finishes writing and closes it -- unlike the claim
+ * lock's `linkSync`-based fresh-create fix (#2920), which exists
+ * specifically so a *third-party reader* never observes a torn body -- so a
+ * plain `wx`-flag exclusive create is sufficient here: POSIX and Windows
+ * both make `O_CREAT | O_EXCL` (`CREATE_NEW`) atomic for existence alone,
+ * with no partial-content window to close. (This creator's *own* later
+ * release does read the body back, to verify the token it wrote at create
+ * time is still present -- see {@link releaseGeneratedTokensWriteLockIfOwned}
+ * -- #2922 review round 11, Copilot; only a torn-body window relevant to a
+ * different reader is what this paragraph rules out.)
+ *
+ * The create step uses {@link openSync}/{@link writeSync}/{@link closeSync}
+ * directly, rather than a single {@link writeFileSync} call, specifically to
+ * track ownership precisely (#2922 review round 5, Copilot): only a
+ * *successful* `openSync(path, 'wx')` proves this call exclusively created
+ * `lockPath` and is its sole owner from that instant on, so only a failure
+ * *after* that point (finishing the write, or closing the descriptor) is
+ * safe to clean up with an unlink. A failure *at* `openSync` itself (for
+ * example `EMFILE`/`ENFILE`, transient descriptor exhaustion) proves the
+ * opposite -- nothing was created by this call -- so nothing is touched;
+ * unlinking there could delete a different, possibly concurrent, holder's
+ * genuine guard, landing right back in the same ABA-race territory as the
+ * stale-guard reclaim already removed below. An earlier revision used the
+ * single-call `writeFileSync(path, ..., { flag: 'wx' })` form and cleaned
+ * up on *any* non-`EEXIST` error, which could not tell these two cases
+ * apart.
+ *
+ * Fails closed after {@link GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS} rather
+ * than self-reclaiming an aged guard (#2922 review -- Codex, Copilot, and
+ * CodeRabbit each independently flagged a since-removed timeout-then-unlink
+ * reclaim path as an ABA race: two callers can both classify the same
+ * guard as stale, and an unconditional `unlinkSync` by the second can
+ * delete the first reclaimer's freshly created replacement -- or a still
+ * genuinely live holder's own guard -- letting two callers enter this
+ * critical section at once, reintroducing the exact clobber this lock
+ * exists to prevent). An orphaned guard (left behind by a process killed
+ * between acquiring it and reaching its own `finally` release) therefore
+ * requires explicit operator cleanup -- removing the reported path -- per
+ * the thrown error's own recovery instructions, rather than an automatic
+ * reclaim this codebase cannot yet prove safe without a real
+ * compare-and-swap or ownership-token primitive.
+ *
+ * Both releases below (the `critical()`-failure cleanup and the
+ * `critical()`-success release) are **token-verified**, not a bare
+ * `unlinkSync(lockPath)` (#2922 review round 10, Copilot): each acquisition
+ * writes a fresh random token into the guard body, and release re-reads the
+ * guard and only unlinks it when that same token is still present. This
+ * mirrors this repository's own existing precedent for exactly this
+ * problem -- `releaseCloneLock` in `clone-lock.mts` -- which likewise
+ * refuses to remove a lock file whose recorded `token` no longer matches
+ * the releasing handle's own. Without this check, a guard manually removed
+ * by an operator (per the timeout error's own recovery instructions) while
+ * the original holder's `critical()` is still genuinely running could be
+ * recreated by a new writer before the original holder's release runs;
+ * that release would then delete the *new* writer's guard instead of a
+ * guard it actually owns, letting two writers believe they hold exclusive
+ * access at once -- the same class of hazard already solved on the
+ * acquire side (see the `openSync`/`writeSync`/`closeSync` ownership
+ * comment above), now closed on the release side too.
+ *
+ * This narrows the guard-recreation window rather than eliminating it:
+ * the same kind of race could still, in principle, land *between* the
+ * token read and the `unlinkSync` call the check guards, because no
+ * `wx`-only filesystem primitive gives a true atomic compare-and-delete.
+ * Closing that residual sliver would need a real compare-and-swap or
+ * `flock(2)`-style primitive this module deliberately avoids taking on
+ * (see the header comment). It is accepted as a known limitation: it only
+ * matters when a live holder's own guard is manually removed while that
+ * holder's `critical()` is still running -- a precondition violation of
+ * the timeout error's own recovery instructions -- and #2922's Acceptance
+ * Criteria only ever covers nonce-preservation under normal concurrent
+ * operation, not safety after an operator has manually intervened on a
+ * guard that turns out not to have been actually orphaned.
+ */
+/**
+ * Combine an original failure with a cleanup failure that happened while
+ * handling it, so neither is silently lost (#2922 review round 9,
+ * Copilot; extended round 12, Codex, to the acquire-phase cleanup
+ * branches below, which had the same gap this originally closed only for
+ * the `critical()`-failure path). Without this, a caller who sees only
+ * `originalError` has no way to learn a guard was also left behind at
+ * `lockPath` until a later, unrelated caller independently discovers it
+ * via its own timeout -- minutes or more later, and attributed to the
+ * wrong operation.
+ */
+function combineGeneratedTokensWriteLockCleanupFailure(
+  originalError,
+  cleanupError,
+  lockPath,
+) {
+  const combined = new Error(
+    `${originalError.message} (additionally failed to remove ` +
+      `the generated-tokens write lock guard at ${lockPath} during ` +
+      `cleanup: ${cleanupError.message})`,
+  );
+  combined.cause = originalError;
+  return combined;
+}
+function withGeneratedTokensWriteLock(recordPath, critical) {
+  const lockPath = resolveGeneratedTokensWriteLockPath(recordPath);
+  const deadline = Date.now() + GENERATED_TOKENS_WRITE_LOCK_TIMEOUT_MS;
+  const token = randomGeneratedTokensWriteLockToken();
+  for (;;) {
+    let fd;
+    try {
+      fd = openSync(lockPath, 'wx');
+    } catch (error) {
+      if (error.code !== 'EEXIST') {
+        // `openSync` itself never returned a descriptor, so this call
+        // never became the guard's owner -- see the function-level doc
+        // comment above for why nothing here is safe to touch.
+        throw error;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Timed out waiting for the generated-tokens write lock at ${lockPath}; ` +
+            `a crashed holder may have left it behind. Remove ${lockPath} ` +
+            `to recover (only safe once you have confirmed no live process ` +
+            `still holds it).`,
+        );
+      }
+      sleepSyncMs(GENERATED_TOKENS_WRITE_LOCK_RETRY_INTERVAL_MS);
+      continue;
+    }
+    // `openSync` succeeded: this call exclusively created `lockPath` and
+    // is its sole, syscall-proven owner from this point on, so a failure
+    // finishing the write below is always safe to clean up.
+    try {
+      // A single `writeSync(fd, token)` call is not guaranteed to write
+      // every byte -- `write(2)` (and thus `writeSync`) may legitimately
+      // return fewer bytes than requested without throwing (#2922 review
+      // round 12, Codex and Copilot independently). A truncated guard
+      // body would then never match `token` again: release's own
+      // token-comparison in {@link releaseGeneratedTokensWriteLockIfOwned}
+      // would treat it as "not mine" and leave the guard behind forever,
+      // even though this call's own write, and the caller's `critical()`,
+      // both otherwise succeed -- every later writer for this claim-id
+      // then waits the full timeout and fails closed until an operator
+      // manually removes it. Loop on the buffer form until every byte is
+      // written, the same pattern Node's own `writeFileSync` uses
+      // internally for exactly this reason.
+      const buffer = Buffer.from(token, 'utf8');
+      let written = 0;
+      while (written < buffer.length) {
+        written += writeSync(fd, buffer, written, buffer.length - written);
+      }
+    } catch (error) {
+      // `writeSync` failing leaves `fd` genuinely still open (a write
+      // failure does not close the descriptor), so this is the correct,
+      // and only, place to close it for this branch. A bare `unlinkSync`
+      // (not the token-verified {@link releaseGeneratedTokensWriteLockIfOwned})
+      // is safe here: `critical()` has not run yet, so no wall-clock window
+      // has opened in which an operator could have manually removed this
+      // still-fresh guard for a different reason to recreate it.
+      try {
+        closeSync(fd);
+      } catch {
+        // ignore
+      }
+      // Report a cleanup-unlink failure alongside the real error rather
+      // than silently swallowing it (#2922 review round 12, Codex):
+      // otherwise a guard left behind here (for example because Windows
+      // still considers the descriptor open) blocks every later writer
+      // for this claim-id until an operator manually removes it, with
+      // nothing in the thrown error pointing at that guard path.
+      try {
+        unlinkSync(lockPath);
+      } catch (cleanupError) {
+        throw combineGeneratedTokensWriteLockCleanupFailure(
+          error,
+          cleanupError,
+          lockPath,
+        );
+      }
+      throw error;
+    }
+    try {
+      closeSync(fd);
+    } catch (error) {
+      // Do NOT retry `closeSync(fd)` here (#2922 review round 8,
+      // Codex): POSIX close() semantics mean the descriptor is no longer
+      // ours to touch once this call has been made, whether or not it
+      // reported an error -- the kernel may already have recycled that
+      // exact descriptor number for something else (for example another
+      // thread's own `open()`), so a second close attempt on it here
+      // could silently disrupt unrelated I/O elsewhere in the process.
+      // A bare `unlinkSync` remains safe for the same reason as the
+      // `writeSync` failure branch above: `critical()` has not run yet.
+      // Report a cleanup-unlink failure alongside the real error, same
+      // as that branch (#2922 review round 12, Codex) -- this is the
+      // exact scenario the review cited: `closeSync` fails (for example
+      // Windows still considers the guard open) and the cleanup unlink
+      // also fails, so the guard can remain and block every later writer
+      // while the caller is never shown its path.
+      try {
+        unlinkSync(lockPath);
+      } catch (cleanupError) {
+        throw combineGeneratedTokensWriteLockCleanupFailure(
+          error,
+          cleanupError,
+          lockPath,
+        );
+      }
+      throw error;
+    }
+    break;
+  }
+  let result;
+  try {
+    result = critical();
+  } catch (error) {
+    // Best-effort cleanup on a `critical()` failure: a cleanup failure
+    // here must never *replace* the real error the caller needs to see,
+    // so on a clean cleanup this rethrows `error` verbatim -- a leaked
+    // guard file then only costs the next caller a bounded wait before
+    // this same fail-closed behavior applies to them too. But when the
+    // cleanup *also* fails, report both instead of silently swallowing
+    // the second failure (#2922 review round 9, Copilot): the caller
+    // would otherwise have no way to learn a guard was left behind until
+    // a later, unrelated caller independently discovers it via its own
+    // timeout -- minutes or more later, and by a completely different
+    // caller than the one whose failure actually caused it. Token-verified
+    // (#2922 review round 10, Copilot): see the function-level doc comment
+    // above for why this must not be a bare `unlinkSync`.
+    try {
+      releaseGeneratedTokensWriteLockIfOwned(lockPath, token);
+    } catch (cleanupError) {
+      throw combineGeneratedTokensWriteLockCleanupFailure(
+        error,
+        cleanupError,
+        lockPath,
+      );
+    }
+    throw error;
+  }
+  // `critical()` succeeded: do NOT swallow a release failure here (#2922
+  // review, Codex). Reporting success while silently leaving the guard
+  // behind would give the caller no signal that anything needs recovery
+  // -- every subsequent write for this claim-id would otherwise just
+  // silently wait out a full timeout before failing, with nothing
+  // pointing at the actual cause. Token-verified (#2922 review round 10,
+  // Copilot): see the function-level doc comment above.
+  releaseGeneratedTokensWriteLockIfOwned(lockPath, token);
+  return result;
+}
+/** Generate a fresh, effectively-unique token for one lock acquisition. */
+function randomGeneratedTokensWriteLockToken() {
+  return `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+/**
+ * Release the generated-tokens write-lock guard at `lockPath` only if it
+ * still holds `token` -- the token this same acquisition wrote when it
+ * created the guard (see {@link withGeneratedTokensWriteLock}'s doc
+ * comment for the full ABA rationale and its residual-race caveat). A
+ * missing guard (already released, or never observed) and a guard whose
+ * token no longer matches (recreated by a different owner) are both
+ * treated as "nothing this call may remove" and silently return, mirroring
+ * `releaseCloneLock`'s own token-mismatch handling in `clone-lock.mts`. The
+ * guard can also disappear *after* this function's own token read confirms
+ * ownership but *before* its `unlinkSync` call below runs -- swallow that
+ * `ENOENT` the same way (#2922 review round 11, Copilot), matching
+ * `releaseCloneLock`'s identical handling at `clone-lock.mts:329-333`:
+ * a guard that is simply already gone by the time of the unlink is still
+ * "nothing left for this call to remove," not a failure to report.
+ */
+function releaseGeneratedTokensWriteLockIfOwned(lockPath, token) {
+  let body;
+  try {
+    body = readFileSync(lockPath, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+  if (body !== token) {
+    return;
+  }
+  try {
+    unlinkSync(lockPath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+/**
  * Read-only inspection of the generated-tokens record for `claimId` at
  * `cwd`'s own private git-admin directory. Never creates, mutates, or
  * deletes anything.
  */
 export function readGeneratedClaimTokens(cwd, claimId) {
-  const path = resolveGeneratedTokensPath(cwd, claimId);
+  return readGeneratedTokensAtPath(
+    resolveGeneratedTokensPath(cwd, claimId),
+    claimId,
+  );
+}
+/**
+ * Path-based counterpart of {@link readGeneratedClaimTokens}, for a caller
+ * that has already resolved the record's path and must not re-resolve it
+ * (#2922 review, CodeRabbit): `resolveGeneratedTokensPath` shells out to
+ * `git rev-parse` via {@link resolveWorktreeAdminDir}, a synchronous child
+ * process spawn that can easily cost tens of milliseconds -- re-running it
+ * from inside a {@link withGeneratedTokensWriteLock} critical section would
+ * needlessly stretch that critical section with work the lock's bounded
+ * wait budget doesn't need to account for at all.
+ * {@link backfillGeneratedClaimTokens} uses this directly with its own
+ * already-resolved `path`, never the
+ * public `cwd`-based function above, once inside that lock.
+ */
+function readGeneratedTokensAtPath(path, claimId) {
   let raw;
   try {
     raw = readFileSync(path, 'utf8');
@@ -593,13 +1000,19 @@ export function readGeneratedClaimTokens(cwd, claimId) {
 /**
  * Write (create or idempotently replace) the generated-tokens record for
  * `claimId` at `cwd`'s own private git-admin directory. Unlike the lock
- * file, this has no collision/`--takeover` concept: the record is
- * per-claim-id evidence, not a mutual-exclusion primitive, so re-invoking
- * (once in the primary worktree at A5 claim time with `{agentId,
- * claimId}`, again with `{agentId, claimId, nonce}` right before the
- * activation-nonce marker posts, and again in the new sibling worktree at
- * B1) is always a safe, expected, idempotent overwrite of the same path.
+ * file, this exposes no collision/`--takeover` concept of its own: the
+ * record is per-claim-id evidence, not a caller-visible mutual-exclusion
+ * primitive, so re-invoking (once in the primary worktree at A5 claim time
+ * with `{agentId, claimId}`, again with `{agentId, claimId, nonce}` right
+ * before the activation-nonce marker posts, and again in the new sibling
+ * worktree at B1) is always a safe, expected, idempotent overwrite of the
+ * same path. Internally, every write (and {@link backfillGeneratedClaimTokens}'s
+ * own read-then-write) is now serialized through
+ * {@link withGeneratedTokensWriteLock} (#2922) so a concurrent writer's
+ * nonce can never be silently lost -- that locking is this function's own
+ * implementation detail, not a contract callers need to coordinate with.
  *
+
  * Never replaces a directory occupying the resolved path (regression,
  * #2879 review): a matching `idd-claim.lock` authenticates the claim
  * lock, not the token record's own path, and this filename's hash
@@ -612,6 +1025,20 @@ export function readGeneratedClaimTokens(cwd, claimId) {
  */
 export function recordGeneratedClaimTokens(cwd, fields) {
   const path = resolveGeneratedTokensPath(cwd, fields.claimId);
+  withGeneratedTokensWriteLock(path, () => {
+    writeGeneratedClaimTokensRecord(path, fields);
+  });
+  return { path };
+}
+/**
+ * Unlocked write primitive shared by {@link recordGeneratedClaimTokens} and
+ * {@link backfillGeneratedClaimTokens} (#2922). Never call this directly
+ * from outside {@link withGeneratedTokensWriteLock}'s `critical` callback --
+ * it performs no locking of its own, by design, so both callers can share
+ * one lock acquisition around their own (possibly read-then-write) critical
+ * section without deadlocking against a non-re-entrant guard.
+ */
+function writeGeneratedClaimTokensRecord(path, fields) {
   const body = {
     agentId: fields.agentId,
     claimId: fields.claimId,
@@ -619,7 +1046,6 @@ export function recordGeneratedClaimTokens(cwd, fields) {
     recordedAt: new Date().toISOString(),
   };
   atomicReplaceFile(path, JSON.stringify(body));
-  return { path };
 }
 /**
  * Recovery route (#2884) for a worktree whose generated-tokens record
@@ -649,7 +1075,7 @@ export function recordGeneratedClaimTokens(cwd, fields) {
  *   documented gated sequence stops here with no further action needed.
  * - Present lock whose `claimId` matches, and no directory blocks the
  *   record path → writes the generated-tokens record via
- *   {@link recordGeneratedClaimTokens}, using the lock's own `agentId`
+ *   {@link writeGeneratedClaimTokensRecord}, using the lock's own `agentId`
  *   and no `nonce` (matching a fresh pre-nonce `--record-tokens` call) →
  *   `backfilled`. If a well-formed record for this exact `claimId`
  *   already exists (outside the documented recovery route, which only ever
@@ -657,15 +1083,19 @@ export function recordGeneratedClaimTokens(cwd, fields) {
  *   meaning no well-formed record exists yet -- so this is a defensive
  *   guard against a caller invoking this function directly against
  *   caller-discipline), its own `nonce` is preserved rather than silently
- *   erased: {@link recordGeneratedClaimTokens} replaces the whole record,
- *   so writing with no `nonce` unconditionally would otherwise drop an
- *   existing one (#2917 review, Copilot).
+ *   erased: {@link writeGeneratedClaimTokensRecord} replaces the whole
+ *   record, so writing with no `nonce` unconditionally would otherwise
+ *   drop an existing one (#2917 review, Copilot). The read that discovers
+ *   this existing nonce and the write that preserves it now share one
+ *   {@link withGeneratedTokensWriteLock} critical section (#2922), so a
+ *   concurrent writer's own fresher nonce can never land invisibly between
+ *   them.
  *
  * Performs no GitHub round-trip on any path, matching `--acquire`'s own
  * same-machine, no-network design. Re-invoking after a successful backfill
  * always reports `backfilled` again -- a safe, idempotent overwrite via
- * `recordGeneratedClaimTokens`'s own existing idempotency contract, not a
- * separate `already-present` status.
+ * `writeGeneratedClaimTokensRecord`'s own existing idempotency contract, not
+ * a separate `already-present` status.
  */
 export function backfillGeneratedClaimTokens(worktree, claimId) {
   const lockPath = resolveClaimLockPath(worktree);
@@ -680,29 +1110,51 @@ export function backfillGeneratedClaimTokens(worktree, claimId) {
   if (read.lock.claimId !== claimId) {
     return { status: 'lock-mismatch', lockPath, path, holder: read.lock };
   }
-  // A directory at the record's own path is never authorized to be
-  // replaced here -- see the function-level doc comment above and
-  // recordGeneratedClaimTokens's own doc comment.
-  try {
-    if (statSync(path).isDirectory()) {
-      return { status: 'record-blocked', lockPath, path };
+  // The directory check, the nonce-preserving read, and the write below all
+  // run inside one write-lock critical section (#2922): without it, a
+  // concurrent plain `recordGeneratedClaimTokens` write (e.g. the
+  // activation-nonce minting flow's own `--record-tokens --nonce` call)
+  // could land between the read and the write, and this function's own
+  // subsequent write -- built from the nonce it captured moments earlier --
+  // would silently clobber that fresher nonce. See
+  // {@link withGeneratedTokensWriteLock} for the full rationale; its
+  // `critical` callback here calls only the unlocked
+  // {@link writeGeneratedClaimTokensRecord} primitive, never the locked
+  // {@link recordGeneratedClaimTokens} wrapper, to avoid deadlocking against
+  // this same non-re-entrant guard.
+  return withGeneratedTokensWriteLock(path, () => {
+    // A directory at the record's own path is never authorized to be
+    // replaced here -- see the function-level doc comment above and
+    // recordGeneratedClaimTokens's own doc comment.
+    try {
+      if (statSync(path).isDirectory()) {
+        return { status: 'record-blocked', lockPath, path };
+      }
+    } catch {
+      // Absent, or an unreadable non-directory path: fall through and let
+      // writeGeneratedClaimTokensRecord's own atomic-write handle it the
+      // same way it always has.
     }
-  } catch {
-    // Absent, or an unreadable non-directory path: fall through and let
-    // recordGeneratedClaimTokens's own atomic-write handle it the same
-    // way it always has.
-  }
-  // Preserve an existing well-formed record's own nonce, if any -- see the
-  // function-level doc comment above.
-  const existing = readGeneratedClaimTokens(worktree, claimId);
-  const nonce =
-    existing.status === 'present' ? existing.record.nonce : undefined;
-  recordGeneratedClaimTokens(worktree, {
-    agentId: read.lock.agentId,
-    claimId,
-    ...(nonce === undefined ? {} : { nonce }),
+    // Preserve an existing well-formed record's own nonce, if any -- see
+    // the function-level doc comment above. Uses the already-resolved
+    // `path`, not the public cwd-based `readGeneratedClaimTokens` (#2922
+    // review, CodeRabbit): that would re-run `resolveGeneratedTokensPath`'s
+    // synchronous `git rev-parse` spawn from inside this critical section.
+    const existing = readGeneratedTokensAtPath(path, claimId);
+    const nonce =
+      existing.status === 'present' ? existing.record.nonce : undefined;
+    writeGeneratedClaimTokensRecord(path, {
+      agentId: read.lock.agentId,
+      claimId,
+      ...(nonce === undefined ? {} : { nonce }),
+    });
+    return {
+      status: 'backfilled',
+      lockPath,
+      path,
+      agentId: read.lock.agentId,
+    };
   });
-  return { status: 'backfilled', lockPath, path, agentId: read.lock.agentId };
 }
 function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, CLAIM_LOCK_FLAG_SPEC);
