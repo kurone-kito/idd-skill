@@ -2032,6 +2032,222 @@ test('listCheckRunWorkflowPaths skips null checkSuite/checkRun list items instea
   ]);
 });
 
+// kurone-kito/idd-skill#2926 (round 2 -- Copilot review, PR #2930): a check
+// suite legitimately produces AT MOST ONE check-run instance of a given
+// name; more than one is exactly what GitHub's own documented check-suite
+// pooling quirk produces when a forged check-run (its own unique
+// `detailsUrl`, so the duplicate-`detailsUrl` defense in
+// pre-merge-readiness.mts never fires) gets attached to an existing
+// GENUINE suite. Both instances must resolve to `null` (unresolved), never
+// to the suite's real path -- the defense this issue's round 2 adds.
+test('listCheckRunWorkflowPaths reports workflowPath null for EVERY check-run in a suite that has more than one matching check-run (same-suite ownership defense, round 2)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              object: {
+                checkSuites: {
+                  nodes: [
+                    {
+                      // Genuine check-run PLUS a forged one pooled into
+                      // the SAME suite -- two matching check-runs sharing
+                      // one suite.
+                      workflowRun: {
+                        file: {
+                          path: '.github/workflows/idd-advisory-convergence.yml',
+                        },
+                      },
+                      checkRuns: {
+                        nodes: [
+                          {
+                            detailsUrl:
+                              'https://github.com/o/r/actions/runs/1/job/1',
+                          },
+                          {
+                            detailsUrl:
+                              'https://github.com/o/r/actions/runs/2/job/1',
+                          },
+                        ],
+                      },
+                    },
+                    {
+                      // A separate, honest suite with exactly one match --
+                      // must still resolve normally, proving the defense
+                      // is scoped to the OFFENDING suite only.
+                      workflowRun: {
+                        file: { path: '.github/workflows/other.yml' },
+                      },
+                      checkRuns: {
+                        nodes: [
+                          {
+                            detailsUrl:
+                              'https://github.com/o/r/actions/runs/3/job/1',
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const result = port.listCheckRunWorkflowPaths(
+    'o',
+    'r',
+    'x'.repeat(40),
+    'idd-advisory-convergence',
+  );
+  assert.deepEqual(result, [
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+      workflowPath: null,
+    },
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
+      workflowPath: null,
+    },
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/3/job/1',
+      workflowPath: '.github/workflows/other.yml',
+    },
+  ]);
+});
+
+// kurone-kito/idd-skill#2926 (round 2 -- Copilot + Codex review, PR #2930):
+// the original `checkSuites(first:100)` was not paginated, so a commit
+// with more than 100 check suites silently lost coverage. This test forces
+// a two-page walk (page 1 reports `hasNextPage: true`) and asserts both
+// that the SECOND page's entry is included in the final result and that
+// the cursor from page 1 is threaded into page 2's own GraphQL variables.
+test('listCheckRunWorkflowPaths paginates the checkSuites connection to completion instead of silently truncating at the first page (round 2)', () => {
+  let callCount = 0;
+  const capturedArgsByCall: string[][] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgsByCall.push(args);
+        callCount += 1;
+        if (callCount === 1) {
+          return JSON.stringify({
+            data: {
+              repository: {
+                object: {
+                  checkSuites: {
+                    nodes: [
+                      {
+                        workflowRun: {
+                          file: { path: '.github/workflows/a.yml' },
+                        },
+                        checkRuns: {
+                          nodes: [
+                            {
+                              detailsUrl:
+                                'https://github.com/o/r/actions/runs/1/job/1',
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: true, endCursor: 'CURSOR_1' },
+                  },
+                },
+              },
+            },
+          });
+        }
+        return JSON.stringify({
+          data: {
+            repository: {
+              object: {
+                checkSuites: {
+                  nodes: [
+                    {
+                      workflowRun: {
+                        file: { path: '.github/workflows/b.yml' },
+                      },
+                      checkRuns: {
+                        nodes: [
+                          {
+                            detailsUrl:
+                              'https://github.com/o/r/actions/runs/2/job/1',
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  const result = port.listCheckRunWorkflowPaths(
+    'o',
+    'r',
+    'x'.repeat(40),
+    'idd-advisory-convergence',
+  );
+  assert.equal(callCount, 2);
+  assert.deepEqual(result, [
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+      workflowPath: '.github/workflows/a.yml',
+    },
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
+      workflowPath: '.github/workflows/b.yml',
+    },
+  ]);
+  assert.ok(
+    capturedArgsByCall[1]?.some((arg) => arg === 'after=CURSOR_1'),
+    `expected page 1's endCursor threaded into page 2's variables, got: ${capturedArgsByCall[1]?.join(' ')}`,
+  );
+});
+
+test('listCheckRunWorkflowPaths throws after exceeding the check-suite page budget rather than looping forever (round 2)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              object: {
+                checkSuites: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: true, endCursor: 'ALWAYS_NEXT' },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () =>
+      port.listCheckRunWorkflowPaths(
+        'o',
+        'r',
+        'x'.repeat(40),
+        'idd-advisory-convergence',
+      ),
+    /exceeded \d+ check-suite pages/,
+  );
+});
+
 test('listWorkflowRunArtifacts calls the artifacts sub-path and preserves a string runId above Number.MAX_SAFE_INTEGER exactly (kurone-kito/idd-skill#2912, round 2)', () => {
   let capturedArgs: string[] | undefined;
   const port = createGithubProviderAdapter(

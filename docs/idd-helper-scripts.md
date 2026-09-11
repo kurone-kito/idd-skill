@@ -2196,14 +2196,86 @@ close.
   `{claim-id}`, UTF-8-encoded -- not the sanitized or truncated form,
   so a fallback and the CLI (or two fallback implementations) agree on
   the same path for the same claim-id (#2879 review, Codex P2). Write
-  `{ agentId, claimId, nonce?, recordedAt }`. No
-  exclusive-create semantics needed (unlike the lock): a plain atomic
-  replace is correct since this is idempotent evidence, not a
-  mutual-exclusion primitive -- except a directory already occupying
-  this exact path, which this fallback never replaces or deletes
-  either, matching `recordGeneratedClaimTokens`'s own absolute
-  invariant in `src/scripts/claim-lock.mts` (PR #2879 regression test;
-  #2917 review, Copilot); stop fail-closed instead.
+  `{ agentId, claimId, nonce?, recordedAt }`. No exclusive-create
+  semantics needed for **this record file itself** (unlike the lock
+  file): a plain atomic replace is correct here since the record is
+  idempotent evidence, not a mutual-exclusion primitive -- except a
+  directory already occupying this exact path, which this fallback
+  never replaces or deletes either, matching
+  `recordGeneratedClaimTokens`'s own absolute invariant in
+  `src/scripts/claim-lock.mts` (PR #2879 regression test; #2917 review,
+  Copilot); stop fail-closed instead. **This is scoped to the record
+  file's own replace step only** -- it does not exempt the coordination
+  below: the separate `.writelock` guard the next bullet introduces
+  _does_ need an exclusive create, every time, even though the record
+  replace it wraps does not (#2922 review round 8, Copilot). Skipping
+  the guard because "no exclusive-create semantics needed" was read as
+  covering this whole write reopens the exact nonce-clobber race #2922
+  reported.
+- **`instructions-only` write-lock coordination** (#2922 -- applies to
+  this write side and to the backfill side below, which performs a
+  read-then-write of the same record): before writing, coordinate
+  against a concurrent writer for the same `{claim-id}` the way the
+  CLI's `recordGeneratedClaimTokens` and `backfillGeneratedClaimTokens`
+  do (`withGeneratedTokensWriteLock`, `src/scripts/claim-lock.mts`):
+  atomically create a same-directory `<resolved-path>.writelock` guard
+  file (exclusive create -- fails if it already exists), retrying
+  roughly every 5 ms for up to 5 seconds if it does, **writing a fresh,
+  unique per-attempt token as the guard's own body** (a random value,
+  or `pid:timestamp:random` -- any scheme unique per attempt is fine).
+  **Only once that create call itself has actually succeeded** -- never
+  before it, and never merely because this invocation _attempted_ one --
+  arm a cleanup handler (a shell `trap`, or the agent's own equivalent of
+  a `finally` block) that runs on **every exit path from this point
+  forward, success or failure alike**, then perform the write (or, for
+  the backfill side, the read that captures the existing `nonce` and the
+  write that follows it). Arming the handler any earlier (for example a
+  `trap` set up before the create attempt) is not ownership-safe: a
+  failed create -- whether from `EEXIST` or from exhausting the 5-second
+  wait budget below -- proves nothing was created by this invocation, so
+  a handler armed that early would remove a **different, possibly
+  concurrent, holder's own guard** instead, reopening the exact ABA race
+  #2922's CLI-side fix (`withGeneratedTokensWriteLock`'s own
+  `openSync`/`writeSync`/`closeSync` ownership tracking) exists to close
+  (#2922 review round 6, CodeRabbit). The cleanup handler itself must be
+  **token-verified, not unconditional** (#2922 review round 11,
+  Copilot): re-read the guard and remove it only if it still holds the
+  exact token this attempt wrote, mirroring the CLI's own
+  `releaseGeneratedTokensWriteLockIfOwned` (and, before it,
+  `releaseCloneLock` in `src/scripts/clone-lock.mts`) -- an operator can
+  legitimately remove a guard by hand per the fail-closed timeout
+  guidance below while this invocation's own write is still genuinely in
+  flight, and a new writer can recreate it before this invocation's
+  cleanup runs; an unconditional removal there would delete that new
+  writer's guard instead of its own, letting two writers proceed at
+  once. Treat a guard that is simply already gone (removed by hand, or
+  already released) the same as a token mismatch -- nothing left for
+  this cleanup to remove, not an error. This narrows rather than
+  eliminates the race (verifying the token and removing the guard are
+  still two separate steps, not one atomic operation), which is an
+  accepted limitation shared with the CLI's own implementation -- see
+  the doc comment on `withGeneratedTokensWriteLock` in
+  `src/scripts/claim-lock.mts` for the full rationale. An agent that
+  removes the guard solely after a successful write and skips cleanup
+  when that write itself fails leaves the same orphaned-guard problem
+  the CLI's own code was separately reviewed for (#2922 review round 4,
+  Copilot): every later writer for this exact `{claim-id}` then waits
+  the full 5 seconds and fails closed until an operator manually removes
+  it. Unlike the record file's own body, the guard file's content is
+  read back by this same cleanup handler to verify ownership before
+  removing it -- no other, contending reader ever needs to inspect it,
+  so no atomic-visibility trick is needed beyond the exclusive create
+  itself. If the 5-second wait budget is exhausted, stop fail-closed and
+  report the guard path for manual removal rather than writing anyway
+  (an earlier revision of the CLI's own lock self-reclaimed an aged
+  guard automatically; three independent reviewers found that unsafe --
+  see the doc comment on `withGeneratedTokensWriteLock` for why
+  fail-closed is the current answer) -- a pre-existing guard this
+  invocation did not itself create is never removed on any path, success
+  or failure. Skipping this coordination reopens the exact race #2922
+  reported for the CLI path: a concurrent writer's fresher `nonce` can be
+  silently lost, including between an `instructions-only` session and a
+  helper-runtime session sharing the same worktree.
 - **`instructions-only` helper-free fallback, read side** (#2879 review,
   Codex P1 -- the mandatory `--read-tokens` check in the Claim
   revalidation gate has no helper-free path without this): resolve the
@@ -2229,9 +2301,11 @@ close.
   helper's own `racedCreate: true` marks exactly this case (#2917
   review, Codex). Only when it parses as well-formed and its `claimId`
   field equals the active `{claim-id}` exactly, apply the write-side
-  fallback above using the lock's own `agentId`, carrying forward an
-  existing well-formed record's own `nonce` when present, otherwise no
-  `nonce` (#2917 review, Copilot) -- except when the record's own
+  fallback above -- write-lock coordination included, wrapped around
+  this whole read-then-write, not just the write -- using the lock's
+  own `agentId`, carrying forward an existing well-formed record's own
+  `nonce` when present, otherwise no `nonce` (#2917 review, Copilot) --
+  except when the record's own
   resolved path is already occupied by a directory: leave it and its
   contents untouched and stop fail-closed instead, mirroring the CLI's
   own `record-blocked` status (`backfillGeneratedClaimTokens`,
@@ -2894,11 +2968,11 @@ reflexively as any other CLI option.
   pass could not fully resolve their real workflow-file producer identity
   (`workflowPath`) -- a parse failure on some but not all live instances, a
   thrown `listCheckRunWorkflowPaths` call, an empty resolved path, a
-  run-id count exceeding the collector's own lookup ceiling, or (kurone-
-  kito/idd-skill#2926) a `detailsUrl` that repeats -- either among the
-  resolved `checkSuite.workflowRun` associations or among the live
-  rollup's own matching instances -- and so cannot be joined back to a
-  single instance safely. Today this can only ever name
+  run-id count exceeding the collector's own lookup ceiling, or a
+  `detailsUrl` that repeats -- either among the resolved
+  `checkSuite.workflowRun` associations or among the live rollup's own
+  matching instances -- and so cannot be joined back to a single instance
+  safely (kurone-kito/idd-skill#2926). Today this can only ever name
   `idd-advisory-convergence`, the one check name `pre-merge-readiness`
   attempts `workflowPath` resolution for. Evidence only (empty array, never
   omitted, when no such downgrade occurred) -- `computePreMergeReadinessBlockers`

@@ -114,6 +114,171 @@ function assertNoGraphqlErrors(payload, context) {
  * truncating the trust-relevant editor set the way the un-paginated
  * `last:100` query already did. */
 const USER_CONTENT_EDITS_MAX_PAGES = 10;
+/** Bounds the forward-pagination loop in
+ * {@link fetchCheckRunWorkflowPaths} (kurone-kito/idd-skill#2926, Copilot +
+ * Codex review, PR #2930): 20 pages of 100 check suites each (2,000 total)
+ * is far beyond any realistic commit's check-suite count -- fail closed
+ * (throw) past this rather than silently truncating the coverage the
+ * un-paginated `first:100` query originally claimed but did not enforce. */
+const CHECK_RUN_WORKFLOW_PATH_MAX_PAGES = 20;
+/**
+ * One page of {@link listCheckRunWorkflowPaths}'s check-suite connection,
+ * flattened into `{detailsUrl, workflowPath}` entries.
+ *
+ * kurone-kito/idd-skill#2926 (Copilot review, PR #2930): a check suite
+ * legitimately produces AT MOST ONE check-run instance of a given name --
+ * the documented multi-instance `idd-advisory-convergence` scenario always
+ * arises from TWO SEPARATE workflow runs (two separate check suites), never
+ * two check-runs sharing ONE suite. More than one same-named check-run in a
+ * single suite is exactly what GitHub's own documented check-suite pooling
+ * quirk produces when a forged check-run -- its own unique `detailsUrl`, so
+ * the caller's duplicate-`detailsUrl` defense never fires on it -- gets
+ * attached to an existing GENUINE suite instead of its own creating job's
+ * suite: the collector would otherwise hand that suite's real
+ * `workflowPath` to the forged instance too, reopening the exact
+ * `groupChecksByProducer` dedup this issue exists to close. So a suite
+ * with more than one matching check-run reports `workflowPath: null` for
+ * ALL of them -- unresolved, never silently trusted -- rather than reports
+ * the suite's real path for any of them.
+ */
+function checkRunWorkflowPathsFromSuiteNodes(suiteNodes) {
+  const out = [];
+  if (!Array.isArray(suiteNodes)) {
+    return out;
+  }
+  for (const suite of suiteNodes) {
+    // GraphQL can return a `null` list item for a nullable type under a
+    // partial-error response -- guarded explicitly (matching this file's
+    // `Array.isArray` convention) rather than relying on the sole caller's
+    // try/catch to turn a thrown TypeError into the same fail-closed
+    // outcome a skip already produces here.
+    if (!suite) continue;
+    const path = suite.workflowRun?.file?.path;
+    const workflowPath = path == null ? null : String(path);
+    const checkRunNodes = suite.checkRuns?.nodes;
+    if (!Array.isArray(checkRunNodes)) continue;
+    const liveCheckRuns = checkRunNodes.filter((checkRun) => !!checkRun);
+    const suiteWorkflowPath = liveCheckRuns.length > 1 ? null : workflowPath;
+    for (const checkRun of liveCheckRuns) {
+      out.push({
+        detailsUrl: String(checkRun.detailsUrl ?? ''),
+        workflowPath: suiteWorkflowPath,
+      });
+    }
+  }
+  return out;
+}
+/** One page of {@link listCheckRunWorkflowPaths}'s underlying GraphQL
+ * connection -- kept a separate function so the loop in
+ * {@link fetchCheckRunWorkflowPaths} reads the same way
+ * {@link fetchWorkItemUserContentEditsPage} / its own caller do above. */
+function fetchCheckRunWorkflowPathsPage(
+  deps,
+  pathsOwner,
+  pathsRepo,
+  headSha,
+  checkName,
+  after,
+) {
+  // The per-suite `checkRuns(first:50, ...)` page is deliberately NOT
+  // itself paginated: a suite with more than one matching check-run is
+  // ALREADY reported fully unresolved by
+  // {@link checkRunWorkflowPathsFromSuiteNodes} regardless of the EXACT
+  // count beyond one, so a truncated inner page can never turn an
+  // unresolved suite into a falsely-trusted one -- only the OUTER
+  // check-suite connection (whose total count can legitimately be large,
+  // e.g. one suite per Actions workflow file times reruns) needs a real
+  // pagination loop.
+  const query = `query($owner:String!,$repo:String!,$sha:GitObjectID!,$name:String!,$after:String){
+  repository(owner:$owner,name:$repo){
+    object(oid:$sha){
+      ... on Commit {
+        checkSuites(first:100, after:$after){
+          nodes{
+            workflowRun{ file{ path } }
+            checkRuns(first:50, filterBy:{checkName:$name}){
+              nodes{ detailsUrl }
+            }
+          }
+          pageInfo{ hasNextPage endCursor }
+        }
+      }
+    }
+  }
+}`;
+  const apiArgs = [
+    'api',
+    'graphql',
+    ...graphqlHostnameArgs(),
+    '-f',
+    `query=${query}`,
+    '-f',
+    `owner=${pathsOwner}`,
+    '-f',
+    `repo=${pathsRepo}`,
+    '-f',
+    `sha=${headSha}`,
+    '-f',
+    `name=${checkName}`,
+  ];
+  if (after) {
+    apiArgs.push('-f', `after=${after}`);
+  }
+  const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+  assertNoGraphqlErrors(raw, 'listCheckRunWorkflowPaths');
+  const parsed = raw;
+  const connection = parsed.data?.repository?.object?.checkSuites;
+  return {
+    entries: checkRunWorkflowPathsFromSuiteNodes(connection?.nodes),
+    hasNextPage: connection?.pageInfo?.hasNextPage ?? false,
+    endCursor: connection?.pageInfo?.endCursor ?? null,
+  };
+}
+/**
+ * Full-walk pagination for {@link ProviderPort.listCheckRunWorkflowPaths}
+ * (kurone-kito/idd-skill#2926, round 2 -- Copilot + Codex review, PR
+ * #2930): the original `checkSuites(first:100)` alone was not accompanied
+ * by pagination, so a commit with more than 100 check suites silently lost
+ * coverage the port method's own contract claims to provide, which could
+ * downgrade an otherwise-passing required check to identity-unresolved.
+ * Mirrors {@link fetchWorkItemUserContentEdits}'s own bounded full-walk
+ * loop shape and failure modes (throw past
+ * {@link CHECK_RUN_WORKFLOW_PATH_MAX_PAGES}; throw on `hasNextPage` without
+ * an `endCursor`) rather than introducing a new pagination idiom.
+ */
+function fetchCheckRunWorkflowPaths(
+  deps,
+  pathsOwner,
+  pathsRepo,
+  headSha,
+  checkName,
+) {
+  const out = [];
+  let after = null;
+  for (let page = 0; page < CHECK_RUN_WORKFLOW_PATH_MAX_PAGES; page += 1) {
+    const result = fetchCheckRunWorkflowPathsPage(
+      deps,
+      pathsOwner,
+      pathsRepo,
+      headSha,
+      checkName,
+      after,
+    );
+    out.push(...result.entries);
+    if (!result.hasNextPage) {
+      return out;
+    }
+    if (!result.endCursor) {
+      throw new Error(
+        'listCheckRunWorkflowPaths: page reported hasNextPage without endCursor',
+      );
+    }
+    after = result.endCursor;
+  }
+  throw new Error(
+    `listCheckRunWorkflowPaths: exceeded ${CHECK_RUN_WORKFLOW_PATH_MAX_PAGES} check-suite pages`,
+  );
+}
 function fetchWorkItemUserContentEditsPage(deps, owner, repo, number, before) {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$before:String){
   repository(owner:$owner,name:$repo){
@@ -1899,84 +2064,20 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       );
       return JSON.parse(raw.trim() || '{}');
     },
-    // kurone-kito/idd-skill#2926: a single, bounded (not paginated -- see
-    // the `first:100`/`first:50` rationale below) GraphQL query, matching
-    // this file's other single-shot `gh api graphql` call sites (e.g.
-    // `getMergedChangeRequestMeta` above) rather than the two dedicated
-    // paginated-loop methods further up this file. `checkSuites(first:100)`
-    // is generous against the sole caller's OWN pre-filter
-    // (`pre-merge-readiness.mts`'s `MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS`
-    // caps distinct cited run ids at 50 before this method is ever called,
-    // and each distinct run id lives in its own suite). The per-suite
-    // `checkRuns(first:50, ...)` cap matches that SAME 50 budget instead of
-    // an arbitrary smaller number, so a legitimate burst of same-named
-    // reruns within one suite (this repository's own
-    // `idd-advisory-convergence.yml` "Concurrency-hardening investigation"
-    // comments document up to 5 live runs in quick succession as an
-    // observed incident, #1381) is exactly as unlikely to silently
-    // truncate here as it already is at the caller's own gate. A truncated
-    // result still only ever fails the whole check name CLOSED at the
-    // caller (a missing `detailsUrl` match), never open.
+    // kurone-kito/idd-skill#2926 (round 2 -- Copilot + Codex review, PR
+    // #2930): delegates to the module-level {@link fetchCheckRunWorkflowPaths}
+    // (full-walk pagination + same-suite ownership defense), matching the
+    // `fetchWorkItemUserContentEdits`-style split this file already uses
+    // for its other bounded-pagination method above rather than inlining
+    // the loop into the returned adapter object.
     listCheckRunWorkflowPaths(pathsOwner, pathsRepo, headSha, checkName) {
-      const query = `query($owner:String!,$repo:String!,$sha:GitObjectID!,$name:String!){
-  repository(owner:$owner,name:$repo){
-    object(oid:$sha){
-      ... on Commit {
-        checkSuites(first:100){
-          nodes{
-            workflowRun{ file{ path } }
-            checkRuns(first:50, filterBy:{checkName:$name}){
-              nodes{ detailsUrl }
-            }
-          }
-        }
-      }
-    }
-  }
-}`;
-      const apiArgs = [
-        'api',
-        'graphql',
-        ...graphqlHostnameArgs(),
-        '-f',
-        `query=${query}`,
-        '-f',
-        `owner=${pathsOwner}`,
-        '-f',
-        `repo=${pathsRepo}`,
-        '-f',
-        `sha=${headSha}`,
-        '-f',
-        `name=${checkName}`,
-      ];
-      const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
-      assertNoGraphqlErrors(raw, 'listCheckRunWorkflowPaths');
-      const parsed = raw;
-      const suiteNodes = parsed.data?.repository?.object?.checkSuites?.nodes;
-      if (!Array.isArray(suiteNodes)) {
-        return [];
-      }
-      const out = [];
-      for (const suite of suiteNodes) {
-        // GraphQL can return a `null` list item for a nullable type under a
-        // partial-error response -- guarded explicitly (matching this
-        // file's `Array.isArray` convention above) rather than relying on
-        // the sole caller's try/catch to turn a thrown TypeError into the
-        // same fail-closed outcome a skip already produces here.
-        if (!suite) continue;
-        const path = suite.workflowRun?.file?.path;
-        const workflowPath = path == null ? null : String(path);
-        const checkRunNodes = suite.checkRuns?.nodes;
-        if (!Array.isArray(checkRunNodes)) continue;
-        for (const checkRun of checkRunNodes) {
-          if (!checkRun) continue;
-          out.push({
-            detailsUrl: String(checkRun.detailsUrl ?? ''),
-            workflowPath,
-          });
-        }
-      }
-      return out;
+      return fetchCheckRunWorkflowPaths(
+        deps,
+        pathsOwner,
+        pathsRepo,
+        headSha,
+        checkName,
+      );
     },
     getWorkflowRunJobs(jobsOwner, jobsRepo, runId) {
       // Not `--paginate`: bounded to a handful of jobs per run (this
