@@ -68,6 +68,18 @@ export const DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES = 0;
 // consumers silently drifting on the registered selector string.
 export const DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR =
   'idd-advisory-convergence';
+// kurone-kito/idd-skill#2657: the dedicated reason token and fixed validity
+// window for the CI-workflow-posted, run-bound `idd-advisory-convergence`
+// waiver. Shared here (rather than declared in either consumer directly)
+// because both `external-check-waiver.mts` (the posting-side `--auto-
+// bootstrap` CLI mode) and `advisory-convergence.mts` (the consuming
+// `autoWaiverValid` check) need the identical value, and
+// `advisory-convergence.mts` already imports FROM `external-check-waiver.mts`
+// (`resolveCollaboratorAuthority`/`normalizeAuthorityEvidence`) -- declaring
+// either constant in either file directly would form an import cycle.
+export const SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON =
+  'self-referential-bootstrap-auto';
+export const SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY = 'PT24H';
 export const ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT = 'phase-specific';
 export const ADVISORY_CAP_EXHAUSTED_ROUTES = new Set([
   'phase-specific',

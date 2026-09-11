@@ -318,6 +318,9 @@ export function createFakeProviderAdapter(fixture) {
     listChangeRequestChangedFiles(number) {
       return fixture.changedFiles?.[number] ?? [];
     },
+    listChangeRequestRenamedFromPaths(number) {
+      return fixture.renamedFromPaths?.[number] ?? [];
+    },
     listChangeRequestCommits(number) {
       return fixture.changeRequestCommits?.[number] ?? [];
     },

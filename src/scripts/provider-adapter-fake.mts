@@ -178,6 +178,8 @@ export interface FakeProviderFixture {
   requestedReviewerLoginsGraphql?: Record<number, string[]>;
   /** Backs {@link ProviderPort.listChangeRequestChangedFiles}. */
   changedFiles?: Record<number, string[]>;
+  /** Backs {@link ProviderPort.listChangeRequestRenamedFromPaths}. */
+  renamedFromPaths?: Record<number, string[]>;
   /** Backs {@link ProviderPort.listChangeRequestCommits}. */
   changeRequestCommits?: Record<number, unknown[]>;
   /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithComments}. */
@@ -678,6 +680,10 @@ export function createFakeProviderAdapter(
 
     listChangeRequestChangedFiles(number: number): string[] {
       return fixture.changedFiles?.[number] ?? [];
+    },
+
+    listChangeRequestRenamedFromPaths(number: number): string[] {
+      return fixture.renamedFromPaths?.[number] ?? [];
     },
 
     listChangeRequestCommits(number: number): unknown[] {

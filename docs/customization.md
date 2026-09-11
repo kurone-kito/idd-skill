@@ -518,6 +518,21 @@ only in that dogfooded original; the portable stub this template ships
 as your `.github/workflows/idd-advisory-convergence.yml` is
 intentionally shorter and does not carry it.
 
+**Self-referential-bootstrap-auto waiver co-requisite**
+(kurone-kito/idd-skill#2657): if you host this workflow, its bundled
+`idd-advisory-convergence-self-waiver` job auto-posts a scoped,
+run-bound waiver whenever a PR's own diff touches this check's own
+committed trigger-file allowlist -- but only once the same
+`ciGate.externalCheckWaivers.mode: "maintainer-authorized"` +
+`idd-advisory-convergence` under `ciGate.externalChecks.waivable`
+prerequisite documented above is ALSO configured. This template's own
+shipped `.github/idd/config.json` omits `ciGate` entirely, so out of
+the box that job exits successfully but posts nothing (a `::notice::`
+explains why) on every allowlisted-touching PR, rather than failing --
+configuring the same policy surface already shown above for the
+ordinary maintainer waiver enables both waiver kinds together, not one
+independently of the other.
+
 Repositories that expect a sustained provider outage (advisory review or
 Actions unavailable for hours, not minutes) may additionally record
 `providerOutage.declarationTarget` and `providerOutage.maxValidity` in

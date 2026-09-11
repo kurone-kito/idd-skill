@@ -12,6 +12,7 @@ import { test } from 'node:test';
 
 import {
   ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN,
+  ADVISORY_CONVERGENCE_WORKFLOW_PATH,
   type AdvisoryConvergenceDeps,
   type AdvisoryConvergenceInputs,
   type AdvisoryConvergenceOptions,
@@ -28,11 +29,14 @@ import {
   pickResolvingClaimEvents,
   readCopilotReviewPollPolicy,
   resolveClaimEvidence,
+  resolveSelfReferentialTriggerFiles,
   retryTransientGhFailure,
   reviewPolicyNotApplicableReason,
   runAdvisoryConvergence,
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
   viewerProbeGhOptions,
   writeAdvisoryConvergenceCliOutput,
 } from '../src/scripts/advisory-convergence.mts';
@@ -3151,6 +3155,936 @@ test('late Copilot review recovery: a fresh clean review landing on HEAD clears 
   assert.equal(verdict.converged, true);
   assert.equal(verdict.waived, false); // never needed -- the ordinary path resolved it
   assert.equal(verdict.ready, true);
+});
+
+// --- 10b. self-referential-bootstrap-auto waiver (kurone-kito/idd-skill#2657)
+
+const BOT_LOGIN = 'github-actions[bot]';
+const RUN_ID = '4242424242';
+const REPO_FULL_NAME = 'kurone-kito/idd-skill';
+
+function autoWaiverBody(
+  overrides: {
+    reason?: string;
+    runId?: string | null;
+    headSha?: string;
+    claimId?: string;
+  } = {},
+): string {
+  return renderExternalCheckWaiverComment({
+    agentId: 'github-actions-bot',
+    claimId: overrides.claimId ?? CLAIM_ID,
+    headSha: overrides.headSha ?? HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: overrides.reason ?? SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: BOT_LOGIN,
+    runId: overrides.runId === null ? undefined : (overrides.runId ?? RUN_ID),
+  });
+}
+
+function acceptedRunLookup() {
+  return {
+    path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    headSha: HEAD,
+    repositoryFullName: REPO_FULL_NAME,
+    event: 'pull_request_target',
+  };
+}
+
+test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true immediately, before deadlinePassed/terminalUnavailable (regression for the 2026-09-10 self-cancellation shape)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // still pending -- Copilot never reviewed
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT, // deadline has NOT passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.deadline.passed, false);
+  assert.equal(verdict.terminal.state, 'NOT_TERMINAL');
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: an indeterminate idd-claimed scope (stale claim history, no currently active claim) rejects an otherwise fully valid none-bound marker (Copilot review, PR #2895, round 10)', () => {
+  // Mirrors "idd-claimed scope: a stale trusted claim... yields a failing
+  // outcome, not not_applicable (#1686 path 4)": applicability resolves
+  // `indeterminate` (`claimMarkerHistoryPresent: true`, no active claim),
+  // deliberately NOT `not_applicable` -- the ordinary convergence path
+  // stays blocked pending human review. The consumer's own active claim
+  // is empty here too, so a none-bound marker would otherwise satisfy
+  // `claimBindingSatisfied` and validate through the unconditional
+  // auto-waiver branch with no human judgment involved at all, exactly
+  // the gap `!scopeBlocksConvergenceEval` (not `!scopeNotApplicable`
+  // alone) closes.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [],
+      claimMarkerHistoryPresent: true,
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ claimId: 'none' }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'indeterminate',
+    reason: 'idd-claimed-claim-history-without-active-claim',
+  });
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: ambiguous closing-issue claim candidates reject an otherwise fully valid none-bound marker under the default all-prs scope (Codex review, PR #2895, round 16)', () => {
+  // The round 10 test above closes this same "none-bound marker
+  // validates with no human judgment involved" gap, but only for
+  // `convergenceScope: 'idd-claimed'` -- `scopeIndeterminate` (which
+  // that fix gates on) is never non-trivially true under `all-prs`
+  // scope, this repository's own configured default, so it provided
+  // NO protection there. `claimCandidateAmbiguous` is a SEPARATE
+  // signal from the PR's own claim history (which is empty/unclaimed
+  // here, same as any ordinary non-IDD-claimed PR under `all-prs`
+  // scope) -- it reflects the PR's CLOSING ISSUES each exposing their
+  // own active claim, exactly the shape `selectLinkedIssueCandidate`
+  // (external-check-waiver.mts) refuses to auto-post ANY marker for.
+  // Without gating on it directly here too, a forged `claim-id:none`
+  // marker (citing a legitimate, concurrently running
+  // `pull_request_target` run -- the run-id check proves only the
+  // cited run's own metadata, not that it posted this comment) could
+  // validate on exactly the PR the posting helper itself would refuse.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      // No review at all -- isolates `ready` to the waiver path alone,
+      // same as the OTHER `all-prs`-scope autoWaiverValid tests in this
+      // file (unlike the round 10 `idd-claimed` test above, where
+      // `scopeIndeterminate` halts convergence regardless of review
+      // state through a different mechanism).
+      reviews: [],
+      claimEvents: [], // this PR's own branch is unclaimed -- the normal, common `all-prs` shape
+      claimCandidateAmbiguous: true, // its closing issues expose multiple active claims
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ claimId: 'none' }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      // Deliberately NOT 'idd-claimed' -- defaults to 'all-prs'.
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a PR that does not touch the trigger-file allowlist is rejected even with an otherwise fully valid marker and run (independent allowlist verification, Codex review, PR #2895)', () => {
+  // The four trust conditions on the cited run alone only prove the marker
+  // cites SOME genuine `pull_request_target`-triggered run of the correct
+  // workflow file/head/repo -- they do not prove THIS PR's own changed
+  // files actually matched the allowlist that run's own job re-derives.
+  // Every other field here is identical to the fully-accepted case above;
+  // only `changedFilePaths` differs, isolating this as the one condition
+  // under test.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: ['docs/README.md'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a pull_request-triggered run is rejected the same way an untrusted actor is (event-type condition)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: { ...acceptedRunLookup(), event: 'pull_request' },
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run whose own workflow path does not match is rejected', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          path: '.github/workflows/lint.yml',
+        },
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run bound to a different head SHA is rejected', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: { ...acceptedRunLookup(), headSha: OTHER_SHA },
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run hosted by a different repository is rejected', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: 'someone-else/fork',
+        },
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run reported with different repository-name casing is still accepted (Copilot review, PR #2895)', () => {
+  // GitHub repository owner/name identities are case-insensitive; the
+  // Actions runs API can report `head_repository.full_name` in a
+  // different case than this invocation's own resolved
+  // repositoryFullName without that meaning a different repository.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: 'Kurone-Kito/IDD-Skill',
+        },
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: an unresolved repositoryFullName never trusts a run with no repository either (Copilot review, PR #2895)', () => {
+  // `String(undefined ?? '') === ''` would otherwise make an ABSENT
+  // expected repository equal an absent run.repositoryFullName too (e.g.
+  // the Actions API reporting a null head_repository, or this invocation's
+  // own owner/repo resolution failing upstream) -- fail closed instead of
+  // treating "neither side knows" as a match.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: '',
+        },
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: '',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a marker missing run-id: never resolves to any lookup, so it is rejected', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ runId: null }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run-id lookup error (unresolvable run) fails closed', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: { error: 'HTTP 404' } },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a different reason token never counts as this waiver kind', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ reason: 'some-other-automated-reason' }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a human-authored marker with the same reason token never counts (author must be github-actions[bot])', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: waiverMode disabled means no automated waiver either, matching the manual flow', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'disabled',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: an ordinary person-authored waiver keeps its existing deadline-gated behavior unchanged (non-regression)', () => {
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: AGENT_ID,
+    claimId: CLAIM_ID,
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'ordinary maintainer waiver, unaffected by #2657',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const beforeDeadline = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT, // deadline has NOT passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  // Unlike the auto-waiver kind, an ordinary waiver's evidence is not even
+  // evaluated before its precondition opens -- `waived` stays `false` here
+  // by construction, not merely `unused`.
+  assert.equal(beforeDeadline.waived, false);
+  assert.equal(beforeDeadline.ready, false);
+
+  const afterDeadline = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD, // deadline has passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(afterDeadline.ready, true);
+});
+
+test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a real bindable claim still validates immediately (#1686 path 3 symmetry)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-different', // branch mismatch -> indeterminate
+      headCommittedAt: RECENT, // deadline has NOT passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.applicability.status, 'indeterminate');
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: an indeterminate PR with no bindable claim (path 2/4) still cannot be waived, same as the ordinary waiver', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [],
+      claimCandidateAmbiguous: true, // #1686 path 2 -- no activeClaimId to bind to
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody({ claimId: CLAIM_ID }),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.applicability.status, 'indeterminate');
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver makes ready true, even past the deadline (Copilot review, PR #2895)', () => {
+  // Before this fix, the pre-existing deadline/terminal reason-push
+  // guards only excluded `waived` -- a ready verdict reached solely
+  // through `autoWaiverValid` (which is never gated behind
+  // deadlinePassed/terminalUnavailable) could carry a stale "deadline
+  // passed with no valid waiver" reason directly alongside `ready:
+  // true`, contradicting the very first `converged` test's
+  // `assert.deepEqual(verdict.reasons, [])` invariant and the
+  // `nextActions` doc comment's "empty exactly when ready is true"
+  // contract.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // still pending -- would otherwise push a reason
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: OLD, // deadline HAS passed -- would otherwise push a reason
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+  assert.deepEqual(verdict.nextActions, []);
+});
+
+test('ADVISORY_CONVERGENCE_WORKFLOW_PATH stays a member of SELF_REFERENTIAL_WAIVER_TRIGGER_FILES (Copilot review, PR #2895)', () => {
+  // Declared as independent literals (not index-derived) so a future
+  // reorder of the allowlist can never silently repoint the workflow-path
+  // trust condition -- this pins the two values can never drift apart
+  // despite that independence.
+  assert.ok(
+    (SELF_REFERENTIAL_WAIVER_TRIGGER_FILES as readonly string[]).includes(
+      ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    ),
+  );
+});
+
+test('SELF_REFERENTIAL_WAIVER_TRIGGER_FILES includes the waiver parser/summarizer dependencies (Codex review, PR #2895, round 7)', () => {
+  // advisory-convergence.mts directly imports the marker parser/renderer
+  // from marker-helpers.mts and the waiver summarizer from
+  // protocol-helpers.mts -- a checker repair isolated to either file
+  // (exactly what this PR's own earlier commits did to implement
+  // run-id:) must still be able to trigger this bypass, or it recreates
+  // the deadlock this mechanism exists to solve.
+  for (const path of [
+    'src/scripts/marker-helpers.mts',
+    'src/scripts/protocol-helpers.mts',
+    'src/scripts/provider-adapter-github.mts',
+  ]) {
+    assert.ok(
+      (SELF_REFERENTIAL_WAIVER_TRIGGER_FILES as readonly string[]).includes(
+        path,
+      ),
+      `expected ${path} to be a member of SELF_REFERENTIAL_WAIVER_TRIGGER_FILES`,
+    );
+  }
+});
+
+test('SELF_REFERENTIAL_WAIVER_TRIGGER_FILES includes the runtime config (Codex review, PR #2895, round 10)', () => {
+  // This repository's own ciGate/advisoryWait policy inputs live in
+  // .github/idd/config.json too, same as every other repository's own
+  // profile-derived set (resolveSelfReferentialTriggerFiles's own base
+  // set) -- a PR repairing this repository's own policy configuration
+  // must still be able to trigger this bypass.
+  assert.ok(
+    (SELF_REFERENTIAL_WAIVER_TRIGGER_FILES as readonly string[]).includes(
+      '.github/idd/config.json',
+    ),
+  );
+});
+
+test('resolveSelfReferentialTriggerFiles: this source repository always resolves its own fixed list, regardless of profile (Codex + Copilot review, PR #2895)', () => {
+  for (const profile of [undefined, 'vendored-node', 'package-manager']) {
+    assert.deepEqual(
+      resolveSelfReferentialTriggerFiles(profile, REPO_FULL_NAME),
+      SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
+    );
+    // Case-insensitive, matching every other repository-identity
+    // comparison in this codebase.
+    assert.deepEqual(
+      resolveSelfReferentialTriggerFiles(profile, 'Kurone-Kito/IDD-Skill'),
+      SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
+    );
+  }
+});
+
+test('resolveSelfReferentialTriggerFiles: a vendored-node adopter resolves the compiled .mjs paths it actually vends', () => {
+  const resolved = resolveSelfReferentialTriggerFiles(
+    'vendored-node',
+    'someone-else/adopter-repo',
+  );
+  assert.deepEqual(resolved, [
+    'scripts/advisory-convergence.mjs',
+    'scripts/advisory-wait-state.mjs',
+    'scripts/advisory-wait-policy.mjs',
+    'scripts/rerun-advisory-convergence.mjs',
+    'scripts/external-check-waiver.mjs',
+    'scripts/marker-helpers.mjs',
+    'scripts/protocol-helpers.mjs',
+    'scripts/provider-adapter-github.mjs',
+    '.github/idd/config.json',
+    ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    '.github/workflows/idd-advisory-convergence-comment.yml',
+  ]);
+  // Never this source repository's own .mts sources, which that profile
+  // never vends.
+  for (const mtsPath of SELF_REFERENTIAL_WAIVER_TRIGGER_FILES) {
+    if (mtsPath.endsWith('.mts')) {
+      assert.ok(!resolved.includes(mtsPath));
+    }
+  }
+});
+
+test('resolveSelfReferentialTriggerFiles: a package-manager adopter resolves its dependency manifest and lockfiles', () => {
+  const resolved = resolveSelfReferentialTriggerFiles(
+    'package-manager',
+    'someone-else/adopter-repo',
+  );
+  assert.deepEqual(resolved, [
+    'package.json',
+    'package-lock.json',
+    'pnpm-lock.yaml',
+    'yarn.lock',
+    '.github/idd/config.json',
+    ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    '.github/workflows/idd-advisory-convergence-comment.yml',
+  ]);
+});
+
+test('resolveSelfReferentialTriggerFiles: every profile includes the runtime config, not only ephemeral-npx (Codex review, PR #2895, round 8)', () => {
+  // Both the posting job and the verdict job check out the trusted
+  // default branch, never the PR head, so a PR that fixes a broken
+  // checker by migrating helperRuntime.profile itself (e.g.
+  // package-manager to ephemeral-npx, to work around a broken
+  // lockfile/manager detection) resolves the OLD, still-broken profile
+  // on both sides -- scoping the config file to only the profile a PR
+  // happens to migrate TO would leave every other profile's own
+  // migration-via-config-only fix unable to trigger this bypass.
+  for (const profile of ['vendored-node', 'package-manager']) {
+    assert.ok(
+      resolveSelfReferentialTriggerFiles(
+        profile,
+        'someone-else/adopter-repo',
+      ).includes('.github/idd/config.json'),
+    );
+  }
+});
+
+test('resolveSelfReferentialTriggerFiles: an unrecognized or absent profile resolves only the profile-invariant paths', () => {
+  for (const profile of [undefined, 'instructions-only']) {
+    assert.deepEqual(
+      resolveSelfReferentialTriggerFiles(profile, 'someone-else/adopter-repo'),
+      [
+        '.github/idd/config.json',
+        ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+        '.github/workflows/idd-advisory-convergence-comment.yml',
+      ],
+    );
+  }
+});
+
+test('resolveSelfReferentialTriggerFiles: an ephemeral-npx adopter resolves its config-pinned package spec too (Codex review, PR #2895, round 6)', () => {
+  // That profile selects its checker version via
+  // helperRuntime.packageSpec in .github/idd/config.json, not a vendored
+  // file or dependency manifest -- a PR repointing that pin at a fixed
+  // checker without also touching a workflow file must still match.
+  assert.deepEqual(
+    resolveSelfReferentialTriggerFiles(
+      'ephemeral-npx',
+      'someone-else/adopter-repo',
+    ),
+    [
+      '.github/idd/config.json',
+      ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+      '.github/workflows/idd-advisory-convergence-comment.yml',
+    ],
+  );
+});
+
+test('self-referential-bootstrap-auto: a vendored-node adopter touching its own compiled .mjs checker is accepted (Codex + Copilot review, PR #2895)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: 'someone-else/adopter-repo',
+        },
+      },
+      changedFilePaths: ['scripts/advisory-convergence.mjs'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: 'someone-else/adopter-repo',
+      helperRuntimeProfile: 'vendored-node',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: a package-manager adopter touching package.json is accepted (Codex + Copilot review, PR #2895)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: 'someone-else/adopter-repo',
+        },
+      },
+      changedFilePaths: ['package.json'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: 'someone-else/adopter-repo',
+      helperRuntimeProfile: 'package-manager',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test("self-referential-bootstrap-auto: a non-origin repository touching this source repository's own .mts path is rejected (no cross-profile union, Codex + Copilot review, PR #2895)", () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          // Matches the run/repository the four trust conditions check --
+          // isolating the allowlist check as the ONLY reason this is
+          // rejected, not a coincidental repository mismatch too.
+          repositoryFullName: 'someone-else/adopter-repo',
+        },
+      },
+      // Only this source repository's own .mts path -- never a member of
+      // a vendored-node adopter's profile-derived list.
+      changedFilePaths: ['src/scripts/advisory-convergence.mts'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: 'someone-else/adopter-repo',
+      helperRuntimeProfile: 'vendored-node',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: this source repository ignores its own configured package-manager profile and keeps its fixed .mts list (Codex + Copilot review, PR #2895)', () => {
+  // This source repository's own `.github/idd/config.json` declares
+  // `helperRuntime.profile: "package-manager"` for its IDD dependency,
+  // but its OWN required check's trigger files are its `.mts` sources
+  // regardless -- a package.json touch must never satisfy it.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      changedFilePaths: ['package.json'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+      helperRuntimeProfile: 'package-manager',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
 });
 
 // --- #1570 AC6: no code path this issue adds ever invokes `gh pr merge

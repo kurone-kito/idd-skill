@@ -165,8 +165,19 @@ const OPERATIONAL_MARKER_ENTRIES = [
   },
   {
     label: '<!-- idd-external-check-waiver:',
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): the trailing
+    // `run-id:` field is optional -- only `--auto-bootstrap` posts it --
+    // and must be accepted here the same way
+    // `parseExternalCheckWaiverComment`'s own regex already does.
+    // Without this, every auto-bootstrap marker fails this shape check,
+    // `operationalMarkerPrefix` returns null for it, and
+    // `summarizeRegularCommentsForGate`/`summarizeDispositionEvidenceForGate`
+    // misclassify the bot's own posted marker as unreplied regular
+    // feedback requiring human disposition -- a comment no one will ever
+    // reply to, permanently routing F2 back to E1 even after the waiver
+    // makes the required check ready.
     pattern:
-      /^<!--\s*idd-external-check-waiver:\s+\S+\s+\S+\s+[0-9a-f]{40}\s+check:\S+\s+reason:\S+\s+expires:\S+\s*-->[\s\S]*$/i,
+      /^<!--\s*idd-external-check-waiver:\s+\S+\s+\S+\s+[0-9a-f]{40}\s+check:\S+\s+reason:\S+\s+expires:\S+(?:\s+run-id:\S+)?\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*idd-external-check-waiver:/i,
   },
   {
@@ -815,6 +826,7 @@ export function renderExternalCheckWaiverComment(payload) {
   const expiresAt = normalizeIsoTimestamp(
     payload?.expiresAt ?? payload?.expires,
   );
+  const runId = normalizeNonWhitespaceToken(payload?.runId);
   if (
     !agentId ||
     !claimId ||
@@ -827,8 +839,9 @@ export function renderExternalCheckWaiverComment(payload) {
   }
   const encodedCheck = encodeExternalCheckWaiverField(checkSelector);
   const encodedReason = encodeExternalCheckWaiverField(reason);
+  const runIdSuffix = runId ? ` run-id:${runId}` : '';
   return [
-    `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${encodedCheck} reason:${encodedReason} expires:${expiresAt} -->`,
+    `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${encodedCheck} reason:${encodedReason} expires:${expiresAt}${runIdSuffix} -->`,
     '',
     renderExternalCheckWaiverNote({
       actor: payload?.actor,
@@ -1886,7 +1899,7 @@ export function parseExternalCheckWaiverComment(body, createdAt) {
     .trimEnd()
     .match(
       new RegExp(
-        `^<!--\\s*idd-external-check-waiver:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+check:(\\S+)\\s+reason:(\\S+)\\s+expires:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        `^<!--\\s*idd-external-check-waiver:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+check:(\\S+)\\s+reason:(\\S+)\\s+expires:(\\S+)(?:\\s+run-id:(\\S+))?\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
         'i',
       ),
     );
@@ -1911,6 +1924,9 @@ export function parseExternalCheckWaiverComment(body, createdAt) {
     reason,
     expiresAt,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+    // kurone-kito/idd-skill#2657: raw token, no percent-decoding -- see
+    // ParsedExternalCheckWaiver.runId's doc comment.
+    runId: match[7] ?? '',
   };
 }
 export function parseReviewWatermarkComment(body, createdAt) {

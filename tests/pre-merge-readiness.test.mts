@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON } from '../src/scripts/advisory-wait-policy.mts';
 import {
   renderExternalCheckWaiverComment,
   renderReviewReplyStamp,
@@ -4866,6 +4867,76 @@ test('summarizeExternalCheckWaivers: valid waiver is placed in valid bucket', ()
   assert.equal(result.valid.length, 1);
   assert.equal(result.valid[0].checkSelector, 'CodeRabbit');
   assert.equal(result.valid[0].authorLogin, 'kurone-kito');
+});
+
+test('summarizeExternalCheckWaivers: excludes a self-referential-bootstrap-auto marker from generic evidence by default (Codex review, PR #2895)', () => {
+  // If an adopter's own trustedMarkerLogins happens to include
+  // github-actions[bot] (a plausible choice unrelated to this feature),
+  // an otherwise-fully-valid self-referential-bootstrap-auto marker must
+  // never be treated as an ORDINARY valid waiver here -- that would let
+  // it satisfy the deadline/terminal-gated waiver escape hatch, or any
+  // F2/F3 consumer's own generic waiver check, without ever running the
+  // run-id/event-type/HEAD/repository/changed-file verification the
+  // dedicated, isolated auto-waiver evidence call in
+  // advisory-convergence.mts performs.
+  const head = 'b'.repeat(40);
+  const body = makeWaiverComment({
+    claimId: 'claim-123',
+    headSha: head,
+    checkSelector: 'idd-advisory-convergence',
+    reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  });
+  const comment = {
+    body,
+    author: { login: 'github-actions[bot]' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['github-actions[bot]'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  // Excluded from EVERY bucket, not merely absent from valid -- the
+  // reason itself disqualifies it before any other classification runs.
+  assert.deepEqual(result, {
+    valid: [],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+    modeDisabled: [],
+  });
+});
+
+test('summarizeExternalCheckWaivers: allowSelfReferentialBootstrapAuto opts a caller back into classifying it (Codex review, PR #2895)', () => {
+  // Proves the exclusion above is genuinely opt-in, not a blanket ban --
+  // advisory-convergence.mts's own dedicated auto-waiver evidence call is
+  // the one authorized caller that sets this.
+  const head = 'b'.repeat(40);
+  const body = makeWaiverComment({
+    claimId: 'claim-123',
+    headSha: head,
+    checkSelector: 'idd-advisory-convergence',
+    reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  });
+  const comment = {
+    body,
+    author: { login: 'github-actions[bot]' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['github-actions[bot]'],
+    now: '2026-05-17T00:00:00Z',
+    allowSelfReferentialBootstrapAuto: true,
+  });
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.valid[0].checkSelector, 'idd-advisory-convergence');
+  assert.equal(result.valid[0].reason, SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON);
 });
 
 test('summarizeExternalCheckWaivers: an odd-cased marker is still recognized', () => {

@@ -12,6 +12,7 @@ import {
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mts';
 
 // Re-exported so callers that already import advisory-bot-identity helpers
@@ -338,6 +339,11 @@ export interface ExternalCheckWaiverEvidence {
     // blocked. `'none'` when the comment's `createdAt` was unparseable --
     // fails closed (never covers).
     createdAt: string;
+    /** kurone-kito/idd-skill#2657: the marker's optional `run-id:` field,
+     * verbatim (`''` when absent). Only the `self-referential-bootstrap-auto`
+     * consumer in `advisory-convergence.mts` reads this -- every other caller
+     * of this function is unaffected by its presence. */
+    runId: string;
   }[];
   expired: { authorLogin: string; checkSelector: string; expiresAt: string }[];
   wrongHead: {
@@ -682,6 +688,7 @@ export function summarizeExternalCheckWaivers(
     waivableSelectors = null,
     maxValidity = '',
     mode = '',
+    allowSelfReferentialBootstrapAuto = false,
   }: {
     prHeadSha?: string;
     activeClaimId?: unknown;
@@ -705,6 +712,42 @@ export function summarizeExternalCheckWaivers(
     // `advisory-convergence.mts`'s own `waiverMode === 'maintainer-authorized'`
     // guard.
     mode?: string;
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): a
+    // `self-referential-bootstrap-auto`-reasoned marker's `reason`/`runId`
+    // are attacker-shaped input from a `github-actions[bot]`-authored
+    // comment body -- trusting one as an ORDINARY valid waiver here (which
+    // happens whenever an adopter's own `trustedMarkerLogins` includes
+    // that login, a plausible choice unrelated to this feature) would
+    // let it satisfy the deadline/terminal-gated waiver escape hatch, or
+    // an F2/F3 pre-merge-readiness consumer's own generic waiver check,
+    // WITHOUT ever running the run-id/event-type/HEAD/repository/
+    // changed-file verification `advisory-convergence.mts`'s dedicated,
+    // isolated auto-waiver evidence call performs. Default `false` (fail
+    // closed): such a marker is excluded from every bucket entirely,
+    // never merely `unauthorized`/`wrongHead`/etc., since the reason
+    // itself disqualifies it regardless of any other field.
+    //
+    // Exactly two call sites may set this `true` -- every other caller
+    // (this function's own ordinary-waiver callers, and
+    // `pre-merge-readiness.mts`) must leave it unset:
+    // 1. `advisory-convergence.mts`'s dedicated, isolated auto-waiver
+    //    evidence call, whose `valid` classification directly feeds
+    //    `autoWaiverValid` -- a GATE decision -- so it is paired with the
+    //    run-id/event-type/HEAD/repository/changed-file verification
+    //    above before anything is trusted.
+    // 2. `external-check-waiver.mts`'s `runExternalCheckWaiver` POST-WRITE
+    //    reconcile (Copilot review, PR #2895): its own `evidence.valid` is
+    //    consulted only by `collectValidWaiverComments` to print a
+    //    concurrent-duplicate WARNING and pick which comment id to keep --
+    //    never to authorize, satisfy, or apply anything -- so there is no
+    //    gate to smuggle past. Its PRE-WRITE reuse-scan sibling call site
+    //    does NOT set this: reuse-scanning is disabled entirely for
+    //    `--auto-bootstrap` (that call site's own doc comment explains
+    //    why a `reason`-only filter is not a sufficient trust check for a
+    //    decision that skips posting), so leaving it unset there costs
+    //    nothing and keeps the exception as narrow as the decision it
+    //    actually affects requires.
+    allowSelfReferentialBootstrapAuto?: boolean;
   } = {},
 ): ExternalCheckWaiverEvidence {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
@@ -743,6 +786,19 @@ export function summarizeExternalCheckWaivers(
 
     if (!parsed) {
       malformed.push({ authorLogin, bodyPreview: body.slice(0, 120) });
+      continue;
+    }
+
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): excluded
+    // entirely, before any other classification, for every caller except
+    // the one dedicated auto-waiver evidence call that opts in -- see
+    // `allowSelfReferentialBootstrapAuto`'s own doc comment above for why
+    // author/head/claim/expiry classification must never even run for
+    // this reason token otherwise.
+    if (
+      !allowSelfReferentialBootstrapAuto &&
+      parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON
+    ) {
       continue;
     }
 
@@ -878,6 +934,7 @@ export function summarizeExternalCheckWaivers(
       reason: parsed.reason,
       expiresAt: parsed.expiresAt,
       createdAt: parsed.createdAt,
+      runId: parsed.runId,
     });
   }
 
@@ -2029,7 +2086,12 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
 // Opening: an `` `@{login}` `` mention immediately followed by a
 // confirmation/dismissal verb -- the consistent lead-in across every
 // sampled reply (e.g. "`@kurone-kito`, confirmed. ...",
-// "`@kurone-kito` Thanks for the fix. ...", "`@kurone-kito`, agreed. ...").
+// "`@kurone-kito` Thanks for the fix. ...", "`@kurone-kito`, agreed. ...",
+// "`@kurone-kito`, acknowledged. ..." -- kurone-kito/idd-skill#2657, PR
+// #2895 round 17: a freshly observed CodeRabbit reply used this verb,
+// which the original 18-sample derivation never happened to include;
+// added as one more member of the SAME already-covered class (a
+// confirmation/dismissal opener), not a new open-ended category).
 // An optional leading `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` is tolerated
 // before the mention (Copilot review, #2649): CodeRabbit's other marker-led
 // reply form (`classifyRegularBotComment`'s stale review-trigger check
@@ -2038,7 +2100,7 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
 // mention.
 const CODERABBIT_ACK_OPENING_RE = new RegExp(
   `^(?:${escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)}\\s*)?` +
-    '`@[\\w.-]+`[,:]?\\s+(?:thanks?(?:\\s+you)?|confirmed|agreed)\\b',
+    '`@[\\w.-]+`[,:]?\\s+(?:thanks?(?:\\s+you)?|confirmed|agreed|acknowledged)\\b',
   'i',
 );
 

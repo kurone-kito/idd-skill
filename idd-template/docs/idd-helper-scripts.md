@@ -1296,6 +1296,22 @@ auditable and fail-closed.
 _{actor}: external check waiver for IDD F phase._
 ```
 
+`run-id:{run-id}` is an optional trailing field (kurone-kito/idd-skill#2657,
+Copilot review PR #2895: shown as its own separate extended form below, so
+neither snippet reads as though the field were required):
+
+```md
+<!-- idd-external-check-waiver: {agent-id} {claim-id|none} {head-sha} check:{check-selector} reason:{reason-token} expires:{iso8601} run-id:{run-id} -->
+
+_{actor}: external check waiver for IDD F phase._
+```
+
+the posting GitHub Actions run's own `GITHUB_RUN_ID`, carried verbatim (not
+percent-encoded -- it is a numeric run id, not free text). Every
+person-authored waiver omits it and parses exactly as before this field
+existed; it exists only for the automated `self-referential-bootstrap-auto`
+waiver kind below.
+
 Interpretation rules:
 
 - `agent-id`, `claim-id`, `head-sha`, `check`, `reason`, and `expires`
@@ -1369,6 +1385,191 @@ Interpretation rules:
     marker comments into the PR
   - in solo-maintainer repositories, this helper-generated comment is
     the authorization path; a normal PR approval is not equivalent
+
+#### Automated self-referential-bootstrap-auto waiver (kurone-kito/idd-skill#2657)
+
+A narrow, documented exception to "human maintainer only" above: when a
+PR's own diff touches `idd-advisory-convergence`'s committed trigger-file
+allowlist (the check's own source, its policy inputs, or its workflow
+files -- a fixed, committed set of paths, never derived from imports),
+that PR cannot benefit from its own fix to the checker while still
+unmerged. This source repository's own copy of the allowlist -- checked
+both by its own top-level workflow's posting step and, at consume time,
+by `resolveSelfReferentialTriggerFiles` recognizing this exact
+repository -- lists a hand-curated set of `.mts`/workflow paths, its real
+checker files, regardless of its own configured `helperRuntime.profile`
+(`package-manager`, chosen for its own IDD dependency, unrelated to this
+workflow's own file layout). For every other repository, both the
+distributed `idd-template/` posting step and `resolveSelfReferentialTriggerFiles`
+independently derive a profile-appropriate set instead, on a
+profile-invariant base of the two workflow paths plus
+`.github/idd/config.json`, adding: compiled `scripts/*.mjs` paths for
+`vendored-node`; the dependency manifest and lockfiles for
+`package-manager`; nothing further for `ephemeral-npx` (whose own
+checker version pin already lives in the base set's config file, via
+`helperRuntime.packageSpec` -- see
+[Customizing IDD](customization.md)); or nothing further for any other
+profile. The config file is included for every profile, not only
+`ephemeral-npx` (kurone-kito/idd-skill#2657, Codex review round 8):
+both this posting job and the verdict job check out the trusted default
+branch, never the PR head, so a PR that fixes a broken checker by
+migrating `helperRuntime.profile` itself (e.g. `package-manager` to
+`ephemeral-npx`, to work around a broken lockfile/manager detection)
+resolves the OLD, still-broken profile on both sides -- scoping the
+config file to only the profile a PR happens to migrate TO would leave
+every other profile's own migration-via-config-only fix unable to
+trigger this bypass, the exact trap this mechanism exists to escape.
+Since a `vendored-node`/`package-manager`
+adopter never ships this source repository's own `src/scripts/*.mts`
+files, an
+unconditional match against them left the mechanism both non-functional
+for adopters and gameable via a PR touching a path that does not exist in
+their own checkout at all. `idd-advisory-convergence.yml` detects this
+from a
+separate job with `issues: write` as its only write permission (the
+verdict job stays read-only; it additionally gains `actions: read`,
+required for the run-id trust verification's own
+`GET /repos/{owner}/{repo}/actions/runs/{run-id}` call in a private
+repository) and posts a marker as `github-actions[bot]` via
+`GITHUB_TOKEN`, using the CLI's `--auto-bootstrap` mode. The verdict job
+also runs `needs:` this posting job (with `if: ${{ !cancelled() }}` so it
+still runs when the posting job skips) so an allowlisted PR's own
+bootstrap marker is guaranteed to exist -- posted or definitively not --
+before the verdict job ever fetches PR comments; without that ordering
+the two jobs race, since posting a PR comment does not itself trigger a
+fresh run of this workflow:
+
+```sh
+idd-external-check-waiver --pr 123 \
+  --check "idd-advisory-convergence" \
+  --reason "self-referential-bootstrap-auto" \
+  --run-id "$GITHUB_RUN_ID" \
+  --auto-bootstrap \
+  --apply --yes
+```
+
+`--auto-bootstrap` differs from ordinary usage in exactly five ways:
+
+- it skips the collaborator-authority check entirely (there is no human
+  actor to authorize -- the trust model below replaces it);
+- `--reason` must equal the literal token `self-referential-bootstrap-auto`
+  (a value the parser rejects for every other purpose) and `--run-id` is
+  required; `--expires`/`--expires-in` are rejected -- the expiry is
+  always computed internally, independent of
+  `advisoryWait.convergenceDeadline`. The base window is the PR's HEAD
+  commit timestamp plus a fixed `PT24H`, but two further rules apply
+  (Codex review, PR #2895): the duration clamps to the configured
+  `ciGate.externalCheckWaivers.maxValidity` when that is shorter than
+  `PT24H` (an adopter with a stricter configured maximum still gets a
+  marker, just a shorter-lived one, instead of every post being
+  rejected by that same policy's own validation), and if the
+  HEAD-anchored result would already be non-future (a stale HEAD from a
+  `reopened` trigger with no new commit), the window anchors on the
+  current time instead, so a stale-enough PR still gets a
+  genuinely-future expiry rather than one rejected outright;
+- it resolves the linked issue's real active claim exactly like the
+  ordinary path when exactly one resolves, but falls back to the same
+  claimless `none` binding `--claimless` renders (rather than blocking)
+  when ZERO candidates resolve at all (Codex review, PR #2895) -- the
+  fixed workflow invocation never passes `--issue`/`--claim-id`/
+  `--claimless`, so a fully claimless allowlisted PR under the default
+  `advisoryWait.convergenceScope: "all-prs"` (no linked issue, e.g. a
+  human-authored checker-file edit outside IDD) would otherwise be
+  permanently unable to post this waiver. Safe because the consumer's own
+  `none`-sentinel match (below) only ever succeeds when it independently
+  finds no active claim either, so this can never paper over a genuine
+  claim mismatch. Restricted to the zero-candidate case specifically, not
+  an AMBIGUOUS one (more than one candidate resolves, Copilot review, PR
+  #2895): some claim genuinely exists there, just not uniquely
+  identified from this input, and this file's own claim resolution
+  cannot prove `advisory-convergence.mts`'s own (different)
+  claim-resolution mechanism would treat that ambiguity the same way, so
+  an ambiguous PR still blocks. Explicitly combining the literal
+  `--claimless` flag with `--auto-bootstrap` is still rejected as
+  redundant caller error;
+- it never reuses an existing marker (kurone-kito/idd-skill#2657, Codex
+  review round 2, PR #2895): the generic reuse scan every other
+  `--apply` invocation runs first (to avoid double-posting on a retry)
+  is skipped entirely here, since it correlates only on selector,
+  reason, HEAD, and claim -- never the `run-id:`/event-type trust chain
+  below -- so a same-repository PR-controlled `pull_request` workflow
+  could otherwise prepost a same-reason marker with no verifiable
+  `run-id:` and trick this job into believing a valid waiver already
+  exists, skipping its own post. Always attempting to post is at worst
+  a harmless extra marker; the consumer's trust check below already
+  accepts any candidate that verifies.
+
+The marker is honored only when **all** of the following hold, verified
+by `advisory-convergence.mts` itself (not the generic
+`resolveTrustedCollaboratorMarkerLogins` trust surface, since this check
+needs a live per-marker run lookup no other consumer needs):
+
+1. the comment author is exactly `github-actions[bot]`;
+2. the `reason:` token is exactly `self-referential-bootstrap-auto`;
+3. `GET /repos/{owner}/{repo}/actions/runs/{run-id}` for the marker's
+   `run-id:` returns `path` equal to
+   `.github/workflows/idd-advisory-convergence.yml`, `head_sha` equal to
+   the marker's `{head-sha}`, and `head_repository.full_name` equal to
+   the current repository;
+4. that same response's `event` field is exactly `pull_request_target`,
+   never `pull_request` -- closing the gap where a same-repository PR
+   editing the workflow YAML can still trigger a `pull_request`-triggered
+   run of it during a `pull_request`/`pull_request_target` migration
+   window (kurone-kito/idd-skill#2764 Phase 1); and
+5. the PR's own changed files (fetched independently at consume time,
+   never trusted from the posting job's own internal check) include at
+   least one path from the trigger-file allowlist above
+   (kurone-kito/idd-skill#2657, Codex review, PR #2895) -- conditions 3
+   and 4 alone only prove the marker cites a genuine
+   `pull_request_target` run of this exact workflow file/head/repo, not
+   that the run's own allowlist check found a match, so without this a
+   same-repository PR could forge a marker citing the ordinary verdict
+   job's own trivially-discoverable run id for its own HEAD and bypass
+   advisory convergence for a change that never touched the allowlist at
+   all.
+
+A marker missing `run-id:`, whose run cannot be resolved, targets another
+head SHA or repository, ran under any event other than
+`pull_request_target`, or whose PR diff does not touch the trigger-file
+allowlist, is rejected the same way a manual waiver from an untrusted
+actor is today. Unlike an ordinary maintainer-authorized waiver
+(gated behind `deadlinePassed || terminalUnavailable`), a valid
+self-referential-bootstrap-auto waiver is evaluated **unconditionally** --
+it makes `ready` true immediately, without waiting for the deadline clock
+or a proven Copilot outage, since the whole point is bootstrapping a fix
+to the deadline mechanism itself. It stays gated on the applicability
+scope, though: under `convergenceScope: "idd-claimed"`, a PR whose
+linked issue's claim history is ambiguous or lacks a currently active
+claim resolves `indeterminate`, not `not_applicable` -- deliberately
+kept **not** self-bootstrap-eligible (Copilot review, PR #2895, round
+10), unlike the ordinary maintainer waiver's own `not_applicable`-only
+gate, since that path requires an actual human judgment call that this
+one never makes. Do not widen this exception to any other reason
+token, actor, or check selector.
+
+**A narrow, inherent dead zone remains** (kurone-kito/idd-skill#2657,
+Codex review, PR #2895, round 9): being in the trigger-file allowlist
+does not mean every possible bug in that file can be self-bootstrapped.
+Both the posting job and the verdict job always check out the
+repository's default branch, never the PR head -- required so neither
+job ever executes PR-controlled code with `issues: write` -- so a bug
+specifically WITHIN the code that decides whether/how to invoke
+`--auto-bootstrap` (its own branches in `external-check-waiver.mts`),
+the two Actions-API methods the trust chain above itself calls
+(`getWorkflowRun`, `listChangeRequestChangedFiles` in
+`provider-adapter-github.mts`), or the five conditions' own verification
+functions in `advisory-convergence.mts` cannot be rescued by this
+mechanism: the OLD, buggy version of exactly that code is what would
+have to decide to trust the fix. This is the same fixed point every
+self-hosting bootstrap has, and isolating marker emission into a
+smaller module would shrink it, never eliminate it. The rest of each
+listed file's surface -- most of it, since each implements far more
+than this one trust path -- remains genuinely bootstrappable as
+described above. For the residual case, the
+[maintainer-authorized waiver backstop](#external-check-waiver-contract)
+this repository already configures is the documented human off-ramp
+for precisely this situation, not a gap this mechanism itself needs to
+close.
 
 ### Provider health helper
 
@@ -2645,7 +2846,11 @@ reflexively as any other CLI option.
   Without `--assert` it always exits `0` (report-only). With `--assert` it
   exits non-zero unless `ready` is `true` (`ready = not_applicable ||
   converged || ((deadline passed || terminal-unavailable) && validly
-  waived)`).
+  waived) || autoWaiverValid`, the last disjunct added by
+  kurone-kito/idd-skill#2657 -- see the self-referential-bootstrap-auto
+  waiver section above; `waiver.autoWaiverValid` in the verdict reports
+  it directly, since every other `waiver.*` field stays gated behind the
+  deadline/terminal precondition this new disjunct is not).
 - **Structured `nextActions` (`#2143`)**: the verdict also reports a
   `nextActions` array populated from the same catalog the `--assert`
   failure stderr block uses (`collectAssertNextActions`). Each item
@@ -2741,7 +2946,9 @@ reflexively as any other CLI option.
   ordinary deadline has passed — but `ready` still requires a valid
   waiver in addition (`ready = not_applicable || converged ||
   ((deadline.passed || terminal.state == "COPILOT_UNAVAILABLE") &&
-  waived)`); the terminal state alone never sets `ready: true`. A
+  waived) || autoWaiverValid`, the last disjunct unaffected by this
+  section — kurone-kito/idd-skill#2657's self-referential-bootstrap-auto
+  waiver above); the terminal state alone never sets `ready: true`. A
   `not_applicable` applicability (including `reviewPolicy`
   `human-required` / `no-advisory`) is an independent ready path and
   does not change this waiver rule. Observed incident:

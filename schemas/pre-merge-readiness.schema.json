@@ -1243,7 +1243,8 @@
               "checkSelector",
               "reason",
               "expiresAt",
-              "createdAt"
+              "createdAt",
+              "runId"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1267,6 +1268,10 @@
                 "type": "string",
                 "description": "Waiver comment's own creation timestamp (#2034), or 'none' when unparseable; the moment a generic waivable check's waiver became genuinely active, used to gate coveredByWaiver on a fresh post-waiver check run.",
                 "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+              },
+              "runId": {
+                "type": "string",
+                "description": "kurone-kito/idd-skill#2657: the marker's optional run-id: field, verbatim ('' when absent). Only the self-referential-bootstrap-auto consumer in advisory-convergence.mts reads this; every other caller of the shared summarizer is unaffected by its presence."
               }
             }
           }

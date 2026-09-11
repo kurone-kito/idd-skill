@@ -115,6 +115,7 @@ import {
   readAdvisorySameHeadRerollCap,
   readAdvisoryWaitPolicy,
   resolveEffectiveAdvisoryTerminalWindowMinutes,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mts';
 import type { CopilotRecoverySummary } from './advisory-wait-state.mts';
 import { buildCopilotRecoverySummary } from './advisory-wait-state.mts';
@@ -128,7 +129,11 @@ import {
 } from './external-check-waiver.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadIddConfig } from './idd-config.mts';
-import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mts';
+import {
+  isValidIsoTimestamp,
+  parseClaimComment,
+  parseExternalCheckWaiverComment,
+} from './marker-helpers.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -189,6 +194,243 @@ import { loadJson, validateConfigSection } from './validate-schemas.mts';
  * and value are unchanged for existing consumers. */
 export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR;
+
+/** kurone-kito/idd-skill#2657: the committed allowlist of paths whose own
+ * edit lets `idd-advisory-convergence.yml` auto-post a scoped
+ * `self-referential-bootstrap-auto` waiver for the PR that edits them --
+ * the narrow trigger set the Background section requires (an
+ * import-derived set would auto-waive most PRs, since this gate's own
+ * script transitively imports several of the most-edited files in the
+ * repository). A hand-curated set, and exactly this SOURCE REPOSITORY's
+ * own trigger set: this repository's own top-level
+ * `.github/workflows/idd-advisory-convergence.yml` hardcodes these same
+ * paths directly (its own checker files are these exact `.mts` sources,
+ * regardless of its own configured `helperRuntime.profile`), and
+ * {@link resolveSelfReferentialTriggerFiles} below returns this constant
+ * only when `repositoryFullName` resolves to this repository. Every
+ * other repository resolves a profile-derived set instead (Codex +
+ * Copilot review, PR #2895): this repository's own `src/scripts/*.mts`
+ * sources are never vended to a `vendored-node`/`package-manager`
+ * adopter, so using this list unconditionally for the DISTRIBUTED
+ * `idd-template/` copy left the mechanism both non-functional (a
+ * genuine checker upgrade could never match a path that never exists in
+ * the adopter's own checkout) and gameable (a PR could touch that
+ * nonexistent path purely to satisfy the string match).
+ * `marker-helpers.mts`/`protocol-helpers.mts`/`provider-adapter-github.mts`
+ * joined this set across this same review (Codex, PR #2895):
+ * `advisory-convergence.mts` directly imports the marker parser/renderer,
+ * the waiver summarizer, and the `getWorkflowRun`/
+ * `listChangeRequestChangedFiles` GitHub adapter calls the trust path
+ * itself invokes, from these three files respectively -- a checker
+ * repair isolated to any one of them (exactly what this PR's own
+ * earlier commits did, across all three, to implement `run-id:` and the
+ * independent allowlist check) must also be able to trigger this
+ * bypass, or it recreates the very deadlock this mechanism exists to
+ * solve. This is a deliberately bounded set of DIRECT, waiver-path-
+ * specific dependencies, not every file `advisory-convergence.mts`
+ * imports for its OTHER, unrelated verdict logic (deadline, terminal
+ * state, disposition evidence, ...) -- `policy-helpers.mts` and
+ * `collaborator-permission.mts` in particular are explicitly excluded,
+ * per the issue's own background, as high-edit-contention files shared
+ * by many unrelated consumers. Widening this set is a reviewed edit to
+ * the constant, never automatic.
+ *
+ * `.github/idd/config.json` joined this set later still (Codex review,
+ * PR #2895, round 10): this repository's own `ciGate`/`advisoryWait`
+ * policy inputs live there too, same as for every other repository's
+ * own profile-derived set below, and a repair to this repository's own
+ * policy configuration deserves the same bootstrap this list already
+ * grants its `.mts` sources.
+ *
+ * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 9): being in
+ * this allowlist does NOT mean every possible bug in these files can be
+ * self-bootstrapped -- an inherent, narrow dead zone remains, and always
+ * will, by the same trusted-checkout design this mechanism itself
+ * depends on (both the posting job and this verdict job check out the
+ * repository's default branch, never the PR head -- see the workflow's
+ * own header comment for why: executing PR-controlled code with
+ * `issues: write` would defeat the whole point of `pull_request_target`).
+ * A bug specifically WITHIN the code that decides whether/how to invoke
+ * `--auto-bootstrap` (`runExternalCheckWaiver`'s own auto-bootstrap
+ * branches and `planExternalCheckWaiver`'s `autoBootstrap`-gated
+ * checks, both in `external-check-waiver.mts`), the two Actions-API
+ * methods the trust chain itself calls (`getWorkflowRun`,
+ * `listChangeRequestChangedFiles` in `provider-adapter-github.mts`), or
+ * this file's own verification functions
+ * ({@link verifySelfReferentialBootstrapWaiverRun},
+ * {@link resolveSelfReferentialTriggerFiles}, `autoWaiverValid`) cannot
+ * be rescued by THIS mechanism, because the OLD, buggy version of
+ * exactly that code is what would have to decide to trust the fix --
+ * the same fixed point every self-hosting bootstrap has (compiling a
+ * fixed compiler bug still needs the old, broken compiler for the first
+ * build). Isolating marker emission into a smaller module would shrink
+ * this dead zone, never eliminate it, and is out of scope here. The
+ * REST of each listed file's surface (which is most of it -- each
+ * implements far more than this one trust path) remains genuinely
+ * bootstrappable exactly as advertised above. For the residual case,
+ * this repository's existing `ciGate.externalCheckWaivers.mode:
+ * "maintainer-authorized"` backstop (AGENTS.md's "Advisory-convergence
+ * waiver backstop" bullet) is the documented human off-ramp for
+ * precisely "the autonomous advisory-convergence loop cannot converge
+ * on its own" -- not a gap this constant needs to also close.
+ *
+ * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 16): a
+ * SEPARATE, narrower residual gap in {@link verifySelfReferentialBootstrapWaiverRun}
+ * itself, tracked rather than closed here -- its `run-id:` check proves
+ * only that the CITED run has the right path/head-sha/repository/event,
+ * never that the cited run is the one that actually POSTED this
+ * specific comment. A same-repository `pull_request`-triggered
+ * workflow with `issues: write` (the same actor this file's own
+ * comments already assume can post arbitrary `github-actions[bot]`-
+ * authored comments) can discover a legitimate, concurrently running
+ * `pull_request_target` run of THIS workflow for its own PR and cite
+ * that run's id in a forged marker -- the run-id is bearer evidence,
+ * not provenance-bound. This does NOT widen what such a forgery can
+ * actually waive, though: `touchesSelfReferentialAllowlist` is fetched
+ * independently from the PR's own live file-changes API, never from
+ * the comment, so a forged marker can only cause a PR that genuinely
+ * touches the allowlist to get its (otherwise-legitimate) waiver via
+ * forgery instead of via the real job -- the allowlist check remains
+ * the load-bearing security boundary. The one CONCRETE exploit this
+ * bearer-evidence gap enabled -- a forged `claim-id:none` marker
+ * validating on a PR whose closing issues expose ambiguous, multiple
+ * active claims, a state the posting helper itself always refuses to
+ * post ANY marker for -- is closed directly in `autoWaiverValid`'s own
+ * `claimCandidateAmbiguous` check below. Full provenance binding
+ * (proving WHICH run posted a given comment, not just that some
+ * qualifying run exists) needs new I/O this pure verdict function does
+ * not have (the run's own job/log data) and is out of scope for a
+ * live-review patch; tracked in a follow-up issue. */
+export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
+  'src/scripts/advisory-convergence.mts',
+  'src/scripts/advisory-wait-state.mts',
+  'src/scripts/advisory-wait-policy.mts',
+  'src/scripts/rerun-advisory-convergence.mts',
+  'src/scripts/external-check-waiver.mts',
+  'src/scripts/marker-helpers.mts',
+  'src/scripts/protocol-helpers.mts',
+  'src/scripts/provider-adapter-github.mts',
+  '.github/idd/config.json',
+  '.github/workflows/idd-advisory-convergence.yml',
+  '.github/workflows/idd-advisory-convergence-comment.yml',
+] as const;
+
+/** kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895): the
+ * source repository's own identity, used ONLY to select
+ * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} as-is for this
+ * repository's own required check instead of a profile-derived set --
+ * this repository's checker files are its own `.mts` sources regardless
+ * of its configured `helperRuntime.profile` (`package-manager`, chosen
+ * for its own IDD dependency, not for this workflow's own file layout).
+ * A literal repository-identity check inside otherwise-generic
+ * distributed code is an intentional, narrow exception, not a pattern to
+ * extend -- every other repository-specific behavior in this codebase is
+ * config-driven, never an identity check. */
+const SELF_REFERENTIAL_ALLOWLIST_ORIGIN_REPOSITORY = 'kurone-kito/idd-skill';
+
+/** kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895): the
+ * trigger-file allowlist a given repository/profile pair actually
+ * verifies against at consume time, mirroring the derivation the
+ * distributed `idd-template/` copy of `idd-advisory-convergence.yml`'s
+ * own posting-side bash step performs (kept in sync by hand across the
+ * two languages/files, the same convention already used for
+ * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} itself). The two
+ * workflow paths and the runtime config are both profile-invariant --
+ * every profile's own checker version pin lives in one of the four base
+ * paths or in the profile-specific paths below. Granularity is
+ * deliberately whole-file, matching this repository's own
+ * `.mts`-based allowlist: a `package.json` touch for any reason (not
+ * only an `idd-skill` dependency bump) satisfies the `package-manager`
+ * case, exactly as an unrelated `.mts` edit already satisfies this
+ * repository's own case today.
+ *
+ * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 8):
+ * `.github/idd/config.json` is included for EVERY profile, not only
+ * `ephemeral-npx` (whose own checker-version pin lives there via
+ * `helperRuntime.packageSpec`) -- both the posting job and this
+ * verdict job check out the repository's trusted default branch, never
+ * the PR head, so a PR that fixes a broken checker by migrating
+ * `helperRuntime.profile` itself (e.g. `package-manager` to
+ * `ephemeral-npx`, to work around a broken lockfile/manager
+ * detection) resolves the OLD, still-broken profile on both sides.
+ * Scoping the config file to only the profile it happens to migrate
+ * TO would leave every other profile's own migration-via-config-only
+ * fix permanently unable to trigger this bypass -- the same trap this
+ * mechanism exists to escape. The config file is itself one of this
+ * check's own policy inputs (`ciGate`, `advisoryWait`, `helperRuntime`
+ * all live there) regardless of profile, so this is a generalization
+ * of an existing category, not a scope-widening exception. */
+export function resolveSelfReferentialTriggerFiles(
+  helperRuntimeProfile: string | undefined,
+  repositoryFullName: string | undefined,
+): readonly string[] {
+  if (
+    String(repositoryFullName ?? '').toLowerCase() ===
+    SELF_REFERENTIAL_ALLOWLIST_ORIGIN_REPOSITORY
+  ) {
+    return SELF_REFERENTIAL_WAIVER_TRIGGER_FILES;
+  }
+  const basePaths = [
+    '.github/idd/config.json',
+    '.github/workflows/idd-advisory-convergence.yml',
+    '.github/workflows/idd-advisory-convergence-comment.yml',
+  ];
+  switch (helperRuntimeProfile) {
+    case 'vendored-node':
+      return [
+        'scripts/advisory-convergence.mjs',
+        'scripts/advisory-wait-state.mjs',
+        'scripts/advisory-wait-policy.mjs',
+        'scripts/rerun-advisory-convergence.mjs',
+        'scripts/external-check-waiver.mjs',
+        'scripts/marker-helpers.mjs',
+        'scripts/protocol-helpers.mjs',
+        'scripts/provider-adapter-github.mjs',
+        ...basePaths,
+      ];
+    case 'package-manager':
+      return [
+        'package.json',
+        'package-lock.json',
+        'pnpm-lock.yaml',
+        'yarn.lock',
+        ...basePaths,
+      ];
+    // ephemeral-npx (which pins its checker version via
+    // helperRuntime.packageSpec in the config file above) and every
+    // other/unresolved profile have no additional profile-specific path
+    // of their own, so both resolve to the profile-invariant base set
+    // via this default.
+    default:
+      return basePaths;
+  }
+}
+
+/** kurone-kito/idd-skill#2657: this gate's own workflow file path, as
+ * reported by the GitHub Actions runs API's `path` field -- the value a
+ * self-referential-bootstrap-auto waiver's `run-id:` lookup must match
+ * (trust condition (c)). Declared as its own explicit literal (Copilot
+ * review, PR #2895) rather than derived by indexing into
+ * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} -- an index-derived value
+ * would silently point at the wrong entry if that array is ever
+ * reordered. A dedicated test asserts this value is still a member of
+ * that array, so the two can never drift apart despite being declared
+ * independently. */
+export const ADVISORY_CONVERGENCE_WORKFLOW_PATH =
+  '.github/workflows/idd-advisory-convergence.yml';
+
+// kurone-kito/idd-skill#2657: `SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON` /
+// `SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY` are declared in
+// `advisory-wait-policy.mts` (imported above) and re-exported here for
+// backward-compatible call sites, rather than declared locally: this file
+// already imports FROM `external-check-waiver.mts`
+// (`resolveCollaboratorAuthority`/`normalizeAuthorityEvidence`), which also
+// needs these two constants for its own `--auto-bootstrap` CLI mode --
+// declaring them in either file directly would form an import cycle.
+export {
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_EXPIRY,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+} from './advisory-wait-policy.mts';
 
 /** #1719: stable, machine-readable tokens for
  * `sameHeadReroll.ineligibleReasons` -- one per boolean term of the
@@ -340,6 +582,17 @@ export interface AdvisoryConvergenceWaiver {
    * (the schema-locked, truthfully-reported count #2021 already
    * established). See {@link evaluateProviderOutageRelief}. */
   outageRelieved: boolean;
+  /** kurone-kito/idd-skill#2657 (Copilot review, PR #2895): whether a
+   * valid, run-bound `self-referential-bootstrap-auto` waiver makes
+   * `ready` true through the independent disjunct in the `ready`
+   * formula. Unlike every other field on this object, this one is
+   * evaluated UNCONDITIONALLY -- never gated behind
+   * `deadlinePassed`/`terminalUnavailable` the way `validCount`/
+   * `outageRelieved` (and the `waived` field they feed) are. Reported
+   * here so a `ready: true` verdict reached solely through this path
+   * is self-explaining, rather than leaving every other waiver/
+   * readiness field false/inapplicable with no visible cause. */
+  autoWaiverValid: boolean;
 }
 
 /** Scope gate evidence for the advisory-convergence verdict.
@@ -539,6 +792,55 @@ export interface AdvisoryConvergenceInputs {
    * outcome, the same safe direction this field's own consumer
    * (`options.exemptBotAuthoredPrs`) already defaults to when unset. */
   prAuthorIsBot?: boolean;
+  /** kurone-kito/idd-skill#2657: pre-resolved `GET
+   * /repos/{owner}/{repo}/actions/runs/{run-id}` evidence, keyed by the
+   * run id (as a string) named in a candidate
+   * `self-referential-bootstrap-auto` waiver marker's `run-id:` field.
+   * `collectFromGitHub` fetches this (network); this pure verdict
+   * function only reads it -- an absent key or an `{error}` entry means
+   * "could not resolve", which the four-condition check below always
+   * treats as a rejection, never a pass. */
+  autoWaiverRunLookups?: Record<
+    string,
+    | {
+        path?: string | null;
+        headSha?: string | null;
+        repositoryFullName?: string | null;
+        event?: string | null;
+      }
+    | { error: string }
+  >;
+  /** kurone-kito/idd-skill#2657 (Codex review, PR #2895): the PR's own
+   * changed file paths, fetched by `collectFromGitHub` only when at
+   * least one candidate self-referential-bootstrap-auto marker exists
+   * (same cost-optimization scope as `autoWaiverRunLookups`) --
+   * `undefined`/`[]` otherwise, which correctly makes `autoWaiverValid`
+   * always `false` in that case regardless (no candidate marker to
+   * validate against either). This independent, consume-time check is
+   * required, not merely defense in depth: the four run-id trust
+   * conditions alone prove a marker was posted by a genuine run of
+   * THIS repository's own workflow file, but never prove that run's
+   * own allowlist check actually found a match -- any PR that can get
+   * `github-actions[bot]` to post an issue comment via a PR-authored,
+   * `pull_request`-triggered workflow with `issues: write` (a
+   * same-repository PR fully controls that trigger's own workflow
+   * content) could otherwise forge a marker citing the ordinary
+   * verdict job's own trivially-discoverable `pull_request_target` run
+   * id for its own HEAD -- which independently satisfies path/head-
+   * SHA/repository/event -- and bypass advisory convergence for a
+   * change that never touched the allowlist at all.
+   *
+   * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12):
+   * `collectFromGitHub` populates this from BOTH
+   * `listChangeRequestChangedFiles` (current paths) AND
+   * `listChangeRequestRenamedFromPaths` (renamed files' OLD paths),
+   * concatenated -- a rename-shaped checker repair away from an
+   * allowlisted path must still be recognized here, even though the
+   * general-purpose changed-file list those OTHER port method's own
+   * consumers key CODEOWNERS/required-reviewer resolution on
+   * deliberately excludes rename sources now (see that method's own
+   * doc comment for the pollution incident this split fixes). */
+  changedFilePaths?: string[];
 }
 
 /** Pure options accepted by {@link computeAdvisoryConvergenceVerdict}. */
@@ -578,6 +880,25 @@ export interface AdvisoryConvergenceOptions {
   waiverMode?: string;
   waiverMaxValidity?: string;
   waiverCheckSelector?: string;
+  /** kurone-kito/idd-skill#2657: the current repository's `owner/repo`
+   * full name, e.g. `kurone-kito/idd-skill`. Used only to verify a
+   * candidate `self-referential-bootstrap-auto` waiver's `run-id:`
+   * lookup resolves to a run hosted by THIS repository (condition (c),
+   * `head_repository.full_name`) -- never trusted from the marker body
+   * itself. Omitted/empty fails that check closed (no auto-waiver can
+   * ever validate), the safe default. */
+  repositoryFullName?: string;
+  /** kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895): this
+   * repository's own configured `helperRuntime.profile`
+   * (`.github/idd/config.json`), used only by
+   * {@link resolveSelfReferentialTriggerFiles} to derive a
+   * profile-appropriate self-referential-bootstrap-auto trigger-file
+   * allowlist for a repository other than this source repository (which
+   * always uses its own fixed
+   * {@link SELF_REFERENTIAL_WAIVER_TRIGGER_FILES} list regardless of this
+   * value). Omitted/unrecognized resolves to the two workflow paths
+   * only, the safe default (never widens). */
+  helperRuntimeProfile?: string;
   /** #2353: whether an active `providerOutage.declarationTarget`
    * declaration exists for THIS gate's own selector, already resolved by
    * the caller (fetch, validity, actor authority -- see
@@ -673,6 +994,73 @@ export function reviewPolicyNotApplicableReason(
     return REVIEW_POLICY_NOT_APPLICABLE_REASON[reviewPolicy];
   }
   return null;
+}
+
+/**
+ * kurone-kito/idd-skill#2657: the fourth (path/head-sha/repo) and fifth
+ * (event-type) trust conditions a `self-referential-bootstrap-auto`
+ * waiver's `run-id:` field must resolve to, given an already-fetched (or
+ * errored) `GET /repos/{owner}/{repo}/actions/runs/{run-id}` lookup
+ * result. Pure and fail-closed: an absent/errored lookup, or any single
+ * mismatching field, is `false`, never a thrown exception -- a
+ * transient or malformed lookup must never widen trust. The event check
+ * is the specific gap the 2026-09-11 hearing added: during
+ * kurone-kito/idd-skill#2764 Phase 1, `idd-advisory-convergence.yml`
+ * still declares both `pull_request` and `pull_request_target`, so a
+ * same-repository PR editing the workflow YAML can still trigger a
+ * `pull_request`-triggered run of it whose `path`/`head_sha`/
+ * `head_repository.full_name` all satisfy the other three conditions.
+ */
+function verifySelfReferentialBootstrapWaiverRun(
+  run:
+    | {
+        path?: string | null;
+        headSha?: string | null;
+        repositoryFullName?: string | null;
+        event?: string | null;
+      }
+    | { error: string }
+    | null
+    | undefined,
+  expected: {
+    path: string;
+    headSha: string;
+    repositoryFullName: string;
+  },
+): boolean {
+  if (!run || 'error' in run) {
+    return false;
+  }
+  // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): fail closed when
+  // this invocation's own resolved repository identity is empty (e.g. a
+  // caller upstream failed to resolve owner/repo) -- without this,
+  // `String(undefined ?? '') === ''` would make an ABSENT expected
+  // repository equal an absent `run.repositoryFullName` too (a run whose
+  // own `head_repository` the Actions API reported as null), letting a
+  // malformed/direct invocation validate an auto-waiver without proving
+  // which repository actually ran it. `expected.path`/`expected.headSha`
+  // need no equivalent guard: both are always non-empty by construction
+  // (a hardcoded workflow-path constant and a regex-validated 40-hex SHA
+  // respectively), so an empty `run` counterpart already fails those
+  // comparisons on its own.
+  if (!expected.repositoryFullName) {
+    return false;
+  }
+  return (
+    String(run.path ?? '') === expected.path &&
+    String(run.headSha ?? '').toLowerCase() ===
+      expected.headSha.toLowerCase() &&
+    // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): repository
+    // owner/name identities are case-insensitive on GitHub -- normalize
+    // both operands the same way headSha above (and
+    // resolveSelfReferentialTriggerFiles's own origin-repository check)
+    // already do, so a run reported back with different casing than
+    // this invocation's own resolved repositoryFullName is not
+    // incorrectly rejected.
+    String(run.repositoryFullName ?? '').toLowerCase() ===
+      expected.repositoryFullName.toLowerCase() &&
+    run.event === 'pull_request_target'
+  );
 }
 
 /**
@@ -1365,6 +1753,13 @@ export function computeAdvisoryConvergenceVerdict(
       // contract.
       waivableSelectors: [...(options.waivableSelectors ?? [])],
       maxValidity: String(options.waiverMaxValidity ?? 'PT24H'),
+      // Explicit rather than relying solely on the enclosing `if`'s
+      // `waiverMode === 'maintainer-authorized'` guard above (Copilot
+      // review, PR #2895): a future refactor that loosens that guard
+      // without noticing this implicit dependency could otherwise
+      // silently reopen this call's own mode gate. Matches the
+      // auto-waiver call below, which already passes this explicitly.
+      mode: waiverMode,
     });
     // Even when the configured list makes SOME check waivable, only count a
     // waiver whose own marker selector is THIS gate's selector -- a valid
@@ -1394,12 +1789,136 @@ export function computeAdvisoryConvergenceVerdict(
       waivableSelectors: [...(options.waivableSelectors ?? [])],
     });
   }
+  // --- Self-referential-bootstrap-auto waiver (kurone-kito/idd-skill#2657) -
+  // --- Evaluated UNCONDITIONALLY -- never gated behind
+  // `deadlinePassed`/`terminalUnavailable` the way the ordinary waiver
+  // below is. This is the 2026-09-11 hearing's fix for the 2026-09-10
+  // self-cancellation bug: a waiver whose validity window shares
+  // `deadlinePassed`'s own anchor/duration is always already expired by
+  // the time it would ever be read through that same gated branch.
+  // Computed BEFORE the `waiver` object below so its own outcome can be
+  // reported there (Copilot review, PR #2895: a `ready: true` verdict
+  // reached solely through this path previously exposed no field
+  // explaining why, contradicting the published `ready` formula).
+  //
+  // A SECOND `summarizeExternalCheckWaivers` call, identical to the
+  // primary call below in every option except `trustedMarkerLogins` --
+  // which is extended to include `github-actions[bot]` for THIS call
+  // only. The primary call's own `trustedMarkerLogins` binding is never
+  // reassigned, so this can never widen trust for an ordinary
+  // person-authored waiver. `mode` is threaded through identically: an
+  // adopter with `ciGate.externalCheckWaivers.mode` not
+  // `maintainer-authorized` gets no automated waiver either, matching
+  // the manual flow.
+  const autoWaiverEvidence = summarizeExternalCheckWaivers(comments, {
+    prHeadSha,
+    activeClaimId,
+    activeClaimSupersedes,
+    trustedMarkerLogins: [...trustedMarkerLogins, 'github-actions[bot]'],
+    now,
+    waivableSelectors: [...(options.waivableSelectors ?? [])],
+    maxValidity: String(options.waiverMaxValidity ?? 'PT24H'),
+    mode: waiverMode,
+    // kurone-kito/idd-skill#2657 (Codex review, PR #2895): one of exactly
+    // two authorized call sites -- see `allowSelfReferentialBootstrapAuto`'s
+    // own doc comment in protocol-helpers.mts for the full list and why
+    // every other caller must leave this unset. This one is the GATE
+    // decision (feeds `autoWaiverValid` directly below), paired with the
+    // independent run-id/event-type/HEAD/repository/changed-file
+    // verification that follows.
+    allowSelfReferentialBootstrapAuto: true,
+  });
+  const autoWaiverRepositoryFullName = String(
+    options.repositoryFullName ?? '',
+  ).trim();
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): independently
+  // verify the PR's own diff actually touches the committed allowlist,
+  // rather than trusting the posting job's own internal check to have
+  // enforced it -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
+  // doc comment for the exact bypass this closes. This is a hard
+  // precondition on `autoWaiverValid` below, independent of the four
+  // run-id trust conditions.
+  const selfReferentialTriggerFiles = resolveSelfReferentialTriggerFiles(
+    options.helperRuntimeProfile,
+    autoWaiverRepositoryFullName,
+  );
+  const touchesSelfReferentialAllowlist = (inputs.changedFilePaths ?? []).some(
+    (path) => selfReferentialTriggerFiles.includes(path),
+  );
+  // Defense in depth: the trust-set extension above already scopes the
+  // call to one login, but a marker's `reason`/`runId` are still
+  // attacker-shaped input from that login's own comment body, so this
+  // filters the specific marker kind within it rather than trusting
+  // every `github-actions[bot]`-authored waiver of any reason.
+  //
+  // kurone-kito/idd-skill#2657 (Copilot review, PR #2895, round 10):
+  // additionally blocked when `scopeIndeterminate` AND no active claim
+  // resolves (`!claim.activeClaimPresent`) -- NOT `scopeIndeterminate`
+  // alone, which would also block the `idd-claimed-branch-mismatch`
+  // sub-case a prior test already pins as intentionally still
+  // auto-waivable ("#1686 path 3 symmetry"): that sub-case's own real,
+  // bindable `activeClaimId` means an accepted marker there is bound to
+  // a KNOWN, exactly-matched claim, not the `none` sentinel -- no
+  // safeguard to bypass. The two sub-cases this DOES need to block
+  // (`idd-claimed-multiple-resolving-claim-candidates` and
+  // `idd-claimed-claim-history-without-active-claim`) both fall under
+  // `!claim.activeClaimPresent`, where the CONSUMER's own claim
+  // resolution reports an empty active claim, same as a genuinely
+  // claimless PR -- letting a `none`-bound auto-bootstrap marker
+  // validate through the unconditional auto-waiver branch there would
+  // bypass the `scopeIndeterminate` human-review requirement with no
+  // human judgment involved at all, unlike the ordinary
+  // maintainer-authorized waiver (which intentionally CAN resolve
+  // `scopeIndeterminate`, per that path's own gating on
+  // `scopeNotApplicable` alone -- a human maintainer's explicit judgment
+  // call, not a mechanical one). `all-prs` scope (the default) never
+  // produces `scopeIndeterminate` at all, so this is a no-op there.
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 16): the
+  // round 10 guard just above only ever fires when `scopeIndeterminate`
+  // can be non-trivially true, which per its own doc comment never
+  // happens under `all-prs` scope (this repository's own configured
+  // default) -- so it provides NO protection there against the exact
+  // same "multiple linked issues expose active claims" ambiguity
+  // `selectLinkedIssueCandidate` (`external-check-waiver.mts`) refuses
+  // to auto-post a marker for in the first place. Without this, a
+  // forged `claim-id:none` marker citing a legitimate, concurrently
+  // running `pull_request_target` run's id (the run-id check verifies
+  // only that CITED run's own metadata, not that it actually posted
+  // this comment -- a separate, tracked gap, see the module header's
+  // dead-zone note) could validate on such a PR even though the
+  // legitimate posting helper would have refused to post ANY marker
+  // for it. `claimCandidateAmbiguous` is the SAME signal the producer
+  // uses (`classifyClaimCandidateAmbiguity`), independent of
+  // `convergenceScope`, so gate on it directly here too rather than
+  // only through the scope-specific check above.
+  const autoWaiverValid =
+    !scopeNotApplicable &&
+    !(scopeIndeterminate && !claim.activeClaimPresent) &&
+    !claimCandidateAmbiguous &&
+    touchesSelfReferentialAllowlist &&
+    autoWaiverEvidence.valid.some(
+      (entry) =>
+        entry.checkSelector === waiverCheckSelector &&
+        entry.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
+        entry.authorLogin === 'github-actions[bot]' &&
+        entry.runId !== '' &&
+        verifySelfReferentialBootstrapWaiverRun(
+          inputs.autoWaiverRunLookups?.[entry.runId],
+          {
+            path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+            headSha: prHeadSha,
+            repositoryFullName: autoWaiverRepositoryFullName,
+          },
+        ),
+    );
+
   const waiver: AdvisoryConvergenceWaiver = {
     mode: waiverMode,
     checkSelector: waiverCheckSelector,
     activeClaimId,
     validCount: validWaiverCount,
     outageRelieved: outageRelief.relieved,
+    autoWaiverValid,
   };
   const waived =
     !scopeNotApplicable && (validWaiverCount > 0 || outageRelief.relieved);
@@ -1420,7 +1939,21 @@ export function computeAdvisoryConvergenceVerdict(
   const ready =
     scopeNotApplicable ||
     converged ||
-    ((deadlinePassed || terminalUnavailable) && waived);
+    ((deadlinePassed || terminalUnavailable) && waived) ||
+    autoWaiverValid;
+
+  // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): the
+  // `reasons.push` guards above only exclude `waived`, so a `ready`
+  // verdict reached solely through `autoWaiverValid` (never gated
+  // behind `deadlinePassed`/`terminalUnavailable` the way `waived` is)
+  // could otherwise carry a stale "deadline passed with no valid
+  // waiver" or "terminally unavailable" explanation alongside
+  // `ready: true` -- a directly contradictory pair no consumer of this
+  // JSON verdict should ever see. Mirrors the existing `nextActions`
+  // invariant below: a ready verdict's `reasons` is always `[]`.
+  if (ready) {
+    reasons.length = 0;
+  }
 
   const reviewReport: AdvisoryConvergenceReviewClause = {
     ...review,
@@ -2332,6 +2865,20 @@ export function collectFromGitHub(
   // pattern) -- re-declaring the shape here would silently stop tracking
   // that source of truth on drift.
   const policy = normalizePolicyConfig(rawConfig);
+  // kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895): read
+  // directly from the already-loaded `rawConfig` rather than a second
+  // `.github/idd/config.json` read (see the reviewPolicy read below for
+  // the same convention) -- `normalizePolicyConfig` does not carry
+  // `helperRuntime` through its own normalized shape, since that section
+  // is validated (not defaulted) elsewhere (`policy-helpers.mts`).
+  const rawHelperRuntime = (rawConfig as { helperRuntime?: unknown } | null)
+    ?.helperRuntime;
+  const helperRuntimeProfile =
+    rawHelperRuntime &&
+    typeof rawHelperRuntime === 'object' &&
+    typeof (rawHelperRuntime as { profile?: unknown }).profile === 'string'
+      ? (rawHelperRuntime as { profile: string }).profile
+      : undefined;
 
   // Resolved once and reused below AND in the returned `options.now` --
   // #2353 (Codex review on PR #2370): the declaration-validity read must
@@ -2489,6 +3036,174 @@ export function collectFromGitHub(
     }
   }
 
+  // kurone-kito/idd-skill#2657: pre-resolve `GET
+  // /repos/{owner}/{repo}/actions/runs/{run-id}` evidence for any
+  // self-referential-bootstrap-auto waiver candidate marker, so the pure
+  // verdict function performs no I/O of its own. A cheap, network-free
+  // local scan (marker-shape prefix test + author/reason/run-id/HEAD
+  // parse) narrows this to the small set of comments that could
+  // possibly be this waiver kind before paying for one Actions-run
+  // lookup per DISTINCT run id among them -- expiry/claim trust is
+  // verified later, inside `computeAdvisoryConvergenceVerdict`; this
+  // scan is a cost optimization only, never the authoritative check.
+  // The author check (Copilot review, PR #2895) is still required here,
+  // not merely redundant with the authoritative one: without it, any
+  // commenter could post arbitrarily many fake same-reason markers with
+  // distinct `run-id:` values and force this required check to spend
+  // one Actions-run lookup per fake id on every assert invocation --
+  // individually fail-closed, but a real drain on the repository-shared
+  // `GITHUB_TOKEN` rate-limit budget.
+  //
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 5): the
+  // author check alone does not bound the COUNT of lookups -- a
+  // same-repository PR-authored `pull_request` workflow with
+  // `issues: write` can still post as `github-actions[bot]` (that
+  // token's permissions are not fork-restricted for a same-repository
+  // PR) and spam arbitrarily many distinct fake `run-id:` values under
+  // the correct reason token, each costing a separate serialized
+  // Actions API call. A local, network-free HEAD-SHA match against
+  // this PR's OWN current HEAD closes most of this cheaply --
+  // `renderExternalCheckWaiverComment` always binds a genuine marker to
+  // the HEAD it was posted for -- but a same-HEAD flood is still
+  // possible, so a hard cap on the number of distinct run ids ever
+  // looked up remains necessary too.
+  //
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 6): an
+  // EARLIEST-first cap (this file's own prior revision) is exactly as
+  // exploitable as a LATEST-first one, just from the opposite
+  // direction -- a same-repository attacker workflow that wins the race
+  // to post before the trusted posting job finishes can crowd out the
+  // genuine, later marker just as reliably as a late flood could crowd
+  // out an early one. No selection ORDER can fully close this without
+  // an API call per candidate, which is the exact cost this prefilter
+  // exists to avoid. This is a bounded-cost, defense-in-depth
+  // optimization, never the authoritative check -- `autoWaiverValid`
+  // below still requires independent Actions-run/allowlist
+  // verification regardless of what this prefilter selects, and the
+  // existing maintainer-authorized waiver remains available as the
+  // documented escape hatch on the rare PR where a flood genuinely
+  // exhausts this budget. Twenty is a deliberately generous bound
+  // (versus the "at most one legitimate marker per relevant push"
+  // steady state) that keeps worst-case API cost small and safe while
+  // making a reliable crowd-out require posting dozens of distinct
+  // spam comments on the PR -- conspicuous, and itself rate-limited by
+  // GitHub's own comment-creation API, unlike an unbounded lookup loop.
+  const MAX_AUTO_WAIVER_RUN_LOOKUPS = 20;
+  const autoWaiverCandidates: { runId: string; createdAt: string }[] = [];
+  const seenAutoWaiverRunIds = new Set<string>();
+  for (const comment of comments) {
+    const body = String(comment.body ?? '');
+    if (!/^<!--\s*idd-external-check-waiver:/i.test(body)) {
+      continue;
+    }
+    const authorLogin = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (authorLogin !== 'github-actions[bot]') {
+      continue;
+    }
+    const createdAt = String(comment.createdAt ?? '');
+    const parsed = parseExternalCheckWaiverComment(body, createdAt);
+    // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): `parsed.runId`
+    // is attacker-controlled comment text (the marker's `run-id:` field is
+    // never percent-decoded or otherwise sanitized -- see
+    // ParsedExternalCheckWaiver.runId's own doc comment), and
+    // `getWorkflowRun` interpolates it directly into a `gh api` REST path
+    // (`repos/{owner}/{repo}/actions/runs/{runId}`). A same-repository
+    // workflow (the same threat model MAX_AUTO_WAIVER_RUN_LOOKUPS's own doc
+    // comment above already covers) could otherwise post a bot-authored
+    // marker whose run-id contains `/`, `?`, or other path syntax and steer
+    // this bounded lookup at an unintended API path instead of a single
+    // Actions run. Validate the token is a canonical positive integer --
+    // the same shape `ci-wait-policy.mts`'s `--run-id` already requires --
+    // before it is ever eligible to become a lookup key; a malformed token
+    // fails closed here exactly like every other invalid input in this
+    // file, rather than reaching the API call at all.
+    // kurone-kito/idd-skill#2657 (Copilot review, PR #2895, round 13): also
+    // require `parsed.checkSelector` to EXACTLY equal
+    // `ADVISORY_CONVERGENCE_CHECK_SELECTOR` (never a glob/broader match --
+    // the genuine self-waiver job always posts this exact selector).
+    // Without this, a same-repository `pull_request`-triggered workflow
+    // (runs PR-controlled code, unlike the trusted `pull_request_target`
+    // verdict job) could post up to `MAX_AUTO_WAIVER_RUN_LOOKUPS` bot-
+    // authored markers with the reserved reason and current HEAD but an
+    // arbitrary `checkSelector`, consuming the entire bounded lookup
+    // budget before the genuine marker is ever considered -- a denial-of-
+    // service on this deliberately-bounded mechanism.
+    if (
+      parsed &&
+      parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON &&
+      parsed.checkSelector === ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+      parsed.runId &&
+      parseCanonicalIntegerOrNull(parsed.runId) !== null &&
+      !seenAutoWaiverRunIds.has(parsed.runId) &&
+      String(parsed.headSha ?? '')
+        .trim()
+        .toLowerCase() === prHeadSha
+    ) {
+      seenAutoWaiverRunIds.add(parsed.runId);
+      autoWaiverCandidates.push({ runId: parsed.runId, createdAt });
+    }
+  }
+  const autoWaiverRunIds = new Set(
+    autoWaiverCandidates
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .slice(0, MAX_AUTO_WAIVER_RUN_LOOKUPS)
+      .map((candidate) => candidate.runId),
+  );
+  const autoWaiverRunLookups: NonNullable<
+    AdvisoryConvergenceInputs['autoWaiverRunLookups']
+  > = {};
+  for (const runId of autoWaiverRunIds) {
+    try {
+      const raw = port.getWorkflowRun(owner, repo, runId) as {
+        path?: string | null;
+        head_sha?: string | null;
+        head_repository?: { full_name?: string | null } | null;
+        event?: string | null;
+      };
+      autoWaiverRunLookups[runId] = {
+        path: raw?.path ?? null,
+        headSha: raw?.head_sha ?? null,
+        repositoryFullName: raw?.head_repository?.full_name ?? null,
+        event: raw?.event ?? null,
+      };
+    } catch (error) {
+      // Fail closed per run id: a lookup failure (unknown run, transient
+      // API error) must never crash the whole collection, and
+      // `verifySelfReferentialBootstrapWaiverRun` already treats an
+      // `{error}` entry the same as an absent one -- always a rejection.
+      autoWaiverRunLookups[runId] = {
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): fetched only
+  // when a candidate marker exists (same cost-optimization scope as the
+  // run-id lookups above) -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
+  // doc comment for why the pure verdict function needs this
+  // independent evidence rather than trusting the posting job's own
+  // internal allowlist check.
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 12): merge in
+  // `listChangeRequestRenamedFromPaths` too -- the general-purpose
+  // `listChangeRequestChangedFiles` deliberately no longer includes a
+  // renamed file's OLD path (see that port method's own doc comment for
+  // the CODEOWNERS-pollution incident this split fixes), but this
+  // specific allowlist check still needs it: a rename-shaped checker
+  // repair away from an allowlisted path must still be recognized.
+  const changedFilePaths =
+    autoWaiverRunIds.size > 0
+      ? [
+          ...retryTransientGhFailure(() =>
+            port.listChangeRequestChangedFiles(Number(args.prNumber)),
+          ),
+          ...retryTransientGhFailure(() =>
+            port.listChangeRequestRenamedFromPaths(Number(args.prNumber)),
+          ),
+        ]
+      : undefined;
+
   return {
     inputs: {
       prNumber: Number(args.prNumber),
@@ -2500,6 +3215,8 @@ export function collectFromGitHub(
       claimMarkerHistoryPresent,
       claimCandidateAmbiguous,
       prAuthorIsBot,
+      autoWaiverRunLookups,
+      changedFilePaths,
     },
     options: {
       now: resolvedNow,
@@ -2521,6 +3238,8 @@ export function collectFromGitHub(
       ),
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
+      repositoryFullName: owner && repo ? `${owner}/${repo}` : '',
+      helperRuntimeProfile,
       outageDeclarationActive,
       sameHeadRerollCap,
       pendingWindowMinutes,

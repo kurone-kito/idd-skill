@@ -276,6 +276,24 @@ next.
 rerun this SAME existing run via the mechanic above — never
 `workflow_dispatch`.
 
+**Automated self-referential-bootstrap-auto waiver (`#2657`)**: alongside
+the manual maintainer-authorized waiver flow above, a PR whose own diff
+touches `idd-advisory-convergence`'s committed trigger-file allowlist gets
+a scoped waiver posted automatically by a separate `issues: write` job in
+`idd-advisory-convergence.yml` itself — no manual waiver or rerun needed
+to unblock it, PROVIDED the adopting repository has also opted into the
+same `ciGate.externalCheckWaivers.mode: "maintainer-authorized"` policy
+and registered `idd-advisory-convergence` under
+`ciGate.externalChecks.waivable` (helper runtime must also be configured;
+the shipped template config leaves all of this unset, in which case the
+job is a documented no-op rather than a failure). See
+[Customizing IDD](../../docs/customization.md) for how to opt in, and
+[External-check waiver contract](../../docs/idd-helper-scripts.md#external-check-waiver-contract)
+for the marker shape, the five acceptance conditions, and why this one
+waiver kind is evaluated independent of the deadline/terminal-unavailable
+gate. This does not replace the manual flow for any other reason token,
+actor, or check.
+
 **Stale workflow definition on the PR branch.** `gh run rerun`
 re-resolves the failing check against the workflow **definition
 file** as it exists on the PR branch, not on `main` — a sibling

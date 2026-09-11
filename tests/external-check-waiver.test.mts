@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { readAdvisoryConvergenceDeadlineMinutes } from '../src/scripts/advisory-wait-policy.mts';
+import {
+  readAdvisoryConvergenceDeadlineMinutes,
+  SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+} from '../src/scripts/advisory-wait-policy.mts';
 import {
   buildTrustedMarkerLogins,
   collectValidWaiverComments,
@@ -14,6 +17,7 @@ import {
   resolveActorLogin,
   runExternalCheckWaiver,
 } from '../src/scripts/external-check-waiver.mts';
+import { operationalMarkerPrefix } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
   parseExternalCheckWaiverComment,
@@ -319,9 +323,49 @@ test('renderExternalCheckWaiverComment round-trips whitespace selectors and reas
     reason: 'rate limit',
     expiresAt: '2026-05-18T00:00:00Z',
     createdAt: '2026-05-17T00:00:00Z',
+    runId: '',
   });
   assert.match(body, /check:Copilot%20code%20review/);
   assert.match(body, /reason:rate%20limit/);
+});
+
+test('renderExternalCheckWaiverComment/parseExternalCheckWaiverComment round-trip an optional run-id (kurone-kito/idd-skill#2657)', () => {
+  const body = renderExternalCheckWaiverComment({
+    actor: 'github-actions[bot]',
+    agentId: 'claude-sonnet5',
+    claimId: 'claim-123',
+    headSha: 'a'.repeat(40),
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'self-referential-bootstrap-auto',
+    expiresAt: '2026-05-18T00:00:00Z',
+    runId: '123456789',
+  });
+
+  assert.match(body, / run-id:123456789 -->/);
+
+  const parsed = parseExternalCheckWaiverComment(body, '2026-05-17T00:00:00Z');
+  assert.deepEqual(parsed, {
+    agentId: 'claude-sonnet5',
+    claimId: 'claim-123',
+    headSha: 'a'.repeat(40),
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'self-referential-bootstrap-auto',
+    expiresAt: '2026-05-18T00:00:00Z',
+    createdAt: '2026-05-17T00:00:00Z',
+    runId: '123456789',
+  });
+});
+
+test('parseExternalCheckWaiverComment ignores a missing run-id (backward compatible)', () => {
+  const legacyBody =
+    '<!-- idd-external-check-waiver: codex-cli claim-123 ' +
+    `${'a'.repeat(40)} check:CodeRabbit reason:rate%20limit ` +
+    'expires:2026-05-18T00:00:00Z -->';
+  const parsed = parseExternalCheckWaiverComment(
+    legacyBody,
+    '2026-05-17T00:00:00Z',
+  );
+  assert.equal(parsed?.runId, '');
 });
 
 test('planExternalCheckWaiver allows a configured non-passing waivable check', () => {
@@ -732,6 +776,349 @@ test('planExternalCheckWaiver leaves other selectors unaffected (#2328)', () => 
 
   assert.equal(report.advisoryConvergenceWaiverPrecondition, undefined);
   assert.equal(report.canApply, true);
+});
+
+// --- kurone-kito/idd-skill#2657: --auto-bootstrap self-referential waiver ---
+
+function buildAutoBootstrapInput(): BaseInput {
+  const input = buildAdvisoryConvergenceInput();
+  input.autoBootstrap = true;
+  input.reason = SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON;
+  input.runId = '123456789';
+  // No human actor/authority for this mode -- the trust model is the
+  // consumer-side run-id/event-type check, not a collaborator permission.
+  input.actor = '';
+  input.authority = {};
+  return input;
+}
+
+test('planExternalCheckWaiver: --auto-bootstrap skips the authority check entirely', () => {
+  const report = planExternalCheckWaiver(buildAutoBootstrapInput(), {
+    now: new Date('2026-08-31T03:13:24Z'), // after the deadline, for simplicity
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.equal(report.actor.known, false); // reported honestly, just never blocked on
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap bypasses the closed deadline-hatch precondition', () => {
+  const report = planExternalCheckWaiver(buildAutoBootstrapInput(), {
+    // Well before the deadline -- the ordinary path (#2328 tests above)
+    // blocks here; auto-bootstrap must not.
+    now: new Date('2026-08-30T22:02:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.advisoryConvergenceWaiverPrecondition?.open, false);
+  assert.equal(report.canApply, true);
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap requires the exact dedicated reason token', () => {
+  const input = buildAutoBootstrapInput();
+  input.reason = 'some-other-reason';
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join(' | '),
+    /requires reason to be exactly "self-referential-bootstrap-auto"/,
+  );
+});
+
+test('planExternalCheckWaiver: rejects the reserved auto-bootstrap reason outside --auto-bootstrap (Codex review, PR #2895)', () => {
+  // summarizeExternalCheckWaivers now deliberately excludes every marker
+  // with this exact reason from generic waiver evidence, so an operator
+  // who copies the documented command but omits --auto-bootstrap would
+  // otherwise get a successful "applied: true" report for a marker no
+  // consumer can ever honor, even past any deadline.
+  const input = buildBaseInput();
+  input.reason = SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON;
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-05-17T00:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join(' | '),
+    /reason "self-referential-bootstrap-auto" is reserved for --auto-bootstrap/,
+  );
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap requires a run id', () => {
+  const input = buildAutoBootstrapInput();
+  input.runId = '';
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(report.blockingReasons.join(' | '), /requires a run id/);
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap rejects a run id that is not a canonical positive integer (Codex review, PR #2895, round 11)', () => {
+  // Same invariant as the CLI-layer parseArgs check, repeated here in case
+  // a future caller constructs the plan input directly instead of
+  // through the CLI (this exact file's own doc comment on the check).
+  for (const invalid of ['0', '-1', '1.5', 'abc', '123/../../evil']) {
+    const input = buildAutoBootstrapInput();
+    input.runId = invalid;
+
+    const report = planExternalCheckWaiver(input, {
+      now: new Date('2026-08-31T03:13:24Z'),
+      repoOwner: 'kurone-kito',
+    });
+
+    assert.equal(report.canApply, false, `run id ${invalid} must block`);
+    assert.match(
+      report.blockingReasons.join(' | '),
+      /canonical positive integer/,
+      `run id ${invalid} must report the canonical-integer reason`,
+    );
+  }
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap cannot be combined with --claimless', () => {
+  const input = buildAutoBootstrapInput();
+  input.claimless = true;
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join(' | '),
+    /cannot be combined with --claimless/,
+  );
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap falls back to a claimless (none) binding when no linked issue resolves (Codex review, PR #2895)', () => {
+  // A fully claimless allowlisted PR under the template default
+  // `advisoryWait.convergenceScope: "all-prs"` -- no closing issue at all,
+  // so `issueCandidates` resolves nothing. The real workflow invocation
+  // always sets `actor = 'github-actions[bot]'` for --auto-bootstrap
+  // (runExternalCheckWaiver), unlike buildAutoBootstrapInput()'s simplified
+  // empty actor used by the authority-skip tests above.
+  const input = buildAutoBootstrapInput();
+  input.issueCandidates = [];
+  input.actor = 'github-actions[bot]';
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.equal(report.linkedIssue, null);
+  const parsed = parseExternalCheckWaiverComment(
+    report.body,
+    '2026-08-31T03:13:24Z',
+  );
+  assert.equal(parsed?.claimId, 'none');
+  assert.equal(parsed?.agentId, 'github-actions[bot]');
+  assert.equal(parsed?.reason, SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON);
+  assert.equal(parsed?.runId, '123456789');
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap still blocks on an empty actor when no linked issue resolves (Codex review, PR #2895)', () => {
+  // buildAutoBootstrapInput()'s own default actor (''), simulating a direct
+  // caller (e.g. a test or a future integration) that constructs the
+  // autoBootstrap input by hand without also supplying an actor -- the
+  // real CLI path always supplies 'github-actions[bot]' (see above), but
+  // the claimless fallback must not silently produce an unbindable marker.
+  const input = buildAutoBootstrapInput();
+  input.issueCandidates = [];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(report.blockingReasons.join(' | '), /actor is empty/);
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap still blocks an ambiguous multi-issue PR (Copilot review, PR #2895)', () => {
+  // Two candidates instead of zero -- the OTHER selectLinkedIssueCandidate
+  // failure reason. Unlike the fully-absent case, some claim genuinely
+  // exists here, just not uniquely identified from this input alone --
+  // the implicit-claimless fallback is restricted to `candidateCount ===
+  // 0` precisely so this ambiguous case still blocks instead of silently
+  // binding `none`, since this file's own claim resolution has no way to
+  // prove `advisory-convergence.mts`'s own (different) claim-resolution
+  // mechanism would treat the ambiguity the same way.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  const [issue] = input.issueCandidates;
+  input.issueCandidates = [
+    issue,
+    { ...issue, number: Number(issue.number) + 1 },
+  ];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join(' | '),
+    /multiple linked issues expose active claims/,
+  );
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap still binds to the real claim on a branch-mismatched linked issue (Codex review, PR #2895, round 11)', () => {
+  // computeAdvisoryConvergenceVerdict's own idd-claimed scope-applicability
+  // logic (the pinned "#1686 path 3 symmetry" test) deliberately keeps a
+  // branch-mismatch PR auto-waivable, PROVIDED the marker binds to the
+  // real, known claim id -- never the `none` sentinel, which
+  // protocol-helpers.mts's claimBindingSatisfied check always rejects when
+  // a non-empty active claim resolves at the gate. Before this fix,
+  // selectLinkedIssueCandidate's own branch filter treated a
+  // branch-mismatched claim exactly like no claim at all, so this case fell
+  // through to the zero-candidate implicit-claimless fallback and rendered
+  // an unbindable `none` marker -- defeating the one path this mechanism
+  // exists to unblock.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  const [issue] = input.issueCandidates;
+  input.issueCandidates = [
+    {
+      ...issue,
+      activeClaim: issue.activeClaim
+        ? { ...issue.activeClaim, branch: 'some-other-branch' }
+        : null,
+    },
+  ];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  const parsed = parseExternalCheckWaiverComment(
+    report.body,
+    '2026-08-31T03:13:24Z',
+  );
+  assert.equal(parsed?.claimId, 'claim-20260517T060713Z-667-7f8f9c0d');
+  assert.equal(parsed?.agentId, 'codex-cli-7f8f9c0d');
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap renders the run-id field into the marker body', () => {
+  const report = planExternalCheckWaiver(buildAutoBootstrapInput(), {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.match(report.body, / run-id:123456789 -->/);
+  const parsed = parseExternalCheckWaiverComment(
+    report.body,
+    '2026-08-31T03:13:24Z',
+  );
+  assert.equal(parsed?.runId, '123456789');
+  assert.equal(parsed?.reason, SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON);
+  // Binds to the linked issue's REAL active claim, never `none`.
+  assert.equal(parsed?.claimId, 'claim-20260517T060713Z-667-7f8f9c0d');
+});
+
+test('parseArgs: --auto-bootstrap requires --run-id, the dedicated --reason, and rejects an explicit expiry', () => {
+  const base = [
+    '--pr',
+    '5',
+    '--check',
+    'idd-advisory-convergence',
+    '--reason',
+    SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    '--run-id',
+    '999',
+  ];
+  assert.equal(parseArgs([...base, '--auto-bootstrap']).autoBootstrap, true);
+  assert.equal(parseArgs([...base, '--auto-bootstrap']).runId, '999');
+
+  assert.throws(
+    () =>
+      parseArgs([
+        '--pr',
+        '5',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--auto-bootstrap',
+      ]),
+    /requires --run-id/,
+  );
+  assert.throws(
+    () =>
+      parseArgs([
+        '--pr',
+        '5',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        'a-different-reason',
+        '--run-id',
+        '999',
+        '--auto-bootstrap',
+      ]),
+    /requires --reason self-referential-bootstrap-auto/,
+  );
+  assert.throws(
+    () => parseArgs([...base, '--auto-bootstrap', '--expires-in', 'PT2H']),
+    /do not pass --expires or --expires-in/,
+  );
+  assert.throws(
+    () => parseArgs([...base, '--auto-bootstrap', '--claimless']),
+    /cannot be combined with --claimless/,
+  );
+});
+
+test('parseArgs: --auto-bootstrap rejects a --run-id that is not a canonical positive integer (Codex review, PR #2895, round 11)', () => {
+  // `advisory-convergence.mts`'s `collectFromGitHub` only ever trusts a
+  // `run-id:` token that parses as a canonical positive integer
+  // (`parseCanonicalIntegerOrNull`, guarding against path-injection into
+  // the Actions REST run-lookup path). Posting a marker with a run id
+  // that consumer is guaranteed to reject would leave the required gate
+  // red with no visible cause -- reject it here, at the producer, instead.
+  const base = [
+    '--pr',
+    '5',
+    '--check',
+    'idd-advisory-convergence',
+    '--reason',
+    SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    '--auto-bootstrap',
+  ];
+  for (const invalid of ['0', '-1', '1.5', 'abc', '007', '123/../../evil']) {
+    assert.throws(
+      () => parseArgs([...base, '--run-id', invalid]),
+      /canonical positive integer/,
+      `--run-id ${invalid} must be rejected`,
+    );
+  }
+  assert.equal(
+    parseArgs([...base, '--run-id', '999']).runId,
+    '999',
+    'a genuine canonical positive integer must still be accepted',
+  );
+});
+
+test('parseArgs: --auto-bootstrap defaults off, and --run-id defaults empty', () => {
+  const parsed = parseArgs(['--pr', '5', '--check', 'x', '--reason', 'y']);
+  assert.equal(parsed.autoBootstrap, false);
+  assert.equal(parsed.runId, '');
 });
 
 test('parseArgs: --allow-closed-precondition defaults off and parses (#2328)', () => {
@@ -1305,6 +1692,1032 @@ test('runExternalCheckWaiver reports no race when its own marker stands alone (#
   assert.equal(report?.concurrentWaivers, undefined);
 });
 
+test('runExternalCheckWaiver: --auto-bootstrap posts end to end with no viewer-identity or collaborator-authority lookup', async () => {
+  let posted: { prNumber: number; body: string } | undefined;
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    // Deliberately NOT supplying options.actor/options.authority: an
+    // auto-bootstrap run must never need either, so a bug that reintroduces
+    // a `gh api user` or collaborator-permission call would surface as a
+    // real subprocess spawn attempt in this test's sandbox instead of
+    // silently passing.
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: () => [],
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T18:20:00Z'), // well before the deadline
+    isTTY: false,
+    postComment: (prNumber, body) => {
+      posted = { prNumber, body };
+      return { html_url: 'https://example.invalid/posted' };
+    },
+  });
+
+  assert.equal(report?.applied, true);
+  assert.equal(report?.actor.known, false); // no authority check ever ran
+  assert.equal(posted?.prNumber, 2325);
+  assert.match(posted?.body ?? '', /reason:self-referential-bootstrap-auto/);
+  assert.match(posted?.body ?? '', / run-id:555 -->/);
+  const parsed = parseExternalCheckWaiverComment(
+    posted?.body ?? '',
+    '2026-08-30T18:20:00Z',
+  );
+  // The fixed PT24H window anchored on the HEAD commit timestamp, not
+  // caller-suppliable and independent of advisoryWait.convergenceDeadline.
+  assert.equal(parsed?.expiresAt, '2026-08-31T18:13:24Z');
+  assert.equal(parsed?.claimId, 'claim-20260830T222316Z-2328');
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap never reuses an existing same-reason marker, even one with no verifiable run-id (Codex review, PR #2895, round 2)', async () => {
+  // kurone-kito/idd-skill#2657: the generic reuse scan correlates on
+  // `reason` but never validates a candidate's `run-id:` against the
+  // Actions Runs API. A forged marker with the exact
+  // self-referential-bootstrap-auto reason token but no run-id (or an
+  // unverifiable one) would previously still be accepted as "reusable",
+  // causing this job to skip posting its own valid, run-bound marker --
+  // silently leaving the required check red once the consumer correctly
+  // rejects the unverifiable reused one. Reuse must be disabled entirely
+  // for --auto-bootstrap, so this must always attempt to post regardless
+  // of what is already present.
+  const forgedMarker = {
+    id: 900,
+    html_url:
+      'https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-900',
+    created_at: '2026-08-30T18:15:00Z',
+    user: { login: 'github-actions[bot]' },
+    body: renderExternalCheckWaiverComment({
+      actor: 'github-actions[bot]',
+      agentId: 'github-actions-bot',
+      claimId: 'claim-20260830T222316Z-2328',
+      headSha: REUSE_HEAD_SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      expiresAt: '2099-01-01T00:00:00Z',
+      // Deliberately no run-id: the forged-marker shape this fix defends
+      // against never has a verifiable one.
+    }),
+  };
+  let posted: { prNumber: number; body: string } | undefined;
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: () => [forgedMarker],
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T18:20:00Z'),
+    isTTY: false,
+    postComment: (prNumber, body) => {
+      posted = { prNumber, body };
+      return { html_url: 'https://example.invalid/posted' };
+    },
+  });
+
+  assert.equal(
+    report?.applied,
+    true,
+    'must post its own marker instead of reusing the pre-existing same-reason one',
+  );
+  assert.equal(report?.reusedWaiver, undefined);
+  assert.equal(posted?.prNumber, 2325);
+  assert.match(posted?.body ?? '', / run-id:555 -->/);
+});
+
+function autoBootstrapWaiverComment({
+  id,
+  createdAt,
+  runId,
+}: {
+  id: number;
+  createdAt: string;
+  runId: string;
+}) {
+  return {
+    id,
+    html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${id}`,
+    created_at: createdAt,
+    user: { login: 'github-actions[bot]' },
+    body: renderExternalCheckWaiverComment({
+      actor: 'github-actions[bot]',
+      agentId: 'github-actions-bot',
+      claimId: 'claim-20260830T222316Z-2328',
+      headSha: REUSE_HEAD_SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      // Within the configured PT24H maxValidity of `createdAt`, unlike the
+      // deliberately far-future expiry other fixtures in this file use for
+      // tests that don't care about `evidence.valid` classification -- this
+      // one does, and a maxValidity-violating expiry lands in `expired`
+      // instead (summarizeExternalCheckWaivers's own re-enforcement of the
+      // configured window at consume time), never reaching `valid` at all.
+      expiresAt: '2026-08-31T10:00:00Z',
+      runId,
+    }),
+  };
+}
+
+test('runExternalCheckWaiver: --auto-bootstrap detects a concurrent duplicate auto-bootstrap post (Copilot review, PR #2895)', async () => {
+  // The pre-write reuse scan is disabled entirely for --auto-bootstrap (see
+  // that call site's own doc comment), so the post-write reconcile below is
+  // the ONLY concurrent-duplicate detection this mode has. Before this fix,
+  // `buildWaiverEvidence`'s summarizeExternalCheckWaivers call left
+  // `allowSelfReferentialBootstrapAuto` unset, so it excluded EVERY
+  // self-referential-bootstrap-auto-reasoned marker from `evidence.valid`
+  // -- including the one this very invocation just posted -- making
+  // `concurrentWaivers` always empty for this mode regardless of how many
+  // concurrent posts actually raced. Mirrors the ordinary-waiver race test
+  // above ("reports a waiver that raced its own post"), scoped to
+  // --auto-bootstrap instead.
+  let reads = 0;
+  const raced = autoBootstrapWaiverComment({
+    id: 300,
+    createdAt: '2026-08-30T18:19:00Z',
+    runId: '111',
+  });
+  const mine = autoBootstrapWaiverComment({
+    id: 400,
+    createdAt: '2026-08-30T18:20:00Z',
+    runId: '555',
+  });
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    // First read: empty (pre-write is skipped for --auto-bootstrap anyway).
+    // Post-write reconcile read: the competitor's marker plus this run's
+    // own -- the race.
+    prComments: () => {
+      reads += 1;
+      return reads === 1 ? [] : [raced, mine];
+    },
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T18:20:00Z'),
+    isTTY: false,
+    postComment: () => ({ html_url: 'https://example.invalid/posted' }),
+  });
+
+  assert.equal(report?.applied, true);
+  assert.deepEqual(
+    report?.concurrentWaivers?.map((entry) => entry.commentId),
+    ['300', '400'],
+  );
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap exits 0 (graceful skip) when the adopter has not opted into the waiver policy (Codex review, PR #2895)', async () => {
+  // The distributed template's own shipped .github/idd/config.json omits
+  // ciGate entirely, so an adopter who hosts this workflow without ALSO
+  // opting into ciGate.externalCheckWaivers.mode: "maintainer-authorized"
+  // and registering this selector under ciGate.externalChecks.waivable
+  // would otherwise have this job fail on every single
+  // allowlisted-touching PR. This must be a graceful no-op, not a
+  // thrown error, for --auto-bootstrap specifically.
+  const dir = mkdtempSync(join(tmpdir(), 'idd-waiver-auto-bootstrap-skip-'));
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    // No ciGate key at all -- matches the shipped template default
+    // exactly.
+    writeFileSync(join(dir, '.github', 'idd', 'config.json'), '{}');
+    process.chdir(dir);
+
+    let postCalls = 0;
+    const { exitCode, report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          '--run-id',
+          '555',
+          '--auto-bootstrap',
+          '--apply',
+          '--yes',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+      },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+          },
+        ],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: () => [],
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T18:20:00Z'),
+      isTTY: false,
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'https://example.invalid/posted' };
+      },
+    });
+
+    assert.equal(
+      exitCode,
+      0,
+      'must exit 0, not throw, for a config-only block',
+    );
+    assert.equal(report?.applied, false);
+    assert.equal(postCalls, 0);
+    assert.ok(
+      report?.blockingReasons?.includes(
+        'external-check waiver mode is disabled',
+      ),
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap exits 0 (graceful skip) when the policy is disabled AND the PR closes multiple actively claimed issues (Codex review, PR #2895, round 12)', async () => {
+  // Combining the config-only block above with an UNRELATED linked-issue
+  // ambiguity (two closing issues both exposing an active claim) used to
+  // defeat the graceful skip entirely: the original `.every(...)` check
+  // required ALL blocking reasons to be config-only, but the ambiguity
+  // reason was never in that set, so it still threw -- even though posting
+  // was already impossible for the config reason alone, regardless of
+  // which claim would have been chosen. Resolving the claim is moot once
+  // the policy itself rules out posting.
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-waiver-auto-bootstrap-skip-ambiguous-'),
+  );
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(join(dir, '.github', 'idd', 'config.json'), '{}');
+    process.chdir(dir);
+
+    let postCalls = 0;
+    const { exitCode, report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          '--run-id',
+          '555',
+          '--auto-bootstrap',
+          '--apply',
+          '--yes',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+      },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+          },
+        ],
+      },
+      // TWO closing issues, both exposing an active claim on the PR
+      // branch -- the ambiguous-claim shape.
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+        {
+          number: 2329,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2329',
+          activeClaim: {
+            agentId: 'claude-8888',
+            claimId: 'claim-20260830T222316Z-2329',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: () => [],
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T18:20:00Z'),
+      isTTY: false,
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'https://example.invalid/posted' };
+      },
+    });
+
+    assert.equal(
+      exitCode,
+      0,
+      'must exit 0, not throw, when policy-disabled combines with claim ambiguity',
+    );
+    assert.equal(report?.applied, false);
+    assert.equal(postCalls, 0);
+    assert.ok(
+      report?.blockingReasons?.includes(
+        'external-check waiver mode is disabled',
+      ),
+    );
+    assert.ok(
+      report?.blockingReasons?.includes(
+        'multiple linked issues expose active claims on the PR branch; rerun with --issue and --claim-id',
+      ),
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap still throws on a genuine blocking reason, not only a config-only one (Codex review, PR #2895)', async () => {
+  // The graceful skip above must stay narrowly scoped to the two known
+  // adopter-configuration-only reasons -- a REAL problem (here: the PR
+  // itself is closed) must still surface as a thrown error, exactly as
+  // before.
+  const dir = mkdtempSync(join(tmpdir(), 'idd-waiver-auto-bootstrap-real-'));
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(join(dir, '.github', 'idd', 'config.json'), '{}');
+    process.chdir(dir);
+
+    await assert.rejects(
+      () =>
+        runExternalCheckWaiver({
+          args: {
+            ...parseArgs([
+              '--pr',
+              '2325',
+              '--check',
+              'idd-advisory-convergence',
+              '--reason',
+              SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+              '--run-id',
+              '555',
+              '--auto-bootstrap',
+              '--apply',
+              '--yes',
+            ]),
+            repo: 'kurone-kito/idd-skill',
+          },
+          pr: {
+            number: 2325,
+            state: 'CLOSED',
+            url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+            headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            headRefOid: REUSE_HEAD_SHA,
+            statusCheckRollup: [
+              {
+                __typename: 'CheckRun',
+                name: 'idd-advisory-convergence',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+              },
+            ],
+          },
+          issueCandidates: [
+            {
+              number: 2328,
+              url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+              activeClaim: {
+                agentId: 'claude-6043e89f',
+                claimId: 'claim-20260830T222316Z-2328',
+                supersedes: 'none',
+                branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+                createdAt: '2026-08-30T22:23:26Z',
+              },
+            },
+          ],
+          prComments: () => [],
+          headCommittedAt: '2026-08-30T18:13:24Z',
+          now: new Date('2026-08-30T18:20:00Z'),
+          isTTY: false,
+          postComment: () => ({ html_url: 'https://example.invalid/posted' }),
+        }),
+      /is not open/,
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap still posts when a same-named check already reports a passing conclusion (Codex review, PR #2895, round 12)', () => {
+  // Round 11 initially treated this as a benign skip, but Codex's follow-up
+  // (round 12) found that reading is unsafe: the origin workflow's verdict
+  // job declares `needs: idd-advisory-convergence-self-waiver`, so within
+  // the very pull_request_target run whose self-waiver job posts this
+  // marker, that run's OWN verdict job cannot have posted a conclusion yet
+  // -- any "already passing" snapshot is necessarily from a DIFFERENT run,
+  // most notably the untrusted, code-fixed sibling pull_request-triggered
+  // instance during the #2764 Phase 1 dual-trigger period. That sibling's
+  // pass proves nothing about whether the sequenced-after, base-branch-
+  // checker verdict instance still needs the marker -- skipping there would
+  // permanently strand an eligible PR red with no other event to retrigger
+  // it. planExternalCheckWaiver must therefore never treat "matched checks
+  // are already passing" as blocking for --auto-bootstrap at all; posting a
+  // redundant marker when one turns out to be unnecessary is harmless.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  input.pr.statusCheckRollup = [
+    {
+      __typename: 'CheckRun',
+      name: 'idd-advisory-convergence',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+    },
+  ];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.deepEqual(report.blockingReasons, []);
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap still posts when no check has been created yet for the selector (Copilot review, PR #2895, round 12)', () => {
+  // The same needs:-sequencing deadlock, the other direction: once the
+  // #2764 Phase 1 dual-trigger period ends and only pull_request_target
+  // remains, the verdict job's check-run entry for the CURRENT run is
+  // guaranteed not to exist yet when this job reads the rollup (it is
+  // downstream of this very job). A bounded wait/retry cannot help --
+  // the check being waited for cannot complete until after this job does
+  // -- so planExternalCheckWaiver must never block --auto-bootstrap on
+  // "did not match any current PR checks" either.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  input.pr.statusCheckRollup = [];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.deepEqual(report.blockingReasons, []);
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap still blocks when the requested selector is not registered as waivable AND no live check exists yet (Codex review, PR #2895, round 13)', () => {
+  // The two tests just above prove --auto-bootstrap never blocks on live
+  // check ROLLUP TIMING (already passing, or not created yet). But
+  // combining "no live check yet" with a genuine POLICY misconfiguration
+  // (the selector was never registered under
+  // ciGate.externalChecks.waivable at all) must still block: the
+  // uncoveredChecks guard that would normally catch this only inspects
+  // checks already in matchedChecks, which is empty here for the same
+  // needs:-sequencing reason as the "no check created yet" test above --
+  // so without a policy-only check independent of any live check, this
+  // misconfiguration would silently pass through as canApply: true and
+  // post a marker no consumer can ever honor.
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  input.pr.statusCheckRollup = [];
+  input.policy = normalizePolicyConfig({
+    ciGate: {
+      externalChecks: { waivable: [] },
+      externalCheckWaivers: {
+        mode: 'maintainer-authorized',
+        authorityPolicy: 'owners-and-maintainers-only',
+        maxValidity: 'PT24H',
+      },
+    },
+  });
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.deepEqual(report.blockingReasons, [
+    'requested selector idd-advisory-convergence is not configured as a ' +
+      'waivable external check (ciGate.externalChecks.waivable)',
+  ]);
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap exits 0 (graceful skip) when the requested selector is not registered as waivable AND no live check exists yet (Codex review, PR #2895, round 13)', async () => {
+  // Same misconfiguration as the planExternalCheckWaiver-level test above,
+  // exercised end to end: the graceful-skip set must also recognize this
+  // new blocking reason as adopter-configuration-only, matching the
+  // documented unconfigured-policy no-op rather than failing the job.
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-waiver-auto-bootstrap-unregistered-selector-'),
+  );
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github', 'idd', 'config.json'),
+      JSON.stringify({
+        ciGate: {
+          externalChecks: { waivable: [] },
+          externalCheckWaivers: {
+            mode: 'maintainer-authorized',
+            authorityPolicy: 'owners-and-maintainers-only',
+            maxValidity: 'PT24H',
+          },
+        },
+      }),
+    );
+    process.chdir(dir);
+
+    let postCalls = 0;
+    const { exitCode, report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          '--run-id',
+          '555',
+          '--auto-bootstrap',
+          '--apply',
+          '--yes',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+      },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        // No live check for the selector yet -- the same needs:-sequencing
+        // gap the round 12 tests above cover.
+        statusCheckRollup: [],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: () => [],
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T18:20:00Z'),
+      isTTY: false,
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'https://example.invalid/posted' };
+      },
+    });
+
+    assert.equal(
+      exitCode,
+      0,
+      'must exit 0, not throw, for a config-only block',
+    );
+    assert.equal(report?.applied, false);
+    assert.equal(postCalls, 0);
+    assert.ok(
+      report?.blockingReasons?.some((reason) =>
+        reason.includes('is not configured as a waivable external check'),
+      ),
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap clamps its fixed expiry to a configured shorter maxValidity (Codex review, PR #2895)', async () => {
+  // The fixed PT24H default is anchored on the HEAD commit timestamp
+  // independent of `advisoryWait.convergenceDeadline` (see the test above),
+  // but `planExternalCheckWaiver`'s own `withinMaxValidity` check compares
+  // whatever expiry is computed against the adopter's configured
+  // `ciGate.externalCheckWaivers.maxValidity` -- unconditionally, for every
+  // waiver kind. An adopter configuring a STRICTER maximum than PT24H (e.g.
+  // PT2H) would therefore have every auto-bootstrap marker rejected by its
+  // own posting job unless the computation clamps to that configured
+  // ceiling instead of always using the fixed default.
+  const dir = mkdtempSync(join(tmpdir(), 'idd-waiver-auto-bootstrap-clamp-'));
+  const originalCwd = process.cwd();
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github', 'idd', 'config.json'),
+      JSON.stringify({
+        ciGate: {
+          externalCheckWaivers: {
+            mode: 'maintainer-authorized',
+            maxValidity: 'PT2H',
+          },
+          externalChecks: {
+            waivable: [
+              { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+            ],
+          },
+        },
+      }),
+    );
+    process.chdir(dir);
+
+    let posted: { prNumber: number; body: string } | undefined;
+    const { report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+          '--run-id',
+          '555',
+          '--auto-bootstrap',
+          '--apply',
+          '--yes',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+      },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+          },
+        ],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: () => [],
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T18:20:00Z'),
+      isTTY: false,
+      postComment: (prNumber, body) => {
+        posted = { prNumber, body };
+        return { html_url: 'https://example.invalid/posted' };
+      },
+    });
+
+    assert.equal(
+      report?.applied,
+      true,
+      'a shorter configured maxValidity must not block the clamped auto-bootstrap marker',
+    );
+    const parsed = parseExternalCheckWaiverComment(
+      posted?.body ?? '',
+      '2026-08-30T18:20:00Z',
+    );
+    // Clamped to PT2H from the HEAD commit timestamp, not the fixed PT24H
+    // default the un-clamped test above pins.
+    assert.equal(parsed?.expiresAt, '2026-08-30T20:13:24Z');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap anchors expiry on "now" when the HEAD commit timestamp is stale (CodeRabbit review, PR #2895)', async () => {
+  // A pull_request_target `reopened` trigger can fire with no new commit,
+  // so the HEAD commit timestamp can be far older than "now" for a
+  // long-stale PR. Anchoring purely on that HEAD timestamp would compute
+  // an expiry already in the past, which planExternalCheckWaiver's own
+  // "expiry must be in the future" check rejects -- silently blocking the
+  // auto-bootstrap post in exactly the stale-reopen scenario the
+  // workflow's own trigger list invites.
+  let posted: { prNumber: number; body: string } | undefined;
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: () => [],
+    // A week old relative to `now` below -- HEAD + PT24H would be
+    // 2026-08-26T18:13:24Z, days in the past relative to `now`.
+    headCommittedAt: '2026-08-25T18:13:24Z',
+    now: new Date('2026-09-01T12:00:00Z'),
+    isTTY: false,
+    postComment: (prNumber, body) => {
+      posted = { prNumber, body };
+      return { html_url: 'https://example.invalid/posted' };
+    },
+  });
+
+  assert.equal(
+    report?.applied,
+    true,
+    'a stale HEAD commit timestamp must not block the auto-bootstrap marker',
+  );
+  const parsed = parseExternalCheckWaiverComment(
+    posted?.body ?? '',
+    '2026-09-01T12:00:00Z',
+  );
+  // Anchored on "now" (2026-09-01T12:00:00Z) + PT24H, not the stale HEAD
+  // commit timestamp.
+  assert.equal(parsed?.expiresAt, '2026-09-02T12:00:00Z');
+});
+
+test('runExternalCheckWaiver: --auto-bootstrap clamps expiry when the HEAD commit timestamp is future-dated (Codex review, PR #2895, round 12)', async () => {
+  // A HEAD commit timestamp even slightly ahead of the runner clock
+  // (author-supplied Git timestamp, or clock skew) previously computed
+  // `headMs + clampedDurationMs` later than `now + maxValidity`, so
+  // planExternalCheckWaiver's own "expiry exceeds configured maxValidity"
+  // check rejected the marker -- leaving an eligible checker-edit PR unable
+  // to bootstrap. Anchoring on min(headMs, nowMs) caps the anchor at "now"
+  // instead.
+  let posted: { prNumber: number; body: string } | undefined;
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        '--run-id',
+        '555',
+        '--auto-bootstrap',
+        '--apply',
+        '--yes',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+    },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: () => [],
+    // 12 hours ahead of "now" below -- HEAD + PT24H would be
+    // 2026-09-03T00:00:00Z, later than now + PT24H (2026-09-02T12:00:00Z).
+    headCommittedAt: '2026-09-02T00:00:00Z',
+    now: new Date('2026-09-01T12:00:00Z'),
+    isTTY: false,
+    postComment: (prNumber, body) => {
+      posted = { prNumber, body };
+      return { html_url: 'https://example.invalid/posted' };
+    },
+  });
+
+  assert.equal(
+    report?.applied,
+    true,
+    'a future-dated HEAD commit timestamp must not block the auto-bootstrap marker',
+  );
+  const parsed = parseExternalCheckWaiverComment(
+    posted?.body ?? '',
+    '2026-09-01T12:00:00Z',
+  );
+  // Anchored on "now" (2026-09-01T12:00:00Z) + PT24H, not the future-dated
+  // HEAD commit timestamp.
+  assert.equal(parsed?.expiresAt, '2026-09-02T12:00:00Z');
+});
+
 test('runExternalCheckWaiver reads one post-write snapshot for the reconcile (#2328 review)', async () => {
   // Two sequential reads would leave `comments` older than `evidence`, and
   // the correlation can only find markers present in `comments` — so a
@@ -1541,6 +2954,144 @@ test('collectValidWaiverComments distinguishes entries by reason too (#2328 revi
   );
 });
 
+test('collectValidWaiverComments with expectedReason excludes an otherwise-fully-valid candidate whose own reason does not match it (Codex review, PR #2895)', () => {
+  // kurone-kito/idd-skill#2657: `--auto-bootstrap`'s reuse scan trusts
+  // `github-actions[bot]` as a marker author (it is the viewer), so
+  // WITHOUT `expectedReason` any other `github-actions[bot]`-authored,
+  // same-selector marker -- e.g. one a PR-controlled `pull_request`
+  // workflow could forge with a different reason -- would still correlate
+  // against a genuinely `valid` evidence entry and be reported reusable.
+  // `expectedReason` closes that: it is checked against the CANDIDATE
+  // COMMENT's own parsed `reason`, independent of what the evidence entry
+  // reports.
+  const genuineReason = SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON;
+  const forgedReason = 'a-forged-different-reason';
+  const sameSecond = '2026-08-30T22:05:01Z';
+  const forgedBody = renderExternalCheckWaiverComment({
+    actor: 'github-actions[bot]',
+    agentId: 'github-actions-bot',
+    claimId: 'claim-abc',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'idd-advisory-convergence',
+    reason: forgedReason,
+    expiresAt: '2026-08-31T10:00:00Z',
+  });
+  const forged = {
+    id: 300,
+    html_url:
+      'https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-300',
+    created_at: sameSecond,
+    user: { login: 'github-actions[bot]' },
+    body: forgedBody,
+  };
+  const evidence = {
+    valid: [
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt: sameSecond,
+        authorLogin: 'github-actions[bot]',
+        // The evidence entry's own `reason` still reflects the forged
+        // comment's actual reason -- `expectedReason` must reject this
+        // independent of whether the summarizer happened to classify the
+        // forged marker `valid` for some other selector/author reason.
+        reason: forgedReason,
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+    modeDisabled: [],
+  } as never;
+
+  const withoutExpectedReason = collectValidWaiverComments({
+    comments: [forged],
+    evidence,
+    checkSelector: 'idd-advisory-convergence',
+  });
+  assert.deepEqual(
+    withoutExpectedReason.map((entry) => entry.commentId),
+    ['300'],
+    'sanity check: without expectedReason the forged marker correlates normally',
+  );
+
+  const withExpectedReason = collectValidWaiverComments({
+    comments: [forged],
+    evidence,
+    checkSelector: 'idd-advisory-convergence',
+    expectedReason: genuineReason,
+  });
+  assert.deepEqual(
+    withExpectedReason,
+    [],
+    'expectedReason rejects a candidate whose own reason token does not match, even when evidence otherwise classifies it valid',
+  );
+
+  assert.equal(
+    findReusableWaiverComment({
+      comments: [forged],
+      evidence,
+      checkSelector: 'idd-advisory-convergence',
+      expectedReason: genuineReason,
+    }),
+    null,
+  );
+});
+
+test('collectValidWaiverComments with expectedReason still includes a candidate whose own reason matches it (Codex review, PR #2895)', () => {
+  const reason = SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON;
+  const createdAt = '2026-08-30T22:05:01Z';
+  const body = renderExternalCheckWaiverComment({
+    actor: 'github-actions[bot]',
+    agentId: 'github-actions-bot',
+    claimId: 'claim-abc',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'idd-advisory-convergence',
+    reason,
+    expiresAt: '2026-08-31T10:00:00Z',
+  });
+  const comment = {
+    id: 400,
+    html_url:
+      'https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-400',
+    created_at: createdAt,
+    user: { login: 'github-actions[bot]' },
+    body,
+  };
+  const evidence = {
+    valid: [
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt,
+        authorLogin: 'github-actions[bot]',
+        reason,
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+    modeDisabled: [],
+  } as never;
+
+  const found = collectValidWaiverComments({
+    comments: [comment],
+    evidence,
+    checkSelector: 'idd-advisory-convergence',
+    expectedReason: reason,
+  });
+  assert.deepEqual(
+    found.map((entry) => entry.commentId),
+    ['400'],
+  );
+});
+
 test('collectValidWaiverComments rejects a wrong-HEAD or wrong-claim twin (#2328 review)', () => {
   // The summarizer keeps a wrong-HEAD or wrong-claim marker out of `valid`,
   // but the entry it produces for a genuine sibling carries no binding of its
@@ -1699,5 +3250,50 @@ test('runExternalCheckWaiver reconciles against the refreshed claim after a take
     report?.concurrentWaivers?.map((entry) => entry.commentId),
     ['500', '501'],
     'both the A-bound and B-bound waivers are live to the gate after the takeover',
+  );
+});
+
+test('operationalMarkerPrefix recognizes a run-id-bound external-check-waiver marker (Codex review, PR #2895)', () => {
+  // The trailing run-id: field is optional -- only --auto-bootstrap posts
+  // it -- and this generic operational-marker shape check must accept it
+  // the same way parseExternalCheckWaiverComment's own regex already
+  // does. Without this, an auto-bootstrap marker's own comment fails this
+  // check, operationalMarkerPrefix returns null for it, and
+  // summarizeRegularCommentsForGate/summarizeDispositionEvidenceForGate
+  // misclassify the bot's own posted marker as unreplied regular
+  // feedback requiring human disposition -- a comment no one will ever
+  // reply to, permanently routing F2 back to E1 even after the waiver
+  // makes the required check ready.
+  const body = renderExternalCheckWaiverComment({
+    actor: 'github-actions[bot]',
+    agentId: 'github-actions-bot',
+    claimId: 'claim-abc',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'idd-advisory-convergence',
+    reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+    expiresAt: '2099-01-01T00:00:00Z',
+    runId: '555',
+  });
+
+  assert.equal(
+    operationalMarkerPrefix(body),
+    '<!-- idd-external-check-waiver:',
+  );
+});
+
+test('operationalMarkerPrefix still recognizes an ordinary external-check-waiver marker with no run-id (non-regression)', () => {
+  const body = renderExternalCheckWaiverComment({
+    actor: 'kurone-kito',
+    agentId: 'claude-6043e89f',
+    claimId: 'claim-abc',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'CodeRabbit',
+    reason: 'rate limit',
+    expiresAt: '2099-01-01T00:00:00Z',
+  });
+
+  assert.equal(
+    operationalMarkerPrefix(body),
+    '<!-- idd-external-check-waiver:',
   );
 });

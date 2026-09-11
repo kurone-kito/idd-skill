@@ -437,6 +437,44 @@ test('classifyThreadAckOnlyPostDisposition still recognizes a known-template cou
   assert.equal(classification.ackOnlyPostDisposition, true);
 });
 
+test('classifyThreadAckOnlyPostDisposition recognizes "acknowledged" as a courtesy-ack opening verb (kurone-kito/idd-skill#2657, PR #2895, round 17)', () => {
+  // Freshly observed on PR #2895 itself: CodeRabbit's reply opened with
+  // "`@kurone-kito`, acknowledged. ..." -- the same confirmation/dismissal
+  // opener class the "thanks/confirmed/agreed" verbs already cover, just a
+  // synonym the original 18-sample derivation did not happen to include.
+  const thread = {
+    id: 'thread-acknowledged-ack',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'ACK-1',
+          author: { login: 'idd-bot' },
+          body: '**Rejected** — reaffirming.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'ACK-2',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, acknowledged. The whole-file allowlist policy is deliberate and applies across helper-runtime profiles. This finding remains withdrawn.\n\n🐇\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, true);
+});
+
 test('classifyThreadAckOnlyPostDisposition rejects a novel substantive reply that merely avoids disposition phrasing (#2641)', () => {
   // A brand-new finding that happens not to be shaped like
   // `**Accepted**`/`**Rejected**` must not misclassify as ack-only just

@@ -52,10 +52,20 @@ concurrency:
   # it), so grouping by ref would collapse unrelated PRs into one slot.
   # Review-thread comments and review submissions live in the companion
   # idd-advisory-convergence-comment.yml workflow and must not share
-  # this group. Keep pull_request and pull_request_target in their
-  # existing group, but isolate workflow_dispatch so a manual re-check
-  # cannot cancel an in-flight PR-linked run.
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || github.event.pull_request.number || inputs.pr_number }}
+  # this group. Isolate workflow_dispatch so a manual re-check cannot
+  # cancel an in-flight PR-linked run.
+  #
+  # kurone-kito/idd-skill#2657 (Codex review, PR #2895): also isolate
+  # pull_request from pull_request_target (previously grouped together)
+  # -- both fire on the same opened/synchronize PR event, so whichever
+  # instance started later could cancel the other mid-run, including the
+  # pull_request_target instance's own idd-advisory-convergence-self-
+  # waiver job, which would then never finish posting the bootstrap
+  # marker for that push (a cancelled run is not itself a new trigger,
+  # so recovery would need a manual rerun -- defeating the whole
+  # no-human-click point of that job). A new push still correctly
+  # cancels a STALE run of the SAME event type for the same PR.
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || format('{0}-{1}', github.event_name, github.event.pull_request.number || inputs.pr_number) }}
 on:
   # Trigger-migration transition state: pull_request is evaluated
   # against the pull request's own merge ref, so a same-repository PR
@@ -122,6 +132,40 @@ jobs:
     # once you have history (see idd-doctor.yml/lint.yml in the source
     # repository for the pattern of sizing this from real run durations).
     timeout-minutes: 10
+    # kurone-kito/idd-skill#2657 (Codex review, PR #2895): sequenced after
+    # the self-waiver job below so an allowlisted PR's own bootstrap
+    # marker is guaranteed to exist (posted or definitively not posted)
+    # before this job ever fetches PR comments -- without this ordering,
+    # the two jobs share no dependency and start in parallel, so this
+    # (typically much faster) job can read comments and fail BEFORE the
+    # self-waiver job finishes its diff check, claim resolution, and
+    # posting call. Since posting a PR comment is not one of this
+    # workflow's own trigger events, that race would leave the required
+    # check red until an unrelated push or manual rerun -- defeating the
+    # whole "no human click required" point of the bootstrap path.
+    # `if: ${{ !cancelled() }}` overrides `needs:`'s own default (a
+    # skipped dependency job skips its dependents too) -- this job must
+    # still run on every trigger, including `workflow_dispatch` or a
+    # `pull_request` run where the self-waiver job's own `if:` skips it
+    # outright, and a non-allowlisted PR where it runs but posts nothing.
+    needs: idd-advisory-convergence-self-waiver
+    if: ${{ !cancelled() }}
+    # Job-level override of the workflow-level `permissions:` block above,
+    # adding `actions: read` (Codex review, PR #2895): `port.getWorkflowRun`
+    # (the self-referential-bootstrap-auto trust verification) calls
+    # `GET /repos/{owner}/{repo}/actions/runs/{id}`, which needs this scope
+    # explicitly in a private repository (an unspecified `GITHUB_TOKEN`
+    # permission defaults to `none`, not inherited from the repository's
+    # own default). A job-level block replaces the workflow-level one
+    # entirely rather than adding to it, so every previously-granted scope
+    # is repeated here too. The self-waiver job below never calls this
+    # endpoint, so its own job-level permissions (unaffected by this one)
+    # do not need this scope.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -328,6 +372,339 @@ jobs:
               # instructions-only already failed the job above), but a
               # required check must never silently no-op and report
               # success on an unexpected profile value.
+              echo "::error::unrecognized helper-runtime profile \"$PROFILE\""
+              exit 1
+              ;;
+          esac
+
+  # kurone-kito/idd-skill#2657: optional companion job -- a PR that fixes
+  # this gate's own checking logic (or a handful of directly-related
+  # files) can never benefit from its own fix while unmerged, because the
+  # verdict job above always runs the version checked out from `main`.
+  # This job auto-posts a narrowly-scoped, run-bound
+  # `idd-external-check-waiver` marker for exactly that case. See
+  # docs/idd-helper-scripts.md's "External-check waiver contract"
+  # (self-referential-bootstrap-auto section) for the full trust model
+  # and the five acceptance conditions `advisory-convergence.mts`
+  # verifies before ever honoring the marker -- this job's only role is
+  # to detect the trigger and post it; trust is established entirely at
+  # consume time, not here.
+  #
+  # `if: pull_request_target` only, never `pull_request`: a
+  # same-repository PR editing this YAML could otherwise also run this
+  # job under a `pull_request`-triggered instance it fully controls. The
+  # consumer's fourth trust condition (the marker's `run-id:` must
+  # resolve to a `pull_request_target`-triggered run) would reject a
+  # marker from that instance anyway, but gating the job itself here
+  # avoids granting `issues: write` under an untrusted-YAML trigger in
+  # the first place.
+  #
+  # This job duplicates the verdict job's own profile-resolution and
+  # dependency-install steps rather than sharing them via `needs:` +
+  # job outputs: this template's workflows are each single-job by
+  # convention, and the duplication keeps this job independently
+  # copy-and-adjustable (or removable) without touching the required
+  # verdict job above.
+  idd-advisory-convergence-self-waiver:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER_LABEL || 'ubuntu-slim' }}
+    timeout-minutes: 10
+    # Narrower than the verdict job's read-only posture above: this job
+    # additionally needs `pull-requests: read` (to diff and fetch the PR)
+    # and `issues: write` (to post the marker, and to read the linked
+    # issue's own comment stream to resolve its active claim -- the
+    # PR-conversation-comment endpoint and the linked-issue-comment
+    # endpoint are both gated under the Issues permission category, same
+    # as the verdict job's own header comment already notes for reads).
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Trusted default-branch checkout, not the PR head -- see the
+          # verdict job's own comment above for the full rationale. This
+          # job's posting logic (external-check-waiver) must be the
+          # trusted copy too, or a PR could edit it to post a
+          # differently-shaped marker or waive an unrelated check.
+          ref: main
+          persist-credentials: false
+      - name: Resolve helper-runtime profile
+        id: profile
+        run: |
+          PROFILE="instructions-only"
+          PACKAGE_SPEC=""
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "::warning::jq is not available on this runner, so helperRuntime.profile cannot be resolved; treating as instructions-only. Install jq on this runner, or use a runner image that provides it."
+          else
+            for CANDIDATE in .github/idd/config.json idd-policy.json; do
+              if [ -f "$CANDIDATE" ]; then
+                if RESOLVED=$(jq -r '
+                  (.helperRuntime) as $hr
+                  | ($hr != null and ($hr|type) == "object") as $is_object
+                  | if $is_object then
+                      (($hr | keys) - ["profile","packageSpec"]) as $extra
+                      | ($hr.profile) as $profile
+                      | ($extra | length == 0) as $keys_ok
+                      | ($profile != null and ($profile|type) == "string" and ($profile|length) > 0 and (["vendored-node","package-manager","ephemeral-npx","instructions-only"] | index($profile)) != null) as $profile_ok
+                      | (if ($hr | has("packageSpec")) then
+                           ($hr.packageSpec) as $spec
+                           | ($spec != null and ($spec|type) == "string" and ($spec | test("\\A[A-Za-z0-9@:/_.+^#%-]+\\z")))
+                         else true end) as $spec_ok
+                      | if ($keys_ok and $profile_ok and $spec_ok) then
+                          "\($hr.profile)\t\($hr.packageSpec // "")"
+                        else empty end
+                    else empty end
+                ' "$CANDIDATE" 2>/dev/null) && [ -n "$RESOLVED" ]; then
+                  IFS=$'\t' read -r PROFILE PACKAGE_SPEC <<<"$RESOLVED"
+                fi
+                break
+              fi
+            done
+          fi
+          echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
+          echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
+      - name: Detect self-referential trigger-file allowlist touch
+        id: allowlist
+        # kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 10):
+        # runs BEFORE any profile-specific setup below that can fail
+        # closed (ambiguous package manager, a broken lockfile install) --
+        # this step needs only `gh`/`jq`/bash, never node, so nothing
+        # below is a prerequisite for it. Detecting the touch first lets
+        # the profile-specific setup steps skip entirely for the vast
+        # majority of PRs that never touch the allowlist at all (see each
+        # step's own added `steps.allowlist.outputs.touched == 'true'`
+        # condition below), instead of failing this job on every PR for a
+        # repository whose current package-manager setup happens to be
+        # broken. A PR that migrates away from a genuinely broken
+        # package-manager setup (the profile-migration case two commits
+        # ago) still cannot post through THAT profile's own broken
+        # runtime -- unavoidable, since posting still needs a working
+        # `pnpm exec`/`npm exec`/`yarn` invocation for that profile
+        # specifically -- but this ordering at least stops a broken
+        # lockfile from blocking every OTHER allowlisted PR that never
+        # depended on package-manager health in the first place (e.g. one
+        # fixing package.json/the lockfile itself, already an allowlisted
+        # path).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PROFILE: ${{ steps.profile.outputs.profile }}
+        run: |
+          # kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895):
+          # the checker's own file surface differs by
+          # helperRuntime.profile -- a vendored-node adopter runs the
+          # COMPILED scripts/*.mjs (this profile never vends the source
+          # repository's own src/scripts/*.mts; see
+          # idd-helper-scripts.md's vendored-node row), and a
+          # package-manager adopter has no local checker file at all,
+          # upgrading it only through its dependency manifest and
+          # lockfile. Using this source repository's own src/scripts/*.mts
+          # paths unconditionally left the mechanism both non-functional
+          # for its intended adopters (a genuine checker upgrade could
+          # never match) and gameable (a PR could touch a path that does
+          # not exist at all in the adopter's own checkout purely to
+          # satisfy the string match). The two workflow paths and the
+          # runtime config are profile-invariant: every profile's own
+          # checker version pin lives in one of these three or in the
+          # profile-specific paths below.
+          #
+          # kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 8):
+          # .github/idd/config.json is in the base set for EVERY profile,
+          # not only ephemeral-npx (whose own checker-version pin lives
+          # there via helperRuntime.packageSpec). Both this job and the
+          # verdict job check out the trusted default branch, never the
+          # PR head, so a PR that fixes a broken checker by migrating
+          # helperRuntime.profile itself (e.g. package-manager to
+          # ephemeral-npx, to work around a broken lockfile/manager
+          # detection) resolves the OLD, still-broken profile here too --
+          # scoping the config file to only the profile it migrates TO
+          # would leave every other profile's own migration-via-config
+          # fix unable to trigger this bypass, the exact trap this
+          # mechanism exists to escape.
+          ALLOWLIST=(
+            ".github/idd/config.json"
+            ".github/workflows/idd-advisory-convergence.yml"
+            ".github/workflows/idd-advisory-convergence-comment.yml"
+          )
+          case "$PROFILE" in
+            vendored-node)
+              ALLOWLIST+=(
+                "scripts/advisory-convergence.mjs"
+                "scripts/advisory-wait-state.mjs"
+                "scripts/advisory-wait-policy.mjs"
+                "scripts/rerun-advisory-convergence.mjs"
+                "scripts/external-check-waiver.mjs"
+                "scripts/marker-helpers.mjs"
+                "scripts/protocol-helpers.mjs"
+                "scripts/provider-adapter-github.mjs"
+              )
+              ;;
+            package-manager)
+              ALLOWLIST+=(
+                "package.json"
+                "package-lock.json"
+                "pnpm-lock.yaml"
+                "yarn.lock"
+              )
+              ;;
+          esac
+          # kurone-kito/idd-skill#2657 (Codex review, PR #2895): `gh pr
+          # diff --name-only` documents itself as "Display only names of
+          # changed files" -- it reports a renamed file only by its NEW
+          # name, never the old one, so a rename away from an allowlisted
+          # path would leave this check false and post no marker at all.
+          # Read the PR files REST endpoint directly instead, which
+          # reports both `filename` and (when present) `previous_filename`
+          # for a renamed entry.
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" \
+            --paginate --jq '.[] | .filename, (.previous_filename // empty)')
+          TOUCHED=false
+          for FILE in "${ALLOWLIST[@]}"; do
+            if grep -qxF "$FILE" <<<"$CHANGED"; then
+              TOUCHED=true
+              break
+            fi
+          done
+          echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
+      - name: Notice when no helper runtime is configured
+        # kurone-kito/idd-skill#2657 (Copilot review, PR #2895, round 11):
+        # this used to `exit 1` unconditionally whenever helperRuntime
+        # resolved to instructions-only, failing this optional job on
+        # EVERY pull_request_target trigger for the template's own shipped
+        # default config (which omits helperRuntime, per
+        # docs/idd-helper-scripts.md's import-time selection order) --
+        # including PRs that never touch this check's own trigger-file
+        # allowlist and have no reason to invoke this job at all. That
+        # contradicted the already-documented promise
+        # (idd-template/docs/customization.md's "Self-referential
+        # -bootstrap-auto waiver co-requisite" section): out of the box,
+        # this job exits successfully on every allowlisted-touching PR
+        # too, explaining itself with a notice instead of failing. Gating
+        # on the allowlist-touch result (same reasoning as the
+        # package-manager steps below) and downgrading to `::notice::`
+        # with no `exit 1` makes both true: a PR unrelated to this
+        # mechanism never sees this job at all, and an allowlisted-
+        # touching PR on an unconfigured runtime gets a clear, non-failing
+        # explanation instead of a false-alarm required-check failure.
+        if: steps.allowlist.outputs.touched == 'true' && steps.profile.outputs.profile == 'instructions-only'
+        run: |
+          echo "::notice::helperRuntime.profile resolves to instructions-only (no runnable helper command), so idd-advisory-convergence-self-waiver has nothing to run for this PR and exits successfully without posting a waiver. Configure helperRuntime.profile in .github/idd/config.json to enable auto-posting for PRs that touch this check's own trigger-file allowlist."
+      - uses: actions/setup-node@v4
+        # kurone-kito/idd-skill#2657 (Copilot review, PR #2895, round 16):
+        # also gated on the allowlist-touch result, matching the
+        # profile-specific steps below -- without it, this step still
+        # downloaded/configured Node for every non-`instructions-only` PR
+        # even when `touched=false`, an avoidable network/failure surface
+        # for a PR this job has no reason to act on at all.
+        if: steps.profile.outputs.profile != 'instructions-only' && steps.allowlist.outputs.touched == 'true'
+        with:
+          node-version: 24.x
+      - name: Detect package manager
+        id: manager
+        # kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 10):
+        # skip entirely when this PR does not touch the allowlist -- see
+        # the allowlist-detection step's own doc comment above for why
+        # this (and the two steps below) moved after it.
+        if: steps.profile.outputs.profile == 'package-manager' && steps.allowlist.outputs.touched == 'true'
+        run: |
+          MANAGER=$(node -e "
+            const fs = require('node:fs');
+            let declared = '';
+            try {
+              const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              declared = String(pkg.packageManager || '').split('@')[0];
+            } catch {
+              // No readable package.json: fall through to lockfile detection.
+            }
+            if (['npm', 'pnpm', 'yarn'].includes(declared)) {
+              console.log(declared);
+            } else {
+              const lockfiles = [
+                ['pnpm-lock.yaml', 'pnpm'],
+                ['package-lock.json', 'npm'],
+                ['yarn.lock', 'yarn'],
+              ].filter(([file]) => fs.existsSync(file));
+              if (lockfiles.length === 1) {
+                console.log(lockfiles[0][1]);
+              } else if (lockfiles.length === 0) {
+                console.log('npm');
+              } else {
+                console.log('ambiguous');
+              }
+            }
+          ")
+          if [ "$MANAGER" = "ambiguous" ]; then
+            echo "::warning::Multiple package-manager lockfiles were found with no declared \"packageManager\" field in package.json; refusing to guess which one to use. Add a \"packageManager\": \"<name>@<version>\" field to package.json, or remove the stale lockfile(s)."
+          fi
+          echo "manager=$MANAGER" >> "$GITHUB_OUTPUT"
+      - name: Fail closed on ambiguous package manager
+        if: steps.manager.outputs.manager == 'ambiguous'
+        run: |
+          echo "::error::This job resolves helperRuntime.profile to package-manager, but multiple package-manager lockfiles were found with no declared \"packageManager\" field in package.json, so which manager to use cannot be determined. Add a \"packageManager\": \"<name>@<version>\" field to package.json, or remove the stale lockfile(s)."
+          exit 1
+      - name: Install dependencies (package-manager profile)
+        if: steps.profile.outputs.profile == 'package-manager' && steps.allowlist.outputs.touched == 'true'
+        env:
+          MANAGER: ${{ steps.manager.outputs.manager }}
+        run: |
+          case "$MANAGER" in
+            pnpm)
+              corepack enable
+              pnpm install --frozen-lockfile
+              ;;
+            yarn)
+              corepack enable
+              yarn install --frozen-lockfile
+              ;;
+            *)
+              npm ci
+              ;;
+          esac
+      - name: Post the self-referential-bootstrap-auto waiver
+        # Skip a fork PR entirely: the consumer's run-bound trust check
+        # would reject it anyway (a fork's own workflow run never matches
+        # this repository), so this avoids a doomed post and the API
+        # calls it would cost. Also skip instructions-only explicitly
+        # (kurone-kito/idd-skill#2657, Copilot review, PR #2895, round 11)
+        # instead of relying on the `case` statement's `*)` fallthrough
+        # below to catch it -- that fallthrough exists as defense-in-depth
+        # for a genuinely unrecognized future profile string, not as the
+        # intended route for a profile the "Notice" step above already
+        # explained and let pass without failing the job.
+        if: steps.allowlist.outputs.touched == 'true' && steps.profile.outputs.profile != 'instructions-only' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PROFILE: ${{ steps.profile.outputs.profile }}
+          PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
+          MANAGER: ${{ steps.manager.outputs.manager }}
+        run: |
+          case "$PROFILE" in
+            vendored-node)
+              node scripts/external-check-waiver.mjs --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+              ;;
+            package-manager)
+              case "$MANAGER" in
+                pnpm)
+                  pnpm exec idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+                  ;;
+                yarn)
+                  yarn idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+                  ;;
+                *)
+                  npm exec idd-external-check-waiver -- --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+                  ;;
+              esac
+              ;;
+            ephemeral-npx)
+              SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
+              npx --yes --package "$SPEC" idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes
+              ;;
+            *)
               echo "::error::unrecognized helper-runtime profile \"$PROFILE\""
               exit 1
               ;;
