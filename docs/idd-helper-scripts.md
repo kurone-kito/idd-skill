@@ -1515,7 +1515,7 @@ needs a live per-marker run lookup no other consumer needs):
    never `pull_request` -- closing the gap where a same-repository PR
    editing the workflow YAML can still trigger a `pull_request`-triggered
    run of it during a `pull_request`/`pull_request_target` migration
-   window (kurone-kito/idd-skill#2764 Phase 1); and
+   window (kurone-kito/idd-skill#2764 Phase 1);
 5. the PR's own changed files (fetched independently at consume time,
    never trusted from the posting job's own internal check) include at
    least one path from the trigger-file allowlist above
@@ -1526,14 +1526,41 @@ needs a live per-marker run lookup no other consumer needs):
    same-repository PR could forge a marker citing the ordinary verdict
    job's own trivially-discoverable run id for its own HEAD and bypass
    advisory convergence for a change that never touched the allowlist at
-   all.
+   all;
+6. `GET /repos/{owner}/{repo}/actions/runs/{run-id}/jobs` for that same
+   `run-id:` reports the run's own `idd-advisory-convergence-self-waiver`
+   job's "Post the self-referential-bootstrap-auto waiver" step with
+   `conclusion: success`, AND the marker comment's own `createdAt` falls
+   within that step's `[started_at, completed_at]` execution window
+   (kurone-kito/idd-skill#2912) -- conditions 3 and 4 alone prove only
+   that SOME genuine run of the right shape exists, never that THAT run's
+   own job actually posted THIS specific comment; a same-repository
+   `pull_request`-triggered workflow (untrusted, but able to post
+   `github-actions[bot]`-authored comments the same way the genuine
+   posting job does) can discover a legitimate, concurrently running
+   `pull_request_target` run's id via the public Actions API and cite it
+   in a forged marker, satisfying conditions 1-5 without having been
+   posted by that run's job at all. Binding to the post step's own
+   recorded conclusion and execution window closes this; and
+7. no second candidate marker (same author, reason, and check selector)
+   also cites this exact `run-id:` (kurone-kito/idd-skill#2912) -- since
+   the genuine posting job always attempts to post regardless of whether
+   a marker already exists for this HEAD (`--auto-bootstrap` explicitly
+   skips the generic reuse scan, see above), a legitimate marker and a
+   forged one sharing the same cited run id can only mean one of the two
+   is fraudulent; rather than pick a winner, both are rejected, falling
+   back to the pre-existing maintainer-authorized waiver as the escape
+   hatch.
 
-A marker missing `run-id:`, whose run cannot be resolved, targets another
-head SHA or repository, ran under any event other than
-`pull_request_target`, or whose PR diff does not touch the trigger-file
-allowlist, is rejected the same way a manual waiver from an untrusted
-actor is today. Unlike an ordinary maintainer-authorized waiver
-(gated behind `deadlinePassed || terminalUnavailable`), a valid
+A marker missing `run-id:`, whose run or run-jobs data cannot be
+resolved, targets another head SHA or repository, ran under any event
+other than `pull_request_target`, whose PR diff does not touch the
+trigger-file allowlist, whose cited run's own posting step did not
+report `success` within its own execution window, or that shares its
+cited `run-id:` with another candidate marker, is rejected the same way
+a manual waiver from an untrusted actor is today. Unlike an ordinary
+maintainer-authorized waiver (gated behind
+`deadlinePassed || terminalUnavailable`), a valid
 self-referential-bootstrap-auto waiver is evaluated **unconditionally** --
 it makes `ready` true immediately, without waiting for the deadline clock
 or a proven Copilot outage, since the whole point is bootstrapping a fix
@@ -1555,13 +1582,16 @@ repository's default branch, never the PR head -- required so neither
 job ever executes PR-controlled code with `issues: write` -- so a bug
 specifically WITHIN the code that decides whether/how to invoke
 `--auto-bootstrap` (its own branches in `external-check-waiver.mts`),
-the two Actions-API methods the trust chain above itself calls
-(`getWorkflowRun`, `listChangeRequestChangedFiles` in
-`provider-adapter-github.mts`), or the five conditions' own verification
-functions in `advisory-convergence.mts` cannot be rescued by this
-mechanism: the OLD, buggy version of exactly that code is what would
-have to decide to trust the fix. This is the same fixed point every
-self-hosting bootstrap has, and isolating marker emission into a
+the three Actions-API methods the trust chain above itself calls
+(`getWorkflowRun`, `getWorkflowRunJobs`, `listChangeRequestChangedFiles`
+in `provider-adapter-github.mts`), or the seven conditions' own
+verification functions in `advisory-convergence.mts`
+(`verifySelfReferentialBootstrapWaiverRun`,
+`verifySelfReferentialBootstrapWaiverProvenance`, and the rest) cannot
+be rescued by this mechanism: the OLD, buggy version of exactly that
+code is what would have to decide to trust the fix. This is the same
+fixed point every self-hosting bootstrap has, and isolating marker
+emission into a
 smaller module would shrink it, never eliminate it. The rest of each
 listed file's surface -- most of it, since each implements far more
 than this one trust path -- remains genuinely bootstrappable as

@@ -229,11 +229,12 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * A bug specifically WITHIN the code that decides whether/how to invoke
  * `--auto-bootstrap` (`runExternalCheckWaiver`'s own auto-bootstrap
  * branches and `planExternalCheckWaiver`'s `autoBootstrap`-gated
- * checks, both in `external-check-waiver.mts`), the two Actions-API
+ * checks, both in `external-check-waiver.mts`), the three Actions-API
  * methods the trust chain itself calls (`getWorkflowRun`,
- * `listChangeRequestChangedFiles` in `provider-adapter-github.mts`), or
- * this file's own verification functions
- * ({@link verifySelfReferentialBootstrapWaiverRun},
+ * `getWorkflowRunJobs`, `listChangeRequestChangedFiles` in
+ * `provider-adapter-github.mts`), or this file's own verification
+ * functions ({@link verifySelfReferentialBootstrapWaiverRun},
+ * {@link verifySelfReferentialBootstrapWaiverProvenance},
  * {@link resolveSelfReferentialTriggerFiles}, `autoWaiverValid`) cannot
  * be rescued by THIS mechanism, because the OLD, buggy version of
  * exactly that code is what would have to decide to trust the fix --
@@ -252,31 +253,76 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  *
  * kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 16): a
  * SEPARATE, narrower residual gap in {@link verifySelfReferentialBootstrapWaiverRun}
- * itself, tracked rather than closed here -- its `run-id:` check proves
- * only that the CITED run has the right path/head-sha/repository/event,
- * never that the cited run is the one that actually POSTED this
- * specific comment. A same-repository `pull_request`-triggered
- * workflow with `issues: write` (the same actor this file's own
- * comments already assume can post arbitrary `github-actions[bot]`-
- * authored comments) can discover a legitimate, concurrently running
- * `pull_request_target` run of THIS workflow for its own PR and cite
- * that run's id in a forged marker -- the run-id is bearer evidence,
- * not provenance-bound. This does NOT widen what such a forgery can
- * actually waive, though: `touchesSelfReferentialAllowlist` is fetched
- * independently from the PR's own live file-changes API, never from
- * the comment, so a forged marker can only cause a PR that genuinely
- * touches the allowlist to get its (otherwise-legitimate) waiver via
- * forgery instead of via the real job -- the allowlist check remains
- * the load-bearing security boundary. The one CONCRETE exploit this
- * bearer-evidence gap enabled -- a forged `claim-id:none` marker
+ * itself -- its `run-id:` check proves only that the CITED run has the
+ * right path/head-sha/repository/event, never that the cited run is the
+ * one that actually POSTED this specific comment. A same-repository
+ * `pull_request`-triggered workflow with `issues: write` (the same actor
+ * this file's own comments already assume can post arbitrary
+ * `github-actions[bot]`-authored comments) can discover a legitimate,
+ * concurrently running `pull_request_target` run of THIS workflow for
+ * its own PR and cite that run's id in a forged marker -- the run-id is
+ * bearer evidence, not provenance-bound. This does NOT widen what such a
+ * forgery can actually waive, though: `touchesSelfReferentialAllowlist`
+ * is fetched independently from the PR's own live file-changes API,
+ * never from the comment, so a forged marker can only cause a PR that
+ * genuinely touches the allowlist to get its (otherwise-legitimate)
+ * waiver via forgery instead of via the real job -- the allowlist check
+ * remains the load-bearing security boundary. The one CONCRETE exploit
+ * this bearer-evidence gap enabled -- a forged `claim-id:none` marker
  * validating on a PR whose closing issues expose ambiguous, multiple
  * active claims, a state the posting helper itself always refuses to
- * post ANY marker for -- is closed directly in `autoWaiverValid`'s own
- * `claimCandidateAmbiguous` check below. Full provenance binding
- * (proving WHICH run posted a given comment, not just that some
- * qualifying run exists) needs new I/O this pure verdict function does
- * not have (the run's own job/log data) and is out of scope for a
- * live-review patch; tracked in a follow-up issue. */
+ * post ANY marker for -- was closed directly in `autoWaiverValid`'s own
+ * `claimCandidateAmbiguous` check below.
+ *
+ * kurone-kito/idd-skill#2912: the general provenance-binding gap the
+ * paragraph above described is now closed too, by
+ * {@link verifySelfReferentialBootstrapWaiverProvenance} plus the
+ * `autoWaiverRunIdCandidateTimestamps` duplicate-run-id check
+ * `autoWaiverValid` also applies. Together they prove the cited run's
+ * own `idd-advisory-convergence-self-waiver` job actually executed the
+ * step that posts this waiver kind, at (within a few seconds of) the
+ * exact moment this specific comment was created, and that no OTHER
+ * candidate marker citing the same run id ALSO independently proves
+ * that -- rather than trusting that SOME qualifying run merely exists.
+ * Uniqueness is deliberately scoped to provenance-PASSING candidates
+ * only (not every structurally-qualifying one): the Actions jobs API
+ * reports only the LATEST run attempt, so a legitimate re-run (`gh run
+ * rerun <run-id>`, this repository's own standard automated recovery
+ * path for a stuck `idd-advisory-convergence` instance,
+ * `rerun-advisory-convergence.mts`) that re-executes an already-
+ * succeeded self-waiver job produces a second GENUINE marker for the
+ * same run id, whose earlier sibling from the prior attempt no longer
+ * falls inside the current attempt's execution window and so fails
+ * provenance on its own, never reaching the uniqueness tally -- this
+ * keeps self-bootstrap working across a legitimate rerun instead of
+ * treating it as a forgery collision. A same-window race between a
+ * genuine marker and a forged one both citing the same run id, by
+ * contrast, still has both pass provenance and both get rejected -- the
+ * security property holds regardless. An attacker can still cause this
+ * mechanism to fail closed (denial of service on the optimization, e.g.
+ * by winning that race), but can no longer make a forged marker
+ * validate on its own; the pre-existing maintainer-authorized waiver
+ * remains the documented escape hatch either way.
+ *
+ * Precondition on "the cited job's step conclusion is `success`"
+ * actually implying it posted a marker: `runExternalCheckWaiver`'s own
+ * `--auto-bootstrap` path can report step-level `success` on a
+ * deliberate no-op skip (never posting) when
+ * `ciGate.externalCheckWaivers.mode` is not `maintainer-authorized` or
+ * the selector is not registered under
+ * `ciGate.externalChecks.waivable` (`external-check-waiver.mts`'s
+ * `benignAutoBootstrapSkipReasons` set). This is self-consistent by
+ * construction, not a separate gap to close: `summarizeExternalCheckWaivers`
+ * gates `.valid` classification on that exact same
+ * `mode`/`waivableSelectors` policy, read from the same trusted
+ * checkout at consume time -- when the benign-skip path is reachable,
+ * no self-referential-bootstrap-auto marker (genuine or forged) ever
+ * reaches `.valid` for `autoWaiverValid`'s `.some()` to iterate in the
+ * first place, so the step-success-without-posting case never actually
+ * gets evaluated for provenance. Still worth stating explicitly, since
+ * an adopter who reads only this file's own trust chain (not
+ * `external-check-waiver.mts`'s posting-side logic too) could otherwise
+ * read "step succeeded" as an unconditional proof of posting. */
 export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   'src/scripts/advisory-convergence.mts',
   'src/scripts/advisory-wait-state.mts',
@@ -505,6 +551,71 @@ function verifySelfReferentialBootstrapWaiverRun(run, expected) {
       expected.repositoryFullName.toLowerCase() &&
     run.event === 'pull_request_target'
   );
+}
+/** kurone-kito/idd-skill#2912: this gate's own self-waiver job id, as
+ * reported by the GitHub Actions jobs API's `name` field (no `name:`
+ * override in the workflow, so the reported name is literally the job
+ * id) -- the job {@link verifySelfReferentialBootstrapWaiverProvenance}
+ * requires proof of execution from. Declared as its own explicit
+ * literal, mirroring {@link ADVISORY_CONVERGENCE_WORKFLOW_PATH}'s own
+ * "kept in sync by hand with the YAML" convention; a dedicated test
+ * pins both this and {@link SELF_REFERENTIAL_WAIVER_POST_STEP_NAME}
+ * against the workflow file's own literal text. */
+export const SELF_REFERENTIAL_WAIVER_JOB_ID =
+  'idd-advisory-convergence-self-waiver';
+/** kurone-kito/idd-skill#2912: the exact `name:` of the step, within
+ * {@link SELF_REFERENTIAL_WAIVER_JOB_ID}, that actually posts a
+ * self-referential-bootstrap-auto marker -- kept in sync by hand with
+ * `.github/workflows/idd-advisory-convergence.yml`'s own "Post the
+ * self-referential-bootstrap-auto waiver" step, the same convention as
+ * {@link SELF_REFERENTIAL_WAIVER_JOB_ID} above. */
+export const SELF_REFERENTIAL_WAIVER_POST_STEP_NAME =
+  'Post the self-referential-bootstrap-auto waiver';
+/**
+ * kurone-kito/idd-skill#2912: whether the cited run's own jobs-API
+ * evidence proves its {@link SELF_REFERENTIAL_WAIVER_JOB_ID} job actually
+ * completed {@link SELF_REFERENTIAL_WAIVER_POST_STEP_NAME}, rather than
+ * merely having the right run-level shape
+ * ({@link verifySelfReferentialBootstrapWaiverRun}'s own job). This is
+ * the binding step that closes the residual gap the module header notes
+ * (#2657, round 16): a run whose own path/head-sha/repository/event all
+ * check out does not by itself prove THAT run's own job posted THIS
+ * specific comment -- a same-repository `pull_request`-triggered
+ * workflow can discover a legitimate run's id via the public Actions API
+ * and cite it in a forged marker. Requiring the post step's own
+ * `conclusion: 'success'` AND that the marker's own `createdAt` falls
+ * within that step's `[startedAt, completedAt]` execution window makes
+ * this practically unforgeable: a forged marker would need the cited
+ * run's post step to have actually run and succeeded at almost exactly
+ * the moment the forged comment was created, which only the run's own
+ * job -- not an unrelated, concurrently-running one -- controls. Pure
+ * and fail-closed, matching {@link verifySelfReferentialBootstrapWaiverRun}'s
+ * own contract: an absent/errored lookup, a non-`success` conclusion, or
+ * a missing/unparseable window is always `false`, never a thrown
+ * exception. */
+function verifySelfReferentialBootstrapWaiverProvenance(
+  jobLookup,
+  markerCreatedAt,
+) {
+  if (!jobLookup || 'error' in jobLookup) {
+    return false;
+  }
+  if (jobLookup.conclusion !== 'success') {
+    return false;
+  }
+  const startedAt = String(jobLookup.startedAt ?? '');
+  const completedAt = String(jobLookup.completedAt ?? '');
+  if (
+    !isValidIsoTimestamp(markerCreatedAt) ||
+    !isValidIsoTimestamp(startedAt) ||
+    !isValidIsoTimestamp(completedAt)
+  ) {
+    return false;
+  }
+  const markerMs = Date.parse(markerCreatedAt);
+  const startedMs = Date.parse(startedAt);
+  const completedMs = Date.parse(completedAt);
+  return markerMs >= startedMs && markerMs <= completedMs;
 }
 /**
  * Compute the deterministic advisory-convergence verdict from already-
@@ -1306,12 +1417,16 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // `selectLinkedIssueCandidate` (`external-check-waiver.mts`) refuses
   // to auto-post a marker for in the first place. Without this, a
   // forged `claim-id:none` marker citing a legitimate, concurrently
-  // running `pull_request_target` run's id (the run-id check verifies
-  // only that CITED run's own metadata, not that it actually posted
-  // this comment -- a separate, tracked gap, see the module header's
-  // dead-zone note) could validate on such a PR even though the
-  // legitimate posting helper would have refused to post ANY marker
-  // for it. `claimCandidateAmbiguous` is the SAME signal the producer
+  // running `pull_request_target` run's id (the run-id check alone
+  // verifies only that CITED run's own metadata, not that it actually
+  // posted this comment -- the general form of that gap is closed by
+  // `verifySelfReferentialBootstrapWaiverProvenance` and the
+  // duplicate-run-id check below, kurone-kito/idd-skill#2912; this
+  // `claimCandidateAmbiguous` guard is independent defense-in-depth for
+  // the SPECIFIC claim-ambiguity shape, not a substitute for either)
+  // could validate on such a PR even though the legitimate posting
+  // helper would have refused to post ANY marker for it.
+  // `claimCandidateAmbiguous` is the SAME signal the producer
   // uses (`classifyClaimCandidateAmbiguity`), independent of
   // `convergenceScope`, so gate on it directly here too rather than
   // only through the scope-specific check above.
@@ -1333,7 +1448,36 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
             headSha: prHeadSha,
             repositoryFullName: autoWaiverRepositoryFullName,
           },
-        ),
+        ) &&
+        // kurone-kito/idd-skill#2912: prove the cited run's OWN job
+        // posted THIS comment, not merely that some run with the right
+        // shape exists -- see `verifySelfReferentialBootstrapWaiverProvenance`'s
+        // own doc comment for the gap this closes.
+        verifySelfReferentialBootstrapWaiverProvenance(
+          inputs.autoWaiverRunJobLookups?.[entry.runId],
+          entry.createdAt,
+        ) &&
+        // kurone-kito/idd-skill#2912: exactly one candidate marker
+        // citing this run id may ALSO independently pass the same
+        // provenance check above -- see
+        // `autoWaiverRunIdCandidateTimestamps`'s own doc comment for
+        // why this is scoped to provenance-PASSING candidates only
+        // (never a bare structural count), which is what lets a
+        // legitimate CI rerun (a second genuine marker for the same
+        // run id, whose earlier sibling now falls outside the latest
+        // attempt's window and so fails provenance on its own) keep
+        // validating instead of being treated as a forgery collision.
+        // Two or more candidates BOTH passing provenance (a forged
+        // marker racing a genuine one inside the same execution
+        // window) fails closed to "no auto-waiver", never picks a
+        // winner.
+        (inputs.autoWaiverRunIdCandidateTimestamps?.[entry.runId] ?? []).filter(
+          (createdAt) =>
+            verifySelfReferentialBootstrapWaiverProvenance(
+              inputs.autoWaiverRunJobLookups?.[entry.runId],
+              createdAt,
+            ),
+        ).length === 1,
     );
   const waiver = {
     mode: waiverMode,
@@ -2383,9 +2527,27 @@ export function collectFromGitHub(
   // making a reliable crowd-out require posting dozens of distinct
   // spam comments on the PR -- conspicuous, and itself rate-limited by
   // GitHub's own comment-creation API, unlike an unbounded lookup loop.
+  // kurone-kito/idd-skill#2912: this same bound now also caps a SECOND
+  // lookup per run id (`getWorkflowRunJobs`, for
+  // `verifySelfReferentialBootstrapWaiverProvenance`), so worst-case
+  // cost is up to 2 * MAX_AUTO_WAIVER_RUN_LOOKUPS Actions-API calls, not
+  // a new, separately-bounded budget of its own.
   const MAX_AUTO_WAIVER_RUN_LOOKUPS = 20;
   const autoWaiverCandidates = [];
   const seenAutoWaiverRunIds = new Set();
+  // kurone-kito/idd-skill#2912: collected over EVERY qualifying comment
+  // (not deduplicated by `seenAutoWaiverRunIds`, which exists only to
+  // bound the number of Actions-API lookups) -- `autoWaiverValid` below
+  // requires exactly one provenance-passing candidate per cited run id,
+  // so a second, forged marker sharing a legitimate run's id must still
+  // be recorded even though it triggers no additional lookup. Kept as
+  // `createdAt` timestamps, not a bare count, so the pure verdict
+  // function can independently re-check each candidate's own provenance
+  // against the run's (single, shared) jobs-API window -- see
+  // `AdvisoryConvergenceInputs.autoWaiverRunIdCandidateTimestamps`'s own
+  // doc comment for why a bare count would misclassify a legitimate CI
+  // rerun as a forgery collision.
+  const autoWaiverRunIdCandidateTimestamps = new Map();
   for (const comment of comments) {
     const body = String(comment.body ?? '');
     if (!/^<!--\s*idd-external-check-waiver:/i.test(body)) {
@@ -2431,13 +2593,21 @@ export function collectFromGitHub(
       parsed.checkSelector === ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
       parsed.runId &&
       parseCanonicalIntegerOrNull(parsed.runId) !== null &&
-      !seenAutoWaiverRunIds.has(parsed.runId) &&
       String(parsed.headSha ?? '')
         .trim()
         .toLowerCase() === prHeadSha
     ) {
-      seenAutoWaiverRunIds.add(parsed.runId);
-      autoWaiverCandidates.push({ runId: parsed.runId, createdAt });
+      // kurone-kito/idd-skill#2912: every qualifying comment's own
+      // `createdAt` is recorded against its cited run id, regardless of
+      // whether this is the first (lookup-triggering) sighting.
+      autoWaiverRunIdCandidateTimestamps.set(parsed.runId, [
+        ...(autoWaiverRunIdCandidateTimestamps.get(parsed.runId) ?? []),
+        createdAt,
+      ]);
+      if (!seenAutoWaiverRunIds.has(parsed.runId)) {
+        seenAutoWaiverRunIds.add(parsed.runId);
+        autoWaiverCandidates.push({ runId: parsed.runId, createdAt });
+      }
     }
   }
   const autoWaiverRunIds = new Set(
@@ -2462,6 +2632,38 @@ export function collectFromGitHub(
       // `verifySelfReferentialBootstrapWaiverRun` already treats an
       // `{error}` entry the same as an absent one -- always a rejection.
       autoWaiverRunLookups[runId] = {
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  // kurone-kito/idd-skill#2912: a second, per-run-id lookup sharing the
+  // exact same `autoWaiverRunIds` budget as the run-metadata lookup
+  // above (so worst case doubles the lookup call count, still bounded
+  // by `MAX_AUTO_WAIVER_RUN_LOOKUPS`) -- see
+  // `AdvisoryConvergenceInputs.autoWaiverRunJobLookups`'s own doc
+  // comment for why the run-metadata lookup alone is insufficient.
+  const autoWaiverRunJobLookups = {};
+  for (const runId of autoWaiverRunIds) {
+    try {
+      const raw = port.getWorkflowRunJobs(owner, repo, runId);
+      const selfWaiverJob = (raw?.jobs ?? []).find(
+        (job) => job?.name === SELF_REFERENTIAL_WAIVER_JOB_ID,
+      );
+      const postStep = (selfWaiverJob?.steps ?? []).find(
+        (step) => step?.name === SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
+      );
+      autoWaiverRunJobLookups[runId] = {
+        conclusion: postStep?.conclusion ?? null,
+        startedAt: postStep?.started_at ?? null,
+        completedAt: postStep?.completed_at ?? null,
+      };
+    } catch (error) {
+      // Fail closed per run id, mirroring the run-metadata lookup above:
+      // a lookup failure must never crash the whole collection, and
+      // `verifySelfReferentialBootstrapWaiverProvenance` already treats
+      // an `{error}` entry the same as an absent one -- always a
+      // rejection.
+      autoWaiverRunJobLookups[runId] = {
         error: error instanceof Error ? error.message : String(error),
       };
     }
@@ -2502,6 +2704,10 @@ export function collectFromGitHub(
       claimCandidateAmbiguous,
       prAuthorIsBot,
       autoWaiverRunLookups,
+      autoWaiverRunJobLookups,
+      autoWaiverRunIdCandidateTimestamps: Object.fromEntries(
+        autoWaiverRunIdCandidateTimestamps,
+      ),
       changedFilePaths,
     },
     options: {

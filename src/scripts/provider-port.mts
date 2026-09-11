@@ -1108,6 +1108,27 @@ export interface ProviderPort {
    * Number.MAX_SAFE_INTEGER exactly" case). */
   getWorkflowRun(owner: string, repo: string, runId: string | number): unknown;
 
+  /** checks. `actions/runs/{runId}/jobs` -- per-job/per-step status for a
+   * single workflow run, raw passthrough. kurone-kito/idd-skill#2912:
+   * {@link getWorkflowRun} alone proves a self-referential-bootstrap-auto
+   * marker's cited run has the right path/head-sha/repository/event
+   * shape, never that the run's OWN `idd-advisory-convergence-self-waiver`
+   * job actually executed the step that posts the marker -- a forged
+   * marker citing a real, unrelated run can satisfy every run-level
+   * condition without having been posted by that run's own job. This lets
+   * the consumer additionally verify that specific step's own recorded
+   * `conclusion`/`started_at`/`completed_at`, closing that gap without
+   * needing the run's log output. Same `string | number` `runId` type as
+   * {@link getWorkflowRun}, for the same above-`Number.MAX_SAFE_INTEGER`
+   * reason; no new `GITHUB_TOKEN` permission is required (this endpoint
+   * shares the `actions: read` scope {@link getWorkflowRun} already
+   * needs). */
+  getWorkflowRunJobs(
+    owner: string,
+    repo: string,
+    runId: string | number,
+  ): unknown;
+
   /** checks. `gh run list --workflow {name} --limit N --json
    * databaseId,conclusion,status,createdAt` -- distinct `gh run list`
    * shape, not a `gh api` call. */

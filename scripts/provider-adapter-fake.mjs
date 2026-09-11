@@ -372,6 +372,17 @@ export function createFakeProviderAdapter(fixture) {
       }
       return value;
     },
+    getWorkflowRunJobs(jobsOwner, jobsRepo, runId) {
+      // Same throw-on-missing contract as getWorkflowRun above.
+      const key = `${jobsOwner}/${jobsRepo}/${runId}`;
+      const value = fixture.workflowRunJobs?.[key];
+      if (value === undefined) {
+        throw new Error(
+          `fake provider: no workflow-run-jobs fixture for ${key}`,
+        );
+      }
+      return value;
+    },
     listWorkflowRuns(runsOwner, runsRepo, workflowName, limit) {
       // Honors `limit`, matching the GitHub adapter's own `gh run list
       // --limit N` call (Copilot review, PR #2429) -- an ignored limit let

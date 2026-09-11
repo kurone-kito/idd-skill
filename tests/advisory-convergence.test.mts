@@ -36,6 +36,8 @@ import {
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  SELF_REFERENTIAL_WAIVER_JOB_ID,
+  SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
   SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
   viewerProbeGhOptions,
   writeAdvisoryConvergenceCliOutput,
@@ -3192,6 +3194,21 @@ function acceptedRunLookup() {
   };
 }
 
+// kurone-kito/idd-skill#2912: the marker's own `createdAt` in every test
+// below that reuses this fixture is `RECENT` (2026-07-11T10:00:00Z) --
+// this window brackets it, matching a genuine ~1-minute job execution.
+function acceptedRunJobLookup() {
+  return {
+    conclusion: 'success',
+    startedAt: '2026-07-11T09:59:30Z',
+    completedAt: '2026-07-11T10:00:30Z',
+  };
+}
+
+function acceptedCandidateTimestamps() {
+  return { [RUN_ID]: [RECENT] };
+}
+
 test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true immediately, before deadlinePassed/terminalUnavailable (regression for the 2026-09-10 self-cancellation shape)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
@@ -3205,6 +3222,8 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3485,6 +3504,8 @@ test('self-referential-bootstrap-auto: a run reported with different repository-
           repositoryFullName: 'Kurone-Kito/IDD-Skill',
         },
       },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3719,6 +3740,8 @@ test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a r
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3786,6 +3809,8 @@ test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
@@ -3973,6 +3998,8 @@ test('self-referential-bootstrap-auto: a vendored-node adopter touching its own 
           repositoryFullName: 'someone-else/adopter-repo',
         },
       },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
       changedFilePaths: ['scripts/advisory-convergence.mjs'],
     }),
     baseOptions({
@@ -4005,6 +4032,8 @@ test('self-referential-bootstrap-auto: a package-manager adopter touching packag
           repositoryFullName: 'someone-else/adopter-repo',
         },
       },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
       changedFilePaths: ['package.json'],
     }),
     baseOptions({
@@ -4085,6 +4114,238 @@ test('self-referential-bootstrap-auto: this source repository ignores its own co
   );
   assert.equal(verdict.waiver.autoWaiverValid, false);
   assert.equal(verdict.ready, false);
+});
+
+// --- kurone-kito/idd-skill#2912: run-provenance binding -- closing the
+// --- residual bearer-evidence gap #2657 round 16 tracked but did not
+// --- close: the four run-level trust conditions above prove a marker
+// --- cites SOME genuine run of the right shape, never that THAT run's
+// --- own job actually posted THIS comment.
+
+test('self-referential-bootstrap-auto: a forged marker sharing a legitimate run id with a genuine marker is rejected (duplicate run-id, no winner picked)', () => {
+  // A same-repository `pull_request`-triggered workflow can discover
+  // this legitimate run's id via the public Actions API and post its
+  // own forged marker citing it -- both markers here independently
+  // satisfy every other condition (run shape, job success, timing
+  // window), isolating duplicate-run-id detection as the one thing
+  // that rejects this.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+        {
+          // The forged sibling: same run id, a moment later, from a
+          // different (attacker-controlled) posting step -- but the
+          // consumer only ever sees another `github-actions[bot]`-
+          // authored comment citing the same run.
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: '2026-07-11T10:00:05Z',
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      // Both candidates' own `createdAt` fall inside
+      // acceptedRunJobLookup()'s `[09:59:30, 10:00:30]` window, so both
+      // independently pass provenance -- isolating the uniqueness check
+      // (not a provenance failure) as the one thing that rejects this.
+      autoWaiverRunIdCandidateTimestamps: {
+        [RUN_ID]: [RECENT, '2026-07-11T10:00:05Z'],
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a legitimate CI rerun (second genuine marker for the same run id, prior attempt now outside the latest window) still validates (kurone-kito/idd-skill#2912, C1 review finding #2)', () => {
+  // `gh run rerun <run-id>` (this repository's own standard automated
+  // recovery path, rerun-advisory-convergence.mts) re-executes every
+  // job under the SAME run id -- including an already-succeeded
+  // self-waiver job, which posts a second genuine marker. The jobs API
+  // reports only the LATEST attempt's window, so attempt 1's marker
+  // (createdAt far before that window) fails provenance on its own and
+  // must not count toward the uniqueness tally; attempt 2's marker
+  // (createdAt inside the window) is the sole provenance-passing
+  // candidate and must still validate.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          // Attempt 2's genuine marker -- this is the one the consumer
+          // is currently evaluating.
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      // The jobs API reflects only the latest (attempt 2) run: its own
+      // post step succeeded in this window.
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidateTimestamps: {
+        // Attempt 1's own (now-stale) genuine marker, from hours
+        // earlier -- structurally qualifies (same run id) but falls
+        // outside attempt 2's window, so it must not count as a
+        // duplicate.
+        [RUN_ID]: ['2026-07-11T06:00:00Z', RECENT],
+      },
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: a marker citing a run whose self-waiver post step never succeeded is rejected (job-status evidence insufficient)', () => {
+  // The cited run has the right path/head-sha/repository/event (every
+  // pre-#2912 condition still passes), but its own
+  // idd-advisory-convergence-self-waiver job's post step shows
+  // `skipped`, not `success` -- proving this run's own job never
+  // actually posted a marker, so whatever comment cites it must have
+  // come from somewhere else.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: {
+        [RUN_ID]: { ...acceptedRunJobLookup(), conclusion: 'skipped' },
+      },
+      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test("self-referential-bootstrap-auto: a marker created outside the cited run's post-step execution window is rejected (stale-run reuse)", () => {
+  // The cited run's own post step genuinely succeeded at some point in
+  // the past, but this specific comment's own `createdAt` falls hours
+  // outside that step's `[startedAt, completedAt]` window -- exactly
+  // the shape a forged marker minted long after the genuine run
+  // finished (e.g. once the genuine marker has since expired) would
+  // have, even though the run-level shape and job success both check
+  // out.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: {
+        [RUN_ID]: {
+          conclusion: 'success',
+          startedAt: '2026-07-01T00:00:00Z',
+          completedAt: '2026-07-01T00:01:00Z',
+        },
+      },
+      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: a run-jobs lookup error fails closed the same way a run lookup error does', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: { error: 'HTTP 404' } },
+      autoWaiverRunIdCandidateTimestamps: acceptedCandidateTimestamps(),
+      changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('self-referential-bootstrap-auto: SELF_REFERENTIAL_WAIVER_JOB_ID and SELF_REFERENTIAL_WAIVER_POST_STEP_NAME stay in sync with the workflow file (drift guard)', () => {
+  // Kept in sync by hand with `.github/workflows/idd-advisory-convergence.yml`,
+  // the same convention SELF_REFERENTIAL_WAIVER_TRIGGER_FILES and
+  // ADVISORY_CONVERGENCE_WORKFLOW_PATH already use -- a job id or step
+  // name renamed in the YAML without updating these constants would
+  // silently make `verifySelfReferentialBootstrapWaiverProvenance`
+  // reject every genuine marker (fail closed, but a self-inflicted
+  // outage rather than the workflow file drifting invisibly).
+  const workflow = readFileSync(
+    new URL(
+      '../.github/workflows/idd-advisory-convergence.yml',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  assert.ok(
+    workflow.includes(`${SELF_REFERENTIAL_WAIVER_JOB_ID}:`),
+    'workflow file no longer declares the expected self-waiver job id',
+  );
+  assert.ok(
+    workflow.includes(`name: ${SELF_REFERENTIAL_WAIVER_POST_STEP_NAME}`),
+    'workflow file no longer declares the expected post-step name',
+  );
 });
 
 // --- #1570 AC6: no code path this issue adds ever invokes `gh pr merge

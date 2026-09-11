@@ -385,10 +385,11 @@ jobs:
   # `idd-external-check-waiver` marker for exactly that case. See
   # docs/idd-helper-scripts.md's "External-check waiver contract"
   # (self-referential-bootstrap-auto section) for the full trust model
-  # and the five acceptance conditions `advisory-convergence.mts`
-  # verifies before ever honoring the marker -- this job's only role is
-  # to detect the trigger and post it; trust is established entirely at
-  # consume time, not here.
+  # and the seven acceptance conditions (kurone-kito/idd-skill#2912 added
+  # two run-provenance conditions to the original five)
+  # `advisory-convergence.mts` verifies before ever honoring the marker --
+  # this job's only role is to detect the trigger and post it; trust is
+  # established entirely at consume time, not here.
   #
   # `if: pull_request_target` only, never `pull_request`: a
   # same-repository PR editing this YAML could otherwise also run this

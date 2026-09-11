@@ -7,8 +7,11 @@ import { test } from 'node:test';
 import {
   ADVISORY_CONVERGENCE_WORKFLOW_PATH,
   collectFromGitHub,
+  computeAdvisoryConvergenceVerdict,
   parseArgs,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  SELF_REFERENTIAL_WAIVER_JOB_ID,
+  SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
 } from '../src/scripts/advisory-convergence.mts';
 import { DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES } from '../src/scripts/advisory-wait-policy.mts';
 import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
@@ -700,5 +703,169 @@ test('collectFromGitHub rejects a run-id token that is not a canonical positive 
     );
 
     assert.deepEqual(inputs.autoWaiverRunLookups, {});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// run-jobs provenance lookup and duplicate-run-id candidate counting
+// (kurone-kito/idd-skill#2912): closes the residual bearer-evidence gap
+// #2657 round 16 tracked but did not close -- a marker citing a real,
+// legitimate run's id must also be proven to have been POSTED by that
+// run's own idd-advisory-convergence-self-waiver job, not merely to cite
+// a run of the right shape.
+// ---------------------------------------------------------------------------
+
+function acceptedRunJobsFixture() {
+  return {
+    jobs: [
+      {
+        name: SELF_REFERENTIAL_WAIVER_JOB_ID,
+        conclusion: 'success',
+        steps: [
+          {
+            name: SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
+            conclusion: 'success',
+            started_at: '2026-07-31T08:59:30Z',
+            completed_at: '2026-07-31T09:00:30Z',
+          },
+        ],
+      },
+    ],
+  };
+}
+
+test("collectFromGitHub fetches getWorkflowRunJobs and threads the cited run's self-waiver post-step evidence into inputs.autoWaiverRunJobLookups", () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment()] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunJobLookups?.[RUN_ID], {
+      conclusion: 'success',
+      startedAt: '2026-07-31T08:59:30Z',
+      completedAt: '2026-07-31T09:00:30Z',
+    });
+  });
+});
+
+test('collectFromGitHub resolves a candidate run-jobs lookup failure to an {error} entry instead of crashing the whole collection', () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment()] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      // No `workflowRunJobs` fixture entry -- the fake adapter throws on
+      // lookup, matching the real adapter's own no-catch, throw-on-failure
+      // contract for an unresolvable run.
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    const lookup = inputs.autoWaiverRunJobLookups?.[RUN_ID];
+    assert.ok(lookup && 'error' in lookup && lookup.error.length > 0);
+  });
+});
+
+test('collectFromGitHub never fetches getWorkflowRunJobs when no candidate auto-waiver marker is present (no wasted API call)', () => {
+  withHermeticCwd(() => {
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [] },
+      // No `workflowRunJobs` fixture at all -- any lookup attempt would
+      // throw, so a non-empty result below would prove one was attempted.
+    });
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunJobLookups, {});
+  });
+});
+
+test('collectFromGitHub records two distinct comments citing the same run id as two candidate timestamps (autoWaiverRunIdCandidateTimestamps)', () => {
+  withHermeticCwd(() => {
+    const forgedSibling = {
+      id: 2,
+      body: renderExternalCheckWaiverComment({
+        agentId: 'github-actions-bot',
+        claimId: 'claim-def',
+        headSha: HEAD_SHA,
+        checkSelector: 'idd-advisory-convergence',
+        reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+        expiresAt: '2099-01-01T00:00:00Z',
+        actor: 'github-actions[bot]',
+        runId: RUN_ID,
+      }),
+      createdAt: '2026-07-31T09:00:05Z',
+      updatedAt: '2026-07-31T09:00:05Z',
+      authorLogin: 'github-actions[bot]',
+    };
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [autoWaiverComment(), forgedSibling] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
+      changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
+    });
+
+    const { inputs, options } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.deepEqual(inputs.autoWaiverRunIdCandidateTimestamps?.[RUN_ID], [
+      autoWaiverComment().createdAt,
+      forgedSibling.createdAt,
+    ]);
+
+    // End-to-end (kurone-kito/idd-skill#2912 acceptance criterion 1): a
+    // forged marker sharing a legitimate, fully-verified run's id with a
+    // genuine marker must never let the auto-waiver validate, all the
+    // way from the fake-provider collection through the pure verdict.
+    const verdict = computeAdvisoryConvergenceVerdict(
+      { ...inputs, claimEvents: [] },
+      {
+        ...options,
+        waiverMode: 'maintainer-authorized',
+        waivableSelectors: [
+          { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+        ],
+      },
+    );
+    assert.equal(verdict.waiver.autoWaiverValid, false);
   });
 });
