@@ -2756,6 +2756,59 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "matches the requested
   assert.equal(classification.ackOnlyPostDisposition, true);
 });
 
+test("classifyThreadAckOnlyPostDisposition rejects a reply combining both the third and fourth shapes' closure vocabulary in one body (Copilot review, #2927)", () => {
+  // Copilot's finding on this PR: the trailing sentence permitted after
+  // "matches the requested behavior." could, before this fix, absorb
+  // "addresses the security concern." as innocuous filler -- but that
+  // exact substring is ALSO a structurally valid
+  // `CODERABBIT_ACK_ADDRESSES_CLOSURE_RE` match (genuine boilerplate
+  // immediately follows it). `isKnownAdvisoryAckTemplate` used to
+  // commit to that first structural match, whose own lead-in (spanning
+  // the entire preceding "matches..." sentence) then failed the
+  // whitelist, short-circuiting to `false` without ever trying the
+  // fourth shape's own, separately valid, match. Now fixed two ways:
+  // `isKnownAdvisoryAckTemplate` tries each closure form independently,
+  // AND the trailing sentence additionally excludes the third shape's
+  // own trigger verb ("addresses"), so this specific combination stays
+  // rejected for a principled, closed-class reason (ambiguous
+  // cross-shape vocabulary in one body) rather than being silently
+  // accepted once the control-flow bug alone is fixed.
+  const thread = {
+    id: 'thread-matches-combined-with-addresses',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'MX-1',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'MX-2',
+          author: { login: 'coderabbitai[bot]' },
+          body:
+            '`@kurone-kito`, thanks. The fix matches the requested ' +
+            'behavior. The default fixture addresses the security ' +
+            'concern.\n\n🐇 ✅',
+          createdAt: '2026-09-11T00:40:00Z',
+          updatedAt: '2026-09-11T00:40:00Z',
+        },
+      ],
+    },
+  };
+
+  const classification = classifyThreadAckOnlyPostDisposition(thread, {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+
+  assert.equal(classification.ackOnlyPostDisposition, false);
+});
+
 // Codex review findings on this PR (#2014), both verified against source
 // before accepting.
 
