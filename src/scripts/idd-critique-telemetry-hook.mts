@@ -655,7 +655,25 @@ export function invokeCritiqueTelemetryHook(
         // the relay load its preload code. Scan every key case-
         // insensitively instead, keeping the last match's value (in
         // practice at most one casing is ever actually set).
+        //
+        // Scrub the reserved transport keys from `relayEnv` itself
+        // (kurone-kito/idd-skill#2910 review, Codex follow-up): `relayEnv`
+        // starts as a full copy of `process.env`, so if this hook's own
+        // process somehow already inherited a stale
+        // `WIN32_RELAY_NODE_OPTIONS_ENV` value (for example a leftover
+        // from a nested/prior invocation) while the caller's own
+        // NODE_OPTIONS was unset, `callerNodeOptions` stays undefined and
+        // the conditional spread below contributes nothing -- leaving
+        // that stale value in `relayEnv` to reach the relay untouched,
+        // which would then apply it to the inner spawn as if it were the
+        // real caller's NODE_OPTIONS. Delete both reserved keys
+        // unconditionally before the conditional re-add closes that gap;
+        // `WIN32_RELAY_COMMAND_ENV` is always overwritten by the
+        // unconditional entry below regardless, but is deleted here too
+        // for symmetry and defense-in-depth.
         const relayEnv: NodeJS.ProcessEnv = { ...process.env };
+        delete relayEnv[WIN32_RELAY_COMMAND_ENV];
+        delete relayEnv[WIN32_RELAY_NODE_OPTIONS_ENV];
         let callerNodeOptions: string | undefined;
         for (const key of Object.keys(relayEnv)) {
           if (key.toUpperCase() === 'NODE_OPTIONS') {

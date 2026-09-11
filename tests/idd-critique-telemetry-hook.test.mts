@@ -993,6 +993,98 @@ process.stdin.on('end', () => {
   }
 });
 
+test('invokeCritiqueTelemetryHook win32 relay clears a stale inherited reserved NODE_OPTIONS-channel value before spawning (kurone-kito/idd-skill#2910 review, Codex follow-up)', async () => {
+  // The reserved IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS
+  // channel exists purely as transport from the primary process to the
+  // relay's own inner spawn (see WIN32_RELAY_SCRIPT's own doc comment) --
+  // it is never meant to already be present as an ambient variable on
+  // this hook's own process. But if it somehow is (for example leaked
+  // from a nested or prior invocation of this same hook), the primary
+  // spawn's relayEnv -- a full copy of process.env -- inherits it too;
+  // when the real caller's own NODE_OPTIONS happens to be unset,
+  // callerNodeOptions comes back undefined, so the conditional re-add
+  // contributes nothing and nothing else explicitly clears the stale
+  // value out of relayEnv before it reaches the relay. Simulate that leak
+  // directly with an intentionally-broken --require target on the stale
+  // channel: if it reaches the real target's NODE_OPTIONS without being
+  // scrubbed first, the target process fails to even start and the
+  // payload never arrives; with the channel properly cleared, the target
+  // starts clean and receives the payload normally.
+  //
+  // Not `stubExecutable` (confirmed live on native Windows): its own win32
+  // branch unconditionally sets `process.env.NODE_OPTIONS` itself, to make
+  // its exe-copy-plus-preload redirect trick work at all -- deleting
+  // NODE_OPTIONS the way this test needs to would break that redirect and
+  // fail the test regardless of whether the fix under test is applied,
+  // which is exactly what happened when this test was first written
+  // against `stubExecutable`. Building the target directly as `node
+  // <scriptPath>` sidesteps NODE_OPTIONS entirely for the target's own
+  // startup, leaving this test free to control it purely to exercise the
+  // reserved-channel leak.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-stale-channel-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const targetScriptPath = join(sandbox, 'target.cjs');
+  writeFileSync(
+    targetScriptPath,
+    `const fs = require('fs');
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`,
+  );
+  // Two simple quoted paths, no nested quoting or embedded newlines --
+  // deliberately avoids `-e "<script>"` here (unlike this file's other
+  // directly-built commands), since that would need the whole multi-line
+  // script JSON-escaped into one already-quoted command string, which
+  // `cmd.exe`'s own quote parsing (the real win32 shell behind `shell:
+  // true`) does not handle the same way a POSIX shell does.
+  const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(targetScriptPath)}`;
+  const hadNodeOptions = Object.hasOwn(process.env, 'NODE_OPTIONS');
+  const previousNodeOptions = process.env.NODE_OPTIONS;
+  const hadStaleChannelValue = Object.hasOwn(
+    process.env,
+    'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS',
+  );
+  const previousStaleChannelValue =
+    process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS;
+  try {
+    // NODE_OPTIONS itself must stay unset so callerNodeOptions comes back
+    // undefined and the conditional re-add cannot mask the bug under test.
+    delete process.env.NODE_OPTIONS;
+    process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS =
+      '--require /idd-2910-nonexistent-stale-channel-preload.cjs';
+    const payload = samplePayload();
+    const result = await invokeCritiqueTelemetryHook(command, payload, {
+      timeoutMs: 5_000,
+      platform: 'win32',
+    });
+    assert.deepEqual(result, { attempted: true, ok: true });
+    const received = await waitForNonEmptyFile(receivedPath, 5_000);
+    assert.equal(
+      received,
+      JSON.stringify(payload),
+      'expected the target to start clean and receive the full payload, with the stale reserved channel value scrubbed rather than leaked through as its NODE_OPTIONS',
+    );
+  } finally {
+    if (hadStaleChannelValue) {
+      process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS =
+        previousStaleChannelValue;
+    } else {
+      delete process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS;
+    }
+    if (hadNodeOptions) {
+      process.env.NODE_OPTIONS = previousNodeOptions;
+    } else {
+      delete process.env.NODE_OPTIONS;
+    }
+  }
+});
+
 test('invokeCritiqueTelemetryHook forwards a compound (a && b) command through the win32 relay when platform is overridden to win32 (kurone-kito/idd-skill#2910 review, Copilot)', async () => {
   // Issue #2910's own "Proposed change" section requires this fix to
   // "keep the existing command config contract (an arbitrary shell
