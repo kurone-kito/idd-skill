@@ -932,15 +932,22 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
     'setInterval(() => {}, 1_000);\n',
   );
   try {
-    // Half 1: a command that exits quickly on its own.
+    // Half 1: a command that exits quickly on its own. Snapshot window
+    // state WHILE it is still running (#2892 review, Copilot) --
+    // `invokeCritiqueTelemetryHook` only resolves once the child has
+    // already exited, so awaiting it before snapshotting would capture
+    // state *after* the process (and any window that opened and closed
+    // along with it) is already gone, silently passing even if a window
+    // briefly appeared.
     const beforeQuick = listVisibleWindowPids();
-    await invokeCritiqueTelemetryHook(
+    const quickPromise = invokeCritiqueTelemetryHook(
       stayAliveCommand('idd-telemetry-hook-window-check-quick'),
       samplePayload(),
       { timeoutMs: 5_000 },
     );
-    const afterQuick = listVisibleWindowPids();
-    const newVisibleQuick = [...afterQuick].filter(
+    await delay(300);
+    const duringQuick = listVisibleWindowPids();
+    const newVisibleQuick = [...duringQuick].filter(
       (pid) => !beforeQuick.has(pid),
     );
     assert.deepEqual(
@@ -948,6 +955,9 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
       [],
       `expected no new visible-window process while the quick-exit command ran, saw PIDs: ${newVisibleQuick.join(', ')}`,
     );
+    // Let the stub's own 2s sleep finish naturally, well within the 5s
+    // timeoutMs, before moving on to Half 2.
+    await quickPromise;
 
     // Half 2: a command that hangs and is killed on timeout.
     let hangPid: number | undefined;
