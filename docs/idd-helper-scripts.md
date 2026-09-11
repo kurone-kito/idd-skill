@@ -3715,6 +3715,197 @@ complement to the recovery-path re-signing in
 `idd-pr-submit.instructions.md` (Post-rebase verification) and
 `idd-overview-core.instructions.md` (cwd-vs-claim cherry-pick recovery).
 
+This wrapper also applies to an ordinary per-commit `git commit` in B3
+(`idd-work.instructions.md`), not only a merge or rebase continuation:
+
+```sh
+git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true commit -F <message-file>
+```
+
+Unlike the merge case above, a commit-only alias such as `git
+commit-ssh` is sufficient here — a single `commit` invocation needs no
+`--continue` step to re-sign.
+
+**Bounded timeout for every invocation** (commit, merge, or rebase): if
+the wrapper has not completed within 2 minutes, treat it as stuck
+rather than a signing failure worth retrying — a whole-command,
+root-cause-agnostic bound (it deliberately does not try to isolate the
+signer subprocess) that applies even to an invocation still producing
+output: an inactivity-only trigger would leave a merge or rebase that
+keeps emitting output free to run indefinitely without ever completing,
+which is not actually bounded (preventive; no observed incident yet —
+raised in PR #2906 review). First check whether the process **tree** —
+the wrapper's git invocation and any descendants such as the signer
+subprocess, not just the top-level command — is still running: per
+`idd-ci.instructions.md`'s "Wake-up discipline" guidance on a heavy
+local command that auto-backgrounds past a tool's default timeout, do
+not start a second wrapper invocation alongside it. This whole
+recovery procedure depends on being able to snapshot and signal the
+process tree — if `pgrep`/`ps` (or an equivalent process-listing and
+signaling mechanism) are not available on the host, that dependency
+cannot be met: stop and post a hold note rather than falling back
+without the cleanup guarantee, the same fail-closed treatment the
+`lsof` case below already gets. It also depends on already knowing
+which process is this invocation's own: "the git PID" below is the PID
+recorded when this wrapper invocation itself was launched, never one
+recovered afterward by searching the process table — launch the
+wrapper (the original invocation and every fallback or continuation
+alike) as `<wrapper command> & echo "wrapper-pid=$!"; wait "$!"` so the
+PID lands in the tool's own output at launch, an unambiguous launch
+record that survives a later timeout, since shell state such as a bare
+`$!` does not itself persist between separate tool calls. B1's
+sibling-worktree model already puts several concurrent workers on one
+host, so a generic `pgrep`/`ps` pattern match (for example, on the
+command name `git commit`) can just as easily match another worker's
+unrelated git invocation, and signaling that tree would terminate
+someone else's in-progress work instead of this one's (preventive; no
+observed incident yet — raised in PR #2906 review). If no such
+launch-time handle was recorded, that dependency is unmet too: hold,
+the same as the missing-`pgrep`/`ps` case above, rather than search for
+a substitute. Otherwise, snapshot the whole set to signal: the git PID
+itself **and** its descendants, found by walking from the git PID (for
+example, recursively via `pgrep -P`) — a
+"descendant" walk alone omits the root git process, leaving it able to
+keep running (and keep `index.lock` held) after only its children are
+signaled. Immediately send SIGTERM to every recorded PID in that
+whole set, not `-9` — git's own signal handler cleans up `index.lock`,
+and a descendant such as the signer subprocess can outlive a `kill`
+scoped to only the git parent (reproduced 2026-09-11 in PR #2906
+review). Snapshot and signal back-to-back, with nothing in between:
+that is what keeps a bare recorded PID number trustworthy without
+needing a separate identity check, since the gap in which an exited
+PID could be reused by an unrelated process stays sub-second on any
+real host. Then wait up to 30 seconds for each recorded PID
+individually to exit (not a fresh tree walk); SIGTERM is asynchronous,
+so checking state immediately can race git's own unwind (still
+removing `index.lock`) or observe stale state.
+
+Even a PID snapshot is best-effort, not a guarantee: a child that gets
+reparented (commonly to init) before the snapshot is taken is never
+recorded at all, so it survives untouched no matter how promptly the
+recorded PIDs are signaled. The same is true of a recorded PID that
+simply outlasts the 30-second wait — for example a process stuck in
+uninterruptible I/O, which cannot receive a signal until it leaves
+that state (preventive; no observed incident yet). Whether either kind
+of survivor is safe to proceed past depends on what it can be: a
+signer subprocess is only a resource leak to report, since the
+unsigned fallback below never invokes one and so cannot race it — but
+the whole-command timeout this section opens with is root-cause-
+agnostic (it can equally fire on a hung hook, not only a stalled
+signer), and a hook process that survives could still be reading or
+writing the working tree or index. Proceeding with the fallback while
+an unidentified or non-signer descendant might still be touching
+repository state risks the fallback's own git operation racing it, so
+treat that case as blocking: stop and post a hold note documenting the
+surviving PID(s) rather than falling back, reserving the
+resource-leak-and-continue treatment for a descendant identifiable as
+the signer itself.
+
+Separately, the lock-ownership check keeps its original (round-6)
+purpose: a leftover `index.lock` after the tree is confirmed gone does
+not prove it belongs to this invocation — a hook, another command, or
+the signer itself could hold it instead, the same ambiguity the
+clone-scoped lock's own "no automatic stale-lock recovery" convention
+already treats as unsafe to guess past. Confirm no other process
+still has the lock file open — a hook or the signer subprocess itself
+could hold it, not only another `git` command, and not necessarily
+one running from this worktree's directory (an absolute-path or
+`git -C` invocation holds the same lock without it) — with `lsof` on
+the `--git-path index.lock` path; where `lsof` is not available,
+ownership cannot be reliably confirmed at all, so treat it as
+unconfirmed rather than substituting a weaker check — before removing
+it yourself
+(`rm -f "$(git rev-parse --git-path index.lock)"`, not a literal
+`.git/index.lock` path, the same linked-worktree rule the rebase-state
+check below uses); if ownership cannot be confirmed, leave the lock in
+place and stop with a hold note instead of forcing the removal.
+
+Either way — the tree exited on its own, was terminated with nothing
+left but an identified signer leak, or the checks above otherwise
+allow proceeding — verify what actually happened before falling back;
+a killed or already-exited process can leave the operation completed,
+mid-progress, or never started at all:
+
+- **Plain commit**: compare `git rev-parse HEAD` before/after the
+  wrapper call, the same check B3's "Verify a commit actually landed"
+  paragraph already prescribes. Landed → stop, do not re-commit.
+  Otherwise, before falling back to `--no-gpg-sign`, also compare the
+  index's tree hash — from running `git write-tree` before the wrapper
+  call and again now — rather than comparing `git status --porcelain`
+  and `git diff --cached --stat` output: `git commit -F` commits the
+  index, so this content-addressed hash is what actually proves it
+  unchanged, whereas status/diff-stat output only shows that a hook
+  mutated the index without moving `HEAD` (reproduced 2026-09-11 in PR
+  #2906 review, via a hook that staged an extra file and slept) — it
+  cannot also catch a hook that swaps one tracked line's content for
+  another of the same shape, leaving both reports unchanged
+  (preventive; no observed incident yet). Unstaged working-tree
+  changes are intentionally excluded from this check: `git commit -F`
+  alone never commits them, so they cannot reach the fallback commit
+  regardless of what changed there. Unchanged → fall back to
+  `--no-gpg-sign`
+  (`idd-overview-appendix.instructions.md`'s "Commit signing" section).
+  Changed → stop and post a hold note for review instead of falling
+  back.
+- **Merge or rebase, state still present**: name the state via git, not
+  a literal path — in a linked worktree (every B1 sibling worktree)
+  `.git` at the worktree root is a _file_ pointing elsewhere, so a
+  hardcoded `.git/rebase-merge` check silently never matches. Use
+  `git rev-parse -q --verify MERGE_HEAD` for a merge, or
+  `test -d "$(git rev-parse --git-path rebase-merge)"` (or
+  `rebase-apply`) for a rebase. Either succeeding means the operation is
+  mid-progress: complete it with `-c commit.gpgsign=false` on the
+  `--continue` form — a plain `--continue` re-signs through the stalled
+  primary signer, and `--no-gpg-sign` itself is not a `--continue` flag.
+- **Merge or rebase, no state present**: absent state alone does not
+  prove the operation succeeded — the timeout can equally fire before
+  Git ever creates that state (nothing to `--continue`), or, for a
+  rebase specifically, leave `HEAD` detached at the upstream tip
+  without replaying the local commit, the same sibling-worktree failure
+  mode `idd-pr-submit.instructions.md`'s D1 "Post-rebase verification"
+  already documents and defines the same predicate for: current branch
+  non-empty (not detached) and the expected local commit present in
+  `origin/{development-branch}..HEAD` for a rebase; for a merge, either
+  `HEAD` advanced past its pre-call value or
+  `git merge-base --is-ancestor origin/{development-branch} HEAD`
+  already succeeds — an already-current merge exits `0` having created
+  neither a new `HEAD` nor `MERGE_HEAD`, and is success, not a failed
+  attempt. For a rebase specifically, D1's two checks alone are not
+  enough here: D1 verifies a rebase that already completed, but a
+  timeout that fires **before** the rebase ever starts leaves the
+  untouched, still-behind branch passing both checks trivially (it was
+  never detached, and its own feature commit was already present in
+  `origin/{development-branch}..HEAD` before this attempt began) —
+  require `git merge-base --is-ancestor origin/{development-branch}
+  HEAD` to succeed too, the same upstream-incorporated check the merge
+  case above already uses, so a rebase that never actually ran is not
+  mistaken for one that did. Verified → stop. Not verified → re-attach
+  to the branch if
+  detached (`git checkout {branch-name}`; the commit is preserved on
+  the branch ref) and rerun the original merge or rebase command
+  **unsigned** (`git -c commit.gpgsign=false merge …` / `rebase …`, not
+  the SSH-signing wrapper), exactly once, under this same 2-minute
+  bound — mirroring D1's own bounded auto-recovery. If that rerun times
+  out or still fails the same verification, post a hold note
+  documenting the branch state and stop, the same as D1's own recovery
+  does when it is exhausted.
+
+No step in this recovery procedure waits indefinitely: the original
+wrapper invocation and every fallback or continuation share the same
+2-minute bound, and the termination wait above has its own 30-second
+bound — every step that exceeds its bound routes to the same
+terminate-and-verify-or-hold outcome, not a fresh unbounded wait. A
+hook or other non-signing cause can hang the plain-commit
+`--no-gpg-sign` fallback or the `--continue` completion just as it
+hung the original attempt; if either does not itself complete within
+2 minutes, apply the same terminate-and-verify procedure to it, and if
+it still does not resolve, post a hold note and stop rather than
+retrying further.
+
+Observed hanging with no output for an extended, unbounded period on
+2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
+unsigned).
+
 ## Friction Inventory
 
 The workflow areas most likely to benefit from optional helpers are:
