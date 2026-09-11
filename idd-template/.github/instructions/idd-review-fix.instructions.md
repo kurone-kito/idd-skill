@@ -149,19 +149,15 @@ is available, because the mechanism's correctness against that domain
 maintainer decision" here does not depend on Tier 2's
 mechanism-simplification precondition, since there is no mechanism
 safe to remove: once several rounds each keep surfacing a genuinely
-new, in-scope spec-coverage gap rather than repeating one, summarize
-the recurring finding category and round count in a PR comment and
-stop for a maintainer decision. Once a maintainer decision accepts the
-residual gaps, close the hold the same way any other hold resolves
-(`idd-overview-appendix.instructions.md`'s Hold / suspend rules) for a
-session-local E10 critique-pass finding with no advisory thread of its
-own, or apply PATH B disposition-and-resolve
-(`idd-review-triage.instructions.md` E4-E7) when the recurring
-findings did surface through an actual Copilot/CI advisory thread.
-Either way, open the follow-up issue for the accepted gaps through
-`idd-pr-submit.instructions.md` D3's follow-up-issue rule (never
-`gh issue create` directly; use the `issue-authoring` skill) rather
-than continuing rounds indefinitely. Worked example:
+new, in-scope spec-coverage gap rather than repeating one, list each
+outstanding gap with its evidence, and the round count, in a PR
+comment and stop for a maintainer decision. Once a maintainer decision
+accepts the residual gaps, record the decision and close out the
+finding the same way this workflow already disposes of any review
+item or resolves any hold (`idd-review-triage.instructions.md`,
+`idd-overview-appendix.instructions.md`), and file any follow-up
+through `idd-review-triage.instructions.md`'s E6 follow-up-issue rule,
+rather than continuing rounds indefinitely. Worked example:
 kurone-kito/idd-skill#2767 (PR kurone-kito/idd-skill#2840) implemented
 a CommonMark-compliant structural-evidence parser
 (`triage-structural-evidence.mts` / `markdown-code.mts`); an
