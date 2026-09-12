@@ -15,6 +15,7 @@ import {
   computeSweepExitCode,
   fetchIssueCommentsGraphql,
   isCrossRepoIssueToken,
+  normalizeMarkerPrefix,
   parseIssueTargetToken,
   runAuthoringMarkerSweep,
   type SweepGraphqlComment,
@@ -64,6 +65,7 @@ function comment(
   body: string,
   authorLogin: string,
   isMinimized = false,
+  createdAt = '',
 ): SweepGraphqlComment {
   return {
     nodeId,
@@ -71,6 +73,7 @@ function comment(
     body,
     authorLogin,
     isMinimized,
+    createdAt,
   };
 }
 
@@ -101,6 +104,37 @@ if (queryArg.includes('minimizeComment')) {
 test('isCrossRepoIssueToken recognizes owner/repo#number and rejects a bare number', () => {
   assert.equal(isCrossRepoIssueToken('kurone-kito/idd-skill#2935'), true);
   assert.equal(isCrossRepoIssueToken('2935'), false);
+});
+
+test('isCrossRepoIssueToken accepts a dot-prefixed repository name (#2935 review, Codex)', () => {
+  assert.equal(isCrossRepoIssueToken('some-org/.github#42'), true);
+});
+
+test('parseIssueTargetToken resolves a dot-prefixed repository name', () => {
+  assert.deepEqual(
+    parseIssueTargetToken('some-org/.github#42', 'kurone-kito', 'idd-skill'),
+    { owner: 'some-org', repo: '.github', issue: 42 },
+  );
+});
+
+test('normalizeMarkerPrefix prefers an explicit --marker-prefix flag over config', () => {
+  assert.equal(
+    normalizeMarkerPrefix('flag-prefix', { markerPrefix: 'config-prefix' }),
+    'flag-prefix',
+  );
+});
+
+test('normalizeMarkerPrefix falls back to config.markerPrefix when no flag is given', () => {
+  assert.equal(
+    normalizeMarkerPrefix('', { markerPrefix: 'config-prefix' }),
+    'config-prefix',
+  );
+});
+
+test('normalizeMarkerPrefix resolves to empty -- never a hardcoded default -- when neither a flag nor config is given (#2935 review, Codex)', () => {
+  assert.equal(normalizeMarkerPrefix('', null), '');
+  assert.equal(normalizeMarkerPrefix('', {}), '');
+  assert.equal(normalizeMarkerPrefix('   ', { markerPrefix: '   ' }), '');
 });
 
 test('parseIssueTargetToken resolves a bare number against the given defaults', () => {
@@ -508,14 +542,14 @@ const hasCursor = argv.some((a) => a.startsWith('cursor='));
 if (!hasCursor) {
   process.stdout.write(JSON.stringify({
     data: { repository: { issue: { comments: {
-      nodes: [{ id: 'IC_p0', url: 'https://x/0', body: 'body-0', isMinimized: false, author: { login: 'a' } }],
+      nodes: [{ id: 'IC_p0', url: 'https://x/0', body: 'body-0', isMinimized: false, createdAt: '2026-01-01T00:00:00Z', author: { login: 'a' } }],
       pageInfo: { hasNextPage: true, endCursor: 'CURSOR1' },
     } } } },
   }));
 } else {
   process.stdout.write(JSON.stringify({
     data: { repository: { issue: { comments: {
-      nodes: [{ id: 'IC_p1', url: 'https://x/1', body: 'body-1', isMinimized: true, author: { login: 'b' } }],
+      nodes: [{ id: 'IC_p1', url: 'https://x/1', body: 'body-1', isMinimized: true, createdAt: '2026-01-02T00:00:00Z', author: { login: 'b' } }],
       pageInfo: { hasNextPage: false, endCursor: null },
     } } } },
   }));
@@ -536,6 +570,7 @@ if (!hasCursor) {
         body: 'body-0',
         authorLogin: 'a',
         isMinimized: false,
+        createdAt: '2026-01-01T00:00:00Z',
       },
       {
         nodeId: 'IC_p1',
@@ -543,8 +578,40 @@ if (!hasCursor) {
         body: 'body-1',
         authorLogin: 'b',
         isMinimized: true,
+        createdAt: '2026-01-02T00:00:00Z',
       },
     ]);
+  } finally {
+    restore();
+  }
+});
+
+test('fetchIssueCommentsGraphql sorts ascending by createdAt, correcting an out-of-order API response (#2935 review)', () => {
+  const restore = stubExecutable(
+    'gh',
+    `
+process.stdout.write(JSON.stringify({
+  data: { repository: { issue: { comments: {
+    nodes: [
+      { id: 'IC_newer', url: 'https://x/newer', body: 'newer', isMinimized: false, createdAt: '2026-02-02T00:00:00Z', author: { login: 'a' } },
+      { id: 'IC_older', url: 'https://x/older', body: 'older', isMinimized: false, createdAt: '2026-02-01T00:00:00Z', author: { login: 'b' } }
+    ],
+    pageInfo: { hasNextPage: false, endCursor: null },
+  } } } },
+}));
+`,
+  );
+  try {
+    const result = fetchIssueCommentsGraphql(
+      'kurone-kito',
+      'idd-skill',
+      100,
+      undefined,
+    );
+    assert.deepEqual(
+      result.map((c) => c.nodeId),
+      ['IC_older', 'IC_newer'],
+    );
   } finally {
     restore();
   }
@@ -664,6 +731,22 @@ test('a lone --owner without --repo (or vice versa) is rejected before resolving
     lonelyRepo.stderr.trim(),
     'error: sweep-authoring-markers: --owner and --repo must be provided together or not at all',
   );
+});
+
+test('a missing --marker-prefix with no config markerPrefix is rejected before any network call (#2935 review, Codex)', () => {
+  const result = runCli([
+    '--issue',
+    '1',
+    '--owner',
+    'kurone-kito',
+    '--repo',
+    'idd-skill',
+    '--trusted-marker-logins',
+    'kurone-kito',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /no marker prefix resolved/);
+  assert.match(result.stderr, /--marker-prefix/);
 });
 
 test('a missing trusted-marker-logins source is rejected with no --allow-untrusted escape hatch', () => {

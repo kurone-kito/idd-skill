@@ -79,7 +79,6 @@ import {
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
 
-const DEFAULT_MARKER_PREFIX = 'idd-skill';
 const ALLOWED_CLASSIFIERS = new Set(['OUTDATED', 'RESOLVED']);
 const ALLOWED_FORMATS = new Set(['json', 'table']);
 const AUTHORING_MARKER_FAMILIES: readonly AuthoringMarkerFamily[] = [
@@ -107,9 +106,20 @@ export interface SweepIssueTarget {
  * itself allows (letters, digits, `.`, `_`, `-`, never leading/trailing
  * `-` or `.`-only). A token that contains `/` or `#` but does not match
  * this shape is a likely typo, not a bare issue number -- callers get a
- * specific error instead of a confusing `--issue` parse failure. */
+ * specific error instead of a confusing `--issue` parse failure.
+ *
+ * The `repo` group allows an optional single leading `.` (#2935 review,
+ * Codex): GitHub's own repository-name rules permit a leading dot --
+ * `.github`, an organization's special community-health-files
+ * repository, is a real, commonly-used name a cross-repository
+ * `issueAuthoring.journalIssue` reference can legitimately need -- while
+ * `owner` keeps the stricter alphanumeric-first rule GitHub actually
+ * enforces for user/organization names (never a leading dot). A repo
+ * name that is only dots (`.`, `..`) still fails to match, since the
+ * pattern always requires at least one alphanumeric character after the
+ * optional leading dot. */
 const CROSS_REPO_ISSUE_TOKEN_PATTERN =
-  /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\/([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)#([1-9]\d*)$/;
+  /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\/(\.?[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)#([1-9]\d*)$/;
 
 /** `true` when `token` is the explicit `owner/repo#number` cross-repository
  * shorthand -- used before any I/O to decide whether this invocation
@@ -163,6 +173,7 @@ export interface SweepGraphqlComment {
   body: string;
   authorLogin: string;
   isMinimized: boolean;
+  createdAt: string;
 }
 
 interface SweepGraphqlCommentsPayload {
@@ -176,6 +187,7 @@ interface SweepGraphqlCommentsPayload {
             url?: unknown;
             body?: unknown;
             isMinimized?: unknown;
+            createdAt?: unknown;
             author?: { login?: unknown } | null;
           }[];
           pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
@@ -197,6 +209,19 @@ interface SweepGraphqlCommentsPayload {
  * (#2754): a caller sweeping several `--issue` targets under one overall
  * `--deadline-ms` must not let a single large comment log's own pagination
  * consume the entire budget with no cap of its own.
+ *
+ * The returned array is explicitly sorted ascending by `createdAt` before
+ * this function returns (#2935 review, Copilot): `classifyAuthoringMarker
+ * Family`'s "newest trusted match" determination trusts array order alone
+ * (`trustedMatchIndexes[trustedMatchIndexes.length - 1]`), so relying on
+ * an undocumented GraphQL connection default -- rather than requesting or
+ * asserting chronological order explicitly -- would let a future API
+ * change (or a wrong assumption about today's default) silently protect a
+ * stale marker instead of the genuinely newest one. Ties (an identical
+ * `createdAt` down to the second, which GitHub's API can return for two
+ * comments posted in rapid succession) keep their original page-fetch
+ * order via a stable sort, since `Array.prototype.sort` is guaranteed
+ * stable in this codebase's supported Node.js range.
  */
 export function fetchIssueCommentsGraphql(
   owner: string,
@@ -208,7 +233,7 @@ export function fetchIssueCommentsGraphql(
   repository(owner:$owner,name:$repo){
     issue(number:$number){
       comments(first:100,after:$cursor){
-        nodes { id url body isMinimized author { login } }
+        nodes { id url body isMinimized createdAt author { login } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -282,6 +307,7 @@ export function fetchIssueCommentsGraphql(
         body: String(node.body ?? ''),
         authorLogin: String(node.author?.login ?? ''),
         isMinimized: Boolean(node.isMinimized),
+        createdAt: String(node.createdAt ?? ''),
       });
     }
     const pageInfo = connection.pageInfo;
@@ -295,6 +321,18 @@ export function fetchIssueCommentsGraphql(
     }
     cursor = pageInfo.endCursor;
   }
+  // #2935 review (Copilot): sort ascending by createdAt explicitly rather
+  // than trusting the GraphQL connection's undocumented default order --
+  // see this function's own doc comment above for why "newest" detection
+  // downstream depends on this.
+  out.sort((a, b) => {
+    const aMs = Date.parse(a.createdAt);
+    const bMs = Date.parse(b.createdAt);
+    if (Number.isNaN(aMs) || Number.isNaN(bMs)) {
+      return 0;
+    }
+    return aMs - bMs;
+  });
   return out;
 }
 
@@ -748,16 +786,33 @@ function parseArgs(argv: string[]): SweepCliArgs {
   };
 }
 
-function normalizeMarkerPrefix(flagValue: string, config: unknown): string {
+/**
+ * Resolve the marker prefix from an explicit `--marker-prefix` flag or
+ * `.github/idd/config.json`'s top-level `markerPrefix`, in that order.
+ * Returns `''` -- never a hardcoded fallback -- when neither source
+ * resolves one (#2935 review, Codex): the issue-authoring contract's own
+ * "prefix-first" rule requires asking rather than guessing when the
+ * prefix is not discoverable, and explicitly forbids ever defaulting to
+ * this SOURCE repository's own `idd-skill` prefix in an installed
+ * bundle. An installed skill or npx profile invoked in a target
+ * repository with no `markerPrefix` configured yet must be told the
+ * already-resolved prefix explicitly via `--marker-prefix`; silently
+ * assuming `idd-skill` there would classify every real marker as
+ * non-canonical and let an `--apply` run report success while
+ * minimizing nothing. The caller (`main`, below) turns an empty result
+ * into a hard, actionable CLI error before any fetch begins.
+ */
+export function normalizeMarkerPrefix(
+  flagValue: string,
+  config: unknown,
+): string {
   const trimmedFlag = flagValue.trim();
   if (trimmedFlag.length > 0) {
     return trimmedFlag;
   }
   const configValue = (config as { markerPrefix?: unknown } | null)
     ?.markerPrefix;
-  const trimmedConfig =
-    typeof configValue === 'string' ? configValue.trim() : '';
-  return trimmedConfig.length > 0 ? trimmedConfig : DEFAULT_MARKER_PREFIX;
+  return typeof configValue === 'string' ? configValue.trim() : '';
 }
 
 function printTable(report: AuthoringMarkerSweepReport): void {
@@ -819,7 +874,11 @@ unlike a direct minimize-superseded-markers.mjs call, this sweep's own
 comment is the live marker to protect from minimization.
 
 --marker-prefix defaults to the top-level markerPrefix field in
-.github/idd/config.json, or "idd-skill" when neither is set.
+.github/idd/config.json. Required when neither is available (#2935
+review, Codex): this command never guesses a prefix, per the
+issue-authoring contract's "prefix-first" rule -- an installed skill or
+npx profile running in a target with no configured markerPrefix yet
+must pass the already-resolved prefix explicitly.
 
 --deadline-ms bounds the WHOLE sweep (every --issue's own GraphQL
 pagination plus the final minimize pass), not just the mutation --
@@ -890,6 +949,12 @@ if (import.meta.main) {
   const defaultOwner = args.owner || currentRepo?.owner || '';
   const defaultRepo = args.repo || currentRepo?.repo || '';
   const markerPrefix = normalizeMarkerPrefix(args.markerPrefix, config);
+  if (markerPrefix.length === 0) {
+    console.error(
+      'error: no marker prefix resolved. Pass --marker-prefix <prefix>, or set the top-level markerPrefix field in .github/idd/config.json -- this command never guesses a prefix (see the issue-authoring contract\'s "prefix-first" rule).',
+    );
+    process.exit(2);
+  }
 
   let issues: SweepIssueTarget[];
   try {
