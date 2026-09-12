@@ -1206,63 +1206,54 @@ set anchor held until every other
 target's label removal is verified, and remove the anchor label last. First
 re-fetch owner comments during release-marker preflight.
 
-**Mandatory release-time hide-on-supersede sweep (#2896).** At this same
-point -- before the reuse-or-append decision below, so a retried or
-resumed release (which reuses an existing `release` marker and never
-appends a new one) still runs the sweep every time this preflight step
-is reached -- paginate the full owner-marker log this re-fetch just
-retrieved, plus the publication-intent log for the journal named in this
-session's own records, and minimize (classifier `OUTDATED`, via the
-existing `minimize-superseded-markers.mjs`, reusing
-`matchCanonicalAuthoringMarkerFamily` unchanged) every byte-exact
-canonical match that is not the newest **trusted-actor** match for its
-family, exactly as the opportunistic per-post step above does.
+**Mandatory release-time hide-on-supersede sweep (#2896, #2935).** At
+this same point -- before the reuse-or-append decision below, so a
+retried or resumed release (which reuses an existing `release` marker
+and never appends a new one) still runs the sweep every time this
+preflight step is reached -- run the single fetch-driven sweep command
+against the target issue and the journal issue named in this session's
+own records:
 
-**Fetch that paginated log via GraphQL, never a plain REST
-issue-comments fetch, and skip an already-minimized candidate before
-submitting it** (#2896 review, Codex): a GraphQL `issueComments` /
-`comments` query can select `isMinimized` on each node directly, while
-REST's issue-comments endpoint never carries that field at all, so a
-REST-fetched snapshot cannot distinguish a comment this sweep already
-cleared from one it never touched. Use that field to exclude any
-candidate already `isMinimized: true` **before** it ever reaches the
-minimize helper's `--subject-ids`, not only when auditing the result
-afterward. Without this, every historical byte-exact canonical comment
-on a long-lived shared journal (one can accumulate hundreds over time)
-gets resubmitted to `minimize-superseded-markers.mjs` on every single
-sweep invocation across every target, and that helper probes each
-subject ID serially with no overall deadline -- a degraded GitHub API
-can then consume its per-call timeout once per historical comment and
-stall release for many minutes despite the attempted-not-blocking
-framing below.
+```sh
+node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
+  --issue <journal-issue-number> \
+  --trusted-marker-logins <trusted-login-1,...> \
+  --deadline-ms 300000 --apply
+```
 
-**Also pass `--deadline-ms`** (#2896 review, Codex, round 8) to every
-`minimize-superseded-markers.mjs` invocation this sweep makes -- for
-example `--deadline-ms 300000` (five minutes) -- as a second,
-independent bound: the `isMinimized` pre-filter above only skips
-already-cleared candidates cheaply, but a first-ever sweep of a large
-backlog can still submit many genuinely-not-yet-minimized candidates
-that each cost a real GitHub API round-trip, and without
-`--deadline-ms` each one can individually consume the helper's own
-per-call timeout with no overall cap.
-
-Determine
-"newest" only among candidates from a trusted marker actor (#2896
-review, Codex), never from every structural match indiscriminately --
-an untrusted actor's byte-exact canonical comment posted after the real
-newest trusted one must never be treated as the thing to keep visible:
+Or, for npx/package-manager profiles, the equivalent
+`idd-sweep-authoring-markers` command. One invocation performs the whole
+sweep that used to be an ~8-step manual procedure (#2935): it fetches
+each `--issue`'s comments via GraphQL (selecting `isMinimized` directly
+-- REST's issue-comments endpoint never carries that field, so this
+command never falls back to REST), classifies every comment with
+`matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`, unchanged),
+determines "newest" only among **trusted-actor** matches per family
+(#2896 review, Codex -- an untrusted actor's later byte-exact comment
+must never be mistaken for the live marker to keep, since
 `minimize-superseded-markers.mjs` itself refuses to minimize any comment
 outside `--trusted-marker-logins` regardless of this selection, so
-naively treating the untrusted comment as newest would instead select
-the legitimate trusted marker for minimization -- exactly backwards.
-This mirrors `checkAuthoringMarkerMinimizationBacklog`'s own audit-side
-fix; keep the two in sync. Attempt this once per target
-here, and once more on the anchor immediately before the release-complete
-preflight below; this is the sweep the contract depends on, but
-"mandatory" means **attempted**, not blocking -- a failed attempt
-(permission error, an unreadable comment list, or an unavailable helper
-runtime) skips silently and never stops release, matching the
-opportunistic step's own best-effort framing. See the
+wrongly treating the untrusted comment as newest would instead select
+the legitimate trusted marker for minimization -- exactly backwards;
+mirrors `checkAuthoringMarkerMinimizationBacklog`'s own audit-side
+rule -- the two share one implementation, `classifyAuthoringMarkerFamily`
+in `marker-helpers.mts`, so they cannot drift), excludes any candidate
+already `isMinimized: true`, and minimizes (classifier `OUTDATED`) every
+remaining eligible candidate in one mutation pass -- reusing
+`minimize-superseded-markers.mjs`'s own `runMinimize` rather than
+reimplementing the mutation. `--deadline-ms` bounds the WHOLE invocation
+(every `--issue`'s own GraphQL pagination plus the final minimize pass,
+for example `--deadline-ms 300000` -- five minutes), guarding against
+the same degraded-GitHub-API risk a large, long-lived shared journal's
+full history would otherwise pose.
+
+Attempt this once per target here, and once more on the anchor
+immediately before the release-complete preflight below; this is the
+sweep the contract depends on, but "mandatory" means **attempted**, not
+blocking -- a failed invocation (permission error, an unreadable comment
+list, or an unavailable helper runtime) skips silently and never stops
+release, matching the opportunistic step's own best-effort framing. See
+the
 [Closing sweep](#closing-sweep-after-stage-2-closes-2896-review-codex)
 section below for the third sweep point this preflight sweep alone does
 not cover, and for the explicit `authoring-marker-minimization-backlog`
@@ -1295,10 +1286,13 @@ final anchor label removal is verified, re-fetch every target and verify its
 current release marker, absent label, and expected body snapshot; any drift
 leaves the set open and prevents completion. Immediately before the
 release-complete reuse-or-append decision below, repeat the same
-mandatory sweep once more on the anchor's own owner-marker log and the
-journal's publication-intent log -- idempotent with every earlier
-target's own sweep above, since a comment either was already minimized
-or was not yet the newest for its family either way. Then reuse or
+mandatory sweep once more -- the same `sweep-authoring-markers.mjs`
+command above, now scoped to `--issue <anchor-issue-number> --issue
+<journal-issue-number>` -- covering the anchor's own owner-marker log
+and the journal's publication-intent log -- idempotent with every
+earlier target's own sweep above, since a comment either was already
+minimized or was not yet the newest for its family either way. Then
+reuse or
 append the anchor-only
 `mode=release-complete` marker and record its comment ID. Reconcile that ID
 and the paginated anchor log with bounded retries; a successful POST or
@@ -1341,13 +1335,21 @@ clear them, and a target's Stage 2 for a given generation runs only
 once -- there is no future preflight sweep that would ever revisit them.
 Once the set-level release actually closes (the successful-close branch
 above: the trusted `release-complete` marker is found and every label is
-confirmed absent), attempt the mandatory sweep one more time: paginate
-every target's now-final owner-marker log (the anchor's included this
-time, not just its own) and the journal's publication-intent log, and
-minimize every byte-exact canonical match that is not the newest for its
-family, exactly as the preflight sweeps above do. Same
-attempted-not-blocking framing: a failed attempt here does not reopen
-the set or roll back the close already recorded above.
+confirmed absent), attempt the mandatory sweep one more time (#2935), in
+a single invocation covering every target's now-final owner-marker log
+(the anchor's included this time, not just its own) and the journal's
+publication-intent log:
+
+```sh
+node scripts/sweep-authoring-markers.mjs --issue <target-1> \
+  --issue <target-2> ... --issue <anchor-issue-number> \
+  --issue <journal-issue-number> \
+  --trusted-marker-logins <trusted-login-1,...> \
+  --deadline-ms 300000 --apply
+```
+
+Same attempted-not-blocking framing: a failed invocation here does not
+reopen the set or roll back the close already recorded above.
 
 **Make every sweep attempt's outcome visible.** Immediately after each
 of the three sweep attempts in this section (per-target preflight,
@@ -1374,12 +1376,13 @@ reports zero backlog even when the sweep was skipped or failed entirely
 (that overstates; this understates to nothing).
 
 **Feed it the sweep's own post-mutation result, never the pre-mutation
-snapshot the sweep read.** The minimize helper mutates GitHub directly;
-it never updates an in-memory or on-disk comment snapshot. Before
-running the check, update the just-fetched snapshot's `isMinimized`
-field to `true` for every candidate the minimize helper's own report
-(`minimize-superseded-markers.mjs`'s `items[]`, keyed by subject id)
-lists with **either** `status: "applied"` **or** `status: "skipped",
+snapshot the sweep read.** The minimize mutation applies directly to
+GitHub; it never updates an in-memory or on-disk comment snapshot.
+Before running the check, update the just-fetched snapshot's
+`isMinimized` field to `true` for every candidate the sweep command's
+own report (`sweep-authoring-markers.mjs`'s `items[]`, each entry tagged
+with the family it belongs to and keyed by subject id) lists with
+**either** `status: "applied"` **or** `status: "skipped",
 reason: "already-minimized"` -- the latter fires whenever the fetched
 snapshot's own `isMinimized` was already stale or absent for a comment
 GitHub already considers minimized (for example one an earlier sweep or
