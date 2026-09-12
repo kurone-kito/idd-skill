@@ -2006,19 +2006,32 @@ close.
   well-formed, and its holder matches (`agentId`, `claimId`) →
   re-acquired without writing — this call's own first read found the
   lock already there, mirroring the helper's `reacquired: true` with no
-  `racedCreate`. Absent → create it with an exclusive file-create API
-  (`open(..., O_CREAT|O_EXCL)` on POSIX, or the PowerShell
-  `FileMode.CreateNew` equivalent), writing the same JSON holder shape
-  (`agentId`, `claimId`, `acquiredAt`). If that create then fails
-  because the path now exists (`EEXIST`), a concurrent same-claim-id
-  writer landed between the read and the create; re-read to confirm the
-  holder matches, but treat this outcome as a race, not as evidence the
-  lock predates this call — never equal it to a lock this same read
-  already found present (the helper's `racedCreate: true`, #2917
-  review, Codex). A path that already exists with a non-matching,
-  missing, malformed, or unreadable holder is a collision either way.
-  Never delete or override a different holder — enable a helper runtime
-  for an authorized takeover instead. Both profiles share the
+  `racedCreate`. Absent → write the same JSON holder shape (`agentId`,
+  `claimId`, `acquiredAt`) to a same-directory temporary file with a
+  unique name (for example `idd-claim.lock.tmp-<pid>-<random>`); once
+  that temp file is fully written and closed, publish it into the
+  final `idd-claim.lock` path atomically: on POSIX, `link()` the temp
+  file into `idd-claim.lock` and then `unlink()` the temp file (never
+  `rename()`, which would silently replace an existing destination
+  instead of failing); on Windows/PowerShell, a no-overwrite move of
+  the fully-written temp file into the final path (for example
+  `[System.IO.File]::Move`, which throws when the destination already
+  exists). This mirrors `createLockFileExclusively` in
+  `src/scripts/claim-lock.mts`. Never create the final
+  `idd-claim.lock` path directly and write into it as two separate
+  steps — a concurrent same-claim-id reader could then observe a torn
+  or empty body at that path and misreport a collision (#2920). If the
+  publish step then fails because the final path now
+  exists (`EEXIST` on POSIX, or the platform-equivalent
+  already-exists failure on Windows), remove your own temporary file
+  and re-read the final path to confirm the holder matches, but treat
+  this outcome as a race, not as evidence the lock predates this call —
+  never equal it to a lock this same read already found present (the
+  helper's `racedCreate: true`, #2917 review, Codex). A path that
+  already exists with a non-matching, missing, malformed, or
+  unreadable holder is a collision either way. Never delete or
+  override a different holder — enable a helper runtime for an
+  authorized takeover instead. Both profiles share the
   `idd-claim.lock` namespace, so a helper-runtime session and an
   instructions-only session see the same lock.
 
@@ -2295,11 +2308,12 @@ close.
   the lock section above and parse it the same way `--check` does --
   but only when your own _first read_ in the acquire step above already
   found the lock present and matching, never when it was absent there
-  and your own exclusive-create then failed `EEXIST`. That failure means
-  a concurrent same-claim-id writer landed between your read and your
-  create -- a race, not evidence the lock predates this gate pass; the
-  helper's own `racedCreate: true` marks exactly this case (#2917
-  review, Codex). Only when it parses as well-formed and its `claimId`
+  and your own publish-into-place attempt then failed because the final
+  path already existed. That failure means a concurrent same-claim-id
+  writer landed between your read and your publish -- a race, not
+  evidence the lock predates this gate pass; the helper's own
+  `racedCreate: true` marks exactly this case (#2917 review, Codex).
+  Only when it parses as well-formed and its `claimId`
   field equals the active `{claim-id}` exactly, apply the write-side
   fallback above -- write-lock coordination included, wrapped around
   this whole read-then-write, not just the write -- using the lock's
