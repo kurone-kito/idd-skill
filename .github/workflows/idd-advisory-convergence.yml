@@ -682,36 +682,3 @@ jobs:
           # outlives a short artifact retention -- keep the repository
           # default so the artifact stays listable for the marker's full
           # validity window.
-
-  # TEMPORARY diagnostic probe for kurone-kito/idd-skill#2951 -- NOT part
-  # of the shipped fix. Reproduces the exact failing REST call
-  # (`external-check-waiver.mts`'s `issues/{n}/comments` POST) in
-  # isolation, under the self-waiver job's CURRENT (pre-fix) permissions
-  # only, dispatched via the workflow_dispatch trigger already registered
-  # on `main` so this run reflects THIS branch's copy of the file. Posts
-  # one throwaway comment to the PR named by `pr_number` and reports
-  # success/failure; the comment is deleted immediately after by the
-  # operator. This job is removed before the real fix commit lands --
-  # see the issue for the empirical result.
-  diag-2951-permission-probe:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
-    steps:
-      - name: Attempt the exact failing POST (with pull-requests write added)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-        run: |
-          set +e
-          gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
-            --method POST \
-            -f "body=idd-skill#2951 diagnostic permission probe (candidate fix: contents:read, pull-requests:write, issues:write) -- safe to delete"
-          STATUS=$?
-          echo "probe_exit_code=$STATUS" >> "$GITHUB_STEP_SUMMARY"
-          exit $STATUS
