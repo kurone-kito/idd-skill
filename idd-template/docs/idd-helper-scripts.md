@@ -2199,7 +2199,15 @@ close.
   worktree exists) is not cleaned up by that removal — an accepted
   residual, since giving this record cross-worktree, pre-acquisition
   visibility is explicitly out of scope (see the lock file's own
-  cross-worktree-visibility note above).
+  cross-worktree-visibility note above). This is a deliberate choice,
+  not an oversight: the file is a few hundred bytes, untracked (never
+  shown by `git status`), and has no working-tree impact, so leaving it
+  in place is cheaper than adding narrowly-scoped cleanup machinery for
+  it. See issue `kurone-kito/idd-skill#2944` for the full reasoning
+  record and the cleanup-vs-document-intent tradeoff it considered —
+  qualified with the owner/repo here since this file is distributed
+  via `idd-template/`, where a bare `#2944` would resolve against
+  whichever repository copied it in.
 - **`instructions-only` helper-free fallback, write side** (no helper
   runtime available — `instructions-only` is the distributed default
   profile, see
