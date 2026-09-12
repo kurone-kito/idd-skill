@@ -4605,6 +4605,50 @@ test('authoring-publication-intent --apply accepts a --actor that matches the au
   }
 });
 
+test('authoring-publication-intent --apply fails closed when the authenticated login cannot be resolved (#2931)', () => {
+  // Codex + Copilot review on PR #2937, round 4 (independently
+  // corroborated): resolveViewerLoginSafe() fails OPEN (empty
+  // viewerLogin, viewerLoginUnavailable: true) on a transient `gh api
+  // user` failure -- the original round-3 actor check's `viewerLogin &&`
+  // guard then silently skipped the comparison, letting an unverified
+  // --actor through into a permanent append-only record. This proves the
+  // POST is never reached when the login cannot be resolved.
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'user') {
+  process.stderr.write('HTTP 401: Bad credentials');
+  process.exit(1);
+}
+process.stderr.write('unexpected gh invocation (expected only a failing api user call): ' + args.join(' '));
+process.exit(1);
+`,
+  );
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        ...authoringArgv('authoring-publication-intent', {
+          ...AUTHORING_PUBLICATION_INTENT_FULL_FIELDS,
+          actor: 'someone',
+        }),
+        '--apply',
+      ],
+      { encoding: 'utf8', env: { ...process.env } },
+    );
+    throw new Error('expected the CLI to exit non-zero');
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /cannot verify --actor: the authenticated GitHub login could not be resolved/,
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('authoring-publication-intent dry-run does not check --actor against the authenticated user (checked only at --apply, #2931)', () => {
   const restore = stubGhNeverCalled();
   try {

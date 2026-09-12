@@ -582,12 +582,16 @@ export interface ParsedIssueReference {
  * `owner/repo` without a number -- so a malformed `--marker-target` fails
  * closed with a targeted error instead of this CLI's live-body fetch
  * below silently hitting the wrong repository or throwing an opaque `gh
- * api` error. Deliberately independent of this CLI's own `--owner` /
- * `--repo` / `<number>` posting-destination flags: `authoring-owner`'s
- * `--marker-target` names which issue's live body the marker's
- * `body-sha256` digest describes, which in every observed usage is the
- * same issue this marker is posted to, but this parser (and the fetch it
- * feeds) does not assume or enforce that equality.
+ * api` error. This parser itself stays independent of this CLI's own
+ * `--owner` / `--repo` / `<number>` posting-destination flags -- it only
+ * validates SHAPE -- but the `import.meta.main` CLI entry point below DOES
+ * enforce that `authoring-owner`'s `--marker-target` (and, separately,
+ * `authoring-publication-intent`'s `--journal`) names the exact same issue
+ * as the resolved posting destination (`isPostingDestination`,
+ * kurone-kito/idd-skill#2931, Codex/Copilot review on PR #2937): a marker
+ * whose `target=` differs from where it is actually posted is a
+ * permanently invalid append-only comment on one issue with no ownership
+ * evidence on the other.
  */
 export function parseIssueReference(ref: string): ParsedIssueReference | null {
   const match = ref.trim().match(/^([^\s/#]+)\/([^\s/#]+)#([1-9]\d*)$/);
@@ -1059,14 +1063,31 @@ prefix, not bare --target / --owner, because this CLI already reserves
 those two names for the posting-destination kind and the repo owner used
 to resolve which repo to call. The two types give --marker-target /
 --anchor DIFFERENT shapes (contract.md): authoring-owner's are
-\`<owner>/<repo>#<number>\` issue references (in every observed usage, the
-same issue this marker is posted to -- independent of the posting
---owner/--repo/<number> flags, though never enforced equal to them), while
+\`<owner>/<repo>#<number>\` issue references, while
 authoring-publication-intent's are OPAQUE per-set ids with no issue
 reference at all (only that type's separate --journal/--issue use the
 \`<owner>/<repo>#<number>\` shape) -- pass either verbatim as opaque
 strings; this CLI never parses or fetches against
 authoring-publication-intent's --marker-target/--anchor.
+--marker-target (authoring-owner) and --journal (authoring-publication-
+intent) MUST name the exact same issue as the resolved posting
+destination (--owner/--repo/<number>, or the current repository's \`gh
+repo view\` when --owner/--repo are omitted) -- checked in dry-run too, not
+just --apply. A mismatch is refused with a targeted error before any
+fetch or POST: an unvalidated value here could otherwise hash or
+reference one issue while the append-only comment lands on a completely
+different one, permanently corrupting both issues' authoring state
+(kurone-kito/idd-skill#2925/#2931). --anchor (authoring-owner) is
+FORMAT-validated only and is deliberately NEVER required to equal the
+posting destination in general -- contract.md's anchor records the SET's
+anchor issue, which legitimately differs from --marker-target for a
+non-anchor member of a multi-target set -- EXCEPT for --mode release-guard
+/ release-complete specifically, which contract.md makes "valid only on
+the set anchor": for those two modes only, --anchor MUST equal
+--marker-target. authoring-publication-intent's non-'none' --issue is
+FORMAT-validated only, with no destination-equality requirement at all
+(it names the issue this publication intent is ABOUT, which need not be
+the --journal issue this marker posts to).
 --body-sha256 is OPTIONAL (authoring-owner only): when omitted,
 this CLI fetches --marker-target's current live body via the same
 JSON-parsed \`gh api\` path every other read in this file already uses (never
@@ -1075,17 +1096,40 @@ kurone-kito/idd-skill#2925's bad digest) and hashes it; when supplied
 explicitly (other than the literal sentinel \`none\`, used for BOTH
 anchor-only modes -- release-guard AND release-complete), it is
 independently VERIFIED against that same fresh fetch and the post is
-refused on a mismatch, never trusted as-is. This CLI also rejects a
---mode/--body-sha256/--snapshot-sha256 combination contract.md's mode
-table forbids (docs/idd-autonomy-contract.md's "Portable authoring-owner
-protocol" section) BEFORE any fetch: the five "target" modes (acquire,
-resume, bootstrap, heartbeat, release) always need a real body-sha256
-(never the none sentinel); the two anchor-only modes (release-guard,
-release-complete) always need body-sha256 none (never omitted or a real
-digest); and only release-complete carries a real snapshot-sha256 (every
-other mode needs snapshot-sha256 none) -- owner comments are append-only,
-so a marker posted with the wrong sentinel for its own mode is a
-permanent, uncorrectable defect once it lands.
+refused on a mismatch, never trusted as-is (an explicit empty string
+\`--body-sha256 ''\` is treated as a real, mismatching value, not as
+omitted). This CLI also rejects a --mode/--body-sha256/--snapshot-sha256/
+--supersedes combination contract.md's mode table forbids
+(docs/idd-autonomy-contract.md's "Portable authoring-owner protocol"
+section) BEFORE any fetch: the five "target" modes (acquire, resume,
+bootstrap, heartbeat, release) always need a real body-sha256 (never the
+none sentinel); the two anchor-only modes (release-guard, release-complete)
+always need body-sha256 none (never omitted or a real digest); only
+release-complete carries a real snapshot-sha256 (every other mode needs
+snapshot-sha256 none); and --supersedes must be \`none\` for
+acquire/bootstrap, a REAL prior-owner token distinct from --marker-owner
+for resume, and exactly --marker-owner for
+release/heartbeat/release-guard/release-complete -- owner comments are
+append-only, so a marker posted with the wrong sentinel/value for its own
+mode is a permanent, uncorrectable defect once it lands. --mode itself
+(and --marker-owner/--supersedes/--actor/--state/--issue) is trimmed
+before any of these checks run, matching the renderers' own internal
+trimming, so a padded value cannot bypass a coupling check while still
+rendering as canonical.
+authoring-publication-intent's --issue may be \`none\` only at
+--state pending (contract.md; mirrors audit-authored-issue.mts's own
+replay rule) -- \`--state member/cleanup/abandoned\` always require a real
+--issue reference. Its --actor is additionally VERIFIED against the
+authenticated GitHub login at --apply time (never in dry-run, which has
+no real POST author to compare against): contract.md requires "actor to
+equal the API author" on every replay, so a mismatched --actor produces
+a durable record replay will always reject. Unlike similar --actor
+checks elsewhere in this repository (local-validation-evidence.mts /
+external-check-waiver.mts / provider-outage-declaration.mts, which fail
+OPEN when the authenticated login cannot be resolved), --apply here
+FAILS CLOSED when it cannot be resolved: those other artifacts are
+recoverable, while a publication-intent record replay rejects is
+permanent append-only noise on an issue this helper cannot retract.
 --snapshot-sha256 has no auto-derivation and stays required and explicit:
 docs/idd-autonomy-contract.md DOES define a precise algorithm for it (a
 SHA-256 digest over the whole authoring set's sorted
@@ -1095,10 +1139,18 @@ session's own durable hold -- cross-target state this single
 --marker-target invocation has no way to enumerate, unlike body-sha256,
 which is always exactly the one named target's own live body.
 --marker-prefix defaults to .github/idd/config.json's \`markerPrefix\`, or
-'idd-skill' when that is also absent. These two types are deliberately NOT
-OPERATIONAL_MARKERS (marker-helpers.mts) and are never subject to this
-file's own --apply hide-at-post-time step or the F4 post-merge cleanup
-driver -- see MARKER_TYPES's own doc comment.
+'idd-skill' when that is also absent -- the same distributed default
+authoring-owner-provenance.mts's own DEFAULT_MARKER_PREFIX uses. Per
+contract.md's "Target marker prefix" section, an installed bundle must
+resolve the TARGET repository's actual configured prefix and never guess;
+this CLI's local-config fallback is a same-repo convenience for THIS
+distributed source repository's own dogfooding, not a substitute for
+passing --marker-prefix explicitly when --owner/--repo names a different
+repository than the one --marker-prefix would be read from.
+These two types are deliberately NOT OPERATIONAL_MARKERS
+(marker-helpers.mts) and are never subject to this file's own --apply
+hide-at-post-time step or the F4 post-merge cleanup driver -- see
+MARKER_TYPES's own doc comment.
 
 --claim-id / --attempt on advisory-recovery are OPTIONAL (#1572): passing
 both binds the marker to the active claim and an attempt number for
@@ -1994,19 +2046,32 @@ if (import.meta.main) {
   // record, so a --actor that does not match the identity actually making
   // this POST produces a record replay will always reject even though this
   // command reports success. Checked only at --apply (dry-run has no real
-  // POST author to compare against), mirroring the identical
-  // --actor/viewerLogin fail-closed pattern already used by
+  // POST author to compare against).
+  //
+  // Unlike the identical --actor/viewerLogin pattern already used by
   // local-validation-evidence.mts / external-check-waiver.mts /
-  // provider-outage-declaration.mts. Fails OPEN (like that same precedent)
-  // when the authenticated login itself cannot be resolved, rather than
-  // introducing a stricter fail-closed variant those established call
-  // sites do not use.
+  // provider-outage-declaration.mts -- all of which fail OPEN (skip the
+  // comparison) when the authenticated login cannot be resolved -- this
+  // one FAILS CLOSED instead (Codex + Copilot review on PR #2937, round
+  // 4, independently corroborated): those other artifacts are correctable
+  // or non-authoritative, while a publication-intent record is a
+  // PERMANENT append-only comment whose replay will reject it forever if
+  // --actor turns out wrong, and this helper cannot retract or edit it
+  // after the fact. A transient `gh api user` failure (expired
+  // credential, rate limit, installation-token quirk) must block the
+  // POST, not silently let an unverified --actor through.
   if (args.type === 'authoring-publication-intent' && args.apply) {
-    const { viewerLogin } = createGithubProviderAdapter(
+    const { viewerLogin, viewerLoginUnavailable } = createGithubProviderAdapter(
       args.owner,
       args.repo,
     ).resolveViewerLoginSafe();
     const actor = args.fields.actor;
+    if (actor && viewerLoginUnavailable) {
+      process.stderr.write(
+        'cannot verify --actor: the authenticated GitHub login could not be resolved (gh api user failed or returned empty); refusing to post an unverified actor into a permanent append-only record -- fix gh auth and retry\n',
+      );
+      process.exit(1);
+    }
     if (
       actor &&
       viewerLogin &&
