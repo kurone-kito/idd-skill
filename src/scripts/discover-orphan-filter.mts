@@ -189,7 +189,7 @@ export type OrphanFilteredReason =
 export type OrphanClassification =
   | {
       orphan: true;
-      reason: 'orphan' | 'blocked_references_closed';
+      reason: 'orphan' | 'references_resolved';
       details?: undefined;
       /** #2767: present only when a runtime-observation-precondition hit
        * was demoted (every structural-evidence signal held) rather than
@@ -815,10 +815,16 @@ export function classifyIssue(
   // Reaching here means blockedRefs/dependencyRefs was non-empty (the
   // earlier both-empty check already returned `orphan`) and every ref
   // resolved to a non-open, non-unresolvable state (closed, or an
-  // exempt open parent epic) -- never "no refs at all" again.
+  // exempt open parent epic) -- never "no refs at all" again. Named
+  // `references_resolved` rather than a "blocked"-sounding name: this
+  // condition means the issue's blocking/dependency references are ALL
+  // resolved (i.e. NOT currently blocked), and a "blocked"-sounding
+  // reason string was observed to read as the opposite of its actual
+  // meaning when an issue also landed in `routed_to_human` for an
+  // unrelated reason (#2932, illustrated on #2781).
   return {
     orphan: true,
-    reason: 'blocked_references_closed',
+    reason: 'references_resolved',
     ...demotionWarning,
   };
 }
@@ -1427,7 +1433,7 @@ Output schema:
   "repository": {"owner": "...", "repo": "..."},
   "diagnostics": {"pr": 404},
   "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "...", "authoringLabelName": "...", "authoringStaleAge": "...", "autopilotSuitabilityFloor": 3, "autopilotSuitabilityEnabled": true},
-  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
+  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|references_resolved", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "filtered": {
     "provider_outage_target": [...],

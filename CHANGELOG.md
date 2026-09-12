@@ -14,6 +14,15 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- `discover-orphan-filter`'s `blocked_references_closed` orphan reason
+  is renamed to `references_resolved`: the old name read as "currently
+  blocked" even though it fires only once every blocking/dependency
+  reference has resolved, which was especially misleading for an
+  entry also routed to `routed_to_human` for an unrelated sub-floor
+  autopilot-suitability score (#2932).
+
 ## [0.10.0] - 2026-09-11
 
 Structural-evidence precision, self-service advisory-convergence
