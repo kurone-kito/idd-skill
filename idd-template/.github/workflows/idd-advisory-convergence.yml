@@ -431,8 +431,10 @@ jobs:
     # `issues: write` (to post the marker, and to read the linked issue's
     # own comment stream to resolve its active claim -- that second call
     # targets a real issue, not a PR, so it only ever needed
-    # `issues: read`; this job keeps `issues: write` unchanged because the
-    # marker POST above still needs it too).
+    # `issues: read`; this job keeps `issues: write` unchanged because
+    # this fix's A/B test held it constant in both runs and so proves
+    # nothing about whether the marker POST also needs it -- narrowing
+    # to `issues: read` would need its own separate live A/B test).
     permissions:
       contents: read
       pull-requests: write
