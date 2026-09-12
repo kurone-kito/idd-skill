@@ -14,8 +14,68 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-12
+
+CI-check-identity spoofing closures, claim generated-token integrity,
+and issue-authoring marker canonicalization release.
+
+### Added
+
+- `post-idd-marker` posts the issue-authoring skill's `authoring-owner`
+  / `authoring-publication-intent` markers through the same reliable,
+  byte-exact JSON path as every other operational marker, closing a
+  bad hand-computed `body-sha256` and a non-canonical blank-line
+  separator that left acquire markers permanently invisible to the
+  hide-on-supersede sweep (#2931).
+- `sweep-authoring-markers`: a single fetch-driven command performs
+  the issue-authoring contract's mandatory hide-on-supersede sweep for
+  `authoring-owner`/`authoring-publication-intent` markers, replacing
+  an eight-step manual procedure (#2935).
+- `claim-lock` gains a `--backfill-tokens` recovery route that
+  reconstructs a missing generated-tokens record from an existing
+  lock file for a claim made before the record feature existed
+  (#2884).
+
+### Changed
+
+- Documentation precision across `AGENTS.md`, `idd-ci`, `idd-merge`,
+  and `idd-advisory-convergence` guidance: a commitlint
+  footer-misparse warning for bare `token:` commit-body lines, an
+  execution-timeout-override extension to heavy local commands, the
+  `#2547` secondary-bot decline path, the primary-worktree
+  generated-tokens accumulation tradeoff, and a documented GHES
+  `upload-artifact` version limitation (#2918, #2933, #2939, #2943,
+  #2944).
+
 ### Fixed
 
+- `acquireClaimLock` and the `instructions-only` helper-free fallback
+  recipe both close the same torn-read false-collision class: a
+  concurrent `--acquire` racing the same `claim-id` against an absent
+  lock could misread a mid-write file as malformed and report a
+  spurious collision (#2920, #2934).
+- `claim-lock` serializes generated-tokens record writes so a
+  concurrent backfill-then-write no longer clobbers a fresher
+  activation nonce (#2922).
+- `protocol-helpers` binds CI check identity to the producing
+  workflow's file path, not only its display name, and
+  `pre-merge-readiness` resolves a check-run's `workflowPath` via its
+  check suite instead of trusting the run's own free-text
+  `detailsUrl` -- closing two ways a same-repository, PR-controlled
+  workflow could forge or mask `idd-advisory-convergence`'s own
+  check-run instances (#2919, #2926).
+- `pre-merge-readiness` gains trustworthy stale-self-waiver detection,
+  and `advisory-convergence` binds an auto-waiver marker to the run
+  that actually posted it rather than only checking the cited run's
+  path/SHA/repository/event shape, closing a forgeable-marker gap
+  (#2911, #2912).
+- `protocol-helpers` recognizes a fourth CodeRabbit courtesy-ack
+  closure shape as an exact literal match (#2927).
+- `idd-critique-telemetry-hook` delivers stdin through a relay hop on
+  native Windows, where a detached `cmd.exe` wrapper could not
+  otherwise relay piped stdin to its child process, and stops
+  orphaned processes on Windows using `taskkill` instead of a POSIX
+  process-group signal (#2892, #2910).
 - `discover-orphan-filter`'s `blocked_references_closed` orphan reason
   is renamed to `references_non_blocking`: the old name read as
   "currently blocked" even though it fires once every blocking/
