@@ -189,7 +189,7 @@ export type OrphanFilteredReason =
 export type OrphanClassification =
   | {
       orphan: true;
-      reason: 'orphan' | 'blocked_references_closed';
+      reason: 'orphan' | 'references_non_blocking';
       details?: undefined;
       /** #2767: present only when a runtime-observation-precondition hit
        * was demoted (every structural-evidence signal held) rather than
@@ -814,11 +814,21 @@ export function classifyIssue(
 
   // Reaching here means blockedRefs/dependencyRefs was non-empty (the
   // earlier both-empty check already returned `orphan`) and every ref
-  // resolved to a non-open, non-unresolvable state (closed, or an
-  // exempt open parent epic) -- never "no refs at all" again.
+  // resolved to a non-open, non-unresolvable state -- either genuinely
+  // closed, or an open parent epic exempted by isDependencyEpicExempt
+  // above (the `continue` a few lines up) -- never "no refs at all"
+  // again. Named `references_non_blocking` rather than a
+  // "blocked"-sounding name (originally `blocked_references_closed`):
+  // that name read as the opposite of its actual meaning once an
+  // issue also landed in `routed_to_human` for an unrelated reason
+  // (#2932, illustrated on #2781). `references_non_blocking` also
+  // covers the exempt-open-epic path correctly, unlike an interim
+  // `references_resolved` name would have (Copilot/Codex review, PR
+  // #2936): an exempt epic reference has not resolved/closed, it is
+  // merely non-blocking.
   return {
     orphan: true,
-    reason: 'blocked_references_closed',
+    reason: 'references_non_blocking',
     ...demotionWarning,
   };
 }
@@ -1427,7 +1437,7 @@ Output schema:
   "repository": {"owner": "...", "repo": "..."},
   "diagnostics": {"pr": 404},
   "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "...", "authoringLabelName": "...", "authoringStaleAge": "...", "autopilotSuitabilityFloor": 3, "autopilotSuitabilityEnabled": true},
-  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
+  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|references_non_blocking", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "filtered": {
     "provider_outage_target": [...],

@@ -631,7 +631,35 @@ test('filterOrphanIssues keeps closed-blocker issues as orphan candidates', asyn
   });
 
   assert.equal(result.orphans.length, 1);
-  assert.equal(result.orphans[0].reason, 'blocked_references_closed');
+  assert.equal(result.orphans[0].reason, 'references_non_blocking');
+});
+
+test('filterOrphanIssues keeps the references_non_blocking reason legible when a closed-blocker issue is routed to a human for an unrelated sub-floor score (#2932)', async () => {
+  const issues = [
+    {
+      number: 32,
+      title: 'blocked by closed issue but below the autopilot floor',
+      state: 'OPEN',
+      labels: [],
+      body: 'Blocked by #33\n\n<!-- idd-skill-autopilot-suitability: 2 -->',
+      url: 'https://example.com/32',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map([[33, 'CLOSED']]),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    autopilot: true,
+    autopilotSuitabilityFloor: 3,
+  });
+
+  // The now-resolved blocking reference makes this orphan-eligible, but
+  // its sub-floor autopilot score (independently) routes it to a human --
+  // the two mechanisms are unrelated, and the reason string must not read
+  // as "still blocked" once it lands in routed_to_human.
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.routed_to_human.length, 1);
+  assert.equal(result.routed_to_human[0].reason, 'references_non_blocking');
 });
 
 test('filterOrphanIssues reports unresolvable and circular references', async () => {
@@ -762,7 +790,7 @@ test('filterOrphanIssues handles pagination with PR-heavy pages', async () => {
     1,
     'Issue should be orphan when blocker is closed',
   );
-  assert.equal(result.orphans[0].reason, 'blocked_references_closed');
+  assert.equal(result.orphans[0].reason, 'references_non_blocking');
 });
 
 test('filterOrphanIssues ranks orphans by autopilot-suitability and routes below-floor to humans (autopilot)', async () => {
@@ -1326,7 +1354,7 @@ test('filterOrphanIssues exempts an open Depends-on reference to a parent epic b
   );
   assert.equal(
     result.orphans.find((o) => o.number === 80)?.reason,
-    'blocked_references_closed',
+    'references_non_blocking',
   );
 });
 
@@ -1361,7 +1389,7 @@ test('filterOrphanIssues exempts an open Depends-on reference to a configured ro
   assert.equal(result.filtered.open_dependency_reference.length, 0);
   assert.equal(
     result.orphans.find((o) => o.number === 90)?.reason,
-    'blocked_references_closed',
+    'references_non_blocking',
   );
 });
 
@@ -1411,7 +1439,7 @@ test('filterOrphanIssues keeps a closed Depends-on reference as an orphan candid
   });
 
   assert.equal(result.orphans.length, 1);
-  assert.equal(result.orphans[0].reason, 'blocked_references_closed');
+  assert.equal(result.orphans[0].reason, 'references_non_blocking');
 });
 
 test('classifyIssue routes runtime/production-observation prose to runtime_observation_precondition (#2467)', () => {
