@@ -18,6 +18,7 @@
 // manual POST path it replaces already requires.
 
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
@@ -28,12 +29,15 @@ import {
   runMinimize,
 } from './minimize-superseded-markers.mts';
 import {
+  matchCanonicalAuthoringMarkerFamily,
   parseCopilotUnavailableComment,
   parseReviewAckComment,
   renderActivationNonceMarker,
   renderAdvisoryRerollMarker,
   renderAdvisoryWaitMarker,
   renderAdvisoryWaitRecoveryMarker,
+  renderAuthoringOwnerMarker,
+  renderAuthoringPublicationIntentMarker,
   renderClaimedByMarker,
   renderCopilotUnavailableMarker,
   renderReviewAckMarker,
@@ -82,8 +86,30 @@ export const MARKER_TYPES = [
   'advisory-reroll',
   'review-ack',
   'copilot-unavailable',
+  'authoring-owner',
+  'authoring-publication-intent',
 ] as const;
 
+/**
+ * #2931: `authoring-owner` / `authoring-publication-intent` are this CLI's
+ * own `--type` vocabulary only -- an entirely separate list from
+ * `OPERATIONAL_MARKERS` (marker-helpers.mts), which drives F4's post-merge
+ * cleanup sweep and the hide-at-post-time classification in
+ * `MARKER_HIDE_POLICY`. contract.md deliberately keeps these two authoring
+ * marker families out of `OPERATIONAL_MARKERS` (they are issue-authoring
+ * Stage 1/Stage 2 lifecycle records, not per-cycle execution markers, and
+ * have their own opportunistic + Stage 2 hide-on-supersede sweep owned by
+ * the issue-authoring protocol itself -- see contract.md's "Hide superseded
+ * owner/publication-intent markers"). Adding them here only teaches this
+ * posting helper how to render+POST their byte-exact canonical body; it
+ * must never also add them to `OPERATIONAL_MARKERS`,
+ * `IDD_AGENT_DERIVED_MARKERS`, `MARKER_HIDE_POLICY`, or this file's own
+ * {@link HIDE_AT_POST_TIME_MARKER_TYPES} -- doing so would fold them into
+ * the operational F4/hide-at-post-time machinery neither contract.md nor
+ * this issue asks for, and `hideSupersededPostTimeMarkers` below assumes
+ * every type it handles carries a `head-sha` (or `claim-id`/`attempt`)
+ * field neither authoring type has.
+ */
 export type MarkerType = (typeof MARKER_TYPES)[number];
 
 /**
@@ -123,6 +149,44 @@ export type FromPrMarkerType = (typeof FROM_PR_MARKER_TYPES)[number];
  * `buildMarkerBody`'s own per-type validation -- a direct caller of
  * `buildMarkerBody` (bypassing this CLI) still gets that renderer's
  * aggregate guard.
+ *
+ * `authoring-owner` / `authoring-publication-intent` (#2931) use
+ * `--marker-target` / `--marker-owner` rather than bare `--target` /
+ * `--owner` for their own `target=` / `owner=` marker fields: this CLI
+ * already reserves `--target` for the posting-destination kind
+ * (`issue`/`pr`) and `--owner` for the GitHub repository owner used to
+ * resolve which repo to call, and the contract's `target=` / `owner=`
+ * fields are unrelated values that would otherwise silently collide with
+ * those two structural flags. The two marker families give `target=` /
+ * `anchor=` DIFFERENT shapes (contract.md): `authoring-owner`'s are
+ * `<owner>/<repo>#<number>` issue references (the same issue the marker
+ * is posted to, hashed for `body-sha256` below), while
+ * `authoring-publication-intent`'s are OPAQUE per-set ids with no issue
+ * reference at all -- only that family's separate `journal=` / `issue=`
+ * fields use the `<owner>/<repo>#<number>` shape. `--marker-target` /
+ * `--anchor` accept either shape verbatim as opaque strings for
+ * `authoring-publication-intent` (no parsing or fetch is ever attempted
+ * for that type); only `authoring-owner`'s `--marker-target` is parsed
+ * via {@link parseIssueReference} and fetched.
+ * `authoring-owner`'s `body-sha256` is deliberately OMITTED here (unlike
+ * every other listed field): the `import.meta.main` CLI entry point below
+ * derives it from a live fetch of `--marker-target`'s current body when
+ * omitted, or independently verifies an explicitly supplied value against
+ * that same fetch, before this list is ever consulted -- see that block's
+ * own doc comment. `snapshot-sha256` stays required and always explicit,
+ * unlike `body-sha256`: docs/idd-autonomy-contract.md DOES define a
+ * precise algorithm for it -- the SHA-256 digest, over UTF-8, of the
+ * whole authoring set's `<owner>/<repo>#<number>:<body-sha256>` lines
+ * (one per target, each using that target's own currently-verified
+ * `body-sha256`), sorted by ascending issue number and joined by a single
+ * `\n` with no trailing newline -- but that algorithm's inputs are every
+ * OTHER target's already-verified digest from the authoring session's own
+ * durable hold, cross-target state a single `--marker-target` CLI
+ * invocation has no way to enumerate (unlike `body-sha256`, which is
+ * always exactly the one named target's own live body, fully resolvable
+ * from that one target alone). Guessing a source for it here would risk
+ * manufacturing a wrong digest under a confidence-inspiring "computed
+ * automatically" banner, the opposite of this issue's goal.
  */
 const REQUIRED_FIELDS_BY_TYPE: Record<MarkerType, readonly string[]> = {
   claim: ['agent-id', 'claim-id', 'timestamp', 'branch'],
@@ -141,7 +205,44 @@ const REQUIRED_FIELDS_BY_TYPE: Record<MarkerType, readonly string[]> = {
     'attempt',
     'timestamp',
   ],
+  'authoring-owner': [
+    'marker-target',
+    'anchor',
+    'mode',
+    'marker-owner',
+    'set',
+    'session',
+    'snapshot-sha256',
+    'supersedes',
+  ],
+  'authoring-publication-intent': [
+    'marker-target',
+    'anchor',
+    'set',
+    'session',
+    'token',
+    'journal',
+    'issue',
+    'actor',
+    'state',
+  ],
 };
+
+/**
+ * Default `<marker-prefix>` for `authoring-owner` /
+ * `authoring-publication-intent` when neither `--marker-prefix` nor
+ * `.github/idd/config.json`'s `markerPrefix` supplies one -- the same
+ * distributed default `authoring-owner-provenance.mts`'s own
+ * `DEFAULT_MARKER_PREFIX` uses.
+ */
+const DEFAULT_AUTHORING_MARKER_PREFIX = 'idd-skill';
+
+/** `--type` values that share the `--marker-prefix` default-resolution
+ * step in the `import.meta.main` CLI entry point below (#2931). */
+const AUTHORING_MARKER_TYPES = [
+  'authoring-owner',
+  'authoring-publication-intent',
+] as const;
 
 export const TARGET_KINDS = ['issue', 'pr'] as const;
 export type TargetKind = (typeof TARGET_KINDS)[number];
@@ -259,6 +360,48 @@ export function buildMarkerBody(type: string, fields: MarkerFields): string {
         headSha: fields['head-sha'],
         attempt: fields.attempt,
         timestamp: fields.timestamp,
+      });
+    case 'authoring-owner':
+      // #2931: routes through the existing marker-helpers.mts renderer
+      // unchanged (never a hand-formatted template), so the posted body
+      // stays byte-exact canonical -- round-tripping through
+      // matchCanonicalAuthoringMarkerFamily returns 'authoring-owner', not
+      // null. `--marker-target` / `--marker-owner` map to the renderer's
+      // `target` / `owner` fields (see REQUIRED_FIELDS_BY_TYPE's doc
+      // comment for why they are not named `--target` / `--owner` here).
+      // `body-sha256` arrives already resolved (auto-derived or verified)
+      // by the CLI entry point below by the time this runs.
+      return renderAuthoringOwnerMarker({
+        markerPrefix: fields['marker-prefix'],
+        target: fields['marker-target'],
+        anchor: fields.anchor,
+        mode: fields.mode,
+        owner: fields['marker-owner'],
+        set: fields.set,
+        session: fields.session,
+        bodySha256: fields['body-sha256'],
+        snapshotSha256: fields['snapshot-sha256'],
+        supersedes: fields.supersedes,
+      });
+    case 'authoring-publication-intent':
+      // #2931: same byte-exact-canonical rationale as authoring-owner
+      // above; this family has no digest field to derive or verify.
+      // Unlike authoring-owner, `--marker-target` / `--anchor` here are
+      // OPAQUE per-set ids (contract.md), not issue references -- passed
+      // straight through as opaque strings, never parsed or fetched
+      // against (only `journal` / `issue` carry an `<owner>/<repo>
+      // #<number>` shape for this type).
+      return renderAuthoringPublicationIntentMarker({
+        markerPrefix: fields['marker-prefix'],
+        target: fields['marker-target'],
+        anchor: fields.anchor,
+        set: fields.set,
+        session: fields.session,
+        token: fields.token,
+        journal: fields.journal,
+        issue: fields.issue,
+        actor: fields.actor,
+        state: fields.state,
       });
     default:
       throw new Error(
@@ -422,6 +565,380 @@ function parsePositiveIntToken(token: string, label: string): number {
   return parsed;
 }
 
+/** One `<owner>/<repo>#<number>` marker-target reference, parsed. */
+export interface ParsedIssueReference {
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+/**
+ * Parse the contract.md `<owner>/<repo>#<number>` shape (#2931). Used
+ * ONLY for `authoring-owner`'s own `target=` field (its `<owner>/<repo>
+ * #<number>` issue reference) -- NOT for `authoring-publication-intent`,
+ * whose `target=` / `anchor=` are opaque per-set ids with no issue
+ * reference at all (contract.md); this CLI never parses or fetches
+ * against that family's `--marker-target` / `--anchor`. Returns `null` on
+ * anything else -- no whitespace tolerance, no bare-number shorthand, no
+ * `owner/repo` without a number -- so a malformed `--marker-target` fails
+ * closed with a targeted error instead of this CLI's live-body fetch
+ * below silently hitting the wrong repository or throwing an opaque `gh
+ * api` error. This parser itself stays independent of this CLI's own
+ * `--owner` / `--repo` / `<number>` posting-destination flags -- it only
+ * validates SHAPE -- but the `import.meta.main` CLI entry point below DOES
+ * enforce that `authoring-owner`'s `--marker-target` (and, separately,
+ * `authoring-publication-intent`'s `--journal`) names the exact same issue
+ * as the resolved posting destination (`isPostingDestination`,
+ * kurone-kito/idd-skill#2931, Codex/Copilot review on PR #2937): a marker
+ * whose `target=` differs from where it is actually posted is a
+ * permanently invalid append-only comment on one issue with no ownership
+ * evidence on the other.
+ */
+export function parseIssueReference(ref: string): ParsedIssueReference | null {
+  const match = ref.trim().match(/^([^\s/#]+)\/([^\s/#]+)#([1-9]\d*)$/);
+  if (!match) {
+    return null;
+  }
+  const number = Number(match[3]);
+  // #2931 (Copilot review on PR #2937): the regex has no upper bound on
+  // digit count, so an absurdly long numeric suffix could overflow past
+  // Number.MAX_SAFE_INTEGER. Real GitHub issue numbers never approach this,
+  // but parsePositiveIntToken above already applies the same guard to the
+  // CLI's own positional <number>, so apply it here too rather than leave
+  // this one parser silently inconsistent.
+  if (!Number.isSafeInteger(number)) {
+    return null;
+  }
+  return { owner: match[1], repo: match[2], number };
+}
+
+/**
+ * True when `ref` names the exact same GitHub issue/PR as the CLI's own
+ * resolved posting destination (`owner` / `repo` / `number`). GitHub logins
+ * and repository names are case-insensitive, so owner/repo compare
+ * case-folded; the issue/PR number compares exactly.
+ *
+ * Used by the `import.meta.main` CLI entry point below to enforce that
+ * `authoring-owner`'s `--marker-target` and `authoring-publication-intent`'s
+ * `--journal` name the SAME issue the marker is actually about to be
+ * POSTed to (kurone-kito/idd-skill#2931, Codex/Copilot review on PR #2937,
+ * corroborated critical finding): without this check, an unvalidated
+ * `--marker-target` / `--journal` could hash or reference one issue while
+ * the append-only comment lands on a completely different one, permanently
+ * corrupting both issues' authoring state -- precisely the incident class
+ * #2931 exists to close. Deliberately NOT applied to `authoring-owner`'s
+ * `--anchor`: contract.md's `anchor` field records the SET's anchor issue,
+ * which legitimately differs from the posting destination for every
+ * non-anchor member of a multi-target set ("the anchor's own marker uses
+ * its target as the anchor, and every other marker in the set repeats the
+ * same value") -- `--anchor` is format-validated only, never destination-
+ * compared.
+ */
+function isPostingDestination(
+  ref: ParsedIssueReference,
+  owner: string,
+  repo: string,
+  number: number,
+): boolean {
+  return (
+    ref.owner.toLowerCase() === owner.toLowerCase() &&
+    ref.repo.toLowerCase() === repo.toLowerCase() &&
+    ref.number === number
+  );
+}
+
+/**
+ * `authoring-owner` `--mode` values whose `body-sha256` must always be a
+ * REAL live-body digest (docs/idd-autonomy-contract.md's "Portable
+ * authoring-owner protocol" section) -- the `none` sentinel is invalid
+ * for these five "target" modes.
+ */
+const AUTHORING_OWNER_REAL_BODY_DIGEST_MODES = new Set([
+  'acquire',
+  'resume',
+  'bootstrap',
+  'heartbeat',
+  'release',
+]);
+
+/**
+ * `authoring-owner` `--mode` values that are anchor-only and whose
+ * `body-sha256` must always be the literal `none` sentinel -- never
+ * omitted (which would trigger this file's live-fetch auto-derivation)
+ * and never a real digest.
+ */
+const AUTHORING_OWNER_NONE_BODY_DIGEST_MODES = new Set([
+  'release-guard',
+  'release-complete',
+]);
+
+/**
+ * Validate contract.md's `--mode` <-> digest-sentinel coupling for
+ * `authoring-owner` (docs/idd-autonomy-contract.md's "Portable
+ * authoring-owner protocol" section; kurone-kito/idd-skill#2931 C1
+ * review finding). Enforced here -- not by the reused renderer, which
+ * validates field SHAPE only (a non-empty token or a `none|<64-hex>`
+ * pattern), never this cross-field coupling -- because owner comments
+ * are APPEND-ONLY: a marker posted with the wrong sentinel for its own
+ * `mode` is a permanent, uncorrectable defect once it lands, exactly the
+ * class of incident this issue exists to close.
+ *
+ * - The five {@link AUTHORING_OWNER_REAL_BODY_DIGEST_MODES} always carry a
+ *   REAL live-body `body-sha256`; the sentinel `none` is invalid for them.
+ * - The two {@link AUTHORING_OWNER_NONE_BODY_DIGEST_MODES} always carry
+ *   `body-sha256=none`; an omitted `--body-sha256` (which would otherwise
+ *   trigger this file's live-fetch auto-derivation) or an explicit real
+ *   digest are both invalid for them.
+ * - Only `release-complete` carries a REAL `snapshot-sha256` (its
+ *   "canonical set snapshot digest"); every other valid mode requires
+ *   `snapshot-sha256=none`.
+ *
+ * Returns an error message describing the violated rule, or `null` when
+ * `mode` is absent/unrecognized (left to `REQUIRED_FIELDS_BY_TYPE` /
+ * the renderer's own mode-enum validation to report) or the fields are
+ * coupling-consistent. Never itself validates `body-sha256` /
+ * `snapshot-sha256`'s SHAPE (`none` vs. 64-hex) -- that stays the
+ * renderer's job; this only checks the two sentinels agree with `mode`.
+ */
+export function validateAuthoringOwnerModeDigestCoupling(
+  fields: MarkerFields,
+): string | null {
+  // #2931 (Codex review on PR #2937): trim the same way this file's own
+  // CLI-level normalization step and marker-helpers.mts's
+  // normalizeNonWhitespaceToken do, so a padded value like `--mode
+  // ' acquire '` -- which the renderer trims and happily accepts as
+  // canonical `mode=acquire` -- cannot silently bypass this Set-membership
+  // check by matching nothing. Defensive here too (not just at the CLI
+  // entry point) since this function is exported and directly unit-tested.
+  const mode = fields.mode?.trim();
+  const bodySha256 = fields['body-sha256']?.trim();
+  const snapshotSha256 = fields['snapshot-sha256']?.trim();
+  if (
+    AUTHORING_OWNER_REAL_BODY_DIGEST_MODES.has(mode) &&
+    bodySha256 === 'none'
+  ) {
+    return (
+      `--mode ${mode} requires a real --body-sha256 (auto-derived from a ` +
+      "live fetch, or an explicit digest) -- the anchor-only 'none' " +
+      'sentinel is only valid for release-guard/release-complete ' +
+      '(docs/idd-autonomy-contract.md)'
+    );
+  }
+  if (
+    AUTHORING_OWNER_NONE_BODY_DIGEST_MODES.has(mode) &&
+    bodySha256 !== 'none'
+  ) {
+    return (
+      `--mode ${mode} is anchor-only and requires --body-sha256 none ` +
+      '(docs/idd-autonomy-contract.md) -- pass it explicitly; omitting ' +
+      '--body-sha256 or passing a real digest is invalid for this mode'
+    );
+  }
+  if (mode === 'release-complete') {
+    if (snapshotSha256 === 'none') {
+      return (
+        '--mode release-complete requires a real --snapshot-sha256 (the ' +
+        'canonical set snapshot digest), not none ' +
+        '(docs/idd-autonomy-contract.md)'
+      );
+    }
+    return null;
+  }
+  if (
+    (AUTHORING_OWNER_REAL_BODY_DIGEST_MODES.has(mode) ||
+      AUTHORING_OWNER_NONE_BODY_DIGEST_MODES.has(mode)) &&
+    snapshotSha256 !== undefined &&
+    snapshotSha256 !== 'none'
+  ) {
+    return (
+      `--mode ${mode} requires --snapshot-sha256 none -- only ` +
+      'release-complete carries a real canonical set snapshot digest ' +
+      '(docs/idd-autonomy-contract.md)'
+    );
+  }
+  return null;
+}
+
+/**
+ * `authoring-owner` `--mode` values whose `--supersedes` must be the
+ * literal `none` sentinel (contract.md: "supersedes=none for acquire and
+ * bootstrap" -- there is no prior owner to supersede when a generation
+ * opens fresh).
+ */
+const AUTHORING_OWNER_NONE_SUPERSEDES_MODES = new Set(['acquire', 'bootstrap']);
+
+/**
+ * `authoring-owner` `--mode` values that RETAIN the current owner token
+ * rather than minting a new one, so their `--supersedes` must equal this
+ * same marker's own `--marker-owner` exactly (contract.md: "For release,
+ * retain the current owner token in owner and set supersedes to that same
+ * current owner token"; the identical "retain ... set supersedes to that
+ * owner token" wording also covers heartbeat, release-guard, and
+ * release-complete).
+ */
+const AUTHORING_OWNER_SELF_SUPERSEDES_MODES = new Set([
+  'release',
+  'heartbeat',
+  'release-guard',
+  'release-complete',
+]);
+
+/**
+ * Validate contract.md's `--mode` <-> `--supersedes` coupling for
+ * `authoring-owner` (kurone-kito/idd-skill#2931, Codex review on PR #2937).
+ * Distinct from {@link validateAuthoringOwnerModeDigestCoupling}'s
+ * body-sha256/snapshot-sha256 coupling -- this checks the THIRD field
+ * contract.md's mode table constrains. Enforced here for the same
+ * append-only-comment reason that function documents: a marker posted with
+ * the wrong `supersedes` for its own mode is a permanent, uncorrectable
+ * defect once it lands.
+ *
+ * - {@link AUTHORING_OWNER_NONE_SUPERSEDES_MODES} (`acquire` / `bootstrap`)
+ *   always carry `supersedes=none`.
+ * - `resume` mints a brand-new `owner` token (contract.md: "For acquire,
+ *   bootstrap, and resume, owner is a newly generated opaque per-target
+ *   owner token"), so its `supersedes` must be a REAL prior-owner token
+ *   that is NOT the same as this marker's own `--marker-owner` -- a resume
+ *   marker whose `supersedes` equals its own `owner` could never be told
+ *   apart from a marker that supersedes nothing.
+ * - {@link AUTHORING_OWNER_SELF_SUPERSEDES_MODES} (`release` / `heartbeat` /
+ *   `release-guard` / `release-complete`) all retain the current owner
+ *   token, so their `supersedes` must equal `--marker-owner` exactly.
+ *
+ * Returns `null` when `mode`, `supersedes`, or `marker-owner` is
+ * absent/unrecognized (left to `REQUIRED_FIELDS_BY_TYPE` / the renderer's
+ * own validation to report by name) or the fields are already
+ * coupling-consistent.
+ */
+export function validateAuthoringOwnerSupersedesModeCoupling(
+  fields: MarkerFields,
+): string | null {
+  // #2931 (Codex review on PR #2937): trim for the same reason
+  // validateAuthoringOwnerModeDigestCoupling does -- see that function's
+  // own comment on this same pattern.
+  const mode = fields.mode?.trim();
+  const supersedes = fields.supersedes?.trim();
+  const markerOwner = fields['marker-owner']?.trim();
+  if (supersedes === undefined || markerOwner === undefined) {
+    return null;
+  }
+  // #2931 (Codex review on PR #2937, round 7): contract.md's `owner=` is
+  // ALWAYS "a newly generated [or retained] opaque per-target owner
+  // token" -- never the `none` sentinel, for any mode. Checked once, for
+  // every recognized mode, rather than per-branch below: the equality
+  // check further down (`supersedes !== markerOwner`) would otherwise
+  // trivially PASS a `--marker-owner none --supersedes none` combination
+  // for release/heartbeat/release-guard/release-complete (contract.md
+  // 1401-1404 explicitly forbids `supersedes=none` for release, but a
+  // shared-sentinel equality check alone cannot tell "both real and
+  // equal" from "both none" apart), leaving an append-only marker with
+  // no real owner token.
+  if (
+    (AUTHORING_OWNER_NONE_SUPERSEDES_MODES.has(mode) ||
+      mode === 'resume' ||
+      AUTHORING_OWNER_SELF_SUPERSEDES_MODES.has(mode)) &&
+    markerOwner === 'none'
+  ) {
+    return (
+      '--marker-owner must be a real opaque per-target owner token, not ' +
+      `the none sentinel -- invalid for --mode ${mode} ` +
+      '(skills/issue-authoring/references/contract.md)'
+    );
+  }
+  if (
+    AUTHORING_OWNER_NONE_SUPERSEDES_MODES.has(mode) &&
+    supersedes !== 'none'
+  ) {
+    return (
+      `--mode ${mode} requires --supersedes none -- there is no prior ` +
+      'owner to supersede when a generation opens fresh ' +
+      '(skills/issue-authoring/references/contract.md)'
+    );
+  }
+  if (mode === 'resume') {
+    if (supersedes === 'none') {
+      return (
+        '--mode resume requires a real --supersedes (the prior owner ' +
+        'token it replaces), not none ' +
+        '(skills/issue-authoring/references/contract.md)'
+      );
+    }
+    if (supersedes === markerOwner) {
+      return (
+        '--mode resume mints a NEW --marker-owner token, so --supersedes ' +
+        '(the prior owner token it replaces) must differ from ' +
+        '--marker-owner (skills/issue-authoring/references/contract.md)'
+      );
+    }
+    return null;
+  }
+  if (
+    AUTHORING_OWNER_SELF_SUPERSEDES_MODES.has(mode) &&
+    supersedes !== markerOwner
+  ) {
+    return (
+      `--mode ${mode} retains the current owner token, so --supersedes ` +
+      'must equal --marker-owner exactly ' +
+      '(skills/issue-authoring/references/contract.md)'
+    );
+  }
+  return null;
+}
+
+/**
+ * `authoring-publication-intent` `--state` values that require a REAL
+ * `--issue` reference -- `none` is only ever valid at `state=pending`
+ * (contract.md: "Append `state=pending; issue=none` before creation, then
+ * append the returned identity while it remains `pending`, append `member`
+ * only after the owner marker is verified"). Mirrors
+ * `audit-authored-issue.mts`'s own `AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER`
+ * set exactly, since that file's replay logic already enforces this same
+ * rule on read -- a record this CLI lets through with `issue=none` at one
+ * of these three states is durable evidence replay will always reject
+ * (kurone-kito/idd-skill#2931, Codex review on PR #2937).
+ */
+const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
+  'member',
+  'cleanup',
+  'abandoned',
+]);
+
+/**
+ * Validate contract.md's `--state` <-> `--issue` coupling for
+ * `authoring-publication-intent` (kurone-kito/idd-skill#2931, Codex review
+ * on PR #2937). Enforced here for the same append-only-comment reason
+ * {@link validateAuthoringOwnerModeDigestCoupling} documents: a
+ * `member`/`cleanup`/`abandoned` record posted with `issue=none` is a
+ * permanent, uncorrectable defect that `audit-authored-issue.mts`'s replay
+ * will always reject, even though this command would otherwise report
+ * success.
+ *
+ * Returns `null` when `state` or `issue` is absent (left to
+ * `REQUIRED_FIELDS_BY_TYPE` to report by name) or the fields are already
+ * coupling-consistent (including every `state=pending` case, which may
+ * freely carry `issue=none` OR a real reference).
+ */
+export function validateAuthoringPublicationIntentStateIssueCoupling(
+  fields: MarkerFields,
+): string | null {
+  const state = fields.state?.trim();
+  const issue = fields.issue?.trim();
+  if (state === undefined || issue === undefined) {
+    return null;
+  }
+  if (
+    AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER.has(state) &&
+    issue.toLowerCase() === 'none'
+  ) {
+    return (
+      `--state ${state} requires a real --issue reference -- issue=none ` +
+      'is only valid at state=pending ' +
+      '(skills/issue-authoring/references/contract.md)'
+    );
+  }
+  return null;
+}
+
 // Excluded from the #1446 cli-args.mts wrapper: `fields` below collects
 // per-marker-type keys dynamically (each `--type` accepts a different
 // field set) rather than a fixed declared spec. `util.parseArgs`'s
@@ -548,6 +1065,116 @@ listed is required for that type):
   review-ack         --agent-id --head-sha --timestamp
                      (or --agent-id --from-pr <n> --timestamp)
   copilot-unavailable --agent-id --claim-id --head-sha --attempt --timestamp
+  authoring-owner    --marker-target --anchor --mode --marker-owner --set
+                     --session --snapshot-sha256 --supersedes [--body-sha256]
+                     [--marker-prefix]
+  authoring-publication-intent  --marker-target --anchor --set --session
+                     --token --journal --issue --actor --state
+                     [--marker-prefix]
+
+authoring-owner / authoring-publication-intent (#2931) render the
+issue-authoring skill's Stage 1/Stage 2 ownership markers
+(skills/issue-authoring/references/contract.md) via the same reliable JSON
+path as every other type above, so the posted body is byte-exact canonical
+(matchCanonicalAuthoringMarkerFamily, marker-helpers.mts, returns the
+family name, never null). authoring-owner is NOT network-free even in
+dry-run (like --from-pr above): whenever a live fetch is needed for
+--body-sha256 (every case except the explicit none sentinel), it runs
+regardless of --apply, so a dry-run preview shows the exact value that
+would actually post. --marker-target / --marker-owner map to these
+markers' own \`target=\` / \`owner=\` fields -- named with a \`marker-\`
+prefix, not bare --target / --owner, because this CLI already reserves
+those two names for the posting-destination kind and the repo owner used
+to resolve which repo to call. The two types give --marker-target /
+--anchor DIFFERENT shapes (contract.md): authoring-owner's are
+\`<owner>/<repo>#<number>\` issue references, while
+authoring-publication-intent's are OPAQUE per-set ids with no issue
+reference at all (only that type's separate --journal/--issue use the
+\`<owner>/<repo>#<number>\` shape) -- pass either verbatim as opaque
+strings; this CLI never parses or fetches against
+authoring-publication-intent's --marker-target/--anchor.
+--marker-target (authoring-owner) and --journal (authoring-publication-
+intent) MUST name the exact same issue as the resolved posting
+destination (--owner/--repo/<number>, or the current repository's \`gh
+repo view\` when --owner/--repo are omitted) -- checked in dry-run too, not
+just --apply. A mismatch is refused with a targeted error before any
+fetch or POST: an unvalidated value here could otherwise hash or
+reference one issue while the append-only comment lands on a completely
+different one, permanently corrupting both issues' authoring state
+(kurone-kito/idd-skill#2925/#2931). --anchor (authoring-owner) is
+FORMAT-validated only and is deliberately NEVER required to equal the
+posting destination in general -- contract.md's anchor records the SET's
+anchor issue, which legitimately differs from --marker-target for a
+non-anchor member of a multi-target set -- EXCEPT for --mode release-guard
+/ release-complete specifically, which contract.md makes "valid only on
+the set anchor": for those two modes only, --anchor MUST equal
+--marker-target. authoring-publication-intent's non-'none' --issue is
+FORMAT-validated only, with no destination-equality requirement at all
+(it names the issue this publication intent is ABOUT, which need not be
+the --journal issue this marker posts to).
+--body-sha256 is OPTIONAL (authoring-owner only): when omitted,
+this CLI fetches --marker-target's current live body via the same
+JSON-parsed \`gh api\` path every other read in this file already uses (never
+a shell-captured \`--jq\` scalar -- the exact root cause of
+kurone-kito/idd-skill#2925's bad digest) and hashes it; when supplied
+explicitly (other than the literal sentinel \`none\`, used for BOTH
+anchor-only modes -- release-guard AND release-complete), it is
+independently VERIFIED against that same fresh fetch and the post is
+refused on a mismatch, never trusted as-is (an explicit empty string
+\`--body-sha256 ''\` is treated as a real, mismatching value, not as
+omitted). This CLI also rejects a --mode/--body-sha256/--snapshot-sha256/
+--supersedes combination contract.md's mode table forbids
+(docs/idd-autonomy-contract.md's "Portable authoring-owner protocol"
+section) BEFORE any fetch: the five "target" modes (acquire, resume,
+bootstrap, heartbeat, release) always need a real body-sha256 (never the
+none sentinel); the two anchor-only modes (release-guard, release-complete)
+always need body-sha256 none (never omitted or a real digest); only
+release-complete carries a real snapshot-sha256 (every other mode needs
+snapshot-sha256 none); and --supersedes must be \`none\` for
+acquire/bootstrap, a REAL prior-owner token distinct from --marker-owner
+for resume, and exactly --marker-owner for
+release/heartbeat/release-guard/release-complete -- owner comments are
+append-only, so a marker posted with the wrong sentinel/value for its own
+mode is a permanent, uncorrectable defect once it lands. --mode itself
+(and --marker-owner/--supersedes/--actor/--state/--issue) is trimmed
+before any of these checks run, matching the renderers' own internal
+trimming, so a padded value cannot bypass a coupling check while still
+rendering as canonical.
+authoring-publication-intent's --issue may be \`none\` only at
+--state pending (contract.md; mirrors audit-authored-issue.mts's own
+replay rule) -- \`--state member/cleanup/abandoned\` always require a real
+--issue reference. Its --actor is additionally VERIFIED against the
+authenticated GitHub login at --apply time (never in dry-run, which has
+no real POST author to compare against): contract.md requires "actor to
+equal the API author" on every replay, so a mismatched --actor produces
+a durable record replay will always reject. Unlike similar --actor
+checks elsewhere in this repository (local-validation-evidence.mts /
+external-check-waiver.mts / provider-outage-declaration.mts, which fail
+OPEN when the authenticated login cannot be resolved), --apply here
+FAILS CLOSED when it cannot be resolved: those other artifacts are
+recoverable, while a publication-intent record replay rejects is
+permanent append-only noise on an issue this helper cannot retract.
+--snapshot-sha256 has no auto-derivation and stays required and explicit:
+docs/idd-autonomy-contract.md DOES define a precise algorithm for it (a
+SHA-256 digest over the whole authoring set's sorted
+<owner>/<repo>#<number>:<body-sha256> lines), but that algorithm's inputs
+are every OTHER target's already-verified digest from the authoring
+session's own durable hold -- cross-target state this single
+--marker-target invocation has no way to enumerate, unlike body-sha256,
+which is always exactly the one named target's own live body.
+--marker-prefix defaults to .github/idd/config.json's \`markerPrefix\`, or
+'idd-skill' when that is also absent -- the same distributed default
+authoring-owner-provenance.mts's own DEFAULT_MARKER_PREFIX uses. Per
+contract.md's "Target marker prefix" section, an installed bundle must
+resolve the TARGET repository's actual configured prefix and never guess;
+this CLI's local-config fallback is a same-repo convenience for THIS
+distributed source repository's own dogfooding, not a substitute for
+passing --marker-prefix explicitly when --owner/--repo names a different
+repository than the one --marker-prefix would be read from.
+These two types are deliberately NOT OPERATIONAL_MARKERS
+(marker-helpers.mts) and are never subject to this file's own --apply
+hide-at-post-time step or the F4 post-merge cleanup driver -- see
+MARKER_TYPES's own doc comment.
 
 --claim-id / --attempt on advisory-recovery are OPTIONAL (#1572): passing
 both binds the marker to the active claim and an attempt number for
@@ -1201,6 +1828,400 @@ if (import.meta.main) {
     process.exit(1);
   }
 
+  // #2931: --marker-prefix defaults the same way
+  // authoring-owner-provenance.mts's own normalizeMarkerPrefix does -- an
+  // explicit --marker-prefix wins, otherwise .github/idd/config.json's
+  // markerPrefix, otherwise the distributed 'idd-skill' default. Both
+  // authoring types share this resolution; only authoring-owner also
+  // derives/verifies body-sha256 below.
+  if (
+    (AUTHORING_MARKER_TYPES as readonly string[]).includes(args.type) &&
+    !args.fields['marker-prefix']
+  ) {
+    const configured = loadIddConfig()?.markerPrefix;
+    args.fields['marker-prefix'] =
+      typeof configured === 'string' && configured.trim()
+        ? configured.trim()
+        : DEFAULT_AUTHORING_MARKER_PREFIX;
+  }
+
+  // #2931 (Codex review on PR #2937): normalize every authoring-type field
+  // this file's own cross-field coupling checks compare, the same way
+  // marker-helpers.mts's normalizeNonWhitespaceToken does (trim) -- BEFORE
+  // any of those checks run. Both renderers already trim internally, so a
+  // padded value like `--mode ' acquire '` still renders as canonical
+  // `mode=acquire` regardless of what this file does; without this step,
+  // this file's own Set-membership/equality comparisons see the UNTRIMMED
+  // string, match nothing, and silently skip every coupling check below
+  // while the renderer still emits the canonical (and cross-field-invalid)
+  // marker -- a full bypass of every guard this issue added. Mutates
+  // args.fields in place so the checks below AND the final buildMarkerBody
+  // call see the identical, already-trimmed value; harmless for the final
+  // rendered body either way, since the renderer would trim these same
+  // fields itself.
+  //
+  // `body-sha256` / `snapshot-sha256` (CodeRabbit review on PR #2937,
+  // round 5) belong on this same list: validateAuthoringOwnerModeDigestCoupling
+  // already trims them internally, but the CLI entry point's own
+  // `args.fields['body-sha256'] !== 'none'` sentinel check further below
+  // compared the UNTRIMMED value -- a padded `--body-sha256 ' none '`
+  // would pass the (trimmed) coupling check yet still trigger this file's
+  // live-fetch derive/verify path, which then fails with a confusing
+  // digest-mismatch error for what was actually a valid anchor-only
+  // invocation.
+  //
+  // `marker-prefix` (Copilot review on PR #2937, round 7) belongs here
+  // too: an explicitly padded `--marker-prefix ' custom-prefix '` is
+  // trimmed by both renderers internally, so the rendered body embeds the
+  // trimmed prefix, but the terminal round-trip assertion further below
+  // was passing the UNTRIMMED prefix to matchCanonicalAuthoringMarkerFamily
+  // -- which searches for a marker literally containing that padded
+  // prefix and finds none, so the CLI refused a body the renderer had
+  // already produced canonically. Not a safety gap (the round-trip
+  // assertion still fails CLOSED either way, never posting the
+  // mismatched-prefix body), but a needless false rejection this
+  // normalization also fixes.
+  if ((AUTHORING_MARKER_TYPES as readonly string[]).includes(args.type)) {
+    for (const field of [
+      'mode',
+      'marker-owner',
+      'supersedes',
+      'actor',
+      'state',
+      'issue',
+      'body-sha256',
+      'snapshot-sha256',
+      'marker-prefix',
+    ]) {
+      if (typeof args.fields[field] === 'string') {
+        args.fields[field] = args.fields[field].trim();
+      }
+    }
+  }
+
+  // #2931: authoring-owner's --marker-target / --anchor are genuine issue
+  // references (unlike authoring-publication-intent's opaque target=/
+  // anchor=, see REQUIRED_FIELDS_BY_TYPE's doc comment), so their
+  // <owner>/<repo>#<number> shape is validated unconditionally here --
+  // BEFORE the REQUIRED_FIELDS_BY_TYPE loop below, so a missing/malformed
+  // value reports its own targeted error instead of the renderer's generic
+  // "invalid ... marker payload" -- regardless of whether a live fetch
+  // ends up happening. Splitting this from the fetch/verify block below
+  // keeps validation behavior for --marker-target consistent (always
+  // format-checked) rather than depending on --body-sha256's value (a
+  // malformed --marker-target with --body-sha256 none previously slipped
+  // through unvalidated, since the sentinel skipped the whole block that
+  // used to contain this check too).
+  //
+  // `markerTargetRef` is hoisted to this outer scope because it is reused
+  // twice further down: the destination-equality check (this marker's own
+  // `target=` must name the SAME issue this CLI is about to post to --
+  // Codex/Copilot review on PR #2937, a critical corroborated finding) and
+  // the body-sha256 derive/verify block, which no longer needs to re-parse
+  // the same value. `--anchor`, unlike `--marker-target`, is validated for
+  // FORMAT only, never destination equality -- see isPostingDestination's
+  // own doc comment for why (the set anchor legitimately differs from the
+  // posting destination for a non-anchor member of a multi-target set).
+  let markerTargetRef: ParsedIssueReference | null = null;
+  if (args.type === 'authoring-owner') {
+    const markerTarget = args.fields['marker-target'];
+    if (markerTarget) {
+      markerTargetRef = parseIssueReference(markerTarget);
+      if (!markerTargetRef) {
+        process.stderr.write(
+          `invalid --marker-target value (expected <owner>/<repo>#<number>): ${markerTarget}\n`,
+        );
+        process.exit(1);
+      }
+    }
+    const anchor = args.fields.anchor;
+    let anchorRef: ParsedIssueReference | null = null;
+    if (anchor) {
+      anchorRef = parseIssueReference(anchor);
+      if (!anchorRef) {
+        process.stderr.write(
+          `invalid --anchor value (expected <owner>/<repo>#<number>): ${anchor}\n`,
+        );
+        process.exit(1);
+      }
+    }
+    // #2931 (C1 review finding): reject a --mode/--body-sha256/
+    // --snapshot-sha256 combination contract.md's mode table forbids
+    // BEFORE the fetch/verify step below -- see
+    // validateAuthoringOwnerModeDigestCoupling's own doc comment for why
+    // this matters (owner comments are append-only, so a wrong sentinel
+    // for the mode is a permanent defect once posted).
+    const couplingError = validateAuthoringOwnerModeDigestCoupling(args.fields);
+    if (couplingError) {
+      process.stderr.write(`${couplingError}\n`);
+      process.exit(1);
+    }
+    // #2931 (Codex review on PR #2937): the same append-only-comment
+    // reasoning applies to --supersedes -- contract.md's mode table also
+    // constrains it (acquire/bootstrap: none; resume: a real prior-owner
+    // token distinct from --marker-owner; release/heartbeat/
+    // release-guard/release-complete: exactly --marker-owner).
+    const supersedesError = validateAuthoringOwnerSupersedesModeCoupling(
+      args.fields,
+    );
+    if (supersedesError) {
+      process.stderr.write(`${supersedesError}\n`);
+      process.exit(1);
+    }
+    // #2931 (Codex review on PR #2937): release-guard / release-complete
+    // are "valid only on the set anchor" (contract.md), and "the anchor's
+    // own marker uses its target as the anchor" -- so for these two modes
+    // specifically, --marker-target and --anchor must name the SAME issue.
+    // Without this check, e.g. `--marker-target o/r#2 --anchor o/r#1`
+    // passes both fields' own format checks and both coupling validators
+    // above, yet posts a release-guard/release-complete record to issue 2
+    // that issue 1 (the actual set anchor) never sees -- a permanently
+    // invalid append-only marker.
+    if (
+      AUTHORING_OWNER_NONE_BODY_DIGEST_MODES.has(args.fields.mode) &&
+      markerTargetRef &&
+      anchorRef &&
+      !isPostingDestination(
+        anchorRef,
+        markerTargetRef.owner,
+        markerTargetRef.repo,
+        markerTargetRef.number,
+      )
+    ) {
+      process.stderr.write(
+        `--mode ${args.fields.mode} is valid only on the set anchor, so --anchor ${anchor} must name the same issue as --marker-target ${markerTarget}\n`,
+      );
+      process.exit(1);
+    }
+  }
+
+  // #2931 (Codex/Copilot review on PR #2937): authoring-publication-intent's
+  // --journal and non-'none' --issue carry the same <owner>/<repo>#<number>
+  // shape as authoring-owner's --marker-target (contract.md), even though
+  // this type's own --marker-target/--anchor stay opaque (see
+  // REQUIRED_FIELDS_BY_TYPE's doc comment). `journalRef` is hoisted for
+  // reuse by the destination-equality check below; `--issue` is format-
+  // checked only -- contract.md gives it no destination-equality
+  // requirement of its own (it names the issue this publication intent is
+  // ABOUT, which need not be the journal issue this marker posts to).
+  let journalRef: ParsedIssueReference | null = null;
+  if (args.type === 'authoring-publication-intent') {
+    const journal = args.fields.journal;
+    if (journal) {
+      journalRef = parseIssueReference(journal);
+      if (!journalRef) {
+        process.stderr.write(
+          `invalid --journal value (expected <owner>/<repo>#<number>): ${journal}\n`,
+        );
+        process.exit(1);
+      }
+    }
+    const issue = args.fields.issue;
+    if (issue && issue !== 'none' && !parseIssueReference(issue)) {
+      process.stderr.write(
+        `invalid --issue value (expected <owner>/<repo>#<number> or none): ${issue}\n`,
+      );
+      process.exit(1);
+    }
+    // #2931 (Codex review on PR #2937): issue=none is only ever valid at
+    // state=pending (contract.md; mirrored by audit-authored-issue.mts's
+    // replay logic) -- a member/cleanup/abandoned record posted with
+    // issue=none reports success here but is durable evidence replay will
+    // always reject.
+    const stateIssueError =
+      validateAuthoringPublicationIntentStateIssueCoupling(args.fields);
+    if (stateIssueError) {
+      process.stderr.write(`${stateIssueError}\n`);
+      process.exit(1);
+    }
+  }
+
+  // #2931 (Codex/Copilot review on PR #2937, critical): resolve the actual
+  // posting destination for both authoring types EARLY -- BEFORE dry-run
+  // returns below -- so the destination-equality check right after this
+  // block runs in dry-run too, WHEN the destination is knowable without a
+  // network call. `authoringDestinationKnowable` is deliberately false for
+  // a PLAIN dry-run (no --apply) with --owner/--repo both omitted: eagerly
+  // resolving via `gh repo view` in that case would break this file's own
+  // documented offline dry-run guarantee
+  // (docs/harness-orchestrated-execution-investigation.md's "Live state
+  // required?" table; Copilot review on PR #2937, round 7 -- a real
+  // regression this eager resolution introduced, since every other
+  // marker type's plain dry-run has always stayed network-free). The
+  // destination-equality check for that specific case simply does not run
+  // until --apply actually needs the destination -- exactly how every
+  // OTHER marker type's dry-run already behaved before this issue. Stored
+  // back into args.owner/args.repo so the later --apply resolution
+  // further below (`args.owner && args.repo ? null :
+  // resolveCurrentGithubRepository()`) sees them already populated and
+  // skips a duplicate `gh repo view` call.
+  const authoringDestinationKnowable =
+    (AUTHORING_MARKER_TYPES as readonly string[]).includes(args.type) &&
+    (args.apply || Boolean(args.owner && args.repo));
+  if (authoringDestinationKnowable && !(args.owner && args.repo)) {
+    try {
+      const currentRepo = resolveCurrentGithubRepository();
+      args.owner = args.owner || currentRepo?.owner || '';
+      args.repo = args.repo || currentRepo?.repo || '';
+    } catch (error) {
+      process.stderr.write(
+        `failed to resolve the current repository for --type ${args.type} (pass --owner/--repo explicitly): ${(error as Error).message}\n`,
+      );
+      process.exit(1);
+    }
+  }
+
+  // #2931 (Codex/Copilot review on PR #2937, critical, independently
+  // corroborated by both reviewers): --marker-target (authoring-owner) /
+  // --journal (authoring-publication-intent) must name the SAME issue this
+  // CLI is actually about to POST to. Root incident: without this check, a
+  // caller could hash/reference one issue while the append-only comment
+  // lands on a completely different one, permanently corrupting both
+  // issues' authoring state -- exactly the class of defect #2931 exists to
+  // close. `--target`'s issue/pr kind is deliberately NOT part of this
+  // comparison (descriptive-only everywhere else in this file; both kinds
+  // POST to the same /issues/<n>/comments endpoint). Gated on
+  // `authoringDestinationKnowable` -- see that constant's own comment --
+  // so a plain dry-run with no --owner/--repo defers this check to
+  // --apply instead of forcing a `gh repo view` call it would otherwise
+  // never need.
+  if (
+    authoringDestinationKnowable &&
+    markerTargetRef &&
+    !isPostingDestination(markerTargetRef, args.owner, args.repo, args.number)
+  ) {
+    process.stderr.write(
+      `--marker-target ${args.fields['marker-target']} does not match the posting destination ${args.owner}/${args.repo}#${args.number}\n`,
+    );
+    process.exit(1);
+  }
+  if (
+    authoringDestinationKnowable &&
+    journalRef &&
+    !isPostingDestination(journalRef, args.owner, args.repo, args.number)
+  ) {
+    process.stderr.write(
+      `--journal ${args.fields.journal} does not match the posting destination ${args.owner}/${args.repo}#${args.number}\n`,
+    );
+    process.exit(1);
+  }
+
+  // #2931 (Codex review on PR #2937): contract.md requires "actor to equal
+  // the API author" on every replay of an authoring-publication-intent
+  // record, so a --actor that does not match the identity actually making
+  // this POST produces a record replay will always reject even though this
+  // command reports success. Checked only at --apply (dry-run has no real
+  // POST author to compare against).
+  //
+  // Unlike the identical --actor/viewerLogin pattern already used by
+  // local-validation-evidence.mts / external-check-waiver.mts /
+  // provider-outage-declaration.mts -- all of which fail OPEN (skip the
+  // comparison) when the authenticated login cannot be resolved -- this
+  // one FAILS CLOSED instead (Codex + Copilot review on PR #2937, round
+  // 4, independently corroborated): those other artifacts are correctable
+  // or non-authoritative, while a publication-intent record is a
+  // PERMANENT append-only comment whose replay will reject it forever if
+  // --actor turns out wrong, and this helper cannot retract or edit it
+  // after the fact. A transient `gh api user` failure (expired
+  // credential, rate limit, installation-token quirk) must block the
+  // POST, not silently let an unverified --actor through.
+  if (args.type === 'authoring-publication-intent' && args.apply) {
+    const { viewerLogin, viewerLoginUnavailable } = createGithubProviderAdapter(
+      args.owner,
+      args.repo,
+    ).resolveViewerLoginSafe();
+    const actor = args.fields.actor;
+    if (actor && viewerLoginUnavailable) {
+      process.stderr.write(
+        'cannot verify --actor: the authenticated GitHub login could not be resolved (gh api user failed or returned empty); refusing to post an unverified actor into a permanent append-only record -- fix gh auth and retry\n',
+      );
+      process.exit(1);
+    }
+    if (
+      actor &&
+      viewerLogin &&
+      actor.toLowerCase() !== viewerLogin.toLowerCase()
+    ) {
+      process.stderr.write(
+        `--actor ${actor} does not match the authenticated user ${viewerLogin} actually making this POST\n`,
+      );
+      process.exit(1);
+    }
+  }
+
+  // #2931: derive or verify authoring-owner's body-sha256 from a live,
+  // JSON-parsed read of --marker-target's current body -- the exact fix
+  // for kurone-kito/idd-skill#2925's root cause (a hand-computed
+  // body-sha256 that silently included a shell-redirect-appended trailing
+  // newline `gh api --jq` emits on stdout but that is not part of the
+  // real body field). Runs BEFORE the REQUIRED_FIELDS_BY_TYPE loop below
+  // so a missing --marker-target reports its own targeted error instead
+  // of the renderer's generic "invalid ... marker payload", and before
+  // any POST so a fetch failure or digest mismatch blocks the post
+  // entirely (fail closed). --marker-target's FORMAT (and now its
+  // destination equality) is already validated above regardless of
+  // body-sha256, so this block only needs to handle "missing"
+  // (`markerTargetRef` null falls through to requireFlag below) -- a
+  // malformed or destination-mismatched value already exited above.
+  //
+  // Design choice (kurone-kito/idd-skill#2931's open question 2): an
+  // explicitly supplied --body-sha256 is INDEPENDENTLY VERIFIED against
+  // this fresh fetch rather than trusted as-is, mirroring this
+  // repository's own discover-viability-gate / claim-approval-gate
+  // precedent of verifying a caller-supplied value over trusting it -- a
+  // stale or hand-miscomputed explicit value is exactly as dangerous as an
+  // omitted one, and this marker type exists specifically to close that
+  // class of bug. The literal sentinel `none` is exempt from both
+  // derivation and verification: it is not a digest of anything
+  // (docs/idd-autonomy-contract.md: BOTH anchor-only modes,
+  // release-guard and release-complete, use body-sha256=none -- enforced
+  // above by validateAuthoringOwnerModeDigestCoupling, which already
+  // guarantees `none` here only ever occurs for one of those two modes),
+  // so hashing a live body against it would always -- and incorrectly --
+  // report a mismatch.
+  if (
+    args.type === 'authoring-owner' &&
+    args.fields['body-sha256'] !== 'none'
+  ) {
+    try {
+      if (!markerTargetRef) {
+        throw new Error(
+          '--marker-target is required for --type authoring-owner',
+        );
+      }
+      const item = createGithubProviderAdapter(
+        markerTargetRef.owner,
+        markerTargetRef.repo,
+      ).getWorkItem(markerTargetRef.number);
+      if (!item) {
+        throw new Error(
+          `--marker-target ${args.fields['marker-target']} was not found`,
+        );
+      }
+      const computedBodySha256 = createHash('sha256')
+        .update(item.body, 'utf8')
+        .digest('hex');
+      const explicitBodySha256 = args.fields['body-sha256'];
+      // #2931 (Copilot review on PR #2937): `explicitBodySha256 &&` treated
+      // an explicitly supplied EMPTY --body-sha256 '' the same as omitted
+      // (both falsy), silently overwriting it with the computed digest
+      // instead of failing closed on the malformed input -- distinguish
+      // omission from an empty value with `!== undefined`.
+      if (
+        explicitBodySha256 !== undefined &&
+        explicitBodySha256 !== computedBodySha256
+      ) {
+        throw new Error(
+          `refusing to post authoring-owner marker: --body-sha256 ${explicitBodySha256} does not match the freshly computed digest ${computedBodySha256} of --marker-target ${args.fields['marker-target']}'s live body`,
+        );
+      }
+      args.fields['body-sha256'] = computedBodySha256;
+    } catch (error) {
+      process.stderr.write(`${(error as Error).message}\n`);
+      process.exit(1);
+    }
+  }
+
   let body: string;
   try {
     // #1722: report a missing required field BY NAME before buildMarkerBody
@@ -1218,6 +2239,44 @@ if (import.meta.main) {
     process.stderr.write(`${(error as Error).message}\n`);
     process.exit(1);
     throw error;
+  }
+
+  // #2931 (Codex review on PR #2937, round 6): a terminal, structural
+  // guard against the #2900/#2926/#2927 incident class -- ANY authoring
+  // field value that breaks the marker's own `key=value; key=value; ...`
+  // grammar (a literal `;`, for instance, in an opaque --set/--session/
+  // --token/--marker-target/--anchor value) can still pass every
+  // per-field check above (none of them scan for grammar-breaking
+  // characters) yet produce a body that fails to round-trip through
+  // matchCanonicalAuthoringMarkerFamily -- exactly the historical
+  // non-canonical-body defect this issue exists to close, just reached
+  // through a different field than #2925's body-sha256. Rather than
+  // enumerate and re-validate every individual field against the marker
+  // grammar (an incremental patch this file would need to repeat for
+  // every current and future authoring field), assert the STRUCTURAL
+  // invariant directly: the body this command is about to post must
+  // parse back out, byte-exact, as the type it claims to be. Pure and
+  // network-free itself, so it runs in dry-run too -- but it is NOT the
+  // first network-touching thing this command may have already done
+  // (Copilot review on PR #2937, round 7): authoring-owner's own
+  // body-sha256 derive/verify fetch, and the destination-equality
+  // resolution above (when knowable, see authoringDestinationKnowable),
+  // both run earlier and are unaffected by a grammar-breaking field this
+  // assertion alone would refuse. This guard's real guarantee is
+  // narrower and still worth stating precisely: a body that fails this
+  // check is refused before the POST and before the dry-run envelope
+  // ever prints it, not that no earlier step in this command could have
+  // already made a network call.
+  if (
+    (args.type === 'authoring-owner' ||
+      args.type === 'authoring-publication-intent') &&
+    matchCanonicalAuthoringMarkerFamily(body, args.fields['marker-prefix']) !==
+      args.type
+  ) {
+    process.stderr.write(
+      `refusing to post: the rendered ${args.type} body does not round-trip through matchCanonicalAuthoringMarkerFamily as canonical -- one or more field values (for example a literal ';', a newline, or an HTML comment terminator) would break the marker's own field-delimiter grammar, leaving a posted record that replay and the hide-on-supersede sweep could never recognize\n`,
+    );
+    process.exit(1);
   }
 
   const number = args.number;

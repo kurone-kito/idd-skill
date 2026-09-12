@@ -23,7 +23,9 @@
         "advisory-recovery",
         "advisory-reroll",
         "review-ack",
-        "copilot-unavailable"
+        "copilot-unavailable",
+        "authoring-owner",
+        "authoring-publication-intent"
       ],
       "description": "Operational marker type rendered for the comment."
     },
