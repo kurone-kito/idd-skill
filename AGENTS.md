@@ -288,6 +288,27 @@ entirely. **Breaking changes must always include a body.**
 
 Wrap body lines at **72 characters**.
 
+- **Avoid a bare `token:` line start**: a body line must not begin
+  with a single (optionally hyphenated) token immediately followed by
+  a colon and a space — for example a line starting `bullet: ...` or
+  `Step-1: ...`. `@commitlint/config-conventional`'s footer/trailer
+  parser misreads that shape as the start of a footer section, even
+  though it is ordinary prose deep in the body, and emits a spurious
+  `footer-leading-blank` warning — a **warning** under this
+  repository's current `.commitlintrc.yml`, not a blocking failure,
+  but still worth avoiding. This does not conflict with the `Why:` /
+  `Context:` / `Change:` labels above: each one only ever opens a
+  fresh, blank-line-separated paragraph, so the blank line already
+  required before it also satisfies `footer-leading-blank`; the trap
+  here is the same shape appearing **without** a preceding blank
+  line, buried mid-paragraph. Reword instead: lead with an article or
+  an extra word (for example "the bullet: ..." or "in step 1: ...")
+  so the line no longer opens with a bare token before the colon.
+  Observed 2026-09-12, live against this repository's own
+  `.commitlintrc.yml`, in commit
+  `bae5e0f1e43b54713f936af6f677773b684dd81e` (PR `#2942`, issue
+  `#2943`).
+
 ### Breaking changes
 
 - Append `!` after the type/scope: `feat!: remove deprecated endpoint`
