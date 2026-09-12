@@ -488,12 +488,19 @@ jobs:
     # comment` (a different, higher-level code path) rather than this
     # job's direct `gh api ... --method POST`, so that comparison alone
     # is circumstantial, not proof. The actual proof is a live A/B test
-    # dispatched against this exact job on this branch before this fix
-    # merged: run 34697203153 reproduced the 403 under the then-current
-    # permissions (`pull-requests: read` instead of `write`); run
-    # 34697250102, identical in every other respect, succeeded
-    # immediately after changing only `pull-requests: read` to `write`,
-    # posting (then deleting) a throwaway comment on PR #2949. GitHub's
+    # dispatched on this branch before this fix merged, using a temporary
+    # `diag-2951-permission-probe` job -- an equivalent probe carrying
+    # the same job-level permissions block and posting to the same
+    # `issues/<PR_NUMBER>/comments` endpoint as this job, committed and
+    # removed before this fix landed; this job itself is
+    # `pull_request_target`-gated (see the `if:` above) and so was
+    # skipped under the `workflow_dispatch` trigger the probe used
+    # (kurone-kito/idd-skill#2954 Copilot review): run 34697203153
+    # reproduced the 403 under the then-current permissions
+    # (`pull-requests: read` instead of `write`); run 34697250102,
+    # identical in every other respect, succeeded immediately after
+    # changing only `pull-requests: read` to `write`, posting (then
+    # deleting) a throwaway comment on PR #2949. GitHub's
     # own docs list this endpoint under the Issues permission category
     # alone (https://docs.github.com/rest/issues/comments#create-an-issue-comment),
     # but that does not hold in practice for a `pull_request_target`

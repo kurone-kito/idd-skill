@@ -419,10 +419,17 @@ jobs:
     # `.github/workflows/idd-advisory-convergence.yml` failed the marker
     # POST to `issues/<PR_NUMBER>/comments` with HTTP 403 "Resource not
     # accessible by integration" on 11/11 real invocations across 3 PRs,
-    # confirmed again by a live A/B test dispatched against that job:
-    # changing only `pull-requests: read` to `write` turned a
-    # reproduced 403 into an immediate success posting (then deleting) a
-    # throwaway comment on a real PR. GitHub's own docs list this
+    # confirmed again by a live A/B test on that job's own upstream
+    # branch, using a temporary `diag-2951-permission-probe` job -- an
+    # equivalent probe carrying the same job-level permissions block and
+    # posting to the same `issues/<PR_NUMBER>/comments` endpoint as this
+    # job, committed and removed before that fix landed; this job itself
+    # is `pull_request_target`-gated (see the `if:` above) and so was
+    # skipped under the `workflow_dispatch` trigger the probe used
+    # (kurone-kito/idd-skill#2954 Copilot review): changing only
+    # `pull-requests: read` to `write` turned a reproduced 403 into an
+    # immediate success posting (then deleting) a throwaway comment on a
+    # real PR. GitHub's own docs list this
     # endpoint under the Issues permission category alone
     # (https://docs.github.com/rest/issues/comments#create-an-issue-comment),
     # but that does not hold in practice for a `pull_request_target`

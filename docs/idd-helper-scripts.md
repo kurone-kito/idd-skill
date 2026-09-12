@@ -1441,8 +1441,14 @@ for adopters and gameable via a PR touching a path that does not exist in
 their own checkout at all. `idd-advisory-convergence.yml` detects this
 from a
 separate job with `issues: write` and `pull-requests: write` as its
-write permissions (kurone-kito/idd-skill#2951: the posting call needs
-both -- `issues: write` alone 403s; the verdict job stays read-only; it
+write permissions (kurone-kito/idd-skill#2951: a live A/B test proved
+`pull-requests: write` is the fix -- with only `pull-requests: read`,
+the posting call 403s; adding `pull-requests: write` alone resolves it.
+That test held `issues: write` constant throughout, so it proves the
+posting call needs `pull-requests: write`, but proves nothing about
+whether `issues: write` is also required -- it is retained unchanged
+because narrowing it was never tested, not because it was proven
+necessary; the verdict job stays read-only; it
 additionally gains `actions: read`,
 required for the run-id trust verification's own
 `GET /repos/{owner}/{repo}/actions/runs/{run-id}` call in a private
