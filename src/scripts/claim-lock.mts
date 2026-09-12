@@ -161,15 +161,15 @@
 // must resolve `--read-tokens`/`--acquire` against its **own current
 // cwd** (never an explicit different worktree's path): once B1 creates
 // the dedicated worktree, that admin directory is private to the one
-// claim/branch it represents, and the pre-mutation claim revalidation
-// gate (`idd-overview-core.instructions.md`) already scopes its own
-// cwd-vs-claim check to exactly that post-B1 contract (B3, D, E, F2/F3),
-// where this record's guarantee is strongest. The existing GitHub
-// claim-state, branch-collision, and worktree-local-lock checks remain
-// the primary defense against a genuinely different session mutating
-// under a claim-id it never generated; this record's own job is narrower
-// and complementary: helping *this* session's own memory survive its own
-// context compaction, not adjudicating between two sessions.
+// claim/branch it represents, and the pre-mutation claim revalidation gate
+// (`idd-overview-core.instructions.md`) already scopes its own
+// cwd-vs-claim check to exactly that post-B1 contract (B2, B3, C5, D, E,
+// and F2/F3 phases), where this record's guarantee is strongest. The
+// existing GitHub claim-state, branch-collision, and worktree-local-lock
+// checks remain the primary defense against a genuinely different session
+// mutating under a claim-id it never generated; this record's own job is
+// narrower and complementary: helping *this* session's own memory survive
+// its own context compaction, not adjudicating between two sessions.
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
