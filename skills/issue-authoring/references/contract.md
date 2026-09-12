@@ -1644,8 +1644,16 @@ only approval boundary.
     --issue <journal-issue-number> \
     --marker-prefix <resolved-target-prefix> \
     --trusted-marker-logins <trusted-login-1,...> \
-    --deadline-ms 300000 --apply
+    --deadline-ms 300000 --apply || true
   ```
+
+  The trailing `|| true` keeps this step's own non-zero exit (a fetch or
+  mutation failure) from aborting an automated `set -e` release script:
+  the sweep's exit code exists for a caller that wants to check its
+  outcome directly, not to make this attempted-not-blocking step itself
+  block release when run inline (#2935 review, round 5, Copilot) --
+  read the sweep's own JSON/table report, not its exit status, to see
+  whether anything needs a human look.
 
   The journal setting can itself name a **different** repository (a
   full `owner/repo#number` reference); when it does, pass that shape to
@@ -1769,11 +1777,12 @@ only approval boundary.
     --issue <journal-issue-number-or-owner/repo#number> \
     --marker-prefix <resolved-target-prefix> \
     --trusted-marker-logins <trusted-login-1,...> \
-    --deadline-ms 300000 --apply
+    --deadline-ms 300000 --apply || true
   ```
 
-  Same attempted-not-blocking framing: a failed invocation here does not
-  reopen the set or roll back the close already recorded above.
+  Same attempted-not-blocking framing (and the same `|| true` reasoning
+  above): a failed invocation here does not reopen the set or roll back
+  the close already recorded above.
 
   **Make every sweep attempt's outcome visible.** Immediately after each
   of the three sweep attempts in this section (per-target preflight,
