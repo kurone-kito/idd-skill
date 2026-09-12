@@ -389,7 +389,14 @@ condition below accounts for this.
   bound above, and do not fall back to `run_in_background` or another
   detached/backgrounded mechanism just because of the kill. This
   reissue-on-timeout guidance is scoped to an idempotent, read-only
-  remote poll like the watch call above. Never blindly re-issue a
+  remote poll like the watch call above. The same preventive override
+  applies before issuing a heavy local command (a full build, test,
+  lint, or doctor run) expected to run long: set an explicit
+  execution-timeout override at or near the calling tool's own
+  execution-timeout ceiling before the command starts, rather than
+  relying on the tool's default and discovering the auto-background
+  only after the fact — this has repeatedly stalled a session's turn
+  in practice (issue `#2933`). Never blindly re-issue a
   heavy local command (a full build, test, or lint run) that
   auto-backgrounds past the tool's default timeout — being idempotent
   does not make it safe to run twice at once; two concurrent instances
