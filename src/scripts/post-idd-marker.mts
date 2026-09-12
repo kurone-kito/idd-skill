@@ -1835,6 +1835,16 @@ if (import.meta.main) {
   // call see the identical, already-trimmed value; harmless for the final
   // rendered body either way, since the renderer would trim these same
   // fields itself.
+  //
+  // `body-sha256` / `snapshot-sha256` (CodeRabbit review on PR #2937,
+  // round 5) belong on this same list: validateAuthoringOwnerModeDigestCoupling
+  // already trims them internally, but the CLI entry point's own
+  // `args.fields['body-sha256'] !== 'none'` sentinel check further below
+  // compared the UNTRIMMED value -- a padded `--body-sha256 ' none '`
+  // would pass the (trimmed) coupling check yet still trigger this file's
+  // live-fetch derive/verify path, which then fails with a confusing
+  // digest-mismatch error for what was actually a valid anchor-only
+  // invocation.
   if ((AUTHORING_MARKER_TYPES as readonly string[]).includes(args.type)) {
     for (const field of [
       'mode',
@@ -1843,6 +1853,8 @@ if (import.meta.main) {
       'actor',
       'state',
       'issue',
+      'body-sha256',
+      'snapshot-sha256',
     ]) {
       if (typeof args.fields[field] === 'string') {
         args.fields[field] = args.fields[field].trim();

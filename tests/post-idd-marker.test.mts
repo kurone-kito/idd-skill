@@ -3708,6 +3708,30 @@ test('authoring-owner --body-sha256 none skips the live fetch entirely (anchor-o
   }
 });
 
+test('authoring-owner --body-sha256 padded with whitespace is still recognized as the none sentinel (#2931)', () => {
+  // CodeRabbit review on PR #2937, round 5: the CLI entry point's own
+  // `args.fields['body-sha256'] !== 'none'` sentinel check compared the
+  // UNTRIMMED value, so `--body-sha256 ' none '` would (wrongly) trigger
+  // the live-fetch derive/verify path instead of being recognized as the
+  // anchor-only none sentinel -- this proves no gh call happens either
+  // way.
+  const restore = stubGhNeverCalled();
+  try {
+    const output = execFileSync(
+      process.execPath,
+      authoringArgv('authoring-owner', {
+        ...AUTHORING_OWNER_FULL_FIELDS,
+        mode: 'release-guard',
+        'body-sha256': ' none ',
+      }),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.match(JSON.parse(output).body, /body-sha256=none;/);
+  } finally {
+    restore();
+  }
+});
+
 test('authoring-owner CLI derives body-sha256 from a live, JSON-parsed read of --marker-target when omitted (#2931)', () => {
   const LIVE_BODY = 'Fresh live body for #42.';
   const expectedDigest = createHash('sha256')
