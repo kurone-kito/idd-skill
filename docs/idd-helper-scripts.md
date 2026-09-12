@@ -2203,8 +2203,11 @@ close.
   not an oversight: the file is a few hundred bytes, untracked (never
   shown by `git status`), and has no working-tree impact, so leaving it
   in place is cheaper than adding narrowly-scoped cleanup machinery for
-  it. See issue `#2944` for the full reasoning record and the
-  cleanup-vs-document-intent tradeoff it considered.
+  it. See issue `kurone-kito/idd-skill#2944` for the full reasoning
+  record and the cleanup-vs-document-intent tradeoff it considered —
+  qualified with the owner/repo here since this file is distributed
+  via `idd-template/`, where a bare `#2944` would resolve against
+  whichever repository copied it in.
 - **`instructions-only` helper-free fallback, write side** (no helper
   runtime available — `instructions-only` is the distributed default
   profile, see
