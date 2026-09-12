@@ -412,36 +412,16 @@ jobs:
     timeout-minutes: 10
     # Narrower than the verdict job's read-only posture above: this job
     # needs `pull-requests: write` (to diff/fetch the PR, and -- this is
-    # the load-bearing grant -- to actually post the marker below;
-    # kurone-kito/idd-skill#2951: with only `pull-requests: read` +
-    # `issues: write`, as this block originally shipped, the dogfooded
-    # copy of this same job in the upstream source repository's
-    # `.github/workflows/idd-advisory-convergence.yml` failed the marker
-    # POST to `issues/<PR_NUMBER>/comments` with HTTP 403 "Resource not
-    # accessible by integration" on 11/11 real invocations across 3 PRs,
-    # confirmed again by a live A/B test on that job's own upstream
-    # branch, using a temporary `diag-2951-permission-probe` job -- an
-    # equivalent probe carrying the same job-level permissions block and
-    # posting to the same `issues/<PR_NUMBER>/comments` endpoint as this
-    # job, committed and removed before that fix landed; this job itself
-    # is `pull_request_target`-gated (see the `if:` above) and so was
-    # skipped under the `workflow_dispatch` trigger the probe used
-    # (kurone-kito/idd-skill#2954 Copilot review): changing only
-    # `pull-requests: read` to `write` turned a reproduced 403 into an
-    # immediate success posting (then deleting) a throwaway comment on a
-    # real PR. GitHub's own docs list this
-    # endpoint under the Issues permission category alone
-    # (https://docs.github.com/rest/issues/comments#create-an-issue-comment),
-    # but that does not hold in practice for a `pull_request_target`
-    # `GITHUB_TOKEN` posting to a PR-numbered target -- do not narrow
-    # this back to `read` without re-running an equivalent live test) and
+    # the load-bearing grant -- to actually post the marker below) and
     # `issues: write` (to post the marker, and to read the linked issue's
-    # own comment stream to resolve its active claim -- that second call
-    # targets a real issue, not a PR, so it only ever needed
-    # `issues: read`; this job keeps `issues: write` unchanged because
-    # this fix's A/B test held it constant in both runs and so proves
-    # nothing about whether the marker POST also needs it -- narrowing
-    # to `issues: read` would need its own separate live A/B test).
+    # own comment stream to resolve its active claim). kurone-kito/idd-skill#2951:
+    # with only `pull-requests: read`, the marker POST failed with HTTP
+    # 403 "Resource not accessible by integration", confirmed by a live
+    # A/B test -- see this source repository's own dogfooded copy of
+    # this file (.github/workflows/idd-advisory-convergence.yml) for the
+    # full investigation, run evidence, and why `issues: write` stays
+    # unchanged rather than narrowed. Do not narrow `pull-requests` back
+    # to `read` without re-running an equivalent live test.
     permissions:
       contents: read
       pull-requests: write
