@@ -17,6 +17,15 @@
 
 import type { StdioOptions } from 'node:child_process';
 import { execFile, execFileSync } from 'node:child_process';
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
@@ -133,6 +142,51 @@ export function ghText(args: string[], options: GhTextOptions = {}): string {
       ? { maxBuffer: options.maxBuffer }
       : {}),
   }).trim();
+}
+
+/**
+ * Sibling of {@link ghText} for a response with no safely-guessable size
+ * ceiling (#2935 review, rounds 4-6): a fixed `maxBuffer` for a large
+ * paginated GraphQL page turned into an escalating, never-fully-provable
+ * guessing game (an initial 10 MiB estimate, then a "proven" 25 MiB
+ * worst-case calculation from GitHub's 65,536-character comment cap and
+ * UTF-8's 4-bytes-per-character ceiling, then a further finding that the
+ * calculation still did not account for `\uXXXX` JSON-escaping, which can
+ * cost up to 12 bytes per character) -- each fix removed one gap but
+ * could not close the class of problem, since the true worst case
+ * depends on exactly how the response is serialized, which this codebase
+ * does not control and should not need to reverse-engineer. This
+ * function removes the ceiling-guessing problem entirely instead of
+ * refining the guess further: it redirects the child process's stdout
+ * directly to a temp file (never through an in-memory pipe with a fixed
+ * cap) and reads that file back, so the only limit is available disk
+ * space -- a categorically different, non-adversarial-input concern.
+ *
+ * Deliberately minimal compared to {@link ghText}: no `stdio`/`input`
+ * override support, since no current caller needs stdin or a custom
+ * stdio shape for a call whose defining trait is "the output size is not
+ * safely boundable" -- add that support only if a real caller needs it.
+ */
+export function ghTextUnbounded(
+  args: string[],
+  options: Pick<GhTextOptions, 'timeout'> = {},
+): string {
+  const dir = mkdtempSync(join(tmpdir(), 'gh-exec-unbounded-'));
+  const outPath = join(dir, 'stdout');
+  try {
+    const fd = openSync(outPath, 'w');
+    try {
+      execFileSync('gh', args, {
+        stdio: ['ignore', fd, 'pipe'],
+        timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+      });
+    } finally {
+      closeSync(fd);
+    }
+    return readFileSync(outPath, 'utf8').trim();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** {@link ghText}, swallowing any failure and returning `''` instead. */

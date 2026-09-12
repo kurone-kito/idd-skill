@@ -64,7 +64,7 @@
 // invocation can freely mix same-repo and cross-repository `--issue`
 // targets.
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
-import { ghText } from './gh-exec.mjs';
+import { ghTextUnbounded } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   classifyAuthoringMarkerFamily,
@@ -143,37 +143,6 @@ export function parseIssueTargetToken(token, defaultOwner, defaultRepo) {
   };
 }
 /**
- * Per-call `execFileSync` output-buffer cap for
- * {@link fetchIssueCommentsGraphql}'s own `gh api graphql` calls (#2935
- * review, rounds 4-5, Codex): `ghText`'s (and Node's `execFileSync`'s)
- * own default is 1 MiB per stream, which a 100-comment page can exceed
- * once several comments carry long discussion bodies -- silently
- * turning a real page of data into an `ENOBUFS` fetch failure that then
- * drops that issue's comments (and every superseded marker on it) from
- * this sweep entirely.
- *
- * An initial 10 MiB estimate (matching `GH_ASYNC_MAX_BUFFER`,
- * `provider-adapter-github.mts`'s own unrelated precedent) drew a
- * further round of review pushing back that 10 MiB is still not a
- * PROVEN bound. This value replaces that estimate with an actual
- * worst-case calculation instead of a bigger guess, so a further
- * "still not big enough" round has no remaining basis: GitHub caps a
- * single issue/PR comment body at 65,536 characters, and UTF-8 (the
- * encoding `gh`'s JSON output uses) never spends more than 4 bytes per
- * character, so one comment's `body` field cannot exceed
- * `65_536 * 4 = 262_144` bytes regardless of content. `comments(first:
- * 100, ...)` below never returns more than 100 nodes per page, and this
- * query's other per-node fields (`id`, `url`, `isMinimized`,
- * `createdAt`, `author.login`) and JSON structural overhead (quotes,
- * commas, key names) add at most a few hundred bytes per node --
- * generously rounded up to 500 bytes/node here. The true worst case for
- * one page is therefore bounded at
- * `100 * (262_144 + 500) = 26_264_400` bytes (~25 MiB); this constant
- * rounds that up to a clean 32 MiB, comfortably above the proven
- * ceiling rather than merely "probably enough."
- */
-const LARGE_COMMENT_PAGE_MAX_BUFFER = 32 * 1024 * 1024;
-/**
  * Fetch every comment on `owner/repo#issueNumber` via a paginated GraphQL
  * `issue(number:).comments` query, selecting `isMinimized` directly (the
  * field REST's issue-comments endpoint never carries at all). `timeoutMs`,
@@ -185,6 +154,18 @@ const LARGE_COMMENT_PAGE_MAX_BUFFER = 32 * 1024 * 1024;
  * (#2754): a caller sweeping several `--issue` targets under one overall
  * `--deadline-ms` must not let a single large comment log's own pagination
  * consume the entire budget with no cap of its own.
+ *
+ * Uses {@link ghTextUnbounded}, not {@link ghText}, for each page's own
+ * `gh api graphql` call (#2935 review, rounds 4-6): a 100-comment page
+ * can exceed any fixed in-memory `maxBuffer` guess once several
+ * comments carry long bodies, and three successive rounds of trying to
+ * calculate a provably sufficient fixed size (10 MiB, then a 25 MiB
+ * worst-case bound from GitHub's 65,536-character comment cap, then a
+ * finding that even that missed JSON-escaping overhead) never converged
+ * on one that could not be second-guessed further. Removing the
+ * fixed-buffer mechanism -- reading the response through a temp file
+ * instead of an in-memory pipe -- closes the entire class of finding at
+ * once instead of refining the guess again.
  *
  * The returned array is explicitly sorted ascending by `createdAt` before
  * this function returns (#2935 review, Copilot): `classifyAuthoringMarker
@@ -239,10 +220,10 @@ export function fetchIssueCommentsGraphql(owner, repo, issueNumber, timeoutMs) {
       `number=${issueNumber}`,
       ...(cursor ? ['-f', `cursor=${cursor}`] : []),
     ];
-    const raw = ghText(args, {
-      ...(perCallTimeout !== undefined ? { timeout: perCallTimeout } : {}),
-      maxBuffer: LARGE_COMMENT_PAGE_MAX_BUFFER,
-    });
+    const raw = ghTextUnbounded(
+      args,
+      perCallTimeout !== undefined ? { timeout: perCallTimeout } : {},
+    );
     let parsed;
     try {
       parsed = JSON.parse(raw || '{}');
