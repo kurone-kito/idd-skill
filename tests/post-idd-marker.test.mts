@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,9 +18,12 @@ import {
   isHideAtPostTimeMarkerType,
   MARKER_TYPES,
   parseArgs,
+  parseIssueReference,
+  validateAuthoringOwnerModeDigestCoupling,
   watermarkFieldsFromSnapshot,
 } from '../src/scripts/post-idd-marker.mts';
 import {
+  matchCanonicalAuthoringMarkerFamily,
   operationalMarkerPrefix,
   parseActivationNonceComment,
   parseAdvisoryRecoveryComment,
@@ -597,7 +601,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the ten supported types', () => {
+test('MARKER_TYPES lists exactly the twelve supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
@@ -611,6 +615,8 @@ test('MARKER_TYPES lists exactly the ten supported types', () => {
       'advisory-reroll',
       'review-ack',
       'copilot-unavailable',
+      'authoring-owner',
+      'authoring-publication-intent',
     ],
   );
 });
@@ -1799,6 +1805,28 @@ const FULL_FIELDS_BY_TYPE: Record<string, Record<string, string>> = {
     'head-sha': SHA,
     attempt: '1',
     timestamp: TS,
+  },
+  // #2931: authoring-owner is deliberately NOT listed here -- unlike every
+  // other type, its body-sha256 is derived/verified via a live `gh` fetch
+  // BEFORE this file's REQUIRED_FIELDS_BY_TYPE loop even runs, so it cannot
+  // share this table's network-free "every flag rejected by name" contract
+  // without either a `gh` stub (this table has none) or the `body-sha256:
+  // 'none'` sentinel (which would make omitting body-sha256 itself
+  // untestable here, since it is optional, not required). See the dedicated
+  // authoring-owner CLI tests below instead.
+  // marker-target / anchor are OPAQUE per-set ids for this type (see
+  // contract.md), not <owner>/<repo>#<number> issue references -- only
+  // journal / issue use that shape here (#2931).
+  'authoring-publication-intent': {
+    'marker-target': 'target-abc123',
+    anchor: 'anchor-abc123',
+    set: 'set-1',
+    session: 'session-1',
+    token: 'pub-1',
+    journal: 'o/r#10',
+    issue: 'none',
+    actor: 'kurone-kito',
+    state: 'pending',
   },
 };
 
@@ -3061,4 +3089,785 @@ if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
   } finally {
     restore();
   }
+});
+
+// --- authoring-owner / authoring-publication-intent (#2931) ----------------
+//
+// post-idd-marker.mjs's byte-exact canonical CLI path for the issue-authoring
+// skill's Stage 1/Stage 2 ownership markers (skills/issue-authoring/
+// references/contract.md), closing two observed incidents this session
+// filed the issue over: kurone-kito/idd-skill#2925's bad body-sha256 from a
+// shell-captured `--jq` scalar with a trailing newline, and #2900/#2926/
+// #2927's acquire markers using a non-canonical blank-line separator that
+// makes matchCanonicalAuthoringMarkerFamily return null for them.
+
+test('buildMarkerBody renders the exact authoring-owner body (reuses renderAuthoringOwnerMarker, #2931)', () => {
+  const digest = 'a'.repeat(64);
+  assert.equal(
+    buildMarkerBody('authoring-owner', {
+      'marker-prefix': 'idd-skill',
+      'marker-target': 'o/r#42',
+      anchor: 'o/r#42',
+      mode: 'acquire',
+      'marker-owner': 'owner-abc',
+      set: 'set-1',
+      session: 'session-1',
+      'body-sha256': digest,
+      'snapshot-sha256': 'none',
+      supersedes: 'none',
+    }),
+    `<!-- idd-skill-authoring-owner: target=o/r#42; anchor=o/r#42; mode=acquire; owner=owner-abc; set=set-1; session=session-1; body-sha256=${digest}; snapshot-sha256=none; supersedes=none -->\n_Issue-authoring ownership marker. Do not edit or delete._`,
+  );
+});
+
+test('buildMarkerBody renders the exact authoring-publication-intent body (reuses renderAuthoringPublicationIntentMarker, #2931)', () => {
+  // #2931 fix: authoring-publication-intent's target=/anchor= are OPAQUE
+  // per-set ids (contract.md), NOT <owner>/<repo>#<number> issue
+  // references like authoring-owner's -- only journal=/issue= use that
+  // shape for this family. Use opaque-looking fixtures throughout this
+  // file's authoring-publication-intent tests so they model the contract.
+  assert.equal(
+    buildMarkerBody('authoring-publication-intent', {
+      'marker-prefix': 'idd-skill',
+      'marker-target': 'target-abc123',
+      anchor: 'anchor-abc123',
+      set: 'set-1',
+      session: 'session-1',
+      token: 'pub-1',
+      journal: 'o/r#10',
+      issue: 'none',
+      actor: 'kurone-kito',
+      state: 'pending',
+    }),
+    '<!-- idd-skill-authoring-publication-intent: target=target-abc123; anchor=anchor-abc123; set=set-1; session=session-1; token=pub-1; journal=o/r#10; issue=none; actor=kurone-kito; state=pending -->\n_Issue-authoring publication-intent record. Do not edit or delete._',
+  );
+});
+
+test('authoring-owner / authoring-publication-intent bodies round-trip through matchCanonicalAuthoringMarkerFamily (#2931)', () => {
+  const ownerBody = buildMarkerBody('authoring-owner', {
+    'marker-prefix': 'idd-skill',
+    'marker-target': 'o/r#42',
+    anchor: 'o/r#42',
+    mode: 'acquire',
+    'marker-owner': 'owner-abc',
+    set: 'set-1',
+    session: 'session-1',
+    'body-sha256': 'a'.repeat(64),
+    'snapshot-sha256': 'none',
+    supersedes: 'none',
+  });
+  assert.equal(
+    matchCanonicalAuthoringMarkerFamily(ownerBody, 'idd-skill'),
+    'authoring-owner',
+  );
+
+  const intentBody = buildMarkerBody('authoring-publication-intent', {
+    'marker-prefix': 'idd-skill',
+    'marker-target': 'target-abc123',
+    anchor: 'anchor-abc123',
+    set: 'set-1',
+    session: 'session-1',
+    token: 'pub-1',
+    journal: 'o/r#10',
+    issue: 'none',
+    actor: 'kurone-kito',
+    state: 'pending',
+  });
+  assert.equal(
+    matchCanonicalAuthoringMarkerFamily(intentBody, 'idd-skill'),
+    'authoring-publication-intent',
+  );
+});
+
+test('buildMarkerBody throws on an invalid authoring-owner field set (renderer validation, #2931)', () => {
+  assert.throws(
+    () => buildMarkerBody('authoring-owner', { 'marker-target': 'o/r#42' }),
+    /invalid authoring-owner marker payload/,
+  );
+});
+
+test('buildMarkerBody throws on an invalid authoring-publication-intent field set (renderer validation, #2931)', () => {
+  assert.throws(
+    () =>
+      buildMarkerBody('authoring-publication-intent', {
+        'marker-target': 'target-abc123',
+      }),
+    /invalid authoring-publication-intent marker payload/,
+  );
+});
+
+test('parseIssueReference parses <owner>/<repo>#<number> and rejects everything else (#2931)', () => {
+  assert.deepEqual(parseIssueReference('kurone-kito/idd-skill#2931'), {
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    number: 2931,
+  });
+  assert.equal(parseIssueReference('kurone-kito/idd-skill'), null);
+  assert.equal(parseIssueReference('kurone-kito#2931'), null);
+  assert.equal(parseIssueReference('kurone-kito/idd-skill#0'), null);
+  assert.equal(parseIssueReference('kurone-kito/idd-skill#2931abc'), null);
+  assert.equal(parseIssueReference(''), null);
+});
+
+test('validateAuthoringOwnerModeDigestCoupling accepts every contract.md-valid mode/digest-sentinel combination (#2931)', () => {
+  const REAL_DIGEST = 'a'.repeat(64);
+  for (const mode of [
+    'acquire',
+    'resume',
+    'bootstrap',
+    'heartbeat',
+    'release',
+  ]) {
+    assert.equal(
+      validateAuthoringOwnerModeDigestCoupling({
+        mode,
+        'body-sha256': REAL_DIGEST,
+        'snapshot-sha256': 'none',
+      }),
+      null,
+      `${mode} + real body-sha256 + snapshot-sha256 none should be valid`,
+    );
+    assert.equal(
+      validateAuthoringOwnerModeDigestCoupling({
+        mode,
+        'snapshot-sha256': 'none',
+      }),
+      null,
+      `${mode} with body-sha256 omitted (to be auto-derived) should be valid`,
+    );
+  }
+  assert.equal(
+    validateAuthoringOwnerModeDigestCoupling({
+      mode: 'release-guard',
+      'body-sha256': 'none',
+      'snapshot-sha256': 'none',
+    }),
+    null,
+  );
+  assert.equal(
+    validateAuthoringOwnerModeDigestCoupling({
+      mode: 'release-complete',
+      'body-sha256': 'none',
+      'snapshot-sha256': REAL_DIGEST,
+    }),
+    null,
+  );
+});
+
+test('validateAuthoringOwnerModeDigestCoupling rejects every contract.md-invalid combination (#2931)', () => {
+  const REAL_DIGEST = 'a'.repeat(64);
+  // Target modes (acquire/resume/bootstrap/heartbeat/release) reject the
+  // anchor-only `none` body-sha256 sentinel.
+  assert.match(
+    validateAuthoringOwnerModeDigestCoupling({
+      mode: 'acquire',
+      'body-sha256': 'none',
+      'snapshot-sha256': 'none',
+    }) ?? '',
+    /--mode acquire requires a real --body-sha256/,
+  );
+  // Anchor-only modes reject a real body-sha256...
+  assert.match(
+    validateAuthoringOwnerModeDigestCoupling({
+      mode: 'release-guard',
+      'body-sha256': REAL_DIGEST,
+      'snapshot-sha256': 'none',
+    }) ?? '',
+    /--mode release-guard is anchor-only and requires --body-sha256 none/,
+  );
+  // ...and an OMITTED body-sha256 (which would otherwise trigger the
+  // live-fetch auto-derivation meant only for target modes).
+  assert.match(
+    validateAuthoringOwnerModeDigestCoupling({
+      mode: 'release-complete',
+      'snapshot-sha256': REAL_DIGEST,
+    }) ?? '',
+    /--mode release-complete is anchor-only and requires --body-sha256 none/,
+  );
+  // release-complete rejects snapshot-sha256 none (its whole purpose is
+  // carrying a real canonical set snapshot digest).
+  assert.match(
+    validateAuthoringOwnerModeDigestCoupling({
+      mode: 'release-complete',
+      'body-sha256': 'none',
+      'snapshot-sha256': 'none',
+    }) ?? '',
+    /--mode release-complete requires a real --snapshot-sha256/,
+  );
+  // Every other mode rejects a real (non-none) snapshot-sha256 -- only
+  // release-complete ever carries one.
+  assert.match(
+    validateAuthoringOwnerModeDigestCoupling({
+      mode: 'acquire',
+      'body-sha256': REAL_DIGEST,
+      'snapshot-sha256': REAL_DIGEST,
+    }) ?? '',
+    /--mode acquire requires --snapshot-sha256 none/,
+  );
+  assert.match(
+    validateAuthoringOwnerModeDigestCoupling({
+      mode: 'release-guard',
+      'body-sha256': 'none',
+      'snapshot-sha256': REAL_DIGEST,
+    }) ?? '',
+    /--mode release-guard requires --snapshot-sha256 none/,
+  );
+});
+
+test('validateAuthoringOwnerModeDigestCoupling returns null for an absent/unrecognized mode (left to REQUIRED_FIELDS_BY_TYPE / the renderer)', () => {
+  assert.equal(
+    validateAuthoringOwnerModeDigestCoupling({
+      'body-sha256': 'none',
+      'snapshot-sha256': 'none',
+    }),
+    null,
+  );
+  assert.equal(
+    validateAuthoringOwnerModeDigestCoupling({
+      mode: 'not-a-real-mode',
+      'body-sha256': 'none',
+      'snapshot-sha256': 'none',
+    }),
+    null,
+  );
+});
+
+test('an authoring-owner envelope validates against the schema (#2931)', () => {
+  const envelope = {
+    mode: 'dry-run',
+    type: 'authoring-owner',
+    target: 'issue',
+    number: 2931,
+    body: buildMarkerBody('authoring-owner', {
+      'marker-prefix': 'idd-skill',
+      'marker-target': 'o/r#42',
+      anchor: 'o/r#42',
+      mode: 'acquire',
+      'marker-owner': 'owner-abc',
+      set: 'set-1',
+      session: 'session-1',
+      'body-sha256': 'a'.repeat(64),
+      'snapshot-sha256': 'none',
+      supersedes: 'none',
+    }),
+  };
+  assert.deepEqual(validate(envelope, schema), []);
+});
+
+test('an authoring-publication-intent envelope validates against the schema (#2931)', () => {
+  const envelope = {
+    mode: 'dry-run',
+    type: 'authoring-publication-intent',
+    target: 'issue',
+    number: 2931,
+    body: buildMarkerBody('authoring-publication-intent', {
+      'marker-prefix': 'idd-skill',
+      'marker-target': 'target-abc123',
+      anchor: 'anchor-abc123',
+      set: 'set-1',
+      session: 'session-1',
+      token: 'pub-1',
+      journal: 'o/r#10',
+      issue: 'none',
+      actor: 'kurone-kito',
+      state: 'pending',
+    }),
+  };
+  assert.deepEqual(validate(envelope, schema), []);
+});
+
+/** A complete, valid authoring-owner renderer-field set (excluding the
+ * structural --type / --target / positional-number flags). `mode:
+ * 'release-guard'` (one of the two anchor-only modes) pairs with
+ * `body-sha256: 'none'` -- a deliberate sentinel here that skips the
+ * live-fetch derivation/verification path (see REQUIRED_FIELDS_BY_TYPE's
+ * own doc comment) so tests reusing this table stay network-free -- per
+ * validateAuthoringOwnerModeDigestCoupling's mode/digest-sentinel
+ * coupling rule (#2931 C1 review finding: `mode: 'acquire'` paired with
+ * `body-sha256: 'none'` is an INVALID combination the CLI now rejects, so
+ * this base object must use an anchor-only mode to stay valid). The
+ * dedicated live-fetch tests below override BOTH `mode: 'acquire'` (or
+ * another target mode) AND `body-sha256` explicitly. */
+const AUTHORING_OWNER_FULL_FIELDS: Record<string, string> = {
+  'marker-target': 'o/r#42',
+  anchor: 'o/r#42',
+  mode: 'release-guard',
+  'marker-owner': 'owner-abc',
+  set: 'set-1',
+  session: 'session-1',
+  'body-sha256': 'none',
+  'snapshot-sha256': 'none',
+  supersedes: 'none',
+};
+
+test("post-idd-marker CLI: authoring-owner's full flag set succeeds (dry-run, --body-sha256 none avoids a live fetch, #2931)", () => {
+  const output = execFileSync(
+    process.execPath,
+    postIddMarkerArgv('authoring-owner', AUTHORING_OWNER_FULL_FIELDS),
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.mode, 'dry-run');
+  assert.equal(parsed.type, 'authoring-owner');
+});
+
+test('post-idd-marker CLI: every required flag of authoring-owner other than body-sha256 (optional/auto-derived) is rejected by name when omitted (#2931)', () => {
+  for (const omittedFlag of Object.keys(AUTHORING_OWNER_FULL_FIELDS)) {
+    if (omittedFlag === 'body-sha256') {
+      continue;
+    }
+    const partial = Object.fromEntries(
+      Object.entries(AUTHORING_OWNER_FULL_FIELDS).filter(
+        ([flag]) => flag !== omittedFlag,
+      ),
+    );
+    const stderr = runCliExpectingFailure(
+      postIddMarkerArgv('authoring-owner', partial),
+    );
+    assert.match(
+      stderr,
+      new RegExp(`--${omittedFlag} is required`),
+      `authoring-owner without --${omittedFlag} should name --${omittedFlag}`,
+    );
+  }
+});
+
+/** Stub `gh api repos/<owner>/<repo>/issues/<n>` (the exact call
+ * `createGithubProviderAdapter(...).getWorkItem` makes, and thus the
+ * authoring-owner body-sha256 live-fetch source, #2931) to return `{ body
+ * }`, and fail loudly on any other invocation. */
+function stubGhIssueBody(
+  owner: string,
+  repo: string,
+  number: number,
+  body: string,
+): () => void {
+  return stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'repos/${owner}/${repo}/issues/${number}') {
+  process.stdout.write(JSON.stringify({ number: ${number}, body: ${JSON.stringify(body)} }));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+}
+
+/** Stub `gh` that fails loudly on ANY invocation -- proves a code path makes
+ * no `gh` call at all (#2931). */
+function stubGhNeverCalled(): () => void {
+  return stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+process.stderr.write('unexpected gh invocation (expected none): ' + args.join(' '));
+process.exit(1);
+`,
+  );
+}
+
+test('authoring-owner --body-sha256 none skips the live fetch entirely (anchor-only release-guard convention, #2931)', () => {
+  const restore = stubGhNeverCalled();
+  try {
+    const output = execFileSync(
+      process.execPath,
+      postIddMarkerArgv('authoring-owner', {
+        ...AUTHORING_OWNER_FULL_FIELDS,
+        mode: 'release-guard',
+      }),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.match(JSON.parse(output).body, /body-sha256=none;/);
+  } finally {
+    restore();
+  }
+});
+
+test('authoring-owner CLI derives body-sha256 from a live, JSON-parsed read of --marker-target when omitted (#2931)', () => {
+  const LIVE_BODY = 'Fresh live body for #42.';
+  const expectedDigest = createHash('sha256')
+    .update(LIVE_BODY, 'utf8')
+    .digest('hex');
+  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY);
+  try {
+    const { 'body-sha256': _omit, ...rest } = AUTHORING_OWNER_FULL_FIELDS;
+    const output = execFileSync(
+      process.execPath,
+      // mode: 'acquire' -- a "target" mode (validateAuthoringOwnerModeDigestCoupling)
+      // that requires a real body-sha256, unlike the base table's own
+      // anchor-only release-guard default; this test's whole point is
+      // exercising the auto-derive path for a real body digest.
+      postIddMarkerArgv('authoring-owner', { ...rest, mode: 'acquire' }),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.match(
+      JSON.parse(output).body,
+      new RegExp(`body-sha256=${expectedDigest};`),
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('authoring-owner CLI verifies an explicit --body-sha256 against a fresh fetch and accepts a match (#2931)', () => {
+  const LIVE_BODY = 'Fresh live body for #42.';
+  const correctDigest = createHash('sha256')
+    .update(LIVE_BODY, 'utf8')
+    .digest('hex');
+  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY);
+  try {
+    const output = execFileSync(
+      process.execPath,
+      // mode: 'acquire' -- release-guard (the base table's own default)
+      // requires body-sha256 none, so a real explicit digest needs a
+      // "target" mode instead (validateAuthoringOwnerModeDigestCoupling).
+      postIddMarkerArgv('authoring-owner', {
+        ...AUTHORING_OWNER_FULL_FIELDS,
+        mode: 'acquire',
+        'body-sha256': correctDigest,
+      }),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.match(
+      JSON.parse(output).body,
+      new RegExp(`body-sha256=${correctDigest};`),
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('authoring-owner CLI refuses to post when an explicit --body-sha256 does not match a fresh fetch (#2931)', () => {
+  const LIVE_BODY = 'Fresh live body for #42.';
+  const wrongDigest = 'a'.repeat(64);
+  const correctDigest = createHash('sha256')
+    .update(LIVE_BODY, 'utf8')
+    .digest('hex');
+  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY);
+  try {
+    try {
+      execFileSync(
+        process.execPath,
+        // mode: 'acquire' -- same coupling reason as the match-acceptance
+        // test above; a real (even if wrong) digest requires a "target"
+        // mode, or the mode/digest coupling check would reject it first
+        // for the wrong reason (release-guard forbids a real digest at
+        // all) instead of exercising the mismatch-detection path.
+        postIddMarkerArgv('authoring-owner', {
+          ...AUTHORING_OWNER_FULL_FIELDS,
+          mode: 'acquire',
+          'body-sha256': wrongDigest,
+        }),
+        { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+      );
+    } catch (error) {
+      const failure = error as { status?: number; stderr?: string };
+      assert.equal(failure.status, 1);
+      assert.match(
+        failure.stderr ?? '',
+        /refusing to post authoring-owner marker/,
+      );
+      assert.match(failure.stderr ?? '', new RegExp(wrongDigest));
+      assert.match(failure.stderr ?? '', new RegExp(correctDigest));
+      return;
+    }
+    throw new Error('expected the CLI to exit non-zero');
+  } finally {
+    restore();
+  }
+});
+
+test('authoring-owner CLI fails closed with a targeted error when --marker-target is missing, before any gh call (#2931)', () => {
+  const { 'marker-target': _omit, ...rest } = AUTHORING_OWNER_FULL_FIELDS;
+  const stderr = runCliExpectingFailure(
+    postIddMarkerArgv('authoring-owner', rest),
+  );
+  assert.match(stderr, /--marker-target is required/);
+});
+
+test('authoring-owner CLI fails closed on a malformed --marker-target, before any gh call (#2931)', () => {
+  const { 'body-sha256': _omit, ...rest } = AUTHORING_OWNER_FULL_FIELDS;
+  const stderr = runCliExpectingFailure(
+    postIddMarkerArgv('authoring-owner', {
+      ...rest,
+      'marker-target': 'not-a-valid-ref',
+    }),
+  );
+  assert.match(
+    stderr,
+    /invalid --marker-target value \(expected <owner>\/<repo>#<number>\): not-a-valid-ref/,
+  );
+});
+
+test('authoring-owner CLI fails closed on a malformed --marker-target EVEN with --body-sha256 none (format check is unconditional, #2931)', () => {
+  // Regression guard: an earlier revision only format-checked
+  // --marker-target inside the body-sha256 derivation/verification step,
+  // so a malformed value slipped through completely unvalidated whenever
+  // --body-sha256 none (the anchor-only release-guard/release-complete
+  // sentinel) skipped that whole step. The format check must fire
+  // regardless of --body-sha256's value.
+  const stderr = runCliExpectingFailure(
+    postIddMarkerArgv('authoring-owner', {
+      ...AUTHORING_OWNER_FULL_FIELDS,
+      'marker-target': 'not-a-valid-ref',
+    }),
+  );
+  assert.match(
+    stderr,
+    /invalid --marker-target value \(expected <owner>\/<repo>#<number>\): not-a-valid-ref/,
+  );
+});
+
+test('authoring-owner CLI rejects --mode acquire with --body-sha256 none, before any gh call (#2931)', () => {
+  const stderr = runCliExpectingFailure(
+    postIddMarkerArgv('authoring-owner', {
+      ...AUTHORING_OWNER_FULL_FIELDS,
+      mode: 'acquire',
+    }),
+  );
+  assert.match(stderr, /--mode acquire requires a real --body-sha256/);
+});
+
+test('authoring-owner CLI rejects --mode release-guard with a real --body-sha256, before any gh call (#2931)', () => {
+  const stderr = runCliExpectingFailure(
+    postIddMarkerArgv('authoring-owner', {
+      ...AUTHORING_OWNER_FULL_FIELDS,
+      'body-sha256': 'a'.repeat(64),
+    }),
+  );
+  assert.match(
+    stderr,
+    /--mode release-guard is anchor-only and requires --body-sha256 none/,
+  );
+});
+
+test('authoring-owner CLI rejects --mode release-complete with --snapshot-sha256 none, before any gh call (#2931)', () => {
+  const stderr = runCliExpectingFailure(
+    postIddMarkerArgv('authoring-owner', {
+      ...AUTHORING_OWNER_FULL_FIELDS,
+      mode: 'release-complete',
+    }),
+  );
+  assert.match(
+    stderr,
+    /--mode release-complete requires a real --snapshot-sha256/,
+  );
+});
+
+test('authoring-owner CLI rejects a non-release-complete --mode with a real --snapshot-sha256, before any gh call (#2931)', () => {
+  const stderr = runCliExpectingFailure(
+    postIddMarkerArgv('authoring-owner', {
+      ...AUTHORING_OWNER_FULL_FIELDS,
+      'snapshot-sha256': 'a'.repeat(64),
+    }),
+  );
+  assert.match(stderr, /--mode release-guard requires --snapshot-sha256 none/);
+});
+
+test('kurone-kito/idd-skill#2925 regression: authoring-owner body-sha256 derivation avoids the exact shell-redirect trailing-newline bug', () => {
+  // #2925's root cause, reproduced LITERALLY here (not just synthesized):
+  // `gh api repos/.../issues/<n> --jq '.body' > file` appends a trailing
+  // newline that `gh api --jq` emits on stdout but that is NOT part of the
+  // actual `body` JSON field, so a hand-computed digest of that
+  // shell-redirect-captured file differs from the true digest of the live
+  // body. This stub answers BOTH call shapes against the same live body:
+  // the plain JSON read (no --jq) this file's own live-fetch derivation
+  // uses via createGithubProviderAdapter, and a `--jq .body` read (used
+  // only by the actual shell-redirect command below, mirroring the real
+  // `gh api --jq` trailing-newline behavior #2925 hit).
+  const LIVE_BODY = 'Some real issue body content.\n\nSecond paragraph.';
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'repos/kurone-kito/idd-skill/issues/2925' && args.includes('--jq')) {
+  process.stdout.write(${JSON.stringify(LIVE_BODY)} + '\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'repos/kurone-kito/idd-skill/issues/2925') {
+  process.stdout.write(JSON.stringify({ number: 2925, body: ${JSON.stringify(LIVE_BODY)} }));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-2925-'));
+  const capturedFile = join(tempRoot, 'body.txt');
+  try {
+    // The actual #2925 shell-redirect capture, run for real (not
+    // synthesized): `gh api ... --jq '.body' > file` through a real shell
+    // redirect against the stub above.
+    execFileSync(
+      'sh',
+      [
+        '-c',
+        `gh api repos/kurone-kito/idd-skill/issues/2925 --jq '.body' > ${JSON.stringify(capturedFile)}`,
+      ],
+      { encoding: 'utf8' },
+    );
+    const shellRedirectCapturedValue = readFileSync(capturedFile, 'utf8');
+    // Sanity check: the shell redirect actually appended the trailing
+    // newline #2925 hit, or this test would prove nothing about the bug
+    // it targets.
+    assert.equal(shellRedirectCapturedValue, `${LIVE_BODY}\n`);
+    const buggyHandComputedDigest = createHash('sha256')
+      .update(shellRedirectCapturedValue, 'utf8')
+      .digest('hex');
+    const correctDigest = createHash('sha256')
+      .update(LIVE_BODY, 'utf8')
+      .digest('hex');
+    assert.notEqual(buggyHandComputedDigest, correctDigest);
+
+    const { 'body-sha256': _omit, ...rest } = AUTHORING_OWNER_FULL_FIELDS;
+    const output = execFileSync(
+      process.execPath,
+      // mode: 'acquire' -- a "target" mode requiring a real body-sha256,
+      // needed here since body-sha256 is omitted (auto-derive path); the
+      // base table's own default mode (release-guard) requires the none
+      // sentinel instead (validateAuthoringOwnerModeDigestCoupling).
+      postIddMarkerArgv('authoring-owner', {
+        ...rest,
+        mode: 'acquire',
+        'marker-target': 'kurone-kito/idd-skill#2925',
+        anchor: 'kurone-kito/idd-skill#2925',
+      }),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    const body = JSON.parse(output).body as string;
+    // The new helper's own live-fetch derivation computes the CORRECT
+    // digest of the exact body...
+    assert.match(body, new RegExp(`body-sha256=${correctDigest};`));
+    // ...and never reproduces the shell-redirect-captured (buggy,
+    // trailing-newline) digest #2925 actually posted.
+    assert.doesNotMatch(
+      body,
+      new RegExp(`body-sha256=${buggyHandComputedDigest};`),
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--apply --type authoring-owner POSTs the byte-exact body with the live-derived body-sha256, and never triggers the hide-at-post-time step (#2931)', () => {
+  const LIVE_BODY = 'Fresh live body for #42.';
+  const correctDigest = createHash('sha256')
+    .update(LIVE_BODY, 'utf8')
+    .digest('hex');
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-post-idd-marker-authoring-owner-apply-'),
+  );
+  const stdinFile = join(tempRoot, 'gh-stdin.txt');
+  // Any THIRD gh invocation beyond the GET (digest derivation) and the POST
+  // falls through to the catch-all failure below -- including a
+  // hide-at-post-time comments-listing call, which authoring-owner must
+  // never trigger (it is deliberately not in HIDE_AT_POST_TIME_MARKER_TYPES,
+  // #2931).
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+function out(s) { fs.writeSync(1, s); process.exit(0); }
+function fail(s) { fs.writeSync(2, s); process.exit(1); }
+if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
+  out(JSON.stringify({ number: 42, body: ${JSON.stringify(LIVE_BODY)} }));
+} else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
+  fs.writeFileSync(${JSON.stringify(stdinFile)}, fs.readFileSync(0, 'utf8'));
+  out(JSON.stringify({ id: 555, html_url: 'https://github.com/o/r/issues/42#issuecomment-555' }));
+} else {
+  fail('unexpected gh invocation: ' + args.join(' '));
+}
+`,
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'authoring-owner',
+        '--target',
+        'issue',
+        '42',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--marker-target',
+        'o/r#42',
+        '--anchor',
+        'o/r#42',
+        '--mode',
+        'acquire',
+        '--marker-owner',
+        'owner-abc',
+        '--set',
+        'set-1',
+        '--session',
+        'session-1',
+        '--snapshot-sha256',
+        'none',
+        '--supersedes',
+        'none',
+        '--apply',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.mode, 'apply');
+    assert.equal(parsed.commentId, 555);
+    assert.deepEqual(JSON.parse(readFileSync(stdinFile, 'utf8')), {
+      body: buildMarkerBody('authoring-owner', {
+        'marker-prefix': 'idd-skill',
+        'marker-target': 'o/r#42',
+        anchor: 'o/r#42',
+        mode: 'acquire',
+        'marker-owner': 'owner-abc',
+        set: 'set-1',
+        session: 'session-1',
+        'body-sha256': correctDigest,
+        'snapshot-sha256': 'none',
+        supersedes: 'none',
+      }),
+    });
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('authoring-publication-intent CLI defaults --marker-prefix to the hardcoded fallback when no config file is present (#2931)', () => {
+  const tempCwd = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-no-config-'));
+  try {
+    const output = execFileSync(
+      process.execPath,
+      postIddMarkerArgv(
+        'authoring-publication-intent',
+        FULL_FIELDS_BY_TYPE['authoring-publication-intent'],
+      ),
+      { cwd: tempCwd, encoding: 'utf8' },
+    );
+    assert.match(
+      JSON.parse(output).body,
+      /^<!-- idd-skill-authoring-publication-intent:/,
+    );
+  } finally {
+    rmSync(tempCwd, { recursive: true, force: true });
+  }
+});
+
+test('authoring-publication-intent CLI honors an explicit --marker-prefix over config/default (#2931)', () => {
+  const output = execFileSync(
+    process.execPath,
+    postIddMarkerArgv('authoring-publication-intent', {
+      ...FULL_FIELDS_BY_TYPE['authoring-publication-intent'],
+      'marker-prefix': 'custom-prefix',
+    }),
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  assert.match(
+    JSON.parse(output).body,
+    /^<!-- custom-prefix-authoring-publication-intent:/,
+  );
 });
