@@ -14,6 +14,7 @@ import {
   ghGraphql,
   ghText,
   ghTextAsync,
+  ghTextUnbounded,
   resolveGhApiHostname,
   resolveViewerLogin,
   safeGhText,
@@ -120,6 +121,70 @@ test('ghText forwards a timeout override and still returns the trimmed result wh
   const restore = stubGh(`process.stdout.write('  fast  \\n');`);
   try {
     assert.equal(ghText(['repo', 'view'], { timeout: 30_000 }), 'fast');
+  } finally {
+    restore();
+  }
+});
+
+test('ghText throws ENOBUFS on output exceeding the default 1 MiB buffer, but succeeds with an explicit maxBuffer override (#2935 review, Codex)', () => {
+  const restore = stubGh(`process.stdout.write('x'.repeat(2 * 1024 * 1024));`);
+  try {
+    assert.throws(
+      () => ghText(['repo', 'view']),
+      (error: unknown) => (error as { code?: string }).code === 'ENOBUFS',
+    );
+    const result = ghText(['repo', 'view'], {
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    assert.equal(result.length, 2 * 1024 * 1024);
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextUnbounded reads a response far larger than any fixed maxBuffer guess, via a temp file (#2935 review, rounds 4-6)', () => {
+  // 40 MiB: bigger than ghText's default 1 MiB AND bigger than every
+  // fixed maxBuffer this codebase tried and had second-guessed away
+  // during review (10 MiB, then 32 MiB) -- the point of this function
+  // is that no such number needs to be picked at all.
+  const size = 40 * 1024 * 1024;
+  const restore = stubGh(`process.stdout.write('y'.repeat(${size}));`);
+  try {
+    const result = ghTextUnbounded(['repo', 'view']);
+    assert.equal(result.length, size);
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextUnbounded trims trailing whitespace, matching ghText', () => {
+  const restore = stubGh(`process.stdout.write('  trimmed  \\n');`);
+  try {
+    assert.equal(ghTextUnbounded(['repo', 'view']), 'trimmed');
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextUnbounded throws on a non-zero gh exit and still cleans up its temp file', () => {
+  const restore = stubGh(`
+process.stderr.write('boom');
+process.exit(1);
+`);
+  try {
+    assert.throws(() => ghTextUnbounded(['repo', 'view']));
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextUnbounded forwards a timeout override', () => {
+  const restore = stubGh(`process.stdout.write('fast');`);
+  try {
+    assert.equal(
+      ghTextUnbounded(['repo', 'view'], { timeout: 30_000 }),
+      'fast',
+    );
   } finally {
     restore();
   }

@@ -409,6 +409,20 @@ in this preamble, since the fallback differs per helper.
   trust explicitly while collaborator-permission trust stays opt-in
   (the `IDD_TRUST_COLLABORATOR_MARKERS` environment variable or the
   `trustCollaboratorMarkers` config field)
+- `scripts/sweep-authoring-markers.mjs` (#2935) for the fetch-driven
+  hide-on-supersede sweep the issue-authoring contract's Stage 2 release
+  flow depends on: given one or more `--issue` targets, it fetches each
+  issue's comments via GraphQL (selecting `isMinimized`, which REST
+  never carries), classifies every comment with
+  `matchCanonicalAuthoringMarkerFamily`, keeps only the newest
+  trusted-actor match per `authoring-owner`/`authoring-publication-intent`
+  family, and minimizes every other eligible candidate in one mutation
+  pass via `minimize-superseded-markers.mjs`'s own `runMinimize` —
+  replacing the ~8-step manual paginate/classify/filter procedure the
+  contract previously described in prose at three separate points. Same
+  mandatory trusted-author gate as `minimize-superseded-markers` (no
+  `--allow-untrusted` escape hatch: this sweep's own "newest"
+  determination depends on the trust filter)
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
 - `scripts/disposition-non-review-notices.mjs` for dry-run/apply

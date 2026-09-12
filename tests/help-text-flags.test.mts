@@ -155,6 +155,13 @@ const CROSS_REFERENCE_FLAGS: Readonly<Record<string, readonly string[]>> = {
     // verify-install-deps.mjs itself parses.
     '--frozen-lockfile',
   ],
+  'sweep-authoring-markers': [
+    // minimize-superseded-markers.mjs's own flag, cited by contrast: this
+    // helper's --help explains it has no --allow-untrusted escape hatch of
+    // its own (its "newest" determination depends on the trust filter),
+    // unlike a direct minimize-superseded-markers.mjs call.
+    '--allow-untrusted',
+  ],
 };
 
 // Explicit covered-helper list (mirrors tests/flag-name-matrix.test.mts's
@@ -211,6 +218,7 @@ const COVERED_HELPERS = [
   'stalled-session-quiet-check',
   'suitability-close-execute',
   'suitability-triage',
+  'sweep-authoring-markers',
   'verify-install-deps',
   'verify-workshop-integrity',
 ] as const;

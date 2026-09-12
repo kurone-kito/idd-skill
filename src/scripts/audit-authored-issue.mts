@@ -58,7 +58,7 @@ import type {
   ParsedAuthoringPublicationMarker,
 } from './marker-helpers.mts';
 import {
-  matchCanonicalAuthoringMarkerFamily,
+  classifyAuthoringMarkerFamily,
   parseAuthoringOwnerComment,
   parseAuthoringPublicationComment,
   parseAuthoringPublicationIntentComment,
@@ -1770,6 +1770,14 @@ function checkAuthoringOwnerMarkerTrail(
  * fewer than two (trust-filtered, when applicable) candidates exist
  * (nothing can be "superseded" without a later candidate to supersede
  * it).
+ *
+ * Delegates the actual classification to {@link classifyAuthoringMarkerFamily}
+ * (`marker-helpers.mts`, extracted in #2935 alongside `sweep-authoring-
+ * markers.mts`'s fetch-driven sweep, which needs the same newest-per-
+ * family/trust/already-minimized rule but returns the eligible comments
+ * themselves, not just a count) -- kept as a thin count-only wrapper here
+ * so this module's public surface and every existing caller are
+ * unaffected.
  */
 function countEligibleSupersededMarkers(
   comments: readonly AuthoringCommentInput[] | undefined,
@@ -1780,39 +1788,12 @@ function countEligibleSupersededMarkers(
   if (comments === undefined) {
     return 0;
   }
-  const matchIndexes: number[] = [];
-  comments.forEach((comment, index) => {
-    if (
-      matchCanonicalAuthoringMarkerFamily(comment.body, markerPrefix) !== family
-    ) {
-      return;
-    }
-    if (trustedActors !== undefined) {
-      const author = comment.author;
-      if (
-        typeof author !== 'string' ||
-        !trustedActors.has(author.toLowerCase())
-      ) {
-        // Not a real candidate at all when a trust set is supplied:
-        // never counted, and never eligible to be selected as "newest"
-        // either -- syntax alone never grants ownership.
-        return;
-      }
-    }
-    matchIndexes.push(index);
-  });
-  if (matchIndexes.length < 2) {
-    return 0;
-  }
-  const newestIndex = matchIndexes[matchIndexes.length - 1];
-  let count = 0;
-  for (const index of matchIndexes) {
-    if (index === newestIndex || comments[index].isMinimized === true) {
-      continue;
-    }
-    count += 1;
-  }
-  return count;
+  return classifyAuthoringMarkerFamily(
+    comments,
+    markerPrefix,
+    family,
+    trustedActors,
+  ).eligibleIndexes.length;
 }
 
 /**

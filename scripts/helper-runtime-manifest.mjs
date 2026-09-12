@@ -566,6 +566,15 @@ const HELPER_COMMANDS = [
     description:
       'Evaluate A4.5 suitability checks and map deterministic outcomes.',
   },
+  {
+    id: 'sweep-authoring-markers',
+    scriptName: 'idd:sweep-authoring-markers',
+    binName: 'idd-sweep-authoring-markers',
+    entryPath: 'scripts/sweep-authoring-markers.mjs',
+    vendoredCommand: 'node scripts/sweep-authoring-markers.mjs',
+    description:
+      'Fetch-driven hide-on-supersede sweep for authoring-owner / authoring-publication-intent markers: fetches one or more issues via GraphQL, classifies and filters superseded candidates, and minimizes them via minimize-superseded-markers.mjs.',
+  },
 ];
 /**
  * Resolve the invocation string for one helper command under one
