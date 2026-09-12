@@ -83,6 +83,14 @@ export interface GhTextOptions {
    * conflict (CodeRabbit review, #1784).
    */
   input?: string;
+  /**
+   * Override the per-stream buffer cap (bytes), mirroring
+   * {@link GhTextAsyncOptions.maxBuffer}. `execFileSync`'s own default is
+   * 1 MiB; a caller expecting a larger response (a paginated GraphQL page
+   * with many or long comments, for example) raises this explicitly
+   * rather than risking an `ENOBUFS` failure (#2935 review, Codex).
+   */
+  maxBuffer?: number;
 }
 
 /**
@@ -121,6 +129,9 @@ export function ghText(args: string[], options: GhTextOptions = {}): string {
     timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
     ...(options.stdio ? { stdio: options.stdio } : {}),
     ...(options.input !== undefined ? { input: options.input } : {}),
+    ...(options.maxBuffer !== undefined
+      ? { maxBuffer: options.maxBuffer }
+      : {}),
   }).trim();
 }
 

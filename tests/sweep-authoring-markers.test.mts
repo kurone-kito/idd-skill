@@ -117,6 +117,24 @@ test('parseIssueTargetToken resolves a dot-prefixed repository name', () => {
   );
 });
 
+test('isCrossRepoIssueToken accepts every owner/repo shape schemas/policy.schema.json itself accepts for issueAuthoring.journalIssue (#2935 review, round 2, Codex)', () => {
+  // Mirrors the schema's own `^[\w.-]+/[\w.-]+#[1-9][0-9]*$` pattern
+  // exactly: leading/trailing underscore, leading/trailing hyphen, and a
+  // leading dot are all schema-valid and must all parse here too.
+  assert.equal(isCrossRepoIssueToken('acme/_journal#42'), true);
+  assert.equal(isCrossRepoIssueToken('acme/journal_#42'), true);
+  assert.equal(isCrossRepoIssueToken('acme/-journal#42'), true);
+  assert.equal(isCrossRepoIssueToken('acme/journal-#42'), true);
+  assert.equal(isCrossRepoIssueToken('_acme/journal#42'), true);
+});
+
+test('parseIssueTargetToken resolves a leading-underscore repository name', () => {
+  assert.deepEqual(
+    parseIssueTargetToken('acme/_journal#42', 'kurone-kito', 'idd-skill'),
+    { owner: 'acme', repo: '_journal', issue: 42 },
+  );
+});
+
 test('normalizeMarkerPrefix prefers an explicit --marker-prefix flag over config', () => {
   assert.equal(
     normalizeMarkerPrefix('flag-prefix', { markerPrefix: 'config-prefix' }),

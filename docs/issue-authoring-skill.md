@@ -1217,6 +1217,7 @@ own records:
 ```sh
 node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
   --issue <journal-issue-number> \
+  --marker-prefix <resolved-target-prefix> \
   --trusted-marker-logins <trusted-login-1,...> \
   --deadline-ms 300000 --apply
 ```
@@ -1350,6 +1351,7 @@ publication-intent log:
 node scripts/sweep-authoring-markers.mjs --issue <target-1> \
   --issue <target-2> ... --issue <anchor-issue-number> \
   --issue <journal-issue-number-or-owner/repo#number> \
+  --marker-prefix <resolved-target-prefix> \
   --trusted-marker-logins <trusted-login-1,...> \
   --deadline-ms 300000 --apply
 ```

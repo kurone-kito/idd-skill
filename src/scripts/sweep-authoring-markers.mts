@@ -102,24 +102,27 @@ export interface SweepIssueTarget {
 }
 
 /** Matches the explicit cross-repository `owner/repo#number` shorthand for
- * one `--issue` token -- the same `owner`/`repo` character class GitHub
- * itself allows (letters, digits, `.`, `_`, `-`, never leading/trailing
- * `-` or `.`-only). A token that contains `/` or `#` but does not match
- * this shape is a likely typo, not a bare issue number -- callers get a
- * specific error instead of a confusing `--issue` parse failure.
+ * one `--issue` token. A token that contains `/` or `#` but does not
+ * match this shape is a likely typo, not a bare issue number -- callers
+ * get a specific error instead of a confusing `--issue` parse failure.
  *
- * The `repo` group allows an optional single leading `.` (#2935 review,
- * Codex): GitHub's own repository-name rules permit a leading dot --
- * `.github`, an organization's special community-health-files
- * repository, is a real, commonly-used name a cross-repository
- * `issueAuthoring.journalIssue` reference can legitimately need -- while
- * `owner` keeps the stricter alphanumeric-first rule GitHub actually
- * enforces for user/organization names (never a leading dot). A repo
- * name that is only dots (`.`, `..`) still fails to match, since the
- * pattern always requires at least one alphanumeric character after the
- * optional leading dot. */
-const CROSS_REPO_ISSUE_TOKEN_PATTERN =
-  /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\/(\.?[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)#([1-9]\d*)$/;
+ * The `owner`/`repo` character class is deliberately exactly
+ * `schemas/policy.schema.json`'s own `issueAuthoring.journalIssue`
+ * pattern (`[\w.-]+`, i.e. word characters, `.`, `-`, in any position,
+ * no leading/trailing restriction) rather than a hand-derived, stricter
+ * subset of GitHub's real naming rules (#2935 review, round 2, Codex):
+ * an earlier revision here rejected `.github`-style leading-dot repo
+ * names, then a follow-up fix rejected leading/trailing `_`/`-`
+ * component names the schema already accepts (for example
+ * `acme/_journal#42`) -- two rounds of the same underlying mistake,
+ * independently re-deriving GitHub's naming rules instead of reusing
+ * the one place this codebase already encodes them. Matching the schema
+ * exactly, rather than refining a parallel approximation of it further,
+ * defers the actual repository-name validity question to GitHub's own
+ * API (which will simply 404 on a request for a name nothing owns),
+ * matching the review's own "defer repository-name validation to
+ * GitHub" resolution. */
+const CROSS_REPO_ISSUE_TOKEN_PATTERN = /^([\w.-]+)\/([\w.-]+)#([1-9]\d*)$/;
 
 /** `true` when `token` is the explicit `owner/repo#number` cross-repository
  * shorthand -- used before any I/O to decide whether this invocation
@@ -198,6 +201,19 @@ interface SweepGraphqlCommentsPayload {
 }
 
 /**
+ * Per-call `execFileSync` output-buffer cap for
+ * {@link fetchIssueCommentsGraphql}'s own `gh api graphql` calls (#2935
+ * review, Codex): `ghText`'s (and Node's `execFileSync`'s) own default is
+ * 1 MiB per stream, which a 100-comment page can exceed once several
+ * comments carry long discussion bodies -- silently turning a real page
+ * of data into an `ENOBUFS` fetch failure that then drops that issue's
+ * comments (and every superseded marker on it) from this sweep entirely.
+ * 10 MiB matches this codebase's own existing precedent for the same
+ * class of risk (`GH_ASYNC_MAX_BUFFER`, `provider-adapter-github.mts`).
+ */
+const LARGE_COMMENT_PAGE_MAX_BUFFER = 10 * 1024 * 1024;
+
+/**
  * Fetch every comment on `owner/repo#issueNumber` via a paginated GraphQL
  * `issue(number:).comments` query, selecting `isMinimized` directly (the
  * field REST's issue-comments endpoint never carries at all). `timeoutMs`,
@@ -268,10 +284,10 @@ export function fetchIssueCommentsGraphql(
       `number=${issueNumber}`,
       ...(cursor ? ['-f', `cursor=${cursor}`] : []),
     ];
-    const raw = ghText(
-      args,
-      perCallTimeout !== undefined ? { timeout: perCallTimeout } : {},
-    );
+    const raw = ghText(args, {
+      ...(perCallTimeout !== undefined ? { timeout: perCallTimeout } : {}),
+      maxBuffer: LARGE_COMMENT_PAGE_MAX_BUFFER,
+    });
     let parsed: SweepGraphqlCommentsPayload;
     try {
       parsed = JSON.parse(raw || '{}');

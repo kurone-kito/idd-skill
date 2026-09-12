@@ -80,6 +80,9 @@ export function ghText(args, options = {}) {
     timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
     ...(options.stdio ? { stdio: options.stdio } : {}),
     ...(options.input !== undefined ? { input: options.input } : {}),
+    ...(options.maxBuffer !== undefined
+      ? { maxBuffer: options.maxBuffer }
+      : {}),
   }).trim();
 }
 /** {@link ghText}, swallowing any failure and returning `''` instead. */

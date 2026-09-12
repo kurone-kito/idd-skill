@@ -125,6 +125,22 @@ test('ghText forwards a timeout override and still returns the trimmed result wh
   }
 });
 
+test('ghText throws ENOBUFS on output exceeding the default 1 MiB buffer, but succeeds with an explicit maxBuffer override (#2935 review, Codex)', () => {
+  const restore = stubGh(`process.stdout.write('x'.repeat(2 * 1024 * 1024));`);
+  try {
+    assert.throws(
+      () => ghText(['repo', 'view']),
+      (error: unknown) => (error as { code?: string }).code === 'ENOBUFS',
+    );
+    const result = ghText(['repo', 'view'], {
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    assert.equal(result.length, 2 * 1024 * 1024);
+  } finally {
+    restore();
+  }
+});
+
 test('ghText times out (throws) when gh exceeds the configured timeout', () => {
   const restore = stubGh(`
 // Block synchronously well past the configured timeout so execFileSync's
