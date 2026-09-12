@@ -157,6 +157,13 @@ layered on top of the distributed IDD defaults:
   full hour -- a HEAD CodeRabbit has not yet reviewed still waits the
   full configured window unchanged, keeping the wait a fallback for
   genuine secondary-bot degradation rather than a tax on every merge.
+  As of #2547, a definitive decline verdict for the current HEAD -- a
+  rate-limit or skip-review notice with no genuine comment after it --
+  is checked before that #2544 short-buffer path and completes the
+  wait immediately -- zero delay, not even the confirmation buffer:
+  once CodeRabbit has conclusively said it will not review this
+  commit, #2335's "might still be mid-review" protection has nothing
+  left to protect.
 - **New-CI-job dispatch-first rollout**: `idd-pr-submit.instructions.md`'s
   D2 "Adding a new CI job" guidance (distributed via `idd-template/`, not
   itself local) requires landing a new CI job `workflow_dispatch`-first.
