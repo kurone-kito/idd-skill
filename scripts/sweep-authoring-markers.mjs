@@ -50,13 +50,19 @@
 // markers.mjs`'s own possible non-zero exit -- non-blocking.
 //
 // Scope: `authoring-owner` and `authoring-publication-intent` only, same as
-// the sweep it replaces. Every `--issue` given is scanned in the SAME
-// `--owner`/`--repo` (defaulting to the current repository) -- this script
-// does not parse a cross-repo `owner/repo#N` shorthand for `--issue`,
-// matching every other single-repo `--issue <number>` helper in this
-// codebase (`authoring-owner-provenance.mts`, `suitability-close-
-// execute.mts`); a caller sweeping a cross-repo journal passes its own
-// `--owner`/`--repo` in a separate invocation.
+// the sweep it replaces. A bare `--issue <number>` is scanned in the
+// invocation's default `--owner`/`--repo` (the global flags, or the
+// current repository when neither is given, matching every other
+// single-repo `--issue <number>` helper in this codebase --
+// `authoring-owner-provenance.mts`, `suitability-close-execute.mts`);
+// an explicit `--issue owner/repo#number` is scanned in ITS OWN
+// owner/repo instead (#2935 review, Codex and Copilot: the contract's
+// `issueAuthoring.journalIssue` can itself be a cross-repository
+// reference, so a single-repo-only design could never sweep it
+// correctly, and worse, could silently mutate an unrelated
+// same-numbered issue in the wrong repository under `--apply`). One
+// invocation can freely mix same-repo and cross-repository `--issue`
+// targets.
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
 import { ghText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
@@ -78,6 +84,51 @@ const AUTHORING_MARKER_FAMILIES = [
   'authoring-owner',
   'authoring-publication-intent',
 ];
+/** Matches the explicit cross-repository `owner/repo#number` shorthand for
+ * one `--issue` token -- the same `owner`/`repo` character class GitHub
+ * itself allows (letters, digits, `.`, `_`, `-`, never leading/trailing
+ * `-` or `.`-only). A token that contains `/` or `#` but does not match
+ * this shape is a likely typo, not a bare issue number -- callers get a
+ * specific error instead of a confusing `--issue` parse failure. */
+const CROSS_REPO_ISSUE_TOKEN_PATTERN =
+  /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\/([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)#([1-9]\d*)$/;
+/** `true` when `token` is the explicit `owner/repo#number` cross-repository
+ * shorthand -- used before any I/O to decide whether this invocation
+ * needs the current repository at all (a caller sweeping only
+ * cross-repo-qualified issues never needs it). */
+export function isCrossRepoIssueToken(token) {
+  return CROSS_REPO_ISSUE_TOKEN_PATTERN.test(token);
+}
+/**
+ * Resolve one `--issue` token to a {@link SweepIssueTarget}: the explicit
+ * `owner/repo#number` shorthand resolves to its own owner/repo,
+ * independent of `defaultOwner`/`defaultRepo`; a bare positive-integer
+ * token resolves against `defaultOwner`/`defaultRepo` (the global
+ * `--owner`/`--repo`, or the current repository when neither is given).
+ * Throws a specific error for a token that contains `/` or `#` but does
+ * not match the cross-repo shape (a likely typo), rather than letting it
+ * fall through to the bare-integer parser's own generic message.
+ */
+export function parseIssueTargetToken(token, defaultOwner, defaultRepo) {
+  const crossRepoMatch = CROSS_REPO_ISSUE_TOKEN_PATTERN.exec(token);
+  if (crossRepoMatch) {
+    return {
+      owner: crossRepoMatch[1],
+      repo: crossRepoMatch[2],
+      issue: Number.parseInt(crossRepoMatch[3], 10),
+    };
+  }
+  if (token.includes('/') || token.includes('#')) {
+    throw new Error(
+      `--issue "${token}" looks like a cross-repository reference but does not match owner/repo#number`,
+    );
+  }
+  return {
+    owner: defaultOwner,
+    repo: defaultRepo,
+    issue: parseCanonicalIntegerOrThrow(token, '--issue'),
+  };
+}
 /**
  * Fetch every comment on `owner/repo#issueNumber` via a paginated GraphQL
  * `issue(number:).comments` query, selecting `isMinimized` directly (the
@@ -227,13 +278,13 @@ export function runAuthoringMarkerSweep(options, deps = DEFAULT_DEPS) {
   };
   const issues = [];
   const subjectFamilies = new Map();
-  for (const issueNumber of options.issues) {
+  for (const target of options.issues) {
     const budget = remaining();
     if (budget !== undefined && budget <= 0) {
       issues.push({
-        owner: options.owner,
-        repo: options.repo,
-        issue: issueNumber,
+        owner: target.owner,
+        repo: target.repo,
+        issue: target.issue,
         commentCount: 0,
         nonCanonical: 0,
         error: 'deadline-exceeded',
@@ -243,16 +294,16 @@ export function runAuthoringMarkerSweep(options, deps = DEFAULT_DEPS) {
     let comments;
     try {
       comments = deps.fetchIssueComments(
-        options.owner,
-        options.repo,
-        issueNumber,
+        target.owner,
+        target.repo,
+        target.issue,
         budget,
       );
     } catch (error) {
       issues.push({
-        owner: options.owner,
-        repo: options.repo,
-        issue: issueNumber,
+        owner: target.owner,
+        repo: target.repo,
+        issue: target.issue,
         commentCount: 0,
         nonCanonical: 0,
         error: error.message,
@@ -276,9 +327,9 @@ export function runAuthoringMarkerSweep(options, deps = DEFAULT_DEPS) {
       }
     }
     issues.push({
-      owner: options.owner,
-      repo: options.repo,
-      issue: issueNumber,
+      owner: target.owner,
+      repo: target.repo,
+      issue: target.issue,
       commentCount: comments.length,
       nonCanonical,
     });
@@ -434,9 +485,21 @@ function parseArgs(argv) {
     SWEEP_AUTHORING_MARKERS_FLAG_SPEC,
   );
   const issueTokens = values.issue ?? [];
-  const issues = issueTokens.map((token) =>
-    parseCanonicalIntegerOrThrow(token, '--issue'),
-  );
+  const owner = (values.owner ?? '').trim();
+  const repo = (values.repo ?? '').trim();
+  // #2935 review (Codex and Copilot both, independently): exactly one of
+  // --owner/--repo would mix a caller-supplied repo with
+  // resolveCurrentGithubRepository()'s current-directory repo for every
+  // bare-number --issue, potentially sweeping (and, under --apply,
+  // mutating) an unrelated same-numbered issue in the wrong repository.
+  // Mirrors authoring-owner-provenance.mts's and suitability-close-
+  // execute.mts's own --owner/--repo pairing guard: require both or
+  // neither.
+  if ((owner === '') !== (repo === '')) {
+    throw new Error(
+      'sweep-authoring-markers: --owner and --repo must be provided together or not at all',
+    );
+  }
   let deadlineMs;
   if (values['deadline-ms'] !== undefined) {
     if (values['deadline-ms'] === '') {
@@ -450,9 +513,9 @@ function parseArgs(argv) {
     deadlineMs = Number.parseInt(values['deadline-ms'], 10);
   }
   return {
-    issues,
-    owner: values.owner ?? '',
-    repo: values.repo ?? '',
+    issueTokens,
+    owner,
+    repo,
     markerPrefix: values['marker-prefix'] ?? '',
     classifier: values.classifier ?? 'OUTDATED',
     trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
@@ -497,7 +560,7 @@ function printTable(report) {
   }
 }
 function printUsage() {
-  console.log(`Usage: sweep-authoring-markers --issue <number> [--issue <number> ...] [--owner <owner>] [--repo <repo>] [--marker-prefix <prefix>] [--classifier OUTDATED|RESOLVED] --trusted-marker-logins <login1,login2> [--apply] [--format json|table] [--deadline-ms <milliseconds>]
+  console.log(`Usage: sweep-authoring-markers --issue <number|owner/repo#number> [--issue ...] [--owner <owner>] [--repo <repo>] [--marker-prefix <prefix>] [--classifier OUTDATED|RESOLVED] --trusted-marker-logins <login1,login2> [--apply] [--format json|table] [--deadline-ms <milliseconds>]
 
 Fetch-driven hide-on-supersede sweep for authoring-owner /
 authoring-publication-intent markers (#2935): fetches each --issue's
@@ -511,9 +574,14 @@ reusing minimize-superseded-markers.mts's own runMinimize.
 Pass one --issue per target to sweep (the per-target preflight and the
 anchor-before-release-complete sweep points each pass one; the closing
 sweep passes every target plus the anchor and the journal issue in the
-same invocation). Every --issue is scanned in the same --owner/--repo
-(defaulting to the current repository); this command does not accept a
-cross-repo owner/repo#N shorthand.
+same invocation). A bare --issue <number> is scanned in --owner/--repo
+(defaulting to the current repository); an explicit --issue
+<owner/repo#number> is scanned in ITS OWN owner/repo instead, so one
+invocation can mix a same-repo target with a cross-repository
+issueAuthoring.journalIssue (#2935 review, Codex and Copilot). --owner
+and --repo must be given together or not at all -- supplying only one
+would otherwise silently mix a caller-supplied repo with the current
+directory's repo for every bare-number --issue.
 
 The trusted-author gate is mandatory, matching minimize-superseded-
 markers.mjs: supply --trusted-marker-logins, IDD_TRUSTED_MARKER_ACTORS, or
@@ -556,7 +624,7 @@ if (import.meta.main) {
     );
     process.exit(2);
   }
-  if (args.issues.length === 0) {
+  if (args.issueTokens.length === 0) {
     console.error('error: --issue must be supplied at least once');
     process.exit(2);
   }
@@ -573,15 +641,31 @@ if (import.meta.main) {
     );
     process.exit(2);
   }
-  const currentRepo =
-    args.owner && args.repo ? null : resolveCurrentGithubRepository();
-  const owner = args.owner || currentRepo?.owner || '';
-  const repo = args.repo || currentRepo?.repo || '';
+  // Only resolve the current repository when at least one --issue token
+  // actually needs it as a default (#2935 review): an invocation sweeping
+  // only explicit owner/repo#number cross-repository targets never needs
+  // it, and skipping the extra `gh repo view` call in that case is free.
+  const explicitRepoGiven = Boolean(args.owner && args.repo);
+  const needsCurrentRepo =
+    !explicitRepoGiven &&
+    args.issueTokens.some((token) => !isCrossRepoIssueToken(token));
+  const currentRepo = needsCurrentRepo
+    ? resolveCurrentGithubRepository()
+    : null;
+  const defaultOwner = args.owner || currentRepo?.owner || '';
+  const defaultRepo = args.repo || currentRepo?.repo || '';
   const markerPrefix = normalizeMarkerPrefix(args.markerPrefix, config);
+  let issues;
+  try {
+    issues = args.issueTokens.map((token) =>
+      parseIssueTargetToken(token, defaultOwner, defaultRepo),
+    );
+  } catch (error) {
+    console.error(`error: ${error.message}`);
+    process.exit(2);
+  }
   const report = runAuthoringMarkerSweep({
-    owner,
-    repo,
-    issues: args.issues,
+    issues,
     markerPrefix,
     classifier: args.classifier,
     trustedSet: new Set(trustedActors),

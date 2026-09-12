@@ -1646,7 +1646,13 @@ only approval boundary.
     --deadline-ms 300000 --apply
   ```
 
-  Or, for npx/package-manager profiles, the equivalent
+  The journal setting can itself name a **different** repository (a
+  full `owner/repo#number` reference); when it does, pass that shape to
+  `--issue` instead of a bare number -- that one `--issue` is fetched
+  from its own repository while every bare-number `--issue` in the same
+  invocation still uses the current repository (or `--owner`/`--repo`,
+  given together or not at all). Or, for
+  npx/package-manager profiles, the equivalent
   `idd-sweep-authoring-markers` command. One invocation performs the
   whole sweep that used to be an ~8-step manual procedure (#2935): it
   fetches each `--issue`'s comments via GraphQL (selecting `isMinimized`
@@ -1759,7 +1765,7 @@ only approval boundary.
   ```sh
   node scripts/sweep-authoring-markers.mjs --issue <target-1> \
     --issue <target-2> ... --issue <anchor-issue-number> \
-    --issue <journal-issue-number> \
+    --issue <journal-issue-number-or-owner/repo#number> \
     --trusted-marker-logins <trusted-login-1,...> \
     --deadline-ms 300000 --apply
   ```

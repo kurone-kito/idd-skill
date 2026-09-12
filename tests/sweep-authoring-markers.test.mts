@@ -14,6 +14,8 @@ import { runMinimize } from '../src/scripts/minimize-superseded-markers.mts';
 import {
   computeSweepExitCode,
   fetchIssueCommentsGraphql,
+  isCrossRepoIssueToken,
+  parseIssueTargetToken,
   runAuthoringMarkerSweep,
   type SweepGraphqlComment,
 } from '../src/scripts/sweep-authoring-markers.mts';
@@ -96,6 +98,88 @@ if (queryArg.includes('minimizeComment')) {
 }
 `;
 
+test('isCrossRepoIssueToken recognizes owner/repo#number and rejects a bare number', () => {
+  assert.equal(isCrossRepoIssueToken('kurone-kito/idd-skill#2935'), true);
+  assert.equal(isCrossRepoIssueToken('2935'), false);
+});
+
+test('parseIssueTargetToken resolves a bare number against the given defaults', () => {
+  assert.deepEqual(parseIssueTargetToken('2935', 'kurone-kito', 'idd-skill'), {
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    issue: 2935,
+  });
+});
+
+test('parseIssueTargetToken resolves an explicit owner/repo#number against its OWN repository, ignoring the defaults', () => {
+  assert.deepEqual(
+    parseIssueTargetToken(
+      'other-owner/other-repo#42',
+      'kurone-kito',
+      'idd-skill',
+    ),
+    { owner: 'other-owner', repo: 'other-repo', issue: 42 },
+  );
+});
+
+test('parseIssueTargetToken rejects a malformed cross-repository-looking token instead of misparsing it as a bare number', () => {
+  assert.throws(
+    () =>
+      parseIssueTargetToken(
+        'kurone-kito/idd-skill',
+        'kurone-kito',
+        'idd-skill',
+      ),
+    /looks like a cross-repository reference but does not match owner\/repo#number/,
+  );
+  assert.throws(
+    () => parseIssueTargetToken('#2935', 'kurone-kito', 'idd-skill'),
+    /looks like a cross-repository reference/,
+  );
+});
+
+test('runAuthoringMarkerSweep mixes a same-repo bare-number target with a cross-repository journal in one invocation, fetching each from its own owner/repo', () => {
+  const seen: { owner: string; repo: string; issue: number }[] = [];
+  const report = runAuthoringMarkerSweep(
+    {
+      issues: [
+        parseIssueTargetToken('100', 'kurone-kito', 'idd-skill'),
+        parseIssueTargetToken(
+          'other-owner/other-repo#200',
+          'kurone-kito',
+          'idd-skill',
+        ),
+      ],
+      markerPrefix: MARKER_PREFIX,
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['trusted-bot']),
+      apply: true,
+    },
+    {
+      fetchIssueComments: (owner, repo, issue) => {
+        seen.push({ owner, repo, issue });
+        return [];
+      },
+      minimize: runMinimize,
+    },
+  );
+  assert.deepEqual(seen, [
+    { owner: 'kurone-kito', repo: 'idd-skill', issue: 100 },
+    { owner: 'other-owner', repo: 'other-repo', issue: 200 },
+  ]);
+  assert.deepEqual(
+    report.issues.map((i) => ({
+      owner: i.owner,
+      repo: i.repo,
+      issue: i.issue,
+    })),
+    [
+      { owner: 'kurone-kito', repo: 'idd-skill', issue: 100 },
+      { owner: 'other-owner', repo: 'other-repo', issue: 200 },
+    ],
+  );
+});
+
 test('runAuthoringMarkerSweep classifies both families independently per issue and minimizes exactly the eligible candidates', () => {
   const targetComments: SweepGraphqlComment[] = [
     comment('IC_t0', ownerMarker('acquire', 'owner-1'), 'trusted-bot'), // eligible
@@ -129,9 +213,10 @@ test('runAuthoringMarkerSweep classifies both families independently per issue a
   try {
     const report = runAuthoringMarkerSweep(
       {
-        owner: 'kurone-kito',
-        repo: 'idd-skill',
-        issues: [100, 200],
+        issues: [
+          { owner: 'kurone-kito', repo: 'idd-skill', issue: 100 },
+          { owner: 'kurone-kito', repo: 'idd-skill', issue: 200 },
+        ],
         markerPrefix: MARKER_PREFIX,
         classifier: 'OUTDATED',
         trustedSet: new Set(['trusted-bot']),
@@ -189,9 +274,7 @@ test('runAuthoringMarkerSweep treats a drifted (non-byte-exact) marker body as n
   try {
     const report = runAuthoringMarkerSweep(
       {
-        owner: 'kurone-kito',
-        repo: 'idd-skill',
-        issues: [100],
+        issues: [{ owner: 'kurone-kito', repo: 'idd-skill', issue: 100 }],
         markerPrefix: MARKER_PREFIX,
         classifier: 'OUTDATED',
         trustedSet: new Set(['trusted-bot']),
@@ -224,9 +307,7 @@ test('runAuthoringMarkerSweep skips the mutation entirely once the deadline is a
   try {
     const report = runAuthoringMarkerSweep(
       {
-        owner: 'kurone-kito',
-        repo: 'idd-skill',
-        issues: [100],
+        issues: [{ owner: 'kurone-kito', repo: 'idd-skill', issue: 100 }],
         markerPrefix: MARKER_PREFIX,
         classifier: 'OUTDATED',
         trustedSet: new Set(['trusted-bot']),
@@ -271,9 +352,7 @@ test('runAuthoringMarkerSweep dry run (apply omitted) still reports a would-be m
   try {
     const report = runAuthoringMarkerSweep(
       {
-        owner: 'kurone-kito',
-        repo: 'idd-skill',
-        issues: [100],
+        issues: [{ owner: 'kurone-kito', repo: 'idd-skill', issue: 100 }],
         markerPrefix: MARKER_PREFIX,
         classifier: 'OUTDATED',
         trustedSet: new Set(['trusted-bot']),
@@ -299,9 +378,10 @@ test('runAuthoringMarkerSweep records a fetch failure for one issue without abor
   ];
   const report = runAuthoringMarkerSweep(
     {
-      owner: 'kurone-kito',
-      repo: 'idd-skill',
-      issues: [100, 200],
+      issues: [
+        { owner: 'kurone-kito', repo: 'idd-skill', issue: 100 },
+        { owner: 'kurone-kito', repo: 'idd-skill', issue: 200 },
+      ],
       markerPrefix: MARKER_PREFIX,
       classifier: 'OUTDATED',
       trustedSet: new Set(['trusted-bot']),
@@ -325,9 +405,7 @@ test('runAuthoringMarkerSweep records a fetch failure for one issue without abor
 test('computeSweepExitCode returns 0 for a clean report with no candidates', () => {
   const clean = runAuthoringMarkerSweep(
     {
-      owner: 'o',
-      repo: 'r',
-      issues: [1],
+      issues: [{ owner: 'o', repo: 'r', issue: 1 }],
       markerPrefix: MARKER_PREFIX,
       classifier: 'OUTDATED',
       trustedSet: new Set(['trusted-bot']),
@@ -370,9 +448,7 @@ if (queryArg.includes('minimizeComment')) {
   try {
     const report = runAuthoringMarkerSweep(
       {
-        owner: 'kurone-kito',
-        repo: 'idd-skill',
-        issues: [100],
+        issues: [{ owner: 'kurone-kito', repo: 'idd-skill', issue: 100 }],
         markerPrefix: MARKER_PREFIX,
         classifier: 'OUTDATED',
         trustedSet: new Set(['trusted-bot']),
@@ -405,9 +481,7 @@ process.stdout.write(JSON.stringify({
   try {
     const report = runAuthoringMarkerSweep(
       {
-        owner: 'kurone-kito',
-        repo: 'idd-skill',
-        issues: [100],
+        issues: [{ owner: 'kurone-kito', repo: 'idd-skill', issue: 100 }],
         markerPrefix: MARKER_PREFIX,
         classifier: 'OUTDATED',
         trustedSet: new Set(['trusted-bot']),
@@ -559,6 +633,36 @@ test('an omitted --issue is rejected by name', () => {
   assert.equal(
     result.stderr.trim(),
     'error: --issue must be supplied at least once',
+  );
+});
+
+test('a lone --owner without --repo (or vice versa) is rejected before resolving the current repository', () => {
+  const lonelyOwner = runCli([
+    '--issue',
+    '1',
+    '--trusted-marker-logins',
+    'kurone-kito',
+    '--owner',
+    'kurone-kito',
+  ]);
+  assert.equal(lonelyOwner.status, 2);
+  assert.equal(
+    lonelyOwner.stderr.trim(),
+    'error: sweep-authoring-markers: --owner and --repo must be provided together or not at all',
+  );
+
+  const lonelyRepo = runCli([
+    '--issue',
+    '1',
+    '--trusted-marker-logins',
+    'kurone-kito',
+    '--repo',
+    'idd-skill',
+  ]);
+  assert.equal(lonelyRepo.status, 2);
+  assert.equal(
+    lonelyRepo.stderr.trim(),
+    'error: sweep-authoring-markers: --owner and --repo must be provided together or not at all',
   );
 });
 
