@@ -1440,8 +1440,10 @@ unconditional match against them left the mechanism both non-functional
 for adopters and gameable via a PR touching a path that does not exist in
 their own checkout at all. `idd-advisory-convergence.yml` detects this
 from a
-separate job with `issues: write` as its only write permission (the
-verdict job stays read-only; it additionally gains `actions: read`,
+separate job with `issues: write` and `pull-requests: write` as its
+write permissions (kurone-kito/idd-skill#2951: the posting call needs
+both -- `issues: write` alone 403s; the verdict job stays read-only; it
+additionally gains `actions: read`,
 required for the run-id trust verification's own
 `GET /repos/{owner}/{repo}/actions/runs/{run-id}` call in a private
 repository) and posts a marker as `github-actions[bot]` via
