@@ -86,6 +86,41 @@ test('required advisory-convergence workflows add pull_request_target and drop p
   }
 });
 
+// kurone-kito/idd-skill#2951 (Copilot review, PR #2954): a live A/B test
+// proved the idd-advisory-convergence-self-waiver job's marker POST 403s
+// under `pull-requests: read` and succeeds under `pull-requests: write`,
+// but nothing asserted the shipped grant itself -- so a future revert back
+// to `read` (in either copy) would pass every other test in this suite
+// while silently reintroducing the proven HTTP 403.
+test('self-waiver job keeps pull-requests: write in both advisory-convergence workflow copies', () => {
+  for (const path of REQUIRED_PATHS) {
+    const text = readWorkflow(path);
+    const jobMatch = text.match(/^ {2}idd-advisory-convergence-self-waiver:$/m);
+    assert.ok(
+      jobMatch?.index !== undefined,
+      `${path} must keep the idd-advisory-convergence-self-waiver job`,
+    );
+    const afterJob = text.slice(jobMatch.index + jobMatch[0].length);
+    const nextSibling = afterJob.match(/^ {2}\S/m);
+    const jobBody =
+      nextSibling?.index === undefined
+        ? afterJob
+        : afterJob.slice(0, nextSibling.index);
+    const permissionsMatch = jobBody.match(
+      /^ {4}permissions:\n((?: {6}.*\n)+)/m,
+    );
+    assert.ok(
+      permissionsMatch,
+      `${path}: idd-advisory-convergence-self-waiver job must declare a permissions: block`,
+    );
+    assert.match(
+      permissionsMatch[1],
+      /^ {6}pull-requests: write$/m,
+      `${path}: idd-advisory-convergence-self-waiver job must keep pull-requests: write (kurone-kito/idd-skill#2951 -- without it the marker POST 403s)`,
+    );
+  }
+});
+
 test('comment-refresh workflows are non-required and use a different job id', () => {
   for (const path of COMMENT_PATHS) {
     const text = readWorkflow(path);
