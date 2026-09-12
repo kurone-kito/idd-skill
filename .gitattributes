@@ -92,6 +92,7 @@ scripts/stalled-session-quiet-check.mjs linguist-generated=true
 scripts/suitability-close-execute.mjs linguist-generated=true
 scripts/suitability-triage.mjs linguist-generated=true
 scripts/supersession-detection.mjs linguist-generated=true
+scripts/sweep-authoring-markers.mjs linguist-generated=true
 scripts/sync-docs.mjs linguist-generated=true
 scripts/token-cost-adapter-claude.mjs linguist-generated=true
 scripts/token-cost-adapter-codex.mjs linguist-generated=true
