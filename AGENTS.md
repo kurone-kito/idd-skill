@@ -304,9 +304,10 @@ Wrap body lines at **72 characters**.
   line, buried mid-paragraph. Reword instead: lead with an article or
   an extra word (for example "the bullet: ..." or "in step 1: ...")
   so the line no longer opens with a bare token before the colon.
-  Observed live against this repository's own `.commitlintrc.yml` in
-  commit `bae5e0f1e43b54713f936af6f677773b684dd81e` (PR `#2942`,
-  issue `#2943`).
+  Observed 2026-09-12, live against this repository's own
+  `.commitlintrc.yml`, in commit
+  `bae5e0f1e43b54713f936af6f677773b684dd81e` (PR `#2942`, issue
+  `#2943`).
 
 ### Breaking changes
 
