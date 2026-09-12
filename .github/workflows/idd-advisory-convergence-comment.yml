@@ -1,4 +1,7 @@
 # Non-required companion to idd-advisory-convergence.yml (#2136, #2411).
+# (kurone-kito/idd-skill#2951 post-merge verification: this comment-only
+# touch exercises the self-waiver job's allowlist detection on a real
+# pull_request_target run against the fixed main copy; safe to ignore.)
 #
 # Human review-thread and regular-comment chatter must not create or
 # cancel the required `idd-advisory-convergence` check-run. This
