@@ -822,6 +822,29 @@ export function validateAuthoringOwnerSupersedesModeCoupling(
   if (supersedes === undefined || markerOwner === undefined) {
     return null;
   }
+  // #2931 (Codex review on PR #2937, round 7): contract.md's `owner=` is
+  // ALWAYS "a newly generated [or retained] opaque per-target owner
+  // token" -- never the `none` sentinel, for any mode. Checked once, for
+  // every recognized mode, rather than per-branch below: the equality
+  // check further down (`supersedes !== markerOwner`) would otherwise
+  // trivially PASS a `--marker-owner none --supersedes none` combination
+  // for release/heartbeat/release-guard/release-complete (contract.md
+  // 1401-1404 explicitly forbids `supersedes=none` for release, but a
+  // shared-sentinel equality check alone cannot tell "both real and
+  // equal" from "both none" apart), leaving an append-only marker with
+  // no real owner token.
+  if (
+    (AUTHORING_OWNER_NONE_SUPERSEDES_MODES.has(mode) ||
+      mode === 'resume' ||
+      AUTHORING_OWNER_SELF_SUPERSEDES_MODES.has(mode)) &&
+    markerOwner === 'none'
+  ) {
+    return (
+      '--marker-owner must be a real opaque per-target owner token, not ' +
+      `the none sentinel -- invalid for --mode ${mode} ` +
+      '(skills/issue-authoring/references/contract.md)'
+    );
+  }
   if (
     AUTHORING_OWNER_NONE_SUPERSEDES_MODES.has(mode) &&
     supersedes !== 'none'
@@ -1846,6 +1869,18 @@ if (import.meta.main) {
   // live-fetch derive/verify path, which then fails with a confusing
   // digest-mismatch error for what was actually a valid anchor-only
   // invocation.
+  //
+  // `marker-prefix` (Copilot review on PR #2937, round 7) belongs here
+  // too: an explicitly padded `--marker-prefix ' custom-prefix '` is
+  // trimmed by both renderers internally, so the rendered body embeds the
+  // trimmed prefix, but the terminal round-trip assertion further below
+  // was passing the UNTRIMMED prefix to matchCanonicalAuthoringMarkerFamily
+  // -- which searches for a marker literally containing that padded
+  // prefix and finds none, so the CLI refused a body the renderer had
+  // already produced canonically. Not a safety gap (the round-trip
+  // assertion still fails CLOSED either way, never posting the
+  // mismatched-prefix body), but a needless false rejection this
+  // normalization also fixes.
   if ((AUTHORING_MARKER_TYPES as readonly string[]).includes(args.type)) {
     for (const field of [
       'mode',
@@ -1856,6 +1891,7 @@ if (import.meta.main) {
       'issue',
       'body-sha256',
       'snapshot-sha256',
+      'marker-prefix',
     ]) {
       if (typeof args.fields[field] === 'string') {
         args.fields[field] = args.fields[field].trim();
@@ -2001,18 +2037,28 @@ if (import.meta.main) {
   }
 
   // #2931 (Codex/Copilot review on PR #2937, critical): resolve the actual
-  // posting destination EARLY for both authoring types -- BEFORE dry-run
-  // returns below, mirroring --from-pr's own eager owner/repo resolution
-  // above -- so the destination-equality check right after this runs the
-  // same way in dry-run and --apply (a dry-run preview shows the same
-  // failure --apply would hit). Stored back into args.owner/args.repo so
-  // the later --apply resolution further below (`args.owner && args.repo
-  // ? null : resolveCurrentGithubRepository()`) sees them already
-  // populated and skips a duplicate `gh repo view` call.
-  if (
+  // posting destination for both authoring types EARLY -- BEFORE dry-run
+  // returns below -- so the destination-equality check right after this
+  // block runs in dry-run too, WHEN the destination is knowable without a
+  // network call. `authoringDestinationKnowable` is deliberately false for
+  // a PLAIN dry-run (no --apply) with --owner/--repo both omitted: eagerly
+  // resolving via `gh repo view` in that case would break this file's own
+  // documented offline dry-run guarantee
+  // (docs/harness-orchestrated-execution-investigation.md's "Live state
+  // required?" table; Copilot review on PR #2937, round 7 -- a real
+  // regression this eager resolution introduced, since every other
+  // marker type's plain dry-run has always stayed network-free). The
+  // destination-equality check for that specific case simply does not run
+  // until --apply actually needs the destination -- exactly how every
+  // OTHER marker type's dry-run already behaved before this issue. Stored
+  // back into args.owner/args.repo so the later --apply resolution
+  // further below (`args.owner && args.repo ? null :
+  // resolveCurrentGithubRepository()`) sees them already populated and
+  // skips a duplicate `gh repo view` call.
+  const authoringDestinationKnowable =
     (AUTHORING_MARKER_TYPES as readonly string[]).includes(args.type) &&
-    !(args.owner && args.repo)
-  ) {
+    (args.apply || Boolean(args.owner && args.repo));
+  if (authoringDestinationKnowable && !(args.owner && args.repo)) {
     try {
       const currentRepo = resolveCurrentGithubRepository();
       args.owner = args.owner || currentRepo?.owner || '';
@@ -2034,8 +2080,13 @@ if (import.meta.main) {
   // issues' authoring state -- exactly the class of defect #2931 exists to
   // close. `--target`'s issue/pr kind is deliberately NOT part of this
   // comparison (descriptive-only everywhere else in this file; both kinds
-  // POST to the same /issues/<n>/comments endpoint).
+  // POST to the same /issues/<n>/comments endpoint). Gated on
+  // `authoringDestinationKnowable` -- see that constant's own comment --
+  // so a plain dry-run with no --owner/--repo defers this check to
+  // --apply instead of forcing a `gh repo view` call it would otherwise
+  // never need.
   if (
+    authoringDestinationKnowable &&
     markerTargetRef &&
     !isPostingDestination(markerTargetRef, args.owner, args.repo, args.number)
   ) {
@@ -2045,6 +2096,7 @@ if (import.meta.main) {
     process.exit(1);
   }
   if (
+    authoringDestinationKnowable &&
     journalRef &&
     !isPostingDestination(journalRef, args.owner, args.repo, args.number)
   ) {
@@ -2204,8 +2256,17 @@ if (import.meta.main) {
   // every current and future authoring field), assert the STRUCTURAL
   // invariant directly: the body this command is about to post must
   // parse back out, byte-exact, as the type it claims to be. Pure and
-  // network-free, so it runs in dry-run too -- a bad body is refused
-  // before any fetch or POST, not just before the POST.
+  // network-free itself, so it runs in dry-run too -- but it is NOT the
+  // first network-touching thing this command may have already done
+  // (Copilot review on PR #2937, round 7): authoring-owner's own
+  // body-sha256 derive/verify fetch, and the destination-equality
+  // resolution above (when knowable, see authoringDestinationKnowable),
+  // both run earlier and are unaffected by a grammar-breaking field this
+  // assertion alone would refuse. This guard's real guarantee is
+  // narrower and still worth stating precisely: a body that fails this
+  // check is refused before the POST and before the dry-run envelope
+  // ever prints it, not that no earlier step in this command could have
+  // already made a network call.
   if (
     (args.type === 'authoring-owner' ||
       args.type === 'authoring-publication-intent') &&

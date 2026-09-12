@@ -3498,6 +3498,36 @@ test('validateAuthoringOwnerSupersedesModeCoupling rejects every contract.md-inv
   }
 });
 
+test('validateAuthoringOwnerSupersedesModeCoupling rejects --marker-owner none for every mode that needs a real owner token (#2931)', () => {
+  // Codex review on PR #2937, round 7: a bare `supersedes !== markerOwner`
+  // equality check trivially passes when both are literally 'none' --
+  // this must be rejected independently of that equality check, for every
+  // mode contract.md gives a real owner-token requirement to (i.e. every
+  // recognized mode except the ones this function does not otherwise
+  // constrain via marker-owner at all -- there are none: acquire/
+  // bootstrap/resume all mint a real token, and the four self-superseding
+  // modes all retain one).
+  for (const mode of [
+    'acquire',
+    'bootstrap',
+    'resume',
+    'release',
+    'heartbeat',
+    'release-guard',
+    'release-complete',
+  ]) {
+    assert.match(
+      validateAuthoringOwnerSupersedesModeCoupling({
+        mode,
+        supersedes: 'none',
+        'marker-owner': 'none',
+      }) ?? '',
+      /--marker-owner must be a real opaque per-target owner token, not the none sentinel/,
+      `--mode ${mode} should reject --marker-owner none`,
+    );
+  }
+});
+
 test('validateAuthoringOwnerSupersedesModeCoupling returns null when mode / supersedes / marker-owner is absent (left to REQUIRED_FIELDS_BY_TYPE)', () => {
   assert.equal(
     validateAuthoringOwnerSupersedesModeCoupling({
@@ -3725,6 +3755,52 @@ process.exit(1);
 `,
   );
 }
+
+test('authoring-owner plain dry-run stays network-free when --owner/--repo are omitted (#2931)', () => {
+  // Copilot review on PR #2937, round 7: an earlier revision eagerly
+  // resolved the posting destination via `gh repo view` for the
+  // destination-equality check, even in a PLAIN dry-run (no --apply, no
+  // --from-pr) -- breaking this file's own documented offline dry-run
+  // guarantee (docs/harness-orchestrated-execution-investigation.md's
+  // "Live state required?" table), which every OTHER marker type's dry-run
+  // has always honored. PATH='' proves no `gh` call happens: a real
+  // `gh repo view` attempt would fail with ENOENT and a non-zero exit.
+  const output = execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'authoring-owner',
+      '--target',
+      'issue',
+      '42',
+      ...Object.entries(AUTHORING_OWNER_FULL_FIELDS).flatMap(
+        ([flag, value]) => [`--${flag}`, value],
+      ),
+    ],
+    { encoding: 'utf8', env: { ...process.env, PATH: '' } },
+  );
+  assert.equal(JSON.parse(output).mode, 'dry-run');
+});
+
+test('authoring-publication-intent plain dry-run stays network-free when --owner/--repo are omitted (#2931)', () => {
+  const output = execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'authoring-publication-intent',
+      '--target',
+      'issue',
+      '42',
+      ...Object.entries(AUTHORING_PUBLICATION_INTENT_FULL_FIELDS).flatMap(
+        ([flag, value]) => [`--${flag}`, value],
+      ),
+    ],
+    { encoding: 'utf8', env: { ...process.env, PATH: '' } },
+  );
+  assert.equal(JSON.parse(output).mode, 'dry-run');
+});
 
 test('authoring-owner --body-sha256 none skips the live fetch entirely (anchor-only release-guard convention, #2931)', () => {
   const restore = stubGhNeverCalled();
@@ -4178,6 +4254,58 @@ test('authoring-owner CLI rejects --mode release/heartbeat/release-complete with
       `--mode ${mode} should reject a foreign --supersedes`,
     );
   }
+});
+
+test('authoring-owner CLI rejects --marker-owner none paired with --supersedes none for self-superseding modes, before any gh call (#2931)', () => {
+  // Codex review on PR #2937, round 7: a bare equality check
+  // (supersedes !== markerOwner) trivially PASSES when BOTH are the
+  // literal string 'none' -- contract.md explicitly forbids
+  // supersedes=none for release (and, by the same "retain the current
+  // owner token" wording, for heartbeat/release-guard/release-complete
+  // too), but the append-only marker would still post successfully with
+  // no real owner token at all.
+  for (const mode of [
+    'release',
+    'heartbeat',
+    'release-guard',
+    'release-complete',
+  ]) {
+    const anchorOnly = mode === 'release-guard' || mode === 'release-complete';
+    const stderr = runCliExpectingFailure(
+      authoringArgv('authoring-owner', {
+        ...AUTHORING_OWNER_FULL_FIELDS,
+        mode,
+        'body-sha256': anchorOnly ? 'none' : 'a'.repeat(64),
+        'snapshot-sha256':
+          mode === 'release-complete' ? 'a'.repeat(64) : 'none',
+        'marker-owner': 'none',
+        supersedes: 'none',
+      }),
+    );
+    assert.match(
+      stderr,
+      /--marker-owner must be a real opaque per-target owner token, not the none sentinel/,
+      `--mode ${mode} should reject --marker-owner none`,
+    );
+  }
+});
+
+test('authoring-owner CLI accepts a padded --marker-prefix (trimmed before the round-trip assertion, #2931)', () => {
+  // Copilot review on PR #2937, round 7: both renderers trim
+  // --marker-prefix internally, but this file's own terminal round-trip
+  // assertion (round 6) was comparing against the UNTRIMMED prefix,
+  // causing it to reject a body the renderer had already produced
+  // canonically. Fail-SAFE (never posted the wrong body) but a needless
+  // false rejection -- this proves the fix accepts the padded input.
+  const output = execFileSync(
+    process.execPath,
+    authoringArgv('authoring-owner', {
+      ...AUTHORING_OWNER_FULL_FIELDS,
+      'marker-prefix': ' custom-prefix ',
+    }),
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  assert.match(JSON.parse(output).body, /^<!-- custom-prefix-authoring-owner:/);
 });
 
 test('authoring-owner CLI still rejects a whitespace-padded --mode that the renderer would trim and accept as canonical (#2931)', () => {
