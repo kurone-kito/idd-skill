@@ -296,7 +296,12 @@ Wrap body lines at **72 characters**.
   though it is ordinary prose deep in the body, and emits a spurious
   `footer-leading-blank` warning — a **warning** under this
   repository's current `.commitlintrc.yml`, not a blocking failure,
-  but still worth avoiding. Reword instead: lead with an article or
+  but still worth avoiding. This does not conflict with the `Why:` /
+  `Context:` / `Change:` labels above: each one only ever opens a
+  fresh, blank-line-separated paragraph, so the blank line already
+  required before it also satisfies `footer-leading-blank`; the trap
+  here is the same shape appearing **without** a preceding blank
+  line, buried mid-paragraph. Reword instead: lead with an article or
   an extra word (for example "the bullet: ..." or "in step 1: ...")
   so the line no longer opens with a bare token before the colon.
   Observed live against this repository's own `.commitlintrc.yml` in
