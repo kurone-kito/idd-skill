@@ -27,6 +27,7 @@ import {
   runMinimize,
 } from './minimize-superseded-markers.mjs';
 import {
+  matchCanonicalAuthoringMarkerFamily,
   parseCopilotUnavailableComment,
   parseReviewAckComment,
   renderActivationNonceMarker,
@@ -1989,6 +1990,34 @@ if (import.meta.main) {
     process.stderr.write(`${error.message}\n`);
     process.exit(1);
     throw error;
+  }
+  // #2931 (Codex review on PR #2937, round 6): a terminal, structural
+  // guard against the #2900/#2926/#2927 incident class -- ANY authoring
+  // field value that breaks the marker's own `key=value; key=value; ...`
+  // grammar (a literal `;`, for instance, in an opaque --set/--session/
+  // --token/--marker-target/--anchor value) can still pass every
+  // per-field check above (none of them scan for grammar-breaking
+  // characters) yet produce a body that fails to round-trip through
+  // matchCanonicalAuthoringMarkerFamily -- exactly the historical
+  // non-canonical-body defect this issue exists to close, just reached
+  // through a different field than #2925's body-sha256. Rather than
+  // enumerate and re-validate every individual field against the marker
+  // grammar (an incremental patch this file would need to repeat for
+  // every current and future authoring field), assert the STRUCTURAL
+  // invariant directly: the body this command is about to post must
+  // parse back out, byte-exact, as the type it claims to be. Pure and
+  // network-free, so it runs in dry-run too -- a bad body is refused
+  // before any fetch or POST, not just before the POST.
+  if (
+    (args.type === 'authoring-owner' ||
+      args.type === 'authoring-publication-intent') &&
+    matchCanonicalAuthoringMarkerFamily(body, args.fields['marker-prefix']) !==
+      args.type
+  ) {
+    process.stderr.write(
+      `refusing to post: the rendered ${args.type} body does not round-trip through matchCanonicalAuthoringMarkerFamily as canonical -- one or more field values (for example a literal ';', a newline, or an HTML comment terminator) would break the marker's own field-delimiter grammar, leaving a posted record that replay and the hide-on-supersede sweep could never recognize\n`,
+    );
+    process.exit(1);
   }
   const number = args.number;
   if (!args.apply) {

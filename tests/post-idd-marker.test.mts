@@ -3217,6 +3217,41 @@ test('authoring-owner / authoring-publication-intent bodies round-trip through m
   );
 });
 
+test('authoring-owner CLI refuses a --session value that breaks the marker grammar, before any gh call (#2931)', () => {
+  // Codex review on PR #2937, round 6: a literal `;` inside any opaque
+  // field (set/session/token, or authoring-publication-intent's opaque
+  // --marker-target/--anchor) passes every per-field check -- none of
+  // them scan for grammar-breaking characters -- yet the rendered body
+  // fails to round-trip through matchCanonicalAuthoringMarkerFamily,
+  // reproducing the #2900/#2926/#2927 non-canonical-body incident class
+  // through a different field than #2925's body-sha256. The terminal
+  // round-trip assertion this file now runs after buildMarkerBody must
+  // catch this regardless of which field carries the delimiter.
+  const stderr = runCliExpectingFailure(
+    authoringArgv('authoring-owner', {
+      ...AUTHORING_OWNER_FULL_FIELDS,
+      session: 'a;b',
+    }),
+  );
+  assert.match(
+    stderr,
+    /refusing to post: the rendered authoring-owner body does not round-trip through matchCanonicalAuthoringMarkerFamily as canonical/,
+  );
+});
+
+test('authoring-publication-intent CLI refuses a --marker-target value that breaks the marker grammar, before any gh call (#2931)', () => {
+  const stderr = runCliExpectingFailure(
+    authoringArgv('authoring-publication-intent', {
+      ...AUTHORING_PUBLICATION_INTENT_FULL_FIELDS,
+      'marker-target': 'target;x=y',
+    }),
+  );
+  assert.match(
+    stderr,
+    /refusing to post: the rendered authoring-publication-intent body does not round-trip through matchCanonicalAuthoringMarkerFamily as canonical/,
+  );
+});
+
 test('buildMarkerBody throws on an invalid authoring-owner field set (renderer validation, #2931)', () => {
   assert.throws(
     () => buildMarkerBody('authoring-owner', { 'marker-target': 'o/r#42' }),
