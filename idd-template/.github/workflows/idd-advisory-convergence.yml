@@ -411,15 +411,31 @@ jobs:
     runs-on: ${{ inputs.runner || vars.CI_RUNNER_LABEL || 'ubuntu-slim' }}
     timeout-minutes: 10
     # Narrower than the verdict job's read-only posture above: this job
-    # additionally needs `pull-requests: read` (to diff and fetch the PR)
-    # and `issues: write` (to post the marker, and to read the linked
-    # issue's own comment stream to resolve its active claim -- the
-    # PR-conversation-comment endpoint and the linked-issue-comment
-    # endpoint are both gated under the Issues permission category, same
-    # as the verdict job's own header comment already notes for reads).
+    # needs `pull-requests: write` (to diff/fetch the PR, and -- this is
+    # the load-bearing grant -- to actually post the marker below;
+    # kurone-kito/idd-skill#2951: with only `pull-requests: read` +
+    # `issues: write`, as this block originally shipped, the dogfooded
+    # copy of this same job in the upstream source repository's
+    # `.github/workflows/idd-advisory-convergence.yml` failed the marker
+    # POST to `issues/<PR_NUMBER>/comments` with HTTP 403 "Resource not
+    # accessible by integration" on 11/11 real invocations across 3 PRs,
+    # confirmed again by a live A/B test dispatched against that job:
+    # changing only `pull-requests: read` to `write` turned a
+    # reproduced 403 into an immediate success posting (then deleting) a
+    # throwaway comment on a real PR. GitHub's own docs list this
+    # endpoint under the Issues permission category alone
+    # (https://docs.github.com/rest/issues/comments#create-an-issue-comment),
+    # but that does not hold in practice for a `pull_request_target`
+    # `GITHUB_TOKEN` posting to a PR-numbered target -- do not narrow
+    # this back to `read` without re-running an equivalent live test) and
+    # `issues: write` (to post the marker, and to read the linked issue's
+    # own comment stream to resolve its active claim -- that second call
+    # targets a real issue, not a PR, so it only ever needed
+    # `issues: read`; this job keeps `issues: write` unchanged because the
+    # marker POST above still needs it too).
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: write
     steps:
       - uses: actions/checkout@v4

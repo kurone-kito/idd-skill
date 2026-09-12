@@ -476,15 +476,37 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 10
     # Narrower than the verdict job's read-only posture above: this job
-    # additionally needs `pull-requests: read` (to diff and fetch the PR)
-    # and `issues: write` (to post the marker, and to read the linked
-    # issue's own comment stream to resolve its active claim -- the
-    # PR-conversation-comment endpoint and the linked-issue-comment
-    # endpoint are both gated under the Issues permission category, same
-    # as the verdict job's own header comment already notes for reads).
+    # needs `pull-requests: write` (to diff/fetch the PR, and -- this is
+    # the load-bearing grant -- to actually post the marker below;
+    # kurone-kito/idd-skill#2951: with only `pull-requests: read` +
+    # `issues: write`, as this block originally shipped, the marker POST
+    # to `issues/<PR_NUMBER>/comments` failed with HTTP 403 "Resource not
+    # accessible by integration" on 11/11 real invocations across 3 PRs.
+    # `.github/workflows/post-merge-cleanup.yml` posts to the same
+    # `issues/<PR_NUMBER>/comments` shape successfully and grants both
+    # `issues: write` and `pull-requests: write`, but it posts via `gh pr
+    # comment` (a different, higher-level code path) rather than this
+    # job's direct `gh api ... --method POST`, so that comparison alone
+    # is circumstantial, not proof. The actual proof is a live A/B test
+    # dispatched against this exact job on this branch before this fix
+    # merged: run 34697203153 reproduced the 403 under the then-current
+    # permissions (`pull-requests: read` instead of `write`); run
+    # 34697250102, identical in every other respect, succeeded
+    # immediately after changing only `pull-requests: read` to `write`,
+    # posting (then deleting) a throwaway comment on PR #2949. GitHub's
+    # own docs list this endpoint under the Issues permission category
+    # alone (https://docs.github.com/rest/issues/comments#create-an-issue-comment),
+    # but that does not hold in practice for a `pull_request_target`
+    # `GITHUB_TOKEN` posting to a PR-numbered target -- do not narrow this
+    # back to `read` without re-running the same live test) and
+    # `issues: write` (to post the marker, and to read the linked issue's
+    # own comment stream to resolve its active claim -- that second call
+    # targets a real issue, not a PR, so it only ever needed
+    # `issues: read`; this job keeps `issues: write` unchanged because the
+    # marker POST above still needs it too).
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
