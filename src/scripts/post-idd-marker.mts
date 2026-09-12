@@ -698,9 +698,16 @@ const AUTHORING_OWNER_NONE_BODY_DIGEST_MODES = new Set([
 export function validateAuthoringOwnerModeDigestCoupling(
   fields: MarkerFields,
 ): string | null {
-  const mode = fields.mode;
-  const bodySha256 = fields['body-sha256'];
-  const snapshotSha256 = fields['snapshot-sha256'];
+  // #2931 (Codex review on PR #2937): trim the same way this file's own
+  // CLI-level normalization step and marker-helpers.mts's
+  // normalizeNonWhitespaceToken do, so a padded value like `--mode
+  // ' acquire '` -- which the renderer trims and happily accepts as
+  // canonical `mode=acquire` -- cannot silently bypass this Set-membership
+  // check by matching nothing. Defensive here too (not just at the CLI
+  // entry point) since this function is exported and directly unit-tested.
+  const mode = fields.mode?.trim();
+  const bodySha256 = fields['body-sha256']?.trim();
+  const snapshotSha256 = fields['snapshot-sha256']?.trim();
   if (
     AUTHORING_OWNER_REAL_BODY_DIGEST_MODES.has(mode) &&
     bodySha256 === 'none'
@@ -801,9 +808,12 @@ const AUTHORING_OWNER_SELF_SUPERSEDES_MODES = new Set([
 export function validateAuthoringOwnerSupersedesModeCoupling(
   fields: MarkerFields,
 ): string | null {
-  const mode = fields.mode;
-  const supersedes = fields.supersedes;
-  const markerOwner = fields['marker-owner'];
+  // #2931 (Codex review on PR #2937): trim for the same reason
+  // validateAuthoringOwnerModeDigestCoupling does -- see that function's
+  // own comment on this same pattern.
+  const mode = fields.mode?.trim();
+  const supersedes = fields.supersedes?.trim();
+  const markerOwner = fields['marker-owner']?.trim();
   if (supersedes === undefined || markerOwner === undefined) {
     return null;
   }
@@ -841,6 +851,60 @@ export function validateAuthoringOwnerSupersedesModeCoupling(
     return (
       `--mode ${mode} retains the current owner token, so --supersedes ` +
       'must equal --marker-owner exactly ' +
+      '(skills/issue-authoring/references/contract.md)'
+    );
+  }
+  return null;
+}
+
+/**
+ * `authoring-publication-intent` `--state` values that require a REAL
+ * `--issue` reference -- `none` is only ever valid at `state=pending`
+ * (contract.md: "Append `state=pending; issue=none` before creation, then
+ * append the returned identity while it remains `pending`, append `member`
+ * only after the owner marker is verified"). Mirrors
+ * `audit-authored-issue.mts`'s own `AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER`
+ * set exactly, since that file's replay logic already enforces this same
+ * rule on read -- a record this CLI lets through with `issue=none` at one
+ * of these three states is durable evidence replay will always reject
+ * (kurone-kito/idd-skill#2931, Codex review on PR #2937).
+ */
+const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
+  'member',
+  'cleanup',
+  'abandoned',
+]);
+
+/**
+ * Validate contract.md's `--state` <-> `--issue` coupling for
+ * `authoring-publication-intent` (kurone-kito/idd-skill#2931, Codex review
+ * on PR #2937). Enforced here for the same append-only-comment reason
+ * {@link validateAuthoringOwnerModeDigestCoupling} documents: a
+ * `member`/`cleanup`/`abandoned` record posted with `issue=none` is a
+ * permanent, uncorrectable defect that `audit-authored-issue.mts`'s replay
+ * will always reject, even though this command would otherwise report
+ * success.
+ *
+ * Returns `null` when `state` or `issue` is absent (left to
+ * `REQUIRED_FIELDS_BY_TYPE` to report by name) or the fields are already
+ * coupling-consistent (including every `state=pending` case, which may
+ * freely carry `issue=none` OR a real reference).
+ */
+export function validateAuthoringPublicationIntentStateIssueCoupling(
+  fields: MarkerFields,
+): string | null {
+  const state = fields.state?.trim();
+  const issue = fields.issue?.trim();
+  if (state === undefined || issue === undefined) {
+    return null;
+  }
+  if (
+    AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER.has(state) &&
+    issue.toLowerCase() === 'none'
+  ) {
+    return (
+      `--state ${state} requires a real --issue reference -- issue=none ` +
+      'is only valid at state=pending ' +
       '(skills/issue-authoring/references/contract.md)'
     );
   }
@@ -1705,6 +1769,35 @@ if (import.meta.main) {
         : DEFAULT_AUTHORING_MARKER_PREFIX;
   }
 
+  // #2931 (Codex review on PR #2937): normalize every authoring-type field
+  // this file's own cross-field coupling checks compare, the same way
+  // marker-helpers.mts's normalizeNonWhitespaceToken does (trim) -- BEFORE
+  // any of those checks run. Both renderers already trim internally, so a
+  // padded value like `--mode ' acquire '` still renders as canonical
+  // `mode=acquire` regardless of what this file does; without this step,
+  // this file's own Set-membership/equality comparisons see the UNTRIMMED
+  // string, match nothing, and silently skip every coupling check below
+  // while the renderer still emits the canonical (and cross-field-invalid)
+  // marker -- a full bypass of every guard this issue added. Mutates
+  // args.fields in place so the checks below AND the final buildMarkerBody
+  // call see the identical, already-trimmed value; harmless for the final
+  // rendered body either way, since the renderer would trim these same
+  // fields itself.
+  if ((AUTHORING_MARKER_TYPES as readonly string[]).includes(args.type)) {
+    for (const field of [
+      'mode',
+      'marker-owner',
+      'supersedes',
+      'actor',
+      'state',
+      'issue',
+    ]) {
+      if (typeof args.fields[field] === 'string') {
+        args.fields[field] = args.fields[field].trim();
+      }
+    }
+  }
+
   // #2931: authoring-owner's --marker-target / --anchor are genuine issue
   // references (unlike authoring-publication-intent's opaque target=/
   // anchor=, see REQUIRED_FIELDS_BY_TYPE's doc comment), so their
@@ -1741,11 +1834,15 @@ if (import.meta.main) {
       }
     }
     const anchor = args.fields.anchor;
-    if (anchor && !parseIssueReference(anchor)) {
-      process.stderr.write(
-        `invalid --anchor value (expected <owner>/<repo>#<number>): ${anchor}\n`,
-      );
-      process.exit(1);
+    let anchorRef: ParsedIssueReference | null = null;
+    if (anchor) {
+      anchorRef = parseIssueReference(anchor);
+      if (!anchorRef) {
+        process.stderr.write(
+          `invalid --anchor value (expected <owner>/<repo>#<number>): ${anchor}\n`,
+        );
+        process.exit(1);
+      }
     }
     // #2931 (C1 review finding): reject a --mode/--body-sha256/
     // --snapshot-sha256 combination contract.md's mode table forbids
@@ -1768,6 +1865,31 @@ if (import.meta.main) {
     );
     if (supersedesError) {
       process.stderr.write(`${supersedesError}\n`);
+      process.exit(1);
+    }
+    // #2931 (Codex review on PR #2937): release-guard / release-complete
+    // are "valid only on the set anchor" (contract.md), and "the anchor's
+    // own marker uses its target as the anchor" -- so for these two modes
+    // specifically, --marker-target and --anchor must name the SAME issue.
+    // Without this check, e.g. `--marker-target o/r#2 --anchor o/r#1`
+    // passes both fields' own format checks and both coupling validators
+    // above, yet posts a release-guard/release-complete record to issue 2
+    // that issue 1 (the actual set anchor) never sees -- a permanently
+    // invalid append-only marker.
+    if (
+      AUTHORING_OWNER_NONE_BODY_DIGEST_MODES.has(args.fields.mode) &&
+      markerTargetRef &&
+      anchorRef &&
+      !isPostingDestination(
+        anchorRef,
+        markerTargetRef.owner,
+        markerTargetRef.repo,
+        markerTargetRef.number,
+      )
+    ) {
+      process.stderr.write(
+        `--mode ${args.fields.mode} is valid only on the set anchor, so --anchor ${anchor} must name the same issue as --marker-target ${markerTarget}\n`,
+      );
       process.exit(1);
     }
   }
@@ -1798,6 +1920,17 @@ if (import.meta.main) {
       process.stderr.write(
         `invalid --issue value (expected <owner>/<repo>#<number> or none): ${issue}\n`,
       );
+      process.exit(1);
+    }
+    // #2931 (Codex review on PR #2937): issue=none is only ever valid at
+    // state=pending (contract.md; mirrored by audit-authored-issue.mts's
+    // replay logic) -- a member/cleanup/abandoned record posted with
+    // issue=none reports success here but is durable evidence replay will
+    // always reject.
+    const stateIssueError =
+      validateAuthoringPublicationIntentStateIssueCoupling(args.fields);
+    if (stateIssueError) {
+      process.stderr.write(`${stateIssueError}\n`);
       process.exit(1);
     }
   }
@@ -1854,6 +1987,36 @@ if (import.meta.main) {
       `--journal ${args.fields.journal} does not match the posting destination ${args.owner}/${args.repo}#${args.number}\n`,
     );
     process.exit(1);
+  }
+
+  // #2931 (Codex review on PR #2937): contract.md requires "actor to equal
+  // the API author" on every replay of an authoring-publication-intent
+  // record, so a --actor that does not match the identity actually making
+  // this POST produces a record replay will always reject even though this
+  // command reports success. Checked only at --apply (dry-run has no real
+  // POST author to compare against), mirroring the identical
+  // --actor/viewerLogin fail-closed pattern already used by
+  // local-validation-evidence.mts / external-check-waiver.mts /
+  // provider-outage-declaration.mts. Fails OPEN (like that same precedent)
+  // when the authenticated login itself cannot be resolved, rather than
+  // introducing a stricter fail-closed variant those established call
+  // sites do not use.
+  if (args.type === 'authoring-publication-intent' && args.apply) {
+    const { viewerLogin } = createGithubProviderAdapter(
+      args.owner,
+      args.repo,
+    ).resolveViewerLoginSafe();
+    const actor = args.fields.actor;
+    if (
+      actor &&
+      viewerLogin &&
+      actor.toLowerCase() !== viewerLogin.toLowerCase()
+    ) {
+      process.stderr.write(
+        `--actor ${actor} does not match the authenticated user ${viewerLogin} actually making this POST\n`,
+      );
+      process.exit(1);
+    }
   }
 
   // #2931: derive or verify authoring-owner's body-sha256 from a live,

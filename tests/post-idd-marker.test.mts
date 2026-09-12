@@ -21,6 +21,7 @@ import {
   parseIssueReference,
   validateAuthoringOwnerModeDigestCoupling,
   validateAuthoringOwnerSupersedesModeCoupling,
+  validateAuthoringPublicationIntentStateIssueCoupling,
   watermarkFieldsFromSnapshot,
 } from '../src/scripts/post-idd-marker.mts';
 import {
@@ -3498,6 +3499,58 @@ test('validateAuthoringOwnerSupersedesModeCoupling returns null when mode / supe
   );
 });
 
+test('validateAuthoringPublicationIntentStateIssueCoupling accepts every contract.md-valid state/issue combination (#2931)', () => {
+  assert.equal(
+    validateAuthoringPublicationIntentStateIssueCoupling({
+      state: 'pending',
+      issue: 'none',
+    }),
+    null,
+    'pending + issue none (pre-create) should be valid',
+  );
+  assert.equal(
+    validateAuthoringPublicationIntentStateIssueCoupling({
+      state: 'pending',
+      issue: 'o/r#42',
+    }),
+    null,
+    'pending + a real issue (post-create, not yet member) should be valid',
+  );
+  for (const state of ['member', 'cleanup', 'abandoned']) {
+    assert.equal(
+      validateAuthoringPublicationIntentStateIssueCoupling({
+        state,
+        issue: 'o/r#42',
+      }),
+      null,
+      `${state} + a real issue should be valid`,
+    );
+  }
+});
+
+test('validateAuthoringPublicationIntentStateIssueCoupling rejects issue=none at member/cleanup/abandoned (#2931)', () => {
+  for (const state of ['member', 'cleanup', 'abandoned']) {
+    assert.match(
+      validateAuthoringPublicationIntentStateIssueCoupling({
+        state,
+        issue: 'none',
+      }) ?? '',
+      new RegExp(`--state ${state} requires a real --issue reference`),
+    );
+  }
+});
+
+test('validateAuthoringPublicationIntentStateIssueCoupling returns null when state / issue is absent (left to REQUIRED_FIELDS_BY_TYPE)', () => {
+  assert.equal(
+    validateAuthoringPublicationIntentStateIssueCoupling({ issue: 'none' }),
+    null,
+  );
+  assert.equal(
+    validateAuthoringPublicationIntentStateIssueCoupling({ state: 'member' }),
+    null,
+  );
+});
+
 test('an authoring-owner envelope validates against the schema (#2931)', () => {
   const envelope = {
     mode: 'dry-run',
@@ -3861,7 +3914,14 @@ test('authoring-owner CLI refuses a --marker-target that does not match the post
   const stderr = runCliExpectingFailure(
     authoringArgv(
       'authoring-owner',
-      { ...AUTHORING_OWNER_FULL_FIELDS, 'marker-target': 'o/r#99' },
+      {
+        ...AUTHORING_OWNER_FULL_FIELDS,
+        'marker-target': 'o/r#99',
+        // anchor must match marker-target here too, or release-guard's own
+        // anchor-mode coupling check (#2931 round 3) fires first and this
+        // test would no longer isolate the destination-equality check.
+        anchor: 'o/r#99',
+      },
       { number: 42, owner: 'o', repo: 'r' },
     ),
   );
@@ -3871,25 +3931,57 @@ test('authoring-owner CLI refuses a --marker-target that does not match the post
   );
 });
 
-test('authoring-owner CLI tolerates a mismatching --anchor (the set anchor legitimately differs from the posting destination, #2931)', () => {
+test('authoring-owner CLI tolerates a mismatching --anchor for a non-anchor-only mode (the set anchor legitimately differs from the posting destination, #2931)', () => {
   // contract.md: "the anchor's own marker uses its target as the anchor,
   // and every other marker in the set repeats the same value" -- a
   // non-anchor member of a multi-target set legitimately posts --anchor
   // naming a DIFFERENT issue (the set anchor) than its own --marker-target.
-  const restore = stubGhNeverCalled();
+  // mode: 'acquire' (not release-guard/release-complete) -- #2931 round 3
+  // requires target === anchor specifically for the two anchor-only modes,
+  // since contract.md says THOSE are "valid only on the set anchor"; every
+  // other mode has no such constraint.
+  const LIVE_BODY = 'Fresh live body for #42.';
+  const correctDigest = createHash('sha256')
+    .update(LIVE_BODY, 'utf8')
+    .digest('hex');
+  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY);
   try {
+    const { 'body-sha256': _omit, ...rest } = AUTHORING_OWNER_FULL_FIELDS;
     const output = execFileSync(
       process.execPath,
       authoringArgv('authoring-owner', {
-        ...AUTHORING_OWNER_FULL_FIELDS,
-        mode: 'release-guard',
+        ...rest,
+        mode: 'acquire',
+        supersedes: 'none',
         anchor: 'o/r#7',
       }),
       { cwd: REPO_ROOT, encoding: 'utf8' },
     );
-    assert.match(JSON.parse(output).body, /anchor=o\/r#7;/);
+    const body = JSON.parse(output).body as string;
+    assert.match(body, /anchor=o\/r#7;/);
+    assert.match(body, new RegExp(`body-sha256=${correctDigest};`));
   } finally {
     restore();
+  }
+});
+
+test('authoring-owner CLI refuses --mode release-guard/release-complete when --anchor does not match --marker-target, before any gh call (#2931)', () => {
+  for (const mode of ['release-guard', 'release-complete']) {
+    const stderr = runCliExpectingFailure(
+      authoringArgv('authoring-owner', {
+        ...AUTHORING_OWNER_FULL_FIELDS,
+        mode,
+        'body-sha256': 'none',
+        'snapshot-sha256':
+          mode === 'release-complete' ? 'a'.repeat(64) : 'none',
+        anchor: 'o/r#7',
+      }),
+    );
+    assert.match(
+      stderr,
+      /is valid only on the set anchor, so --anchor o\/r#7 must name the same issue as --marker-target o\/r#42/,
+      `--mode ${mode} should reject a mismatching --anchor`,
+    );
   }
 });
 
@@ -4027,6 +4119,28 @@ test('authoring-owner CLI rejects --mode release/heartbeat/release-complete with
       `--mode ${mode} should reject a foreign --supersedes`,
     );
   }
+});
+
+test('authoring-owner CLI still rejects a whitespace-padded --mode that the renderer would trim and accept as canonical (#2931)', () => {
+  // Codex review on PR #2937 (round 3): this file's own coupling
+  // validators originally did `Set.has(fields.mode)` on the RAW string,
+  // while renderAuthoringOwnerMarker trims internally
+  // (normalizeNonWhitespaceToken) -- so `--mode ' acquire '` matched
+  // neither AUTHORING_OWNER_REAL_BODY_DIGEST_MODES nor
+  // AUTHORING_OWNER_NONE_BODY_DIGEST_MODES, silently skipping every
+  // coupling check below, while the renderer still emitted canonical
+  // `mode=acquire` -- a full bypass of every guard this issue added. This
+  // reproduces the exact invalid combination (acquire + body-sha256 none)
+  // the un-padded mode-digest coupling test above already covers, but
+  // through the padded spelling that used to slip past it.
+  const stderr = runCliExpectingFailure(
+    authoringArgv('authoring-owner', {
+      ...AUTHORING_OWNER_FULL_FIELDS,
+      mode: ' acquire ',
+      supersedes: 'none',
+    }),
+  );
+  assert.match(stderr, /--mode acquire requires a real --body-sha256/);
 });
 
 test('kurone-kito/idd-skill#2925 regression: authoring-owner body-sha256 derivation avoids the exact shell-redirect trailing-newline bug', () => {
@@ -4304,6 +4418,34 @@ test('authoring-publication-intent CLI accepts a real --issue reference distinct
   assert.match(JSON.parse(output).body, /issue=o\/r#999;/);
 });
 
+test('authoring-publication-intent CLI refuses issue=none at member/cleanup/abandoned, before any gh call (#2931)', () => {
+  for (const state of ['member', 'cleanup', 'abandoned']) {
+    const stderr = runCliExpectingFailure(
+      authoringArgv('authoring-publication-intent', {
+        ...AUTHORING_PUBLICATION_INTENT_FULL_FIELDS,
+        state,
+      }),
+    );
+    assert.match(
+      stderr,
+      new RegExp(`--state ${state} requires a real --issue reference`),
+      `state=${state} + issue=none should be rejected`,
+    );
+  }
+});
+
+test('authoring-publication-intent CLI accepts issue=none at state=pending (pre-create record, #2931)', () => {
+  const output = execFileSync(
+    process.execPath,
+    authoringArgv(
+      'authoring-publication-intent',
+      AUTHORING_PUBLICATION_INTENT_FULL_FIELDS,
+    ),
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  assert.match(JSON.parse(output).body, /issue=none; actor=\S+; state=pending/);
+});
+
 test('authoring-publication-intent CLI refuses a --journal that does not match the posting destination, before any gh call (#2931)', () => {
   // Critical Codex/Copilot finding on PR #2937 (same class as
   // authoring-owner's --marker-target check): an unvalidated --journal
@@ -4355,4 +4497,127 @@ test('authoring-publication-intent CLI honors an explicit --marker-prefix over c
     JSON.parse(output).body,
     /^<!-- custom-prefix-authoring-publication-intent:/,
   );
+});
+
+/** Stub `gh api user --jq .login` (resolveViewerLoginSafe's exact call,
+ * #2931) alongside the issue-comments POST, for the actor-binding tests
+ * below. */
+function stubGhViewerLoginAndPost(
+  login: string,
+  owner: string,
+  repo: string,
+  number: number,
+  stdinFile: string,
+): () => void {
+  return stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+function out(s) { fs.writeSync(1, s); process.exit(0); }
+function fail(s) { fs.writeSync(2, s); process.exit(1); }
+if (args[0] === 'api' && args[1] === 'user') {
+  out(${JSON.stringify(login)});
+} else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
+  fs.writeFileSync(${JSON.stringify(stdinFile)}, fs.readFileSync(0, 'utf8'));
+  out(JSON.stringify({ id: 777, html_url: 'https://github.com/${owner}/${repo}/issues/${number}#issuecomment-777' }));
+} else {
+  fail('unexpected gh invocation: ' + args.join(' '));
+}
+`,
+  );
+}
+
+test('authoring-publication-intent --apply refuses a --actor that does not match the authenticated user (#2931)', () => {
+  // Codex review on PR #2937: contract.md requires "actor to equal the API
+  // author" on every replay -- a mismatched --actor produces a record
+  // replay will always reject even though this command reports success.
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-post-idd-marker-pub-intent-actor-'),
+  );
+  const stdinFile = join(tempRoot, 'gh-stdin.txt');
+  const restore = stubGhViewerLoginAndPost(
+    'the-real-user',
+    'o',
+    'r',
+    42,
+    stdinFile,
+  );
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        ...authoringArgv('authoring-publication-intent', {
+          ...AUTHORING_PUBLICATION_INTENT_FULL_FIELDS,
+          actor: 'someone-else',
+        }),
+        '--apply',
+      ],
+      { encoding: 'utf8', env: { ...process.env } },
+    );
+    throw new Error('expected the CLI to exit non-zero');
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /--actor someone-else does not match the authenticated user the-real-user/,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('authoring-publication-intent --apply accepts a --actor that matches the authenticated user (case-insensitive, #2931)', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-post-idd-marker-pub-intent-actor-match-'),
+  );
+  const stdinFile = join(tempRoot, 'gh-stdin.txt');
+  const restore = stubGhViewerLoginAndPost(
+    'The-Real-User',
+    'o',
+    'r',
+    42,
+    stdinFile,
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        ...authoringArgv('authoring-publication-intent', {
+          ...AUTHORING_PUBLICATION_INTENT_FULL_FIELDS,
+          actor: 'the-real-user',
+        }),
+        '--apply',
+      ],
+      { encoding: 'utf8', env: { ...process.env } },
+    );
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.mode, 'apply');
+    assert.equal(parsed.commentId, 777);
+    assert.match(
+      JSON.parse(readFileSync(stdinFile, 'utf8')).body,
+      /actor=the-real-user;/,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('authoring-publication-intent dry-run does not check --actor against the authenticated user (checked only at --apply, #2931)', () => {
+  const restore = stubGhNeverCalled();
+  try {
+    const output = execFileSync(
+      process.execPath,
+      authoringArgv('authoring-publication-intent', {
+        ...AUTHORING_PUBLICATION_INTENT_FULL_FIELDS,
+        actor: 'anyone-at-all',
+      }),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.match(JSON.parse(output).body, /actor=anyone-at-all;/);
+  } finally {
+    restore();
+  }
 });
