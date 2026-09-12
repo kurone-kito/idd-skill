@@ -699,10 +699,10 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: write
     steps:
-      - name: Attempt the exact failing POST (pre-fix permissions)
+      - name: Attempt the exact failing POST (with pull-requests write added)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
@@ -711,7 +711,7 @@ jobs:
           set +e
           gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
             --method POST \
-            -f "body=idd-skill#2951 diagnostic permission probe (pre-fix: contents:read, pull-requests:read, issues:write) -- safe to delete"
+            -f "body=idd-skill#2951 diagnostic permission probe (candidate fix: contents:read, pull-requests:write, issues:write) -- safe to delete"
           STATUS=$?
           echo "probe_exit_code=$STATUS" >> "$GITHUB_STEP_SUMMARY"
           exit $STATUS
