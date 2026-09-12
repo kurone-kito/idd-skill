@@ -2085,6 +2085,139 @@ export function matchCanonicalAuthoringMarkerFamily(
   return null;
 }
 
+export type AuthoringMarkerFamily =
+  | 'authoring-owner'
+  | 'authoring-publication-intent';
+
+/** One comment as {@link classifyAuthoringMarkerFamily} needs it -- the
+ * narrowest shape common to both of its callers (#2935): `audit-authored-
+ * issue.mts`'s network-free `AuthoringCommentInput` and `sweep-authoring-
+ * markers.mts`'s GraphQL-fetched candidates each carry additional fields
+ * this function never reads. */
+export interface AuthoringMarkerCandidateInput {
+  body: string;
+  author?: string;
+  isMinimized?: boolean;
+}
+
+/**
+ * Result of classifying `comments` against one marker `family` for the
+ * hide-on-supersede sweep (#2935; extracted from `audit-authored-
+ * issue.mts`'s original `countEligibleSupersededMarkers`, which returned
+ * only `eligibleIndexes.length`, so the two never drift on this rule).
+ * Every field is an array of INDEXES into the original `comments` array,
+ * not comments themselves, so a caller that needs the full comment (e.g.
+ * to resolve a GraphQL node id for the minimize mutation) can index back
+ * into its own array.
+ */
+export interface AuthoringMarkerFamilyClassification {
+  /** Byte-exact canonical matches for `family`, in input order, regardless
+   * of trust or minimization state. */
+  matchIndexes: number[];
+  /** Subset of {@link matchIndexes} authored by a member of
+   * `trustedActors` (case-insensitive); equal to `matchIndexes` when
+   * `trustedActors` is `undefined` (trust filtering disabled). */
+  trustedMatchIndexes: number[];
+  /** The single newest (last, in input order) entry of
+   * {@link trustedMatchIndexes} -- the one live marker this sweep must
+   * never minimize -- or `null` when fewer than two trusted matches exist
+   * (nothing can be "superseded" without a later candidate). */
+  newestTrustedIndex: number | null;
+  /** {@link trustedMatchIndexes} minus {@link newestTrustedIndex}, further
+   * excluding any candidate whose `isMinimized` is already `true`: the
+   * actual hide-on-supersede backlog. */
+  eligibleIndexes: number[];
+  /** {@link trustedMatchIndexes} minus {@link newestTrustedIndex} that are
+   * already `isMinimized: true` -- not backlog, already handled. */
+  alreadyMinimizedIndexes: number[];
+  /** {@link matchIndexes} excluded from {@link trustedMatchIndexes} because
+   * their author is missing or not a member of `trustedActors`. Always
+   * empty when `trustedActors` is `undefined`: syntax alone never grants
+   * ownership, so this set is only meaningful once a trust policy is
+   * actually supplied. */
+  untrustedIndexes: number[];
+}
+
+/**
+ * Classify `comments` for exactly one authoring marker `family` (#2935):
+ * find every byte-exact canonical match
+ * (`matchCanonicalAuthoringMarkerFamily`), determine the newest match
+ * among trusted-actor authors only (per the contract's "syntax alone
+ * never grants ownership" rule -- an untrusted actor's later byte-exact
+ * comment must never be mistaken for the live marker to keep), and split
+ * the rest into eligible-for-minimization vs. already-minimized.
+ * `family` is matched against the RAW `comment.body` (never
+ * `stripMarkdownCodeRegions`-masked), matching exactly what a live
+ * `matchCanonicalAuthoringMarkerFamily` call against the real comment
+ * would see. `trustedActors` left `undefined` disables trust filtering
+ * entirely (every byte-exact match counts as a candidate regardless of
+ * author) -- callers that need an author-trust-filtered result (both
+ * current callers do) must pass a `Set` of lowercase logins.
+ */
+export function classifyAuthoringMarkerFamily(
+  comments: readonly AuthoringMarkerCandidateInput[],
+  markerPrefix: string,
+  family: AuthoringMarkerFamily,
+  trustedActors: ReadonlySet<string> | undefined,
+): AuthoringMarkerFamilyClassification {
+  const matchIndexes: number[] = [];
+  const untrustedIndexes: number[] = [];
+  comments.forEach((comment, index) => {
+    if (
+      matchCanonicalAuthoringMarkerFamily(comment.body, markerPrefix) !== family
+    ) {
+      return;
+    }
+    matchIndexes.push(index);
+    if (trustedActors !== undefined) {
+      const author = comment.author;
+      if (
+        typeof author !== 'string' ||
+        !trustedActors.has(author.toLowerCase())
+      ) {
+        untrustedIndexes.push(index);
+      }
+    }
+  });
+  const untrustedSet = new Set(untrustedIndexes);
+  const trustedMatchIndexes =
+    trustedActors === undefined
+      ? matchIndexes
+      : matchIndexes.filter((index) => !untrustedSet.has(index));
+  if (trustedMatchIndexes.length < 2) {
+    return {
+      matchIndexes,
+      trustedMatchIndexes,
+      newestTrustedIndex: null,
+      eligibleIndexes: [],
+      alreadyMinimizedIndexes: [],
+      untrustedIndexes,
+    };
+  }
+  const newestTrustedIndex =
+    trustedMatchIndexes[trustedMatchIndexes.length - 1];
+  const eligibleIndexes: number[] = [];
+  const alreadyMinimizedIndexes: number[] = [];
+  for (const index of trustedMatchIndexes) {
+    if (index === newestTrustedIndex) {
+      continue;
+    }
+    if (comments[index].isMinimized === true) {
+      alreadyMinimizedIndexes.push(index);
+    } else {
+      eligibleIndexes.push(index);
+    }
+  }
+  return {
+    matchIndexes,
+    trustedMatchIndexes,
+    newestTrustedIndex,
+    eligibleIndexes,
+    alreadyMinimizedIndexes,
+    untrustedIndexes,
+  };
+}
+
 // --- Per-cycle marker body renderers (#900) ---
 //
 // Pure, network-free renderers for the three operational markers an agent
