@@ -132,6 +132,21 @@ export const MERGE_BASE_FETCH_STEPS: readonly (readonly string[])[] = [
  */
 const FETCH_TIMEOUT_MS = 120_000;
 
+/**
+ * Minimum remaining budget (ms) required to still attempt a fetch within
+ * {@link computeMergeBase}'s overall deadline (#2989 review, Copilot
+ * round 2). `computeMergeBase` can call `tryFetchBase`/`tryFetchHead` up
+ * to six times (three {@link MERGE_BASE_FETCH_STEPS} steps, two fetches
+ * each); without an overall deadline, six independent `FETCH_TIMEOUT_MS`
+ * timeouts compound to a ~12-minute worst case for one branch-state
+ * check. `computeMergeBase` instead tracks a single deadline
+ * `FETCH_TIMEOUT_MS` after its own start and gives each attempt only the
+ * remaining time toward it; below this floor, the retry loop treats
+ * history as not fetchable for that attempt rather than spawning a `git
+ * fetch` doomed to time out almost immediately.
+ */
+const MIN_FETCH_ATTEMPT_MS = 5_000;
+
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -488,18 +503,46 @@ function computeMergeBase(
   repo: string | undefined,
   notes: string[],
 ): string | null {
+  const deadline = Date.now() + FETCH_TIMEOUT_MS;
   return resolveMergeBaseWithRetry(
     () => gitText(['merge-base', prHeadSha, prBaseSha]),
     (step) => {
       const fetchArgs = MERGE_BASE_FETCH_STEPS[step];
-      const baseFetched = tryFetchBase(
-        prBaseRef,
-        owner,
-        repo,
-        notes,
-        fetchArgs,
-      );
-      const headFetched = tryFetchHead(prNumber, owner, repo, notes, fetchArgs);
+
+      let baseFetched = false;
+      const baseRemainingMs = deadline - Date.now();
+      if (baseRemainingMs >= MIN_FETCH_ATTEMPT_MS) {
+        baseFetched = tryFetchBase(
+          prBaseRef,
+          owner,
+          repo,
+          notes,
+          fetchArgs,
+          baseRemainingMs,
+        );
+      } else {
+        notes.push(
+          'Merge-base fetch budget exhausted; skipping base-ref fetch.',
+        );
+      }
+
+      let headFetched = false;
+      const headRemainingMs = deadline - Date.now();
+      if (headRemainingMs >= MIN_FETCH_ATTEMPT_MS) {
+        headFetched = tryFetchHead(
+          prNumber,
+          owner,
+          repo,
+          notes,
+          fetchArgs,
+          headRemainingMs,
+        );
+      } else {
+        notes.push(
+          'Merge-base fetch budget exhausted; skipping head-ref fetch.',
+        );
+      }
+
       return baseFetched || headFetched;
     },
     MERGE_BASE_FETCH_STEPS.length,
@@ -756,6 +799,12 @@ export function resolveFetchOrigin(
  * attempt against the same unreachable/absent target would not change the
  * outcome, so the caller should stop immediately rather than repeat the
  * same failure (and its `notes` entry) across every remaining step.
+ *
+ * `timeoutMs` is the caller's remaining budget toward
+ * {@link computeMergeBase}'s overall deadline (#2989 review, Copilot
+ * round 2), not always the full {@link FETCH_TIMEOUT_MS} -- see
+ * `MIN_FETCH_ATTEMPT_MS`'s doc comment for why an overall deadline
+ * exists.
  */
 function tryFetchBase(
   prBaseRef: string,
@@ -763,6 +812,7 @@ function tryFetchBase(
   repo: string | undefined,
   notes: string[],
   fetchArgs: readonly string[],
+  timeoutMs: number,
 ): boolean {
   if (!prBaseRef) return false;
   if (!owner || !repo) {
@@ -786,7 +836,7 @@ function tryFetchBase(
       {
         stdio: 'ignore',
         encoding: 'utf8',
-        timeout: FETCH_TIMEOUT_MS,
+        timeout: timeoutMs,
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: '0',
@@ -833,6 +883,10 @@ function tryFetchBase(
  * missing or malformed, or when the fetch itself failed (network, auth,
  * unknown ref, etc.) -- in either case a further attempt against the same
  * unreachable/absent target would not change the outcome.
+ *
+ * `timeoutMs` is the caller's remaining budget toward
+ * {@link computeMergeBase}'s overall deadline -- see `tryFetchBase`'s
+ * own doc comment and `MIN_FETCH_ATTEMPT_MS` for why.
  */
 function tryFetchHead(
   prNumber: unknown,
@@ -840,6 +894,7 @@ function tryFetchHead(
   repo: string | undefined,
   notes: string[],
   fetchArgs: readonly string[],
+  timeoutMs: number,
 ): boolean {
   // Mirrors parseArgs's own canonical-positive-integer check: a malformed or
   // missing PR number is a structural skip, not an error -- callers that
@@ -866,7 +921,7 @@ function tryFetchHead(
     execFileSync('git', ['fetch', '--no-tags', ...fetchArgs, remote, headRef], {
       stdio: 'ignore',
       encoding: 'utf8',
-      timeout: FETCH_TIMEOUT_MS,
+      timeout: timeoutMs,
       env: {
         ...process.env,
         GIT_TERMINAL_PROMPT: '0',
