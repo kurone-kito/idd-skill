@@ -78,19 +78,55 @@ export const MERGE_BASE_FETCH_STEPS = [
  */
 const FETCH_TIMEOUT_MS = 120_000;
 /**
+ * Overall wall-clock budget (ms) for {@link computeMergeBase}'s whole
+ * retry sequence (#2989 review, Codex round 3). A first fix (Copilot
+ * round 2) tracked a single deadline of exactly `FETCH_TIMEOUT_MS` for
+ * the whole call, bounding the pre-fix ~12-minute worst case (six
+ * independent `FETCH_TIMEOUT_MS` timeouts, three
+ * {@link MERGE_BASE_FETCH_STEPS} steps times two fetches each) -- but
+ * that shared deadline could then let two genuinely healthy,
+ * individually-slow transfers (a large base-ref fetch and a large
+ * head-ref fetch on the same call) starve each other of remaining
+ * time, since together they could plausibly need close to
+ * `FETCH_TIMEOUT_MS` each. Doubling the overall budget while still
+ * capping each individual attempt at `FETCH_TIMEOUT_MS` (see
+ * {@link resolveFetchAttemptTimeoutMs}) lets both fetches in the
+ * common two-fetch case draw a full transfer budget, while still
+ * bounding the entire six-attempt worst case to this value (~4
+ * minutes) instead of the pre-fix ~12 minutes.
+ */
+const OVERALL_FETCH_BUDGET_MS = 2 * FETCH_TIMEOUT_MS;
+/**
  * Minimum remaining budget (ms) required to still attempt a fetch within
- * {@link computeMergeBase}'s overall deadline (#2989 review, Copilot
- * round 2). `computeMergeBase` can call `tryFetchBase`/`tryFetchHead` up
- * to six times (three {@link MERGE_BASE_FETCH_STEPS} steps, two fetches
- * each); without an overall deadline, six independent `FETCH_TIMEOUT_MS`
- * timeouts compound to a ~12-minute worst case for one branch-state
- * check. `computeMergeBase` instead tracks a single deadline
- * `FETCH_TIMEOUT_MS` after its own start and gives each attempt only the
- * remaining time toward it; below this floor, the retry loop treats
- * history as not fetchable for that attempt rather than spawning a `git
- * fetch` doomed to time out almost immediately.
+ * {@link computeMergeBase}'s overall deadline. Below this floor, the
+ * retry loop treats history as not fetchable for that attempt rather
+ * than spawning a `git fetch` doomed to time out almost immediately.
  */
 const MIN_FETCH_ATTEMPT_MS = 5_000;
+/**
+ * Decides whether {@link computeMergeBase}'s retry loop should still
+ * attempt a fetch given `deadline` (an absolute `Date.now()`-scale
+ * timestamp) and the current time, and if so, the per-attempt timeout
+ * to use (#2989 review, Copilot round 3: this arithmetic is extracted
+ * into its own pure, exported function specifically so it can be
+ * unit-tested directly -- the real `git fetch` call sites it feeds
+ * stay deliberately untested at their own call site, per this file's
+ * existing hermetic-test convention, so a regression in this
+ * budget/skip logic itself would otherwise never be exercised by the
+ * test suite).
+ *
+ * Returns `null` when the remaining budget is below
+ * {@link MIN_FETCH_ATTEMPT_MS} (skip this attempt); otherwise returns
+ * the timeout to pass to the fetch, capped at {@link FETCH_TIMEOUT_MS}
+ * so no single attempt can claim more than its own fair share of
+ * {@link OVERALL_FETCH_BUDGET_MS} even when most of it is still
+ * unspent.
+ */
+export function resolveFetchAttemptTimeoutMs(deadline, now) {
+  const remainingMs = deadline - now;
+  if (remainingMs < MIN_FETCH_ATTEMPT_MS) return null;
+  return Math.min(FETCH_TIMEOUT_MS, remainingMs);
+}
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -415,21 +451,21 @@ function computeMergeBase(
   repo,
   notes,
 ) {
-  const deadline = Date.now() + FETCH_TIMEOUT_MS;
+  const deadline = Date.now() + OVERALL_FETCH_BUDGET_MS;
   return resolveMergeBaseWithRetry(
     () => gitText(['merge-base', prHeadSha, prBaseSha]),
     (step) => {
       const fetchArgs = MERGE_BASE_FETCH_STEPS[step];
       let baseFetched = false;
-      const baseRemainingMs = deadline - Date.now();
-      if (baseRemainingMs >= MIN_FETCH_ATTEMPT_MS) {
+      const baseTimeoutMs = resolveFetchAttemptTimeoutMs(deadline, Date.now());
+      if (baseTimeoutMs !== null) {
         baseFetched = tryFetchBase(
           prBaseRef,
           owner,
           repo,
           notes,
           fetchArgs,
-          baseRemainingMs,
+          baseTimeoutMs,
         );
       } else {
         notes.push(
@@ -437,15 +473,15 @@ function computeMergeBase(
         );
       }
       let headFetched = false;
-      const headRemainingMs = deadline - Date.now();
-      if (headRemainingMs >= MIN_FETCH_ATTEMPT_MS) {
+      const headTimeoutMs = resolveFetchAttemptTimeoutMs(deadline, Date.now());
+      if (headTimeoutMs !== null) {
         headFetched = tryFetchHead(
           prNumber,
           owner,
           repo,
           notes,
           fetchArgs,
-          headRemainingMs,
+          headTimeoutMs,
         );
       } else {
         notes.push(
@@ -711,6 +747,7 @@ function tryFetchBase(prBaseRef, owner, repo, notes, fetchArgs, timeoutMs) {
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: '0',
+          GIT_ASKPASS: '',
           GCM_INTERACTIVE: 'never',
         },
       },
@@ -788,6 +825,7 @@ function tryFetchHead(prNumber, owner, repo, notes, fetchArgs, timeoutMs) {
       env: {
         ...process.env,
         GIT_TERMINAL_PROMPT: '0',
+        GIT_ASKPASS: '',
         GCM_INTERACTIVE: 'never',
       },
     });
