@@ -75,7 +75,10 @@ function createTwoCommitRepo(): { dir: string; older: string; newer: string } {
   if (sharedTwoCommitRepo) return sharedTwoCommitRepo;
   const dir = mkdtempSync(join(tmpdir(), 'idd-branch-conflict-state-'));
   const git = (args: string[]) =>
-    execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+    execFileSync('git', ['-c', 'core.autocrlf=false', ...args], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
   git(['init', '-q']);
   git(['config', 'user.email', 'test@example.invalid']);
   git(['config', 'user.name', 'Test']);
@@ -102,10 +105,14 @@ function createTwoCommitRepo(): { dir: string; older: string; newer: string } {
  * config for this invocation only, without touching any real repository or
  * user config. */
 function gitNoSign(dir: string, args: string[]): string {
-  return execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], {
-    cwd: dir,
-    encoding: 'utf8',
-  }).trim();
+  return execFileSync(
+    'git',
+    ['-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...args],
+    {
+      cwd: dir,
+      encoding: 'utf8',
+    },
+  ).trim();
 }
 
 let sharedUpstreamRepo: {
@@ -294,6 +301,15 @@ test('classifyBranchConflictState: CONFLICTING returns content-conflict', async 
     owner: 'test-owner',
     repo: 'test-repo',
     _testPrData: fixture.prData,
+    // The fixture's SHAs are placeholders, not real git objects, and its
+    // owner/repo ('test-owner'/'test-repo') do not exist -- without this
+    // flag, deriveBranchState's CONFLICTING branch falls through to a
+    // real anonymous git fetch that hangs on a host with an interactive
+    // credential helper configured (#2990). branchState,
+    // syncRecommendation, and baseAdvancedSinceMergeBase are all set
+    // unconditionally for this branch (see deriveBranchState), so
+    // skipping the probe does not change any assertion below.
+    _skipGitProbe: true,
   });
   assert.equal(result.branchState, fixture.expected.branchState);
   assert.equal(result.syncRecommendation, fixture.expected.syncRecommendation);
@@ -839,6 +855,12 @@ test('classifyBranchConflictState: published is true when head SHA is present', 
     owner: 'test-owner',
     repo: 'test-repo',
     _testPrData: fixture.prData,
+    // Same reasoning as the CONFLICTING test above (#2990): the `clean`
+    // fixture's placeholder SHAs and nonexistent test-owner/test-repo
+    // would otherwise reach a real, hanging git fetch via
+    // computeBaseAdvanced. `published` is derived from `prHeadSha`
+    // before the probe ever runs, so this assertion is unaffected.
+    _skipGitProbe: true,
   });
   assert.equal(result.published, true);
 });
