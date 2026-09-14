@@ -143,6 +143,14 @@ export function assertCritiqueTelemetrySnapshot(
       'snapshot.delegateUsageCount must be a non-negative integer',
     );
   }
+  // A zero-denominator ternary alone (below) validates only the RATE
+  // field, not the count it was derived from -- sampleCount: 0 with a
+  // positive delegateUsageCount would still compute the correct null
+  // rate and pass, even though 0 samples can never carry any delegate
+  // usage (#3005 review round 5, Codex).
+  if (snapshot.delegateUsageCount > snapshot.sampleCount) {
+    throw new Error('snapshot.delegateUsageCount must not exceed sampleCount');
+  }
   if (!isRateOrNull(snapshot.delegateUsageRate)) {
     throw new Error(
       'snapshot.delegateUsageRate must be null or a number in [0, 1]',

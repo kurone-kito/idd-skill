@@ -289,6 +289,18 @@ function canonicalStringify(value) {
  * different records under this repository's own documented concurrent-
  * session load. Hashing the full normalized record instead means only a
  * byte-for-byte-equivalent re-processed line ever collides.
+ *
+ * Known limitation, accepted as out of scope for #3002 (#3005 review
+ * round 5, Codex): two genuinely distinct hook invocations that happen
+ * to produce byte-identical normalized content (for example, two
+ * concurrent sessions on the same issue each emitting the same
+ * zero-finding round at the same second) hash identically and one is
+ * discarded as though it were a re-processed duplicate, undercounting
+ * real rounds. The only real fix is a producer-generated session or
+ * event identifier in the hook payload itself -- a change to the
+ * documented contract in docs/idd-workflow.md and the
+ * kurone-kito/dotfiles-defined consumer, both outside this harvester's
+ * own scope of consuming that contract as already documented.
  */
 export function sampleDedupKey(sample) {
   return createHash('sha256').update(canonicalStringify(sample)).digest('hex');

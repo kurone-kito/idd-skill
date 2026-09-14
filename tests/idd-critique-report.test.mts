@@ -207,6 +207,15 @@ test('assertCritiqueTelemetrySnapshot rejects a severityBreakdown total exceedin
   );
 });
 
+test('assertCritiqueTelemetrySnapshot rejects delegateUsageCount exceeding sampleCount even when delegateUsageRate itself still computes to null (#3005 review round 5, Codex)', () => {
+  const snapshot = aggregateCritiqueSnapshot([], NOW);
+  assert.equal(snapshot.sampleCount, 0);
+  assert.equal(snapshot.delegateUsageRate, null);
+  assert.throws(() =>
+    assertCritiqueTelemetrySnapshot({ ...snapshot, delegateUsageCount: 1 }),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // readCritiqueSamples
 // ---------------------------------------------------------------------------

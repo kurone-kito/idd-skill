@@ -71,6 +71,18 @@ project's own issue `#3002` B2 critique pass raised) and appended to
 so re-running the harvester against the same, possibly-grown log file
 never double-counts a round already harvested.
 
+**Known limitation.** Content-hash dedup cannot tell apart two
+genuinely distinct hook invocations that happen to produce
+byte-identical normalized content (for example, two concurrent
+sessions on the same issue each emitting the same zero-finding round
+at the same second) — one is discarded as though it were a
+re-processed duplicate, undercounting real rounds. Fixing this
+properly needs a producer-generated session or event identifier in the
+hook payload itself, a change to the documented contract in
+`docs/idd-workflow.md` and the `kurone-kito/dotfiles`-defined consumer,
+both out of scope for this harvester, which only consumes that
+contract as already documented (#3005 review round 5, Codex).
+
 `node scripts/idd-critique-report.mjs`:
 
 - `--in <samples.jsonl> [--in <samples.jsonl> ...] --apply` aggregates
