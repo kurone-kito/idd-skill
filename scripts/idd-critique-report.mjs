@@ -22,6 +22,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
+import { parseCritiqueTelemetryLine } from './idd-critique-harvest.mjs';
 
 const DEFAULT_SNAPSHOT_PATH = 'docs/idd-critique-snapshot.json';
 // Deliberately NOT docs/idd-critique-telemetry.md: audit/sync-manifest.json's
@@ -122,37 +123,27 @@ function readJsonlLines(path) {
  * malformed line in an already-harvested samples file is a hard error:
  * fail closed rather than silently drop it from the aggregate, mirroring
  * token-cost-report.mts's own readSamples contract.
+ *
+ * Reuses the harvester's own {@link parseCritiqueTelemetryLine} for the
+ * actual validation, rather than a second hand-rolled shape check: #3002
+ * C1 critique found the original hand-rolled check here validated only
+ * that `severityBreakdown` was a plain object, never its `high`/
+ * `medium`/`low` sub-fields or the `acceptedCount + rejectedCount <=
+ * findingsCount` invariant, so a corrupted or future-drifted samples
+ * file could pass through as a well-formed sample and silently
+ * aggregate into a snapshot with `NaN`/`null` fields. Sharing the parser
+ * closes that gap structurally instead of requiring the two validators
+ * to be kept in sync by hand.
  */
 export function readCritiqueSamples(paths) {
   const samples = [];
   for (const path of paths) {
     for (const { lineNumber, text } of readJsonlLines(path)) {
-      let sample;
-      try {
-        sample = JSON.parse(text);
-      } catch (error) {
-        throw new Error(
-          `${path}:${lineNumber}: invalid JSON (${error.message})`,
-        );
+      const parsed = parseCritiqueTelemetryLine(text);
+      if ('error' in parsed) {
+        throw new Error(`${path}:${lineNumber}: ${parsed.error}`);
       }
-      if (
-        !isPlainObject(sample) ||
-        sample.schemaVersion !== 1 ||
-        typeof sample.round !== 'number' ||
-        typeof sample.repo !== 'string' ||
-        typeof sample.issue !== 'number' ||
-        typeof sample.findingsCount !== 'number' ||
-        !isPlainObject(sample.severityBreakdown) ||
-        typeof sample.acceptedCount !== 'number' ||
-        typeof sample.rejectedCount !== 'number' ||
-        typeof sample.delegateUsed !== 'boolean' ||
-        typeof sample.timestamp !== 'string'
-      ) {
-        throw new Error(
-          `${path}:${lineNumber}: not a well-formed CritiqueTelemetrySample`,
-        );
-      }
-      samples.push(sample);
+      samples.push(parsed.sample);
     }
   }
   return samples;

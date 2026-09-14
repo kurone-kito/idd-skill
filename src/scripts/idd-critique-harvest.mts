@@ -284,6 +284,15 @@ function readExistingDedupKeys(outPath: string): Set<string> {
  * {@link sampleDedupKey}). A missing `inPaths` entry is silently
  * skipped -- the hook may not have run yet, or a repository may not
  * configure it at all.
+ *
+ * Known limitation (#3002 C1 critique): the read-existing-keys-then-
+ * append sequence is not atomic across two concurrent invocations
+ * against the same `outPath` -- each could miss the other's in-flight
+ * write and both append the same record. Harmless in practice (a
+ * duplicate line only inflates one snapshot metric by one until the
+ * next harvest re-dedupes it against a fully-flushed file), and the
+ * same non-atomic shape token-cost-harvest.mts's own local samples file
+ * already has; not hardened further here.
  */
 export function harvestCritiqueTelemetry(
   inPaths: readonly string[],

@@ -157,6 +157,33 @@ test('readCritiqueSamples throws on a malformed already-harvested line (fail clo
   assert.throws(() => readCritiqueSamples([inPath]), /invalid JSON/);
 });
 
+test('readCritiqueSamples throws on a non-numeric severityBreakdown sub-field (#3002 C1 critique regression)', () => {
+  const dir = sandboxDir();
+  const inPath = join(dir, 'samples.jsonl');
+  const corrupted = {
+    ...sample(),
+    severityBreakdown: { high: 'not-a-number', medium: 1, low: 0 },
+  };
+  writeFileSync(inPath, `${JSON.stringify(corrupted)}\n`);
+  assert.throws(() => readCritiqueSamples([inPath]), /severityBreakdown\.high/);
+});
+
+test('readCritiqueSamples throws when acceptedCount + rejectedCount exceeds findingsCount (#3002 C1 critique regression)', () => {
+  const dir = sandboxDir();
+  const inPath = join(dir, 'samples.jsonl');
+  const corrupted = {
+    ...sample(),
+    findingsCount: 1,
+    acceptedCount: 1,
+    rejectedCount: 1,
+  };
+  writeFileSync(inPath, `${JSON.stringify(corrupted)}\n`);
+  assert.throws(
+    () => readCritiqueSamples([inPath]),
+    /acceptedCount \+ rejectedCount/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Rendering / replaceMarkedRegion / checkRenderedFiles
 // ---------------------------------------------------------------------------
