@@ -287,6 +287,22 @@ export function aggregateCritiqueSnapshot(samples, now) {
       delegateUsageCount += 1;
     }
   }
+  // Each per-sample field is individually bounded to a safe integer at
+  // harvest time (parseCritiqueTelemetryRecord), but their accumulated
+  // sums here are not -- two samples each near Number.MAX_SAFE_INTEGER
+  // would otherwise let --apply write a snapshot that its own paired
+  // --check immediately rejects (#3005 review round 8, Codex). Fail
+  // closed instead of writing that self-inconsistent artifact.
+  for (const [label, value] of [
+    ['totalFindings', totalFindings],
+    ['severityBreakdown total', high + medium + low],
+    ['acceptedCount', acceptedCount],
+    ['rejectedCount', rejectedCount],
+  ]) {
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(`aggregate ${label} exceeds Number.MAX_SAFE_INTEGER`);
+    }
+  }
   const decidedCount = acceptedCount + rejectedCount;
   const acceptRate = decidedCount > 0 ? acceptedCount / decidedCount : null;
   const rejectRate = decidedCount > 0 ? rejectedCount / decidedCount : null;

@@ -117,6 +117,31 @@ test('aggregateCritiqueSnapshot marks publishable once sampleCount reaches the t
   assert.equal(snapshot.publishable, true);
 });
 
+test('aggregateCritiqueSnapshot fails closed instead of writing a self-inconsistent snapshot when accumulated totals overflow Number.MAX_SAFE_INTEGER (#3005 review round 8, Codex)', () => {
+  const huge = Number.MAX_SAFE_INTEGER;
+  const samples = [
+    sample({
+      round: 1,
+      findingsCount: huge,
+      severityBreakdown: { high: huge, medium: 0, low: 0 },
+      acceptedCount: huge,
+      rejectedCount: 0,
+    }),
+    sample({
+      round: 2,
+      timestamp: '2026-09-09T00:00:00Z',
+      findingsCount: huge,
+      severityBreakdown: { high: huge, medium: 0, low: 0 },
+      acceptedCount: huge,
+      rejectedCount: 0,
+    }),
+  ];
+  assert.throws(
+    () => aggregateCritiqueSnapshot(samples, NOW),
+    /MAX_SAFE_INTEGER/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // assertCritiqueTelemetrySnapshot
 // ---------------------------------------------------------------------------
