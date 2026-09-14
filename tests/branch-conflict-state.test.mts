@@ -11,6 +11,7 @@ import {
   parseArgs,
   parseConflictFiles,
   parseGitFetchOrigin,
+  resolveFetchAttemptTimeoutMs,
   resolveFetchOrigin,
   resolveMergeBaseWithRetry,
 } from '../src/scripts/branch-conflict-state.mts';
@@ -847,6 +848,44 @@ test('resolveMergeBaseWithRetry: never calls widenHistory when the first lookup 
   );
   assert.equal(result, 'already-resolved-sha');
   assert.equal(widenCalls, 0);
+});
+
+// #2989 review, Copilot round 3: resolveFetchAttemptTimeoutMs is the
+// pure budget/skip arithmetic computeMergeBase's retry loop uses to
+// bound its overall wait -- extracted specifically so a regression here
+// (propagating the wrong remaining timeout, enforcing the wrong skip
+// floor, or not stopping after the deadline) is caught directly,
+// without needing a real `git fetch` at the untested call sites this
+// feeds.
+
+test('resolveFetchAttemptTimeoutMs: returns the full per-attempt cap when the whole budget remains', () => {
+  const now = 1_000_000;
+  const deadline = now + 2 * 120_000; // OVERALL_FETCH_BUDGET_MS
+  assert.equal(resolveFetchAttemptTimeoutMs(deadline, now), 120_000);
+});
+
+test('resolveFetchAttemptTimeoutMs: clamps to the remaining budget once it is below the per-attempt cap', () => {
+  const now = 1_000_000;
+  const deadline = now + 60_000; // less than the 120s per-attempt cap
+  assert.equal(resolveFetchAttemptTimeoutMs(deadline, now), 60_000);
+});
+
+test('resolveFetchAttemptTimeoutMs: returns null once the remaining budget drops below the minimum floor', () => {
+  const now = 1_000_000;
+  const deadline = now + 4_999; // one ms under MIN_FETCH_ATTEMPT_MS (5s)
+  assert.equal(resolveFetchAttemptTimeoutMs(deadline, now), null);
+});
+
+test('resolveFetchAttemptTimeoutMs: the minimum floor itself is still a valid attempt (boundary, not skipped)', () => {
+  const now = 1_000_000;
+  const deadline = now + 5_000; // exactly MIN_FETCH_ATTEMPT_MS
+  assert.equal(resolveFetchAttemptTimeoutMs(deadline, now), 5_000);
+});
+
+test('resolveFetchAttemptTimeoutMs: returns null once the deadline has already passed', () => {
+  const now = 1_000_000;
+  const deadline = now - 1;
+  assert.equal(resolveFetchAttemptTimeoutMs(deadline, now), null);
 });
 
 test('classifyBranchConflictState: published is true when head SHA is present', async () => {

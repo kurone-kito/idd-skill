@@ -112,6 +112,82 @@ export const MERGE_BASE_FETCH_STEPS: readonly (readonly string[])[] = [
   ['--deepen=200'],
 ];
 
+/**
+ * Timeout (ms) for a single `tryFetchBase`/`tryFetchHead` history fetch
+ * (#2989 review, Codex round 1). Deliberately **not** `gh-exec.mts`'s
+ * `DEFAULT_GH_TIMEOUT_MS` (30s): that constant sizes a single `gh` API
+ * request, but a `git fetch` here can transfer real commit/tree/blob
+ * history -- a large repository, a slow GHES instance, or the deepest
+ * `MERGE_BASE_FETCH_STEPS` step (`--deepen=200`) can plausibly exceed
+ * 30s on a healthy connection. A too-short timeout would abort a
+ * healthy transfer, making `tryFetchBase`/`tryFetchHead` return `false`
+ * and `computeBaseAdvanced` report an unresolved merge base as
+ * `baseAdvancedSinceMergeBase: false` -- silently losing the
+ * fresh-CI-required advisory note for a `CLEAN` PR whose base has
+ * genuinely advanced. Matches `gh-exec.mts`'s own
+ * `DEFAULT_GH_PAGINATED_TIMEOUT_MS` precedent of a deliberately
+ * generous, still-bounded multiplier for a larger-transfer case,
+ * scaled here for a git object-transfer bound rather than a paginated
+ * API response.
+ */
+const FETCH_TIMEOUT_MS = 120_000;
+
+/**
+ * Overall wall-clock budget (ms) for {@link computeMergeBase}'s whole
+ * retry sequence (#2989 review, Codex round 3). A first fix (Copilot
+ * round 2) tracked a single deadline of exactly `FETCH_TIMEOUT_MS` for
+ * the whole call, bounding the pre-fix ~12-minute worst case (six
+ * independent `FETCH_TIMEOUT_MS` timeouts, three
+ * {@link MERGE_BASE_FETCH_STEPS} steps times two fetches each) -- but
+ * that shared deadline could then let two genuinely healthy,
+ * individually-slow transfers (a large base-ref fetch and a large
+ * head-ref fetch on the same call) starve each other of remaining
+ * time, since together they could plausibly need close to
+ * `FETCH_TIMEOUT_MS` each. Doubling the overall budget while still
+ * capping each individual attempt at `FETCH_TIMEOUT_MS` (see
+ * {@link resolveFetchAttemptTimeoutMs}) lets both fetches in the
+ * common two-fetch case draw a full transfer budget, while still
+ * bounding the entire six-attempt worst case to this value (~4
+ * minutes) instead of the pre-fix ~12 minutes.
+ */
+const OVERALL_FETCH_BUDGET_MS = 2 * FETCH_TIMEOUT_MS;
+
+/**
+ * Minimum remaining budget (ms) required to still attempt a fetch within
+ * {@link computeMergeBase}'s overall deadline. Below this floor, the
+ * retry loop treats history as not fetchable for that attempt rather
+ * than spawning a `git fetch` doomed to time out almost immediately.
+ */
+const MIN_FETCH_ATTEMPT_MS = 5_000;
+
+/**
+ * Decides whether {@link computeMergeBase}'s retry loop should still
+ * attempt a fetch given `deadline` (an absolute `Date.now()`-scale
+ * timestamp) and the current time, and if so, the per-attempt timeout
+ * to use (#2989 review, Copilot round 3: this arithmetic is extracted
+ * into its own pure, exported function specifically so it can be
+ * unit-tested directly -- the real `git fetch` call sites it feeds
+ * stay deliberately untested at their own call site, per this file's
+ * existing hermetic-test convention, so a regression in this
+ * budget/skip logic itself would otherwise never be exercised by the
+ * test suite).
+ *
+ * Returns `null` when the remaining budget is below
+ * {@link MIN_FETCH_ATTEMPT_MS} (skip this attempt); otherwise returns
+ * the timeout to pass to the fetch, capped at {@link FETCH_TIMEOUT_MS}
+ * so no single attempt can claim more than its own fair share of
+ * {@link OVERALL_FETCH_BUDGET_MS} even when most of it is still
+ * unspent.
+ */
+export function resolveFetchAttemptTimeoutMs(
+  deadline: number,
+  now: number,
+): number | null {
+  const remainingMs = deadline - now;
+  if (remainingMs < MIN_FETCH_ATTEMPT_MS) return null;
+  return Math.min(FETCH_TIMEOUT_MS, remainingMs);
+}
+
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -468,18 +544,46 @@ function computeMergeBase(
   repo: string | undefined,
   notes: string[],
 ): string | null {
+  const deadline = Date.now() + OVERALL_FETCH_BUDGET_MS;
   return resolveMergeBaseWithRetry(
     () => gitText(['merge-base', prHeadSha, prBaseSha]),
     (step) => {
       const fetchArgs = MERGE_BASE_FETCH_STEPS[step];
-      const baseFetched = tryFetchBase(
-        prBaseRef,
-        owner,
-        repo,
-        notes,
-        fetchArgs,
-      );
-      const headFetched = tryFetchHead(prNumber, owner, repo, notes, fetchArgs);
+
+      let baseFetched = false;
+      const baseTimeoutMs = resolveFetchAttemptTimeoutMs(deadline, Date.now());
+      if (baseTimeoutMs !== null) {
+        baseFetched = tryFetchBase(
+          prBaseRef,
+          owner,
+          repo,
+          notes,
+          fetchArgs,
+          baseTimeoutMs,
+        );
+      } else {
+        notes.push(
+          'Merge-base fetch budget exhausted; skipping base-ref fetch.',
+        );
+      }
+
+      let headFetched = false;
+      const headTimeoutMs = resolveFetchAttemptTimeoutMs(deadline, Date.now());
+      if (headTimeoutMs !== null) {
+        headFetched = tryFetchHead(
+          prNumber,
+          owner,
+          repo,
+          notes,
+          fetchArgs,
+          headTimeoutMs,
+        );
+      } else {
+        notes.push(
+          'Merge-base fetch budget exhausted; skipping head-ref fetch.',
+        );
+      }
+
       return baseFetched || headFetched;
     },
     MERGE_BASE_FETCH_STEPS.length,
@@ -736,6 +840,26 @@ export function resolveFetchOrigin(
  * attempt against the same unreachable/absent target would not change the
  * outcome, so the caller should stop immediately rather than repeat the
  * same failure (and its `notes` entry) across every remaining step.
+ *
+ * `timeoutMs` is the caller's remaining budget toward
+ * {@link computeMergeBase}'s overall deadline (#2989 review, Copilot
+ * round 2), not always the full {@link FETCH_TIMEOUT_MS} -- see
+ * `MIN_FETCH_ATTEMPT_MS`'s doc comment for why an overall deadline
+ * exists.
+ *
+ * The fetch `env` deliberately does **not** set `GIT_ASKPASS: ''`
+ * (#2989 review, Codex round 4, reversing a CodeRabbit round-4
+ * suggestion that was briefly applied and then reverted): unlike
+ * `GIT_TERMINAL_PROMPT`/`GCM_INTERACTIVE`, which only disable
+ * *interactive* prompting paths with no legitimate noninteractive use
+ * case, `GIT_ASKPASS` is itself a credential *provider* Git may
+ * consult before falling back to a terminal prompt -- some checkouts
+ * point it at a genuinely noninteractive script (a CI-style token
+ * emitter). Clearing it would silently break that legitimate
+ * credential source's real, working fetches, not just interactive
+ * ones. Any askpass helper that *is* interactive stays bounded by
+ * `timeoutMs` regardless, same as every other stall this function
+ * already tolerates.
  */
 function tryFetchBase(
   prBaseRef: string,
@@ -743,6 +867,7 @@ function tryFetchBase(
   repo: string | undefined,
   notes: string[],
   fetchArgs: readonly string[],
+  timeoutMs: number,
 ): boolean {
   if (!prBaseRef) return false;
   if (!owner || !repo) {
@@ -766,6 +891,12 @@ function tryFetchBase(
       {
         stdio: 'ignore',
         encoding: 'utf8',
+        timeout: timeoutMs,
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: '0',
+          GCM_INTERACTIVE: 'never',
+        },
       },
     );
     return true;
@@ -807,6 +938,10 @@ function tryFetchBase(
  * missing or malformed, or when the fetch itself failed (network, auth,
  * unknown ref, etc.) -- in either case a further attempt against the same
  * unreachable/absent target would not change the outcome.
+ *
+ * `timeoutMs` is the caller's remaining budget toward
+ * {@link computeMergeBase}'s overall deadline -- see `tryFetchBase`'s
+ * own doc comment and `MIN_FETCH_ATTEMPT_MS` for why.
  */
 function tryFetchHead(
   prNumber: unknown,
@@ -814,6 +949,7 @@ function tryFetchHead(
   repo: string | undefined,
   notes: string[],
   fetchArgs: readonly string[],
+  timeoutMs: number,
 ): boolean {
   // Mirrors parseArgs's own canonical-positive-integer check: a malformed or
   // missing PR number is a structural skip, not an error -- callers that
@@ -840,6 +976,12 @@ function tryFetchHead(
     execFileSync('git', ['fetch', '--no-tags', ...fetchArgs, remote, headRef], {
       stdio: 'ignore',
       encoding: 'utf8',
+      timeout: timeoutMs,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GCM_INTERACTIVE: 'never',
+      },
     });
     return true;
   } catch {
