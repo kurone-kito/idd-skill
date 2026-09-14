@@ -913,16 +913,27 @@ inside this 400-PR window — issue `#2255`, issue `#2264`, issue
 2026-08-15) predates it — and their corrected, fully-paginated Copilot
 review-submission counts are 21, 59, 11, 11, and 32 respectively,
 spanning nearly the full original 11-59 citation range. Issue `#2264`'s
-59 is in fact this sample's new corrected max, resolving the previous
-draft's data-provenance discrepancy rather than merely noting it:
-the discrepancy traced to the same pagination undercount corrected
-above, not to a genuinely different or unreconcilable methodology.
+59 is in fact this sample's new corrected max. This specific tension —
+between the 2026-09-10 rationale's 11-59 citation and this
+recalibration's own first-draft sample, which had wrongly reported a
+max of only 22 — traces entirely to the pagination undercount corrected
+above, and is resolved by that correction: it was a bug in this
+recalibration's own data collection, not a genuinely different or
+unreconcilable counting methodology between the two entries. This is a
+narrower claim than "the review-fix-loop measurement approach itself
+has no open questions" — see the two caveats below, which this
+correction does not resolve.
 
 Splitting the sample by merge date (older half 2026-08-17 to
 2026-09-03, n=185, versus newer half 2026-09-03 to 2026-09-14, n=215)
 showed a clear rising trend consistent with this repository's rising
 IDD concurrency and throughput over the same period: mean 3.15 to
-4.04 (+28%), p90 5 to 8 (+60%), p95 8 to 9. Restricting to the 68 PRs
+4.04 (+28%), p90 5 to 8 (+60%), p95 8 to 9 — the newer half's p95 is
+also corrected here, from this recalibration's originally-reported 10
+down to 9, by the same full-pagination fix described above (the
+newer half is small enough, n=215, that even one or two corrected
+outlier counts can shift which value lands exactly at the p95 index).
+Restricting to the 68 PRs
 merged since the `15` default went live (2026-09-10 onward) — an exact
 match to the originally-circulated PR count, confirming the underlying
 400-PR sample and date window were otherwise sound — showed mean=5.56,
@@ -951,6 +962,28 @@ kurone-kito/idd-skill#2999 for the full methodology and the acceptance
 criteria that applied it across every mirrored occurrence of this
 default, and PR kurone-kito/idd-skill#3004's own review thread for the
 pagination-undercount finding and this correction.
+
+**Open caveat, not resolved by this recalibration** (raised in the same
+PR review, `chatgpt-codex-connector`): every figure above counts
+Copilot review submissions per PR, the same proxy the original 2026-
+09-10 rationale already used to justify `15`. The mechanism this
+default actually gates is the same-claim `review-watermark` **post**
+count (`idd-review-triage.instructions.md`'s round-count cutoff
+section), which E1 refreshes once per snapshot and can refresh again
+after disposition activity independently of a fresh Copilot
+submission — so the two counters are not guaranteed to move 1:1, and
+watermark-post counts could run higher than Copilot-review counts on a
+PR with several disposition-driven refreshes in the same round. This
+recalibration reuses the existing proxy symmetrically for both the old
+and the new value rather than introducing a new one, so it does not, by
+itself, make the cutoff's real-world firing rate any less well
+understood than it already was under `15` — but a rigorous fix would
+mean re-deriving this whole distribution against actual watermark-post
+counts (parsing each sampled PR's comment history for the marker,
+not just its review list), which is a substantially larger effort than
+this issue's own scope of recalibrating an existing default using the
+existing counting convention. Left as a candidate follow-up rather than
+attempted here.
 
 ### review-ack worked example
 
