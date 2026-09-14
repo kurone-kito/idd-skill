@@ -68,10 +68,15 @@ const SEVERITY_KEYS = ['high', 'medium', 'low'];
  * genuinely absent field defaults to all-zero), reject a present
  * `delegateCommand` when `delegateUsed` is `false` (the documented
  * contract states it is present only when `delegateUsed` is `true`),
- * and enforce the cross-field sanity bound `acceptedCount +
- * rejectedCount <= findingsCount` -- deliberately looser than requiring
- * exact equality, which a partially- or delegate-scored round could
- * legitimately violate.
+ * and enforce two cross-field sanity bounds: `acceptedCount +
+ * rejectedCount` must equal `findingsCount` exactly -- verified against
+ * `idd-work.instructions.md`'s C4, which requires deciding Accept or
+ * Reject for every finding before the telemetry hook fires, so no
+ * legitimately-partial round exists to accommodate with a looser bound
+ * (#3005 review round 3, Codex) -- while `severityBreakdown`'s own
+ * `high + medium + low` total only needs to stay `<=` `findingsCount`,
+ * since a partial severity breakdown is intentionally allowed (#3005
+ * review round 3, Copilot).
  */
 function parseCritiqueTelemetryRecord(text, mode) {
   let raw;
@@ -314,7 +319,8 @@ function readExistingDedupKeys(outPath) {
 /**
  * Harvest every `inPaths` JSONL log into `outPath`'s aggregate samples
  * file, keeping only records whose own `repo` field matches `repo`
- * (`<owner>/<repo>`, exact string match). The documented log path
+ * (`<owner>/<repo>`, case-insensitive -- GitHub's own owner/repository
+ * identity is case-insensitive too). The documented log path
  * (`${XDG_STATE_HOME:-$HOME/.local/state}/idd-critique/log.jsonl`) is
  * host-wide, not per-repository, and the hook payload's own `repo`
  * field exists precisely so multiple repositories' telemetry sharing

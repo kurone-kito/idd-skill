@@ -183,6 +183,30 @@ test('assertCritiqueTelemetrySnapshot rejects a minPublishableSamples other than
   );
 });
 
+test('assertCritiqueTelemetrySnapshot rejects totalFindings disagreeing with acceptedCount + rejectedCount (#3005 review round 4, Codex)', () => {
+  const snapshot = aggregateCritiqueSnapshot([sample()], NOW);
+  assert.throws(() =>
+    assertCritiqueTelemetrySnapshot({
+      ...snapshot,
+      totalFindings: snapshot.totalFindings + 1,
+    }),
+  );
+});
+
+test('assertCritiqueTelemetrySnapshot rejects a severityBreakdown total exceeding totalFindings (#3005 review round 4, Codex)', () => {
+  const snapshot = aggregateCritiqueSnapshot([sample()], NOW);
+  assert.throws(() =>
+    assertCritiqueTelemetrySnapshot({
+      ...snapshot,
+      severityBreakdown: {
+        high: snapshot.totalFindings + 1,
+        medium: 0,
+        low: 0,
+      },
+    }),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // readCritiqueSamples
 // ---------------------------------------------------------------------------

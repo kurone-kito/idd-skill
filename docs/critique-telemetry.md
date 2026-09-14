@@ -56,8 +56,9 @@ log. A line missing only an optional field is not malformed: `pr`
 normalizes to `null`, each of `severityBreakdown.high`/`.medium`/`.low`
 normalizes to `0` when the whole field is absent, and `delegateCommand`
 stays unset. `--repo` is required and keeps only records whose own
-`repo` field matches it exactly (`skippedOtherRepo` in the printed
-counts) — the same scoping `token-cost-harvest.mjs` already requires,
+`repo` field matches it case-insensitively (`skippedOtherRepo` in the
+printed counts) — the same scoping `token-cost-harvest.mjs` already
+requires,
 needed here because this operator's other repositories can share the
 same host-wide log path. Every kept line is deduplicated by a content
 hash of its own normalized record (not a `repo`+`issue`+`round`+

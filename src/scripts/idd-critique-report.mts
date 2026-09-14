@@ -112,6 +112,26 @@ export function assertCritiqueTelemetrySnapshot(
   if (!isNonNegativeInteger(snapshot.rejectedCount)) {
     throw new Error('snapshot.rejectedCount must be a non-negative integer');
   }
+  // Every harvested sample enforces acceptedCount + rejectedCount ===
+  // findingsCount and severityBreakdown's own total <= findingsCount
+  // (idd-critique-harvest.mts's parseCritiqueTelemetryRecord), so both
+  // invariants must still hold in aggregate -- a corrupted or
+  // hand-edited snapshot with a mismatched totalFindings would
+  // otherwise pass `--check` as long as its rates stayed internally
+  // consistent (#3005 review round 4, Codex).
+  if (
+    snapshot.acceptedCount + snapshot.rejectedCount !==
+    snapshot.totalFindings
+  ) {
+    throw new Error(
+      'snapshot.totalFindings must equal acceptedCount + rejectedCount',
+    );
+  }
+  if (severity.high + severity.medium + severity.low > snapshot.totalFindings) {
+    throw new Error(
+      'snapshot.severityBreakdown total must not exceed totalFindings',
+    );
+  }
   if (!isRateOrNull(snapshot.acceptRate)) {
     throw new Error('snapshot.acceptRate must be null or a number in [0, 1]');
   }
