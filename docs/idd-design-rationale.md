@@ -872,9 +872,11 @@ existed to sample, even though the `15` default itself had only been
 live for 4 days (2026-09-10 to 2026-09-14) of that month — the
 analysis below draws on historical loop lengths recorded under
 whatever cutoff was active at each sampled PR's own time, not on `15`'s
-own accumulated track record; the smaller, dedicated post-rollout
-subsample (68 PRs merged since 2026-09-10) is examined separately
-below for that narrower, apples-to-apples comparison. Pulling the 400
+own accumulated track record; a smaller, dedicated post-rollout
+subsample (merged PRs since 2026-09-10) is examined separately below
+for that narrower, apples-to-apples comparison — see that subsection
+for its corrected size and figures; an earlier draft of this
+introduction cited a stale, since-corrected count here. Pulling the 400
 most recently merged PRs in this repository (`gh api graphql`,
 `repo:kurone-kito/idd-skill is:pr is:merged`, counting `reviews` nodes
 with `author.login == "copilot-pull-request-reviewer"` per PR — the
@@ -1015,6 +1017,21 @@ each individual review's own submission timestamp rather than the
 PR's merge timestamp, which this recalibration does not attempt; the
 corrected 55-PR cohort above should be read as a closer, not exact,
 approximation of behavior specifically under `15`.
+
+**Third open caveat** (also `chatgpt-codex-connector`): every sample
+above is `is:merged`, which excludes a PR whose review loop was still
+open (or was closed without merging) at the 2026-09-14 sampling
+cutoff — right-censoring that could, in principle, hide exactly the
+long, non-converging loops this cutoff exists to control, so the
+97-98%-exempt figure describes merged loops observed to completion,
+not every loop this policy is exposed to. A same-day spot-check found
+this repository had only 3 open PRs and 2 quickly-closed-without-
+merging PRs (each open under a day, not long-running) at sampling
+time, suggesting the current practical impact is small, but this does
+not establish the concern is unfounded in general, and this
+recalibration does not attempt to incorporate still-open loops into
+the distribution. Left as a candidate follow-up, alongside the two
+caveats above.
 
 ### review-ack worked example
 
