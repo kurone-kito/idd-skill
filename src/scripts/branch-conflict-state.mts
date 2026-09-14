@@ -846,6 +846,20 @@ export function resolveFetchOrigin(
  * round 2), not always the full {@link FETCH_TIMEOUT_MS} -- see
  * `MIN_FETCH_ATTEMPT_MS`'s doc comment for why an overall deadline
  * exists.
+ *
+ * The fetch `env` deliberately does **not** set `GIT_ASKPASS: ''`
+ * (#2989 review, Codex round 4, reversing a CodeRabbit round-4
+ * suggestion that was briefly applied and then reverted): unlike
+ * `GIT_TERMINAL_PROMPT`/`GCM_INTERACTIVE`, which only disable
+ * *interactive* prompting paths with no legitimate noninteractive use
+ * case, `GIT_ASKPASS` is itself a credential *provider* Git may
+ * consult before falling back to a terminal prompt -- some checkouts
+ * point it at a genuinely noninteractive script (a CI-style token
+ * emitter). Clearing it would silently break that legitimate
+ * credential source's real, working fetches, not just interactive
+ * ones. Any askpass helper that *is* interactive stays bounded by
+ * `timeoutMs` regardless, same as every other stall this function
+ * already tolerates.
  */
 function tryFetchBase(
   prBaseRef: string,
@@ -881,7 +895,6 @@ function tryFetchBase(
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: '0',
-          GIT_ASKPASS: '',
           GCM_INTERACTIVE: 'never',
         },
       },
@@ -967,7 +980,6 @@ function tryFetchHead(
       env: {
         ...process.env,
         GIT_TERMINAL_PROMPT: '0',
-        GIT_ASKPASS: '',
         GCM_INTERACTIVE: 'never',
       },
     });
