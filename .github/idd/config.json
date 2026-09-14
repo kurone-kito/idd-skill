@@ -43,6 +43,11 @@
   "discover": {
     "selectionDesync": "session-offset"
   },
+  "critiqueLoop": {
+    "telemetryHook": {
+      "command": "idd-critique-telemetry"
+    }
+  },
   "forcedHandoff": {
     "mode": "human-gated",
     "authorityPolicy": "owners-and-maintainers-only"
