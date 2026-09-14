@@ -592,7 +592,7 @@ export const POLICY_DEFAULTS = Object.freeze({
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
-    deferAfterRounds: 15,
+    deferAfterRounds: 12,
   }) as Readonly<CritiqueLoopPolicy>,
   reviewEscalation: Object.freeze({
     changesRequestedFirstEscalation: 'PT24H',
