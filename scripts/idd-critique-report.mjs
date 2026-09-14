@@ -99,6 +99,36 @@ export function assertCritiqueTelemetrySnapshot(snapshot) {
       'snapshot.delegateUsageRate must be null or a number in [0, 1]',
     );
   }
+  // A rate that is merely shape-valid (null or in [0, 1]) can still be
+  // stale relative to its own source counts -- e.g. one accepted and
+  // one rejected finding with an unchanged acceptRate: 1 left over from
+  // an earlier, different aggregation. --check never rereads samples,
+  // so this recomputation is the only place that catches a corrupted
+  // committed snapshot passing as clean (#3005 review, Codex).
+  const decidedCount = snapshot.acceptedCount + snapshot.rejectedCount;
+  const expectedAcceptRate =
+    decidedCount > 0 ? snapshot.acceptedCount / decidedCount : null;
+  if (snapshot.acceptRate !== expectedAcceptRate) {
+    throw new Error(
+      'snapshot.acceptRate must match acceptedCount/(acceptedCount + rejectedCount)',
+    );
+  }
+  const expectedRejectRate =
+    decidedCount > 0 ? snapshot.rejectedCount / decidedCount : null;
+  if (snapshot.rejectRate !== expectedRejectRate) {
+    throw new Error(
+      'snapshot.rejectRate must match rejectedCount/(acceptedCount + rejectedCount)',
+    );
+  }
+  const expectedDelegateUsageRate =
+    snapshot.sampleCount > 0
+      ? snapshot.delegateUsageCount / snapshot.sampleCount
+      : null;
+  if (snapshot.delegateUsageRate !== expectedDelegateUsageRate) {
+    throw new Error(
+      'snapshot.delegateUsageRate must match delegateUsageCount/sampleCount',
+    );
+  }
   if (!isNonNegativeInteger(snapshot.minPublishableSamples)) {
     throw new Error(
       'snapshot.minPublishableSamples must be a non-negative integer',

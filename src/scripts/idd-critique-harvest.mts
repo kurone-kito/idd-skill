@@ -135,8 +135,17 @@ function parseCritiqueTelemetryRecord(
   if (!isPlainObject(raw)) {
     return { error: 'line is not a JSON object' };
   }
-  if (mode === 'harvested' && raw.schemaVersion !== 1) {
-    return { error: 'schemaVersion must be exactly 1' };
+  if (mode === 'harvested') {
+    if (raw.schemaVersion !== 1) {
+      return { error: 'schemaVersion must be exactly 1' };
+    }
+  } else if (raw.schemaVersion !== undefined && raw.schemaVersion !== 1) {
+    // The documented raw hook payload never sends schemaVersion at all,
+    // but nothing stops a malformed or future-contract producer from
+    // including one -- an explicit value other than 1 signals a
+    // contract this harvester does not understand and must not
+    // silently reinterpret as version 1 (#3005 review, Codex).
+    return { error: 'schemaVersion must be exactly 1 when present' };
   }
   if (raw.phase !== 'C') {
     return { error: "phase must be exactly 'C'" };
@@ -174,6 +183,9 @@ function parseCritiqueTelemetryRecord(
       error: 'acceptedCount + rejectedCount must not exceed findingsCount',
     };
   }
+  if (mode === 'harvested' && raw.severityBreakdown === undefined) {
+    return { error: 'severityBreakdown must be present' };
+  }
   let severityRaw: Record<string, unknown> = {};
   if (raw.severityBreakdown !== undefined) {
     if (!isPlainObject(raw.severityBreakdown)) {
@@ -189,6 +201,16 @@ function parseCritiqueTelemetryRecord(
   for (const key of SEVERITY_KEYS) {
     const value = severityRaw[key];
     if (value === undefined) {
+      // A genuinely-harvested record always writes all three keys (see
+      // the sample construction below), so a harvested-mode record
+      // missing one is corrupted, not merely using the raw payload's
+      // optional-field leniency -- require it explicitly instead of
+      // defaulting (#3005 review, Codex).
+      if (mode === 'harvested') {
+        return {
+          error: `severityBreakdown.${key} must be present`,
+        };
+      }
       continue;
     }
     if (!isNonNegativeInteger(value)) {

@@ -151,6 +151,31 @@ test('assertCritiqueTelemetrySnapshot rejects an impossible calendar date (#3005
   );
 });
 
+test('assertCritiqueTelemetrySnapshot rejects a stale acceptRate that disagrees with acceptedCount/rejectedCount (#3005 review round 2, Codex)', () => {
+  const snapshot = aggregateCritiqueSnapshot(
+    [
+      sample({ acceptedCount: 1, rejectedCount: 1 }),
+      sample({ round: 2, acceptedCount: 0, rejectedCount: 0 }),
+    ],
+    NOW,
+  );
+  assert.equal(snapshot.acceptRate, 0.5);
+  assert.throws(() =>
+    assertCritiqueTelemetrySnapshot({ ...snapshot, acceptRate: 1 }),
+  );
+});
+
+test('assertCritiqueTelemetrySnapshot rejects a stale delegateUsageRate that disagrees with delegateUsageCount/sampleCount (#3005 review round 2, Codex)', () => {
+  const snapshot = aggregateCritiqueSnapshot(
+    [sample({ delegateUsed: true }), sample({ round: 2, delegateUsed: false })],
+    NOW,
+  );
+  assert.equal(snapshot.delegateUsageRate, 0.5);
+  assert.throws(() =>
+    assertCritiqueTelemetrySnapshot({ ...snapshot, delegateUsageRate: 1 }),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // readCritiqueSamples
 // ---------------------------------------------------------------------------

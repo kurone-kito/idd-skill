@@ -200,6 +200,48 @@ test('parseHarvestedCritiqueTelemetrySample rejects a schemaVersion other than 1
   assert.match((parsed as { error: string }).error, /schemaVersion/);
 });
 
+test('parseCritiqueTelemetryLine rejects an explicit raw schemaVersion other than 1 (#3005 review round 2, Codex)', () => {
+  const parsed = parseCritiqueTelemetryLine(validLine({ schemaVersion: 2 }));
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /schemaVersion/);
+});
+
+test('parseCritiqueTelemetryLine tolerates a raw payload with no schemaVersion field at all', () => {
+  const parsed = parseCritiqueTelemetryLine(validLine());
+  assert.ok('sample' in parsed);
+});
+
+test('parseHarvestedCritiqueTelemetrySample rejects an already-harvested line missing a severityBreakdown key (#3005 review round 2, Codex)', () => {
+  const harvested = parseCritiqueTelemetryLine(validLine());
+  assert.ok('sample' in harvested);
+  const sample = (harvested as { sample: CritiqueTelemetrySample }).sample;
+  const corrupted = {
+    ...sample,
+    severityBreakdown: {
+      high: sample.severityBreakdown.high,
+      medium: sample.severityBreakdown.medium,
+    },
+  };
+  const parsed = parseHarvestedCritiqueTelemetrySample(
+    JSON.stringify(corrupted),
+  );
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /severityBreakdown\.low/);
+});
+
+test('parseHarvestedCritiqueTelemetrySample rejects an already-harvested line missing severityBreakdown entirely (#3005 review round 2, Codex)', () => {
+  const harvested = parseCritiqueTelemetryLine(validLine());
+  assert.ok('sample' in harvested);
+  const { severityBreakdown: _severityBreakdown, ...withoutSeverity } = (
+    harvested as { sample: CritiqueTelemetrySample }
+  ).sample;
+  const parsed = parseHarvestedCritiqueTelemetrySample(
+    JSON.stringify(withoutSeverity),
+  );
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /severityBreakdown/);
+});
+
 test('parseHarvestedCritiqueTelemetrySample rejects an already-harvested line missing pr entirely (#3005 review, Copilot)', () => {
   const harvested = parseCritiqueTelemetryLine(validLine());
   assert.ok('sample' in harvested);
