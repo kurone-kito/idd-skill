@@ -194,6 +194,16 @@ layered on top of the distributed IDD defaults:
   and a personal `/home/<user>/...` path would silently fail for any
   other operator or a remote/cloud agent that never reads this
   operator's `$HOME` (preventive; no observed incident yet).
+  `idd-critique-telemetry` itself is expected to come from an
+  operator's own external tooling (this repository ships the
+  `idd-critique-telemetry-hook` resolver that invokes it, never the
+  collector binary itself), mirroring how `critiqueLoop.delegate`'s
+  configured command already points at an external, not-shipped-in-repo
+  binary. Per
+  [docs/idd-workflow.md](docs/idd-workflow.md#repository-configurable-critique-telemetry-hook)'s
+  fire-and-forget contract, an operator or remote/cloud agent without
+  that binary on `PATH` gets a silent no-op, the same as leaving the
+  hook unconfigured, rather than a failure.
 
 ## Branch strategy
 
