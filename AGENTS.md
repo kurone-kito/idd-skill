@@ -177,6 +177,33 @@ layered on top of the distributed IDD defaults:
   noise from an unproven job auto-running on every unrelated push. See
   that guidance (and its linked rationale entry) for the mechanics
   rather than duplicating them here. Refs #2892 (non-blocking).
+- **Critique-loop telemetry hook**: This source repository also
+  records `critiqueLoop.telemetryHook.command:
+  "idd-critique-telemetry"` as a local IDD dogfooding policy (applies
+  only to `kurone-kito/idd-skill`). Roadmap #2677 and its children
+  issues #2678-#2680 built the `critiqueLoop.telemetryHook` mechanism
+  as a distributed, opt-in per-operator feature, but that roadmap's
+  own scope stopped at the mechanism and never configured it for this
+  repository. Observed 2026-09-14, issue #3001: an in-repo audit found
+  `critiqueLoop.delegate` already configured and in genuine, frequent
+  use, while C1's own effectiveness at mitigating E-phase Copilot
+  review cost -- the purpose `docs/idd-design-rationale.md` documents
+  for the critique loop -- had zero observability. The configured
+  command is the bare name `idd-critique-telemetry`, not a hardcoded
+  absolute path, because this file is committed to a public repository
+  and a personal `/home/<user>/...` path would silently fail for any
+  other operator or a remote/cloud agent that never reads this
+  operator's `$HOME` (preventive; no observed incident yet).
+  `idd-critique-telemetry` itself is expected to come from an
+  operator's own external tooling (this repository ships the
+  `idd-critique-telemetry-hook` resolver that invokes it, never the
+  collector binary itself), mirroring how `critiqueLoop.delegate`'s
+  configured command already points at an external, not-shipped-in-repo
+  binary. Per
+  [docs/idd-workflow.md](docs/idd-workflow.md#repository-configurable-critique-telemetry-hook)'s
+  fire-and-forget contract, an operator or remote/cloud agent without
+  that binary on `PATH` gets a silent no-op, the same as leaving the
+  hook unconfigured, rather than a failure.
 
 ## Branch strategy
 

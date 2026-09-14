@@ -31,6 +31,7 @@ import {
   stripGeneratedFromBanner,
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
+import { resolveEffectiveCritiqueLoopTelemetryHook } from '../src/scripts/policy-helpers.mts';
 import { readJson, readText } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -1656,6 +1657,21 @@ test('#2284: this repository keeps fully_autonomous_merge as its local dogfood o
     mergePolicy: string;
   };
   assert.equal(templateConfig.mergePolicy, 'human_merge');
+});
+
+test('#3001: this repository dogfoods critiqueLoop.telemetryHook.command as a repository-local hook', () => {
+  // Unlike a schema-validity check alone (idd-doctor), this resolves the
+  // REAL repo-committed config through the same pure resolver the runtime
+  // hook CLI uses, so a typo or removal of this exact command would fail
+  // here even though the synthetic-config resolver tests and idd-doctor's
+  // schema check would both still pass. See #3001.
+  const repoConfig = readJson('.github/idd/config.json');
+  const resolved = resolveEffectiveCritiqueLoopTelemetryHook({
+    localConfig: repoConfig,
+  });
+  assert.equal(resolved.status, 'local');
+  assert.equal(resolved.source, 'repository-local');
+  assert.equal(resolved.hook?.command, 'idd-critique-telemetry');
 });
 
 test('collectDuplicateSyncPairTargets flags repeated targets and ignores unique ones', () => {
