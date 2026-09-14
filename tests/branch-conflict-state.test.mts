@@ -305,10 +305,10 @@ test('classifyBranchConflictState: CONFLICTING returns content-conflict', async 
     // owner/repo ('test-owner'/'test-repo') do not exist -- without this
     // flag, deriveBranchState's CONFLICTING branch falls through to a
     // real anonymous git fetch that hangs on a host with an interactive
-    // credential helper configured (#2990). branchState,
-    // syncRecommendation, and baseAdvancedSinceMergeBase are all set
-    // unconditionally for this branch (see deriveBranchState), so
-    // skipping the probe does not change any assertion below.
+    // credential helper configured (#2990). The assertions below --
+    // branchState, syncRecommendation, and baseAdvancedSinceMergeBase --
+    // are all set unconditionally for this branch (see
+    // deriveBranchState), so skipping the probe changes none of them.
     _skipGitProbe: true,
   });
   assert.equal(result.branchState, fixture.expected.branchState);
