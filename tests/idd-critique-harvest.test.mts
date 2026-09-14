@@ -438,6 +438,35 @@ test('harvestCritiqueTelemetry matches --repo case-insensitively (#3005 review r
   assert.equal(counts.skippedOtherRepo, 0);
 });
 
+test('harvestCritiqueTelemetry inserts a missing trailing newline before appending to a partially-written outPath (#3005 review round 7, Codex)', () => {
+  const dir = sandboxDir();
+  const inPath = join(dir, 'log.jsonl');
+  writeFileSync(inPath, `${validLine({ round: 2 })}\n`);
+  const outPath = join(dir, 'samples.jsonl');
+  // No trailing newline on the pre-existing content, simulating a
+  // partial or externally-created file.
+  writeFileSync(outPath, JSON.stringify(JSON.parse(validLine({ round: 1 }))));
+  harvestCritiqueTelemetry([inPath], outPath, FIXTURE_REPO);
+  const lines = readFileSync(outPath, 'utf8')
+    .split('\n')
+    .filter((line) => line.length > 0);
+  assert.equal(lines.length, 2);
+  for (const line of lines) {
+    assert.doesNotThrow(() => JSON.parse(line));
+  }
+});
+
+test('parseCritiqueTelemetryLine rejects an integer literal beyond Number.MAX_SAFE_INTEGER that JSON.parse would otherwise silently round (#3005 review round 7, Codex)', () => {
+  // A literal too large to represent exactly: JSON.parse silently
+  // rounds 9007199254740993 to 9007199254740992 before this validator
+  // ever runs -- Number.isSafeInteger must still reject the rounded
+  // result (9007199254740992 > Number.MAX_SAFE_INTEGER).
+  const line = validLine().replace('"round":1', '"round":9007199254740993');
+  const parsed = parseCritiqueTelemetryLine(line);
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /round/);
+});
+
 test('parseRepoFlag validates the <owner>/<repo> shape', () => {
   assert.deepEqual(parseRepoFlag('kurone-kito/idd-skill'), {
     owner: 'kurone-kito',

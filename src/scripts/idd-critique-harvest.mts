@@ -74,12 +74,22 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+// Number.isSafeInteger, not Number.isInteger: JSON.parse silently rounds
+// an integer literal beyond Number.MAX_SAFE_INTEGER (e.g. the literal
+// 9007199254740993 parses to 9007199254740992) before this guard ever
+// sees it, and Number.isInteger still accepts that already-altered
+// value. isSafeInteger at least rejects the boundary case where the
+// rounding pushed the value out of the exactly-representable range
+// (#3005 review round 7, Codex) -- it cannot recover an original digit
+// string JSON.parse already silently altered while still landing inside
+// the safe range, an inherent JSON.parse limitation no runtime guard
+// can close after the fact.
 function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isPositiveInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 1;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 }
 
 const SEVERITY_KEYS = ['high', 'medium', 'low'] as const;
@@ -390,6 +400,15 @@ function readJsonlLines(path: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+/** True when `path` exists, is non-empty, and its last byte is not a newline. */
+function needsLeadingNewline(path: string): boolean {
+  if (!existsSync(path)) {
+    return false;
+  }
+  const raw = readFileSync(path, 'utf8');
+  return raw.length > 0 && !raw.endsWith('\n');
+}
+
 function readExistingDedupKeys(outPath: string): Set<string> {
   const keys = new Set<string>();
   if (!existsSync(outPath)) {
@@ -488,7 +507,13 @@ export function harvestCritiqueTelemetry(
   }
   if (!options.dryRun && toAppend.length > 0) {
     mkdirSync(dirname(outPath), { recursive: true });
-    appendFileSync(outPath, `${toAppend.join('\n')}\n`);
+    // A prior write to outPath with no trailing newline (a partial or
+    // externally-created file) would otherwise let this append's first
+    // `{` land directly after the previous line's final `}`, corrupting
+    // both records into one unparseable line (#3005 review round 7,
+    // Codex).
+    const prefix = needsLeadingNewline(outPath) ? '\n' : '';
+    appendFileSync(outPath, `${prefix}${toAppend.join('\n')}\n`);
   }
   return counts;
 }

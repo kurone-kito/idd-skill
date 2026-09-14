@@ -39,8 +39,12 @@ const MIN_PUBLISHABLE_SAMPLES = 10;
 function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+// Number.isSafeInteger, not Number.isInteger, for the same reason
+// idd-critique-harvest.mts's own guard uses it (#3005 review round 7,
+// Codex): a committed snapshot is JSON too, so the identical
+// JSON.parse silent-rounding risk applies to it.
 function isNonNegativeInteger(value) {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 function isRateOrNull(value) {
   return (
