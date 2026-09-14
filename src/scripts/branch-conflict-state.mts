@@ -8,7 +8,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 
 import { parseCliArgs } from './cli-args.mts';
-import { ghText } from './gh-exec.mts';
+import { DEFAULT_GH_TIMEOUT_MS, ghText } from './gh-exec.mts';
 
 interface PrData {
   headRefOid?: unknown;
@@ -766,6 +766,12 @@ function tryFetchBase(
       {
         stdio: 'ignore',
         encoding: 'utf8',
+        timeout: DEFAULT_GH_TIMEOUT_MS,
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: '0',
+          GCM_INTERACTIVE: 'never',
+        },
       },
     );
     return true;
@@ -840,6 +846,12 @@ function tryFetchHead(
     execFileSync('git', ['fetch', '--no-tags', ...fetchArgs, remote, headRef], {
       stdio: 'ignore',
       encoding: 'utf8',
+      timeout: DEFAULT_GH_TIMEOUT_MS,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GCM_INTERACTIVE: 'never',
+      },
     });
     return true;
   } catch {

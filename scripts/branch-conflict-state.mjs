@@ -6,7 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
-import { ghText } from './gh-exec.mjs';
+import { DEFAULT_GH_TIMEOUT_MS, ghText } from './gh-exec.mjs';
 
 /** One-line advisory attached to `notes` alongside a `true` result. */
 const BASE_ADVANCED_BLIND_SPOT_NOTE =
@@ -643,6 +643,12 @@ function tryFetchBase(prBaseRef, owner, repo, notes, fetchArgs) {
       {
         stdio: 'ignore',
         encoding: 'utf8',
+        timeout: DEFAULT_GH_TIMEOUT_MS,
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: '0',
+          GCM_INTERACTIVE: 'never',
+        },
       },
     );
     return true;
@@ -710,6 +716,12 @@ function tryFetchHead(prNumber, owner, repo, notes, fetchArgs) {
     execFileSync('git', ['fetch', '--no-tags', ...fetchArgs, remote, headRef], {
       stdio: 'ignore',
       encoding: 'utf8',
+      timeout: DEFAULT_GH_TIMEOUT_MS,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GCM_INTERACTIVE: 'never',
+      },
     });
     return true;
   } catch {
