@@ -1,0 +1,5 @@
+{"phase":"C","round":1,"repo":"kurone-kito/idd-skill","issue":3002,"pr":null,"findingsCount":3,"severityBreakdown":{"high":1,"medium":1,"low":1},"acceptedCount":2,"rejectedCount":1,"delegateUsed":true,"delegateCommand":"coderabbit-critique","timestamp":"2026-09-08T12:00:00Z"}
+this is not json at all
+{"phase":"C","round":2,"repo":"kurone-kito/idd-skill","issue":3002,"findingsCount":0,"acceptedCount":0,"rejectedCount":0,"delegateUsed":false,"timestamp":"2026-09-09T09:00:00Z"}
+{"phase":"C","round":3,"repo":"kurone-kito/idd-skill","issue":3002,"pr":2999,"findingsCount":"3","acceptedCount":2,"rejectedCount":1,"delegateUsed":false,"timestamp":"2026-09-10T10:00:00Z"}
+{"phase":"C","round":4,"repo":"kurone-kito/idd-skill","issue":3002,"pr":2999,"findingsCount":2,"severityBreakdown":{"medium":2},"acceptedCount":1,"rejectedCount":1,"delegateUsed":false,"timestamp":"2026-09-11T11:00:00Z"}

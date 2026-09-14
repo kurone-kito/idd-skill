@@ -129,6 +129,14 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   // idd-template/; an adopter repository has no token-cost data to
   // harvest.
   'scripts/token-cost-harvest.mjs',
+  // idd-critique-harvest.mjs (#3002): this repository's own dogfood
+  // critique-loop telemetry harvest CLI, named in
+  // docs/critique-telemetry.md's own usage examples. It reads only
+  // a local JSONL log under
+  // `${XDG_STATE_HOME:-$HOME/.local/state}/idd-critique/` -- never
+  // committed to git -- and is never distributed to idd-template/; an
+  // adopter repository has no critique-loop telemetry log to harvest.
+  'scripts/idd-critique-harvest.mjs',
 ]);
 
 // A helper name that appears only as a *proposed*, not-yet-built script
