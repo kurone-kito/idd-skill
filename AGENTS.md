@@ -181,19 +181,19 @@ layered on top of the distributed IDD defaults:
   records `critiqueLoop.telemetryHook.command:
   "idd-critique-telemetry"` as a local IDD dogfooding policy (applies
   only to `kurone-kito/idd-skill`). Roadmap #2677 and its children
-  #2678-#2680 built the `critiqueLoop.telemetryHook` mechanism as a
-  distributed, opt-in per-operator feature, but that roadmap's own
-  scope stopped at the mechanism and never configured it for this
-  repository. An in-repo audit found `critiqueLoop.delegate` already
-  configured and in genuine, frequent use, while C1's own
-  effectiveness at mitigating E-phase Copilot review cost -- the
-  purpose `docs/idd-design-rationale.md` documents for the critique
-  loop -- had zero observability. The configured command is the bare
-  name `idd-critique-telemetry`, not a hardcoded absolute path,
-  because this file is committed to a public repository and a
-  personal `/home/<user>/...` path would silently fail for any other
-  operator or a remote/cloud agent that never reads this operator's
-  `$HOME`. Refs #3001 (non-blocking).
+  issues #2678-#2680 built the `critiqueLoop.telemetryHook` mechanism
+  as a distributed, opt-in per-operator feature, but that roadmap's
+  own scope stopped at the mechanism and never configured it for this
+  repository. Observed 2026-09-14, issue #3001: an in-repo audit found
+  `critiqueLoop.delegate` already configured and in genuine, frequent
+  use, while C1's own effectiveness at mitigating E-phase Copilot
+  review cost -- the purpose `docs/idd-design-rationale.md` documents
+  for the critique loop -- had zero observability. The configured
+  command is the bare name `idd-critique-telemetry`, not a hardcoded
+  absolute path, because this file is committed to a public repository
+  and a personal `/home/<user>/...` path would silently fail for any
+  other operator or a remote/cloud agent that never reads this
+  operator's `$HOME` (preventive; no observed incident yet).
 
 ## Branch strategy
 
