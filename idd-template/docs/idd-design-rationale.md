@@ -846,8 +846,9 @@ open. An unmarked issue's `Refs` lines are completely unaffected.
 
 #### 2026-09-15 recalibration to 12, using a month of real data (kurone-kito/idd-skill#2999)
 
-After a month of live review-fix-loop history accumulated against the
-`15` default above, a full sample of this repository's own merged PRs
+After a month of historical review-fix-loop data accumulated in this
+repository — distinct from the `15` default's own much shorter live
+track record — a full sample of this repository's own merged PRs
 (rather than the small, cherry-picked set that originally motivated
 `15`) showed a p95 in the single digits and fewer than 3% of PRs
 reaching a round count anywhere near the configured threshold, albeit
@@ -855,8 +856,13 @@ with a rising trend over that month as this repository's own IDD
 concurrency and throughput grew. The default was lowered to `12` —
 still comfortably above ordinary usage, but tightened in response to
 that trend rather than left on its original starting-point value
-indefinitely. See kurone-kito/idd-skill#2999 for the full methodology
-and figures behind this recalibration; adopters without an equivalent
+indefinitely. A same-day PR review also caught, and this recalibration
+corrected, a pagination bug that had silently undercounted the busiest
+outlier PRs in the initial sample; the percentiles this recalibration
+actually turns on were unaffected, but adopters reproducing this kind
+of analysis should paginate the full result set, not just its first
+page. See kurone-kito/idd-skill#2999 for the full methodology and
+figures behind this recalibration; adopters without an equivalent
 history of their own should keep tuning this value from their own
 observed data rather than adopting either number as a universal
 constant.

@@ -867,41 +867,69 @@ open. An unmarked issue's `Refs` lines are completely unaffected.
 
 #### 2026-09-15 recalibration to 12, using a month of real data (kurone-kito/idd-skill#2999)
 
-By 2026-09-14, roughly a month of live data had accumulated since the
-`15` default above went live (2026-09-10). Pulling the 400 most
-recently merged PRs in this repository (`gh api graphql`,
+By 2026-09-14, roughly a month of historical review-fix-loop data
+existed to sample, even though the `15` default itself had only been
+live for 4 days (2026-09-10 to 2026-09-14) of that month — the
+analysis below draws on historical loop lengths recorded under
+whatever cutoff was active at each sampled PR's own time, not on `15`'s
+own accumulated track record; the smaller, dedicated post-rollout
+subsample (68 PRs merged since 2026-09-10) is examined separately
+below for that narrower, apples-to-apples comparison. Pulling the 400
+most recently merged PRs in this repository (`gh api graphql`,
 `repo:kurone-kito/idd-skill is:pr is:merged`, counting `reviews` nodes
 with `author.login == "copilot-pull-request-reviewer"` per PR — the
 same counting method the entry above already cites) over a `mergedAt`
-range of 2026-08-17 to 2026-09-14 (roughly 28 days) gave a full-sample
-(n=400) distribution of min=0, p25=1, median=2, p75=4, p90=7, p95=9,
-p99=17, max=22, mean=3.42. Threshold coverage: 35 PRs (8.75%) reached
-8 or more rounds, 17 (4.25%) reached 10 or more, 9 (2.25%) reached 12
-or more, 7 (1.75%) reached 15 or more, and only 1 (0.25%) reached 20 or
-more; none reached 25.
+range of 2026-08-17 to 2026-09-14 (roughly 28 days) gave an initial
+full-sample (n=400) distribution of min=0, p25=1, median=2, p75=4,
+p90=7, p95=9, p99=17, max=22, mean=3.42, with only 1 PR (0.25%)
+reaching 20 or more rounds and none reaching 25 or more.
 
-The observed max (22) sits far below the original 11-59 citation
-range. Independently re-checking live PR data (`gh api`, merge dates
-and paginated Copilot review counts) found five of the six PRs
-originally cited above merged inside this 400-PR window — issue
-`#2255`, issue `#2264`, issue `#2368`, issue `#2403`, and issue
-`#2840`; only issue `#2018` (merged 2026-08-15) predates it — and
-their current Copilot review-submission counts (21, 59, 11, 11, and
-32 respectively) still span nearly the full original 11-59 range.
-Issue `#2264`'s 59 in particular is far above this sample's own
-reported max of 22, despite falling squarely inside the sampled
-window. This is a genuine data-provenance discrepancy between the two
-methodology passes, worth noting, not one this recalibration resolves
-further.
+**Correction (2026-09-15, same-day PR review, `chatgpt-codex-connector`):**
+a reviewer on this recalibration's own pull request found that a PR
+inside the sampled window with 59 Copilot reviews makes the
+above-reported max of 22 impossible, and asked for the sampling
+methodology to be reconciled before relying on it for calibration.
+Independently re-running the count with full result-set pagination
+(the initial pass, like this same mistake made once directly against
+this recalibration's own draft text, silently truncated any PR with
+more than 100 total review-timeline entries — precisely the highest
+outlier PRs) against the identical 400-PR sample gives a corrected
+distribution of min=0, p25=1, median=2, p75=4, p90=7, p95=9, **p99=21,
+max=59** (`#2264`), mean=3.63. Threshold coverage: 35 PRs (8.75%)
+reached 8 or more rounds, 17 (4.25%) reached 10 or more, 9 (2.25%)
+reached 12 or more, 7 (1.75%) reached 15 or more, 5 (1.25%) reached 20
+or more, and 3 (0.75%) reached 25 or more (the same 3 also reach 30 or
+more). Every percentile from p25 through p95, and the 9-PR (2.25%)
+count at the `12`-round threshold this recalibration actually turns
+on, are **unchanged** by the correction — only the tail beyond p95 (p99
+and max) and the coarser high-end threshold buckets (≥20/≥25/≥30) were
+affected, consistent with an undercount that only silently truncates
+the small number of PRs busy enough to exceed 100 total review-timeline
+entries.
+
+Of the six PRs originally cited for the stale `15` default, five merged
+inside this 400-PR window — issue `#2255`, issue `#2264`, issue
+`#2368`, issue `#2403`, and issue `#2840`; only issue `#2018` (merged
+2026-08-15) predates it — and their corrected, fully-paginated Copilot
+review-submission counts are 21, 59, 11, 11, and 32 respectively,
+spanning nearly the full original 11-59 citation range. Issue `#2264`'s
+59 is in fact this sample's new corrected max, resolving the previous
+draft's data-provenance discrepancy rather than merely noting it:
+the discrepancy traced to the same pagination undercount corrected
+above, not to a genuinely different or unreconcilable methodology.
 
 Splitting the sample by merge date (older half 2026-08-17 to
-2026-09-03 versus newer half 2026-09-03 to 2026-09-14) showed a clear
-rising trend consistent with this repository's rising IDD concurrency
-and throughput over the same period: mean 2.84 to 4.00 (+41%), p90 5
-to 8 (+60%). Restricting to the 68 PRs merged since the `15` default
-went live (2026-09-10 onward) showed mean=5.07, p90=10, max=22, with
-no visible censoring at 15 — four post-cutoff PRs still showed
-17/17/18/22 rounds with no truncation, most plausibly because those
+2026-09-03, n=185, versus newer half 2026-09-03 to 2026-09-14, n=215)
+showed a clear rising trend consistent with this repository's rising
+IDD concurrency and throughput over the same period: mean 3.15 to
+4.04 (+28%), p90 5 to 8 (+60%), p95 8 to 9. Restricting to the 68 PRs
+merged since the `15` default went live (2026-09-10 onward) — an exact
+match to the originally-circulated PR count, confirming the underlying
+400-PR sample and date window were otherwise sound — showed mean=5.56,
+p90=10, and a corrected max=35 (`#2895`, not 22); the four highest
+post-cutoff PRs are 35, 32, 23, and 17 rounds (`#2895`, `#2840`,
+`#2855`, `#2868`), not 22/18/17/17 as originally reported, with no
+visible censoring at 15 either way, most plausibly because those
 specific high-round PRs' recurring findings were Medium/High-severity
 (exempt from deferral by design) rather than any compliance gap in the
 mechanism itself. Spot-checking the highest-count PRs found no
@@ -911,17 +939,18 @@ with disproportionately high round counts from protracted back-and-forth
 rather than diff size.
 
 Twelve sits just above both the full-month p95 (9) and the
-most-recent-half p95 (10) — a modest, data-grounded tightening in
+most-recent-half p95 (9) — a modest, data-grounded tightening in
 response to the observed rising trend, while still exempting roughly
 97-98% of ordinary review-fix loops (only 9 of the 400 sampled PRs
-would have crossed it) from the deferral path. This replaces the
-original value's stale, cherry-picked justification (six outlier PRs,
-not a representative sample) with one derived from a full
-representative month, without swinging to an aggressive cutoff that
-would defer a meaningfully larger share of ordinary loops. See
+cross it, unchanged by the correction above) from the deferral path.
+This replaces the original value's stale, cherry-picked justification
+(six outlier PRs, not a representative sample) with one derived from a
+full representative month, without swinging to an aggressive cutoff
+that would defer a meaningfully larger share of ordinary loops. See
 kurone-kito/idd-skill#2999 for the full methodology and the acceptance
 criteria that applied it across every mirrored occurrence of this
-default.
+default, and PR kurone-kito/idd-skill#3004's own review thread for the
+pagination-undercount finding and this correction.
 
 ### review-ack worked example
 
