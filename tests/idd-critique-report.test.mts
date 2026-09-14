@@ -216,6 +216,21 @@ test('assertCritiqueTelemetrySnapshot rejects delegateUsageCount exceeding sampl
   );
 });
 
+test('assertCritiqueTelemetrySnapshot rejects a positive totalFindings when sampleCount is 0, even with matching accepted/rejected counts and rates (#3005 review round 6, Codex)', () => {
+  const snapshot = aggregateCritiqueSnapshot([], NOW);
+  assert.equal(snapshot.sampleCount, 0);
+  assert.throws(() =>
+    assertCritiqueTelemetrySnapshot({
+      ...snapshot,
+      totalFindings: 2,
+      acceptedCount: 1,
+      rejectedCount: 1,
+      acceptRate: 0.5,
+      rejectRate: 0.5,
+    }),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // readCritiqueSamples
 // ---------------------------------------------------------------------------

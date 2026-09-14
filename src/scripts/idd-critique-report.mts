@@ -127,6 +127,13 @@ export function assertCritiqueTelemetrySnapshot(
       'snapshot.totalFindings must equal acceptedCount + rejectedCount',
     );
   }
+  // An aggregate of zero samples can never contain any findings -- a
+  // corrupted snapshot with sampleCount: 0 but a positive totalFindings
+  // (with matching accepted/rejected counts and rates) would otherwise
+  // satisfy every other check above (#3005 review round 6, Codex).
+  if (snapshot.sampleCount === 0 && snapshot.totalFindings !== 0) {
+    throw new Error('snapshot.totalFindings must be 0 when sampleCount is 0');
+  }
   if (severity.high + severity.medium + severity.low > snapshot.totalFindings) {
     throw new Error(
       'snapshot.severityBreakdown total must not exceed totalFindings',
