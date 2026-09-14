@@ -8,7 +8,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 
 import { parseCliArgs } from './cli-args.mts';
-import { DEFAULT_GH_TIMEOUT_MS, ghText } from './gh-exec.mts';
+import { ghText } from './gh-exec.mts';
 
 interface PrData {
   headRefOid?: unknown;
@@ -111,6 +111,26 @@ export const MERGE_BASE_FETCH_STEPS: readonly (readonly string[])[] = [
   ['--deepen=20'],
   ['--deepen=200'],
 ];
+
+/**
+ * Timeout (ms) for a single `tryFetchBase`/`tryFetchHead` history fetch
+ * (#2989 review, Codex round 1). Deliberately **not** `gh-exec.mts`'s
+ * `DEFAULT_GH_TIMEOUT_MS` (30s): that constant sizes a single `gh` API
+ * request, but a `git fetch` here can transfer real commit/tree/blob
+ * history -- a large repository, a slow GHES instance, or the deepest
+ * `MERGE_BASE_FETCH_STEPS` step (`--deepen=200`) can plausibly exceed
+ * 30s on a healthy connection. A too-short timeout would abort a
+ * healthy transfer, making `tryFetchBase`/`tryFetchHead` return `false`
+ * and `computeBaseAdvanced` report an unresolved merge base as
+ * `baseAdvancedSinceMergeBase: false` -- silently losing the
+ * fresh-CI-required advisory note for a `CLEAN` PR whose base has
+ * genuinely advanced. Matches `gh-exec.mts`'s own
+ * `DEFAULT_GH_PAGINATED_TIMEOUT_MS` precedent of a deliberately
+ * generous, still-bounded multiplier for a larger-transfer case,
+ * scaled here for a git object-transfer bound rather than a paginated
+ * API response.
+ */
+const FETCH_TIMEOUT_MS = 120_000;
 
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
@@ -766,7 +786,7 @@ function tryFetchBase(
       {
         stdio: 'ignore',
         encoding: 'utf8',
-        timeout: DEFAULT_GH_TIMEOUT_MS,
+        timeout: FETCH_TIMEOUT_MS,
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: '0',
@@ -846,7 +866,7 @@ function tryFetchHead(
     execFileSync('git', ['fetch', '--no-tags', ...fetchArgs, remote, headRef], {
       stdio: 'ignore',
       encoding: 'utf8',
-      timeout: DEFAULT_GH_TIMEOUT_MS,
+      timeout: FETCH_TIMEOUT_MS,
       env: {
         ...process.env,
         GIT_TERMINAL_PROMPT: '0',
