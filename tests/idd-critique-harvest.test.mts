@@ -10,6 +10,8 @@ import {
   type CritiqueTelemetrySample,
   harvestCritiqueTelemetry,
   parseCritiqueTelemetryLine,
+  parseHarvestedCritiqueTelemetrySample,
+  parseRepoFlag,
   sampleDedupKey,
 } from '../src/scripts/idd-critique-harvest.mts';
 
@@ -142,6 +144,75 @@ test('parseCritiqueTelemetryLine rejects an invalid timestamp', () => {
   assert.ok('error' in parsed);
 });
 
+test('parseCritiqueTelemetryLine rejects a phase other than "C" (#3005 review, Copilot)', () => {
+  const parsed = parseCritiqueTelemetryLine(validLine({ phase: 'E10' }));
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /phase/);
+});
+
+test('parseCritiqueTelemetryLine rejects a non-object severityBreakdown instead of treating it as absent (#3005 review, Copilot)', () => {
+  const parsed = parseCritiqueTelemetryLine(
+    validLine({ severityBreakdown: 'not-an-object' }),
+  );
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /severityBreakdown/);
+});
+
+test('parseCritiqueTelemetryLine rejects a null severityBreakdown instead of treating it as absent (#3005 review, Copilot)', () => {
+  const parsed = parseCritiqueTelemetryLine(
+    validLine({ severityBreakdown: null }),
+  );
+  assert.ok('error' in parsed);
+});
+
+test('parseCritiqueTelemetryLine rejects delegateCommand present when delegateUsed is false (#3005 review, Copilot)', () => {
+  const parsed = parseCritiqueTelemetryLine(
+    validLine({ delegateUsed: false, delegateCommand: 'coderabbit-critique' }),
+  );
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /delegateCommand/);
+});
+
+// ---------------------------------------------------------------------------
+// parseHarvestedCritiqueTelemetrySample
+// ---------------------------------------------------------------------------
+
+test('parseHarvestedCritiqueTelemetrySample accepts a well-formed already-harvested line', () => {
+  const harvested = parseCritiqueTelemetryLine(validLine());
+  assert.ok('sample' in harvested);
+  const parsed = parseHarvestedCritiqueTelemetrySample(
+    JSON.stringify((harvested as { sample: CritiqueTelemetrySample }).sample),
+  );
+  assert.ok('sample' in parsed, 'expected a valid sample');
+});
+
+test('parseHarvestedCritiqueTelemetrySample rejects a schemaVersion other than 1 (#3005 review, Codex)', () => {
+  const harvested = parseCritiqueTelemetryLine(validLine());
+  assert.ok('sample' in harvested);
+  const corrupted = {
+    ...(harvested as { sample: CritiqueTelemetrySample }).sample,
+    schemaVersion: 2,
+  };
+  const parsed = parseHarvestedCritiqueTelemetrySample(
+    JSON.stringify(corrupted),
+  );
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /schemaVersion/);
+});
+
+test('parseHarvestedCritiqueTelemetrySample rejects an already-harvested line missing pr entirely (#3005 review, Copilot)', () => {
+  const harvested = parseCritiqueTelemetryLine(validLine());
+  assert.ok('sample' in harvested);
+  const { pr: _pr, ...withoutPr } = (
+    harvested as { sample: CritiqueTelemetrySample }
+  ).sample;
+  const parsed = parseHarvestedCritiqueTelemetrySample(
+    JSON.stringify(withoutPr),
+  );
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /\bpr\b/);
+});
+
 // ---------------------------------------------------------------------------
 // sampleDedupKey
 // ---------------------------------------------------------------------------
@@ -194,14 +265,17 @@ test('sampleDedupKey differs for two records sharing repo+issue+round+timestamp 
 // harvestCritiqueTelemetry
 // ---------------------------------------------------------------------------
 
+const FIXTURE_REPO = 'kurone-kito/idd-skill';
+
 test('harvestCritiqueTelemetry harvests the fixture log, skipping malformed lines and reporting counts', () => {
   const dir = sandboxDir();
   const outPath = join(dir, 'samples.jsonl');
-  const counts = harvestCritiqueTelemetry([FIXTURE_LOG], outPath);
+  const counts = harvestCritiqueTelemetry([FIXTURE_LOG], outPath, FIXTURE_REPO);
   assert.equal(counts.read, 5);
   assert.equal(counts.appended, 3);
   assert.equal(counts.skippedMalformed, 2);
   assert.equal(counts.skippedDuplicate, 0);
+  assert.equal(counts.skippedOtherRepo, 0);
   const lines = readFileSync(outPath, 'utf8')
     .split('\n')
     .filter((line) => line.length > 0);
@@ -211,9 +285,9 @@ test('harvestCritiqueTelemetry harvests the fixture log, skipping malformed line
 test('harvestCritiqueTelemetry is idempotent across repeated runs against the same log', () => {
   const dir = sandboxDir();
   const outPath = join(dir, 'samples.jsonl');
-  harvestCritiqueTelemetry([FIXTURE_LOG], outPath);
+  harvestCritiqueTelemetry([FIXTURE_LOG], outPath, FIXTURE_REPO);
   const firstRunContent = readFileSync(outPath, 'utf8');
-  const counts = harvestCritiqueTelemetry([FIXTURE_LOG], outPath);
+  const counts = harvestCritiqueTelemetry([FIXTURE_LOG], outPath, FIXTURE_REPO);
   assert.equal(counts.appended, 0);
   assert.equal(counts.skippedDuplicate, 3);
   assert.equal(readFileSync(outPath, 'utf8'), firstRunContent);
@@ -222,9 +296,14 @@ test('harvestCritiqueTelemetry is idempotent across repeated runs against the sa
 test('harvestCritiqueTelemetry --dry-run reports counts without writing --out', () => {
   const dir = sandboxDir();
   const outPath = join(dir, 'samples.jsonl');
-  const counts = harvestCritiqueTelemetry([FIXTURE_LOG], outPath, {
-    dryRun: true,
-  });
+  const counts = harvestCritiqueTelemetry(
+    [FIXTURE_LOG],
+    outPath,
+    FIXTURE_REPO,
+    {
+      dryRun: true,
+    },
+  );
   assert.equal(counts.appended, 3);
   assert.throws(() => readFileSync(outPath, 'utf8'));
 });
@@ -235,9 +314,33 @@ test('harvestCritiqueTelemetry silently skips a missing --in path', () => {
   const counts = harvestCritiqueTelemetry(
     [join(dir, 'does-not-exist.jsonl')],
     outPath,
+    FIXTURE_REPO,
   );
   assert.equal(counts.read, 0);
   assert.equal(counts.appended, 0);
+});
+
+test('harvestCritiqueTelemetry skips a well-formed record for a different repository (#3005 review, Copilot)', () => {
+  const dir = sandboxDir();
+  const inPath = join(dir, 'log.jsonl');
+  writeFileSync(inPath, `${validLine({ repo: 'someone-else/other-repo' })}\n`);
+  const outPath = join(dir, 'samples.jsonl');
+  const counts = harvestCritiqueTelemetry([inPath], outPath, FIXTURE_REPO);
+  assert.equal(counts.read, 1);
+  assert.equal(counts.appended, 0);
+  assert.equal(counts.skippedOtherRepo, 1);
+  assert.throws(() => readFileSync(outPath, 'utf8'));
+});
+
+test('parseRepoFlag validates the <owner>/<repo> shape', () => {
+  assert.deepEqual(parseRepoFlag('kurone-kito/idd-skill'), {
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+  });
+  assert.equal(parseRepoFlag(''), null);
+  assert.equal(parseRepoFlag('no-slash'), null);
+  assert.equal(parseRepoFlag('too/many/slashes'), null);
+  assert.equal(parseRepoFlag('owner/'), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -251,12 +354,12 @@ test('CLI: idd-critique-harvest.mjs writes appended records and prints counts', 
   const outPath = join(dir, 'samples.jsonl');
   const stdout = execFileSync(
     process.execPath,
-    [CLI_PATH, '--in', inPath, '--out', outPath],
+    [CLI_PATH, '--repo', FIXTURE_REPO, '--in', inPath, '--out', outPath],
     { encoding: 'utf8', timeout: 60_000 },
   );
   assert.match(
     stdout,
-    /read=1 appended=1 skipped-duplicate=0 skipped-malformed=0/,
+    /read=1 appended=1 skipped-duplicate=0 skipped-other-repo=0 skipped-malformed=0/,
   );
   const lines = readFileSync(outPath, 'utf8')
     .split('\n')
@@ -271,10 +374,32 @@ test('CLI: idd-critique-harvest.mjs --dry-run never creates --out', () => {
   const outPath = join(dir, 'samples.jsonl');
   execFileSync(
     process.execPath,
-    [CLI_PATH, '--in', inPath, '--out', outPath, '--dry-run'],
+    [
+      CLI_PATH,
+      '--repo',
+      FIXTURE_REPO,
+      '--in',
+      inPath,
+      '--out',
+      outPath,
+      '--dry-run',
+    ],
     { encoding: 'utf8', timeout: 60_000 },
   );
   assert.throws(() => readFileSync(outPath, 'utf8'));
+});
+
+test('CLI: idd-critique-harvest.mjs requires --repo', () => {
+  const dir = sandboxDir();
+  const inPath = join(dir, 'log.jsonl');
+  writeFileSync(inPath, `${validLine()}\n`);
+  assert.throws(() =>
+    execFileSync(process.execPath, [CLI_PATH, '--in', inPath], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    }),
+  );
 });
 
 test('CLI: idd-critique-harvest.mjs --help exits 0', () => {

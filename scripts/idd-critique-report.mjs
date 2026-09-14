@@ -22,7 +22,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
-import { parseCritiqueTelemetryLine } from './idd-critique-harvest.mjs';
+import {
+  parseHarvestedCritiqueTelemetrySample,
+  sampleDedupKey,
+} from './idd-critique-harvest.mjs';
 
 const DEFAULT_SNAPSHOT_PATH = 'docs/idd-critique-snapshot.json';
 // Deliberately NOT docs/idd-critique-telemetry.md: audit/sync-manifest.json's
@@ -56,12 +59,7 @@ export function assertCritiqueTelemetrySnapshot(snapshot) {
   if (snapshot.schemaVersion !== 1) {
     throw new Error('snapshot.schemaVersion must be 1');
   }
-  if (
-    typeof snapshot.generatedOn !== 'string' ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(snapshot.generatedOn)
-  ) {
-    throw new Error('snapshot.generatedOn must be a YYYY-MM-DD UTC date');
-  }
+  assertUtcCalendarDate(snapshot.generatedOn);
   if (!isNonNegativeInteger(snapshot.sampleCount)) {
     throw new Error('snapshot.sampleCount must be a non-negative integer');
   }
@@ -109,6 +107,31 @@ export function assertCritiqueTelemetrySnapshot(snapshot) {
   if (typeof snapshot.publishable !== 'boolean') {
     throw new Error('snapshot.publishable must be a boolean');
   }
+  const eligible = snapshot.sampleCount >= snapshot.minPublishableSamples;
+  if (snapshot.publishable !== eligible) {
+    throw new Error(
+      'snapshot.publishable must match the sampleCount/minPublishableSamples gate',
+    );
+  }
+}
+/**
+ * Validate a UTC calendar date string (`YYYY-MM-DD`), rejecting a
+ * shape-valid but impossible date such as `2026-02-30` (#3005 review,
+ * Copilot) by round-tripping through `Date`, mirroring
+ * token-cost-core.mts's own `assertUtcCalendarDate`.
+ */
+function assertUtcCalendarDate(value) {
+  if (typeof value !== 'string') {
+    throw new Error('snapshot.generatedOn must be a YYYY-MM-DD UTC date');
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    throw new Error('snapshot.generatedOn must be a YYYY-MM-DD UTC date');
+  }
 }
 function readJsonlLines(path) {
   const raw = readFileSync(path, 'utf8');
@@ -124,25 +147,41 @@ function readJsonlLines(path) {
  * fail closed rather than silently drop it from the aggregate, mirroring
  * token-cost-report.mts's own readSamples contract.
  *
- * Reuses the harvester's own {@link parseCritiqueTelemetryLine} for the
- * actual validation, rather than a second hand-rolled shape check: #3002
- * C1 critique found the original hand-rolled check here validated only
- * that `severityBreakdown` was a plain object, never its `high`/
- * `medium`/`low` sub-fields or the `acceptedCount + rejectedCount <=
- * findingsCount` invariant, so a corrupted or future-drifted samples
- * file could pass through as a well-formed sample and silently
- * aggregate into a snapshot with `NaN`/`null` fields. Sharing the parser
- * closes that gap structurally instead of requiring the two validators
- * to be kept in sync by hand.
+ * Uses the harvester's own {@link parseHarvestedCritiqueTelemetrySample}
+ * -- a strict validator for already-normalized records, distinct from
+ * the lenient raw-payload {@link parseCritiqueTelemetryLine} -- rather
+ * than a second hand-rolled shape check: #3002 C1 critique found an
+ * earlier hand-rolled check here validated only that `severityBreakdown`
+ * was a plain object, never its sub-fields or the `acceptedCount +
+ * rejectedCount <= findingsCount` invariant; the fix for that first
+ * reused the lenient raw parser directly, but #3005 review (Copilot)
+ * found THAT silently "repaired" an already-harvested record with a
+ * wrong `schemaVersion` or a missing `pr` key instead of failing closed.
+ * The strict parser closes both gaps at once.
+ *
+ * Also deduplicates by {@link sampleDedupKey} across every `--in` file
+ * combined (#3005 review, Codex and Copilot): a harvested samples file
+ * can itself carry a duplicate record -- e.g. from two concurrent
+ * harvester invocations racing past each other's in-flight write (see
+ * harvestCritiqueTelemetry's own doc comment) -- and the harvester's own
+ * dedup only ever prevents a *future* append, never retroactively
+ * removes one already written. Without this, a duplicate permanently
+ * inflates every downstream aggregate metric.
  */
 export function readCritiqueSamples(paths) {
   const samples = [];
+  const seenKeys = new Set();
   for (const path of paths) {
     for (const { lineNumber, text } of readJsonlLines(path)) {
-      const parsed = parseCritiqueTelemetryLine(text);
+      const parsed = parseHarvestedCritiqueTelemetrySample(text);
       if ('error' in parsed) {
         throw new Error(`${path}:${lineNumber}: ${parsed.error}`);
       }
+      const key = sampleDedupKey(parsed.sample);
+      if (seenKeys.has(key)) {
+        continue;
+      }
+      seenKeys.add(key);
       samples.push(parsed.sample);
     }
   }

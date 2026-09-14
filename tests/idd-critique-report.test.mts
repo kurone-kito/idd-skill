@@ -137,6 +137,20 @@ test('assertCritiqueTelemetrySnapshot rejects an out-of-range rate', () => {
   );
 });
 
+test('assertCritiqueTelemetrySnapshot rejects publishable disagreeing with the sampleCount gate (#3005 review, Copilot)', () => {
+  const snapshot = aggregateCritiqueSnapshot([], NOW);
+  assert.throws(() =>
+    assertCritiqueTelemetrySnapshot({ ...snapshot, publishable: true }),
+  );
+});
+
+test('assertCritiqueTelemetrySnapshot rejects an impossible calendar date (#3005 review, Copilot)', () => {
+  const snapshot = aggregateCritiqueSnapshot([sample()], NOW);
+  assert.throws(() =>
+    assertCritiqueTelemetrySnapshot({ ...snapshot, generatedOn: '2026-02-30' }),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // readCritiqueSamples
 // ---------------------------------------------------------------------------
@@ -182,6 +196,33 @@ test('readCritiqueSamples throws when acceptedCount + rejectedCount exceeds find
     () => readCritiqueSamples([inPath]),
     /acceptedCount \+ rejectedCount/,
   );
+});
+
+test('readCritiqueSamples throws on a schemaVersion other than 1 (#3005 review, Codex)', () => {
+  const dir = sandboxDir();
+  const inPath = join(dir, 'samples.jsonl');
+  const corrupted = { ...sample(), schemaVersion: 2 };
+  writeFileSync(inPath, `${JSON.stringify(corrupted)}\n`);
+  assert.throws(() => readCritiqueSamples([inPath]), /schemaVersion/);
+});
+
+test('readCritiqueSamples throws on an already-harvested line missing pr entirely (#3005 review, Copilot)', () => {
+  const dir = sandboxDir();
+  const inPath = join(dir, 'samples.jsonl');
+  const { pr: _pr, ...withoutPr } = sample();
+  writeFileSync(inPath, `${JSON.stringify(withoutPr)}\n`);
+  assert.throws(() => readCritiqueSamples([inPath]), /\bpr\b/);
+});
+
+test('readCritiqueSamples deduplicates an identical record repeated across --in files (#3005 review, Codex and Copilot)', () => {
+  const dir = sandboxDir();
+  const pathA = join(dir, 'samples-a.jsonl');
+  const pathB = join(dir, 'samples-b.jsonl');
+  const line = `${JSON.stringify(sample())}\n`;
+  writeFileSync(pathA, line);
+  writeFileSync(pathB, line);
+  const samples = readCritiqueSamples([pathA, pathB]);
+  assert.equal(samples.length, 1);
 });
 
 // ---------------------------------------------------------------------------

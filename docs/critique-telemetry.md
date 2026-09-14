@@ -42,23 +42,28 @@ but much simpler, measurement.
 ## How the snapshot is produced
 
 ```sh
-node scripts/idd-critique-harvest.mjs [--in <log.jsonl> ...] \
-  [--out <samples.jsonl>] [--dry-run]
+node scripts/idd-critique-harvest.mjs --repo kurone-kito/idd-skill \
+  [--in <log.jsonl> ...] [--out <samples.jsonl>] [--dry-run]
 ```
 
 This reads the local `idd-critique` JSONL log(s) (default `--in`:
-`${XDG_STATE_HOME:-$HOME/.local/state}/idd-critique/log.jsonl`) and
-validates each line against the documented payload contract. A line
-that fails to parse as JSON, or whose required fields are missing or
-mistyped, is skipped and counted — never fatal, so one bad line never
-loses the rest of the log. A line missing only an optional field is not
-malformed: `pr` normalizes to `null`, each of
-`severityBreakdown.high`/`.medium`/`.low` normalizes to `0` when
-absent, and `delegateCommand` stays unset. Every valid line is
-deduplicated by a content hash of its own normalized record (not a
-`repo`+`issue`+`round`+`timestamp` business key, which two genuinely
-different rounds could coincidentally share under concurrent load) and
-appended to `--out` (default:
+`${XDG_STATE_HOME:-$HOME/.local/state}/idd-critique/log.jsonl` — a
+**host-wide**, not per-repository, path) and validates each line
+against the documented payload contract. A line that fails to parse as
+JSON, or whose required fields are missing or mistyped, is skipped and
+counted — never fatal, so one bad line never loses the rest of the
+log. A line missing only an optional field is not malformed: `pr`
+normalizes to `null`, each of `severityBreakdown.high`/`.medium`/`.low`
+normalizes to `0` when the whole field is absent, and `delegateCommand`
+stays unset. `--repo` is required and keeps only records whose own
+`repo` field matches it exactly (`skippedOtherRepo` in the printed
+counts) — the same scoping `token-cost-harvest.mjs` already requires,
+needed here because this operator's other repositories can share the
+same host-wide log path. Every kept line is deduplicated by a content
+hash of its own normalized record (not a `repo`+`issue`+`round`+
+`timestamp` business key, which two genuinely different rounds could
+coincidentally share under concurrent load) and appended to `--out`
+(default:
 `${XDG_STATE_HOME:-$HOME/.local/state}/idd-skill/idd-critique/samples.jsonl`),
 so re-running the harvester against the same, possibly-grown log file
 never double-counts a round already harvested.
@@ -76,9 +81,10 @@ never double-counts a round already harvested.
   `token-cost-report.mjs` is: it refuses to run while the current
   branch is the repository's default branch, since a stray `--apply`
   left dirty on the shared primary worktree can block every concurrent
-  session's next B1 `git merge --ff-only` worktree creation. Pass
-  `--allow-default-branch` for an intentional maintainer run from the
-  primary worktree.
+  session's next B1 `git merge --ff-only` worktree creation — the
+  observed incident behind `token-cost-report.mjs`'s own guard
+  (`#2452`). Pass `--allow-default-branch` for an intentional
+  maintainer run from the primary worktree.
 
 A snapshot is `publishable` only once it has at least 10 harvested
 rounds. Below that gate, the table below stays on an unpublished

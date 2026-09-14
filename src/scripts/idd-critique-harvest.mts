@@ -44,16 +44,18 @@ export interface CritiqueSeverityBreakdown {
  * documented in docs/idd-workflow.md's "Repository-configurable critique
  * telemetry hook" section: this harvester normalizes (never
  * reconstructs) it -- `severityBreakdown`'s three keys always default to
- * `0` when the raw payload omits them, and `schemaVersion` is added for
- * forward compatibility with a future contract revision. `phase` stays a
- * plain `string` (not the literal `'C'`): docs/idd-workflow.md's own E10
- * section already names extending this hook to E10 as a "not-yet-scoped"
- * future change, and narrowing the type now would make that later
- * contract-only change break this file's own compile.
+ * `0` when the raw payload omits the whole field, and `schemaVersion` is
+ * added for forward compatibility with a future contract revision.
+ * `phase` is the literal `'C'`: the hook is documented as C1-only today
+ * (docs/idd-workflow.md's own E10 section names extending it as a
+ * separate, not-yet-scoped future change), so a record naming any other
+ * phase is rejected as malformed rather than silently accepted (#3005
+ * review, Copilot) -- widening this type is part of that future change,
+ * not a compatibility hedge to take on now.
  */
 export interface CritiqueTelemetrySample {
   schemaVersion: 1;
-  phase: string;
+  phase: 'C';
   round: number;
   repo: string;
   issue: number;
@@ -81,27 +83,48 @@ function isPositiveInteger(value: unknown): value is number {
 
 const SEVERITY_KEYS = ['high', 'medium', 'low'] as const;
 
+/** Selects between the two contracts {@link parseCritiqueTelemetryRecord} enforces. */
+type ParseRecordMode = 'raw' | 'harvested';
+
 /**
- * Parse and validate one JSONL line against the documented critique
- * telemetry payload contract. A structurally malformed line (invalid
- * JSON, or a required field with the wrong type or a value the contract
- * cannot express) resolves to `{ error }` rather than throwing -- the
- * harvester must keep processing the rest of the log (Acceptance
- * criteria: "without erroring on a malformed line"). An optional field
- * genuinely absent from an otherwise well-formed line is never an error:
- * `pr` normalizes to `null` when omitted, `severityBreakdown`'s three
- * keys each default to `0` when omitted, and `delegateCommand` stays
- * `undefined` when omitted (regardless of `delegateUsed`'s value -- the
- * contract does not promise that pairing strictly, so this validator
- * does not enforce it as fatal).
+ * Shared validation for one critique-telemetry JSONL line, parameterized
+ * by which contract it must satisfy (#3005 review, Copilot):
  *
- * Also enforces one cross-field sanity bound (#3002 B2 critique):
- * `acceptedCount + rejectedCount` must not exceed `findingsCount`. This
- * is deliberately looser than requiring exact equality, which a
- * partially-scored or delegate-scored round could legitimately violate.
+ * - `'raw'` ({@link parseCritiqueTelemetryLine}): the hook's own raw
+ *   payload, read at harvest time. Tolerates a genuinely absent
+ *   `schemaVersion` (the documented hook payload never sends one) and a
+ *   genuinely absent `pr` (defaults to `null`), matching the Acceptance
+ *   criteria's "record missing an optional field" requirement.
+ * - `'harvested'` ({@link parseHarvestedCritiqueTelemetrySample}): an
+ *   already-normalized line from this module's own samples file, read
+ *   back by the report step. Every field the harvester always writes
+ *   must be explicitly present with the exact normalized shape --
+ *   reusing the lenient `'raw'` defaults here would silently "repair" a
+ *   corrupted or future-schema-drifted already-harvested record instead
+ *   of failing closed (#3005 review, Copilot): `schemaVersion` must be
+ *   exactly `1`, and `pr` must be present (as a positive integer or
+ *   `null`), not merely defaultable from absent.
+ *
+ * A structurally malformed line (invalid JSON, or a required field with
+ * the wrong type or a value the contract cannot express) resolves to
+ * `{ error }` rather than throwing in both modes -- the caller decides
+ * whether that is fatal (the harvester tolerates it and keeps
+ * processing; the report reader's own caller fails closed on it
+ * instead).
+ *
+ * Both modes reject `phase` values other than the literal `'C'`, reject
+ * `severityBreakdown` present with a non-object value (only a
+ * genuinely absent field defaults to all-zero), reject a present
+ * `delegateCommand` when `delegateUsed` is `false` (the documented
+ * contract states it is present only when `delegateUsed` is `true`),
+ * and enforce the cross-field sanity bound `acceptedCount +
+ * rejectedCount <= findingsCount` -- deliberately looser than requiring
+ * exact equality, which a partially- or delegate-scored round could
+ * legitimately violate.
  */
-export function parseCritiqueTelemetryLine(
+function parseCritiqueTelemetryRecord(
   text: string,
+  mode: ParseRecordMode,
 ): { sample: CritiqueTelemetrySample } | { error: string } {
   let raw: unknown;
   try {
@@ -112,8 +135,11 @@ export function parseCritiqueTelemetryLine(
   if (!isPlainObject(raw)) {
     return { error: 'line is not a JSON object' };
   }
-  if (typeof raw.phase !== 'string' || raw.phase.length === 0) {
-    return { error: 'phase must be a non-empty string' };
+  if (mode === 'harvested' && raw.schemaVersion !== 1) {
+    return { error: 'schemaVersion must be exactly 1' };
+  }
+  if (raw.phase !== 'C') {
+    return { error: "phase must be exactly 'C'" };
   }
   if (!isPositiveInteger(raw.round)) {
     return { error: 'round must be a positive integer' };
@@ -123,6 +149,9 @@ export function parseCritiqueTelemetryLine(
   }
   if (!isPositiveInteger(raw.issue)) {
     return { error: 'issue must be a positive integer' };
+  }
+  if (mode === 'harvested' && raw.pr === undefined) {
+    return { error: 'pr must be present (a positive integer or null)' };
   }
   let pr: number | null = null;
   if (raw.pr !== null && raw.pr !== undefined) {
@@ -145,11 +174,13 @@ export function parseCritiqueTelemetryLine(
       error: 'acceptedCount + rejectedCount must not exceed findingsCount',
     };
   }
-  const severityRaw: Record<string, unknown> = isPlainObject(
-    raw.severityBreakdown,
-  )
-    ? raw.severityBreakdown
-    : {};
+  let severityRaw: Record<string, unknown> = {};
+  if (raw.severityBreakdown !== undefined) {
+    if (!isPlainObject(raw.severityBreakdown)) {
+      return { error: 'severityBreakdown must be an object when present' };
+    }
+    severityRaw = raw.severityBreakdown;
+  }
   const severityBreakdown: CritiqueSeverityBreakdown = {
     high: 0,
     medium: 0,
@@ -172,6 +203,11 @@ export function parseCritiqueTelemetryLine(
   }
   let delegateCommand: string | undefined;
   if (raw.delegateCommand !== undefined) {
+    if (raw.delegateUsed !== true) {
+      return {
+        error: 'delegateCommand must not be present when delegateUsed is false',
+      };
+    }
     if (
       typeof raw.delegateCommand !== 'string' ||
       raw.delegateCommand.length === 0
@@ -191,7 +227,7 @@ export function parseCritiqueTelemetryLine(
 
   const sample: CritiqueTelemetrySample = {
     schemaVersion: 1,
-    phase: raw.phase,
+    phase: 'C',
     round: raw.round,
     repo: raw.repo,
     issue: raw.issue,
@@ -207,6 +243,35 @@ export function parseCritiqueTelemetryLine(
     sample.delegateCommand = delegateCommand;
   }
   return { sample };
+}
+
+/**
+ * Parse and validate one RAW hook-payload JSONL line (harvest time). See
+ * {@link parseCritiqueTelemetryRecord}'s `'raw'` mode for the exact
+ * contract. A structurally malformed line resolves to `{ error }`
+ * rather than throwing -- the harvester must keep processing the rest
+ * of the log (Acceptance criteria: "without erroring on a malformed
+ * line").
+ */
+export function parseCritiqueTelemetryLine(
+  text: string,
+): { sample: CritiqueTelemetrySample } | { error: string } {
+  return parseCritiqueTelemetryRecord(text, 'raw');
+}
+
+/**
+ * Parse and strictly validate one already-HARVESTED JSONL line (report
+ * time), as written by this module's own {@link harvestCritiqueTelemetry}.
+ * See {@link parseCritiqueTelemetryRecord}'s `'harvested'` mode for the
+ * exact contract; used by idd-critique-report.mts's readCritiqueSamples
+ * to fail closed on a corrupted or future-schema-drifted samples file
+ * instead of silently normalizing it the way the lenient raw-payload
+ * parser above would (#3005 review, Copilot).
+ */
+export function parseHarvestedCritiqueTelemetrySample(
+  text: string,
+): { sample: CritiqueTelemetrySample } | { error: string } {
+  return parseCritiqueTelemetryRecord(text, 'harvested');
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +314,7 @@ export interface HarvestCounts {
   appended: number;
   skippedDuplicate: number;
   skippedMalformed: number;
+  skippedOtherRepo: number;
   malformedDetails: string[];
 }
 
@@ -279,8 +345,18 @@ function readExistingDedupKeys(outPath: string): Set<string> {
 
 /**
  * Harvest every `inPaths` JSONL log into `outPath`'s aggregate samples
- * file. Idempotent: re-running against the same (possibly grown) log
- * never re-appends a sample already present in `outPath` (see
+ * file, keeping only records whose own `repo` field matches `repo`
+ * (`<owner>/<repo>`, exact string match). The documented log path
+ * (`${XDG_STATE_HOME:-$HOME/.local/state}/idd-critique/log.jsonl`) is
+ * host-wide, not per-repository, and the hook payload's own `repo`
+ * field exists precisely so multiple repositories' telemetry sharing
+ * one host can be told apart -- mirroring token-cost-harvest.mts's own
+ * required `--repo` scoping (#3005 review, Copilot). A record for a
+ * different repository is neither malformed nor a duplicate; it is
+ * counted separately as `skippedOtherRepo`.
+ *
+ * Idempotent: re-running against the same (possibly grown) log never
+ * re-appends a sample already present in `outPath` (see
  * {@link sampleDedupKey}). A missing `inPaths` entry is silently
  * skipped -- the hook may not have run yet, or a repository may not
  * configure it at all.
@@ -288,15 +364,19 @@ function readExistingDedupKeys(outPath: string): Set<string> {
  * Known limitation (#3002 C1 critique): the read-existing-keys-then-
  * append sequence is not atomic across two concurrent invocations
  * against the same `outPath` -- each could miss the other's in-flight
- * write and both append the same record. Harmless in practice (a
- * duplicate line only inflates one snapshot metric by one until the
- * next harvest re-dedupes it against a fully-flushed file), and the
- * same non-atomic shape token-cost-harvest.mts's own local samples file
- * already has; not hardened further here.
+ * write and both append the same record, the same non-atomic shape
+ * token-cost-harvest.mts's own local samples file already has. Not
+ * hardened further here at the harvest layer: idd-critique-report.mts's
+ * own `readCritiqueSamples` deduplicates by the same {@link
+ * sampleDedupKey} across every file it reads (#3005 review, Codex and
+ * Copilot), so a rare duplicate line never permanently inflates a
+ * downstream aggregate even though it can transiently exist in
+ * `outPath` between harvest runs.
  */
 export function harvestCritiqueTelemetry(
   inPaths: readonly string[],
   outPath: string,
+  repo: string,
   options: { dryRun?: boolean } = {},
 ): HarvestCounts {
   const counts: HarvestCounts = {
@@ -304,6 +384,7 @@ export function harvestCritiqueTelemetry(
     appended: 0,
     skippedDuplicate: 0,
     skippedMalformed: 0,
+    skippedOtherRepo: 0,
     malformedDetails: [],
   };
   const seenKeys = readExistingDedupKeys(outPath);
@@ -319,6 +400,10 @@ export function harvestCritiqueTelemetry(
       if ('error' in parsed) {
         counts.skippedMalformed += 1;
         counts.malformedDetails.push(`${inPath}:${index + 1}: ${parsed.error}`);
+        continue;
+      }
+      if (parsed.sample.repo !== repo) {
+        counts.skippedOtherRepo += 1;
         continue;
       }
       const key = sampleDedupKey(parsed.sample);
@@ -363,10 +448,26 @@ export function defaultSamplesPath(): string {
 // CLI
 // ---------------------------------------------------------------------------
 
+/** Validates a --repo <owner>/<repo> flag value; null for anything but exactly two non-empty segments. Mirrors token-cost-harvest.mts's own parseRepoFlag. */
+export function parseRepoFlag(
+  repoFlag: string,
+): { owner: string; repo: string } | null {
+  const parts = repoFlag
+    .trim()
+    .split('/')
+    .map((part) => part.trim());
+  if (parts.length !== 2 || parts.some((part) => part === '')) {
+    return null;
+  }
+  const [owner, repo] = parts;
+  return { owner, repo };
+}
+
 // Flag-spec keys stay the dashed literal on purpose -- see cli-args.mts's
 // module header (tests/flag-name-matrix.test.mts scans each helper's own
 // compiled .mjs source text for its canonical flags as quoted literals).
 const IDD_CRITIQUE_HARVEST_FLAG_SPEC = {
+  '--repo': { type: 'string', default: '' },
   '--in': { type: 'string', multiple: true },
   '--out': { type: 'string', default: '' },
   '--dry-run': { type: 'boolean', default: false },
@@ -375,8 +476,12 @@ const IDD_CRITIQUE_HARVEST_FLAG_SPEC = {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/idd-critique-harvest.mjs [--in <log.jsonl> ...] [--out <samples.jsonl>] [--dry-run]
+  node scripts/idd-critique-harvest.mjs --repo <owner>/<repo> [--in <log.jsonl> ...] [--out <samples.jsonl>] [--dry-run]
 
+  --repo <owner>/<repo>  Repository to keep harvested records for. The
+                 documented log path is host-wide, not per-repository,
+                 so a record naming a different repo is skipped
+                 (skippedOtherRepo), never harvested. Required.
   --in <path>    Critique-telemetry JSONL log to harvest (repeatable;
                  default: ${defaultLogPath()}).
   --out <path>   Aggregate samples JSONL file to append validated,
@@ -395,12 +500,23 @@ if (import.meta.main) {
     printHelp();
     process.exit(0);
   }
+  const repoFlag = values.repo as string;
+  const parsedRepo = parseRepoFlag(repoFlag);
+  if (!parsedRepo) {
+    process.stderr.write(
+      repoFlag.trim() === ''
+        ? '--repo <owner>/<repo> is required\n'
+        : `--repo must be in <owner>/<repo> form, got: ${repoFlag}\n`,
+    );
+    process.exit(2);
+  }
+  const repo = `${parsedRepo.owner}/${parsedRepo.repo}`;
   const inPaths = (values.in as string[] | undefined) ?? [defaultLogPath()];
   const outPath = (values.out as string) || defaultSamplesPath();
   const dryRun = values['dry-run'] as boolean;
-  const counts = harvestCritiqueTelemetry(inPaths, outPath, { dryRun });
+  const counts = harvestCritiqueTelemetry(inPaths, outPath, repo, { dryRun });
   process.stdout.write(
-    `idd-critique-harvest: read=${counts.read} appended=${counts.appended} skipped-duplicate=${counts.skippedDuplicate} skipped-malformed=${counts.skippedMalformed}${
+    `idd-critique-harvest: read=${counts.read} appended=${counts.appended} skipped-duplicate=${counts.skippedDuplicate} skipped-other-repo=${counts.skippedOtherRepo} skipped-malformed=${counts.skippedMalformed}${
       dryRun ? ' (dry-run)' : ` -> ${outPath}`
     }\n`,
   );
