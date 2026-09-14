@@ -27,6 +27,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { parseCliArgs } from './cli-args.mts';
+import { isValidIsoTimestamp } from './marker-helpers.mts';
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -178,9 +179,17 @@ function parseCritiqueTelemetryRecord(
   if (!isNonNegativeInteger(raw.rejectedCount)) {
     return { error: 'rejectedCount must be a non-negative integer' };
   }
-  if (raw.acceptedCount + raw.rejectedCount > raw.findingsCount) {
+  if (raw.acceptedCount + raw.rejectedCount !== raw.findingsCount) {
+    // `idd-work.instructions.md`'s C4 requires deciding Accept or Reject
+    // for every finding before the telemetry hook fires -- verified
+    // against that primary source rather than assumed (#3005 review
+    // round 3, Codex): an earlier revision of this check allowed
+    // acceptedCount + rejectedCount to fall short of findingsCount on
+    // the theory that a partially-scored round could legitimately do
+    // so, but the documented C-phase contract never actually permits
+    // that, so exact equality is the correct bound.
     return {
-      error: 'acceptedCount + rejectedCount must not exceed findingsCount',
+      error: 'acceptedCount + rejectedCount must equal findingsCount',
     };
   }
   if (mode === 'harvested' && raw.severityBreakdown === undefined) {
@@ -220,6 +229,18 @@ function parseCritiqueTelemetryRecord(
     }
     severityBreakdown[key] = value;
   }
+  if (
+    severityBreakdown.high + severityBreakdown.medium + severityBreakdown.low >
+    raw.findingsCount
+  ) {
+    // Unlike acceptedCount/rejectedCount above, a partial severity
+    // breakdown is intentionally allowed (not every finding need carry
+    // a severity tag), so this stays a `<=` bound rather than equality
+    // (#3005 review round 3, Copilot).
+    return {
+      error: 'severityBreakdown total must not exceed findingsCount',
+    };
+  }
   if (typeof raw.delegateUsed !== 'boolean') {
     return { error: 'delegateUsed must be a boolean' };
   }
@@ -240,10 +261,14 @@ function parseCritiqueTelemetryRecord(
     }
     delegateCommand = raw.delegateCommand;
   }
-  if (
-    typeof raw.timestamp !== 'string' ||
-    Number.isNaN(Date.parse(raw.timestamp))
-  ) {
+  if (!isValidIsoTimestamp(raw.timestamp)) {
+    // Date.parse is permissive: it accepts non-ISO strings and can
+    // normalize an impossible calendar date instead of rejecting it, so
+    // a bare Date.parse check would let those slip past this
+    // documented ISO8601 timestamp contract (#3005 review round 3,
+    // Copilot and Codex). isValidIsoTimestamp round-trips through
+    // Date#toISOString() and compares the normalized strings, the same
+    // strict check already used throughout marker-helpers.mts.
     return { error: 'timestamp must be a valid ISO8601 string' };
   }
 
@@ -424,7 +449,12 @@ export function harvestCritiqueTelemetry(
         counts.malformedDetails.push(`${inPath}:${index + 1}: ${parsed.error}`);
         continue;
       }
-      if (parsed.sample.repo !== repo) {
+      // GitHub owner/repository identities are case-insensitive (same
+      // precedent as audit-authored-issue.mts's own repo comparison),
+      // so a payload naming e.g. `Kurone-Kito/idd-skill` must still
+      // match `--repo kurone-kito/idd-skill` (#3005 review round 3,
+      // Copilot).
+      if (parsed.sample.repo.toLowerCase() !== repo.toLowerCase()) {
         counts.skippedOtherRepo += 1;
         continue;
       }

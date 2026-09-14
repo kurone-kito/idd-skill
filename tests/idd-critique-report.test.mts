@@ -176,6 +176,13 @@ test('assertCritiqueTelemetrySnapshot rejects a stale delegateUsageRate that dis
   );
 });
 
+test('assertCritiqueTelemetrySnapshot rejects a minPublishableSamples other than the fixed policy constant (#3005 review round 3, Codex)', () => {
+  const snapshot = aggregateCritiqueSnapshot([], NOW);
+  assert.throws(() =>
+    assertCritiqueTelemetrySnapshot({ ...snapshot, minPublishableSamples: 0 }),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // readCritiqueSamples
 // ---------------------------------------------------------------------------

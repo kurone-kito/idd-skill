@@ -129,9 +129,13 @@ export function assertCritiqueTelemetrySnapshot(snapshot) {
       'snapshot.delegateUsageRate must match delegateUsageCount/sampleCount',
     );
   }
-  if (!isNonNegativeInteger(snapshot.minPublishableSamples)) {
+  // Fixed policy, not merely shape-checked: a corrupted or hand-edited
+  // snapshot setting this to e.g. 0 would otherwise let `--check` render
+  // a "publishable" table at n=0, bypassing the documented ten-round
+  // gate entirely (#3005 review round 3, Codex).
+  if (snapshot.minPublishableSamples !== MIN_PUBLISHABLE_SAMPLES) {
     throw new Error(
-      'snapshot.minPublishableSamples must be a non-negative integer',
+      `snapshot.minPublishableSamples must equal ${MIN_PUBLISHABLE_SAMPLES}`,
     );
   }
   if (typeof snapshot.publishable !== 'boolean') {

@@ -120,9 +120,20 @@ test('parseCritiqueTelemetryLine rejects acceptedCount + rejectedCount exceeding
   );
 });
 
-test('parseCritiqueTelemetryLine tolerates acceptedCount + rejectedCount below findingsCount (no strict equality required)', () => {
+test('parseCritiqueTelemetryLine rejects acceptedCount + rejectedCount falling short of findingsCount (#3005 review round 3, Codex: idd-work.instructions.md C4 requires a decision for every finding)', () => {
   const parsed = parseCritiqueTelemetryLine(
     validLine({ findingsCount: 3, acceptedCount: 1, rejectedCount: 0 }),
+  );
+  assert.ok('error' in parsed);
+  assert.match(
+    (parsed as { error: string }).error,
+    /acceptedCount \+ rejectedCount must equal findingsCount/,
+  );
+});
+
+test('parseCritiqueTelemetryLine requires acceptedCount + rejectedCount to equal findingsCount exactly', () => {
+  const parsed = parseCritiqueTelemetryLine(
+    validLine({ findingsCount: 3, acceptedCount: 2, rejectedCount: 1 }),
   );
   assert.ok('sample' in parsed, 'expected a valid sample');
 });
@@ -171,6 +182,47 @@ test('parseCritiqueTelemetryLine rejects delegateCommand present when delegateUs
   );
   assert.ok('error' in parsed);
   assert.match((parsed as { error: string }).error, /delegateCommand/);
+});
+
+test('parseCritiqueTelemetryLine rejects a severityBreakdown total exceeding findingsCount (#3005 review round 3, Copilot)', () => {
+  const parsed = parseCritiqueTelemetryLine(
+    validLine({
+      findingsCount: 1,
+      severityBreakdown: { high: 1, medium: 1, low: 0 },
+      acceptedCount: 1,
+      rejectedCount: 0,
+    }),
+  );
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /severityBreakdown total/);
+});
+
+test('parseCritiqueTelemetryLine tolerates a partial severityBreakdown total below findingsCount (no equality required)', () => {
+  const parsed = parseCritiqueTelemetryLine(
+    validLine({
+      findingsCount: 3,
+      severityBreakdown: { high: 1, medium: 0, low: 0 },
+      acceptedCount: 3,
+      rejectedCount: 0,
+    }),
+  );
+  assert.ok('sample' in parsed, 'expected a valid sample');
+});
+
+test('parseCritiqueTelemetryLine rejects a non-ISO timestamp Date.parse would otherwise accept (#3005 review round 3, Copilot and Codex)', () => {
+  const parsed = parseCritiqueTelemetryLine(
+    validLine({ timestamp: '09/08/2026' }),
+  );
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /timestamp/);
+});
+
+test('parseCritiqueTelemetryLine rejects an impossible calendar date in the timestamp (#3005 review round 3, Copilot and Codex)', () => {
+  const parsed = parseCritiqueTelemetryLine(
+    validLine({ timestamp: '2026-02-30T12:00:00Z' }),
+  );
+  assert.ok('error' in parsed);
+  assert.match((parsed as { error: string }).error, /timestamp/);
 });
 
 // ---------------------------------------------------------------------------
@@ -285,6 +337,7 @@ test('sampleDedupKey differs for two records sharing repo+issue+round+timestamp 
       findingsCount: 1,
       acceptedCount: 1,
       rejectedCount: 0,
+      severityBreakdown: { high: 1, medium: 0, low: 0 },
     }),
   );
   const b = parseCritiqueTelemetryLine(
@@ -294,6 +347,7 @@ test('sampleDedupKey differs for two records sharing repo+issue+round+timestamp 
       findingsCount: 2,
       acceptedCount: 1,
       rejectedCount: 1,
+      severityBreakdown: { high: 1, medium: 1, low: 0 },
     }),
   );
   assert.ok('sample' in a && 'sample' in b);
@@ -372,6 +426,16 @@ test('harvestCritiqueTelemetry skips a well-formed record for a different reposi
   assert.equal(counts.appended, 0);
   assert.equal(counts.skippedOtherRepo, 1);
   assert.throws(() => readFileSync(outPath, 'utf8'));
+});
+
+test('harvestCritiqueTelemetry matches --repo case-insensitively (#3005 review round 3, Copilot)', () => {
+  const dir = sandboxDir();
+  const inPath = join(dir, 'log.jsonl');
+  writeFileSync(inPath, `${validLine({ repo: 'Kurone-Kito/Idd-Skill' })}\n`);
+  const outPath = join(dir, 'samples.jsonl');
+  const counts = harvestCritiqueTelemetry([inPath], outPath, FIXTURE_REPO);
+  assert.equal(counts.appended, 1);
+  assert.equal(counts.skippedOtherRepo, 0);
 });
 
 test('parseRepoFlag validates the <owner>/<repo> shape', () => {

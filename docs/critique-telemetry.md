@@ -62,7 +62,9 @@ needed here because this operator's other repositories can share the
 same host-wide log path. Every kept line is deduplicated by a content
 hash of its own normalized record (not a `repo`+`issue`+`round`+
 `timestamp` business key, which two genuinely different rounds could
-coincidentally share under concurrent load) and appended to `--out`
+coincidentally share under concurrent load — the incident this
+project's own issue `#3002` B2 critique pass raised) and appended to
+`--out`
 (default:
 `${XDG_STATE_HOME:-$HOME/.local/state}/idd-skill/idd-critique/samples.jsonl`),
 so re-running the harvester against the same, possibly-grown log file
