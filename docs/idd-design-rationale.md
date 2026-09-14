@@ -928,40 +928,58 @@ Splitting the sample by merge date (older half 2026-08-17 to
 2026-09-03, n=185, versus newer half 2026-09-03 to 2026-09-14, n=215)
 showed a clear rising trend consistent with this repository's rising
 IDD concurrency and throughput over the same period: mean 3.15 to
-4.04 (+28%), p90 5 to 8 (+60%), p95 8 to 9 — the newer half's p95 is
-also corrected here, from this recalibration's originally-reported 10
-down to 9, by the same full-pagination fix described above (the
-newer half is small enough, n=215, that even one or two corrected
-outlier counts can shift which value lands exactly at the p95 index).
-Restricting to the 68 PRs
-merged since the `15` default went live (2026-09-10 onward) — an exact
-match to the originally-circulated PR count, confirming the underlying
-400-PR sample and date window were otherwise sound — showed mean=5.56,
-p90=10, and a corrected max=35 (`#2895`, not 22); the four highest
-post-cutoff PRs are 35, 32, 23, and 17 rounds (`#2895`, `#2840`,
-`#2855`, `#2868`), not 22/18/17/17 as originally reported, with no
-visible censoring at 15 either way, most plausibly because those
-specific high-round PRs' recurring findings were Medium/High-severity
-(exempt from deferral by design) rather than any compliance gap in the
-mechanism itself. Spot-checking the highest-count PRs found no
-bot/vendor-bump/mass-rename noise skewing the sample: every one is
+4.04 (+28%), p90 5 to 8 (+60%), p95 8 to 10 — matching, not correcting,
+this recalibration's originally-reported newer-half p95 of 10. An
+earlier draft of this note mis-reported the newer-half p95 as 9 using
+a non-standard percentile rounding rule inconsistent with the
+nearest-rank method used everywhere else in this analysis; a PR review
+correctly pointed out that full-pagination correction can only raise
+individual PR counts, never lower them, so a corrected percentile
+computed the same way as before can never _decrease_ — recomputing
+with the same nearest-rank method used throughout gives 10, unchanged.
+
+**Second correction (2026-09-15, later same-day PR review,
+`chatgpt-codex-connector`):** the "68 PRs merged since the `15`
+default went live (2026-09-10 onward)" cohort below used a coarse
+midnight UTC boundary rather than the actual rollout instant. The `15`
+default's own PR (kurone-kito/idd-skill#2867) merged at
+2026-09-10T09:20:17Z — 13 PRs credited to the post-rollout cohort
+actually merged earlier that same UTC day, before the rollout,
+including `#2840` (merged 2026-09-10T08:25:14Z, roughly 55 minutes
+before rollout) at 32 rounds. Re-filtering by the actual rollout
+timestamp gives a corrected post-rollout cohort of n=55 (not 68), with
+mean=5.4 (not 5.56), p90=10 (unchanged), and max=35 (`#2895`, unchanged
+— `#2895` merged after rollout either way); the four highest correctly
+in-cohort PRs are 35, 23, 17, and 14 rounds (`#2895`, `#2855`, `#2868`,
+`#2928`), not 35/32/23/17 as this note previously (still incorrectly)
+reported. No visible censoring at 15 either way, most plausibly because
+those specific high-round PRs' recurring findings were Medium/High-
+severity (exempt from deferral by design) rather than any compliance
+gap in the mechanism itself. Spot-checking the highest-count PRs found
+no bot/vendor-bump/mass-rename noise skewing the sample: every one is
 genuine human-authored feature/fix work, including some small-diff PRs
-with disproportionately high round counts from protracted back-and-forth
-rather than diff size.
+with disproportionately high round counts from protracted
+back-and-forth rather than diff size. This cohort still only
+coarsely approximates behavior specifically under the `15` default: a
+PR merging after rollout can still carry review activity that started
+before it, so PR-merge-time filtering alone does not isolate reviews
+actually conducted under `15` — a further, disclosed limitation this
+recalibration does not attempt to resolve (see the caveats below).
 
 Twelve sits just above both the full-month p95 (9) and the
-most-recent-half p95 (9) — a modest, data-grounded tightening in
+most-recent-half p95 (10) — a modest, data-grounded tightening in
 response to the observed rising trend, while still exempting roughly
 97-98% of ordinary review-fix loops (only 9 of the 400 sampled PRs
-cross it, unchanged by the correction above) from the deferral path.
+cross it, unchanged by either correction above) from the deferral path.
 This replaces the original value's stale, cherry-picked justification
 (six outlier PRs, not a representative sample) with one derived from a
 full representative month, without swinging to an aggressive cutoff
 that would defer a meaningfully larger share of ordinary loops. See
 kurone-kito/idd-skill#2999 for the full methodology and the acceptance
 criteria that applied it across every mirrored occurrence of this
-default, and PR kurone-kito/idd-skill#3004's own review thread for the
-pagination-undercount finding and this correction.
+default, and PR kurone-kito/idd-skill#3004's own review threads for
+the pagination-undercount, percentile-method, and rollout-boundary
+findings and these corrections.
 
 **Open caveat, not resolved by this recalibration** (raised in the same
 PR review, `chatgpt-codex-connector`): every figure above counts
@@ -984,6 +1002,19 @@ not just its review list), which is a substantially larger effort than
 this issue's own scope of recalibrating an existing default using the
 existing counting convention. Left as a candidate follow-up rather than
 attempted here.
+
+**Second open caveat** (also raised by `chatgpt-codex-connector`,
+alongside the rollout-boundary correction above): filtering the
+post-rollout cohort by each PR's own merge timestamp only approximates
+"reviewed under the `15` default." A PR merging after rollout can
+still carry review activity — including some of its Copilot
+submissions — that started before rollout, so PR-merge-time filtering
+does not cleanly isolate review activity conducted while `15` was
+actually live. Precisely isolating that would require filtering by
+each individual review's own submission timestamp rather than the
+PR's merge timestamp, which this recalibration does not attempt; the
+corrected 55-PR cohort above should be read as a closer, not exact,
+approximation of behavior specifically under `15`.
 
 ### review-ack worked example
 
