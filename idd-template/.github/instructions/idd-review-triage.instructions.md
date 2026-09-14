@@ -167,7 +167,7 @@ state of its own, but can still match a prior resolved thread's claim.
   at current HEAD, or the new occurrence carries genuinely new
   information the prior thread did not address.
 
-**Round-count cutoff (`critiqueLoop.deferAfterRounds`, default `15`).**
+**Round-count cutoff (`critiqueLoop.deferAfterRounds`, default `12`).**
 Once the claim's `review-watermark` post count (paginated,
 including minimized ones and this pass's own E1 post) reaches the
 threshold, disposition an undispositioned Low-severity (E4) PATH A

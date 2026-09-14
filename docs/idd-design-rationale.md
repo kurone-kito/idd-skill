@@ -865,6 +865,174 @@ marker, its `Refs #<N>` reference is resolved the same way an ordinary
 `Blocked by #<N>` line is — excluded from Discover while `#<N>` stays
 open. An unmarked issue's `Refs` lines are completely unaffected.
 
+#### 2026-09-15 recalibration to 12, using a month of real data (kurone-kito/idd-skill#2999)
+
+By 2026-09-14, roughly a month of historical review-fix-loop data
+existed to sample, even though the `15` default itself had only been
+live for 4 days (2026-09-10 to 2026-09-14) of that month — the
+analysis below draws on historical loop lengths recorded under
+whatever cutoff was active at each sampled PR's own time, not on `15`'s
+own accumulated track record; a smaller, dedicated post-rollout
+subsample (merged PRs since 2026-09-10) is examined separately below
+for that narrower, apples-to-apples comparison — see that subsection
+for its corrected size and figures; an earlier draft of this
+introduction cited a stale, since-corrected count here. Pulling the 400
+most recently merged PRs in this repository (`gh api graphql`,
+`repo:kurone-kito/idd-skill is:pr is:merged`, counting `reviews` nodes
+with `author.login == "copilot-pull-request-reviewer"` per PR — the
+same counting method the entry above already cites) over a `mergedAt`
+range of 2026-08-17 to 2026-09-14 (roughly 28 days) gave an initial
+full-sample (n=400) distribution of min=0, p25=1, median=2, p75=4,
+p90=7, p95=9, p99=17, max=22, mean=3.42, with only 1 PR (0.25%)
+reaching 20 or more rounds and none reaching 25 or more.
+
+**Correction (2026-09-15, same-day PR review, `chatgpt-codex-connector`):**
+a reviewer on this recalibration's own pull request found that a PR
+inside the sampled window with 59 Copilot reviews makes the
+above-reported max of 22 impossible, and asked for the sampling
+methodology to be reconciled before relying on it for calibration.
+Independently re-running the count with full result-set pagination
+(the initial pass, like this same mistake made once directly against
+this recalibration's own draft text, silently truncated any PR with
+more than 100 total review-timeline entries — precisely the highest
+outlier PRs) against the identical 400-PR sample gives a corrected
+distribution of min=0, p25=1, median=2, p75=4, p90=7, p95=9, **p99=21,
+max=59** (`#2264`), mean=3.63. Threshold coverage: 35 PRs (8.75%)
+reached 8 or more rounds, 17 (4.25%) reached 10 or more, 9 (2.25%)
+reached 12 or more, 7 (1.75%) reached 15 or more, 5 (1.25%) reached 20
+or more, and 3 (0.75%) reached 25 or more (the same 3 also reach 30 or
+more). Every percentile from p25 through p95, and the 9-PR (2.25%)
+count at the `12`-round threshold this recalibration actually turns
+on, are **unchanged** by the correction — only the tail beyond p95 (p99
+and max) and the coarser high-end threshold buckets (≥20/≥25/≥30) were
+affected, consistent with an undercount that only silently truncates
+the small number of PRs busy enough to exceed 100 total review-timeline
+entries.
+
+Of the six PRs originally cited for the stale `15` default, five merged
+inside this 400-PR window — issue `#2255`, issue `#2264`, issue
+`#2368`, issue `#2403`, and issue `#2840`; only issue `#2018` (merged
+2026-08-15) predates it — and their corrected, fully-paginated Copilot
+review-submission counts are 21, 59, 11, 11, and 32 respectively,
+spanning nearly the full original 11-59 citation range. Issue `#2264`'s
+59 is in fact this sample's new corrected max. This specific tension —
+between the 2026-09-10 rationale's 11-59 citation and this
+recalibration's own first-draft sample, which had wrongly reported a
+max of only 22 — traces entirely to the pagination undercount corrected
+above, and is resolved by that correction: it was a bug in this
+recalibration's own data collection, not a genuinely different or
+unreconcilable counting methodology between the two entries. This is a
+narrower claim than "the review-fix-loop measurement approach itself
+has no open questions" — see the two caveats below, which this
+correction does not resolve.
+
+Splitting the sample by merge date (older half 2026-08-17 to
+2026-09-03, n=185, versus newer half 2026-09-03 to 2026-09-14, n=215)
+showed a clear rising trend consistent with this repository's rising
+IDD concurrency and throughput over the same period: mean 3.15 to
+4.04 (+28%), p90 5 to 8 (+60%), p95 8 to 10 — matching, not correcting,
+this recalibration's originally-reported newer-half p95 of 10. An
+earlier draft of this note mis-reported the newer-half p95 as 9 using
+a non-standard percentile rounding rule inconsistent with the
+nearest-rank method used everywhere else in this analysis; a PR review
+correctly pointed out that full-pagination correction can only raise
+individual PR counts, never lower them, so a corrected percentile
+computed the same way as before can never _decrease_ — recomputing
+with the same nearest-rank method used throughout gives 10, unchanged.
+
+**Second correction (2026-09-15, later same-day PR review,
+`chatgpt-codex-connector`):** the "68 PRs merged since the `15`
+default went live (2026-09-10 onward)" cohort below used a coarse
+midnight UTC boundary rather than the actual rollout instant. The `15`
+default's own PR (kurone-kito/idd-skill#2867) merged at
+2026-09-10T09:20:17Z — 13 PRs credited to the post-rollout cohort
+actually merged earlier that same UTC day, before the rollout,
+including `#2840` (merged 2026-09-10T08:25:14Z, roughly 55 minutes
+before rollout) at 32 rounds. Re-filtering by the actual rollout
+timestamp gives a corrected post-rollout cohort of n=55 (not 68), with
+mean=5.4 (not 5.56), p90=10 (unchanged), and max=35 (`#2895`, unchanged
+— `#2895` merged after rollout either way); the four highest correctly
+in-cohort PRs are 35, 23, 17, and 14 rounds (`#2895`, `#2855`, `#2868`,
+`#2928`), not 35/32/23/17 as this note previously (still incorrectly)
+reported. No visible censoring at 15 either way, most plausibly because
+those specific high-round PRs' recurring findings were Medium/High-
+severity (exempt from deferral by design) rather than any compliance
+gap in the mechanism itself. Spot-checking the highest-count PRs found
+no bot/vendor-bump/mass-rename noise skewing the sample: every one is
+genuine human-authored feature/fix work, including some small-diff PRs
+with disproportionately high round counts from protracted
+back-and-forth rather than diff size. This cohort still only
+coarsely approximates behavior specifically under the `15` default: a
+PR merging after rollout can still carry review activity that started
+before it, so PR-merge-time filtering alone does not isolate reviews
+actually conducted under `15` — a further, disclosed limitation this
+recalibration does not attempt to resolve (see the caveats below).
+
+Twelve sits just above both the full-month p95 (9) and the
+most-recent-half p95 (10) — a modest, data-grounded tightening in
+response to the observed rising trend, while still exempting roughly
+97-98% of ordinary review-fix loops (only 9 of the 400 sampled PRs
+cross it, unchanged by either correction above) from the deferral path.
+This replaces the original value's stale, cherry-picked justification
+(six outlier PRs, not a representative sample) with one derived from a
+full representative month, without swinging to an aggressive cutoff
+that would defer a meaningfully larger share of ordinary loops. See
+kurone-kito/idd-skill#2999 for the full methodology and the acceptance
+criteria that applied it across every mirrored occurrence of this
+default, and PR kurone-kito/idd-skill#3004's own review threads for
+the pagination-undercount, percentile-method, and rollout-boundary
+findings and these corrections.
+
+**Open caveat, not resolved by this recalibration** (raised in the same
+PR review, `chatgpt-codex-connector`): every figure above counts
+Copilot review submissions per PR, the same proxy the original 2026-
+09-10 rationale already used to justify `15`. The mechanism this
+default actually gates is the same-claim `review-watermark` **post**
+count (`idd-review-triage.instructions.md`'s round-count cutoff
+section), which E1 refreshes once per snapshot and can refresh again
+after disposition activity independently of a fresh Copilot
+submission — so the two counters are not guaranteed to move 1:1, and
+watermark-post counts could run higher than Copilot-review counts on a
+PR with several disposition-driven refreshes in the same round. This
+recalibration reuses the existing proxy symmetrically for both the old
+and the new value rather than introducing a new one, so it does not, by
+itself, make the cutoff's real-world firing rate any less well
+understood than it already was under `15` — but a rigorous fix would
+mean re-deriving this whole distribution against actual watermark-post
+counts (parsing each sampled PR's comment history for the marker,
+not just its review list), which is a substantially larger effort than
+this issue's own scope of recalibrating an existing default using the
+existing counting convention. Left as a candidate follow-up rather than
+attempted here.
+
+**Second open caveat** (also raised by `chatgpt-codex-connector`,
+alongside the rollout-boundary correction above): filtering the
+post-rollout cohort by each PR's own merge timestamp only approximates
+"reviewed under the `15` default." A PR merging after rollout can
+still carry review activity — including some of its Copilot
+submissions — that started before rollout, so PR-merge-time filtering
+does not cleanly isolate review activity conducted while `15` was
+actually live. Precisely isolating that would require filtering by
+each individual review's own submission timestamp rather than the
+PR's merge timestamp, which this recalibration does not attempt; the
+corrected 55-PR cohort above should be read as a closer, not exact,
+approximation of behavior specifically under `15`.
+
+**Third open caveat** (also `chatgpt-codex-connector`): every sample
+above is `is:merged`, which excludes a PR whose review loop was still
+open (or was closed without merging) at the 2026-09-14 sampling
+cutoff — right-censoring that could, in principle, hide exactly the
+long, non-converging loops this cutoff exists to control, so the
+97-98%-exempt figure describes merged loops observed to completion,
+not every loop this policy is exposed to. A same-day spot-check found
+this repository had only 3 open PRs and 2 quickly-closed-without-
+merging PRs (each open under a day, not long-running) at sampling
+time, suggesting the current practical impact is small, but this does
+not establish the concern is unfounded in general, and this
+recalibration does not attempt to incorporate still-open loops into
+the distribution. Left as a candidate follow-up, alongside the two
+caveats above.
+
 ### review-ack worked example
 
 A review posts a regular-comment finding plus a suppressed one.

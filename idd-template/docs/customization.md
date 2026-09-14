@@ -1407,7 +1407,7 @@ supports these keys:
 - `claim.verifySettleDelay` (default `PT5S`)
 - `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `3`)
 - `critiqueLoop.e10NoProgressHoldAfter` (default `3`)
-- `critiqueLoop.deferAfterRounds` (default `15`)
+- `critiqueLoop.deferAfterRounds` (default `12`)
 - `reviewEscalation.changesRequestedFirstEscalation` /
   `reviewEscalation.changesRequestedSecondEscalation`
   (default `PT24H` / `PT48H`)

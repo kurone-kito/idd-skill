@@ -1222,7 +1222,7 @@ const policyConfigFixture = {
   critiqueLoop: {
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
-    deferAfterRounds: 15,
+    deferAfterRounds: 12,
   },
   reviewEscalation: {
     changesRequestedFirstEscalation: 'PT24H',
