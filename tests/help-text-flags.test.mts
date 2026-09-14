@@ -196,6 +196,7 @@ const COVERED_HELPERS = [
   'helper-runtime-manifest',
   'idd-critique-delegate',
   'idd-critique-harvest',
+  'idd-critique-report',
   'idd-critique-telemetry-hook',
   'idd-doctor',
   'idd-roadmap-audit-execute',

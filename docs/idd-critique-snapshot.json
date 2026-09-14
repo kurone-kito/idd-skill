@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "generatedOn": "2026-09-15",
+  "sampleCount": 0,
+  "totalFindings": 0,
+  "severityBreakdown": {
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "acceptedCount": 0,
+  "rejectedCount": 0,
+  "acceptRate": null,
+  "rejectRate": null,
+  "delegateUsageCount": 0,
+  "delegateUsageRate": null,
+  "minPublishableSamples": 10,
+  "publishable": false
+}
