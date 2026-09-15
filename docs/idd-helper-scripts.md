@@ -2406,14 +2406,21 @@ close.
   ```
 
 - Package-manager commands: run the profile-selected `idd:clone-lock`
-  package script. The examples use `npm`; substitute the repository's
-  configured package manager:
+  package script. `npm` needs an outer `--` before helper arguments;
+  `pnpm` and `yarn` do not. Keep the inner `--` that separates the
+  helper flags from the command wrapped by `clone-lock`:
 
   ```sh
   npm run idd:clone-lock -- --exec --agent-id <id> [--repo <path>] \
     [--timeout-ms <n>] -- <command> [args...]
+  pnpm run idd:clone-lock --exec --agent-id <id> [--repo <path>] \
+    [--timeout-ms <n>] -- <command> [args...]
+  yarn run idd:clone-lock --exec --agent-id <id> [--repo <path>] \
+    [--timeout-ms <n>] -- <command> [args...]
 
   npm run idd:clone-lock -- --check [--repo <path>]
+  pnpm run idd:clone-lock --check [--repo <path>]
+  yarn run idd:clone-lock --check [--repo <path>]
   ```
 
 - Ephemeral-npx commands: use the profile-selected `idd:clone-lock`
@@ -2743,7 +2750,7 @@ to post it is the consuming track's job.
   configured package manager:
 
   ```sh
-  npm run idd:ci-wait-policy
+  npm run idd:ci-wait-policy --
   ```
 
 - Ephemeral-npx command: use the profile-selected `idd:ci-wait-policy`
