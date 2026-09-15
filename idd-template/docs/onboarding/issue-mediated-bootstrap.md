@@ -314,6 +314,7 @@ absolute policy-document path before running this command:
   cd "$CLONE_DIR" &&
   node scripts/idd-onboard.mjs --record-policy \
     --transcript "$TRANSCRIPT_FILE" --target "$TARGET_REPO" \
+    --allow-root "$TARGET_REPO" \
     --issue-mediated --apply \
     --write-policy-doc "$POLICY_DOC"
 )

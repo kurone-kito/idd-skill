@@ -4273,6 +4273,10 @@ test('bin/idd-onboard.mjs --record-policy --issue-mediated records the companion
     /### Issue-Authoring Companion\n\n\*\*Status\*\*: `not installed`/,
   );
   const patch = issueMediatedRun.verdict.configPatch as Record<string, unknown>;
+  assert.deepEqual(
+    patch,
+    defaultRun.verdict.configPatch as Record<string, unknown>,
+  );
   assert.equal('issueAuthoringCompanion' in patch, false);
   assert.equal(
     issueMediatedRun.verdict.writtenPolicyDocPath,
