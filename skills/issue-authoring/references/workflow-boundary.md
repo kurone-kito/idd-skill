@@ -133,8 +133,27 @@ approval boundary that hands off to IDD execution.
   Use the same `body-sha256` and `snapshot-sha256` semantics as the portable
   owner protocol: target markers persist the exact fresh body digest, and the
   anchor-only `release-complete` marker carries the recomputed set snapshot.
+  For `snapshot-sha256`, compute the SHA-256 digest over the UTF-8 bytes of
+  the whole target set's `<owner>/<repo>#<number>:<body-sha256>` lines.
+  Normalize each `<owner>` and `<repo>` component with
+  `NFC(Unicode-default-lowercase(NFC(component)))`, join them with `/`, and
+  serialize each line with that normalized identity. Sort by the identity's
+  unsigned UTF-8 byte sequence (shorter equal prefixes first), then issue
+  number ascending, and join with a single `\n` and no trailing newline.
   New markers missing these fields are not valid for a new generation; legacy
-  markers are migration input only and cannot prove completion.
+  markers are migration input only. A legacy marker cannot prove completion
+  until its target body and required snapshot are re-fetched and recomputed
+  with the canonical algorithm. For this migration check, that algorithm is
+  the SHA-256 digest of the UTF-8 bytes of
+  `<owner>/<repo>#<number>:<body-sha256>` lines after normalizing each
+  owner/repository component with
+  `NFC(Unicode-default-lowercase(NFC(component)))`, joining the normalized
+  components with `/`, sorting by unsigned UTF-8 identity bytes (shorter
+  equal prefixes first) and then issue number ascending, joining with one
+  `\n`, and omitting a trailing newline. When the stored snapshot digest
+  matches that recomputation, the current verification may accept it.
+  Missing, mismatched, or otherwise unverifiable evidence fails closed.
+  This legacy-marker behavior is preventive; no observed incident yet.
 
   Append this HTML-first body with a direct JSON `POST` to the issue-comments
   endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the

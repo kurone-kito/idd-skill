@@ -167,14 +167,27 @@ The originating durable hold persists, for every target, its verified
 release-marker ID, absent-label result, and expected `body-sha256`. It also
 persists the canonical set snapshot as the SHA-256 digest, over UTF-8, of the
 target set's `<owner>/<repo>#<number>:<body-sha256>` lines (one per target,
-using each target's currently-verified `body-sha256`), sorted in ascending
-issue-number order and joined with a single `\n` character with no trailing
+using each target's currently-verified `body-sha256`). Define the canonical
+repository identity by applying
+`NFC(Unicode-default-lowercase(NFC(component)))` to each `<owner>` and `<repo>`
+component and joining them with `/`; serialize every line with that normalized
+identity. Sort first by the identity's UTF-8 byte sequence in unsigned
+lexicographic order (compare bytes from left to right, with a shorter equal
+prefix first), then by issue number in ascending order, and join with a
+single `\n` character with no trailing
 newline; the same `snapshot-sha256` must be carried by `release-complete`. A
 later session must re-fetch every target, recompute and compare each body
 digest, verify the release marker and absent label, and recompute the set
-snapshot before accepting `release-complete`. Missing, mismatched, or
-unverifiable snapshot evidence fails closed and leaves the hold and labels in
-place.
+snapshot before accepting `release-complete`. This repository-first order
+applies to new `release-complete` markers; a marker produced under the former
+issue-number-first rule is migration input only. Accept it only when the
+snapshot is recomputed under this canonical algorithm and matches; a legacy
+digest that does not match, or any other unverifiable evidence, fails closed
+and leaves the hold and labels in place. Because the marker format has no
+algorithm-version field, a legacy digest that happens to match the corrected
+recomputation is indistinguishable from a new one and can only be accepted on
+that current verification. This legacy-marker behavior is preventive; no
+observed incident yet.
 Read every issue comment page and order valid markers by GitHub `created_at`,
 then comment ID. Replay that ordered log as a state machine: an
 `acquire`/`bootstrap` with `supersedes=none` starts a generation only when no
