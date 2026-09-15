@@ -46,12 +46,24 @@ placeholder companion docs by hand.
 
 ### Validate the import with IDD doctor (optional)
 
-After importing IDD, run the doctor script once in a repository that
-has the helper installed to catch common setup drift:
+After importing IDD, use the command for the helper runtime profile
+selected by the repository to catch common setup drift. For the
+`vendored-node` profile, run:
 
 ```sh
 node scripts/idd-doctor.mjs
 ```
+
+For the `package-manager` profile, invoke the generated `idd:doctor`
+package.json script through the configured package manager, such as
+`npm run idd:doctor --`. For the `ephemeral-npx` profile, run:
+
+```sh
+npx --yes --package <helper-package-spec> idd-doctor
+```
+
+The `instructions-only` profile has no doctor helper, so skip this
+optional check.
 
 The report checks core IDD file presence, unresolved placeholders,
 marker-prefix consistency, command-table sanity, and (when `gh` access
