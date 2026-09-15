@@ -51,7 +51,8 @@ Map helper fields to actions below.
    actor. When an open PR exists, require issue-plus-PR approval naming
    that PR. Record mismatches against live claim/branch/PR as Step 0
    STOP. Never invent or post forced-handoff markers from this session.
-3. Open PR number + HEAD SHA, or `none`.
+3. Open PR number + HEAD SHA, or claim-branch remote tip, or
+   `none`.
 4. Latest activity `updatedAt` on issue/PR (comments, reviews, threads).
 5. CI states for PR HEAD (or `none`).
 6. `git worktree list`, local branch existence, worktree `git status`,
@@ -86,23 +87,25 @@ Else stall-lite. Steps 1-2 are pre-claim (stall windows do not apply).
 2. Re-read; if claim and predicate still hold, post a trusted
    `unclaimed-by` matching the held `{agent-id}` / `{claim-id}`.
 3. Confirm unclaimed; else STOP.
-4. Fresh A5 `supersedes: none` → Step 1 with `--claim-id`.
+4. Fresh A5 `supersedes: none` → Step 1 with `--claim-id` of
+   that claim.
 
 ## Step 1 — Claim state (helper-first)
 
 On helper-enabled profiles, run `resume-claim-routing.mjs --issue <N>`
 (and stop-and-ask on failure — do not use the written table). Map:
 
-| Helper `state` / `action`  | Action                                                                                           |
-| -------------------------- | ------------------------------------------------------------------------------------------------ |
-| `already_owned` / `keep`   | Keep same `{claim-id}` → Step 2 (if branch is `roadmap-audit/*`, A1.5 only → STOP)               |
-| `unclaimed` / `re_claim`   | Fresh A5 claim → Step 2                                                                          |
-| `stale` / `takeover`       | A5 takeover `supersedes: <prior-id>` → Step 2 (if branch is `roadmap-audit/*`, A1.5 only → STOP) |
-| `non_inheritable` / `stop` | Forced-handoff: retry below; else STOP — live competitor claim                                   |
-| `disputed` / `stop`        | STOP — contested claim                                                                           |
+| Helper `state` / `action`  | Action                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------- |
+| `already_owned` / `keep`   | Keep same `{claim-id}` → Step 2 (if branch is `roadmap-audit/*`, A1.5 only → STOP)     |
+| `unclaimed` / `re_claim`   | Fresh A5 claim → Step 2                                                                |
+| `stale` / `takeover`       | Forced-handoff: retry below; else A5 takeover (if `roadmap-audit/*`, A1.5 only → STOP) |
+| `non_inheritable` / `stop` | Forced-handoff: retry below; else STOP — live competitor claim                         |
+| `disputed` / `stop`        | STOP — contested claim                                                                 |
 
 Forced-handoff: pass `new_claim_id` into Step 1. On
-`non_inheritable`/`stop` with `evidence.forced_handoff`, retry
+`non_inheritable`/`stop` or `stale`/`takeover` with
+`evidence.forced_handoff`, retry
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
 Retry `already_owned`: if `new_agent_id` is not this session,
 STOP. Else adopt the pair; post an activation-nonce if missing;
@@ -196,12 +199,6 @@ If claim lost: STOP. Do not post further operational markers.
 
 ## Stop-and-ask
 
-Stop and ask the operator when:
-
-- helper runtime is expected but missing/failing;
-- claim state is ambiguous or disputed;
-- forced-handoff evidence is partial;
-- worktree is dirty with unclear ownership;
-- multiple PRs match the claim branch.
-
+Stop and ask when a helper is missing/failing, claim/forced-handoff
+is ambiguous, the worktree is dirty, or multiple PRs match.
 Do **not** run autonomous merge (F3+) on the lite tier.

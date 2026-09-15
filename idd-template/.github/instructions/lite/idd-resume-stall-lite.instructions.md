@@ -89,8 +89,8 @@ gate.
 2. Re-run `resume-claim-routing.mjs --issue <N>`.
 3. Active claim still the same non-owned `{claim-id}`.
 4. Still stale (≥ 24 h) now.
-5. Fresh server `NOW` + re-run quiet-check; if new activity, STOP and
-   restart from resume discovery.
+5. Fresh server `NOW` + re-run quiet-check (no PR: written S2, not
+   helper); if new activity, STOP and restart from resume discovery.
 6. Issue still open; PR not merged.
 7. Plan A5 takeover with settle delay (`claim.verifySettleDelay`, default
    `PT5S`) and same-second claim-id tie-break.
