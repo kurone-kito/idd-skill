@@ -12,6 +12,12 @@ const HOOKS_DIR = join(
   '..',
   '.githooks',
 );
+const TEMPLATE_HOOKS_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'idd-template',
+  '.githooks',
+);
 
 // A git-config-file-safe null-device path. `node:os`'s `devNull` is the
 // Win32 device-namespace form (`\\.\nul`) on win32, which Git for Windows
@@ -75,6 +81,35 @@ function runHook(repo: string, hook: string, cwd = repo): number {
   }
 }
 
+/** Run the sourced guard and report its status and caller's noglob state. */
+function runGuardWithNoglobState(
+  repo: string,
+  initiallyNoglob: boolean,
+): { status: number; noglob: boolean } {
+  const script = [
+    'set +e',
+    '. "$1"',
+    'idd_worktree_guard_check commit',
+    'status=$?',
+    'case $- in *f*) noglob=1;; *) noglob=0;; esac',
+    'printf "%s %s\\n" "$status" "$noglob"',
+  ].join('; ');
+  const args = initiallyNoglob ? ['-f', '-c'] : ['-c'];
+  args.push(
+    script,
+    'idd-worktree-guard',
+    join(repo, '.githooks', '_idd-worktree-guard.sh'),
+  );
+  const output = execFileSync('sh', args, {
+    cwd: repo,
+    env: fixtureEnv(),
+    encoding: 'utf8',
+    stdio: 'pipe',
+  }).trim();
+  const [status, noglob] = output.split(/\s+/).map(Number);
+  return { status, noglob: noglob === 1 };
+}
+
 /** Poison process.env, run the synchronous callback, then restore keys. */
 function withPoisonedEnv(
   poison: Record<string, string>,
@@ -98,7 +133,7 @@ function withPoisonedEnv(
 }
 
 /** Create a throwaway git repo carrying the shipped hooks and a config. */
-function setupRepo(configObj: unknown): string {
+function setupRepo(configObj: unknown, hooksSource = HOOKS_DIR): string {
   const dir = mkdtempSync(join(tmpdir(), 'idd-hook-'));
   git(dir, ['init', '-b', 'main']);
   git(dir, ['config', 'user.email', 'test@example.com']);
@@ -110,7 +145,7 @@ function setupRepo(configObj: unknown): string {
       JSON.stringify(configObj, null, 2),
     );
   }
-  cpSync(HOOKS_DIR, join(dir, '.githooks'), { recursive: true });
+  cpSync(hooksSource, join(dir, '.githooks'), { recursive: true });
   writeFileSync(join(dir, 'README.md'), 'placeholder\n');
   git(dir, ['add', '-A']);
   git(dir, ['commit', '--no-verify', '-m', 'init']);
@@ -138,15 +173,38 @@ test('hook blocks commit and push from the primary worktree on issue/* when enab
   }
 });
 
-test('hook keeps branch globs literal when a matching path exists', () => {
-  const repo = setupRepo({ worktreeGuard: { enabled: true } });
-  try {
-    mkdirSync(join(repo, 'issue'));
-    writeFileSync(join(repo, 'issue', 'template.md'), 'fixture\n');
-    git(repo, ['checkout', '-q', '-b', 'issue/123-example']);
-    assert.equal(runHook(repo, 'pre-commit'), 1);
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
+test('root and distributed hooks keep branch globs literal when a matching path exists', () => {
+  for (const hooksSource of [HOOKS_DIR, TEMPLATE_HOOKS_DIR]) {
+    const repo = setupRepo({ worktreeGuard: { enabled: true } }, hooksSource);
+    try {
+      mkdirSync(join(repo, 'issue'));
+      writeFileSync(join(repo, 'issue', 'template.md'), 'fixture\n');
+      git(repo, ['checkout', '-q', '-b', 'issue/123-example']);
+      assert.equal(runHook(repo, 'pre-commit'), 1);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }
+});
+
+test("hooks preserve the caller's noglob state while matching branch patterns", () => {
+  for (const hooksSource of [HOOKS_DIR, TEMPLATE_HOOKS_DIR]) {
+    const repo = setupRepo({ worktreeGuard: { enabled: true } }, hooksSource);
+    try {
+      mkdirSync(join(repo, 'issue'));
+      writeFileSync(join(repo, 'issue', 'template.md'), 'fixture\n');
+      git(repo, ['checkout', '-q', '-b', 'issue/123-example']);
+      assert.deepEqual(runGuardWithNoglobState(repo, false), {
+        status: 1,
+        noglob: false,
+      });
+      assert.deepEqual(runGuardWithNoglobState(repo, true), {
+        status: 1,
+        noglob: true,
+      });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   }
 });
 
