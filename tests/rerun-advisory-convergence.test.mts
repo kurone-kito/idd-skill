@@ -140,6 +140,52 @@ test('classifies a queued instance as pending', () => {
   assert.equal(plan.instances[0]?.classification, 'pending');
 });
 
+// Issue #2994 records a wait-loop failure shape where a consumer's own
+// self-referential sibling can remain pending for the polling job's lifetime.
+// The ordinary plan must keep that instance visible as pending while allowing
+// an independent terminal candidate to proceed; callers must not use a raw
+// zero-pending condition without excluding the guaranteed sibling.
+test('#2994: a self-referential pending sibling stays out of the rerun plan', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1002',
+          status: 'in_progress',
+          conclusion: null,
+          completedAt: null,
+          runId: '5002',
+          htmlUrl:
+            'https://github.com/kurone-kito/idd-skill/actions/runs/5002/job/9002',
+        }),
+        baseInstance({
+          checkRunId: '1003',
+          conclusion: 'failure',
+          runId: '5003',
+          htmlUrl:
+            'https://github.com/kurone-kito/idd-skill/actions/runs/5003/job/9003',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+
+  assert.deepEqual(
+    plan.instances.map((instance) => instance.classification),
+    ['pending', 'rerun-eligible'],
+  );
+  assert.equal(plan.counts.pending, 1);
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.deepEqual(
+    plan.plan.map((entry) => entry.runId),
+    ['5003'],
+  );
+  assert.match(
+    describeOutstandingStates(plan),
+    /1 instance\(s\) are still running/,
+  );
+});
+
 // --- Classification: bot-gated-skip ------------------------------------
 
 test('classifies an action_required conclusion as bot-gated-skip', () => {

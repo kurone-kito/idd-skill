@@ -255,6 +255,17 @@ applies), waits for each to reach a terminal state before starting the
 next, and stops early as soon as the rollup resolves — never a
 `bot-gated-skip` or rerun-budget-held instance.
 
+**Self-referential pending-instance exclusion (`#2994`)**: a consumer
+that wraps this recovery in a wait loop must identify and exclude its own
+guaranteed self-referential pending instance before using “zero pending
+instances” as a termination condition. A `needs:` dependency can keep
+that sibling pending for the polling job’s whole lifetime. This exclusion
+does not make an `awaiting-fresh-review` instance rerunnable: retain that
+fail-closed hold unless an independently verified current-HEAD recovery
+signal exists, and never infer one from a raw waiver comment. Issue
+[#2994](https://github.com/kurone-kito/idd-skill/issues/2994) records the
+observed failure shape.
+
 ```sh
 # source repo / vendored-node profile
 node scripts/rerun-advisory-convergence.mjs --pr <n> [--apply]
