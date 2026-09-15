@@ -338,11 +338,11 @@ gating this PR normally and are not affected by this note.
 **Expect template-internal review comments.** This PR's diff _is_ the
 imported template, so review bots will flag defects in the vendored
 files themselves. Treat import mistakes (missing files, leftover
-placeholders, unpinned fetches) as in-scope here. Do not locally
-patch a template-internal finding — after this merge, track it via
-the issue-mediated bootstrap reference's
-"Template-internal review findings" subsection (Upstream-candidate
-escalation; never fork-fix the vendored copy in this PR).
+placeholders, unpinned fetches) as in-scope here. Do not fork-fix a
+template-internal finding in this PR; see the issue-mediated bootstrap
+reference's "Template-internal review findings" subsection for how to
+reply or resolve a blocking comment without patching the vendored
+copy, and how to track a qualifying finding after merge.
 
 ## Acceptance criteria
 
@@ -520,12 +520,13 @@ signal — no branch, PR, or merge.
 ## Concurrent base-branch drift during the bootstrap PR
 
 This PR is explicitly off the Discover -> Claim -> Work loop, so IDD's
-D1 pre-push rebase and Esync post-push merge-from-main never run for
-it. On an active target repository, other PRs can still merge to the
-default branch while the bootstrap PR is open. Observed 2026-09-14 on
-`kurone-kito/kurone-kito#29` (tracked upstream as issue `#2984`): three
-unrelated PRs merged to the base branch mid-bootstrap and forced a
-manual rebase with no documented procedure.
+D1 pre-push rebase and Esync post-push merge of `{development-branch}`
+never run for it. On an active target repository, other PRs can still
+merge to the default branch while the bootstrap PR is open. Observed
+2026-09-14 on `kurone-kito/kurone-kito#29` (tracked upstream as
+`kurone-kito/idd-skill#2984`): three unrelated PRs merged to the base
+branch mid-bootstrap and forced a manual rebase with no documented
+procedure.
 
 A target-repo up-to-date-head ruleset can independently require the
 same sync even though IDD's own automation is not running.
@@ -534,11 +535,13 @@ Reconcile it by hand:
 
 1. Fetch the target default branch (`git fetch origin` plus that branch
    name).
-2. If no pull request exists yet — including a not-yet-pushed branch —
-   rebase onto that tip. If a PR is already open, merge the default
-   branch into the bootstrap branch instead — matching IDD's
-   post-publication default so the sync is reviewable and no
-   force-push is required.
+2. If the bootstrap branch has not been pushed yet, rebase onto that
+   tip. Once it has been pushed — even if `gh pr create` has not
+   succeeded yet — merge the default branch into the bootstrap branch
+   instead. The first push is the publication boundary: rebasing after
+   that rewrites published remote history and the next normal push is
+   rejected. Matching IDD's post-publication default keeps the sync
+   reviewable and avoids a force-push.
 3. Re-run Step 6 verification after the rebase or merge, even when
    there were no conflicts, before merging the bootstrap PR.
 
@@ -550,23 +553,36 @@ Because this PR's diff _is_ the imported template, review bots review
 that vendored text as new code in the adopter repository. A large
 share of comments will describe defects or gaps in the template
 itself, not mistakes in this import. Observed 2026-09-14 on
-`kurone-kito/kurone-kito#29` (tracked upstream as issue `#2984`): of 43
-review-bot comments, roughly two-thirds were template-internal.
+`kurone-kito/kurone-kito#29` (tracked upstream as
+`kurone-kito/idd-skill#2984`): of 43 review-bot comments, roughly
+two-thirds were template-internal.
 
 Disposition:
 
 - **Import mistakes stay in this PR** — missing files, leftover
   placeholders, unpinned fetches, or the wrong helper-runtime files.
-- **Do not fork-fix a template-internal finding in this PR.** After
-  the import merges and the repository is IDD-operational, track it
-  through
-  [Upstream-candidate escalation][upstream-candidate]:
-  a local issue with the `status:upstream-candidate` label and the
-  hidden `upstream-candidate` marker. That path never writes to
-  `kurone-kito/idd-skill`; whether to report the local issue upstream
-  is a human decision. If `upstreamEscalation.enabled` is still the
-  distributed default (`false`), record the finding on this bootstrap
-  issue or the welcome/next-steps issue instead of silently patching
-  the vendored copy.
+- **Do not fork-fix a template-internal finding in this PR.** If a
+  bot requests changes or leaves an unresolved thread, reply on that
+  thread that the finding is template-internal, will be tracked after
+  merge, and is not an import defect — then resolve the thread or
+  wait for a maintainer approval so existing review gates can still
+  let this PR merge. Do not patch the vendored copy just to silence
+  the comment.
+- **After merge, qualify before escalating.**
+  [Upstream-candidate escalation][upstream-candidate] is opt-in
+  (`upstreamEscalation.enabled`, default `false`) and only accepts
+  high-confidence cases where the template's own stated logic is
+  self-contradictory or cannot produce the outcome it claims — never
+  a subjective wording complaint or a finding local to the adopter
+  repository. A qualifying finding becomes a local issue with the
+  `status:upstream-candidate` label and the hidden
+  `<!-- {marker-prefix}-upstream-candidate: true -->`
+  marker (substitute the confirmed hearing prefix; a bare
+  `upstream-candidate` token is not recognized). That path never
+  writes to `kurone-kito/idd-skill`; whether to report the local
+  issue upstream is a human decision. Everything else — including
+  every finding when the toggle is still `false` — is recorded on
+  this bootstrap issue or the welcome/next-steps issue instead of
+  silently patching the vendored copy.
 
 [upstream-candidate]: ../../.github/instructions/idd-overview-appendix.instructions.md#upstream-candidate-escalation
