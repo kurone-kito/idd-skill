@@ -212,7 +212,8 @@ in this preamble, since the fallback differs per helper.
   `"not_evaluated"`, never omitted (referenced in
   [kurone-kito/idd-skill#2102](https://github.com/kurone-kito/idd-skill/issues/2102))
 - `scripts/suitability-close-execute.mjs` for the A4.5 high-confidence
-  duplicate/superseded coordination-close path (referenced in #1485);
+  duplicate/superseded coordination-close path (referenced in
+  [kurone-kito/idd-skill#1485](https://github.com/kurone-kito/idd-skill/issues/1485));
   it reuses the triage detection kernel, requires a separate
   `suitability-close/<issue>-<slug>` claim for `--apply`, and fails closed
   when a fresh evaluation is no longer eligible
@@ -1980,7 +1981,8 @@ close.
   heuristic.
 - `instructions-only`: apply the written A4.5 checks as a detect-only path,
   post the required diagnostic comment with machine-derivable evidence, and
-  do not create a coordination claim or close and release the issue. For a
+  do not create a coordination claim; do not close the issue or release a
+  coordination claim. For a
   discovery candidate, remove it from Candidates and continue the Decision
   Flow loop; an explicit-target caller follows A0-T's report-and-stop route.
   See the [A4.5 high-confidence coordination-close
