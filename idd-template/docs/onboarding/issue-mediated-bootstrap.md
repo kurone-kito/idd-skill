@@ -335,6 +335,15 @@ not a skipped gate. This repository may already have its own CI,
 branch protection, or review bot from before choosing IDD; those keep
 gating this PR normally and are not affected by this note.
 
+**Expect template-internal review comments.** This PR's diff _is_ the
+imported template, so review bots will flag defects in the vendored
+files themselves. Treat import mistakes (missing files, leftover
+placeholders, unpinned fetches) as in-scope here. Do not locally
+patch a template-internal finding — after this merge, track it via
+the issue-mediated bootstrap reference's
+"Template-internal review findings" subsection (Upstream-candidate
+escalation; never fork-fix the vendored copy in this PR).
+
 ## Acceptance criteria
 
 - Every file listed in `idd-template/ONBOARDING.md` Step 2's core
@@ -488,6 +497,13 @@ explicitly not the full autonomous Discover -> Claim -> Work loop:
   choosing IDD — those keep gating the bootstrap PR exactly as they did
   before, and this note is never grounds for disregarding them.
 
+On an active target repository, also expect
+[concurrent default-branch drift](#concurrent-base-branch-drift-during-the-bootstrap-pr)
+while this PR is open, and
+[template-internal review findings](#template-internal-review-findings)
+from bots reviewing the imported template as new code. Neither is
+handled by IDD's own loop — this PR is off that loop by design.
+
 Once this PR merges, the repository is IDD-operational and every
 subsequent change — including the optional add-ons above — runs through
 the normal claim -> work -> PR -> CI -> merge loop, with the one
@@ -500,3 +516,56 @@ has left a recorded acknowledgment — a comment or reaction on the
 issue. The agent's own judgment that the content has been
 "acknowledged" is not enough. Close it directly after that operator
 signal — no branch, PR, or merge.
+
+## Concurrent base-branch drift during the bootstrap PR
+
+This PR is explicitly off the Discover -> Claim -> Work loop, so IDD's
+D1 pre-push rebase and Esync post-push merge-from-main never run for
+it. On an active target repository, other PRs can still merge to the
+default branch while the bootstrap PR is open. Observed 2026-09-14 on
+`kurone-kito/kurone-kito#29` (tracked upstream as issue `#2984`): three
+unrelated PRs merged to the base branch mid-bootstrap and forced a
+manual rebase with no documented procedure.
+
+A target-repo up-to-date-head ruleset can independently require the
+same sync even though IDD's own automation is not running.
+
+Reconcile it by hand:
+
+1. Fetch the target default branch (`git fetch origin` plus that branch
+   name).
+2. If the bootstrap branch has not been pushed yet, rebase onto that
+   tip. If the PR is already published, merge the default branch into
+   the bootstrap branch instead — matching IDD's post-publication
+   default so the sync is reviewable and no force-push is required.
+3. After any conflict resolution, re-run Step 6 verification before
+   merge.
+
+Do not wait for D1 or Esync to do this.
+
+## Template-internal review findings
+
+Because this PR's diff _is_ the imported template, review bots review
+that vendored text as new code in the adopter repository. A large
+share of comments will describe defects or gaps in the template
+itself, not mistakes in this import. Observed 2026-09-14 on
+`kurone-kito/kurone-kito#29` (tracked upstream as issue `#2984`): of 43
+review-bot comments, roughly two-thirds were template-internal.
+
+Disposition:
+
+- **Import mistakes stay in this PR** — missing files, leftover
+  placeholders, unpinned fetches, or the wrong helper-runtime files.
+- **Do not fork-fix a template-internal finding in this PR.** After
+  the import merges and the repository is IDD-operational, track it
+  through
+  [Upstream-candidate escalation][upstream-candidate]:
+  a local issue with the `status:upstream-candidate` label and the
+  hidden `upstream-candidate` marker. That path never writes to
+  `kurone-kito/idd-skill`; whether to report the local issue upstream
+  is a human decision. If `upstreamEscalation.enabled` is still the
+  distributed default (`false`), record the finding on this bootstrap
+  issue or the welcome/next-steps issue instead of silently patching
+  the vendored copy.
+
+[upstream-candidate]: ../../.github/instructions/idd-overview-appendix.instructions.md#upstream-candidate-escalation
