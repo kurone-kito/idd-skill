@@ -26,12 +26,19 @@ SERVER_NOW=$(gh api repos/<owner>/<repo>/issues/<N> --include \
   | grep -i '^date:' | head -1 | sed 's/^[Dd]ate: *//' | tr -d '\r')
 NOW=$(node -e "console.log(new Date(process.argv[1]).toISOString().replace(/\.\d{3}Z$/, 'Z'))" "$SERVER_NOW")
 
-# Quiet-window evidence (always pass --now)
+# Quiet-window evidence (always pass --now). Requires --pr; skip if none.
 node scripts/stalled-session-quiet-check.mjs \
   --pr <pr-number> \
   --now "$NOW" \
   --claim-created-at <latest-valid-claimed-by-created_at>
 ```
+
+No PR: do not invent `--pr`. Skip the helper (not a helper
+failure). Decide S2 from the written bullets using the claim
+`branch:` remote tip SHA and update time (no remote branch: treat
+absence as no movement only if also absent at S2); S4 step 5 re-reads that tip
+and repeats the written S2 checks against a fresh `NOW`; hold
+on movement or incomplete evidence.
 
 Never use the local wall clock as `now`. Re-derive a **fresh** `NOW`
 before S4; do not reuse the S2 value.
@@ -53,9 +60,7 @@ Require **no** external progress in the last 30 minutes:
 - no CI `queued` / `in_progress`;
 - no new review/comment/CI completion activity.
 
-Helper fields to read: top-level `quiet_window_met`, `reason`,
-`latest_activity`; nested under `evidence`: `has_heartbeat_in_window`,
-`has_ci_running`, `has_branch_tip_movement`.
+Helper fields: `quiet_window_met`, `reason`, `latest_activity`.
 
 | Result                                                         | Action                                                 |
 | -------------------------------------------------------------- | ------------------------------------------------------ |
@@ -84,8 +89,8 @@ gate.
 2. Re-run `resume-claim-routing.mjs --issue <N>`.
 3. Active claim still the same non-owned `{claim-id}`.
 4. Still stale (≥ 24 h) now.
-5. Fresh server `NOW` + re-run quiet-check; if new activity, STOP and
-   restart from resume discovery.
+5. Fresh server `NOW` + re-run quiet-check (no PR: written S2, not
+   helper); if new activity, STOP and restart from resume discovery.
 6. Issue still open; PR not merged.
 7. Plan A5 takeover with settle delay (`claim.verifySettleDelay`, default
    `PT5S`) and same-second claim-id tie-break.
@@ -104,12 +109,6 @@ Any failure → STOP and restart. Do not post takeover on stale evidence.
 
 ## Hold behavior
 
-On S2/S3 hold: **do not** post hold comments on the issue/PR (that can
-reset quiet-window evidence). Log evidence in the session only and stop.
-
-## Hold-and-stop (no issue/PR hold comment)
-
-**Hold and stop** (session log only — same rule as Hold behavior above)
-when helper runtime is expected but unavailable, when timestamps cannot
-be server-anchored, or when claim/forced-handoff state is ambiguous.
-Never invent forced-handoff consent.
+On S2/S3 hold, missing helper, unanchored timestamps, or ambiguous
+claim/forced-handoff: session log only (no issue/PR comment). Never
+invent forced-handoff consent.
