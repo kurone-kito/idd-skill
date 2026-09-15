@@ -31,12 +31,15 @@ SERVER_NOW=$(gh api repos/<owner>/<repo>/issues/<N> --include \
   | grep -i '^date:' | head -1 | sed 's/^[Dd]ate: *//' | tr -d '\r')
 NOW=$(node -e "console.log(new Date(process.argv[1]).toISOString().replace(/\.\d{3}Z$/, 'Z'))" "$SERVER_NOW")
 
-# Quiet-window evidence (always pass --now)
+# Quiet-window evidence (always pass --now). Requires --pr; skip if none.
 node scripts/stalled-session-quiet-check.mjs \
   --pr <pr-number> \
   --now "$NOW" \
   --claim-created-at <latest-valid-claimed-by-created_at>
 ```
+
+No PR: do not invent `--pr`. Use the claim `branch:` remote tip SHA
+and update time as S2 branch-movement evidence.
 
 Never use the local wall clock as `now`. Re-derive a **fresh** `NOW`
 before S4; do not reuse the S2 value.

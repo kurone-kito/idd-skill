@@ -62,10 +62,24 @@ Use GitHub **server** timestamps only. Stale age default: **24 h**
 | Issue closed or PR merged                                      | Step 1 cleanup only → STOP                                             |
 | Valid human-gated forced-handoff matching live claim/branch/PR | Step 1 forced-handoff path (skip stall)                                |
 | Forced-handoff evidence present but mismatches live state      | STOP — report mismatch; do not claim/push                              |
+| Non-owned claim + operator-present (below) + input received    | Operator-present path (below); skip stall                              |
 | Non-owned active claim, no valid forced-handoff                | Open `idd-resume-stall-lite.instructions.md`; return here if unblocked |
 | Otherwise                                                      | Step 1                                                                 |
 
 Quiet-window evidence never bypasses the 24 h stale threshold.
+
+### Operator-present release
+
+Predicate: claimant-authored pause comment after latest valid
+`claimed-by`, awaited input received here, no later trusted claimant
+activity (step 1 excepted). Else stall-lite. Steps 1-2 are pre-claim.
+Stall 30 min / 24 h windows do not apply.
+
+1. Post the operator input as a normal comment; ask a human to drop
+   any needs-decision/blocked-by-human label (never this session).
+2. Re-read; post matching `unclaimed-by`.
+3. Confirm unclaimed; else STOP.
+4. Fresh A5 `supersedes: none` → Step 1.
 
 ## Step 1 — Claim state (helper-first)
 
@@ -77,8 +91,12 @@ On helper-enabled profiles, run `resume-claim-routing.mjs --issue <N>`
 | `already_owned` / `keep`   | Keep same `{claim-id}` → Step 2 (if branch is `roadmap-audit/*`, A1.5 only → STOP)               |
 | `unclaimed` / `re_claim`   | Fresh A5 claim → Step 2                                                                          |
 | `stale` / `takeover`       | A5 takeover `supersedes: <prior-id>` → Step 2 (if branch is `roadmap-audit/*`, A1.5 only → STOP) |
-| `non_inheritable` / `stop` | STOP — live competitor claim                                                                     |
+| `non_inheritable` / `stop` | Forced-handoff: retry below; else STOP — live competitor claim                                   |
 | `disputed` / `stop`        | STOP — contested claim                                                                           |
+
+Forced-handoff: pass `new_claim_id` into Step 1. On
+`non_inheritable`/`stop` with `evidence.forced_handoff`, retry
+`--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
 
 After any helper map, still apply the `roadmap-audit/*` special case when
 the active claim branch field starts with `roadmap-audit/`: coordination
@@ -133,21 +151,13 @@ On helper-enabled profiles, run `resume-route-selection.mjs --issue <N>`
 - `E1` → `idd-review-snapshot-lite.instructions.md`
 - `E15` → `idd-review-fix-lite.instructions.md` E15 (invokes
   `idd-ci-lite.instructions.md` for polling)
-- `Esync` → the standard `idd-review-triage.instructions.md`'s
-  **E-phase branch-sync check** for classification only — see note
-  below
+- `Esync` → `idd-review-triage.instructions.md` **E-phase
+  branch-sync check** (classification only). Redirect non-lite
+  exits: `clean` → `idd-pre-merge-lite.instructions.md`; step 6 →
+  `idd-review-snapshot-lite.instructions.md` (E1)
 - `F1` / `F2` → `idd-pre-merge-lite.instructions.md`, from the top
   (covers both F1 and F2)
 - `stop` → STOP — report helper `reason`
-
-`Esync` resumes at the standard
-`idd-review-triage.instructions.md`'s **E-phase branch-sync check**
-for branch-state classification only. Two of its exits point outside
-the lite profile: the `clean` exit continues to non-lite
-`idd-pre-merge.instructions.md` — go to
-`idd-pre-merge-lite.instructions.md` instead. The sync path's step 6
-returns to non-lite `idd-review-snapshot.instructions.md` — return to
-`idd-review-snapshot-lite.instructions.md` (E1) instead.
 
 Before any mutation after routing: re-validate claim ownership, PR HEAD,
 and CI live state.
@@ -163,11 +173,6 @@ Written table (`instructions-only` profile only):
 | Success | clean reviews; branch clean                | → F2                  |
 | Success | clean; branch behind only                  | → F1 then F2 or sync  |
 | Success | content conflict                           | → Esync               |
-
-Above, `E1` / `E15` / `Esync` route as in the Step 3 list and
-**E-phase branch-sync check** note above (which also names
-`idd-review-snapshot-lite.instructions.md` and
-`idd-ci-lite.instructions.md`).
 
 Forced-handoff recovery on an open PR: final success still → **E1** until
 this claim posts its own review-watermark and baseline.
