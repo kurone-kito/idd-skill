@@ -292,8 +292,8 @@ recording action rather than a pinned remote-fetch step:
   path)
 
 When recording these confirmed decisions from the transcript, use the
-issue-mediated mode so the generated policy document records the core-
-bootstrap companion as `not installed`, regardless of the operator's
+issue-mediated mode so the generated policy document records the
+core-bootstrap companion as `not installed`, regardless of the operator's
 real companion choice. The separate companion target state above remains
 the value for the follow-up issue to read. This manual-patching
 prohibition addresses the observed issue-mediated bootstrap in
