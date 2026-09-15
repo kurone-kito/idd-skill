@@ -1979,12 +1979,13 @@ close.
   the evidence-bound closing comment, closes the issue, and releases the
   claim in that order. It never acts on the weak title/declaration
   heuristic.
-- `instructions-only`: the helper is unavailable, so apply the written A4.5
-  checks as a detect-only path, post the required diagnostic comment with
-  machine-derivable evidence, leave the duplicate/superseded issue open, and
-  stop for maintainer review. Do not create a coordination claim or close and
-  release it from this profile. See the [A4.5 high-confidence
-  coordination-close path](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)
+- `instructions-only`: apply the written A4.5 checks as a detect-only path,
+  post the required diagnostic comment with machine-derivable evidence, and
+  do not create a coordination claim or close and release the issue. For a
+  discovery candidate, remove it from Candidates and continue the Decision
+  Flow loop; an explicit-target caller follows A0-T's report-and-stop route.
+  See the [A4.5 high-confidence coordination-close
+  path](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)
   for the evidence boundary and the helper-capable execution path.
 
 ### Claim approval evidence
