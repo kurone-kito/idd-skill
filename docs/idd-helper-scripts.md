@@ -212,8 +212,7 @@ in this preamble, since the fallback differs per helper.
   `"not_evaluated"`, never omitted (referenced in
   [kurone-kito/idd-skill#2102](https://github.com/kurone-kito/idd-skill/issues/2102))
 - `scripts/suitability-close-execute.mjs` for the A4.5 high-confidence
-  duplicate/superseded coordination-close path (referenced in
-  [kurone-kito/idd-skill#1485](https://github.com/kurone-kito/idd-skill/issues/1485));
+  duplicate/superseded coordination-close path (referenced in #1485);
   it reuses the triage detection kernel, requires a separate
   `suitability-close/<issue>-<slug>` claim for `--apply`, and fails closed
   when a fresh evaluation is no longer eligible
