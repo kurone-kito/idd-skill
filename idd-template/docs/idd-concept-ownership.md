@@ -58,7 +58,7 @@ back as evidence for a gate.
 | Review threads | Human reviewer or advisory bot, during CI/E-phase | Worker session (replies at E6/E13); reviewer (reopen) | E1 snapshot; E7 verification; F2 unresolved-threads gate |
 | `review-watermark` / `review-baseline` markers | Worker session, E1/E2 | Worker session (re-post to refresh; minimize a superseded one as `OUTDATED`) | F2/F3 review-currency check |
 | Disposition replies (`**Accepted**` / `**Rejected**` / `**Awaiting maintainer decision**`) | Worker session, E6/E13 | Worker session mirrors a human maintainer's later decision onto an AMD thread | E7 verifier; F2/F3 disposition-evidence gate |
-| `advisory-wait` / `advisory-wait-recovery` markers | Worker session, E14 or F2/F3 per the advisory-wait protocol | Worker session (minimize a superseded same-PR marker as `OUTDATED`) | AW1-AW3 decision table |
+| `advisory-wait` / `advisory-wait-recovery` / `advisory-reroll` markers | Worker session, E14 or F2/F3 for advisory-wait/recovery; F2-only for advisory-reroll per the advisory-wait protocol | Worker session (minimize a superseded same-PR marker as `OUTDATED`) | AW1-AW3 for advisory-wait/recovery; AW6/F2 for advisory-reroll |
 | CI checks | GitHub platform, triggered by push or review events | Worker session may request a rerun, subject to `ciWait.rerunPolicy` | D4/E15/F2 CI gate |
 | Live status digest | Worker session (or merge-capable session), after any phase transition | Worker session, re-validating the claim before each edit | Human-facing only — never authoritative for a state transition |
 | Forced-handoff marker | Human maintainer only (`forced-handoff: human-gated`, an authorized actor) | Not mutated once posted | Successor worker session (Claim-state parsing rule 7); Resume Step 0/1 |
