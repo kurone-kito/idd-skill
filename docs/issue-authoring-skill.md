@@ -168,9 +168,10 @@ rules.
   default `3`) designate human-oriented issues that discover routes
   to humans in autopilot runs.
 - The score is an **advisory** ranking/routing hint only; it never
-  bypasses the A4.5/A5 gates, a `1` must agree with
-  `status:blocked-by-human`, and a missing or out-of-range score is
-  treated as having no score (evaluated normally, never skipped).
+  bypasses the A4.5/A5 gates, and a score of `1` must agree with the
+  configured `blocked-by-human` label (default `status:blocked-by-human`).
+  A missing or out-of-range score is treated as having no score
+  (evaluated normally, never skipped).
 
 ### Effort hint
 
