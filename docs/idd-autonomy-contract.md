@@ -167,10 +167,14 @@ The originating durable hold persists, for every target, its verified
 release-marker ID, absent-label result, and expected `body-sha256`. It also
 persists the canonical set snapshot as the SHA-256 digest, over UTF-8, of the
 target set's `<owner>/<repo>#<number>:<body-sha256>` lines (one per target,
-using each target's currently-verified `body-sha256`), sorted first by
-canonical repository identity (`<owner>/<repo>`) in lexicographic order,
-then by issue number in ascending order, and joined with a single `\n`
-character with no trailing
+using each target's currently-verified `body-sha256`). Define the canonical
+repository identity by applying Unicode NFC, then locale-independent Unicode
+default lowercase, to each `<owner>` and `<repo>` component and joining them
+with `/`; serialize every line with that normalized identity. Sort first by
+the identity's UTF-8 byte sequence in unsigned lexicographic order (compare
+bytes from left to right, with a shorter equal prefix first), then by issue
+number in ascending order, and join with a single `\n` character with no
+trailing
 newline; the same `snapshot-sha256` must be carried by `release-complete`. A
 later session must re-fetch every target, recompute and compare each body
 digest, verify the release marker and absent label, and recompute the set
