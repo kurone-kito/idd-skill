@@ -291,6 +291,20 @@ recording action rather than a pinned remote-fetch step:
 - Bootstrap execution mode: issue-mediated (this issue's own execution
   path)
 
+When recording these confirmed decisions from the transcript, pass the
+issue-mediated mode so the generated policy document records the core-
+bootstrap companion as `not installed`, regardless of the operator's
+real companion choice. The separate companion target state above remains
+the value for the follow-up issue to read; do not manually patch the
+generated policy document afterward.
+
+```sh
+node scripts/idd-onboard.mjs --record-policy \
+  --transcript <transcript-file> --target <target-repo> \
+  --issue-mediated --apply \
+  --write-policy-doc <target-repo>/<policy-doc-path>
+```
+
 This is a single, atomically-reviewable change: the core import,
 placeholder substitution, and agent-entry-file updates land together,
 and Step 6 verification confirms the result before merge. Worktree

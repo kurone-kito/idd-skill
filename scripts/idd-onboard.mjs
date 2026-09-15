@@ -2191,14 +2191,20 @@ const RECORD_POLICY_DOC_ROWS = [
  * a confirmed transcript's answers, following the structure shown in
  * `idd-template/docs/onboarding/policy-decisions.md`'s
  * "Recording the selected policies" section. An item with no confirmed
- * answer is omitted rather than printed with a placeholder value.
+ * answer is omitted rather than printed with a placeholder value. The
+ * issue-mediated bootstrap option can override the companion row without
+ * changing the transcript or config patch.
  */
-function buildFilledPolicyDocument(answers) {
+function buildFilledPolicyDocument(answers, options = {}) {
   const valueById = new Map(answers.map((answer) => [answer.id, answer.value]));
   const sections = RECORD_POLICY_DOC_ROWS.filter((row) =>
     valueById.has(row.id),
   ).map((row) => {
-    const value = valueById.get(row.id);
+    const transcriptValue = valueById.get(row.id);
+    const value =
+      options.issueMediated && row.id === 'issue-authoring-companion'
+        ? 'not installed'
+        : transcriptValue;
     const body = row.renderBody
       ? row.renderBody(value)
       : `**${row.label}**: \`${value}\``;
@@ -2347,7 +2353,9 @@ export function runRecordPolicyCli(args, readers = {}) {
       `config.json patch failed schema validation: ${schemaErrors.join('; ')}`,
     );
   }
-  const policyDocument = buildFilledPolicyDocument(transcript.answers);
+  const policyDocument = buildFilledPolicyDocument(transcript.answers, {
+    issueMediated: args.issueMediated,
+  });
   // --dry-run always wins over --apply, matching runImportCli's convention.
   const canWrite = args.apply && !args.dryRun;
   if (canWrite) {
@@ -2399,6 +2407,7 @@ function parseArgs(rawArgv) {
     verify: false,
     hear: false,
     recordPolicy: false,
+    issueMediated: false,
     propose: false,
     apply: false,
     answers: undefined,
@@ -2444,6 +2453,10 @@ function parseArgs(rawArgv) {
     }
     if (token === '--record-policy') {
       parsed.recordPolicy = true;
+      continue;
+    }
+    if (token === '--issue-mediated') {
+      parsed.issueMediated = true;
       continue;
     }
     if (token === '--propose') {
@@ -2546,6 +2559,9 @@ function substituteOnlyFlagsPresent(args) {
 /** --record-policy-only flags the user explicitly passed (present regardless of mode). */
 function recordPolicyOnlyFlagsPresent(args) {
   const present = [];
+  if (args.issueMediated) {
+    present.push('--issue-mediated');
+  }
   if (args.transcript !== undefined) {
     present.push('--transcript');
   }
@@ -2883,7 +2899,7 @@ function printHelp() {
        node scripts/idd-onboard.mjs --hear --propose --target <dir>
        node scripts/idd-onboard.mjs --hear --apply --answers <file> --target <dir>
        node scripts/idd-onboard.mjs --hear --target <dir>   (interactive TTY wizard)
-       node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--apply] [--write-policy-doc <path>]
+       node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--issue-mediated] [--apply] [--write-policy-doc <path>]
 
 Onboarding automation.
 
@@ -3053,6 +3069,9 @@ AGENTS.md, or GEMINI.md.
   --write-policy-doc <path>    also write the filled Markdown template to
                                <path> (--apply only); without this flag the
                                template is stdout-only.
+  --issue-mediated              record the issue-authoring companion as
+                               \`not installed\` in the policy document,
+                               regardless of the transcript value.
   --target <dir>               target repository (default: current directory)
   --allow-root <dir>           additionally confine --target to this root,
                                on top of the current working directory
