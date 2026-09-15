@@ -513,10 +513,36 @@ jobs:
     # this fix's A/B test held it constant in both runs and so proves
     # nothing about whether the marker POST also needs it -- narrowing
     # to `issues: read` would need its own separate live A/B test).
+    # `checks: read` and `statuses: read` (kurone-kito/idd-skill#2995):
+    # this job's own posting logic always calls
+    # `external-check-waiver.mts`'s `--auto-bootstrap` path, which reads
+    # `pr.statusCheckRollup` (`gh pr view --json ...,statusCheckRollup,...`)
+    # before ever reaching the POST above -- the rollup mixes
+    # Checks-API-backed entries (this repository's own GitHub Actions
+    # jobs, including this workflow's required verdict job) and
+    # legacy Statuses-API-backed entries, and GitHub requires both scopes
+    # explicitly to read either kind through this field. A field-feedback
+    # report confirmed the resulting "Resource not accessible by
+    # integration" 403 empirically via a live probe matrix in a private
+    # adopter repository's first-ever real `pull_request_target` run.
+    # This exact 403 has never been directly reproduced in THIS
+    # (public) repository: run 34699403367 against PR #2954, still on
+    # the pre-`pull-requests:write`-fix permissions below (`pull-requests:
+    # read`, no `checks`/`statuses` at all), got past the
+    # `statusCheckRollup` read and built the full waiver comment body,
+    # failing only at the POST step -- the same public/private
+    # `GITHUB_TOKEN` scope-enforcement split already documented for
+    # `actions: read` above (Codex review, PR #2895: needed "explicitly
+    # in a private repository"). Do not treat this repository's own
+    # green runs as proof the two new scopes are unneeded -- they were
+    # added proactively, for the documented adopter-repo failure mode,
+    # not because this repository has observed the 403 itself.
     permissions:
       contents: read
       pull-requests: write
       issues: write
+      checks: read
+      statuses: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

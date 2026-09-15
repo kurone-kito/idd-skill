@@ -121,6 +121,49 @@ test('self-waiver job keeps pull-requests: write in both advisory-convergence wo
   }
 });
 
+// kurone-kito/idd-skill#2995: the self-waiver job's `--auto-bootstrap`
+// call always reads `pr.statusCheckRollup` (via `gh pr view --json
+// ...,statusCheckRollup,...`) before ever reaching the marker POST --
+// a rollup mixing Checks-API and legacy Statuses-API entries needs both
+// scopes explicitly. Without this regression test, a future revert of
+// either grant would pass every other test in this suite while
+// silently reintroducing the "Resource not accessible by integration"
+// 403 a field-feedback report confirmed empirically in a private
+// adopter repository.
+test('self-waiver job keeps checks: read and statuses: read in both advisory-convergence workflow copies', () => {
+  for (const path of REQUIRED_PATHS) {
+    const text = readWorkflow(path);
+    const jobMatch = text.match(/^ {2}idd-advisory-convergence-self-waiver:$/m);
+    assert.ok(
+      jobMatch?.index !== undefined,
+      `${path} must keep the idd-advisory-convergence-self-waiver job`,
+    );
+    const afterJob = text.slice(jobMatch.index + jobMatch[0].length);
+    const nextSibling = afterJob.match(/^ {2}\S/m);
+    const jobBody =
+      nextSibling?.index === undefined
+        ? afterJob
+        : afterJob.slice(0, nextSibling.index);
+    const permissionsMatch = jobBody.match(
+      /^ {4}permissions:\n((?: {6}.*\n)+)/m,
+    );
+    assert.ok(
+      permissionsMatch,
+      `${path}: idd-advisory-convergence-self-waiver job must declare a permissions: block`,
+    );
+    assert.match(
+      permissionsMatch[1],
+      /^ {6}checks: read$/m,
+      `${path}: idd-advisory-convergence-self-waiver job must keep checks: read (kurone-kito/idd-skill#2995 -- --auto-bootstrap's statusCheckRollup read needs it)`,
+    );
+    assert.match(
+      permissionsMatch[1],
+      /^ {6}statuses: read$/m,
+      `${path}: idd-advisory-convergence-self-waiver job must keep statuses: read (kurone-kito/idd-skill#2995 -- --auto-bootstrap's statusCheckRollup read needs it)`,
+    );
+  }
+});
+
 test('comment-refresh workflows are non-required and use a different job id', () => {
   for (const path of COMMENT_PATHS) {
     const text = readWorkflow(path);
