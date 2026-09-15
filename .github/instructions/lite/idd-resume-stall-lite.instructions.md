@@ -40,8 +40,8 @@ node scripts/stalled-session-quiet-check.mjs \
 
 No PR: do not invent `--pr`. Skip the helper (not a helper
 failure). Decide S2 from the written bullets using the claim
-`branch:` remote tip SHA and update time; S4 step 5 reuses
-that path. Incomplete evidence still holds.
+`branch:` remote tip SHA and update time; S4 step 5 re-reads
+that tip and holds on movement or incomplete evidence.
 
 Never use the local wall clock as `now`. Re-derive a **fresh** `NOW`
 before S4; do not reuse the S2 value.
@@ -112,12 +112,6 @@ Any failure → STOP and restart. Do not post takeover on stale evidence.
 
 ## Hold behavior
 
-On S2/S3 hold: **do not** post hold comments on the issue/PR (that can
-reset quiet-window evidence). Log evidence in the session only and stop.
-
-## Hold-and-stop (no issue/PR hold comment)
-
-**Hold and stop** (session log only — same rule as Hold behavior above)
-when helper runtime is expected but unavailable, when timestamps cannot
-be server-anchored, or when claim/forced-handoff state is ambiguous.
-Never invent forced-handoff consent.
+On S2/S3 hold, missing helper, unanchored timestamps, or ambiguous
+claim/forced-handoff: session log only (no issue/PR comment). Never
+invent forced-handoff consent.

@@ -57,28 +57,29 @@ Use GitHub **server** timestamps only. Stale age default: **24 h**
 
 ## Step 0 — Route classifier (first match wins)
 
-| Condition                                                      | Action                                                                 |
-| -------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Issue closed or PR merged                                      | Step 1 cleanup only → STOP                                             |
-| Valid human-gated forced-handoff matching live claim/branch/PR | Step 1 forced-handoff path (skip stall)                                |
-| Forced-handoff evidence present but mismatches live state      | STOP — report mismatch; do not claim/push                              |
-| Non-owned claim + operator-present (below) + input received    | Operator-present path (below); skip stall                              |
-| Non-owned active claim, no valid forced-handoff                | Open `idd-resume-stall-lite.instructions.md`; return here if unblocked |
-| Otherwise                                                      | Step 1                                                                 |
+| Condition                                                          | Action                                                                 |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| Issue closed or PR merged                                          | Step 1 cleanup only → STOP                                             |
+| Valid human-gated forced-handoff matching live claim/branch/PR     | Step 1 forced-handoff path (skip stall)                                |
+| Forced-handoff evidence present but mismatches live state          | STOP — report mismatch; do not claim/push                              |
+| Non-owned active claim + operator-present (below) + input received | Operator-present path (below); skip stall                              |
+| Non-owned active claim, no valid forced-handoff                    | Open `idd-resume-stall-lite.instructions.md`; return here if unblocked |
+| Otherwise                                                          | Step 1                                                                 |
 
 Quiet-window evidence never bypasses the 24 h stale threshold.
 
 ### Operator-present release
 
-Predicate: claimant-authored pause comment after latest valid
-`claimed-by`, awaited input received here, no later trusted claimant
-activity (step 1 excepted). Else stall-lite. Steps 1-2 are pre-claim
-(stall 30 min / 24 h windows do not apply).
+Predicate: claimant-authored comment after latest valid `claimed-by`
+that records a deliberate pause and the same awaited input now
+received here; no later trusted claimant heartbeat, branch/PR
+movement, or comment/review (this path's step-1 comment excepted).
+Else stall-lite. Steps 1-2 are pre-claim (stall windows do not apply).
 
 1. Post the operator input as a normal comment; ask a human to drop
    any needs-decision/blocked-by-human label (never this session).
-2. Re-read; if claim and predicate still hold, post `unclaimed-by`
-   matching the held `{agent-id}` / `{claim-id}`.
+2. Re-read; if claim and predicate still hold, post a trusted
+   `unclaimed-by` matching the held `{agent-id}` / `{claim-id}`.
 3. Confirm unclaimed; else STOP.
 4. Fresh A5 `supersedes: none` → Step 1.
 
@@ -98,6 +99,8 @@ On helper-enabled profiles, run `resume-claim-routing.mjs --issue <N>`
 Forced-handoff: pass `new_claim_id` into Step 1. On
 `non_inheritable`/`stop` with `evidence.forced_handoff`, retry
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
+Retry `already_owned`: adopt `new_claim_id` / `new_agent_id` and
+post an activation-nonce if missing, then Step 2.
 
 After any helper map, `roadmap-audit/*` is still A1.5-only (no
 worktree; child issues are not locked).
@@ -152,7 +155,8 @@ On helper-enabled profiles, run `resume-route-selection.mjs --issue <N>`
   `idd-ci-lite.instructions.md` for polling)
 - `Esync` → `idd-review-triage.instructions.md` **E-phase
   branch-sync check** (classification only). Redirect non-lite
-  exits: `clean` → `idd-pre-merge-lite.instructions.md`; step 6 →
+  exits: `clean` / `behind-no-conflict` →
+  `idd-pre-merge-lite.instructions.md`; step 6 →
   `idd-review-snapshot-lite.instructions.md` (E1)
 - `F1` / `F2` → `idd-pre-merge-lite.instructions.md`, from the top
   (covers both F1 and F2)
