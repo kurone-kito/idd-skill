@@ -911,12 +911,20 @@ fresh read immediately before posting; anchor-only `release-guard` uses
 `body-sha256=none`, while anchor-only `release-complete` carries the required
 canonical set snapshot digest. Persist the per-target body digests and
 snapshot inputs in the originating hold and re-fetch/recompute them before
-accepting completion. New markers missing these fields are not valid for a new
-generation; legacy markers are migration input only. A legacy marker cannot
-prove completion until its target body and required snapshot are re-fetched
-and recomputed with the canonical algorithm; when the stored snapshot digest
-matches that recomputation, the current verification may accept it. Missing,
-mismatched, or otherwise unverifiable evidence fails closed.
+accepting completion. For `snapshot-sha256`, compute the SHA-256 digest over
+the UTF-8 bytes of the whole target set's
+`<owner>/<repo>#<number>:<body-sha256>` lines. Normalize each `<owner>` and
+`<repo>` component with
+`NFC(Unicode-default-lowercase(NFC(component)))`, join them with `/`, and
+serialize each line with that normalized identity. Sort by the identity's
+unsigned UTF-8 byte sequence (shorter equal prefixes first), then issue
+number ascending, and join with a single `\n` and no trailing newline. New
+markers missing these fields are not valid for a new generation; legacy
+markers are migration input only. A legacy marker cannot prove completion
+until its target body and required snapshot are re-fetched and recomputed
+with the canonical algorithm; when the stored snapshot digest matches that
+recomputation, the current verification may accept it. Missing, mismatched,
+or otherwise unverifiable evidence fails closed.
 
 Verify the returned comment ID and body after posting, then re-read the active
 claim and open-PR state again. If execution began during acquisition, stop

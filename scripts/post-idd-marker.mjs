@@ -148,9 +148,9 @@ export const FROM_PR_MARKER_TYPES = [
  * identity's UTF-8 bytes in unsigned lexicographic order (byte by byte, with
  * shorter equal prefixes first), then by issue number in ascending order and
  * join with `\n` with no trailing newline -- but that algorithm's inputs are
- * every
- * OTHER target's already-verified digest from the authoring session's own
- * durable hold, cross-target state a single `--marker-target` CLI
+ * the already-verified digest records from every OTHER target in the
+ * authoring session's own durable hold, cross-target state a single
+ * `--marker-target` CLI
  * invocation has no way to enumerate (unlike `body-sha256`, which is
  * always exactly the one named target's own live body, fully resolvable
  * from that one target alone). Guessing a source for it here would risk
