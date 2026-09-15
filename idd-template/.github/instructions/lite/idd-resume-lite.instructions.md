@@ -81,7 +81,7 @@ Else stall-lite. Steps 1-2 are pre-claim (stall windows do not apply).
 2. Re-read; if claim and predicate still hold, post a trusted
    `unclaimed-by` matching the held `{agent-id}` / `{claim-id}`.
 3. Confirm unclaimed; else STOP.
-4. Fresh A5 `supersedes: none` → Step 1.
+4. Fresh A5 `supersedes: none` → Step 1 with `--claim-id`.
 
 ## Step 1 — Claim state (helper-first)
 
@@ -99,9 +99,9 @@ On helper-enabled profiles, run `resume-claim-routing.mjs --issue <N>`
 Forced-handoff: pass `new_claim_id` into Step 1. On
 `non_inheritable`/`stop` with `evidence.forced_handoff`, retry
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
-Retry `already_owned`: adopt `new_claim_id` / `new_agent_id`;
-post an activation-nonce if missing; wait settle; confirm the
-nonce winner; then Step 2.
+Retry `already_owned`: if `new_agent_id` is not this session,
+STOP. Else adopt the pair; post an activation-nonce if missing;
+wait settle; confirm the nonce winner; then Step 2.
 
 After any helper map, `roadmap-audit/*` is still A1.5-only (no
 worktree; child issues are not locked).
@@ -156,8 +156,7 @@ On helper-enabled profiles, run `resume-route-selection.mjs --issue <N>`
   `idd-ci-lite.instructions.md` for polling)
 - `Esync` → `idd-review-triage.instructions.md` **E-phase
   branch-sync check** (classification only). Redirect non-lite
-  exits: `clean` / `behind-no-conflict` →
-  `idd-pre-merge-lite.instructions.md`; step 6 →
+  exits: `clean` → `idd-pre-merge-lite.instructions.md`; step 6 →
   `idd-review-snapshot-lite.instructions.md` (E1)
 - `F1` / `F2` → `idd-pre-merge-lite.instructions.md`, from the top
   (covers both F1 and F2)
