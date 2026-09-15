@@ -195,6 +195,8 @@ const COVERED_HELPERS = [
   'forced-handoff-marker',
   'helper-runtime-manifest',
   'idd-critique-delegate',
+  'idd-critique-harvest',
+  'idd-critique-report',
   'idd-critique-telemetry-hook',
   'idd-doctor',
   'idd-roadmap-audit-execute',
