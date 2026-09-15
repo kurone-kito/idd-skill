@@ -1968,10 +1968,10 @@ close.
     --claim-id <claim-id> --agent-id <agent-id> --apply
   ```
 
-- Supported options are `--issue <number>` (required), `--claim-id` and
-  `--agent-id` (required with `--apply`), `--owner <owner>` and
-  `--repo <repo>` (required together when supplied), `--policy <path>`,
-  and `--now <ISO8601>`.
+- Supported options are `--issue <number>` (required), `--apply` (execute the
+  evidence-bound close), `--help` (print usage), `--claim-id` and `--agent-id`
+  (required with `--apply`), `--owner <owner>` and `--repo <repo>` (required
+  together when supplied), `--policy <path>`, and `--now <ISO8601>`.
 - Stable output fields are `ready`, `eligible`, `evidence`, `claim`,
   `closed`, and `result`, alongside `protocolVersion`, `mode`, and
   `issueNumber`. Dry-run reports the high-confidence evidence without
@@ -1979,8 +1979,13 @@ close.
   the evidence-bound closing comment, closes the issue, and releases the
   claim in that order. It never acts on the weak title/declaration
   heuristic.
-- `instructions-only`: follow the portable manual procedure in the
-  [A4.5 high-confidence coordination-close path](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule).
+- `instructions-only`: the helper is unavailable, so apply the written A4.5
+  checks as a detect-only path, post the required diagnostic comment with
+  machine-derivable evidence, leave the duplicate/superseded issue open, and
+  stop for maintainer review. Do not create a coordination claim or close and
+  release it from this profile. See the [A4.5 high-confidence
+  coordination-close path](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)
+  for the evidence boundary and the helper-capable execution path.
 
 ### Claim approval evidence
 
