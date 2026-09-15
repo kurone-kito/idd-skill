@@ -534,12 +534,13 @@ Reconcile it by hand:
 
 1. Fetch the target default branch (`git fetch origin` plus that branch
    name).
-2. If the bootstrap branch has not been pushed yet, rebase onto that
-   tip. If the PR is already published, merge the default branch into
-   the bootstrap branch instead — matching IDD's post-publication
-   default so the sync is reviewable and no force-push is required.
-3. After any conflict resolution, re-run Step 6 verification before
-   merge.
+2. If no pull request exists yet — including a not-yet-pushed branch —
+   rebase onto that tip. If a PR is already open, merge the default
+   branch into the bootstrap branch instead — matching IDD's
+   post-publication default so the sync is reviewable and no
+   force-push is required.
+3. Re-run Step 6 verification after the rebase or merge, even when
+   there were no conflicts, before merging the bootstrap PR.
 
 Do not wait for D1 or Esync to do this.
 
