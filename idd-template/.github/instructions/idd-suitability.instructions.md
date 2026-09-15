@@ -243,6 +243,10 @@ heuristic — for a discovery-path candidate (A2/A3 roadmap traversal or
 A0-O orphan-first; never an A0-T explicit target, which keeps its
 report-and-stop path unchanged):
 
+With `instructions-only`, report evidence, remove candidate from Candidates,
+skip claim/close/release; continue A4.5. A0-T reports/stops; otherwise use the
+coordination-close procedure below:
+
 1. Post a no-worktree coordination claim on the candidate, structurally
    identical to A1.5's roadmap-audit claim
    (`idd-roadmap-audit.instructions.md`) but with

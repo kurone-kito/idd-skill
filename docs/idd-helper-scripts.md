@@ -211,6 +211,12 @@ in this preamble, since the fallback differs per helper.
   live `--issue <n>` verdict; `duplicate_or_superseded` always reports
   `"not_evaluated"`, never omitted (referenced in
   [kurone-kito/idd-skill#2102](https://github.com/kurone-kito/idd-skill/issues/2102))
+- `scripts/suitability-close-execute.mjs` for the A4.5 high-confidence
+  duplicate/superseded coordination-close path (referenced in
+  [kurone-kito/idd-skill#1485](https://github.com/kurone-kito/idd-skill/issues/1485));
+  it reuses the triage detection kernel, requires a separate
+  `suitability-close/<issue>-<slug>` claim for `--apply`, and fails closed
+  when a fresh evaluation is no longer eligible
 - `scripts/claim-approval-gate.mjs` for A5(a) issue-author approval
   verification; A5(d) open-PR conflict checks remain manual by design
   (referenced in
@@ -1932,6 +1938,56 @@ close.
 - The helper evaluates the three A4 viability criteria (limited scope, clear
   verification, autonomous completion) against fetched issue bodies; it does
   not post claims or mutate any state
+
+### Suitability high-confidence close
+
+- Source repo / vendored-node command:
+  `node scripts/suitability-close-execute.mjs --issue <issue-number>`
+  runs the read-only dry-run. Add `--claim-id <claim-id> --agent-id
+  <agent-id> --apply` after posting the `suitability-close/<issue>-<slug>`
+  coordination claim to execute an eligible close.
+- Package-manager command: run the profile-selected
+  `idd:suitability-close-execute` package script. The example uses `npm`;
+  substitute the repository's configured package manager:
+
+  ```sh
+  npm run idd:suitability-close-execute -- --issue <issue-number>
+  npm run idd:suitability-close-execute -- --issue <issue-number> \
+    --claim-id <claim-id> --agent-id <agent-id> --apply
+  ```
+
+- Ephemeral-npx command: use the profile-selected
+  `idd-suitability-close-execute` command from the helper runtime manifest
+  wiring above; the literal invocations are:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-suitability-close-execute --issue <issue-number>
+  npx --yes --package <helper-package-spec> \
+    idd-suitability-close-execute --issue <issue-number> \
+    --claim-id <claim-id> --agent-id <agent-id> --apply
+  ```
+
+- Supported options are `--issue <number>` (required), `--apply` (execute the
+  evidence-bound close), `--help` (print usage), `--claim-id` and `--agent-id`
+  (required with `--apply`), `--owner <owner>` and `--repo <repo>` (required
+  together when supplied), `--policy <path>`, and `--now <ISO8601>`.
+- Stable output fields are `ready`, `eligible`, `evidence`, `claim`,
+  `closed`, and `result`, alongside `protocolVersion`, `mode`, and
+  `issueNumber`. Dry-run reports the high-confidence evidence without
+  mutating; apply re-validates the coordination claim and evidence, posts
+  the evidence-bound closing comment, closes the issue, and releases the
+  claim in that order. It never acts on the weak title/declaration
+  heuristic.
+- `instructions-only`: apply the written A4.5 checks as a detect-only path,
+  post the required diagnostic comment with machine-derivable evidence, and
+  do not create a coordination claim; do not close the issue or release a
+  coordination claim. For a
+  discovery candidate, remove it from Candidates and continue the Decision
+  Flow loop; an explicit-target caller follows A0-T's report-and-stop route.
+  See the [A4.5 high-confidence coordination-close
+  path](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)
+  for the evidence boundary and the helper-capable execution path.
 
 ### Claim approval evidence
 
