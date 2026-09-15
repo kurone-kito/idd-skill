@@ -388,7 +388,8 @@ in this preamble, since the fallback differs per helper.
   for the polling job’s whole lifetime. This does not authorize treating
   `awaiting-fresh-review` as rerunnable or trusting a raw waiver comment;
   retain that hold unless an independently verified recovery signal exists.
-  The failure shape was observed on 2026-09-14; see [issue #2994](https://github.com/kurone-kito/idd-skill/issues/2994).
+  The failure shape is documented in [issue #2994](https://github.com/kurone-kito/idd-skill/issues/2994),
+  filed on 2026-09-14.
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
