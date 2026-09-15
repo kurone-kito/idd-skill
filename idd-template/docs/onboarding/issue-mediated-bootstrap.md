@@ -339,10 +339,15 @@ gating this PR normally and are not affected by this note.
 imported template, so review bots will flag defects in the vendored
 files themselves. Treat import mistakes (missing files, leftover
 placeholders, unpinned fetches) as in-scope here. Do not fork-fix a
-template-internal finding in this PR; see the issue-mediated bootstrap
-reference's "Template-internal review findings" subsection for how to
-reply or resolve a blocking comment without patching the vendored
-copy, and how to track a qualifying finding after merge.
+template-internal finding in this PR. If a bot requests changes or
+leaves an unresolved thread, reply that it is template-internal and
+not an import defect, then follow this repository's own
+review/conversation-resolution policy (resolve the thread when that
+policy allows; otherwise wait for the required reviewer or maintainer
+acknowledgement). After merge, track a qualifying finding per
+[Onboarding Reference — Issue-Mediated
+Bootstrap](https://raw.githubusercontent.com/kurone-kito/idd-skill/<tag-or-sha>/idd-template/docs/onboarding/issue-mediated-bootstrap.md)
+(same `<tag-or-sha>` pin as the process reference).
 
 ## Acceptance criteria
 
@@ -522,28 +527,37 @@ signal — no branch, PR, or merge.
 This PR is explicitly off the Discover -> Claim -> Work loop, so IDD's
 D1 pre-push rebase and Esync post-push merge of `{development-branch}`
 never run for it. On an active target repository, other PRs can still
-merge to the default branch while the bootstrap PR is open. Observed
-2026-09-14 on `kurone-kito/kurone-kito#29` (tracked upstream as
-`kurone-kito/idd-skill#2984`): three unrelated PRs merged to the base
-branch mid-bootstrap and forced a manual rebase with no documented
-procedure.
+merge to the bootstrap PR's confirmed base branch while that PR is
+open. Observed 2026-09-14 on `kurone-kito/kurone-kito#29` (tracked
+upstream as `kurone-kito/idd-skill#2984`): three unrelated PRs merged
+to the base branch mid-bootstrap and forced a manual rebase with no
+documented procedure.
 
 A target-repo up-to-date-head ruleset can independently require the
-same sync even though IDD's own automation is not running.
+same sync even though IDD's own automation is not running. Use the
+bootstrap PR's own base branch throughout — the confirmed
+`{development-branch}` from the hearing when that is the PR base, not
+the GitHub default branch by default.
 
-Reconcile it by hand:
+Reconcile it by hand against that confirmed base branch:
 
-1. Fetch the target default branch (`git fetch origin` plus that branch
-   name).
+1. Fetch it (`git fetch origin` plus that branch name).
 2. If the bootstrap branch has not been pushed yet, rebase onto that
-   tip. Once it has been pushed — even if `gh pr create` has not
-   succeeded yet — merge the default branch into the bootstrap branch
-   instead. The first push is the publication boundary: rebasing after
-   that rewrites published remote history and the next normal push is
-   rejected. Matching IDD's post-publication default keeps the sync
-   reviewable and avoids a force-push.
-3. Re-run Step 6 verification after the rebase or merge, even when
-   there were no conflicts, before merging the bootstrap PR.
+   tip **unless** `git merge-base HEAD origin/<base>` already equals
+   `origin/<base>` — then skip the rebase (a no-op rebase can detach
+   HEAD in a sibling worktree). Once it has been pushed — even if
+   `gh pr create` has not succeeded yet — merge `origin/<base>` into
+   the bootstrap branch instead. The first push is the publication
+   boundary: rebasing after that rewrites published remote history and
+   the next normal push is rejected. `<base>` here is the confirmed
+   base branch name.
+3. After rebase or merge, confirm `git branch --show-current` is
+   non-empty (HEAD is on the bootstrap branch, not detached) and that
+   the local commit is still in `origin/<base>..HEAD`. Then re-run
+   Step 6 verification, even when there were no conflicts.
+4. `git push` the bootstrap branch (normal push, never force) so the
+   remote PR and the target repository's CI/review gates see the
+   reconciliation. Wait for those gates before merging.
 
 Do not wait for D1 or Esync to do this.
 
@@ -564,9 +578,11 @@ Disposition:
 - **Do not fork-fix a template-internal finding in this PR.** If a
   bot requests changes or leaves an unresolved thread, reply on that
   thread that the finding is template-internal, will be tracked after
-  merge, and is not an import defect — then resolve the thread or
-  wait for a maintainer approval so existing review gates can still
-  let this PR merge. Do not patch the vendored copy just to silence
+  merge, and is not an import defect. Then follow the target
+  repository's own review and conversation-resolution policy — some
+  repos require the thread itself to be resolved, and the strict
+  review profile requires a reviewer or maintainer resolution, not
+  merely an approval. Do not patch the vendored copy just to silence
   the comment.
 - **After merge, qualify before escalating.**
   [Upstream-candidate escalation][upstream-candidate] is opt-in
