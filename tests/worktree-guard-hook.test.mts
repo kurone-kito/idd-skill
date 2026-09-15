@@ -138,6 +138,18 @@ test('hook blocks commit and push from the primary worktree on issue/* when enab
   }
 });
 
+test('hook keeps branch globs literal when a matching path exists', () => {
+  const repo = setupRepo({ worktreeGuard: { enabled: true } });
+  try {
+    mkdirSync(join(repo, 'issue'));
+    writeFileSync(join(repo, 'issue', 'template.md'), 'fixture\n');
+    git(repo, ['checkout', '-q', '-b', 'issue/123-example']);
+    assert.equal(runHook(repo, 'pre-commit'), 1);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test('hook blocks roadmap-audit/* branches in the primary worktree', () => {
   const repo = setupRepo({ worktreeGuard: { enabled: true } });
   try {
