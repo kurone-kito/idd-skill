@@ -82,8 +82,8 @@ Else stall-lite. Steps 1-2 are pre-claim (stall windows do not apply).
 2. Re-read; if claim and predicate still hold, post a trusted
    `unclaimed-by` matching the held `{agent-id}` / `{claim-id}`.
 3. Confirm unclaimed; else STOP.
-4. Fresh A5 `supersedes: none` → Step 1 with `--claim-id` of
-   that claim.
+4. Fresh-claim-gate; A5 `supersedes: none` → Step 1 with
+   `--claim-id` of that claim.
 
 ## Step 1 — Claim state (helper-first)
 
