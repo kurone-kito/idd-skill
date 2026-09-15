@@ -265,7 +265,7 @@ that wraps this recovery in a wait loop must identify and exclude its own
 guaranteed self-referential pending instance before using “zero pending
 instances” as a termination condition. A `needs:` dependency can keep
 that sibling pending for the polling job’s whole lifetime. This exclusion
-does not make an `awaiting-fresh-review` instance rerunnable: retain that
+does not make an `awaiting-fresh-review` instance eligible for rerun: retain that
 fail-closed hold unless an independently verified current-HEAD recovery
 signal exists, and never infer one from a raw waiver comment. Issue
 [#2994](https://github.com/kurone-kito/idd-skill/issues/2994) records the

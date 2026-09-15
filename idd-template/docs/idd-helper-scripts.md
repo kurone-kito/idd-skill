@@ -386,7 +386,7 @@ in this preamble, since the fallback differs per helper.
   guaranteed self-referential pending instance before polling for zero
   pending instances; a `needs:` dependency can keep that sibling pending
   for the polling job’s whole lifetime. This does not authorize treating
-  `awaiting-fresh-review` as rerunnable or trusting a raw waiver comment;
+  `awaiting-fresh-review` as eligible for rerun or trusting a raw waiver comment;
   retain that hold unless an independently verified recovery signal exists.
   The failure shape is documented in [issue #2994](https://github.com/kurone-kito/idd-skill/issues/2994),
   filed on 2026-09-14.
