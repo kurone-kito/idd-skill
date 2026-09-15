@@ -174,9 +174,11 @@ character with no trailing
 newline; the same `snapshot-sha256` must be carried by `release-complete`. A
 later session must re-fetch every target, recompute and compare each body
 digest, verify the release marker and absent label, and recompute the set
-snapshot before accepting `release-complete`. Missing, mismatched, or
-unverifiable snapshot evidence fails closed and leaves the hold and labels in
-place.
+snapshot before accepting `release-complete`. This repository-first order
+applies to new `release-complete` markers; a marker produced under the former
+issue-number-first rule is migration input only and cannot prove completion
+under this rule. Missing, mismatched, legacy, or otherwise unverifiable
+snapshot evidence fails closed and leaves the hold and labels in place.
 Read every issue comment page and order valid markers by GitHub `created_at`,
 then comment ID. Replay that ordered log as a state machine: an
 `acquire`/`bootstrap` with `supersedes=none` starts a generation only when no

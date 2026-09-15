@@ -178,7 +178,8 @@ export type FromPrMarkerType = (typeof FROM_PR_MARKER_TYPES)[number];
  * precise algorithm for it -- the SHA-256 digest, over UTF-8, of the
  * whole authoring set's `<owner>/<repo>#<number>:<body-sha256>` lines
  * (one per target, each using that target's own currently-verified
- * `body-sha256`), sorted by ascending issue number and joined by a single
+ * `body-sha256`), sorted first by canonical repository identity
+ * (`<owner>/<repo>`) in lexicographic order, then by issue number and joined
  * `\n` with no trailing newline -- but that algorithm's inputs are every
  * OTHER target's already-verified digest from the authoring session's own
  * durable hold, cross-target state a single `--marker-target` CLI
