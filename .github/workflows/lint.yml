@@ -178,3 +178,9 @@ jobs:
           hold under a same-claim-id race|genuinely pre-existing matching
           lock reacquires with no racedCreate"
           tests/claim-lock.test.mts
+      # Regression coverage for kurone-kito/idd-skill#2988: the full file
+      # is now safe after #2989 bounded its production fetch calls and
+      # #2990 made the fixture suite hermetic on Windows. Keep this
+      # whole-file step distinct from the narrowed claim-lock coverage.
+      - name: Run branch-conflict-state tests
+        run: node --test tests/branch-conflict-state.test.mts
