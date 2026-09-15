@@ -821,8 +821,17 @@ vocabulary and upstream `kurone-kito/idd-skill` cross-references for
 These files close that gap out of the box; `.cspell.config.yml`'s
 `enableGlobDot: true` in particular is required for `cspell lint "**"` to
 scan `.github/instructions/**` at all — without it, that command
-silently skips those files rather than reporting them clean. If the
-target repository already has its own `.markdownlint.yml`,
+silently skips those files rather than reporting them clean.
+
+`.cspell.config.yml` also writes its spell-check cache under
+`node_modules/.cache/cspell/`. On a repository that does not already
+have a `.gitignore` entry for `node_modules/` (typical for a non-Node
+adopter), the first `cspell` run then leaves those cache files
+untracked (observed 2026-09-14, issue `#2986`). Add a `.gitignore`
+entry for `node_modules/` before that first run when one does not
+already exist.
+
+If the target repository already has its own `.markdownlint.yml`,
 `.markdownlint-cli2.yaml`, or `.cspell.config.yml` with different
 content, `--import` refuses to overwrite it (reported under
 `blockedOverwrites`, same as any other differing file) — merge the
