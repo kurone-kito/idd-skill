@@ -1360,8 +1360,12 @@ only approval boundary.
   canonical set snapshot digest. Persist the per-target body digests and
   snapshot inputs in the originating hold and re-fetch/recompute them before
   accepting completion. New markers missing these fields are not valid for a
-  new generation; treat legacy markers only as migration input and fail closed
-  when the required snapshot cannot be verified.
+  new generation; treat legacy markers only as migration input. A legacy
+  marker cannot prove completion until its target body and required snapshot
+  are re-fetched and recomputed with the canonical algorithm; when the stored
+  snapshot digest matches that recomputation, the current verification may
+  accept it. Missing, mismatched, or otherwise unverifiable evidence fails
+  closed.
 
   Append this HTML-first body with a direct JSON `POST` to the issue-comments
   endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the

@@ -134,7 +134,11 @@ approval boundary that hands off to IDD execution.
   owner protocol: target markers persist the exact fresh body digest, and the
   anchor-only `release-complete` marker carries the recomputed set snapshot.
   New markers missing these fields are not valid for a new generation; legacy
-  markers are migration input only and cannot prove completion.
+  markers are migration input only. A legacy marker cannot prove completion
+  until its target body and required snapshot are re-fetched and recomputed
+  with the canonical algorithm; when the stored snapshot digest matches that
+  recomputation, the current verification may accept it. Missing, mismatched,
+  or otherwise unverifiable evidence fails closed.
 
   Append this HTML-first body with a direct JSON `POST` to the issue-comments
   endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the

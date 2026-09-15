@@ -912,7 +912,11 @@ fresh read immediately before posting; anchor-only `release-guard` uses
 canonical set snapshot digest. Persist the per-target body digests and
 snapshot inputs in the originating hold and re-fetch/recompute them before
 accepting completion. New markers missing these fields are not valid for a new
-generation; legacy markers are migration input only and cannot prove completion.
+generation; legacy markers are migration input only. A legacy marker cannot
+prove completion until its target body and required snapshot are re-fetched
+and recomputed with the canonical algorithm; when the stored snapshot digest
+matches that recomputation, the current verification may accept it. Missing,
+mismatched, or otherwise unverifiable evidence fails closed.
 
 Verify the returned comment ID and body after posting, then re-read the active
 claim and open-PR state again. If execution began during acquisition, stop
