@@ -555,9 +555,11 @@ Reconcile it by hand against that confirmed base branch:
    non-empty (HEAD is on the bootstrap branch, not detached) and that
    the local commit is still in `origin/<base>..HEAD`. Then re-run
    Step 6 verification, even when there were no conflicts.
-4. `git push` the bootstrap branch (normal push, never force) so the
-   remote PR and the target repository's CI/review gates see the
-   reconciliation. Wait for those gates before merging.
+4. Publish the bootstrap branch with a normal push, never force: on
+   the first push use `git push -u origin HEAD` (the branch has no
+   upstream yet, so a bare `git push` fails under Git's default);
+   afterwards `git push` is enough. Wait for the remote PR's CI and
+   review gates before merging.
 
 Do not wait for D1 or Esync to do this.
 
