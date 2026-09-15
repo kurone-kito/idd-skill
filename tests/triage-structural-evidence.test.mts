@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -9,6 +10,10 @@ import {
   hasVerificationCommandSignal,
   isTrustedEditorSignal,
 } from '../src/scripts/triage-structural-evidence.mts';
+
+const fixtureRepoRoot = resolve(process.cwd(), 'test-fixture-repo');
+const fixturePath = (...segments: string[]) =>
+  resolve(fixtureRepoRoot, ...segments);
 
 // --- hasVerificationCommandSignal -------------------------------------------
 
@@ -776,9 +781,9 @@ test('hasVerificationCommandSignal: a mixed multi-line double-backtick span with
 
 test('candidateFilesExistOnDisk: true when at least one listed path exists', () => {
   const body = `## Candidate files\n\n- \`src/scripts/exists.mts\`\n- \`src/scripts/missing.mts\`\n`;
-  const existing = new Set(['/repo/src/scripts/exists.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'exists.mts')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     true,
   );
 });
@@ -786,7 +791,7 @@ test('candidateFilesExistOnDisk: true when at least one listed path exists', () 
 test('candidateFilesExistOnDisk: false when no listed path exists', () => {
   const body = `## Candidate files\n\n- \`src/scripts/missing.mts\`\n`;
   assert.equal(
-    candidateFilesExistOnDisk(body, () => false, '/repo'),
+    candidateFilesExistOnDisk(body, () => false, fixtureRepoRoot),
     false,
   );
 });
@@ -794,7 +799,7 @@ test('candidateFilesExistOnDisk: false when no listed path exists', () => {
 test('candidateFilesExistOnDisk: false when the section is absent', () => {
   const body = `## Background\n\nNo candidate files section here.\n`;
   assert.equal(
-    candidateFilesExistOnDisk(body, () => true, '/repo'),
+    candidateFilesExistOnDisk(body, () => true, fixtureRepoRoot),
     false,
   );
 });
@@ -802,7 +807,7 @@ test('candidateFilesExistOnDisk: false when the section is absent', () => {
 test('candidateFilesExistOnDisk: an absolute path candidate never satisfies the signal, even when existsAt is unconditionally true (CodeRabbit review, PR #2840)', () => {
   const body = `## Candidate files\n\n- \`/etc/passwd\`\n`;
   assert.equal(
-    candidateFilesExistOnDisk(body, () => true, '/repo'),
+    candidateFilesExistOnDisk(body, () => true, fixtureRepoRoot),
     false,
   );
 });
@@ -810,7 +815,7 @@ test('candidateFilesExistOnDisk: an absolute path candidate never satisfies the 
 test('candidateFilesExistOnDisk: a Windows-drive-letter absolute path candidate never satisfies the signal, even on a POSIX host (CodeRabbit review, PR #2840)', () => {
   const body = `## Candidate files\n\n- \`C:\\Windows\\System32\\config\`\n`;
   assert.equal(
-    candidateFilesExistOnDisk(body, () => true, '/repo'),
+    candidateFilesExistOnDisk(body, () => true, fixtureRepoRoot),
     false,
   );
 });
@@ -818,7 +823,7 @@ test('candidateFilesExistOnDisk: a Windows-drive-letter absolute path candidate 
 test('candidateFilesExistOnDisk: a ../-escaping path candidate never satisfies the signal, even when existsAt is unconditionally true (CodeRabbit review, PR #2840)', () => {
   const body = `## Candidate files\n\n- \`../../etc/passwd\`\n`;
   assert.equal(
-    candidateFilesExistOnDisk(body, () => true, '/repo'),
+    candidateFilesExistOnDisk(body, () => true, fixtureRepoRoot),
     false,
   );
 });
@@ -832,7 +837,7 @@ test('candidateFilesExistOnDisk: a Windows-backslash-form ../-escaping path neve
   // not a POSIX-host escape.
   const body = '## Candidate files\n\n- `..\\..\\etc\\passwd`\n';
   assert.equal(
-    candidateFilesExistOnDisk(body, () => true, '/repo'),
+    candidateFilesExistOnDisk(body, () => true, fixtureRepoRoot),
     false,
   );
 });
@@ -848,9 +853,9 @@ test('candidateFilesExistOnDisk: an example inside a fenced code block does not 
     '```',
     '',
   ].join('\n');
-  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'foo.mts')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     false,
   );
 });
@@ -864,9 +869,9 @@ test('candidateFilesExistOnDisk: an example inside an HTML comment does not coun
     '-->',
     '',
   ].join('\n');
-  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'foo.mts')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     false,
   );
 });
@@ -880,9 +885,9 @@ test('candidateFilesExistOnDisk: an example inside a raw HTML block (<pre>) does
     '</pre>',
     '',
   ].join('\n');
-  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'foo.mts')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     false,
   );
 });
@@ -897,9 +902,9 @@ test('candidateFilesExistOnDisk: a real Candidate files section after an unclose
     '- `src/scripts/foo.mts`',
     '',
   ].join('\n');
-  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'foo.mts')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     true,
   );
 });
@@ -925,18 +930,18 @@ test('candidateFilesExistOnDisk: a real Candidate files section after a fenced e
     '- `src/scripts/foo.mts`',
     '',
   ].join('\n');
-  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'foo.mts')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     true,
   );
 });
 
 test('candidateFilesExistOnDisk: a relative path whose internal ../ segment still normalizes inside repoRoot still resolves and can satisfy the signal', () => {
   const body = `## Candidate files\n\n- \`src/scripts/../scripts/exists.mts\`\n`;
-  const existing = new Set(['/repo/src/scripts/exists.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'exists.mts')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     true,
   );
 });
@@ -950,10 +955,15 @@ test('candidateFilesExistOnDisk: resolves a full idd-template instructions path 
   // idd-template source path itself must exist for this to pass.
   const body = `## Candidate files\n\n- \`idd-template/.github/instructions/idd-suitability.instructions.md\`\n`;
   const existing = new Set([
-    '/repo/idd-template/.github/instructions/idd-suitability.instructions.md',
+    fixturePath(
+      'idd-template',
+      '.github',
+      'instructions',
+      'idd-suitability.instructions.md',
+    ),
   ]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     true,
   );
 });
@@ -965,10 +975,10 @@ test('candidateFilesExistOnDisk: does not satisfy the signal via the mirror when
   // not exist.
   const body = `## Candidate files\n\n- \`idd-template/.github/instructions/idd-suitability.instructions.md\`\n`;
   const existing = new Set([
-    '/repo/.github/instructions/idd-suitability.instructions.md',
+    fixturePath('.github', 'instructions', 'idd-suitability.instructions.md'),
   ]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     false,
   );
 });
@@ -980,9 +990,9 @@ test('candidateFilesExistOnDisk: a normalized-only match (contention key, not a 
   // at repo root. Resolving the raw path (not the normalized key) must
   // not be fooled by that coincidence.
   const body = `## Candidate files\n\n- \`idd-template/package.json\`\n`;
-  const existing = new Set(['/repo/package.json']);
+  const existing = new Set([fixturePath('package.json')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     false,
   );
 });
@@ -990,10 +1000,15 @@ test('candidateFilesExistOnDisk: a normalized-only match (contention key, not a 
 test('candidateFilesExistOnDisk: resolves a bare instructions basename under idd-template mirror', () => {
   const body = `## Candidate files\n\n- \`idd-template/.github/instructions/idd-discover.instructions.md\`\n`;
   const existing = new Set([
-    '/repo/idd-template/.github/instructions/idd-discover.instructions.md',
+    fixturePath(
+      'idd-template',
+      '.github',
+      'instructions',
+      'idd-discover.instructions.md',
+    ),
   ]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     true,
   );
 });
@@ -1006,9 +1021,9 @@ test("candidateFilesExistOnDisk: a later raw spelling sharing an earlier one's c
   // spelling is the one that actually exists on disk, so it must not be
   // silently dropped.
   const body = `## Candidate files\n\n- \`idd-template/package.json\`\n- \`package.json\`\n`;
-  const existing = new Set(['/repo/package.json']);
+  const existing = new Set([fixturePath('package.json')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     true,
   );
 });
@@ -1032,9 +1047,9 @@ test('candidateFilesExistOnDisk: a mixed multi-line double-backtick span with a 
     '``',
     '',
   ].join('\n');
-  const existing = new Set(['/repo/src/scripts/exists.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'exists.mts')]);
   assert.equal(
-    candidateFilesExistOnDisk(body, (p) => existing.has(p), '/repo'),
+    candidateFilesExistOnDisk(body, (p) => existing.has(p), fixtureRepoRoot),
     true,
   );
 });
@@ -1174,7 +1189,7 @@ test('evaluateStructuralEvidence: computes all three signals together', () => {
     '- `src/scripts/foo.mts`',
     '',
   ].join('\n');
-  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'foo.mts')]);
   const trusted = new Set(['alice']);
   const evidence = evaluateStructuralEvidence({
     body,
@@ -1182,7 +1197,7 @@ test('evaluateStructuralEvidence: computes all three signals together', () => {
     editorLogins: [],
     isTrustedLogin: (login) => trusted.has(login),
     existsAt: (p) => existing.has(p),
-    repoRoot: '/repo',
+    repoRoot: fixtureRepoRoot,
   });
   assert.deepEqual(evidence, {
     verificationCommand: true,
@@ -1203,7 +1218,7 @@ test('evaluateStructuralEvidence: an untrusted editor alone keeps the overall re
     '- `src/scripts/foo.mts`',
     '',
   ].join('\n');
-  const existing = new Set(['/repo/src/scripts/foo.mts']);
+  const existing = new Set([fixturePath('src', 'scripts', 'foo.mts')]);
   const trusted = new Set(['alice']);
   const evidence = evaluateStructuralEvidence({
     body,
@@ -1211,7 +1226,7 @@ test('evaluateStructuralEvidence: an untrusted editor alone keeps the overall re
     editorLogins: ['mallory'],
     isTrustedLogin: (login) => trusted.has(login),
     existsAt: (p) => existing.has(p),
-    repoRoot: '/repo',
+    repoRoot: fixtureRepoRoot,
   });
   assert.equal(evidence.trustedEditor, false);
   assert.equal(hasAllStructuralSignals(evidence), false);

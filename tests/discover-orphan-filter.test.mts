@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -18,6 +18,7 @@ import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detect
 import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const existingFooPath = resolve(process.cwd(), 'src/scripts/foo.mts');
 
 /**
  * Stub `gh` on PATH so `runCli()` can resolve owner/repo via `repo view`
@@ -270,7 +271,7 @@ test('#2767: filterOrphanIssues demotes a runtime-observation-precondition candi
     fetchUserContentEditorsByIssueNumber: () => ['alice'],
     isTrustedCollaborator: () => false,
     trustedMarkerLogins: ['alice'],
-    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+    existsAt: (path) => path === existingFooPath,
   });
 
   assert.equal(result.orphans.length, 1);
@@ -326,7 +327,7 @@ test('#2767: filterOrphanIssues degrades to the plain (filtered) result when fet
     },
     isTrustedCollaborator: () => false,
     trustedMarkerLogins: ['alice'],
-    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+    existsAt: (path) => path === existingFooPath,
   });
 
   assert.equal(result.orphans.length, 0);
@@ -409,7 +410,7 @@ test('#2767: filterOrphanIssues demotes a runtime-observation-precondition candi
     fetchUserContentEditorsByIssueNumber: () => ['alice'],
     isTrustedCollaborator: () => false,
     trustedMarkerLogins: ['alice'],
-    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+    existsAt: (path) => path === existingFooPath,
   });
 
   assert.equal(result.orphans.length, 1);
@@ -450,7 +451,7 @@ test('#2767: filterOrphanIssues suppresses the demotion warning when the candida
     fetchUserContentEditorsByIssueNumber: () => ['alice'],
     isTrustedCollaborator: () => false,
     trustedMarkerLogins: ['alice'],
-    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+    existsAt: (path) => path === existingFooPath,
     fetchCommentsByIssueNumber: () => [rejectionComment],
     fetchTimelineByIssueNumber: () => [],
   });
@@ -485,7 +486,7 @@ test('#2767: filterOrphanIssues suppresses the demotion warning when the candida
     fetchUserContentEditorsByIssueNumber: () => ['alice'],
     isTrustedCollaborator: () => false,
     trustedMarkerLogins: ['alice'],
-    existsAt: (path) => path.endsWith('src/scripts/foo.mts'),
+    existsAt: (path) => path === existingFooPath,
     autopilot: true,
     autopilotSuitabilityFloor: 3,
   });
