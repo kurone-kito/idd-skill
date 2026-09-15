@@ -1047,8 +1047,9 @@ Binding rules:
   content like `roadmap-id`; it must never be added to
   `OPERATIONAL_MARKERS` in `scripts/protocol-helpers.mjs` or
   subjected to F4 minimization.
-- **One source of truth.** A score of `1` must agree with
-  `status:blocked-by-human`; never publish a contradiction.
+- **One source of truth.** A score of `1` must agree with the configured
+  `blocked-by-human` label (default `status:blocked-by-human`); never
+  publish a contradiction.
 - **Advisory, never a gate.** The score only ranks/routes
   candidates. The A4.5 suitability gate and A5 claim safety checks
   still run unchanged on whatever issue is selected; a high score
