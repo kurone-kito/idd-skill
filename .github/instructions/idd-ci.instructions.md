@@ -260,6 +260,9 @@ applies), waits for each to reach a terminal state before starting the
 next, and stops early as soon as the rollup resolves — never a
 `bot-gated-skip` or rerun-budget-held instance.
 
+**Self-referential wait (`#2994`)**: exclude your sibling before
+zero-pending checks; see helper docs.
+
 ```sh
 # source repo / vendored-node profile
 node scripts/rerun-advisory-convergence.mjs --pr <n> [--apply]
