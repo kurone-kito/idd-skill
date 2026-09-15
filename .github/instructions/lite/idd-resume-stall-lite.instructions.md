@@ -40,8 +40,8 @@ node scripts/stalled-session-quiet-check.mjs \
 
 No PR: do not invent `--pr`. Skip the helper (not a helper
 failure). Decide S2 from the written bullets using the claim
-`branch:` remote tip SHA and update time (no remote branch:
-treat absence as no movement); S4 step 5 re-reads that tip
+`branch:` remote tip SHA and update time (no remote branch: treat
+absence as no movement only if also absent at S2); S4 step 5 re-reads that tip
 and repeats the written S2 checks against a fresh `NOW`; hold
 on movement or incomplete evidence.
 

@@ -107,9 +107,10 @@ Forced-handoff: pass `new_claim_id` into Step 1. On
 `non_inheritable`/`stop` or `stale`/`takeover` with
 `evidence.forced_handoff`, retry
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
-Retry `already_owned`: if `new_agent_id` is not this session,
-STOP. Else adopt the pair; post an activation-nonce if missing;
-wait settle; confirm the nonce winner; then Step 2.
+Retry `already_owned`: STOP if `new_agent_id` is not this
+session or `old_claim_id` is this session's claim (displaced).
+Else adopt the pair; post an activation-nonce if missing; wait
+settle; confirm the nonce winner; then Step 2.
 
 After any helper map, `roadmap-audit/*` is still A1.5-only (no
 worktree; child issues are not locked).
