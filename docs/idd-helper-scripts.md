@@ -1929,9 +1929,17 @@ close.
 
 - Source repo / vendored-node command:
   `node scripts/claim-approval-gate.mjs --issue <issue-number>`
-- Package-manager / ephemeral-npx command: use the
-  profile-selected `idd:claim-approval-gate` command from the helper
-  runtime manifest wiring above; the literal invocation is:
+- Package-manager command: run the profile-selected
+  `idd:claim-approval-gate` package script. The example uses `npm`;
+  substitute the repository's configured package manager:
+
+  ```sh
+  npm run idd:claim-approval-gate -- --issue <issue-number>
+  ```
+
+- Ephemeral-npx command: use the profile-selected
+  `idd:claim-approval-gate` command from the helper runtime manifest
+  wiring above; the literal invocation is:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -1959,9 +1967,20 @@ close.
   `node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <id>
   --claim-id <id> [--takeover]`
   and `node scripts/claim-lock.mjs --check --worktree <path>`
-- Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:claim-lock` command from the helper runtime manifest wiring above;
-  the literal invocations are:
+- Package-manager commands: run the profile-selected `idd:claim-lock`
+  package script. The examples use `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:claim-lock -- --acquire --worktree <path> --agent-id <id> \
+    --claim-id <id> [--takeover]
+
+  npm run idd:claim-lock -- --check --worktree <path>
+  ```
+
+- Ephemeral-npx commands: use the profile-selected `idd:claim-lock`
+  command from the helper runtime manifest wiring above; the literal
+  invocations are:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -2073,8 +2092,22 @@ close.
   --claim-id <id>`, and
   `node scripts/claim-lock.mjs --backfill-tokens --worktree <path>
   --claim-id <id>`
-- Package-manager / ephemeral-npx command: use the same profile-selected
-  `idd:claim-lock` command as the lock above; the literal invocations are:
+- Package-manager commands: run the same profile-selected `idd:claim-lock`
+  package script as the lock above. The examples use `npm`; substitute the
+  repository's configured package manager:
+
+  ```sh
+  npm run idd:claim-lock -- --record-tokens --worktree <path> \
+    --agent-id <id> --claim-id <id> [--nonce <nonce>]
+
+  npm run idd:claim-lock -- --read-tokens --worktree <path> --claim-id <id>
+
+  npm run idd:claim-lock -- --backfill-tokens --worktree <path> \
+    --claim-id <id>
+  ```
+
+- Ephemeral-npx commands: use the same profile-selected `idd:claim-lock`
+  command as the lock above; the literal invocations are:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -2372,9 +2405,20 @@ close.
   node scripts/clone-lock.mjs --check [--repo <path>]
   ```
 
-- Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:clone-lock` command from the helper runtime manifest wiring
-  above; the literal invocations are:
+- Package-manager commands: run the profile-selected `idd:clone-lock`
+  package script. The examples use `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:clone-lock -- --exec --agent-id <id> [--repo <path>] \
+    [--timeout-ms <n>] -- <command> [args...]
+
+  npm run idd:clone-lock -- --check [--repo <path>]
+  ```
+
+- Ephemeral-npx commands: use the profile-selected `idd:clone-lock`
+  command from the helper runtime manifest wiring above; the literal
+  invocations are:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -2423,9 +2467,17 @@ close.
 
 - Source repo / vendored-node command:
   `node scripts/branch-name.mjs --number <issue-number> --title <issue-title>`
-- Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:branch-name` command from the helper runtime manifest wiring above;
-  the literal invocation is:
+- Package-manager command: run the profile-selected `idd:branch-name`
+  package script. The example uses `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:branch-name -- --number <issue-number> --title <issue-title>
+  ```
+
+- Ephemeral-npx command: use the profile-selected `idd:branch-name`
+  command from the helper runtime manifest wiring above; the literal
+  invocation is:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -2446,7 +2498,16 @@ close.
 
 - Source repo / vendored-node command:
   `node scripts/select-desynced-index.mjs --token <session-token> --band-size <band-size>`
-- Package-manager / ephemeral-npx command: use the profile-selected
+- Package-manager command: run the profile-selected
+  `idd:select-desynced-index` package script. The example uses `npm`;
+  substitute the repository's configured package manager:
+
+  ```sh
+  npm run idd:select-desynced-index -- --token <session-token> \
+    --band-size <band-size>
+  ```
+
+- Ephemeral-npx command: use the profile-selected
   `idd:select-desynced-index` command from the helper runtime manifest
   wiring above; the literal invocation is:
 
@@ -2470,9 +2531,17 @@ close.
 - Source repo / vendored-node command:
   `node scripts/emit-marker.mjs --type <type> <fields...>` where `<type>` is
   `claimed-by`, `review-watermark`, or `review-baseline`
-- Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:emit-marker` command from the helper runtime manifest wiring above;
-  the literal invocation is:
+- Package-manager command: run the profile-selected `idd:emit-marker`
+  package script. The example uses `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:emit-marker -- --type <type> <fields...>
+  ```
+
+- Ephemeral-npx command: use the profile-selected `idd:emit-marker`
+  command from the helper runtime manifest wiring above; the literal
+  invocation is:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -2496,9 +2565,18 @@ close.
   `node scripts/post-idd-marker.mjs --type <type> --target <issue|pr> <number> <fields...>`
   (dry-run prints a JSON envelope whose `body` field is the marker); add
   `--apply` to POST it.
-- Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:post-idd-marker` command from the helper runtime manifest wiring
-  above; the literal invocation is:
+- Package-manager command: run the profile-selected `idd:post-idd-marker`
+  package script. The example uses `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:post-idd-marker -- --type <type> \
+    --target <issue|pr> <number> <fields...>
+  ```
+
+- Ephemeral-npx command: use the profile-selected `idd:post-idd-marker`
+  command from the helper runtime manifest wiring above; the literal
+  invocation is:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -2660,9 +2738,17 @@ to post it is the consuming track's job.
 
 - Source repo / vendored-node command:
   `node scripts/ci-wait-policy.mjs`
-- Package-manager / ephemeral-npx command: use the
-  profile-selected `idd:ci-wait-policy` command from the helper runtime
-  manifest wiring above; the literal invocation is:
+- Package-manager command: run the profile-selected `idd:ci-wait-policy`
+  package script. The example uses `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:ci-wait-policy
+  ```
+
+- Ephemeral-npx command: use the profile-selected `idd:ci-wait-policy`
+  command from the helper runtime manifest wiring above. The
+  profile-selected `idd:ci-wait-policy` command is:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -2711,9 +2797,17 @@ to post it is the consuming track's job.
 
 - Source repo / vendored-node command:
   `node scripts/ci-wait-state.mjs --pr <pr-number>`
-- Package-manager / ephemeral-npx command: use the
-  profile-selected `idd:ci-wait-state` command from the helper runtime
-  manifest wiring above; the literal invocation is:
+- Package-manager command: run the profile-selected `idd:ci-wait-state`
+  package script. The example uses `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:ci-wait-state -- --pr <pr-number>
+  ```
+
+- Ephemeral-npx command: use the profile-selected `idd:ci-wait-state`
+  command from the helper runtime manifest wiring above; the literal
+  invocation is:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -2768,10 +2862,19 @@ to post it is the consuming track's job.
   node scripts/rerun-advisory-convergence.mjs --pr <pr-number> [--check-name <name>] [--apply]
   ```
 
-- Package-manager / ephemeral-npx command: use the
-  profile-selected `idd:rerun-advisory-convergence` command from the
-  helper runtime manifest wiring above, with `[--check-name <name>]`
-  and `[--apply]` appended the same way; the literal invocation is:
+- Package-manager command: run the profile-selected
+  `idd:rerun-advisory-convergence` package script. The example uses `npm`;
+  substitute the repository's configured package manager:
+
+  ```sh
+  npm run idd:rerun-advisory-convergence -- --pr <pr-number> \
+    [--check-name <name>] [--apply]
+  ```
+
+- Ephemeral-npx command: use the profile-selected
+  `idd:rerun-advisory-convergence` command from the helper runtime manifest
+  wiring above, with `[--check-name <name>]` and `[--apply]` appended the
+  same way; the literal invocation is:
 
   ```sh
   npx --yes --package <helper-package-spec> \
@@ -4008,9 +4111,18 @@ same as `AW4`/`AW5`.
   node scripts/idd-suggest-untrusted-labelers.mjs [--owner <owner>] [--repo <repo>] [--format table|json]
   ```
 
-- Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:suggest-untrusted-labelers` command from the helper runtime
-  manifest wiring above; the literal invocation is:
+- Package-manager command: run the profile-selected
+  `idd:suggest-untrusted-labelers` package script. The example uses `npm`;
+  substitute the repository's configured package manager:
+
+  ```sh
+  npm run idd:suggest-untrusted-labelers -- --owner <owner> \
+    --repo <repo> [--format table|json]
+  ```
+
+- Ephemeral-npx command: use the profile-selected
+  `idd:suggest-untrusted-labelers` command from the helper runtime manifest
+  wiring above; the literal invocation is:
 
   ```sh
   npx --yes --package <helper-package-spec> \
