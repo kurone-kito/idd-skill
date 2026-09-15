@@ -1047,8 +1047,9 @@ Binding rules:
   content like `roadmap-id`; it must never be added to
   `OPERATIONAL_MARKERS` in `scripts/protocol-helpers.mjs` or
   subjected to F4 minimization.
-- **One source of truth.** A score of `1` must agree with
-  `status:blocked-by-human`; never publish a contradiction.
+- **One source of truth.** A score of `1` must agree with the configured
+  `blocked-by-human` label (default `status:blocked-by-human`); never
+  publish a contradiction.
 - **Advisory, never a gate.** The score only ranks/routes
   candidates. The A4.5 suitability gate and A5 claim safety checks
   still run unchanged on whatever issue is selected; a high score
@@ -1136,7 +1137,8 @@ readiness bucket (see [Readiness buckets](#readiness-buckets)) carries a
 hidden, machine-readable **authoring-bucket marker** recording which of
 those two axes applies, so `audit-authored-issue.mts` can mechanically
 enforce the matching label the same way it already enforces
-`status:blocked-by-human` for a suitability score of `1`
+the configured `blocked-by-human` label (default `status:blocked-by-human`)
+for a suitability score of `1`
 (`checkSuitabilityBlockedByHuman`) — see
 [Mechanical pre-publish gate](#mechanical-pre-publish-gate)'s
 `--expect-bucket` flag for the enforcement path. `ready` and other
@@ -1155,7 +1157,8 @@ Binding rules:
 - **Folds the existing suitability-1 check.** When present, this marker
   decides `suitability-blocked-by-human`'s applicability instead of the
   suitability score: `blocked-by-human` requires
-  `status:blocked-by-human` regardless of score; `needs-decision` means
+  the configured `blocked-by-human` label (default `status:blocked-by-human`)
+  regardless of score; `needs-decision` means
   that check does not apply, even at a suitability score of `1`. Absent
   or malformed, `checkSuitabilityBlockedByHuman` falls back to the
   pre-existing suitability-1-only rule — no backfill onto issues

@@ -168,9 +168,10 @@ rules.
   default `3`) designate human-oriented issues that discover routes
   to humans in autopilot runs.
 - The score is an **advisory** ranking/routing hint only; it never
-  bypasses the A4.5/A5 gates, a `1` must agree with
-  `status:blocked-by-human`, and a missing or out-of-range score is
-  treated as having no score (evaluated normally, never skipped).
+  bypasses the A4.5/A5 gates, and a score of `1` must agree with the
+  configured `blocked-by-human` label (default `status:blocked-by-human`).
+  A missing or out-of-range score is treated as having no score
+  (evaluated normally, never skipped).
 
 ### Effort hint
 
@@ -207,8 +208,9 @@ A newly published `needs-decision` or `blocked-by-human` issue carries a
 hidden **authoring-bucket marker**
 (`<!-- {marker-prefix}-authoring-bucket: needs-decision|blocked-by-human -->`)
 so `audit-authored-issue.mts` can mechanically enforce the matching
-label the same way it already enforces `status:blocked-by-human` for a
-suitability score of `1`. Publishing into either bucket runs the linter
+label the same way it already enforces the configured `blocked-by-human`
+label (default `status:blocked-by-human`) for a suitability score of `1`.
+Publishing into either bucket runs the linter
 with `--expect-bucket` (see
 [Mechanical pre-publish gate](#mechanical-pre-publish-gate) below),
 requiring the marker rather than treating its absence as fail-safe. See
