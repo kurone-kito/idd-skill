@@ -291,12 +291,21 @@ recording action rather than a pinned remote-fetch step:
 - Bootstrap execution mode: issue-mediated (this issue's own execution
   path)
 
-When recording these confirmed decisions from the transcript, pass the
+When recording these confirmed decisions from the transcript, use the
 issue-mediated mode so the generated policy document records the core-
 bootstrap companion as `not installed`, regardless of the operator's
 real companion choice. The separate companion target state above remains
-the value for the follow-up issue to read; do not manually patch the
-generated policy document afterward.
+the value for the follow-up issue to read. This manual-patching
+prohibition is preventive; no observed incident yet.
+
+For a helper runtime profile, run the helper-assisted command below. With
+`instructions-only`, follow the manual Step 3 procedure in `ONBOARDING.md`
+and the policy-decisions template: write the selected policy section into
+the target documentation, set the core-bootstrap companion status to `not
+installed`, and retain the transcript's real companion target state,
+including its native destination when installed, for the follow-up issue.
+Do not add an `issueAuthoringCompanion` config field for this docs-only
+override.
 
 ```sh
 node scripts/idd-onboard.mjs --record-policy \
