@@ -33,8 +33,10 @@ node scripts/stalled-session-quiet-check.mjs \
   --claim-created-at <latest-valid-claimed-by-created_at>
 ```
 
-No PR: do not invent `--pr`. Use the claim `branch:` remote tip SHA
-and update time as S2 branch-movement evidence.
+No PR: do not invent `--pr`. Skip the helper (not a helper
+failure). Decide S2 from the written bullets using the claim
+`branch:` remote tip SHA and update time; S4 step 5 reuses
+that path. Incomplete evidence still holds.
 
 Never use the local wall clock as `now`. Re-derive a **fresh** `NOW`
 before S4; do not reuse the S2 value.
@@ -56,9 +58,7 @@ Require **no** external progress in the last 30 minutes:
 - no CI `queued` / `in_progress`;
 - no new review/comment/CI completion activity.
 
-Helper fields to read: top-level `quiet_window_met`, `reason`,
-`latest_activity`; nested under `evidence`: `has_heartbeat_in_window`,
-`has_ci_running`, `has_branch_tip_movement`.
+Helper fields: `quiet_window_met`, `reason`, `latest_activity`.
 
 | Result                                                         | Action                                                 |
 | -------------------------------------------------------------- | ------------------------------------------------------ |

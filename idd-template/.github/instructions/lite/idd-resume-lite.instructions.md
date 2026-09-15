@@ -72,12 +72,13 @@ Quiet-window evidence never bypasses the 24 h stale threshold.
 
 Predicate: claimant-authored pause comment after latest valid
 `claimed-by`, awaited input received here, no later trusted claimant
-activity (step 1 excepted). Else stall-lite. Steps 1-2 are pre-claim.
-Stall 30 min / 24 h windows do not apply.
+activity (step 1 excepted). Else stall-lite. Steps 1-2 are pre-claim
+(stall 30 min / 24 h windows do not apply).
 
 1. Post the operator input as a normal comment; ask a human to drop
    any needs-decision/blocked-by-human label (never this session).
-2. Re-read; post matching `unclaimed-by`.
+2. Re-read; if claim and predicate still hold, post `unclaimed-by`
+   matching the held `{agent-id}` / `{claim-id}`.
 3. Confirm unclaimed; else STOP.
 4. Fresh A5 `supersedes: none` → Step 1.
 
@@ -98,10 +99,8 @@ Forced-handoff: pass `new_claim_id` into Step 1. On
 `non_inheritable`/`stop` with `evidence.forced_handoff`, retry
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
 
-After any helper map, still apply the `roadmap-audit/*` special case when
-the active claim branch field starts with `roadmap-audit/`: coordination
-only — re-run A1.5, skip worktree creation, STOP after roadmap-side
-effects. Child-issue execution is not locked by that claim.
+After any helper map, `roadmap-audit/*` is still A1.5-only (no
+worktree; child issues are not locked).
 
 Written table (`instructions-only` profile only): first matching row.
 
