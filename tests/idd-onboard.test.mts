@@ -3588,6 +3588,7 @@ test('runRecordPolicyCli uses the injected readRemoteBranchExists reader instead
         verify: false,
         hear: false,
         recordPolicy: true,
+        issueMediated: false,
         propose: false,
         apply: true,
         answers: undefined,
@@ -4115,6 +4116,16 @@ test('bin/idd-onboard.mjs --substitute rejects --record-policy-only flags (--tra
   assert.equal(result.status, 2);
 });
 
+test('bin/idd-onboard.mjs rejects --issue-mediated outside --record-policy', () => {
+  const root = makeFixtureDir();
+  const result = spawnSync(
+    process.execPath,
+    [BIN_PATH, '--substitute', '--target', root, '--issue-mediated'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+});
+
 /** A pristine, post-import config.json (unsubstituted placeholders, as --record-policy expects). */
 /**
  * `buildValidHearAnswers()` synthesizes `fixture-development-branch` for
@@ -4220,6 +4231,61 @@ test('bin/idd-onboard.mjs --record-policy dry-run prints the config patch and fi
     /### CI Wait Policy\n\n- \*\*running timeout\*\*: `PT30M` \/ 30 min \(distributed default, not confirmed by this hearing item\)\n- \*\*generation timeout\*\*: `PT10M` \/ 10 min \(distributed default, not confirmed by this hearing item\)\n- \*\*rerun policy\*\*: `rerun-once`/,
   );
   assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs --record-policy --issue-mediated records the companion as not installed without changing the config patch', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  answers['issue-authoring-companion'] = 'installed';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const defaultRun = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  assert.equal(defaultRun.status, 0);
+  assert.match(
+    defaultRun.verdict.policyDocument as string,
+    /### Issue-Authoring Companion\n\n\*\*Status\*\*: `installed`/,
+  );
+
+  const policyDocPath = join(root, 'policy-doc.md');
+  const issueMediatedRun = runCliBin([
+    '--record-policy',
+    '--issue-mediated',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    policyDocPath,
+  ]);
+  assert.equal(issueMediatedRun.status, 0);
+  assert.match(
+    issueMediatedRun.verdict.policyDocument as string,
+    /### Issue-Authoring Companion\n\n\*\*Status\*\*: `not installed`/,
+  );
+  const patch = issueMediatedRun.verdict.configPatch as Record<string, unknown>;
+  assert.deepEqual(
+    patch,
+    defaultRun.verdict.configPatch as Record<string, unknown>,
+  );
+  assert.equal('issueAuthoringCompanion' in patch, false);
+  assert.equal(
+    issueMediatedRun.verdict.writtenPolicyDocPath,
+    resolve(policyDocPath),
+  );
+  assert.match(
+    readFileSync(policyDocPath, 'utf8'),
+    /### Issue-Authoring Companion\n\n\*\*Status\*\*: `not installed`/,
+  );
 });
 
 test('bin/idd-onboard.mjs --record-policy fills a Claim Timing override with the confirmed selection, not invented sub-values, and carries a confirmed CI Wait rerun policy into its bullet', () => {
@@ -4702,6 +4768,7 @@ test('bin/idd-onboard.mjs --help documents --record-policy, --transcript, and --
   assert.match(help, /--record-policy/);
   assert.match(help, /--transcript/);
   assert.match(help, /--write-policy-doc/);
+  assert.match(help, /--issue-mediated/);
   assert.match(help, /--from-transcript/);
 });
 

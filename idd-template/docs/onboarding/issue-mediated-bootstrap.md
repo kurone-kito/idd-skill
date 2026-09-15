@@ -291,6 +291,44 @@ recording action rather than a pinned remote-fetch step:
 - Bootstrap execution mode: issue-mediated (this issue's own execution
   path)
 
+When recording these confirmed decisions from the transcript, use the
+issue-mediated mode so the generated policy document records the
+core-bootstrap companion as `not installed`, regardless of the operator's
+real companion choice. The separate companion target state above remains
+the value for the follow-up issue to read. This manual-patching
+prohibition addresses the observed issue-mediated bootstrap in
+`kurone-kito/kurone-kito#29` (the retrospective source for issue `#2985`):
+adopters had to patch the generated policy document after recording it.
+
+For a helper runtime profile, first materialize the embedded transcript JSON
+from this issue verbatim into an executor-local `$TRANSCRIPT_FILE`. The
+helper-assisted path requires a full `idd-skill` clone checked out at the
+reviewed pin used for this bootstrap; set `$CLONE_DIR` to that clone and
+`$TARGET_REPO` to the target repository at execution time. Run from that
+pinned clone, not from `$TARGET_REPO`, because only the clone is guaranteed
+to contain `scripts/idd-onboard.mjs`. Set `$POLICY_DOC` to the target's
+absolute policy-document path before running this command:
+
+```sh
+(
+  cd "$CLONE_DIR" &&
+  node scripts/idd-onboard.mjs --record-policy \
+    --transcript "$TRANSCRIPT_FILE" --target "$TARGET_REPO" \
+    --allow-root "$TARGET_REPO" \
+    --issue-mediated --apply \
+    --write-policy-doc "$POLICY_DOC"
+)
+```
+
+With `instructions-only`, or when the pinned clone or its working Node.js
+runtime is unavailable, follow the manual Step 3 procedure in `ONBOARDING.md`
+and the policy-decisions template: use the embedded transcript as the
+source, write the selected policy section into the target documentation,
+set the core-bootstrap companion status to `not installed`, and retain the
+transcript's real companion target state, including its native destination
+when installed, for the follow-up issue. Do not add an
+`issueAuthoringCompanion` config field for this docs-only override.
+
 This is a single, atomically-reviewable change: the core import,
 placeholder substitution, and agent-entry-file updates land together,
 and Step 6 verification confirms the result before merge. Worktree

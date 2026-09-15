@@ -2731,14 +2731,23 @@ const RECORD_POLICY_DOC_ROWS: readonly RecordPolicyDocRow[] = [
  * a confirmed transcript's answers, following the structure shown in
  * `idd-template/docs/onboarding/policy-decisions.md`'s
  * "Recording the selected policies" section. An item with no confirmed
- * answer is omitted rather than printed with a placeholder value.
+ * answer is omitted rather than printed with a placeholder value. The
+ * issue-mediated bootstrap option can override the companion row without
+ * changing the transcript or config patch.
  */
-function buildFilledPolicyDocument(answers: readonly HearAnswer[]): string {
+function buildFilledPolicyDocument(
+  answers: readonly HearAnswer[],
+  options: { readonly issueMediated?: boolean } = {},
+): string {
   const valueById = new Map(answers.map((answer) => [answer.id, answer.value]));
   const sections = RECORD_POLICY_DOC_ROWS.filter((row) =>
     valueById.has(row.id),
   ).map((row) => {
-    const value = valueById.get(row.id) as string;
+    const transcriptValue = valueById.get(row.id) as string;
+    const value =
+      options.issueMediated && row.id === 'issue-authoring-companion'
+        ? 'not installed'
+        : transcriptValue;
     const body = row.renderBody
       ? row.renderBody(value)
       : `**${row.label}**: \`${value}\``;
@@ -2891,7 +2900,9 @@ export function runRecordPolicyCli(
       `config.json patch failed schema validation: ${schemaErrors.join('; ')}`,
     );
   }
-  const policyDocument = buildFilledPolicyDocument(transcript.answers);
+  const policyDocument = buildFilledPolicyDocument(transcript.answers, {
+    issueMediated: args.issueMediated,
+  });
   // --dry-run always wins over --apply, matching runImportCli's convention.
   const canWrite = args.apply && !args.dryRun;
   if (canWrite) {
@@ -2936,6 +2947,7 @@ interface ParsedArgs {
   verify: boolean;
   hear: boolean;
   recordPolicy: boolean;
+  issueMediated: boolean;
   propose: boolean;
   /** Bare `--apply`, shared by `--hear --apply` and `--record-policy --apply`. */
   apply: boolean;
@@ -2970,6 +2982,7 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     verify: false,
     hear: false,
     recordPolicy: false,
+    issueMediated: false,
     propose: false,
     apply: false,
     answers: undefined,
@@ -3015,6 +3028,10 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     }
     if (token === '--record-policy') {
       parsed.recordPolicy = true;
+      continue;
+    }
+    if (token === '--issue-mediated') {
+      parsed.issueMediated = true;
       continue;
     }
     if (token === '--propose') {
@@ -3120,6 +3137,9 @@ function substituteOnlyFlagsPresent(args: ParsedArgs): string[] {
 /** --record-policy-only flags the user explicitly passed (present regardless of mode). */
 function recordPolicyOnlyFlagsPresent(args: ParsedArgs): string[] {
   const present: string[] = [];
+  if (args.issueMediated) {
+    present.push('--issue-mediated');
+  }
   if (args.transcript !== undefined) {
     present.push('--transcript');
   }
@@ -3464,7 +3484,7 @@ function printHelp(): void {
        node scripts/idd-onboard.mjs --hear --propose --target <dir>
        node scripts/idd-onboard.mjs --hear --apply --answers <file> --target <dir>
        node scripts/idd-onboard.mjs --hear --target <dir>   (interactive TTY wizard)
-       node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--apply] [--write-policy-doc <path>]
+       node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--issue-mediated] [--apply] [--write-policy-doc <path>]
 
 Onboarding automation.
 
@@ -3634,6 +3654,9 @@ AGENTS.md, or GEMINI.md.
   --write-policy-doc <path>    also write the filled Markdown template to
                                <path> (--apply only); without this flag the
                                template is stdout-only.
+  --issue-mediated              record the issue-authoring companion as
+                               \`not installed\` in the policy document,
+                               regardless of the transcript value.
   --target <dir>               target repository (default: current directory)
   --allow-root <dir>           additionally confine --target to this root,
                                on top of the current working directory
