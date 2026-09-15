@@ -99,8 +99,9 @@ On helper-enabled profiles, run `resume-claim-routing.mjs --issue <N>`
 Forced-handoff: pass `new_claim_id` into Step 1. On
 `non_inheritable`/`stop` with `evidence.forced_handoff`, retry
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
-Retry `already_owned`: adopt `new_claim_id` / `new_agent_id` and
-post an activation-nonce if missing, then Step 2.
+Retry `already_owned`: adopt `new_claim_id` / `new_agent_id`;
+post an activation-nonce if missing; wait settle; confirm the
+nonce winner; then Step 2.
 
 After any helper map, `roadmap-audit/*` is still A1.5-only (no
 worktree; child issues are not locked).
