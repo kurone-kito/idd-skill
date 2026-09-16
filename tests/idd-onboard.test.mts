@@ -35,6 +35,7 @@ import {
   buildUntrustedLabelerGuardWorkflowContent,
   checkGitRemoteBranchExists,
   checkManifestCompleteness,
+  checkPackagePinWarning,
   checkPlaceholderResidue,
   checkStaleImportSignal,
   deriveDevelopmentBranchCandidate,
@@ -2592,6 +2593,30 @@ function importAndSubstitute(targetRoot: string): void {
   applySubstitutionPlan(targetRoot, subPlan);
 }
 
+/**
+ * Rewrite `targetRoot`'s already-imported `.github/idd/config.json` to set
+ * (or, with `helperRuntime: undefined`, remove) its `helperRuntime` key —
+ * the same read-mutate-rewrite pattern the `--record-policy` tests below
+ * use directly, reused here for the `checkPackagePinWarning` (#2987)
+ * fixtures.
+ */
+function setHelperRuntime(
+  targetRoot: string,
+  helperRuntime: Record<string, unknown> | undefined,
+): void {
+  const configPath = join(targetRoot, '.github', 'idd', 'config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  if (helperRuntime === undefined) {
+    delete config.helperRuntime;
+  } else {
+    config.helperRuntime = helperRuntime;
+  }
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+}
+
 test('checkManifestCompleteness reports no gap for a fully imported target', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
@@ -2804,6 +2829,103 @@ test('runVerify blocks when manifest completeness or placeholder residue fails',
 });
 
 // ---------------------------------------------------------------------------
+// checkPackagePinWarning / runVerify's packagePinWarning field (#2987)
+// ---------------------------------------------------------------------------
+
+test('checkPackagePinWarning warns for package-manager with no packageSpec configured', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, { profile: 'package-manager' });
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.profile, 'package-manager');
+  assert.equal(result.applicable, true);
+  assert.equal(result.packageSpecConfigured, false);
+  assert.ok(result.warning !== null);
+  assert.match(result.warning as string, /mutable default archive URL/);
+  assert.match(
+    result.warning as string,
+    /docs\/onboarding\/policy-decisions\.md#helper-runtime-profile/,
+  );
+});
+
+test('checkPackagePinWarning warns for ephemeral-npx with no packageSpec configured', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, { profile: 'ephemeral-npx' });
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.profile, 'ephemeral-npx');
+  assert.equal(result.applicable, true);
+  assert.equal(result.packageSpecConfigured, false);
+  assert.ok(result.warning !== null);
+  assert.match(result.warning as string, /mutable default archive URL/);
+});
+
+test('checkPackagePinWarning reports no warning once packageSpec is configured', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, {
+    profile: 'package-manager',
+    packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+  });
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.applicable, true);
+  assert.equal(result.packageSpecConfigured, true);
+  assert.equal(result.warning, null);
+});
+
+test('checkPackagePinWarning never warns for instructions-only (the default template has no helperRuntime key)', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.profile, 'instructions-only');
+  assert.equal(result.applicable, false);
+  assert.equal(result.warning, null);
+});
+
+test('checkPackagePinWarning never warns for vendored-node even with no packageSpec configured', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, { profile: 'vendored-node' });
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.profile, 'vendored-node');
+  assert.equal(result.applicable, false);
+  assert.equal(result.warning, null);
+});
+
+test('checkPackagePinWarning falls back to instructions-only/no-warning for an unsupported profile string (fail-closed, matches idd-doctor.mts convention)', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, { profile: 'not-a-real-profile' });
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.profile, 'instructions-only');
+  assert.equal(result.applicable, false);
+  assert.equal(result.warning, null);
+});
+
+test('checkPackagePinWarning falls back to instructions-only/no-warning when packageSpec fails the shell-safe pattern (whole helperRuntime record is invalid, fail-closed)', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, {
+    profile: 'package-manager',
+    packageSpec: 'invalid spec with spaces',
+  });
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.profile, 'instructions-only');
+  assert.equal(result.applicable, false);
+  assert.equal(result.warning, null);
+});
+
+test('runVerify exposes packagePinWarning without letting it affect blocking', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, { profile: 'package-manager' });
+  const result = runVerify(REPO_ROOT, targetRoot);
+  assert.equal(result.blocking, false);
+  assert.equal(result.packagePinWarning.applicable, true);
+  assert.ok(result.packagePinWarning.warning !== null);
+});
+
+// ---------------------------------------------------------------------------
 // CLI (acceptance criteria) — --verify
 // ---------------------------------------------------------------------------
 
@@ -2888,6 +3010,58 @@ test('bin/idd-onboard.mjs --verify exits 0 even when the stale-import signal fir
   assert.ok(
     (verdict.staleImportSignal as { missing: string[] }).missing.length > 0,
   );
+});
+
+test('bin/idd-onboard.mjs --verify exits 0 and exposes a non-blocking package-pin warning when packageSpec is absent (#2987)', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, { profile: 'package-manager' });
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.blocking, false);
+  const packagePinWarning = verdict.packagePinWarning as {
+    profile: string;
+    applicable: boolean;
+    packageSpecConfigured: boolean;
+    warning: string | null;
+  };
+  assert.equal(packagePinWarning.profile, 'package-manager');
+  assert.equal(packagePinWarning.applicable, true);
+  assert.equal(packagePinWarning.packageSpecConfigured, false);
+  assert.match(
+    String(packagePinWarning.warning),
+    /mutable default archive URL/,
+  );
+});
+
+test('bin/idd-onboard.mjs --verify reports no package-pin warning once packageSpec is configured (#2987)', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, {
+    profile: 'ephemeral-npx',
+    packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+  });
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.blocking, false);
+  const packagePinWarning = verdict.packagePinWarning as {
+    packageSpecConfigured: boolean;
+    warning: string | null;
+  };
+  assert.equal(packagePinWarning.packageSpecConfigured, true);
+  assert.equal(packagePinWarning.warning, null);
 });
 
 test('bin/idd-onboard.mjs --verify exits 2 when --source is missing', () => {
@@ -3016,6 +3190,7 @@ test('bin/idd-onboard.mjs --help documents --verify and lists --profile values s
   assert.match(help, /manifestCompleteness/);
   assert.match(help, /placeholderResidue/);
   assert.match(help, /staleImportSignal/);
+  assert.match(help, /packagePinWarning/);
 });
 
 // ---------------------------------------------------------------------------

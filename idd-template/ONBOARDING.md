@@ -655,12 +655,16 @@ error), so an agent can gate on the exit code without parsing prose.
 
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check for a target tree after `--import` and `--substitute` have run,
-  replacing a manual walkthrough of the checklist below with three check
+  replacing a manual walkthrough of the checklist below with four check
   groups: manifest completeness (reusing `--import`'s own file-set
-  resolution), placeholder residue (reusing `--substitute`'s scanner), and
-  an informational stale-import signal. A missing manifest file or a
-  leftover onboarding placeholder is blocking; the stale-import signal
-  never is.
+  resolution), placeholder residue (reusing `--substitute`'s scanner), an
+  informational stale-import signal, and a non-blocking package-pin
+  advisory (flags an `ephemeral-npx`/`package-manager` helper runtime
+  profile with no configured `helperRuntime.packageSpec` — see
+  [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)).
+  A missing manifest file or a leftover onboarding placeholder is
+  blocking; the stale-import signal and the package-pin advisory never
+  are.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \

@@ -30,13 +30,17 @@
 //
 // --verify: mechanical pass/fail for a target tree after --import and
 // --substitute have run, replacing a manual walkthrough of
-// `idd-template/ONBOARDING.md` Step 6 with three check groups: manifest
+// `idd-template/ONBOARDING.md` Step 6 with four check groups: manifest
 // completeness (reuses --import's own manifest resolution — no second file
 // list), placeholder residue (reuses --substitute's scanner — no second
-// scan), and a stale-import signal (re-runs idd-doctor's content-based
+// scan), a stale-import signal (re-runs idd-doctor's content-based
 // drift detector against the target's imported files instead of forking its
 // logic, the #1208 shared-module convention `check-pnpm-boundary.mts`
-// already uses).
+// already uses), and a package-pin advisory (#2987: warns, but never
+// blocks, when the target's effective `helperRuntime.profile` is
+// `ephemeral-npx`/`package-manager` with no `helperRuntime.packageSpec`
+// configured, so helper commands silently resolve against the mutable
+// default archive URL instead of an audited pin).
 
 import { execFileSync } from 'node:child_process';
 import {
@@ -68,6 +72,7 @@ import type {
 import { loadOnboardingHearingCatalog } from './onboarding-hearing.mts';
 import {
   inspectDevelopmentBranch,
+  inspectHelperRuntimeConfig,
   normalizePolicyConfig,
 } from './policy-helpers.mts';
 import type { PromptFn } from './readline-prompt.mts';
@@ -1920,19 +1925,122 @@ export function checkStaleImportSignal(
   return { missing };
 }
 
+// ---------------------------------------------------------------------------
+// Wave 3 --verify: package-pin advisory (#2987)
+// ---------------------------------------------------------------------------
+
+/**
+ * `helperRuntime.profile` values whose helper commands resolve a package
+ * spec (`npx --yes --package <spec> idd-*`, or the equivalent
+ * `package.json` dependency pin) -- the two profiles
+ * `helperRuntime.packageSpec` actually affects. `instructions-only` never
+ * runs a helper command, and `vendored-node` copies helper files into the
+ * repository instead of resolving them from a package spec, so a missing
+ * `packageSpec` is a no-op for both.
+ */
+const PACKAGE_SPEC_APPLICABLE_PROFILES: ReadonlySet<string> = new Set([
+  'ephemeral-npx',
+  'package-manager',
+]);
+
+/** Non-blocking package-pin advisory result for one target tree (#2987). */
+export interface PackagePinWarningResult {
+  /** The target's effective `helperRuntime.profile` (defaults to `instructions-only`). */
+  profile: string;
+  /** True when `profile` is one `helperRuntime.packageSpec` applies to. */
+  applicable: boolean;
+  /** True when the target's `helperRuntime.packageSpec` is configured. */
+  packageSpecConfigured: boolean;
+  /**
+   * The advisory message, present only when `applicable` is true and
+   * `packageSpecConfigured` is false; `null` for every other combination
+   * (a non-applicable profile, or a profile with a configured
+   * `packageSpec`) -- a stable shape so a caller can gate on
+   * `warning !== null` without re-deriving `applicable &&
+   * !packageSpecConfigured` itself.
+   */
+  warning: string | null;
+}
+
+/**
+ * Check whether the target's effective helper runtime profile can silently
+ * resolve helper commands against the mutable default archive URL instead
+ * of an audited pin (#2987 background: an adopter completed the whole
+ * hearing/import/substitute/record-policy sequence with `ephemeral-npx` or
+ * `package-manager` selected and never set `helperRuntime.packageSpec`,
+ * caught only by a downstream reviewer -- see
+ * `idd-template/docs/onboarding/policy-decisions.md#helper-runtime-profile`
+ * for the full incident).
+ *
+ * Reads the target's own `.github/idd/config.json` via this module's
+ * existing lstat-guarded `readTargetPolicyConfig` reader -- the same
+ * reader `planUntrustedLabelerGuardWorkflow` above uses, though that
+ * caller pairs it with `normalizePolicyConfig`, not
+ * `inspectHelperRuntimeConfig` -- paired here instead with
+ * `inspectHelperRuntimeConfig` (from `policy-helpers.mts`), the same
+ * schema-aware profile/packageSpec inspector idd-doctor.mts's own
+ * `resolveConfiguredHelperRuntime` uses. Deliberately narrower than that
+ * idd-doctor.mts resolver, which also falls back to the legacy
+ * `idd-policy.json` filename for repository-wide diagnostics outside
+ * onboarding: a `--verify` target's manifest completeness check already
+ * requires the canonical `.github/idd/config.json` path to exist, so
+ * there is no legacy-filename case to fall back to here, and reusing this
+ * module's own symlink-safe reader keeps every `--verify` file read on
+ * one convention (#2254 review history).
+ *
+ * The CLI's own `--profile` flag selects which file set `--import` /
+ * `--verify` check (`vendored-node` vs. the default set) -- it is not the
+ * same thing as the effective `helperRuntime.profile` this function
+ * resolves, which always comes from the target's own recorded
+ * configuration regardless of the `--profile` flag's value.
+ *
+ * Non-blocking by design (Groom hearing, 2026-09-15, issue `#2987`):
+ * `instructions-only` and `vendored-node` never warn (no remote package
+ * resolution to pin for either), and a profile with a configured
+ * `packageSpec` already reflects an audited pin. A malformed or invalid
+ * `helperRuntime` (an unsupported `profile` string, an invalid
+ * `packageSpec`, unparseable JSON, etc.) collapses to the same
+ * `instructions-only` / non-applicable fallback as a wholly absent one --
+ * matching `idd-doctor.mts`'s own fail-closed convention -- so this check
+ * never flags a misconfigured `helperRuntime` itself; that stays
+ * idd-doctor's separate `checkHelperRuntimeConfig` diagnostic, which
+ * `--verify` does not run.
+ */
+export function checkPackagePinWarning(
+  targetRoot: string,
+): PackagePinWarningResult {
+  const inspected = inspectHelperRuntimeConfig(
+    readTargetPolicyConfig(targetRoot),
+  );
+  const profile =
+    inspected.status === 'ok' ? inspected.profile : 'instructions-only';
+  const packageSpec =
+    inspected.status === 'ok' ? (inspected.packageSpec ?? '') : '';
+  const applicable = PACKAGE_SPEC_APPLICABLE_PROFILES.has(profile);
+  const packageSpecConfigured = packageSpec !== '';
+  const warning =
+    applicable && !packageSpecConfigured
+      ? `helper commands for the "${profile}" helper runtime profile resolve against the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
+      : null;
+  return { profile, applicable, packageSpecConfigured, warning };
+}
+
 /** The combined wave-3 verify verdict for one target tree. */
 export interface VerifyResult {
   manifestCompleteness: ManifestCompletenessResult;
   placeholderResidue: PlaceholderResidueResult;
   staleImportSignal: StaleImportSignalResult;
+  /** Non-blocking package-pin advisory (#2987); never contributes to `blocking`. */
+  packagePinWarning: PackagePinWarningResult;
   /** True when a blocking finding exists (manifest gap or placeholder residue). */
   blocking: boolean;
 }
 
 /**
- * Run all three wave-3 check groups against one target tree. The
- * stale-import signal never contributes to `blocking` (see
- * `checkStaleImportSignal`'s doc comment); only a manifest gap or
+ * Run all four wave-3 check groups against one target tree. Neither the
+ * stale-import signal nor the package-pin advisory ever contributes to
+ * `blocking` (see `checkStaleImportSignal`'s and
+ * `checkPackagePinWarning`'s doc comments); only a manifest gap or
  * placeholder residue can fail verify, matching the exit contract in
  * `runVerifyCli`.
  */
@@ -1948,6 +2056,7 @@ export function runVerify(
   );
   const placeholderResidue = checkPlaceholderResidue(targetRoot);
   const staleImportSignal = checkStaleImportSignal(targetRoot);
+  const packagePinWarning = checkPackagePinWarning(targetRoot);
   const blocking =
     manifestCompleteness.missingSource.length > 0 ||
     manifestCompleteness.missingTarget.length > 0 ||
@@ -1956,6 +2065,7 @@ export function runVerify(
     manifestCompleteness,
     placeholderResidue,
     staleImportSignal,
+    packagePinWarning,
     blocking,
   };
 }
@@ -3462,13 +3572,15 @@ function runVerifyCli(args: ParsedArgs): void {
     manifestCompleteness: result.manifestCompleteness,
     placeholderResidue: result.placeholderResidue,
     staleImportSignal: result.staleImportSignal,
+    packagePinWarning: result.packagePinWarning,
     blocking: result.blocking,
   };
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   // Blocking findings (manifest gap or placeholder residue) signal via exit
   // 1, matching --substitute / --import's contract; the stale-import signal
-  // is informational only and never flips this exit code (see
-  // checkStaleImportSignal / runVerify).
+  // and the package-pin advisory are both informational only and never
+  // flip this exit code (see checkStaleImportSignal / checkPackagePinWarning
+  // / runVerify).
   process.exit(result.blocking ? 1 : 0);
 }
 
@@ -3562,14 +3674,18 @@ nothing in that case); 2 usage or configuration error.
 
 --verify (wave 3): mechanical pass/fail for a target tree after --import and
 --substitute have run, in place of a manual walkthrough of
-idd-template/ONBOARDING.md Step 6. Reports three check groups:
+idd-template/ONBOARDING.md Step 6. Reports four check groups:
 manifestCompleteness (every file --import would copy for --source /
 --profile exists under --target, reusing that same manifest resolution —
 missing files are blocking), placeholderResidue (leftover {{...}} tokens via
 --substitute's own scanner — a remaining onboarding placeholder is blocking
-residue, any other {{...}}-shaped token stays informational), and
+residue, any other {{...}}-shaped token stays informational),
 staleImportSignal (idd-doctor's content-based stale-import detector re-run
-against the target's imported files — informational only, never blocking).
+against the target's imported files — informational only, never blocking),
+and packagePinWarning (advisory only, never blocking: flags an
+ephemeral-npx/package-manager helperRuntime.profile with no configured
+helperRuntime.packageSpec, so helper commands silently resolve against the
+mutable default archive URL instead of an audited pin).
 
 Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest gap
 or placeholder residue); 2 usage or configuration error.
