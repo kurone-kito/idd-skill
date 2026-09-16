@@ -397,9 +397,15 @@ the missing forced-load primitive. The recorded no-go stands.**
 
 ### A. Is an explicit-invoke directive as reliable as a Read directive?
 
-Both Claude Code and OpenCode document orchestrator-direction as a real
-pattern, but as a stronger case of the same model-judgment-mediated
-mechanism section 4 already found, not a separate forced-load primitive:
+Neither runtime documents "orchestrator-directed invocation" as a named
+primitive. The analysis below is this addendum's own inference from what
+each runtime does document — explicit `/skill-name` invocation and
+model-selected automatic loading for Claude Code, and a model-issued
+`skill({ name: ... })` call for OpenCode — not a third, separately
+documented mechanism. Read that way, both runtimes support
+orchestrator-direction only as a stronger case of the same
+model-judgment-mediated mechanism section 4 already found, not a
+separate forced-load primitive:
 
 - Claude Code: "Claude uses skills when relevant, or you can invoke one
   directly with `/skill-name`," and frontmatter adds "the ability for
@@ -441,7 +447,9 @@ mechanism section 4 already found, not a separate forced-load primitive:
 ### B. Failure modes a file `Read` cannot have
 
 Skill invocation depends on a prior, separate discovery/indexing step
-that `Read` does not:
+that `Read` does not. Each mode below is a documented mechanical
+possibility, not a recorded incident in this repository or its
+dogfooding sessions (preventive; no observed incident yet):
 
 - **Silent discovery/indexing failures**: a missing or malformed
   required frontmatter field (`name`, `description`) leaves a skill
@@ -532,19 +540,26 @@ section, retrieved 2026-09-16.)
   alone, at roughly 100-125 tokens per skill, would consume on the order
   of 1,600-2,000 tokens — most to nearly all of the documented budget for
   the _entire_ session, before counting any other skill a user has
-  installed. A finer future split raises the skill count without
-  shrinking any file's body content (which stays deferred either way),
-  so it moves this mapping closer to, or past, the same fixed budget
-  rather than away from it.
-- **A failure mode this creates that Part B did not yet cover**: the
-  quoted eviction behavior means even a correctly discovered, validly
-  listed skill can silently drop out of the listing under ordinary load
-  from other installed skills, with the least-recently-invoked dropped
-  first — exactly the position an orchestrator-directed phase skill
-  would be in on its first use in a session, or in any session that
-  never happens to invoke it. A `Read` directive has no equivalent
-  failure mode: a file does not stop being `Read`-able because other,
-  unrelated files were opened more recently.
+  installed. At a finer future granularity — for example Option B split
+  further into roughly 32 narrower skills, doubling Section 1's own
+  count — the same per-skill baseline puts the metadata floor at
+  roughly 3,200-4,000 tokens, already past the single-session 1% budget
+  by itself before any other installed skill or the 1,536-character cap
+  is even reached; this is the concrete verifiable case the "roughly
+  linear" claim otherwise leaves abstract. A finer split raises the
+  skill count without shrinking any file's body content (which stays
+  deferred either way), so it moves this mapping closer to, or past,
+  the same fixed budget rather than away from it.
+- **A nuance that narrows, not widens, Part B's discovery concerns**:
+  the quoted eviction behavior only ever drops **descriptions**, never
+  the skill **name** — "the listing always contains every skill name"
+  is stated in the same sentence this addendum already quotes above.
+  An orchestrator directive invokes by exact name, not by
+  description-matched relevance, so a validly discovered skill's name
+  stays invocable under listing pressure even after its description is
+  evicted; only the fuzzy, description-dependent auto-trigger path
+  section 4 already covers degrades this way. Do not read this as a
+  discovery failure mode for the exact-name path — it is not one.
 - **A favorable nuance current documentation also surfaces, which
   neither prior note recorded**: the listing itself is explicitly not
   re-injected after `/compact` — "Unlike the rest of the startup
@@ -560,13 +575,16 @@ section, retrieved 2026-09-16.)
   core file, which does reload after compaction per that same page.
 
 Net effect: the cost side is real, current documentation now lets it be
-stated precisely rather than restated on faith, and it cuts in both
-directions — confirmed and quantified as a session-wide, non-trivial
+stated precisely rather than restated on faith, and it cuts in more than
+one direction — confirmed and quantified as a session-wide, non-trivial
 tax that this repository's own Option A mapping would consume most of by
-itself, partly offset by the post-compaction reset the prior notes did
-not know to claim. Either way this is a cost-side finding; it does not
-touch the Part A/B/C safety argument above, which is what the recorded
-no-go actually turns on.
+itself and a finer split would exceed outright; partly offset by the
+post-compaction reset the prior notes did not know to claim; and,
+narrowly, favorable to the exact-name path specifically, since listing
+pressure degrades fuzzy auto-matching without ever blocking a
+discovered skill's name from being invoked. None of that touches the
+Part A/B/C safety
+argument above, which is what the recorded no-go actually turns on.
 
 ### Verdict, restated
 
