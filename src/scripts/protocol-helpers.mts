@@ -3382,8 +3382,14 @@ export function dispositionNamesAdvisoryBot(
 // notice-vs-genuine classification for the secondary bot
 // (`isAdvisoryNonReviewNotice`, `isReviewSummaryComment`,
 // `classifyRegularBotComment`) already operates purely on top-level PR
-// comments -- `ReviewLike` carries no `body` field in this codebase's
-// model, so a PR review object can never carry the marker text this needs.
+// comments. `ReviewLike` gained an optional `body` field (#3015, consumed
+// by `isCopilotErrorReviewBody`/`findLastCopilotReviewCommit` for the
+// primary Copilot review-coverage classification only), so a PR review
+// object CAN carry marker-shaped text now -- restricting this secondary-bot
+// settlement classifier to `comments` is a deliberate scope choice, not a
+// type limitation: the secondary bot's rate-limit/skip-review notices and
+// summary walkthroughs are observed live only as top-level PR comments, so
+// there is no known review-body shape this classifier would need to catch.
 //
 // Falls back to `user.login`/`created_at`/`updated_at` alongside
 // `author.login`/`createdAt`/`updatedAt`, matching every other
