@@ -90,7 +90,7 @@ E15 -> E1 (CI success)
 Esync -> F1 -> F2
 F2 -> E1 (not ready)
 F2 -> D3_PREMERGE -> F2_HANDOFF -> F3 -> F4 -> F5
-F5 -> A -> A1
+F5 -> A -> A5
 ```
 
 The first line shows alternatives, not a requirement that all three A0
@@ -104,7 +104,10 @@ goes through E4-E8.
 From E8, zero Accepted PATH A items goes to `Esync`; accepted PATH A work
 goes through E9-E15, and a successful E15 CI wait returns to E1 for a fresh
 snapshot. The F2 edge to E1 represents an unmet merge condition. `A` stays
-the collapsed return target for F5, after which discovery resumes at A1.
+the collapsed return target for F5, and the shipped graph edge is
+`F5 -> A -> A5`. A fresh `idd-discover` session then applies its normal
+discovery-entry routing; this proposal does not replace the graph edge with a
+direct `A -> A1` transition.
 
 The D3 entries are nested checkpoints in one PR-submission phase, so the
 future implementation should document their ownership as follows:
@@ -170,6 +173,16 @@ in-flight adopter session may have persisted it before the implementation
 lands. Alias acceptance should be permanent: the workflow cannot reliably
 discover when an old issue comment, PR marker, or archived adopter session
 has stopped being read.
+
+The implementation must also preserve the resolver's separator-normalized
+fallback for retired IDs. The current fallback checks only canonical IDs, so
+the rename must add a validated normalized-alias lookup after the new
+canonical and literal-alias checks. Normalizing each legacy alias with the
+same separator rules and mapping it to its owning semantic canonical ID
+keeps inputs such as `A4---5`, `A4/5`, `A4 : 5`, and `A4\5` readable without
+enumerating every separator spelling in `DEFAULT_LEGACY_ALIASES`. The
+normalized lookup must use the same ambiguity rejection as the literal alias
+map.
 
 ## Finding 4 — Keep the collapsed `A` graph node
 
