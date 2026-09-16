@@ -128,10 +128,20 @@ test('workflow_dispatch is guarded to require an already-merged PR before cleanu
       /::error::/,
       `${path} guard step must fail with a clear ::error:: message`,
     );
+    // A single generic `exit 1` match anywhere in the block would also
+    // match the earlier numeric-format branch, so it stays green even if
+    // a regression drops `exit 1` from just the lookup-failure or
+    // not-merged branch below. Anchor each check to its own branch
+    // instead (#2979 review, CodeRabbit).
     assert.match(
       guardBlock,
-      /\n\s*exit 1\n/,
-      `${path} guard step must exit non-zero on an unmerged or unresolvable PR`,
+      /\|\| \{\s*\n\s*echo "::error::[^"]*"\s*\n\s*exit 1\s*\n\s*\}/,
+      `${path} guard step must exit non-zero when the gh pr view lookup itself fails`,
+    );
+    assert.match(
+      guardBlock,
+      /if \[ "\$STATE" != "MERGED" \]; then\s*\n\s*echo "::error::[^"]*"\s*\n\s*exit 1\s*\n\s*fi/,
+      `${path} guard step must exit non-zero when the PR's state is not MERGED`,
     );
   }
 });
