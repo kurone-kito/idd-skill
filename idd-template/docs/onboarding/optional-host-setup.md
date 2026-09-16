@@ -793,9 +793,13 @@ bundle is third-party code, so marking it `linguist-vendored` drops it
 from your repository's language statistics and de-prioritizes it in code
 search — useful when your own code is mostly docs or another language and
 you do not want the copied `.mjs`/schema files to dominate the language
-bar. (This is the adopter-side counterpart of the source repository's
-`linguist-generated` artifacts; the semantics differ deliberately:
-generated = first-party build output, vendored = copied third-party code.)
+bar. Do **not** mark those copied files `linguist-generated=true`
+(generated = first-party build output; vendored = copied third-party
+code; observed 2026-09-13, issue `#2958`, when
+`template-distribution.md` told adopters to copy the source
+repository's generated-output stanza onto this third-party set). The
+source repository uses `linguist-generated` only for its own built
+`.mjs` artifacts, not for this copied set.
 
 The helper-runtime manifest emits the exact lines from the same
 `managedFiles` import-graph it uses to vend the bundle, so the attribute

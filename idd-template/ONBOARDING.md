@@ -688,9 +688,8 @@ see
 [Profile-conditional helper files](docs/onboarding/template-distribution.md#profile-conditional-helper-files-vendored-node)
 for why that bundle is out of scope here and how to get it anyway. If
 you selected the `vendored-node` profile, also see
-[`.gitattributes` linguist-generated convention](docs/onboarding/template-distribution.md#gitattributes-linguist-generated-convention-vendored-node)
-to avoid review bots duplicating findings across a vendored `.mts`
-source and its generated `.mjs` output.
+[`.gitattributes` linguist-vendored convention](docs/onboarding/template-distribution.md#gitattributes-linguist-vendored-convention-vendored-node)
+to mark the copied helper files as third-party code.
 For `idd-skill` maintainers working on this generated file list and the
 remote-fetch examples, see
 [Template distribution maintainer reference](docs/onboarding/template-distribution.md).
