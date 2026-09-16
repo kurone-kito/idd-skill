@@ -607,8 +607,8 @@ section, retrieved 2026-09-16.)
   caution applies to overstating the `Read` side's own recovery: per
   `docs/idd-workflow.md`'s entry-points table, Claude Code auto-loads
   only `CLAUDE.md` (which imports `AGENTS.md`) — "None from
-  `.github/instructions/` by default" — so `idd-overview-core
-  .instructions.md`, where the routing table itself lives, is opened
+  `.github/instructions/` by default" — so the file where the routing
+  table itself lives (`idd-overview-core.instructions.md`) is opened
   manually via `Read`, not embedded in always-loaded content, and
   nothing here claims compaction reloads that file automatically either.
   What compaction does reload is the entry file carrying the directive
