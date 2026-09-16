@@ -275,12 +275,11 @@ Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
 First record `{agent-id}`/`{claim-id}` via
 `<profile-selected-claim-lock-command> --record-tokens --worktree
-<path> --agent-id {agent-id} --claim-id {claim-id}` (A5(a)); then post
-the claim comment using the exact format and posting mechanics
-already defined in
+<path> --agent-id {agent-id} --claim-id {claim-id}` (resolve the same
+way as A5(a) above); then post the claim comment using the exact
+format and posting mechanics already defined in
 [Claim format](idd-overview-core.instructions.md#claim-format) — do not
-re-derive them here. `emit-marker` (`--type claimed-by`, emit-only) also
-renders the body without posting.
+re-derive them here.
 
 **Nothing appended after the note.** A `claimed-by` / `unclaimed-by`
 marker body must be exactly the HTML comment token followed by, at

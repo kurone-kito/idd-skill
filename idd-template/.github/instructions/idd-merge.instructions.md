@@ -155,10 +155,10 @@ Before any mutating action in F3, apply the
      gate — do not add stricter sub-conditions; e.g. a pending-window
      `SATISFIED` can keep `copilotPending` true and
      `LAST_COPILOT_COMMIT` off the head). **Manual-fallback
-     equivalent** (helper unavailable or discarded): step 3's
-     AW1/AW2/AW3 walk already run earlier in this pass — satisfied
-     when it reached "proceed with the merge" without stopping or
-     returning elsewhere;
+     equivalent** (helper unavailable or discarded): the AW1/AW2/AW3
+     decision table (`idd-advisory-wait.instructions.md`), run in full
+     for `PR_HEAD_SHA_F3`, returns `SATISFIED` — not merely any step 3
+     branch that says "proceed with the merge";
    - no unwaived `copilot-terminal-unavailable` in the helper's
      `blockers[]` — separate from `f3Outcome`, not a stricter
      sub-condition on it
