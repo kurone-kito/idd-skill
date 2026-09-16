@@ -85,8 +85,13 @@ The recommended route preserves the existing major-family order and
 makes the inserted responsibilities explicit:
 
 ```text
-A0_T -> A3 -> A4 -> A3_APPROVAL -> A4_SUITABILITY -> A5 (explicit target)
+A0_T -> A3 -> A4 -> A3_APPROVAL -> A4_SUITABILITY -> A5 (explicit execution-leaf target)
+A0_T -> A3 -> A1_AUDIT -> A2 -> A3 -> A3_APPROVAL -> A4 -> A4_SUITABILITY -> A5 (explicit roadmap target)
 A0 -> (A0_O | A1)
+A0_O -> A3_APPROVAL (orphan candidate remains)
+A0_O -> A1 (orphan-first primary path, no orphan remains)
+A0_O -> A3 (roadmap-first fallback, trigger (a) or (c), no orphan remains)
+A0_O -> stop (roadmap-first fallback, trigger (b), no orphan remains)
 A1 -> A1_AUDIT
 A1_AUDIT -> A1 (completed nested roadmap)
 A1_AUDIT -> stop (non-autonomous gap)
@@ -102,7 +107,7 @@ C2 -> C5 (zero findings but floor failed)
 C2 -> D1 (zero findings and floor passed)
 C4 -> D1 (clean exit and floor passed)
 C6 -> C1 (next critique pass)
-D1 -> D2 -> D3 -> D3_IMPACT -> D3_CLOSE -> D4
+D1 -> D2 -> D3_IMPACT -> D3 -> D3_CLOSE -> D4
 D4 -> D2 (code-caused required-check failure, cancellation, or timeout)
 D4 -> E1 -> E2 -> E3
 E3 -> E4 -> E5 -> E6 -> E7 -> E8
@@ -110,7 +115,7 @@ E3 -> Esync (empty snapshot)
 E8 -> Esync (zero Accepted PATH A)
 E8 -> E9 -> E10 -> E11 -> E12 -> E13 -> E14 -> E15
 E7 -> E4 (missing disposition evidence)
-E10 -> E9 (additional critique findings)
+E10 -> E10 (additional critique findings)
 E15 -> E1 (CI success)
 E15 -> E11 (code-caused failure or timeout)
 Esync -> E1 (sync performed)
@@ -123,7 +128,8 @@ F2 -> D4 (required CI failure, cancellation, or timeout)
 F2 -> D3_PREMERGE -> F2_HANDOFF
 F2_HANDOFF -> F3 (authorized merge policy)
 F2_HANDOFF -> stop (human_merge or unknown policy)
-F2_HANDOFF -> A5 -> F2 (designated separate merge agent resumption)
+F2_HANDOFF -> A5 -> F2_HANDOFF (designated separate merge agent establishes ownership)
+F2_HANDOFF -> F2 -> F2_HANDOFF (designated separate merge agent lacks fresh F2 evidence)
 F3 -> F4 -> F5
 F3 -> E14 (advisory state drift)
 F3 -> F1 (base branch update or conflict)
@@ -134,21 +140,32 @@ F3 -> stop (maintainer decision required)
 F5 -> A -> A5
 ```
 
-The first line shows alternatives, not a requirement that all three A0
-routes execute. `A0_O` and `A0_T` remain their existing orphan and
-explicit-target shortcuts. `Resume` remains a routing entry that may
-return to the appropriate point in this sequence; it is not renumbered.
-The explicit-target `A0_T` line is a separate entry: it skips A0's normal
-scope and orphan discovery, then applies readiness at A3, viability at A4,
-approval at `A3_APPROVAL`, and suitability at `A4_SUITABILITY` in that
-order. A1's audit returns to A1 after closing a completed nested roadmap,
+The first lines show alternatives, not a requirement that all A0 routes
+execute. `A0_O` and `A0_T` remain their existing orphan and explicit-target
+shortcuts. When A0-O still has an orphan candidate, it passes the set directly
+to `A3_APPROVAL`, skipping A1-A3. With no orphan candidate, the
+`orphan-first` primary path continues at A1; a `roadmap-first` fallback
+returns to A3 for triggers (a) and (c), or stops for trigger (b), as required
+by the invoking path. `Resume` remains a routing entry that may return to the
+appropriate point in this sequence; it is not renumbered.
+The first explicit-target `A0_T` line is a leaf-only entry: it skips A0's
+normal scope and orphan discovery, then applies readiness at A3, viability at
+A4, approval at `A3_APPROVAL`, and suitability at `A4_SUITABILITY` in that
+order. A roadmap-target `A0_T` first applies the target's A3 checks, then
+audits the root at `A1_AUDIT`, traverses its descendants at A2, and applies
+the normal scoped A3 → `A3_APPROVAL` → A4 → `A4_SUITABILITY` sequence to one
+child. A target-side dependency, coordination, close, non-autonomous gap,
+empty scoped set, or suitability failure stops without fallback. A1's audit
+returns to A1 after closing a completed nested roadmap,
 stops on a non-autonomous gap, and reaches A2 only for unresolved work or
 an autonomous gap. A4's suitability rejection returns to A4 for the next
 normal-discovery survivor but stops for an explicit target.
 C2 sends a zero-finding result to C5 when the objective validation floor
 fails; C3 has no findings to score in that case. C2 and C4 provide the
 clean C-phase exits to D1 after the validation floor;
-C6 returns to C1 for the next critique pass. The E-phase has two exits from
+C6 returns to C1 for the next critique pass. When E10 finds additional
+critique findings, it fixes them and repeats E10 itself; E9 remains the
+disposition-to-fix entry. The E-phase has two exits from
 E3: an empty snapshot goes directly to `Esync`, while a non-empty snapshot
 goes through E4-E8.
 A5 returns to the collapsed discovery node when a normal roadmap or orphan
@@ -159,8 +176,8 @@ HEAD is pushed and checked before review processing resumes.
 From E8, zero Accepted PATH A items goes to `Esync`; accepted PATH A work
 goes through E9-E15, and a successful E15 CI wait returns to E1 for a fresh
 snapshot. E7 returns to the E4-E6 disposition sequence when required
-classifications, replies, or resolutions are missing. E10 returns to E9 when
-the critique pass finds additional issues. E15 returns to E11 for a
+classifications, replies, or resolutions are missing. E10 returns to itself
+when the critique pass finds additional issues. E15 returns to E11 for a
 code-caused failure or timeout, so the fix-and-validate loop runs before the
 next CI wait. After `Esync` performs a branch merge, it returns to E1 for a
 fresh review snapshot; only the no-sync path continues to F1. The F2 edge to
@@ -179,9 +196,10 @@ to E1 for a new snapshot. A required CI failure, cancellation, or timeout at
 F2 returns to D4 for the fix-and-push cycle. At F2.5, `F3` is reachable only under
 `fully_autonomous_merge` or an explicitly designated and resumed
 `separate_merge_agent`; `human_merge` and unknown policies stop for handoff.
-A designated separate merge agent may re-enter through A5 and F2 when it
-still needs to establish ownership or refresh merge evidence; an unrecorded
-or different merge-capable actor stops with a handoff instead.
+A designated separate merge agent returns to `F2_HANDOFF` after A5
+establishes ownership, and returns there again after F2 refreshes missing or
+stale evidence. An unrecorded or different merge-capable actor stops with a
+handoff instead.
 F3's successful path is conditional: advisory drift returns to E14, a base
 branch update or conflict returns to F1, a failed CI condition returns to D4,
 review drift or new reviewer activity returns to E1, and an awaiting-reviewer
@@ -299,7 +317,10 @@ should use this order:
 3. Migrate the directly related docs, examples, tests, and fixtures for
    that same family. Keep historical incident text and compatibility
    fixtures in the explicit old-spelling allowlist rather than changing
-   their evidence.
+   their evidence. This proposal itself is allowlisted design-record
+   evidence: its disposition table, alias example, and inventory pattern
+   intentionally retain retired spellings and must remain unchanged during
+   that migration.
 4. After each batch, rerun the fresh inventory, resolver and graph tests,
    generated-source checks, and documentation audits. A batch is not
    complete while an old spelling remains outside the allowlist or while
@@ -322,20 +343,22 @@ come back empty.
 
 ## Finding 6 — Sequence the lite mirror with the standard corpus
 
-The future implementation should migrate the `.github/instructions/lite/`
-shadow files in the same change and in the same corresponding phase-family
-batches as the standard corpus. Recompute the actual shadow-file set from
-the sync manifest when planning each batch rather than freezing its current
-topology in this proposal. A lite reader must not see a different phase
-vocabulary for the same gate, and the compatibility aliases must cover both
-profiles during rollout.
+The future implementation should migrate the canonical
+`idd-template/.github/instructions/lite/` sources and regenerate the
+`.github/instructions/lite/` shadow files in the same change and in the same
+corresponding phase-family batches as the standard corpus. Recompute the
+actual shadow-file set from the sync manifest when planning each batch rather
+than freezing its current topology in this proposal. A lite reader must not
+see a different phase vocabulary for the same gate, and the compatibility
+aliases must cover both profiles during rollout.
 
 That recommendation does not widen issue [#2968](https://github.com/kurone-kito/idd-skill/issues/2968).
 Only lines carrying the phase vocabulary and their existing mirror
 contract are in scope; unrelated lite parity gaps remain in #2968's
-backlog. This issue itself does not edit the lite tree because its
-acceptance criteria explicitly prohibit changes outside `docs/` and the
-generated source-repository index.
+backlog. This issue itself does not edit the lite tree because this
+investigation deliberately limits its implementation surface to `docs/` and
+the generated source-repository index; later implementation work remains
+separately scoped.
 
 ## Recommendation — adopt semantic suffixes, defer implementation
 
@@ -346,7 +369,10 @@ path for old live records, and keeping the graph's deliberate `A`
 abstraction. Because canonical output changes are breaking for older
 consumers, that implementation issue must also name its version boundary,
 downstream migration notice, resolver, parser, schema, source-mirror, and
-lite-mirror changes as one bounded batch plan.
+lite-mirror changes as one bounded batch plan. It must explicitly reconcile
+or revise the existing Phase ID Compatibility Contract and Phase ID
+Compatibility Defaults; until that follow-up is approved, the current stable
+canonical/display-only contract remains authoritative.
 
 This is not a token-reduction proposal. Re-ordering moves bytes between
 positions; it removes none. The roadmap's measured literal cross-file
