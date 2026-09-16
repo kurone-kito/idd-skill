@@ -118,9 +118,10 @@ any divergence that already exists.
 
 ## Bundle Budgets
 
-The `bundleBudgets` entries cap the combined byte size of the
-instruction files loaded together on each phase path (discovery,
-resume, work, review, and merge), so context re-bloat fails the audit
+The `bundleBudgets` entries cap the combined byte size of named file
+groups loaded together on each phase path (including instruction
+bundles and other context-bearing surfaces such as the onboarding front
+door and its on-demand companions), so context re-bloat fails the audit
 instead of silently degrading unattended loops.
 
 Each `limitBytes` value encodes at most roughly 10% headroom over the

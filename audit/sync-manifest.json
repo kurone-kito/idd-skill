@@ -438,6 +438,28 @@
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
       "limitBytes": 115500
+    },
+    {
+      "id": "bundle-onboarding-front-door",
+      "description": "Onboarding front door: the top-level ONBOARDING.md guide loaded first",
+      "files": [
+        "idd-template/ONBOARDING.md"
+      ],
+      "limitBytes": 56000
+    },
+    {
+      "id": "bundle-onboarding-companions",
+      "description": "Onboarding companion Markdown guides read on demand after the front door",
+      "files": [
+        "idd-template/docs/onboarding/agent-entry-and-verification.md",
+        "idd-template/docs/onboarding/issue-mediated-bootstrap.md",
+        "idd-template/docs/onboarding/optional-host-setup.md",
+        "idd-template/docs/onboarding/placeholders.md",
+        "idd-template/docs/onboarding/policy-decisions.md",
+        "idd-template/docs/onboarding/project-tuning.md",
+        "idd-template/docs/onboarding/template-distribution.md"
+      ],
+      "limitBytes": 175000
     }
   ],
   "contextCeiling": {
