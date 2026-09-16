@@ -7,10 +7,11 @@ tags: [onboarding, host-setup]
 
 # Onboarding Reference — Optional Host Setup
 
-Use this reference alongside `idd-template/ONBOARDING.md` when you want to
-enable one of the optional host-level integrations it mentions but does not
-walk through inline. None of these steps are required to finish the hearing
-or the core import.
+Use this reference alongside
+[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.11.0/idd-template/ONBOARDING.md)
+when you want to enable one of the optional host-level integrations it
+mentions but does not walk through inline. None of these steps are
+required to finish the hearing or the core import.
 
 This page is the detailed companion for:
 
@@ -576,7 +577,7 @@ enable **Dismiss stale pull request approvals when new commits are
 pushed** (or its equivalent) so approval applies to the workflow
 revision that will merge. Without those settings, CODEOWNERS only
 requests or routes a review and does not make approval a merge gate.
-The [dry-run — Readiness assessment](../../ONBOARDING.md#dry-run--readiness-assessment)
+The [dry-run — Readiness assessment](https://github.com/kurone-kito/idd-skill/blob/v0.11.0/idd-template/ONBOARDING.md#dry-run--readiness-assessment)
 report's `CODEOWNERS present` item checks only that a CODEOWNERS file
 exists; it does not verify workflow-path coverage, producer binding, or
 these required-review settings (preventive; no observed incident yet).

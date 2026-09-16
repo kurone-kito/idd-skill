@@ -7,10 +7,12 @@ tags: [onboarding, bootstrap]
 
 # Onboarding Reference — Issue-Mediated Bootstrap
 
-Use this reference alongside `idd-template/ONBOARDING.md` when the
-operator wants an audited bootstrap trail instead of the distributed
-default direct-import ("theirs-flow") path. This page is the detailed
-companion for the pointer subsection between Step 1C and Step 2.
+Use this reference alongside
+[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.11.0/idd-template/ONBOARDING.md)
+when the operator wants an audited bootstrap trail instead of the
+distributed default direct-import ("theirs-flow") path. This page is
+the detailed companion for the pointer subsection between Step 1C and
+Step 2.
 
 **This mode is opt-in, not a replacement.** The existing direct-import
 path (Steps 2, 4, 5, and 6 as already written in
@@ -224,13 +226,13 @@ transcript.
 **The raw transcript is not enough for the issue-authoring companion
 item on its own.** The transcript's `issue-authoring-companion` answer
 only carries the operator's real choice (`installed` / `not
-installed`). This bootstrap issue always defers those files (see
-"Do not draft this" below) and, when the real choice is `installed`,
-also needs the confirmed native destination for the companion
-follow-up issue to read later — neither the forced `not installed`
-core-bootstrap override nor the destination has its own transcript
-field. Add both as an explicit override note directly below the
-embedded transcript:
+installed`). This bootstrap issue always defers those files (see "do
+not draft a companion-install follow-up" below) and, when the real
+choice is `installed`, also needs the confirmed native destination for
+the companion follow-up issue to read later — neither the forced `not
+installed` core-bootstrap override nor the destination has its own
+transcript field. Add both as an explicit override note directly below
+the embedded transcript:
 
 ```markdown
 Issue-authoring companion status (core-bootstrap, temporary): not
@@ -495,7 +497,7 @@ examples ("start issue authoring to implement {inferred gap}", "run the
 IDD loop"). Derive `{inferred gap}` and the other prompt content using
 the same repository-evidence-read method the optional Dry-run readiness
 report already performs
-([Dry-run — Readiness assessment](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#dry-run--readiness-assessment))
+([Dry-run — Readiness assessment](https://github.com/kurone-kito/idd-skill/blob/v0.11.0/idd-template/ONBOARDING.md#dry-run--readiness-assessment))
 — detected package manager, missing prerequisites, and so on — rather
 than inventing a new inference mechanism. Run that read **fresh, after
 this merge**, not reused from the pre-import dry-run's stored output:

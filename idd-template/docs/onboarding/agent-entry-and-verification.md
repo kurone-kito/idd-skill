@@ -7,9 +7,11 @@ tags: [onboarding, agent-entry]
 
 # Onboarding Reference — Agent Entry and Verification
 
-Use this reference alongside `idd-template/ONBOARDING.md` when you need
-the detailed agent-entry examples and expanded verification guidance
-that the thin onboarding entry point now links to.
+Use this reference alongside
+[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.11.0/idd-template/ONBOARDING.md)
+when you need the detailed agent-entry examples and expanded
+verification guidance that the thin onboarding entry point now links
+to.
 
 This page is the detailed companion for:
 
@@ -276,9 +278,10 @@ sibling entry file.
 
 ## Verification details
 
-Use the Step 6 checklist in `idd-template/ONBOARDING.md` as the final
-go/no-go gate. When you need the concrete evidence behind those shorter
-checks, confirm the detailed items below.
+Use the Step 6 checklist in
+[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.11.0/idd-template/ONBOARDING.md)
+as the final go/no-go gate. When you need the concrete evidence behind
+those shorter checks, confirm the detailed items below.
 
 ### Imported files and profile artifacts
 
