@@ -382,12 +382,14 @@ This investigation does not:
 Section 4 above enumerated four Claude Code invocation paths (model
 judgment, `/name`, subagent preload, `paths` glob-match) and found none
 of them a "must load unconditionally" primitive. It did not evaluate a
-fifth path: **orchestrator-directed invocation**, where the always-loaded
-entry file's own routing table names a skill explicitly and instructs
-the agent to invoke it at that exact step — structurally the same
-instruction shape as "open this file" (the routing table already
-dispatches to phase files this way), differing only in which tool
-executes the directive. This addendum records the verdict for
+fifth path: **orchestrator-directed invocation**, where a routing
+table — reached via the always-loaded entry file's own directive to
+open it, per this repository's own two-step entry contract (Part D
+below) — names a skill explicitly and instructs the agent to invoke it
+at that exact step, structurally the same instruction shape as "open
+this file" (the routing table already dispatches to phase files this
+way), differing only in which tool executes the directive. This
+addendum records the verdict for
 [#3032](https://github.com/kurone-kito/idd-skill/issues/3032), a
 fourth-kind-of-new-evidence issue under this document's own Revisit
 conditions above.
@@ -574,10 +576,13 @@ section, retrieved 2026-09-16.)
   live rather than trusting a number restated here), would consume a
   large fraction of the documented single-session budget on its own
   before counting any other skill a user has installed. At a finer
-  future granularity — for example Option B split further into roughly
-  twice as many narrower skills — the same illustrative average, applied
-  to that doubled count, plausibly exceeds the full budget on its own,
-  though the actual number depends on the descriptions actually written
+  future granularity — for example splitting Option A's own,
+  already-larger phase-file mapping into roughly twice as many
+  still-narrower skills, not Option B's 5–6, which even doubled stays
+  comfortably under the budget — the same illustrative average, applied
+  to that Option-A-based doubled count, plausibly exceeds the full
+  budget on its own, though the actual number depends on the descriptions
+  actually written
   and would need measuring against a concrete proposal rather than
   assumed from the average alone; this rate-times-count method is the
   concrete, checkable calculation the "roughly linear" claim otherwise
