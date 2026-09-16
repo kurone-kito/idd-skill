@@ -771,15 +771,16 @@ maintainer decision` thread (E7 permits one to stay unresolved, so a
 zero Accepted count alone does not mean nothing is pending; branch-sync
 and F1 come next only once that thread is also clear), or after a
 round completes **both** E13 and E14: the first point has no
-dispositions to preserve; the other two leave every disposition
-durable on GitHub. A successor re-enters through Resume's own routing.
-E14 belongs in that boundary,
+dispositions to preserve; the other two leave every reviewer-visible
+disposition durable on GitHub (an E2-only finding is preserved by its
+pushed fix instead, per the cold-start reconstruction section's edge
+case 2). A successor re-enters through Resume's own routing. E14
+belongs in that boundary,
 not only E13 — E1 Step 3 excludes a `CHANGES_REQUESTED` review body
 only once it has **both** a reply and a re-review request, so exiting
 right after E13's replies but before E14 requests review leaves that
-body's exclusion condition unmet, and a fresh E1 pass re-surfaces it
-(E4-E8 still recognize it as already dispositioned, so no rework
-follows — only the unnecessary re-surfacing). Exiting anywhere between
+body's exclusion condition unmet, and a fresh E1 pass re-surfaces it.
+Exiting anywhere between
 E4 and a round's completed E14 is not recommended — an Accepted-PATH-A
 decision carries no durable marker until E13 posts it (E6 defers that
 reply on purpose), and a `CHANGES_REQUESTED` body needs E14's request
@@ -932,10 +933,8 @@ Running this variant safely requires:
   note above and `idd-review-snapshot.instructions.md`'s cold-start
   reconstruction section. This covers only those two named entry
   points; a brief that instead hands a worker into E10, E13, E14, or
-  E15 has no supported cold-entry route yet and should route through
-  E4 instead, which runs this reconstruction -- not E1 directly, which
-  has no local-ahead check of its own and can let F2 discard an
-  unpushed commit.
+  E15 has no supported cold-entry route yet -- stop and report rather
+  than improvising one.
 - **Independently verify a worker's reported terminal outcome before
   trusting it.** A worker's final-turn text describes what it
   _attempted_, not proof of what actually landed on the forge. Before

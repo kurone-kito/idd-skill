@@ -329,9 +329,9 @@ unconditionally, in the **same surviving claimed worktree**:
    (false by design against an already-fixed tree). Covered items: E9
    skips them, E13 cites the commit; others: E9 fixes them normally.
    A non-empty result overrides an empty E3 or zero-Accepted E8 route:
-   resume at E10 for covered items regardless -- E10, not E12, because
-   a cold session cannot know whether E10's critique pass already ran
-   against them, and
+   resume at E10 for the local-ahead diff, even with an empty
+   E3 and nothing to map it to -- E10, not E12, because a cold session
+   cannot know whether E10's critique pass already ran against it, and
    [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
    governs that ambiguity.
 
