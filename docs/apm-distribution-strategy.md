@@ -478,8 +478,8 @@ Re-evaluate this note when any of the following holds:
 **Onboarding token cost is not an APM fit.** `idd-onboard.mjs` already
 automates Steps 0, 1A, 1B, 1C (`--hear`), 2 (`--import`), 3
 (`--record-policy`), 4 (`--substitute`), and the mechanical subset of
-Step 6 (`--verify`). Within the current skill-only onboarding path, the
-residual procedure cost includes the manual Step 5 agent-entry updates,
+Step 6 (`--verify`). In the documented helper-assisted path, residual
+procedure cost includes the manual Step 5 agent-entry updates,
 the policy, configuration, frontmatter, and entry-consistency checks that
 remain manual in Step 6, and reading the documentation. A future APM
 distribution could automate those entry-file writes, but it would not
