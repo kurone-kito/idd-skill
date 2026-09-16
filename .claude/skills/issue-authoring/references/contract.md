@@ -1737,11 +1737,16 @@ only approval boundary.
   whether that removal is a non-anchor target's or the anchor's own --
   that the marked target is the sole member of its authoring set: it
   carries no `<marker-prefix>-roadmap-id` marker (never a roadmap
-  anchor), and a paginated scan of trusted owner markers finds no
-  sibling target sharing the same set ID. If either condition fails,
-  the exception does not authorize removing any label for this
-  release; fall back to the ordinary explicit human release-request
-  precondition for the whole set instead. Then,
+  anchor), and a repository-wide paginated issue-comment scan for
+  trusted owner markers whose exact `set` matches finds no sibling
+  target -- the same repository-wide, fail-closed enumeration the
+  resume procedure above requires, since a sibling's marker lives on
+  the sibling's own issue and never appears in the marked target's own
+  comment log; block on incomplete or inconclusive enumeration the
+  same way. If either condition fails, or the scan cannot be
+  completed, the exception does not authorize removing any label for
+  this release; fall back to the ordinary explicit human
+  release-request precondition for the whole set instead. Then,
   immediately before each label removal, append and verify the set anchor's
   `mode=heartbeat` first (or reuse one per the heartbeat-coalescing rule
   above), re-fetching it and requiring its current owner, set, anchor, and
