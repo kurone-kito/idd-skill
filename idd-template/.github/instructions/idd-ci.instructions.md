@@ -225,10 +225,9 @@ required `pull_request`- or `pull_request_target`-triggered run for
 this HEAD (subject to `ciWait.rerunPolicy`), never the gated bot run
 itself (approve it via `POST
 /repos/{owner}/{repo}/actions/runs/{run_id}/approve` only if needed).
-The required check also self-heals on a push or a non-bot companion
-refresh from a review-thread reply or qualifying IDD-originated PR
-comment. Ordinary PR comments are filtered, although `issue_comment`
-is subscribed for qualifying comments.
+The required check self-heals on a push or companion refresh from
+IDD-originated review-thread replies or qualifying PR comments. Ordinary
+comments are filtered, although `issue_comment` is subscribed.
 
 **If rerunning the passing non-bot instance alone does not clear the
 rollup (`#1745`)**: a HEAD can carry several
@@ -239,9 +238,10 @@ reruns of those instances. Review submissions use
 `cancel-in-progress` can leave the required-check rollup pinned to a
 `CANCELLED` instance. Unlike `action_required`, it is not gated and
 can be rerun (the direct experiment confirmed this for `#1745`). If
-the non-bot rerun does not clear the block, rerun every
-`CANCELLED` sibling for the same HEAD (`gh run rerun <run-id>` on each,
-per the plan below); only an `action_required` instance stays withheld.
+the non-bot rerun does not clear the block, rerun same-HEAD `CANCELLED`
+siblings the plan marks `rerun-eligible` (`gh run rerun <run-id>`). Do
+not rerun held siblings: `action_required`, `pending`,
+`unresolved`, `awaiting-fresh-review`, or `rerun-budget-held`.
 
 Note: this is a known Rulesets platform behavior, not an `idd-skill`
 dedup bug — GitHub can require every same-named instance non-failing,
