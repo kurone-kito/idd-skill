@@ -613,7 +613,12 @@ either — an id rename alone does not count as new) or a `limitBytes`
 decrease never trips it. If the base ref or its manifest cannot be read
 (for example, a shallow checkout), the check emits a notice and skips
 this comparison instead of failing
-closed.
+closed. The same base-ref comparison also covers `instructionSizeBudgets`'
+own per-file `phaseLimitBytes` and `alwaysLoadedLimitBytes` (issue
+`#3028`), each checked against only the governed files its own
+`alwaysLoaded` classification applies to, with the equivalent id-rename
+protection matched by an unchanged `glob` instead of an unchanged file
+set.
 
 ### High-contention shared files
 
