@@ -899,11 +899,15 @@ Node.js helper path.
   or mirror URL explicitly. Persist that same pin in
   `.github/idd/config.json` as the optional `helperRuntime.packageSpec`
   field so it is reflected consistently in every helper-emitted
-  `ephemeral-npx` (and `package-manager`) invocation string (including
-  the manifest CLI's own default and idd-doctor's remediation hints),
-  not only a one-shot `--package-spec` flag on a single invocation. An
-  explicit `--package-spec` flag still wins over the configured value
-  when both are present. `idd-onboard.mjs --verify` reports a
+  `ephemeral-npx` invocation string (including the manifest CLI's own
+  default and idd-doctor's remediation hints), not only a one-shot
+  `--package-spec` flag on a single invocation. An explicit
+  `--package-spec` flag still wins over the configured value when both
+  are present. The `package-manager` profile above uses the same
+  configured pin for its install command and `devDependencies` entry
+  instead — its emitted helper commands are bare `idd-*` bin names, not
+  a parameterized invocation string, so the pin never appears inside
+  those commands themselves. `idd-onboard.mjs --verify` reports a
   non-blocking advisory for either profile when no `packageSpec` is
   configured.
 - `instructions-only`: keep helper dependencies, helper files, and helper
