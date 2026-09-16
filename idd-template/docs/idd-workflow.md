@@ -753,10 +753,11 @@ guarantee) or after E8 finds zero Accepted PATH A items **and** no
 pending `Awaiting maintainer decision` item, thread or regular
 comment (E7 permits one to stay unresolved, so a zero Accepted count
 alone does not mean nothing is pending; branch-sync and F1 come next
-only once that item is also clear) -- both only when no local-ahead
-commit is still unpushed (the cold-start reconstruction section's
-edge case 2 pushes one first, via E10-E12, before either point
-applies) -- or after a round completes **both** E13 and E14: the
+only once that item is also clear) -- both only when the worktree is
+clean and no local-ahead commit is still unpushed (the cold-start
+reconstruction section's edge case 2 pushes one first, via E10-E12,
+before either point applies) -- or after a round completes **both**
+E13 and E14: the
 first point has no dispositions to preserve; the other two leave
 every reviewer-visible disposition durable on GitHub. A successor
 re-enters through Resume's own routing. E14 belongs in that boundary,

@@ -277,37 +277,42 @@ Read this section when entering E4 (`idd-review-triage.instructions.md`)
 or E9 (`idd-review-fix.instructions.md`) without ReviewItems_snapshot
 from this episode's own E1-E3 pass -- following
 `idd-overview-core.instructions.md`'s unconditional "Snapshot done" /
-"Review feedback accepted" routing rows without having just run E1, or
-an orchestrator delegation brief that hands off mid-review (see
-`docs/idd-workflow.md`'s "Cold entry outside Resume" note for how
-`idd-resume.instructions.md`'s own worktree-state routes reach this
-section too).
+"Review feedback accepted" routing rows, or an orchestrator delegation
+brief that hands off mid-review.
 
 **Procedure**: run E1 Steps 1-3 above (Step 2 already posts the
-watermark; do not post a second one). No session memory is required --
-re-running them now is the reconstruction. Run edge case 2's steps 1-3
+watermark; do not post a second one) -- re-running them now _is_ the
+reconstruction. Run edge case 2's steps 1-3
 below unconditionally before E3 -- a local fix can predate E4 and
-never re-surface there; its step 4 resumes at E4 for the non-empty
-case. Then continue through E2, E3, and, only when E3 finds
+never re-surface there; edge case 1's check at E4 then covers it.
+Then continue through E2, E3, and, only when E3 finds
 ReviewItems_snapshot non-empty, E4-E8 in full before any E9 work -- a
 cold E9 entry has no durable Accepted-PATH-A set to trust (E6 defers
 that reply to E13), so triage must re-run.
 
 Two correctness-sensitive gaps need an explicit rule (preventive; no
 observed incident yet), since a naive rebuild can silently drop or
-duplicate a reviewer-facing item:
+duplicate an item:
 
-**Edge case 1 -- an item mid-E4 classification, no disposition reply
-posted yet.** No special handling: Step 3's awaiting-reviewer
-exclusion, including its stated exceptions, already draws this line.
-An item a lost session classified Accepted but never replied to (E6
-defers that reply to E13) has no IDD-agent reply for Step 3 to see, so
-the rebuild re-includes it as ordinary undispositioned work -- E4
-simply re-classifies it. Nothing to recover.
+**Edge case 1 -- an item without a completed disposition.** Covers a
+lost session mid-E4 classification (E6 defers PATH A Accept replies to
+E13); one whose E12 push landed but lost the session before E13; and a
+`CHANGES_REQUESTED` body Step 3 re-surfaces solely for a missing E14
+request (its exclusion needs both) -- if it already carries an E13
+`Accepted -- fixed in` reply, skip reclassification and route
+straight to E14. Otherwise Step 3's awaiting-reviewer exclusion
+(exceptions included) already draws the line: no IDD-agent reply
+exists, so the rebuild re-includes it as ordinary work. Before E5
+verifies it, check whether a branch commit newer than its timestamp
+already fixes it (a lost E12 push, or edge case 2's local-ahead diff
+below) -- both read false against E5's claim-truth test by design. A
+covered in-scope reviewer-feedback PATH A item Accepts without that
+test, skips E9, E13 cites the commit; everything else follows E5-E8 as
+normal.
 
-**Edge case 2 -- an E9 fix committed but not yet pushed.** GitHub-side
-state cannot see this, and a fix for a session-local E2 finding may
-never re-surface at E4 (E2's findings are not durable) -- an empty E3
+**Edge case 2 -- an E9 fix committed but not yet pushed.** GitHub
+cannot see this; a fix for a session-local E2 finding may never
+re-surface at E4 (E2's findings are not durable) -- an empty E3
 result alone is not proof there is nothing to recover, since F2 resets
 the worktree to the PR's remote HEAD before merge. Run this
 unconditionally, in the **same surviving claimed worktree**:
@@ -316,26 +321,21 @@ unconditionally, in the **same surviving claimed worktree**:
    here could race an external rewrite and pass step 2 falsely.
 2. `git merge-base --is-ancestor "$PR_HEAD" HEAD` -- a failure
    (external rewrite, diverged worktree) stops for reconciliation;
-   never fall through to edge case 1's GitHub-only re-triage, which
+   never fall through to edge case 1's rule instead, which
    risks F2 discarding real local work.
 3. `git status --porcelain` must report clean -- a dirty worktree
    can't prove which uncommitted lines belong to which item. Treat it
    as unverified input (never trust or discard): stop for
    reconciliation before E9 work.
-4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff, continue
-   to E3. **E3 non-empty**: during E4, before E5 verifies each item,
-   check it against the recorded diff -- covered reviewer-feedback
-   PATH A items Accept without E5's claim-truth test (fixed reads
-   false against the fixed tree by design), skip E9, E13 cites the
-   commit; everything else follows E5-E8 as normal. Either way, even
-   with zero Accepted items,
-   the diff still runs E10-E12 and pushes before branch-sync. **E3
-   empty** (an E2-only finding): resume at E10 for the diff itself --
-   E10, not E12, because a cold session cannot know whether E10's
-   critique pass already ran against it, and
+4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff -- edge
+   case 1's check above covers this diff too. Either way, even with
+   zero Accepted items, the diff still runs E10-E12 and pushes before
+   branch-sync. **E3 empty** (an E2-only finding): resume at E10 for
+   the diff itself -- E10, not E12, because a cold session cannot know
+   whether E10's critique pass already ran against it, and
    [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
    governs that ambiguity.
 
 Clean worktree, no local-ahead commits: E3's own routing applies
-unchanged. A fresh or lost worktree has no path to this evidence and
-falls back to edge case 1's rule, re-triaged from scratch.
+unchanged. A fresh or lost worktree falls back to edge case 1's rule
+instead, re-triaged from scratch.
