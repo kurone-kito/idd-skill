@@ -201,9 +201,12 @@ loop instead of returning to this D1 rebase path.
    above — do not push with `--force-with-lease` and do not continue in
    this lite flow; the merge-based resync path is out of this file's
    scope.
-4. New CI job: land it `workflow_dispatch`-only, validate with
-   `gh workflow run <file> --ref {branch-name}`, flip the trigger, then
-   re-run **pre-push-validate** and push, before D3.
+4. New CI job whose workflow file isn't on `main` yet: land a
+   bootstrap PR first (trigger wiring only, job inert) — `gh workflow
+   run` can't dispatch a branch-only file. Once the file is on `main`:
+   land the job `workflow_dispatch`-only, validate with a manual
+   dispatch run, commit the trigger-flip edit, re-run
+   **pre-push-validate**, and push, before D3.
 
 ## D3 — Create PR
 
@@ -211,8 +214,7 @@ loop instead of returning to this D1 rebase path.
    `.github/pull_request_template.md` exists; if it does, shape the
    body to that template's sections from the start.
 2. Create the PR using GH CLI (`gh pr create`) or GH MCP, with a body
-   satisfying the rules below — this step is not formatting guidance
-   for an already-open PR; the PR must actually be created here.
+   satisfying the rules below.
 3. The PR body must include: a concise summary, a closing keyword line
    for the claimed issue, recommended follow-up issues (if any), and
    background/rationale only when it materially affects review. Ground
@@ -234,10 +236,9 @@ loop instead of returning to this D1 rebase path.
    prefix — GitHub does not detect the keyword in any of those forms,
    and the linked issue will not auto-close on merge.
 5. **Negation-blind detection**: GitHub matches a keyword immediately
-   adjacent to a `#N` with no concept of negation. Never place a
-   recognized keyword directly next to a `#N` you do not intend to
-   close, even inside a sentence saying it should not close it — reorder
-   the sentence so no keyword sits next to that reference.
+   adjacent to a `#N` with no concept of negation — never place one
+   next to a `#N` you don't intend to close, even inside a "not"
+   clause; reorder the sentence instead.
 6. **Multiple closes**: repeat the keyword for each issue — `Closes #1,
    closes #2` closes both; `Closes #1, #2` closes only the first.
 7. If CODEOWNERS or expected reviewers are not auto-assigned, request
