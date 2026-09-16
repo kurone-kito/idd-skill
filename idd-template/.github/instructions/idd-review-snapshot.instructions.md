@@ -280,13 +280,13 @@ section too).
 
 **Procedure**: run E1 Steps 1-3 above (Step 2 already posts the
 watermark; do not post a second one). No session memory is required --
-re-running them now is the reconstruction. Run edge case 2's
-local-worktree check below unconditionally, before trusting either of
-E3's branches -- a local fix can predate E4 and never re-surface
-there. Then continue through E2, E3, and, only when E3 finds
-ReviewItems_snapshot non-empty, E4-E8 in full before any E9 work -- a
-cold E9 entry has no durable Accepted-PATH-A set to trust (E6 defers
-that reply to E13), so triage must re-run.
+re-running them now is the reconstruction. Run edge case 2's steps 1-3
+below unconditionally before E3 -- a local fix can predate E4 and
+never re-surface there; its step 4 resumes after E3 routes. Then
+continue through E2, E3, and, only when E3 finds ReviewItems_snapshot
+non-empty, E4-E8 in full before any E9 work -- a cold E9 entry has no
+durable Accepted-PATH-A set to trust (E6 defers that reply to E13), so
+triage must re-run.
 
 Two correctness-sensitive gaps need an explicit rule (preventive; no
 observed incident yet), since a naive rebuild can silently drop or
@@ -317,16 +317,13 @@ unconditionally, in the **same surviving claimed worktree**:
    can't prove which uncommitted lines belong to which item. Treat it
    as unverified input (never trust or discard): stop for
    reconciliation before E9 work.
-4. `git log "$PR_HEAD"..HEAD` lists commits already made -- not
-   proof every Accepted item is covered, only that some commit is
-   ahead. Per Accepted item, check whether the local diff already
-   contains its fix -- a coverage check, not E5's claim-truth test
-   (false by design against an already-fixed tree). Covered items: E9
-   skips them, E13 cites the commit; others: E9 fixes them normally.
-   A non-empty result overrides an empty E3 or zero-Accepted E8 route:
-   resume at E10 for the local-ahead diff, even with an empty
-   E3 and nothing to map it to -- E10, not E12, because a cold session
-   cannot know whether E10's critique pass already ran against it, and
+4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff, continue
+   to E3. **E3 non-empty**: after E4-E8, map each Accepted item
+   against it -- covered items skip E9, E13 cites the commit; unmatched
+   items get their normal E9 fix. **E3 empty** (the diff addressed an
+   E2-only finding): resume at E10 for the diff itself -- E10, not
+   E12, because a cold session cannot know whether E10's critique pass
+   already ran against it, and
    [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
    governs that ambiguity.
 
