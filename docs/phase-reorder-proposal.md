@@ -85,7 +85,7 @@ The recommended route preserves the existing major-family order and
 makes the inserted responsibilities explicit:
 
 ```text
-A0_T -> A3 -> A4 -> A3_APPROVAL -> A4_SUITABILITY -> A5 (explicit execution-leaf target)
+A0_T -> A3 -> A4 -> A3_APPROVAL -> A4_SUITABILITY -> A5 (explicit execution-leaf target; approval-after-viability exception)
 A0_T -> A3 -> A1_AUDIT -> A2 -> A3 -> A3_APPROVAL -> A4 -> A4_SUITABILITY -> A5 (explicit roadmap target)
 A0 -> (A0_O | A1)
 A0_O -> A3_APPROVAL (orphan candidate remains)
@@ -94,8 +94,9 @@ A0_O -> A3 (roadmap-first fallback, trigger (a) or (c), no orphan remains)
 A0_O -> stop (roadmap-first fallback, trigger (b), no orphan remains)
 A1 -> A1_AUDIT
 A1_AUDIT -> A1 (completed nested roadmap)
+A1_AUDIT -> A1 (completed top-level roadmap; continue roadmap discovery)
 A1_AUDIT -> stop (non-autonomous gap)
-A1_AUDIT -> A2 (unresolved work or autonomous gap)
+A1_AUDIT -> A2 (unresolved work, autonomous gap, or childless/malformed roadmap)
 A2 -> A3 -> A3_APPROVAL -> A4 -> A4_SUITABILITY -> A5
 A4_SUITABILITY -> A4 (rejection in normal discovery)
 A3_APPROVAL -> stop (only approval-needed fallback remains)
@@ -110,6 +111,8 @@ C2 -> D1 (zero findings and floor passed)
 C4 -> D1 (clean exit and floor passed)
 C6 -> C1 (next critique pass)
 D1 -> D2 -> D3_IMPACT -> D3 -> D3_CLOSE -> D4
+D2 -> D3 (no IDD impact heading; skip D3_IMPACT and D3_PREMERGE)
+D3 -> D4 (non-default development branch; skip D3_CLOSE)
 D4 -> D2 (code-caused required-check failure, cancellation, or timeout)
 D4 -> E1 -> E2 -> E3
 E3 -> E4 -> E5 -> E6 -> E7 -> E8
@@ -117,7 +120,7 @@ E3 -> Esync (empty snapshot)
 E8 -> Esync (zero Accepted PATH A)
 E8 -> E9 -> E10 -> E11 -> E12 -> E13 -> E14 -> E15
 E7 -> E4 (missing disposition evidence)
-E10 -> E10 (additional critique findings)
+E10 -> E9 (additional critique findings; fix and validate before repeating)
 E15 -> E1 (CI success)
 E15 -> E11 (code-caused failure or timeout)
 Esync -> E1 (sync performed)
@@ -127,7 +130,8 @@ F2 -> E14 (REQUEST_NEEDED)
 F2 -> F2 (WAIT or RECOVERY_NEEDED after bounded polling)
 F2 -> E1 (stale review or other non-advisory evidence)
 F2 -> D4 (required CI failure, cancellation, or timeout)
-F2 -> D3_PREMERGE -> F2_HANDOFF
+F2 -> D3_PREMERGE -> F2_HANDOFF (IDD impact heading exists)
+F2 -> F2_HANDOFF (no IDD impact heading; skip D3_PREMERGE)
 F2_HANDOFF -> F3 (authorized merge policy)
 F2_HANDOFF -> stop (human_merge or unknown policy)
 F2_HANDOFF -> A5 -> F2_HANDOFF (designated separate merge agent establishes ownership)
@@ -156,11 +160,16 @@ A4, approval at `A3_APPROVAL`, and suitability at `A4_SUITABILITY` in that
 order. A roadmap-target `A0_T` first applies the target's A3 checks, then
 audits the root at `A1_AUDIT`, traverses its descendants at A2, and applies
 the normal scoped A3 → `A3_APPROVAL` → A4 → `A4_SUITABILITY` sequence to one
-child. A target-side dependency, coordination, close, non-autonomous gap,
+child. The leaf-target route's A3 → A4 → `A3_APPROVAL` order is an explicit
+approval-after-viability exception from A0-T and must not be generalized to
+normal or roadmap-child selection. A target-side dependency, coordination,
+close, non-autonomous gap,
 empty scoped set, or suitability failure stops without fallback. A1's audit
-returns to A1 after closing a completed nested roadmap,
-stops on a non-autonomous gap, and reaches A2 only for unresolved work or
-an autonomous gap. A4's suitability rejection returns to A4 for the next
+returns to A1 after closing a completed nested roadmap so its ancestor is
+re-evaluated, and returns to A1 after closing a completed top-level roadmap to
+continue roadmap discovery. It stops on a non-autonomous gap and reaches A2
+for unresolved work, an autonomous gap, or a childless/malformed roadmap.
+A4's suitability rejection returns to A4 for the next
 normal-discovery survivor when it is an ordinary rejection; a fresh `invalid`
 outcome stops for human trust/safety review, while a reconfirmed `invalid`
 outcome is excluded and discovery may continue. A3's approval gate stops an
@@ -172,8 +181,9 @@ C2 sends a zero-finding result to C5 when the objective validation floor
 fails; C3 has no findings to score in that case. C2 and C4 provide the
 clean C-phase exits to D1 after the validation floor;
 C6 returns to C1 for the next critique pass. When E10 finds additional
-critique findings, it fixes them and repeats E10 itself; E9 remains the
-disposition-to-fix entry. The E-phase has two exits from
+critique findings, it returns to E9 for the fix-and-validate step and then
+repeats E10; E9 remains the disposition-to-fix entry. The E-phase has two
+exits from
 E3: an empty snapshot goes directly to `Esync`, while a non-empty snapshot
 goes through E4-E8.
 A5 returns to the collapsed discovery node when a normal roadmap or orphan
@@ -184,8 +194,9 @@ HEAD is pushed and checked before review processing resumes.
 From E8, zero Accepted PATH A items goes to `Esync`; accepted PATH A work
 goes through E9-E15, and a successful E15 CI wait returns to E1 for a fresh
 snapshot. E7 returns to the E4-E6 disposition sequence when required
-classifications, replies, or resolutions are missing. E10 returns to itself
-when the critique pass finds additional issues. E15 returns to E11 for a
+classifications, replies, or resolutions are missing. E10 returns to E9
+when the critique pass finds additional issues, so the prescribed fix and
+validation occur before the next critique pass. E15 returns to E11 for a
 code-caused failure or timeout, so the fix-and-validate loop runs before the
 next CI wait. After `Esync` performs a branch merge, it returns to E1 for a
 fresh review snapshot; only the no-sync path continues to F1. The F2 edge to
@@ -201,7 +212,8 @@ single E1 shortcut: `REQUEST_NEEDED` returns to E14, while `WAIT` and
 `RECOVERY_NEEDED` use their bounded polling or recovery path and re-enter the
 first F2 condition. Review-currency or other non-advisory staleness returns
 to E1 for a new snapshot. A required CI failure, cancellation, or timeout at
-F2 returns to D4 for the fix-and-push cycle. At F2.5, `F3` is reachable only under
+F2 returns to D4 for the fix-and-push cycle. At `F2_HANDOFF`, `F3` is
+reachable only under
 `fully_autonomous_merge` or an explicitly designated and resumed
 `separate_merge_agent`; `human_merge` and unknown policies stop for handoff.
 A designated separate merge agent returns to `F2_HANDOFF` after A5
@@ -217,12 +229,17 @@ without merging.
 The D3 entries are nested checkpoints in one PR-submission phase, so the
 future implementation should document their ownership as follows:
 
-1. `D3_IMPACT` derives the PR-template impact checklist while assembling
-   the body, before the PR is created.
-2. `D3_CLOSE` verifies the plain-text closing keyword and exact closing
-   set after creation.
-3. `D3_PREMERGE` is not a D3-to-D4 checkpoint. F2 runs the closing-set and
-   impact-checklist verification against the final HEAD at the F2/F2.5
+1. When an IDD impact heading exists, `D3_IMPACT` derives the PR-template
+   impact checklist while assembling the body, before the PR is created. If
+   no such heading exists, skip `D3_IMPACT` and `D3_PREMERGE` together.
+2. On the default development branch, `D3_CLOSE` verifies the plain-text
+   closing keyword and exact closing set after creation. On a non-default
+   development branch, skip that closing-set check because GitHub cannot
+   populate `closingIssuesReferences` there.
+3. When the impact heading exists, `D3_PREMERGE` is not a D3-to-D4
+   checkpoint. F2 runs the closing-set and
+   impact-checklist verification against the final HEAD at the
+   F2/`F2_HANDOFF`
    boundary, and F3 repeats that gate immediately before merge.
 
 This is an ordering clarification, not a request to split D3 into three
@@ -236,15 +253,15 @@ The following table is the complete disposition of the seven decimal
 insertions. The old spellings remain accepted after the future canonical
 rename; no historical issue or PR comment is rewritten.
 
-| Existing label  | New canonical ID | Position and reason                                                                             |
-| --------------- | ---------------- | ----------------------------------------------------------------------------------------------- |
-| `A1.5` / `A1_5` | `A1_AUDIT`       | After roadmap discovery and before child enumeration; names the completed-roadmap audit.        |
-| `A3.5` / `A3_5` | `A3_APPROVAL`    | After readiness filtering and before viability selection; names the issue-author approval gate. |
-| `A4.5` / `A4_5` | `A4_SUITABILITY` | After viable selection and before claim; names pre-claim suitability triage.                    |
-| `D3.5` / `D3_5` | `D3_CLOSE`       | After PR creation; names closing-keyword and exact closing-set verification.                    |
-| `D3.6` / `D3_6` | `D3_IMPACT`      | Before PR body creation; names mechanical IDD impact-checklist derivation.                      |
-| `D3.7` / `D3_7` | `D3_PREMERGE`    | At the pre-merge boundary; names final-head re-verification.                                    |
-| `F2.5` / `F2_5` | `F2_HANDOFF`     | Between pre-merge conditions and merge execution; names merge-policy handoff.                   |
+| Existing label  | New canonical ID | Position and reason                                                                                                                                                   |
+| --------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `A1.5` / `A1_5` | `A1_AUDIT`       | After roadmap discovery and before child enumeration; names the completed-roadmap audit.                                                                              |
+| `A3.5` / `A3_5` | `A3_APPROVAL`    | After normal or roadmap-child readiness filtering and before viability selection; explicit leaf-target A0_T retains its A3 → A4 → approval-after-viability exception. |
+| `A4.5` / `A4_5` | `A4_SUITABILITY` | After viable selection and before claim; names pre-claim suitability triage.                                                                                          |
+| `D3.5` / `D3_5` | `D3_CLOSE`       | After PR creation; names closing-keyword and exact closing-set verification.                                                                                          |
+| `D3.6` / `D3_6` | `D3_IMPACT`      | Before PR body creation; names mechanical IDD impact-checklist derivation.                                                                                            |
+| `D3.7` / `D3_7` | `D3_PREMERGE`    | At the pre-merge boundary; names final-head re-verification.                                                                                                          |
+| `F2.5` / `F2_5` | `F2_HANDOFF`     | Between pre-merge conditions and merge execution; names merge-policy handoff.                                                                                         |
 
 Changing the canonical emitted IDs is a versioned breaking migration, not a
 transparent cleanup. The aliases let a new reader consume historical
@@ -317,8 +334,12 @@ mirrors, with the compatibility contract landed first. The implementation
 should use this order:
 
 1. Add and test the new canonical IDs and aliases in the resolver and
-   every parser or schema contract that reads them. This makes old and new
-   spellings readable before any textual migration begins.
+   every parser or schema contract that reads them. Include the phase graph's
+   node and edge IDs in this compatibility batch by migrating
+   `schemas/phase-graph.json` and its graph-validation fixtures together;
+   `F2_5` must not be left as an unresolvable graph node after the rename.
+   This makes old and new spellings readable before any textual migration
+   begins.
 2. Migrate one source-of-truth phase family at a time. For generated
    instruction or documentation mirrors, edit the canonical source,
    regenerate the mirror, and inspect the resulting diff before moving on.
