@@ -469,10 +469,13 @@ dogfooding sessions (preventive; no observed incident yet):
   (`code.claude.com/docs/en/skills` and `opencode.ai/docs/skills/`
   troubleshooting/"Edit a skill during a session" sections, retrieved
   2026-09-16). A `Read` on a missing or misnamed path fails immediately
-  and visibly to the calling turn; each of these instead leaves the
-  directive silently unsatisfiable, or satisfiable only by direct
-  invocation and not by the routing table's ordinary directive, with no
-  comparable error surfaced at the step that needed it.
+  and visibly to the calling turn; these two discovery/indexing cases
+  instead leave the directive silently unsatisfiable, or satisfiable
+  only by direct invocation and not by the routing table's ordinary
+  directive, with no comparable error surfaced at the step that needed
+  it. (This silence is specific to these two cases — the
+  permission-based case below is the opposite: an active, visible
+  block, not a silent one.)
 - **Name-collision precedence outside the routing table's control**:
   Claude Code resolves same-named skills by a fixed hierarchy
   (enterprise overrides personal, personal overrides project, either
@@ -503,8 +506,12 @@ dogfooding sessions (preventive; no observed incident yet):
   directive naming a `disable-model-invocation` skill fails
   twice over: the name is absent from the ambient listing, and even a
   directive that supplies the name directly is blocked at the point of
-  the call. `Read` has no equivalent "permission hides the file from the
-  tool that would open it" default.
+  the call — but, unlike the silent cases above, this failure is
+  visible: the quoted text confirms Claude Code blocks the call and
+  tells the model not to work around it, rather than leaving the
+  directive to fail with no signal. `Read` has no equivalent "permission
+  hides the file from the tool that would open it" default, silent or
+  visible.
 
 ### C. Does the weak-model tier change the answer?
 
