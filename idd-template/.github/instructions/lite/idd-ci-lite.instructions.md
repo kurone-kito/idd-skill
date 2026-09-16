@@ -140,10 +140,11 @@ CI-polling shared helper file), never this one. Read
   Actions API for runs filtered to the current PR head SHA and check
   name.
 - Required `idd-advisory-convergence` runs use `pull_request` /
-  `pull_request_target`; the companion handles Copilot
-  `pull_request_review` / `pull_request_review_comment` and qualifying
-  `issue_comment` events. The required workflow's bot-triggered run can
-  be `action_required`
+  `pull_request_target`; the non-required companion
+  `idd-advisory-convergence-comment.yml` handles Copilot
+  `pull_request_review` submissions, IDD-originated
+  `pull_request_review_comment`, and qualifying `issue_comment` events.
+  Its bot-triggered run can be `action_required`
   and cannot refresh the required check. For a review submission use
   `--refresh-latest --apply`; comment paths use plain `--apply`. Only
   IDD-originated review-thread replies or qualifying IDD-originated PR

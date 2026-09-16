@@ -10,9 +10,10 @@
 // `idd-ci.instructions.md` §Rerun mechanics (#1381, extended by #1424): a
 // PR HEAD can accumulate several `idd-advisory-convergence` check-run
 // instances: the required workflow fires on pull_request and
-// pull_request_target, while the companion refreshes those instances from
-// pull_request_review/pull_request_review_comment and qualifying
-// issue_comment events; `cancel-in-progress` cancels most of them. The
+// pull_request_target, while the non-required companion receives
+// pull_request_review submissions, IDD-originated
+// pull_request_review_comment, and qualifying issue_comment events;
+// `cancel-in-progress` cancels most of them. The
 // required-check rollup can stay pinned to a stale non-passing instance
 // even after the real verdict converges. This helper
 // fetches every check-run instance for the current HEAD via the commit
