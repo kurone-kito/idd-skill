@@ -422,10 +422,16 @@ jobs:
     # full investigation, run evidence, and why `issues: write` stays
     # unchanged rather than narrowed. Do not narrow `pull-requests` back
     # to `read` without re-running an equivalent live test.
+    # `checks: read` / `statuses: read` (kurone-kito/idd-skill#2995): the
+    # `--auto-bootstrap` path also reads `pr.statusCheckRollup`, which
+    # needs both scopes explicitly -- see the source repository's own
+    # copy of this file for the full investigation and evidence.
     permissions:
       contents: read
       pull-requests: write
       issues: write
+      checks: read
+      statuses: read
     steps:
       - uses: actions/checkout@v4
         with:
