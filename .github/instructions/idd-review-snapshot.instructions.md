@@ -299,8 +299,9 @@ lost session mid-E4 classification (E6 defers PATH A Accept replies to
 E13); one whose E12 push landed but lost the session before E13; and a
 `CHANGES_REQUESTED` body Step 3 re-surfaces solely for a missing E14
 request (its exclusion needs both) -- if it already carries an E13
-`Accepted -- fixed in` reply, skip reclassification and route
-straight to E14. Otherwise Step 3's awaiting-reviewer exclusion
+`**Accepted** — fixed in` reply with no reviewer reply or reopen
+since, skip reclassification and route straight to E14. Otherwise
+Step 3's awaiting-reviewer exclusion
 (exceptions included) already draws the line: no IDD-agent reply
 exists, so the rebuild re-includes it as ordinary work. Before E5
 verifies it, check whether a branch commit newer than its timestamp
