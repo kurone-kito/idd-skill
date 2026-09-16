@@ -184,6 +184,6 @@ re-derive it.
 - [references/report-template.md](references/report-template.md) for
   the report shape.
 - IDD Autonomy Contract (`docs/idd-autonomy-contract.md`) — R4's
-  closed source of truth.
+  comparison baseline; instruction files win on disagreement.
 - IDD — Concept Ownership Matrix (`docs/idd-concept-ownership.md`) —
   R2's concept-index seed.
