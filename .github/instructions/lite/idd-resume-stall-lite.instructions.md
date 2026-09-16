@@ -14,9 +14,11 @@ takeover, return to resume lite Step 1.
 
 ## Helper runtime contract
 
-- **Helper-enabled profiles**: run the commands below. If a required
-  helper is missing, fails, or disagrees with live state → **hold and
-  stop** (do not claim). Do not invent a silent prose takeover path.
+- **Helper-enabled profiles** (`package-manager`/`ephemeral-npx`/
+  vendored-node: see `docs/idd-helper-scripts.md`): run the commands
+  below. If a required helper is missing, fails, or disagrees with
+  live state → **hold and stop** (do not claim). Do not invent a
+  silent prose takeover path.
 - **`instructions-only`**: use the written S1–S5 steps without helpers,
   still with a server-anchored `now` for the quiet window.
 
