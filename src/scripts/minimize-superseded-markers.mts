@@ -735,9 +735,33 @@ export function computeExitCode(report: MinimizeReport): number {
 function printTable(report: MinimizeReport): void {
   console.log(`mode: ${report.mode}  classifier: ${report.classifier}`);
   const c = report.counts;
-  console.log(
-    `counts: eligible=${c.eligible} applied=${c.applied} failed=${c.failed} already=${c.alreadyMinimized} blocked=${c.cannotMinimize} untrusted=${c.untrusted} unsupported=${c.unsupportedType}`,
-  );
+  // #2962: deadlineSkipped is appended, not spliced between the other
+  // columns -- it is both the last-declared field on MinimizeReport's
+  // `counts` interface and the last key JSON.stringify(report, ...)
+  // would emit for it, so appending here is what actually "matches the
+  // existing --format json shape" (the issue's own acceptance
+  // criterion), not just a safe default position. The `undefined` guard
+  // (rather than `> 0`) also matches that JSON shape exactly:
+  // runMinimize() unconditionally seeds counts.deadlineSkipped = 0
+  // regardless of whether --deadline-ms was ever passed, so this prints
+  // "deadlineSkipped=0" on essentially every real CLI run, not only a
+  // deadline-triggering one -- a `> 0` guard would silently diverge from
+  // the JSON output again for that common all-zero case.
+  const countsLine = [
+    `eligible=${c.eligible}`,
+    `applied=${c.applied}`,
+    `failed=${c.failed}`,
+    `already=${c.alreadyMinimized}`,
+    `blocked=${c.cannotMinimize}`,
+    `untrusted=${c.untrusted}`,
+    `unsupported=${c.unsupportedType}`,
+    c.deadlineSkipped === undefined
+      ? ''
+      : `deadlineSkipped=${c.deadlineSkipped}`,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  console.log(`counts: ${countsLine}`);
   for (const item of report.items) {
     const url = item.url ?? '(no url)';
     const reason = item.reason ?? '';
