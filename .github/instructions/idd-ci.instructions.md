@@ -240,13 +240,14 @@ rollup (`#1745`)**: a HEAD can carry several
 `pull_request`/`pull_request_target` runs can coexist with companion
 reruns of those instances. Review submissions use
 `--refresh-latest --apply`; comment paths use plain `--apply`.
-`cancel-in-progress` can leave the required-check rollup pinned to a
-`CANCELLED` instance. Unlike `action_required`, it is not gated and
-can be rerun (the direct experiment confirmed this for `#1745`). If
-the non-bot rerun does not clear the block, rerun same-HEAD `CANCELLED`
-siblings the plan marks `rerun-eligible` (`gh run rerun <run-id>`). Do
-not rerun held siblings: `action_required`, `pending`,
-`unresolved`, `awaiting-fresh-review`, or `rerun-budget-held`.
+`cancel-in-progress` can pin the rollup to a non-gated `CANCELLED`
+instance (see `#1745`). If it leaves the block,
+rerun same-HEAD `CANCELLED` siblings marked `rerun-eligible` (`gh run
+rerun <run-id>`). For the ordinary plan, hold `action_required`,
+`pending`, `unresolved`, `awaiting-fresh-review`, and
+`rerun-budget-held` instances; the review exception
+`--refresh-latest --apply` may rerun a budget-held pull_request-family
+instance unless `ciWait.rerunPolicy` is `hold`.
 
 Note: this is a known Rulesets platform behavior, not an `idd-skill`
 dedup bug — GitHub can require every same-named instance non-failing,
