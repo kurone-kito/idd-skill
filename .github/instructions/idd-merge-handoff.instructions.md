@@ -70,18 +70,25 @@ stop and report.
        current `{claim-id}` and stop. If the claim was already lost, do
        not post release.
 6. When the policy is `fully_autonomous_merge`:
-   1. If this session does not yet hold a verified active `{claim-id}`,
-      establish ownership through `idd-claim.instructions.md` A5 — the
-      same no-claim recovery step 5 uses for `separate_merge_agent` —
-      then return to this handoff phase.
-      `idd-merge.instructions.md`'s F3 step 1 requires an active claim
-      regardless of policy, with no `fully_autonomous_merge` exception;
-      establishing one here before routing to F3 is what keeps this
-      no-active-claim continuation from contradicting that check
-      (kurone-kito/idd-skill#2977).
-   2. If this session has not yet recorded F2 evidence for the
-      `{claim-id}` now active (for example, step 1 just took over a
-      stale claim under a fresh `{claim-id}`), return to
-      `idd-pre-merge.instructions.md` and run F2 once to record a fresh
-      snapshot for it, then return here.
-   3. Continue directly to `idd-merge.instructions.md`.
+   1. If this PR has no linked issue to claim against
+      (`closingIssuesReferences` empty — the claimless case
+      `idd-pre-merge.instructions.md`'s F2 readiness collector already
+      accepts via `--claimless`), this recovery path does not apply:
+      `idd-claim.instructions.md`'s A5 is issue-scoped, and the F3
+      merge-execution helper has no claimless mode either. Report and
+      stop rather than inventing an unsupported path (PR
+      kurone-kito/idd-skill#3051 review).
+   2. Otherwise, if this session does not yet hold a verified active
+      `{claim-id}`, establish ownership through
+      `idd-claim.instructions.md` A5 — the same no-claim recovery step 5
+      uses for `separate_merge_agent` — then return to this handoff
+      phase. `idd-merge.instructions.md`'s F3 step 1 requires an active
+      claim regardless of policy, with no `fully_autonomous_merge`
+      exception; establishing one here before routing to F3 is what
+      keeps this no-active-claim continuation from contradicting that
+      check (kurone-kito/idd-skill#2977).
+   3. If this session has not yet recorded F2 evidence for the
+      `{claim-id}` now active (for example, step 6.2 just established a
+      fresh claim), return to `idd-pre-merge.instructions.md` and run F2
+      once to record a fresh snapshot for it, then return here.
+   4. Continue directly to `idd-merge.instructions.md`.
