@@ -421,20 +421,25 @@ forced-handoff recovery note for the authoritative rule.
 
 **Cold entry outside Resume**: `idd-resume.instructions.md`'s Step 3
 table rebuilds at E1 for the CI/review resume cases it covers (crash,
-rate-limit, stale-claim takeover with reviews already settled) — but
-two of its own worktree-state routes resume without that rebuild too:
-`docs/idd-resume-detail.md` §W3 (dirty worktree, reviews exist: resumes
-straight from E9) and §W5 (clean, unpushed: pushes before Step 3's
-table even runs). The gap this closes spans three paths: those two
-Resume routes, `idd-overview-core.instructions.md`'s phase-routing
-entries for "Snapshot done" / "Review feedback accepted," followed
-without having just run E1, and an orchestrator fan-out delegation
-brief that hands a worker straight into mid-review (see
+rate-limit, stale-claim takeover with reviews already settled).
+`docs/idd-resume-detail.md`'s two worktree-state routes reach the same
+rebuild indirectly rather than not at all: §W3 (dirty worktree,
+reviews exist) resumes by treating the work as mid-review-fix, so its
+own entry into `idd-review-fix.instructions.md`'s E9 already carries
+this section's pointer; §W5 (clean, unpushed) pushes, then falls
+through to Step 3's own table, which routes to E1 whenever unresolved
+threads, unreplied comments, or an active `CHANGES_REQUESTED` review
+remain — the narrower residual gap is only the case where the
+post-push state already reads clean and Step 3 routes straight to F2.
+The gap this section closes directly spans two paths:
+`idd-overview-core.instructions.md`'s phase-routing entries for
+"Snapshot done" / "Review feedback accepted," followed without having
+just run E1, and an orchestrator fan-out delegation brief that hands a
+worker straight into mid-review (see
 [Orchestrator fan-out variant](#orchestrator-fan-out-variant) below).
 `idd-review-snapshot.instructions.md`'s cold-start reconstruction
-section is the named procedure for all three, including the two edge
-cases a naive rebuild could get wrong; wiring §W3/§W5 to call it is a
-follow-up to `idd-resume.instructions.md` itself.
+section is the named procedure for both, including the two edge cases
+a naive rebuild could get wrong.
 
 ## Artifact taxonomy and ownership
 
@@ -764,24 +769,36 @@ mid-loop death.
 
 Mid-review carries a narrower, equivalent boundary. A session may
 deliberately exit right after E1's watermark posts (before E4 starts),
-after E8 finds zero Accepted PATH A items (nothing pending; the
-branch-sync check and F1 come next), or after a round completes
-**both** E13 and E14: each of these leaves every disposition durable
-on GitHub, so a successor re-enters cleanly via a fresh E1 pass with
-nothing to recover. E14 belongs in that boundary, not only E13 — E1
-Step 3 excludes a `CHANGES_REQUESTED` review body only once it has
-**both** a reply and a re-review request, so exiting right after
-E13's replies but before E14 requests review leaves that body's
-exclusion condition unmet, and a fresh E1 pass re-surfaces it (E4-E8
-still recognize it as already dispositioned, so no rework follows —
-only the unnecessary re-surfacing). Exiting anywhere between E4 and a
-round's completed E14 is not recommended — an Accepted-PATH-A decision
-carries no durable marker until E13 posts it (E6 defers that reply on
-purpose), and a `CHANGES_REQUESTED` body needs E14's request too for
-its own exclusion to hold — so a session forced to exit or resume
-there instead relies on the recovery procedure the
+after E8 finds zero Accepted PATH A items **and** no open `Awaiting
+maintainer decision` thread (E7 permits one to stay unresolved, so a
+zero Accepted count alone does not mean nothing is pending; branch-sync
+and F1 come next only once that thread is also clear), or after a
+round completes **both** E13 and E14: each of these leaves every
+disposition durable on GitHub, so a successor re-enters cleanly via a
+fresh E1 pass with nothing to recover. E14 belongs in that boundary,
+not only E13 — E1 Step 3 excludes a `CHANGES_REQUESTED` review body
+only once it has **both** a reply and a re-review request, so exiting
+right after E13's replies but before E14 requests review leaves that
+body's exclusion condition unmet, and a fresh E1 pass re-surfaces it
+(E4-E8 still recognize it as already dispositioned, so no rework
+follows — only the unnecessary re-surfacing). Exiting anywhere between
+E4 and a round's completed E14 is not recommended — an Accepted-PATH-A
+decision carries no durable marker until E13 posts it (E6 defers that
+reply on purpose), and a `CHANGES_REQUESTED` body needs E14's request
+too for its own exclusion to hold — so a session forced to exit or
+resume there instead relies on the recovery procedure the
 [ReviewItems_snapshot lifecycle](#reviewitems_snapshot-lifecycle)
 section names.
+
+This boundary covers same-session continuation and orchestrator
+fan-out delegation, which already carries the active claim verbatim to
+the next worker (see [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation)).
+It does not by itself authorize a genuine cross-session handoff: the
+claim stays active and owned until released, so an unrelated session
+that simply shows up hits `idd-resume.instructions.md`'s
+non-owned-active-claim stop path. A deliberate operator-driven handoff
+at this boundary uses [Operator-present release](../.github/instructions/idd-resume.instructions.md#operator-present-release)
+instead of a new mechanism.
 
 Short sessions need cheap ramp-up, which the "facts live in docs and
 helpers, not in session memory" design already supports: a fresh session

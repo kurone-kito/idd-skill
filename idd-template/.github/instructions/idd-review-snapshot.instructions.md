@@ -270,16 +270,13 @@ Otherwise → proceed to `idd-review-triage.instructions.md` (E4).
 
 Read this section when entering E4 (`idd-review-triage.instructions.md`)
 or E9 (`idd-review-fix.instructions.md`) without ReviewItems_snapshot
-from this episode's own E1-E3 pass. Three paths land here with no
-rebuild of their own: `idd-overview-core.instructions.md`'s
-unconditional "Snapshot done" / "Review feedback accepted" routing
-rows; an orchestrator delegation brief that hands off mid-review; and
-`idd-resume.instructions.md`'s own worktree-state routes --
-`docs/idd-resume-detail.md` §W3 (dirty worktree, reviews exist: resumes
-straight from E9) and §W5 (clean, unpushed: pushes before Step 3's
-table runs) -- neither of which rebuilds at E1 either. Wiring those two
-routes to run this section first is a follow-up to
-`idd-resume.instructions.md` itself, outside this section's own file.
+from this episode's own E1-E3 pass -- following
+`idd-overview-core.instructions.md`'s unconditional "Snapshot done" /
+"Review feedback accepted" routing rows without having just run E1, or
+an orchestrator delegation brief that hands off mid-review (see
+`docs/idd-workflow.md`'s "Cold entry outside Resume" note for how
+`idd-resume.instructions.md`'s own worktree-state routes reach this
+section too).
 
 **Procedure**: run E1 Steps 1-3 above. They already re-derive
 ReviewItems_snapshot entirely from live GitHub state on every
@@ -319,12 +316,13 @@ unconditionally, in the **same surviving claimed worktree**:
 3. `git status --porcelain` must report clean -- a dirty worktree
    can't prove which uncommitted lines belong to which item; route it
    through E9 instead so its own fix-and-commit step absorbs them.
-4. `git log "$PR_HEAD"..HEAD` lists commits already made: treat this
-   as pending work regardless of whether E4 re-surfaces a matching
-   item, confirming the local diff actually addresses it (never assume
-   from the commit list alone) before taking it through E10-E15 rather
-   than re-fixing: E10, not E12, because a cold session cannot know
-   whether E10's critique pass already ran against it, and
+4. `git log "$PR_HEAD"..HEAD` lists commits already made: this is
+   E5's normal Accept ("Verify before accept" confirmed by this live
+   evidence) regardless of whether E4 re-surfaces a matching item --
+   never assume it from the commit list alone. E9 then has no work;
+   take it through E10-E15 instead: E10, not E12, because a cold
+   session cannot know whether E10's critique pass already ran against
+   it, and
    [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
    governs that ambiguity.
 
