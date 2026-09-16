@@ -419,22 +419,16 @@ when the branch and HEAD are unchanged — see
 `idd-resume.instructions.md`'s CI/review routing table and its
 forced-handoff recovery note for the authoritative rule.
 
-**Cold entry outside Resume**: `idd-resume.instructions.md`'s Step 3
-table rebuilds at E1 for the CI/review resume cases it covers (crash,
-rate-limit, or a takeover where unresolved threads, unreplied
-comments, or an active `CHANGES_REQUESTED` review remain -- a
-takeover with reviews already settled instead routes straight to F2,
-not E1). `docs/idd-resume-detail.md`'s two worktree-state routes reach
-the same
-rebuild indirectly rather than not at all: §W3 (dirty worktree,
-reviews exist) resumes by treating the work as mid-review-fix, so its
-own entry into `idd-review-fix.instructions.md`'s E9 already carries
-this section's pointer; §W5 (clean, unpushed) pushes, then falls
-through to Step 3's own table, which routes to E1 whenever unresolved
-threads, unreplied comments, or an active `CHANGES_REQUESTED` review
-remain — the narrower residual gap is only the case where the
-post-push state already reads clean and Step 3 routes straight to F2.
-The gap this section closes directly spans two paths:
+**Cold entry outside Resume**: `idd-resume.instructions.md` owns
+mid-review resume routing -- see its Step 3 table and forced-handoff
+note, and `docs/idd-resume-detail.md` §W3/§W5. Where any of those
+routes lands a session at E4 or E9 without a `ReviewItems_snapshot`
+from its own E1-E3 pass, the cold-start reconstruction section below
+applies; reconciling §W3's own dirty-worktree instructions with that
+section's stop-and-reconcile rule is a follow-up to
+`idd-resume-detail.md` itself, not a gap this section can close by
+restating Resume's routing here. The gap this section closes directly
+spans two paths:
 `idd-overview-core.instructions.md`'s phase-routing entries for
 "Snapshot done" / "Review feedback accepted," followed without having
 just run E1, and an orchestrator fan-out delegation brief that hands a
@@ -778,9 +772,8 @@ zero Accepted count alone does not mean nothing is pending; branch-sync
 and F1 come next only once that thread is also clear), or after a
 round completes **both** E13 and E14: the first point has no
 dispositions to preserve; the other two leave every disposition
-durable on GitHub. A successor re-enters through Resume, which
-completes any pending CI (E15) before starting a fresh E1. E14 belongs
-in that boundary,
+durable on GitHub. A successor re-enters through Resume's own routing.
+E14 belongs in that boundary,
 not only E13 — E1 Step 3 excludes a `CHANGES_REQUESTED` review body
 only once it has **both** a reply and a re-review request, so exiting
 right after E13's replies but before E14 requests review leaves that
@@ -940,7 +933,9 @@ Running this variant safely requires:
   reconstruction section. This covers only those two named entry
   points; a brief that instead hands a worker into E10, E13, E14, or
   E15 has no supported cold-entry route yet and should route through
-  E4 (or E1) instead.
+  E4 instead, which runs this reconstruction -- not E1 directly, which
+  has no local-ahead check of its own and can let F2 discard an
+  unpushed commit.
 - **Independently verify a worker's reported terminal outcome before
   trusting it.** A worker's final-turn text describes what it
   _attempted_, not proof of what actually landed on the forge. Before

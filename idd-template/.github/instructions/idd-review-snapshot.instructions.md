@@ -278,10 +278,9 @@ an orchestrator delegation brief that hands off mid-review (see
 `idd-resume.instructions.md`'s own worktree-state routes reach this
 section too).
 
-**Procedure**: run E1 Steps 1-3 above. They already re-derive
-ReviewItems_snapshot entirely from live GitHub state on every
-execution -- no session memory required -- so re-running them now is
-the reconstruction; post a fresh watermark (Step 2). Run edge case 2's
+**Procedure**: run E1 Steps 1-3 above (Step 2 already posts the
+watermark; do not post a second one). No session memory is required --
+re-running them now is the reconstruction. Run edge case 2's
 local-worktree check below unconditionally, before trusting either of
 E3's branches -- a local fix can predate E4 and never re-surface
 there. Then continue through E2, E3, and, only when E3 finds
@@ -320,13 +319,14 @@ unconditionally, in the **same surviving claimed worktree**:
    reconciliation before E9 work.
 4. `git log "$PR_HEAD"..HEAD` lists commits already made -- not
    proof every Accepted item is covered, only that some commit is
-   ahead. Map each Accepted item to a specific commit via E5's normal
-   "Verify before accept" (confirmed by this live evidence); E9 skips
-   only the items the diff verifiably covers, and still fixes anything
-   unmatched normally. A non-empty result here overrides an empty E3
-   or zero-Accepted E8 route: resume at E10 for the covered items
-   regardless -- E10, not E12, because a cold session cannot know
-   whether E10's critique pass already ran against them, and
+   ahead. Per Accepted item, check whether the local diff already
+   contains its fix -- a coverage check, not E5's claim-truth test
+   (false by design against an already-fixed tree). Covered items: E9
+   skips them, E13 cites the commit; others: E9 fixes them normally.
+   A non-empty result overrides an empty E3 or zero-Accepted E8 route:
+   resume at E10 for covered items regardless -- E10, not E12, because
+   a cold session cannot know whether E10's critique pass already ran
+   against them, and
    [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
    governs that ambiguity.
 
