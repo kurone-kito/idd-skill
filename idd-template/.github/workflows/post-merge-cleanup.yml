@@ -24,8 +24,11 @@
 #     this workflow already requires the same repository write access
 #     that could edit this file directly, so the pin narrows the
 #     execution surface rather than adding a new trust boundary.
-#   - No PR-head code, workflow, or action is ever executed; nothing from
-#     the PR diff ever runs. Under `vendored-node` and `package-manager`,
+#   - On `pull_request_target`, no PR-head code, workflow, or action is
+#     ever executed; nothing from the PR diff ever runs
+#     (`workflow_dispatch`'s own, narrower "no PR-head content" story is
+#     the defense-in-depth pin above, not this stronger guarantee). Under
+#     `vendored-node` and `package-manager`,
 #     the cleanup-audit invocation names only a script or package this
 #     base branch already tracks or has already declared as a
 #     dependency. Under `package-manager` specifically, that base-branch

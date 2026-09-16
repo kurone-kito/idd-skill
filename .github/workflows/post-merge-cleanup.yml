@@ -24,13 +24,16 @@
 #     already requires the same repository write access that could edit
 #     this file directly, so the pin narrows the execution surface
 #     rather than adding a new trust boundary.
-#   - No PR-head code, workflow, or action is ever executed: the only
-#     script that runs is this repository's own tracked
-#     `scripts/audit-pr-cleanup.mjs`, invoked with the PR number as inert
-#     numeric data. The `pr_number` value (a `workflow_dispatch` number
-#     input, not strictly enforced as numeric for direct API dispatches)
-#     is passed through `env:` and referenced as a quoted shell variable,
-#     never interpolated directly into a `run:` script.
+#   - On `pull_request_target`, no PR-head code, workflow, or action is
+#     ever executed: the only script that runs is this repository's own
+#     tracked `scripts/audit-pr-cleanup.mjs`, invoked with the PR number
+#     as inert numeric data (`workflow_dispatch`'s own, narrower
+#     "no PR-head content" story is the defense-in-depth pin above, not
+#     this stronger guarantee). The `pr_number` value (a
+#     `workflow_dispatch` number input, not strictly enforced as numeric
+#     for direct API dispatches) is passed through `env:` and referenced
+#     as a quoted shell variable, never interpolated directly into a
+#     `run:` script.
 #   - The `cleanup` job only runs against an already-merged pull request.
 #     For `pull_request_target`, that guarantee comes from the job-level
 #     `if:` below (`github.event.pull_request.merged == true`). For
