@@ -425,7 +425,7 @@ contract, a score of `1` carries the configured `blocked-by-human` label
 (default `status:blocked-by-human`), unless an
 `authoring-bucket: needs-decision` marker substitutes the
 configured needs-decision label instead (see
-[Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
+[Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/<tag-or-sha>/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
 — here the label applies, correctly signaling that this issue needs a
 human or a narrowly-scoped, pre-authorized agent rather than the
 ordinary autonomous loop. Use the operator-confirmed `labels.blockedByHumanLabelName`
