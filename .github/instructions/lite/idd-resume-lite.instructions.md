@@ -13,15 +13,13 @@ resume file in the same turn.
 
 ## Helper runtime contract
 
-1. **When helper runtime is enabled** (`package-manager`, vendored-node,
-   or any profile that ships the helpers): run the commands below first.
-   If a helper is **missing, fails, returns invalid JSON, or disagrees
-   with live GitHub state** → **stop and ask**. Do **not** fall through
-   to the written tables in that situation.
+1. **When helper runtime is enabled** (`package-manager`, `ephemeral-npx`
+   — see `docs/idd-helper-scripts.md` — or vendored-node): run the
+   commands below first. If a helper is **missing, fails, returns
+   invalid JSON, or disagrees with live GitHub state** → **stop and
+   ask**. Do **not** fall through to the written tables.
 2. **When the repository is `instructions-only`** (no helper runtime
    shipped): skip the helper commands and use the written tables only.
-   That is the sole path where the tables below are the primary control
-   surface.
 
 Never invent forced-handoff markers. Unattended sessions only
 **consume** already-recorded human-gated forced-handoff evidence.

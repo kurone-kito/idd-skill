@@ -32,8 +32,8 @@ Before posting the handoff comment, confirm all of the following:
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
    --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
    the package-manager-profile `idd:claim-lock` command with the same
-   arguments — resolve the exact command from
-   `docs/idd-helper-scripts.md` if unsure). A `collision` result is
+   arguments, or the ephemeral-npx equivalent — resolve the exact
+   command from `docs/idd-helper-scripts.md` if unsure). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
    `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
    and require `present: true` with no `malformed`; otherwise recover
