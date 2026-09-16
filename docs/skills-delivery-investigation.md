@@ -588,9 +588,11 @@ section, retrieved 2026-09-16.)
   evicted; only the fuzzy, description-dependent auto-trigger path
   section 4 already covers degrades this way. Do not read this as a
   discovery failure mode for the exact-name path — it is not one.
-- **The cost reduction below is not actually favorable — on inspection
-  it is a fourth, preventive discovery/validity failure mode (no
-  observed incident yet), not a compensating win.** The listing itself
+- **The cost reduction below is not clearly favorable — on the most
+  evidence-consistent reading, it points to a fourth, preventive
+  discovery/validity failure mode (no observed incident yet, and not
+  independently confirmed), not a settled compensating win.** The
+  listing itself
   is explicitly not re-injected after `/compact` — "Unlike the rest of
   the startup content, this listing is not re-injected after `/compact`.
   Only skills you actually invoked get preserved."
@@ -599,11 +601,18 @@ section, retrieved 2026-09-16.)
   listing — or one the user typed explicitly — is a valid `Skill` call
   target; nothing this addendum found documents any mechanism that
   re-renders the listing, or restores one dropped skill's entry within
-  it, mid-session after a compaction event. Taken at face value, a
-  never-invoked phase skill therefore genuinely stops being a valid
-  orchestrator-directed target the moment compaction occurs — its
-  rendered-text cost does not merely drop to zero, the call itself
-  becomes unsatisfiable. This repository's own wiring means the same
+  it, mid-session after a compaction event. What remains genuinely
+  unconfirmed is whether that call-time check reads the rendered
+  listing text itself or a separate, harness-internal discovery state
+  the text merely reflects; nothing this addendum found documents that
+  distinction either way. Taking the observed rule at face value — the
+  only form of the check anything here directly documents — a
+  never-invoked phase skill would stop being a valid orchestrator-
+  directed target the moment compaction occurs, its rendered-text cost
+  not merely dropping to zero but the call itself becoming
+  unsatisfiable; treat that as this addendum's best reading of the
+  available evidence, not a confirmed or independently reproduced
+  runtime fact. This repository's own wiring means the same
   caution applies to overstating the `Read` side's own recovery: per
   `docs/idd-workflow.md`'s entry-points table, Claude Code auto-loads
   only `CLAUDE.md` (which imports `AGENTS.md`) — "None from
@@ -630,12 +639,14 @@ measurement rather than the average alone; genuinely favorable to the
 exact-name path specifically on one narrow point, since listing
 pressure degrades fuzzy auto-matching without ever blocking a
 discovered skill's name from being invoked; and, on the post-compaction
-question specifically, not favorable after all — the same event that
-frees the rendered-text cost also removes a never-invoked skill's own
-listing entry with no documented way back, making post-compaction
-reachability a genuine addition to Part B's failure-mode family rather
-than an offsetting benefit. None of that touches the Part A/B/C safety
-argument above, which is what the recorded no-go actually turns on.
+question specifically, not clearly favorable after all — on this
+addendum's best reading, the same event that frees the rendered-text
+cost also removes a never-invoked skill's own listing entry with no
+documented way back, making post-compaction reachability a plausible,
+though unconfirmed, addition to Part B's failure-mode family rather
+than a settled offsetting benefit. None of that touches the Part
+A/B/C safety argument above, which is what the recorded no-go
+actually turns on.
 
 ### Verdict, restated
 
