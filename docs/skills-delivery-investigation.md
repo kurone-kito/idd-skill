@@ -533,23 +533,29 @@ section, retrieved 2026-09-16.)
   roughly 2,000 tokens for the _entire_ listing across every installed
   skill, not per skill. The general Agent Skills architecture separately
   states Level 1 metadata (`name` plus `description`) costs "~100 tokens
-  per Skill" at typical description lengths
+  per Skill" **at typical description lengths**
   (`platform.claude.com/docs/en/agents-and-tools/agent-skills/overview`,
-  "How Skills work" table, retrieved 2026-09-16). Applied to this
-  repository's own Section 1 mapping: Option A (16 phase-file skills)
-  alone, at roughly 100-125 tokens per skill, would consume on the order
-  of 1,600-2,000 tokens — most to nearly all of the documented budget for
-  the _entire_ session, before counting any other skill a user has
-  installed. At a finer future granularity — for example Option B split
-  further into roughly 32 narrower skills, doubling Section 1's own
-  count — the same per-skill baseline puts the metadata floor at
-  roughly 3,200-4,000 tokens, already past the single-session 1% budget
-  by itself before any other installed skill or the 1,536-character cap
-  is even reached; this is the concrete verifiable case the "roughly
-  linear" claim otherwise leaves abstract. A finer split raises the
-  skill count without shrinking any file's body content (which stays
-  deferred either way), so it moves this mapping closer to, or past,
-  the same fixed budget rather than away from it.
+  "How Skills work" table, retrieved 2026-09-16) — an average the source
+  states for ordinary fuzzy-triggered skills, not a documented floor;
+  an exact-name orchestrator-directed skill's description carries no
+  fuzzy-trigger-keyword burden, so its real cost could run lower.
+  Applying that average illustratively to this repository's own
+  Section 1 mapping: Option A (16 phase-file skills) alone would
+  consume on the order of 1,600 tokens, a large fraction of the
+  documented single-session budget before counting any other skill a
+  user has installed. At a finer future granularity — for example
+  Option B split further into roughly 32 narrower skills, doubling
+  Section 1's own count — the same illustrative average puts the
+  estimate at roughly 3,200 tokens, past the 2,000-token budget on
+  its own at that average, though the actual number depends on the
+  descriptions actually written and would need measuring against a
+  concrete proposal rather than assumed from the average alone; this
+  is the concrete, checkable example the "roughly linear" claim
+  otherwise leaves abstract, not a proven conclusion that the finer
+  split exceeds the budget. Either way, a finer split raises the skill
+  count without shrinking any file's body content (which stays
+  deferred either way), so it moves this mapping closer to, or
+  potentially past, the same fixed budget rather than away from it.
 - **A nuance that narrows, not widens, Part B's discovery concerns**:
   the quoted eviction behavior only ever drops **descriptions**, never
   the skill **name** — "the listing always contains every skill name"
@@ -576,9 +582,11 @@ section, retrieved 2026-09-16.)
 
 Net effect: the cost side is real, current documentation now lets it be
 stated precisely rather than restated on faith, and it cuts in more than
-one direction — confirmed and quantified as a session-wide, non-trivial
-tax that this repository's own Option A mapping would consume most of by
-itself and a finer split would exceed outright; partly offset by the
+one direction — confirmed and, at the documented average, illustrated
+as a session-wide, non-trivial tax that this repository's own Option A
+mapping would consume a large fraction of by itself, and a finer split
+moves it closer to or potentially past that budget, pending an actual
+measurement rather than the average alone; partly offset by the
 post-compaction reset the prior notes did not know to claim; and,
 narrowly, favorable to the exact-name path specifically, since listing
 pressure degrades fuzzy auto-matching without ever blocking a
