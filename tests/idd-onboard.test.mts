@@ -2846,6 +2846,14 @@ test('checkPackagePinWarning warns for package-manager with no packageSpec confi
     result.warning as string,
     /docs\/onboarding\/policy-decisions\.md#helper-runtime-profile/,
   );
+  // #3052 review: package-manager's emitted commands are bare `idd-*` bin
+  // names -- only its install command / devDependencies entry resolve the
+  // pin, never the invocation string itself (unlike ephemeral-npx below).
+  assert.match(
+    result.warning as string,
+    /install their pinned dependency from/,
+  );
+  assert.doesNotMatch(result.warning as string, /resolve against/);
 });
 
 test('checkPackagePinWarning warns for ephemeral-npx with no packageSpec configured', () => {
@@ -2858,6 +2866,9 @@ test('checkPackagePinWarning warns for ephemeral-npx with no packageSpec configu
   assert.equal(result.packageSpecConfigured, false);
   assert.ok(result.warning !== null);
   assert.match(result.warning as string, /mutable default archive URL/);
+  // ephemeral-npx embeds the pin directly in its own invocation string
+  // (`npx --yes --package <spec> idd-*`), unlike package-manager above.
+  assert.match(result.warning as string, /resolve against/);
 });
 
 test('checkPackagePinWarning reports no warning once packageSpec is configured', () => {
