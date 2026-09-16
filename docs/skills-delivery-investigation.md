@@ -557,44 +557,51 @@ least, so the skills you use most keep their full text."
 (`code.claude.com/docs/en/skills`, "Skill descriptions are cut short"
 section, retrieved 2026-09-16.)
 
-- **Quantified**: at the 200,000-token reference context size Claude
-  Code's own interactive context-window guide uses
-  (`code.claude.com/docs/en/context-window`, retrieved 2026-09-16), 1% is
-  roughly 2,000 tokens for the _entire_ listing across every installed
-  skill, not per skill. The general Agent Skills architecture separately
-  states Level 1 metadata (`name` plus `description`) costs "~100 tokens
-  per Skill" **at typical description lengths**
+- **Quantified**: the quoted mechanism above defines this as a
+  _character_ budget, not a token budget — it "shortens descriptions to
+  fit the listing's character budget," which "scales at 1% of the
+  model's context window." At the 200,000-token reference context size
+  Claude Code's own interactive context-window guide uses
+  (`code.claude.com/docs/en/context-window`, retrieved 2026-09-16), that
+  reading puts the character budget at roughly 2,000 characters for the
+  _entire_ listing across every installed skill, not per skill; the
+  source states no separate, token-denominated cap to compare against
+  directly. The general Agent Skills architecture separately states
+  Level 1 metadata (`name` plus `description`) costs "~100 tokens per
+  Skill" **at typical description lengths**
   (`platform.claude.com/docs/en/agents-and-tools/agent-skills/overview`,
-  "How Skills work" table, retrieved 2026-09-16) — an average the source
-  states for ordinary fuzzy-triggered skills, not a documented floor;
-  an exact-name orchestrator-directed skill's description carries no
+  "How Skills work" table, retrieved 2026-09-16) — a token estimate, not
+  a character one, and an average the source states for ordinary
+  fuzzy-triggered skills, not a documented floor; an exact-name
+  orchestrator-directed skill's description carries no
   fuzzy-trigger-keyword burden, so its real cost could run lower.
-  Applying that average illustratively to this repository's own
+  Comparing the two figures needs a character-to-token conversion
+  neither source documents; using the common rough approximation of
+  about 4 characters per token (this addendum's own estimate, not a
+  cited figure), that ~100-token average is roughly 400 characters per
+  skill. Applying that illustratively to this repository's own
   Section 1 mapping, rather than repeating a file count here that could
-  drift out of sync with that table: Option A, at roughly 100 tokens per
-  skill times Section 1's own current phase-file count (read that table
-  live rather than trusting a number restated here), would consume a
-  large fraction of the documented single-session budget on its own
-  before counting any other skill a user has installed. At a finer
-  future granularity — for example splitting Option A's own,
-  already-larger phase-file mapping into roughly twice as many
-  still-narrower skills, not Option B's 5–6, which even doubled stays
-  comfortably under the budget — the same illustrative average, applied
-  to that Option-A-based doubled count, plausibly pushes the uncapped
-  per-skill metadata demand past the budget, though the actual number
-  depends on the descriptions actually written and would need measuring
-  against a concrete proposal rather than assumed from the average
-  alone; this rate-times-count method is the concrete, checkable
-  calculation the "roughly linear" claim otherwise leaves abstract, not
-  a proven conclusion about exactly where that threshold falls. Because
-  the 1% figure caps the rendered listing itself, not the underlying
-  metadata demand, the listing a session actually sees cannot exceed
-  that cap — a demand past the cap forces the same truncation/eviction
-  behavior described above (shorter or dropped descriptions), not
-  literally missing skills. Either way, a finer split raises the skill
-  count without shrinking any file's body content (which stays deferred
-  either way), so it moves this mapping closer to, or into, that
-  truncation/eviction territory rather than away from it.
+  drift out of sync with that table: at roughly 400 characters per
+  skill, even Option B's smaller count (5–6 bundle-aligned skills) alone
+  already lands at or near the entire roughly 2,000-character budget
+  before counting any other skill a user has installed, and Option A's
+  larger, one-skill-per-phase-file count (read that table live rather
+  than trusting a number restated here) lands well past it; a finer
+  future split — doubling either mapping into narrower skills — only
+  pushes further past the same fixed budget, not toward it. This is a
+  stronger conclusion than an earlier token-unit reading of this same
+  figure supported, because treating the character budget as if it were
+  already token-denominated understated the true cost; exactly how much
+  stronger depends on how reliable the roughly-4-characters-per-token
+  approximation is for these specific descriptions, which this addendum
+  has not independently measured against a real serialized listing.
+  Because the character budget caps the rendered listing itself, not
+  the underlying metadata demand, the listing a session actually sees
+  cannot exceed that cap regardless of the true count — a demand past
+  the cap forces the same truncation/eviction behavior described above
+  (shorter or dropped descriptions), not literally missing skills, so
+  heavier mappings degrade the listing's description text rather than
+  fail outright.
 - **A nuance that narrows, not widens, Part B's discovery concerns**:
   the quoted eviction behavior only ever drops **descriptions**, never
   the skill **name** — "the listing always contains every skill name"
@@ -648,11 +655,14 @@ section, retrieved 2026-09-16.)
 
 Net effect: the cost side is real, current documentation now lets it be
 stated precisely rather than restated on faith, and it cuts in more than
-one direction — confirmed and, at the documented average, illustrated
-as a session-wide, non-trivial tax that this repository's own Option A
-mapping would consume a large fraction of by itself, and a finer split
-moves it closer to or potentially past that budget, pending an actual
-measurement rather than the average alone; genuinely favorable to the
+one direction — confirmed and, once the character-versus-token units
+are read consistently, illustrated as a session-wide, non-trivial tax
+that this repository's own Option A mapping, and even Option B's
+smaller mapping, would already approach or exceed by itself, with a
+finer split pushing further past that same fixed budget rather than
+toward it, pending an actual measurement against a real serialized
+listing rather than the character-per-token approximation alone;
+genuinely favorable to the
 exact-name path specifically on one narrow point, since listing
 pressure degrades fuzzy auto-matching without ever blocking a
 discovered skill's name from being invoked; and, on the post-compaction
