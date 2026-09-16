@@ -749,17 +749,17 @@ Mid-review carries a narrower, equivalent boundary. A session may
 deliberately exit after E3 completes with an empty snapshot (E1's
 watermark alone is not enough -- E2's critique pass must actually run
 first, which Resume's clean/successful-PR route to F2 does not
-guarantee), after E8 finds zero Accepted PATH A items **and** no
+guarantee) or after E8 finds zero Accepted PATH A items **and** no
 pending `Awaiting maintainer decision` item, thread or regular
 comment (E7 permits one to stay unresolved, so a zero Accepted count
 alone does not mean nothing is pending; branch-sync and F1 come next
-only once that item is also clear), or after a
-round completes **both** E13 and E14: the first point has no
-dispositions to preserve; the other two leave every reviewer-visible
-disposition durable on GitHub (an E2-only finding is preserved by its
-pushed fix instead, per the cold-start reconstruction section's edge
-case 2). A successor re-enters through Resume's own routing. E14
-belongs in that boundary,
+only once that item is also clear) -- both only when no local-ahead
+commit is still unpushed (the cold-start reconstruction section's
+edge case 2 pushes one first, via E10-E12, before either point
+applies) -- or after a round completes **both** E13 and E14: the
+first point has no dispositions to preserve; the other two leave
+every reviewer-visible disposition durable on GitHub. A successor
+re-enters through Resume's own routing. E14 belongs in that boundary,
 not only E13 — E1 Step 3 excludes a `CHANGES_REQUESTED` review body
 only once it has **both** a reply and a re-review request, so exiting
 right after E13's replies but before E14 requests review leaves that

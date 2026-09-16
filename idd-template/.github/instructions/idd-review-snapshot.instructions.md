@@ -298,8 +298,7 @@ exclusion, including its stated exceptions, already draws this line.
 An item a lost session classified Accepted but never replied to (E6
 defers that reply to E13) has no IDD-agent reply for Step 3 to see, so
 the rebuild re-includes it as ordinary undispositioned work -- E4
-simply re-classifies it. Nothing to recover; state this explicitly so
-a resuming session invents no extra bookkeeping.
+simply re-classifies it. Nothing to recover.
 
 **Edge case 2 -- an E9 fix committed but not yet pushed.** GitHub-side
 state cannot see this, and a fix for a session-local E2 finding may
@@ -308,7 +307,8 @@ result alone is not proof there is nothing to recover, since F2 resets
 the worktree to the PR's remote HEAD before merge. Run this
 unconditionally, in the **same surviving claimed worktree**:
 
-1. `PR_HEAD=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')`
+1. `PR_HEAD={head-SHA}` -- E1 Step 1's stored value; a re-fetch
+   here could race an external rewrite and pass step 2 falsely.
 2. `git merge-base --is-ancestor "$PR_HEAD" HEAD` -- a failure
    (external rewrite, diverged worktree) stops for reconciliation;
    never fall through to edge case 1's GitHub-only re-triage, which
