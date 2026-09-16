@@ -82,6 +82,28 @@ test('instruction size budget skips with a notice when no git comparison base re
   ]);
 });
 
+// #3028 refactor-ordering regression: resolveInstructionSizeBudgetConfig
+// validation must stay strictly behind the changedFiles === null skip, so
+// an invalid config in a checkout with no resolvable comparison base still
+// degrades to the skip notice above rather than newly surfacing as a hard
+// validation error.
+test('instruction size budget still just skips with a notice when no git comparison base resolves, even with an invalid config', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', alwaysLoadedLimitBytes: 'not-a-number' },
+    null,
+    () => {
+      throw new Error('must not list files on the null-base skip path');
+    },
+    () => {
+      throw new Error('must not read files on the null-base skip path');
+    },
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.notices, [
+    'instruction-size-budgets: skipped instruction size budget check because no git comparison base was available',
+  ]);
+});
+
 test('instruction size budget reads and audits only changed files, honoring both limits', () => {
   const texts: Record<string, string> = {
     'idd-phase.instructions.md': 'p'.repeat(120),

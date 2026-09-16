@@ -572,6 +572,153 @@ export function selectStricterNoticeUtilizationPct(
   return basePct === null ? currentPct : Math.min(currentPct, basePct);
 }
 
+/** One `instructionSizeBudgets` entry's per-file limits, as currently
+ * configured -- the "current" side of
+ * {@link collectInstructionSizeBudgetRatchetViolations}. `glob` is carried
+ * alongside `id` so an entry renamed between the base ref and the current
+ * tree can still be matched by its unchanged glob (see that function's own
+ * rename-fallback doc). */
+export interface InstructionSizeBudgetLimitStat {
+  id: string;
+  glob: string;
+  phaseLimitBytes: number;
+  alwaysLoadedLimitBytes: number;
+}
+
+/** One governed file's measured size and classification at the base ref,
+ * used only by {@link collectInstructionSizeBudgetRatchetViolations}. */
+export interface InstructionSizeBudgetFileStat {
+  path: string;
+  bytes: number;
+  alwaysLoaded: boolean;
+}
+
+/** One `instructionSizeBudgets` entry's limits and governed-file stats as
+ * measured at the base ref -- the "base" side of
+ * {@link collectInstructionSizeBudgetRatchetViolations}. */
+export interface InstructionSizeBudgetBaseEntryStat
+  extends InstructionSizeBudgetLimitStat {
+  files: readonly InstructionSizeBudgetFileStat[];
+}
+
+/**
+ * Collect "near-ceiling ratchet" violations (#3028) for
+ * `instructionSizeBudgets`' own per-file limits, `phaseLimitBytes` and
+ * `alwaysLoadedLimitBytes`: `docs/policy-constants.md`'s near-ceiling
+ * exception explicitly covers "an individual per-file instruction file"
+ * too, but {@link collectNearCeilingRatchetViolations} only ever compared
+ * `bundleBudgets`. This extends the same base-ref-vs-current, threshold,
+ * and skip semantics to the per-file case.
+ *
+ * Pure (no I/O): the audit pipeline supplies the current entries' limits
+ * and the base entries' limits plus their own governed files' measured
+ * sizes (`collectInstructionSizeBudgetViolations`'s own file resolution
+ * and size basis, reused rather than re-derived, via
+ * {@link resolveInstructionSizeBudgetConfig}).
+ *
+ * Each field is checked independently against only the base-ref files
+ * classified into its own bucket: `phaseLimitBytes` against files where
+ * `alwaysLoaded` is `false`, `alwaysLoadedLimitBytes` against files where
+ * it is `true` -- a phase file sitting near its ceiling never blocks an
+ * `alwaysLoadedLimitBytes` raise, and vice versa. One error is emitted
+ * per near-ceiling file per raised field (not one aggregate error per
+ * entry): unlike a bundle's single summed total, each governed file here
+ * has its own independent byte count, so a raise can be near-ceiling for
+ * some governed files and not others.
+ *
+ * No violation (silently skipped) for a field when: the entry has no
+ * base-ref match (see the rename fallback below); the field's value did
+ * not increase relative to the base ref; or the base ref's own value for
+ * that field is zero or negative. Threshold comparison is cross-multiplied
+ * in byte space, inclusive `>=`, matching
+ * {@link collectNearCeilingRatchetViolations}'s own convention.
+ *
+ * **Entry-rename fallback** (#3028 critique finding, mirroring the
+ * bundle-side #2697 protection): matching current-to-base entries by `id`
+ * alone would let a PR dodge this guard by renaming an already-near-ceiling
+ * entry's `id` while leaving its `glob` unchanged and raising a limit --
+ * `id` and `glob` are independent manifest fields, so a rename reads as
+ * "no base-ref entry", the brand-new-entry exemption. When a current
+ * entry's `id` has no base match, this also looks for a base entry whose
+ * `glob` is identical to the current entry's own. A `glob` shared by two
+ * or more base entries is ambiguous and is never used as a fallback match,
+ * matching {@link collectNearCeilingRatchetViolations}'s own
+ * file-set-signature discipline.
+ */
+export function collectInstructionSizeBudgetRatchetViolations(
+  noticeUtilizationPct: number,
+  currentEntries: readonly InstructionSizeBudgetLimitStat[],
+  baseEntries: readonly InstructionSizeBudgetBaseEntryStat[],
+): string[] {
+  const baseById = new Map(baseEntries.map((entry) => [entry.id, entry]));
+  // `null` marks an ambiguous glob (shared by 2+ base entries) so it is
+  // never mistaken for "no entry" (`undefined`, via a plain Map miss) --
+  // both must resolve to "no fallback match", but for different reasons.
+  const baseByGlob = new Map<
+    string,
+    InstructionSizeBudgetBaseEntryStat | null
+  >();
+  for (const entry of baseEntries) {
+    baseByGlob.set(entry.glob, baseByGlob.has(entry.glob) ? null : entry);
+  }
+
+  const errors: string[] = [];
+  for (const current of currentEntries) {
+    const base =
+      baseById.get(current.id) ?? baseByGlob.get(current.glob) ?? undefined;
+    if (!base) {
+      continue;
+    }
+    errors.push(
+      ...instructionSizeBudgetFieldRatchetErrors(
+        current.id,
+        'phaseLimitBytes',
+        current.phaseLimitBytes,
+        base.phaseLimitBytes,
+        base.files.filter((file) => !file.alwaysLoaded),
+        noticeUtilizationPct,
+      ),
+    );
+    errors.push(
+      ...instructionSizeBudgetFieldRatchetErrors(
+        current.id,
+        'alwaysLoadedLimitBytes',
+        current.alwaysLoadedLimitBytes,
+        base.alwaysLoadedLimitBytes,
+        base.files.filter((file) => file.alwaysLoaded),
+        noticeUtilizationPct,
+      ),
+    );
+  }
+  return errors;
+}
+
+/** One field's near-ceiling check for one entry, shared by both
+ * `phaseLimitBytes` and `alwaysLoadedLimitBytes` in
+ * {@link collectInstructionSizeBudgetRatchetViolations}. */
+function instructionSizeBudgetFieldRatchetErrors(
+  id: string,
+  field: 'phaseLimitBytes' | 'alwaysLoadedLimitBytes',
+  currentLimit: number,
+  baseLimit: number,
+  baseFiles: readonly InstructionSizeBudgetFileStat[],
+  noticeUtilizationPct: number,
+): string[] {
+  if (currentLimit <= baseLimit || baseLimit <= 0) {
+    return [];
+  }
+  const errors: string[] = [];
+  for (const file of baseFiles) {
+    if (file.bytes * 100 >= baseLimit * noticeUtilizationPct) {
+      const utilizationPct = (file.bytes / baseLimit) * 100;
+      errors.push(
+        `near-ceiling-ratchet: ${id} ${field} raised from ${baseLimit} to ${currentLimit} while ${file.path} was already at ${utilizationPct.toFixed(2)}% utilization at the base ref (${file.bytes}/${baseLimit} bytes) -- docs/policy-constants.md's near-ceiling exception prefers trimming or splitting the addition over raising here`,
+      );
+    }
+  }
+  return errors;
+}
+
 // Words after which a `/` must start a regex literal, not division.
 const REGEX_PRECEDING_KEYWORDS = new Set([
   'return',
