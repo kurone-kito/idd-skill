@@ -102,6 +102,24 @@ test('normalizeReview maps REST review fields, deriving createdAt from submitted
     }).updatedAt,
     '2026-07-31T13:00:00Z',
   );
+  // #3015 (Copilot review, PR #3045): the assertion above only exercises
+  // an OMITTED body, so it would still pass even if `normalizeReview`
+  // accidentally dropped every non-empty REST review body -- the exact
+  // path `findLastCopilotReviewCommit` (reached via
+  // `buildPreMergeReadinessSummary` -> `buildAdvisoryWaitSummary`) needs
+  // to see a Copilot error review's real body text in order to filter it
+  // out. Assert the non-empty case is preserved verbatim, using the
+  // actual observed Copilot error-review template as the fixture.
+  assert.equal(
+    normalizeReview({
+      submitted_at: '2026-07-31T12:00:00Z',
+      body:
+        'Copilot encountered an error and was unable to review this pull ' +
+        'request. You can try again by re-requesting a review.',
+    }).body,
+    'Copilot encountered an error and was unable to review this pull ' +
+      'request. You can try again by re-requesting a review.',
+  );
 });
 
 test('normalizeThread maps a ProviderPort review-thread node, including nested comments', () => {
