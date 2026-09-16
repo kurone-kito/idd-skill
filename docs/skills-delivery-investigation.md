@@ -579,27 +579,28 @@ section, retrieved 2026-09-16.)
   evicted; only the fuzzy, description-dependent auto-trigger path
   section 4 already covers degrades this way. Do not read this as a
   discovery failure mode for the exact-name path — it is not one.
-- **A nuance current documentation surfaces that this addendum cannot
-  fully resolve**: the listing itself is explicitly not re-injected
-  after `/compact` — "Unlike the rest of the startup content, this
-  listing is not re-injected after `/compact`. Only skills you actually
-  invoked get preserved." (`code.claude.com/docs/en/context-window`,
-  retrieved 2026-09-16). The always-resident framing in Section 5 above
-  and in `docs/claude-skill-strategy.md`'s Context Economics section is
-  accurate only up to a session's first compaction; past that point the
-  listing's rendered-text cost drops to zero for any never-invoked
-  skill. Whether that also means a never-invoked skill's exact name
-  stops being a valid orchestrator-directed target after compaction —
-  since Part A's listing-membership observation was made against the
-  rendered text, not against whatever discovery state the harness may
-  separately retain independent of that text — is not settled by
-  anything this addendum found documented either way; treat it as an
-  open question this cost reduction raises, not a confirmed favorable
-  trade. A plain instruction-file routing table has no equivalent
-  tension: it lives inside the always-loaded core file, which does
-  reload after compaction, so the target it names (a phase file to
-  `Read`) never depends on a rendered listing that compaction may
-  already have dropped.
+- **The cost reduction below is not actually favorable — on inspection
+  it is a fourth, preventive discovery/validity failure mode (no
+  observed incident yet), not a compensating win.** The listing itself
+  is explicitly not re-injected after `/compact` — "Unlike the rest of
+  the startup content, this listing is not re-injected after `/compact`.
+  Only skills you actually invoked get preserved."
+  (`code.claude.com/docs/en/context-window`, retrieved 2026-09-16). Part
+  A's own observed rule is that only a name currently present in the
+  listing — or one the user typed explicitly — is a valid `Skill` call
+  target; nothing this addendum found documents any mechanism that
+  re-renders the listing, or restores one dropped skill's entry within
+  it, mid-session after a compaction event. Taken at face value, a
+  never-invoked phase skill therefore genuinely stops being a valid
+  orchestrator-directed target the moment compaction occurs — its
+  rendered-text cost does not merely drop to zero, the call itself
+  becomes unsatisfiable — even though the always-loaded routing table
+  naming it does survive (compaction reloads the core instruction file
+  itself, just not the skill listing a call to that skill would need). A
+  plain instruction-file routing table has no equivalent gap: it lives
+  inside the same always-loaded core file, and the target it names (a
+  phase file to `Read`) is always openable regardless of what else is
+  currently rendered in context.
 
 Net effect: the cost side is real, current documentation now lets it be
 stated precisely rather than restated on faith, and it cuts in more than
@@ -610,12 +611,13 @@ moves it closer to or potentially past that budget, pending an actual
 measurement rather than the average alone; genuinely favorable to the
 exact-name path specifically on one narrow point, since listing
 pressure degrades fuzzy auto-matching without ever blocking a
-discovered skill's name from being invoked; and left genuinely open on
-the post-compaction question, which reduces the rendered-text cost but
-may or may not also affect exact-name reachability for a never-invoked
-skill, unresolved either way by anything this addendum found
-documented. None of that touches the Part A/B/C safety argument above,
-which is what the recorded no-go actually turns on.
+discovered skill's name from being invoked; and, on the post-compaction
+question specifically, not favorable after all — the same event that
+frees the rendered-text cost also removes a never-invoked skill's own
+listing entry with no documented way back, making post-compaction
+reachability a genuine addition to Part B's failure-mode family rather
+than an offsetting benefit. None of that touches the Part A/B/C safety
+argument above, which is what the recorded no-go actually turns on.
 
 ### Verdict, restated
 
@@ -627,8 +629,9 @@ with an explicit, exactly-named directive — but it does not supply the
 "must load unconditionally" primitive Section 4 found absent, because
 (a) both Claude Code and OpenCode document this as a stronger case of
 the same model-judgment-mediated invocation, not a forced load; (b)
-skill invocation carries discovery, collision, and permission-hiding
-failure modes a `Read` call does not; and (c) the weak-model tier — the
+skill invocation carries discovery, collision, permission-hiding, and
+post-compaction reachability failure modes a `Read` call does not; and
+(c) the weak-model tier — the
 roadmap's own stated audience for this line of investigation — makes
 those extra failure modes worse to depend on, not better, per this
 repository's own lite-profile design note. The claim protocol and
