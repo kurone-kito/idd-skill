@@ -273,10 +273,11 @@ incomplete/current authoring hold blocks; only exact anchor/set/session
 `release-complete` allows a completed generation.
 Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
-First record `{agent-id}`/`{claim-id}` via `node scripts/claim-lock.mjs
---record-tokens --worktree <path> --agent-id {agent-id} --claim-id
-{claim-id}`; then post the claim comment using the exact format and
-posting mechanics already defined in
+First record `{agent-id}`/`{claim-id}` via
+`<profile-selected-claim-lock-command> --record-tokens --worktree
+<path> --agent-id {agent-id} --claim-id {claim-id}` (A5(a)); then post
+the claim comment using the exact format and posting mechanics
+already defined in
 [Claim format](idd-overview-core.instructions.md#claim-format) — do not
 re-derive them here. `emit-marker` (`--type claimed-by`, emit-only) also
 renders the body without posting.
@@ -576,8 +577,8 @@ A same-machine fast path complementing the cross-machine claim check
 above. Acquire once the B1 worktree exists (before the first mutation;
 also re-run `--record-tokens` there (with `--nonce`)), then re-run
 alongside every later pre-mutation check:
-`node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id
-{agent-id} --claim-id {claim-id}`.
+`<profile-selected-claim-lock-command> --acquire --worktree <path>
+--agent-id {agent-id} --claim-id {claim-id}`.
 
 A matching `{claim-id}` re-acquires as a read-only check; a different
 `{claim-id}` is always a collision, regardless of lock age. Run
