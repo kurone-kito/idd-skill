@@ -163,12 +163,10 @@ Before any mutating action in F3, apply the
      `blockers[]` — separate from `f3Outcome`, not a stricter
      sub-condition on it
      ([Terminal routing](idd-advisory-wait.instructions.md#terminal-routing-1570)).
-     **Manual-fallback equivalent**: apply Terminal routing directly —
-     satisfied unless `COPILOT_UNAVAILABLE` holds (recovery cycle
-     exhausted, terminal window elapsed, no current-HEAD Copilot
-     review) with neither a valid `idd-external-check-waiver:` marker
-     for selector `idd-advisory-convergence` on this HEAD nor an
-     active `#2320` outage declaration;
+     **Manual-fallback equivalent**: apply that Terminal routing
+     section in full — satisfied only when its **Unwaived** hold does
+     not apply to this HEAD; its waiver/declaration validity rules are
+     not paraphrased here;
    - all required CI checks pass for the current head;
    - claim ownership still uses your `{claim-id}`;
    - D3.5 steps 6-7 and D3.7 (`idd-pr-submit.instructions.md`) have
