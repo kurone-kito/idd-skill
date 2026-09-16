@@ -315,12 +315,14 @@ the worktree to the PR's remote HEAD before merge. Run this
 unconditionally, in the **same surviving claimed worktree**:
 
 1. `PR_HEAD=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')`
-2. `git merge-base --is-ancestor "$PR_HEAD" HEAD` -- a failure means
-   local history is not a simple ahead-of-`$PR_HEAD` case; fall back
-   to edge case 1's rule instead.
+2. `git merge-base --is-ancestor "$PR_HEAD" HEAD` -- a failure
+   (external rewrite, diverged worktree) stops for reconciliation;
+   never fall through to edge case 1's GitHub-only re-triage, which
+   risks F2 discarding real local work.
 3. `git status --porcelain` must report clean -- a dirty worktree
-   can't prove which uncommitted lines belong to which item; route it
-   through E9 instead so its own fix-and-commit step absorbs them.
+   can't prove which uncommitted lines belong to which item. Treat it
+   as unverified input (never trust or discard): stop for
+   reconciliation before E9 work.
 4. `git log "$PR_HEAD"..HEAD` lists commits already made -- not
    proof every Accepted item is covered, only that some commit is
    ahead. Map each Accepted item to a specific commit via E5's normal
@@ -335,5 +337,4 @@ unconditionally, in the **same surviving claimed worktree**:
 
 Clean worktree, no local-ahead commits: E3's own routing applies
 unchanged. A fresh or lost worktree has no path to this evidence and
-falls back to edge case 1's rule -- safely, if wastefully, re-triaged
-from scratch.
+falls back to edge case 1's rule, re-triaged from scratch.
