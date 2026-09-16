@@ -64,5 +64,19 @@ stop and report.
        then release the worker claim with `unclaimed-by` using the
        current `{claim-id}` and stop. If the claim was already lost, do
        not post release.
-6. When the policy is `fully_autonomous_merge`, continue directly to
-   `idd-merge.instructions.md`.
+6. When the policy is `fully_autonomous_merge`:
+   1. If this session does not yet hold a verified active `{claim-id}`,
+      establish ownership through `idd-claim.instructions.md` A5 — the
+      same no-claim recovery step 5 uses for `separate_merge_agent` —
+      then return to this handoff phase.
+      `idd-merge.instructions.md`'s F3 step 1 requires an active claim
+      regardless of policy, with no `fully_autonomous_merge` exception;
+      establishing one here before routing to F3 is what keeps this
+      no-active-claim continuation from contradicting that check
+      (kurone-kito/idd-skill#2977).
+   2. If this session has not yet recorded F2 evidence for the
+      `{claim-id}` now active (for example, step 1 just took over a
+      stale claim under a fresh `{claim-id}`), return to
+      `idd-pre-merge.instructions.md` and run F2 once to record a fresh
+      snapshot for it, then return here.
+   3. Continue directly to `idd-merge.instructions.md`.
