@@ -441,8 +441,10 @@ separate forced-load primitive:
   This is a directly observable, reproducible constraint of the current
   runtime, not an inference. An orchestrator directive naming a skill not
   currently in that listing has no valid way to invoke it; a `Read`
-  directive naming any existing file path always succeeds regardless of
-  any "listing."
+  directive naming any existing file path has no such listing
+  precondition to fail on in the first place — its own possible failure
+  mode is a separate, later concern (Part B's permission-hiding bullet
+  covers it), not a "listing" gate of any kind.
 
 ### B. Failure modes a file `Read` cannot have
 
