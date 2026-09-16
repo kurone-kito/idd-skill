@@ -72,3 +72,86 @@ test('duplicate-evidence-skip guard is a strict superset of the prior EXISTING_S
     );
   }
 });
+
+test('workflow_dispatch is guarded to require an already-merged PR before cleanup runs (#2979)', () => {
+  for (const path of WORKFLOW_PATHS) {
+    const text = readWorkflow(path);
+    const guardStart = text.indexOf(
+      'name: Require a merged PR for workflow_dispatch',
+    );
+    assert.notStrictEqual(
+      guardStart,
+      -1,
+      `${path} must define the workflow_dispatch merged-PR guard step`,
+    );
+    const cleanupStepStart = text.indexOf(
+      'name: Run F4 cleanup (server-side fallback)',
+    );
+    assert.notStrictEqual(
+      cleanupStepStart,
+      -1,
+      `${path} must still define the F4 cleanup step`,
+    );
+    assert.ok(
+      guardStart < cleanupStepStart,
+      `${path} guard step must run before the F4 cleanup step`,
+    );
+    const guardBlock = text.slice(guardStart, cleanupStepStart);
+
+    assert.match(
+      guardBlock,
+      /if: github\.event_name == 'workflow_dispatch'/,
+      `${path} guard step must be gated on workflow_dispatch`,
+    );
+    assert.match(
+      guardBlock,
+      /\*\[!0-9\]\*/,
+      `${path} guard step must reject a PR_NUMBER that is not a plain decimal number`,
+    );
+    assert.match(
+      guardBlock,
+      /gh pr view "\$PR_NUMBER" --repo "\$GITHUB_REPOSITORY" --json merged/,
+      `${path} guard step must look up the dispatched PR's merged state, scoped to this repository`,
+    );
+    assert.match(
+      guardBlock,
+      /"\$MERGED" != "true"/,
+      `${path} guard step must fail when the PR is not merged`,
+    );
+    assert.match(
+      guardBlock,
+      /::error::/,
+      `${path} guard step must fail with a clear ::error:: message`,
+    );
+    assert.match(
+      guardBlock,
+      /\n\s*exit 1\n/,
+      `${path} guard step must exit non-zero on an unmerged or unresolvable PR`,
+    );
+  }
+});
+
+test('workflow_dispatch checkout is pinned to the trusted default branch, pull_request_target keeps its own default (#2979)', () => {
+  for (const path of WORKFLOW_PATHS) {
+    const text = readWorkflow(path);
+    const checkoutStart = text.indexOf('uses: actions/checkout');
+    assert.notStrictEqual(
+      checkoutStart,
+      -1,
+      `${path} must keep its actions/checkout step`,
+    );
+    const fetchDepthStart = text.indexOf('fetch-depth:', checkoutStart);
+    assert.notStrictEqual(
+      fetchDepthStart,
+      -1,
+      `${path} checkout step must keep its fetch-depth: input`,
+    );
+    const checkoutWith = text.slice(checkoutStart, fetchDepthStart);
+
+    assert.match(
+      checkoutWith,
+      /ref: \$\{\{ github\.event_name == 'workflow_dispatch' && github\.event\.repository\.default_branch \|\| github\.sha \}\}/,
+      `${path} checkout must pin ref: to the default branch on workflow_dispatch and fall back to github.sha (the pull_request_target default) otherwise`,
+    );
+  }
+});

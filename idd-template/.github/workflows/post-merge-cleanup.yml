@@ -2,15 +2,28 @@
 # with base-repository permissions and secrets even for pull requests from
 # forks. That is safe here only because all of the following hold, and any
 # future edit to this file must preserve them:
-#   - No unreviewed PR-head content is ever checked out: the sole
-#     `actions/checkout` step below carries no `ref:` override, so it
-#     resolves to the `pull_request_target` default -- the base branch's
-#     tip at event time. Because the job only proceeds when
-#     `merged == true`, that tip already includes this PR's own merge
-#     (a repository that merges via merge commits typically sees that
-#     merge commit itself) -- it is never the PR's own head SHA, and
-#     never content that has not already passed through the merge
-#     decision.
+#   - No unreviewed PR-head content is ever checked out. On
+#     `pull_request_target`, the sole `actions/checkout` step below
+#     carries no `ref:` override for that trigger -- it resolves to
+#     `github.sha`, which for this trigger is the base branch's tip at
+#     event time. Because the job only proceeds when `merged == true`,
+#     that tip already includes this PR's own merge (a repository that
+#     merges via merge commits typically sees that merge commit itself)
+#     -- it is never the PR's own head SHA, and never content that has
+#     not already passed through the merge decision. On
+#     `workflow_dispatch`, there is no equivalent trusted default -- the
+#     event resolves to whatever ref the dispatch was run against -- so
+#     that path pins `ref:` explicitly to
+#     `github.event.repository.default_branch` instead (#2979). This pin
+#     is defense-in-depth, not a full equivalent to the
+#     `pull_request_target` guarantee above: a `workflow_dispatch` run
+#     always executes this workflow's own YAML from whatever ref it was
+#     dispatched against, before the pinned checkout below even runs, so
+#     the pin only keeps the checked-out helper-runtime content
+#     trustworthy, not this file's own step definitions. Dispatching
+#     this workflow already requires the same repository write access
+#     that could edit this file directly, so the pin narrows the
+#     execution surface rather than adding a new trust boundary.
 #   - No PR-head code, workflow, or action is ever executed; nothing from
 #     the PR diff ever runs. Under `vendored-node` and `package-manager`,
 #     the cleanup-audit invocation names only a script or package this
@@ -37,16 +50,27 @@
 #     strictly enforced as numeric for direct API dispatches) is passed
 #     through `env:` and referenced as a quoted shell variable, never
 #     interpolated directly into a `run:` script.
-#   - The `cleanup` job only runs when
-#     `github.event.pull_request.merged == true`, or via an explicit,
-#     human-triggered `workflow_dispatch` -- never against an open or
-#     unmerged pull request.
+#   - The `cleanup` job only runs against an already-merged pull request.
+#     For `pull_request_target`, that guarantee comes from the job-level
+#     `if:` below (`github.event.pull_request.merged == true`). For
+#     `workflow_dispatch`, the job `if:` alone cannot express the same
+#     guarantee -- the dispatched `pr_number` is arbitrary operator
+#     input -- so a dedicated "Require a merged PR for workflow_dispatch"
+#     step looks the PR up via `gh pr view --json merged` and fails the
+#     job, before the cleanup-audit invocation runs, when that PR does
+#     not exist or is not merged (#2979). This closes a defense-in-depth
+#     gap: the cleanup-audit helper already independently guards nearly
+#     every mutating check on its own `pr.merged` read, so an
+#     unmerged-PR dispatch was already a near-total no-op rather than an
+#     active exposure, but the job itself had no equivalent guarantee of
+#     its own.
 #   - `permissions:` stays least-privilege: `contents: read`,
 #     `issues: write`, `pull-requests: write` -- no `contents: write` and
 #     no elevated or secret-bearing scopes.
-# If a future change adds a `ref:` override on the checkout step, downloads
-# or executes PR-head content, widens `permissions:`, or removes the
-# merged-only guard, re-review this trust model before merging that change.
+# If a future change routes an untrusted ref through the checkout step,
+# drops the `workflow_dispatch` ref pin or its merged-PR guard step,
+# downloads or executes PR-head content, or widens `permissions:`,
+# re-review this trust model before merging that change.
 #
 # Profile resolution: unlike this source repository's own dogfooded copy
 # (kurone-kito/idd-skill's own `.github/workflows/post-merge-cleanup.yml`),
@@ -100,8 +124,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # workflow_dispatch has no trustworthy default ref (see the
+          # trust-model comment above), so pin it explicitly to this
+          # repository's own default branch; pull_request_target keeps
+          # resolving to github.sha, its own already-trusted default.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}
           fetch-depth: 1
           persist-credentials: false
+      - name: Require a merged PR for workflow_dispatch
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # gh reads whichever of these two matches its resolved host
+          # (`gh help environment`), so setting both is inert on
+          # github.com and lets this same step authenticate on a
+          # self-hosted GHES host too.
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          # Same combined expression the "Run F4 cleanup" step below uses
+          # for PR_NUMBER, even though github.event.pull_request.number is
+          # always empty on this trigger -- kept identical so the two
+          # never drift apart.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: |
+          # workflow_dispatch's `pr_number` input is `type: number` in the
+          # UI, but that constraint is not strictly enforced for direct
+          # API dispatches, and `gh pr view` also accepts a full PR URL --
+          # reject anything that is not a bare decimal number before
+          # trusting it as this repository's own PR number (#2979).
+          case "$PR_NUMBER" in
+            ''|*[!0-9]*)
+              echo "::error::PR_NUMBER (\"$PR_NUMBER\") is not a plain decimal PR number; refusing to look it up."
+              exit 1
+              ;;
+          esac
+          MERGED=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json merged --jq .merged) || {
+            echo "::error::Failed to look up PR #$PR_NUMBER in $GITHUB_REPOSITORY; refusing to run cleanup for it via workflow_dispatch."
+            exit 1
+          }
+          if [ "$MERGED" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER in $GITHUB_REPOSITORY is not merged (merged=$MERGED); this workflow only cleans up already-merged pull requests."
+            exit 1
+          fi
       - name: Resolve helper-runtime profile
         id: profile
         run: |
