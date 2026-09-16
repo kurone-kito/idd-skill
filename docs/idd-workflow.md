@@ -421,8 +421,11 @@ forced-handoff recovery note for the authoritative rule.
 
 **Cold entry outside Resume**: `idd-resume.instructions.md`'s Step 3
 table rebuilds at E1 for the CI/review resume cases it covers (crash,
-rate-limit, stale-claim takeover with reviews already settled).
-`docs/idd-resume-detail.md`'s two worktree-state routes reach the same
+rate-limit, or a takeover where unresolved threads, unreplied
+comments, or an active `CHANGES_REQUESTED` review remain -- a
+takeover with reviews already settled instead routes straight to F2,
+not E1). `docs/idd-resume-detail.md`'s two worktree-state routes reach
+the same
 rebuild indirectly rather than not at all: §W3 (dirty worktree,
 reviews exist) resumes by treating the work as mid-review-fix, so its
 own entry into `idd-review-fix.instructions.md`'s E9 already carries
@@ -773,9 +776,11 @@ after E8 finds zero Accepted PATH A items **and** no open `Awaiting
 maintainer decision` thread (E7 permits one to stay unresolved, so a
 zero Accepted count alone does not mean nothing is pending; branch-sync
 and F1 come next only once that thread is also clear), or after a
-round completes **both** E13 and E14: each of these leaves every
-disposition durable on GitHub, so a successor re-enters cleanly via a
-fresh E1 pass with nothing to recover. E14 belongs in that boundary,
+round completes **both** E13 and E14: the first point has no
+dispositions to preserve; the other two leave every disposition
+durable on GitHub. A successor re-enters through Resume, which
+completes any pending CI (E15) before starting a fresh E1. E14 belongs
+in that boundary,
 not only E13 — E1 Step 3 excludes a `CHANGES_REQUESTED` review body
 only once it has **both** a reply and a re-review request, so exiting
 right after E13's replies but before E14 requests review leaves that
@@ -927,9 +932,10 @@ Running this variant safely requires:
   context.
 - **A delegation brief resuming mid-review at E4 or E9 must run the
   cold-start reconstruction.** A fresh worker dispatched straight into
-  E4 or E9 for a PR it did not just fetch itself must not assume
-  `ReviewItems_snapshot` still reflects live state — see the
-  ReviewItems_snapshot lifecycle section's Cold entry outside Resume
+  E4 or E9 without a `ReviewItems_snapshot` from its own E1-E3 pass
+  must not assume `ReviewItems_snapshot` still reflects live state —
+  see the ReviewItems_snapshot lifecycle section's Cold entry outside
+  Resume
   note above and `idd-review-snapshot.instructions.md`'s cold-start
   reconstruction section. This covers only those two named entry
   points; a brief that instead hands a worker into E10, E13, E14, or

@@ -321,13 +321,15 @@ unconditionally, in the **same surviving claimed worktree**:
 3. `git status --porcelain` must report clean -- a dirty worktree
    can't prove which uncommitted lines belong to which item; route it
    through E9 instead so its own fix-and-commit step absorbs them.
-4. `git log "$PR_HEAD"..HEAD` lists commits already made: this is
-   E5's normal Accept ("Verify before accept" confirmed by this live
-   evidence) regardless of whether E4 re-surfaces a matching item --
-   never assume it from the commit list alone. E9 then has no work;
-   take it through E10-E15 instead: E10, not E12, because a cold
-   session cannot know whether E10's critique pass already ran against
-   it, and
+4. `git log "$PR_HEAD"..HEAD` lists commits already made -- not
+   proof every Accepted item is covered, only that some commit is
+   ahead. Map each Accepted item to a specific commit via E5's normal
+   "Verify before accept" (confirmed by this live evidence); E9 skips
+   only the items the diff verifiably covers, and still fixes anything
+   unmatched normally. A non-empty result here overrides an empty E3
+   or zero-Accepted E8 route: resume at E10 for the covered items
+   regardless -- E10, not E12, because a cold session cannot know
+   whether E10's critique pass already ran against them, and
    [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
    governs that ambiguity.
 
