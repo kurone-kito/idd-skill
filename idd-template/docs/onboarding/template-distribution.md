@@ -214,7 +214,9 @@ adopter's `.gitattributes` — the same recommendation as
 Do **not** mark that copied set `linguist-generated=true`; that
 attribute is for first-party generated output (the `idd-skill` source
 repository uses it for its own `scripts/*.mjs` built from `.mts`
-sources — see the root `.gitattributes`).
+sources — see the root `.gitattributes`; observed 2026-09-13,
+issue `#2958`, when this page previously recommended the
+generated-output stanza for the same copied files).
 
 `idd-template/` ships no `.gitattributes` file, since an adopter's own
 `.gitattributes` (if any) is theirs to own, and the import mechanism
