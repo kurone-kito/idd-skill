@@ -98,10 +98,8 @@ This section's rebase only applies **before the branch's first push**.
    remote; stop on any other nonzero exit status. When it already
    exists, do not rebase it — instead check for an open PR:
    `gh pr list --head {branch-name} --state open --json number --jq
-   '.[0].number // empty'` (the `// empty` matters: an empty list's
-   `.[0].number` is the literal string `null`, not blank, and a
-   literal `null` can be misread as a real PR number instead of "no
-   open PR").
+   '.[0].number // empty'` (`// empty` avoids misreading an empty
+   list's literal `null` as a real PR number).
    - No output (empty): D2's push already happened in an earlier,
      interrupted session. `git fetch origin {branch-name}`, then check
      `git log --oneline origin/{branch-name}..HEAD` — if it lists any
@@ -198,6 +196,11 @@ loop instead of returning to this D1 rebase path.
    above — do not push with `--force-with-lease` and do not continue in
    this lite flow; the merge-based resync path is out of this file's
    scope.
+4. New CI job: land it `workflow_dispatch`-only first (if its workflow
+   file isn't on `main` yet, land a bootstrap PR for just the trigger
+   wiring first — `gh workflow run` can't dispatch a branch-only
+   file), validate with a manual dispatch run, commit the trigger-flip
+   edit, re-run **pre-push-validate**, and push, before D3.
 
 ## D3 — Create PR
 
@@ -205,8 +208,7 @@ loop instead of returning to this D1 rebase path.
    `.github/pull_request_template.md` exists; if it does, shape the
    body to that template's sections from the start.
 2. Create the PR using GH CLI (`gh pr create`) or GH MCP, with a body
-   satisfying the rules below — this step is not formatting guidance
-   for an already-open PR; the PR must actually be created here.
+   satisfying the rules below.
 3. The PR body must include: a concise summary, a closing keyword line
    for the claimed issue, recommended follow-up issues (if any), and
    background/rationale only when it materially affects review. Ground
@@ -216,10 +218,10 @@ loop instead of returning to this D1 rebase path.
    from `.github/idd/config.json` (fixed tag, the claimed issue's own body
    language for `match-source`, or English if absent — see
    [Authoring Language](../../../docs/customization.md#authoring-language));
-   this never changes any machine-parsed marker or exact-regex-matched visible
-   line, which stays canonical regardless — concretely, the closing keyword line
-   stays canonical English: GitHub's parser and D3.5's verification regex below
-   match only the English keyword forms.
+   this never changes a machine-parsed marker or exact-regex-matched
+   visible line — the closing keyword line stays canonical English,
+   since GitHub's parser and D3.5's regex below match only English
+   keyword forms.
 4. **Closing keyword**: write a plain-text line such as `Closes #N` for
    the claimed issue number, on its own line. GitHub recognizes these
    keyword forms (case-insensitive): `close`, `closes`, `closed`, `fix`,
@@ -228,10 +230,9 @@ loop instead of returning to this D1 rebase path.
    prefix — GitHub does not detect the keyword in any of those forms,
    and the linked issue will not auto-close on merge.
 5. **Negation-blind detection**: GitHub matches a keyword immediately
-   adjacent to a `#N` with no concept of negation. Never place a
-   recognized keyword directly next to a `#N` you do not intend to
-   close, even inside a sentence saying it should not close it — reorder
-   the sentence so no keyword sits next to that reference.
+   adjacent to a `#N` with no concept of negation — never place one
+   next to a `#N` you don't intend to close, even inside a "not"
+   clause; reorder the sentence instead.
 6. **Multiple closes**: repeat the keyword for each issue — `Closes #1,
    closes #2` closes both; `Closes #1, #2` closes only the first.
 7. If CODEOWNERS or expected reviewers are not auto-assigned, request

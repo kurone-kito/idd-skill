@@ -147,6 +147,15 @@ other GitHub side effect, confirm all of the following:
    simplifying/removing the mechanism over a second redesign -- only
    once confirmed non-required by the issue's acceptance criteria or
    contract; if required, stop for a maintainer decision.
+8. Third tier: when each new finding is instead a genuine, distinct gap
+   against an open-ended external correctness domain (a grammar,
+   protocol, or wire format) rather than a symptom of one mechanism,
+   tiers 1-2 do not apply -- there is no mechanism to simplify, since
+   coverage of that domain is itself the acceptance criterion. Once
+   several rounds each surface a genuinely new in-scope gap rather than
+   repeating one, list every outstanding gap with evidence and the
+   round count in a hold comment and stop for a maintainer decision
+   (`#2865`).
 
 ## E11 — Resolve conflicts with main
 
@@ -279,7 +288,11 @@ other GitHub side effect, confirm all of the following:
    fall back to a manual per-field fetch.
 4. Read the helper's `outcome` field and apply this decision table, top
    to bottom, first match wins:
-   - `SATISFIED` → continue to E15.
+   - `SATISFIED`, `copilotPending` `false`, `copilotPendingCoversHead`
+     `false` (settled by elapsed time alone, never proven the request
+     reached Copilot, `#2327`): lite has no bounded recovery cycle to
+     run here — continue to E15 the same as an ordinary `SATISFIED`.
+   - `SATISFIED` (otherwise) → continue to E15.
    - `RECOVERY_NEEDED`: post the recovery marker
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
