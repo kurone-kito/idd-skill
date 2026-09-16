@@ -56,7 +56,7 @@
 #     `workflow_dispatch`, the job `if:` alone cannot express the same
 #     guarantee -- the dispatched `pr_number` is arbitrary operator
 #     input -- so a dedicated "Require a merged PR for workflow_dispatch"
-#     step looks the PR up via `gh pr view --json merged` and fails the
+#     step looks the PR up via `gh pr view --json state` and fails the
 #     job, before the cleanup-audit invocation runs, when that PR does
 #     not exist or is not merged (#2979). This closes a defense-in-depth
 #     gap: the cleanup-audit helper already independently guards nearly
@@ -157,12 +157,25 @@ jobs:
               exit 1
               ;;
           esac
-          MERGED=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json merged --jq .merged) || {
-            echo "::error::Failed to look up PR #$PR_NUMBER in $GITHUB_REPOSITORY; refusing to run cleanup for it via workflow_dispatch."
+          # A `merged` field is not supported by `gh pr view --json` --
+          # `gh pr view --help` lists `mergedAt`/`state`, not `merged` --
+          # so querying it errors out before returning JSON, which would
+          # make this guard fail closed for every dispatch, including one
+          # for a genuinely merged PR. Query `state` instead, which is
+          # never null (#2979 review, Copilot/Codex). No `--repo`
+          # override here: `$PR_NUMBER` is already constrained to a bare
+          # decimal number by the check above, so `gh` safely resolves
+          # both the repository and the host from this step's own
+          # checked-out git context, matching every other `gh` call in
+          # this file and avoiding a GHES host-resolution mismatch an
+          # explicit `--repo` (without also pinning a matching host)
+          # would introduce (#2979 review, Copilot).
+          STATE=$(gh pr view "$PR_NUMBER" --json state --jq .state) || {
+            echo "::error::Failed to look up PR #$PR_NUMBER; refusing to run cleanup for it via workflow_dispatch."
             exit 1
           }
-          if [ "$MERGED" != "true" ]; then
-            echo "::error::PR #$PR_NUMBER in $GITHUB_REPOSITORY is not merged (merged=$MERGED); this workflow only cleans up already-merged pull requests."
+          if [ "$STATE" != "MERGED" ]; then
+            echo "::error::PR #$PR_NUMBER is not merged (state=$STATE); this workflow only cleans up already-merged pull requests."
             exit 1
           fi
       - name: Resolve helper-runtime profile

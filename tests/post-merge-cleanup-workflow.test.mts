@@ -110,13 +110,18 @@ test('workflow_dispatch is guarded to require an already-merged PR before cleanu
     );
     assert.match(
       guardBlock,
-      /gh pr view "\$PR_NUMBER" --repo "\$GITHUB_REPOSITORY" --json merged/,
-      `${path} guard step must look up the dispatched PR's merged state, scoped to this repository`,
+      /gh pr view "\$PR_NUMBER" --json state --jq \.state/,
+      `${path} guard step must look up the dispatched PR's state via a supported gh pr view JSON field (not the unsupported "merged" field, #2979 review)`,
     );
     assert.match(
       guardBlock,
-      /"\$MERGED" != "true"/,
-      `${path} guard step must fail when the PR is not merged`,
+      /"\$STATE" != "MERGED"/,
+      `${path} guard step must fail when the PR's state is not MERGED`,
+    );
+    assert.doesNotMatch(
+      guardBlock,
+      /--json merged\b/,
+      `${path} guard step must not query the unsupported "merged" gh pr view JSON field (#2979 review: this field does not exist and always errors)`,
     );
     assert.match(
       guardBlock,
