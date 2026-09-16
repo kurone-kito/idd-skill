@@ -142,10 +142,11 @@ path. Evidence should be captured as issues referencing this note.
 
 [`docs/skills-delivery-investigation.md`'s
 addendum](skills-delivery-investigation.md#addendum-orchestrator-directed-skill-invocation-2026-09-16-issue-3032)
-records a since-evaluated fifth invocation path — an always-loaded
-entry file's routing table explicitly naming and directing invocation
-of a skill — and finds it narrows, but does not close, the determinism
-gap this note and that investigation both turn on.
+records a since-evaluated fifth invocation path — a routing table,
+reached via an always-loaded entry file's own directive to open it,
+explicitly naming and directing invocation of a skill — and finds it
+narrows, but does not close, the determinism gap this note and that
+investigation both turn on.
 
 ## Non-Goals
 
