@@ -509,9 +509,15 @@ dogfooding sessions (preventive; no observed incident yet):
   the call — but, unlike the silent cases above, this failure is
   visible: the quoted text confirms Claude Code blocks the call and
   tells the model not to work around it, rather than leaving the
-  directive to fail with no signal. `Read` has no equivalent "permission
-  hides the file from the tool that would open it" default, silent or
-  visible.
+  directive to fail with no signal. Call-time blocking alone is not
+  unique to `Skill`: both runtimes expose an equivalent deny rule for
+  `Read` itself (OpenCode's permission system covers `read` the same
+  way; Claude Code supports tool-specific `Read(...)` deny rules), so a
+  denied `Read` can fail at the point of the call too. What `Read` still
+  has no equivalent for is the listing-omission side: a permission-
+  denied `Read` target is still a nameable, attemptable path — the
+  agent's belief that the file exists never depended on any pre-rendered
+  inventory the way a `Skill` name depends on the skill listing.
 
 ### C. Does the weak-model tier change the answer?
 
@@ -658,12 +664,14 @@ with an explicit, exactly-named directive — but it does not supply the
 "must load unconditionally" primitive Section 4 found absent, because
 (a) both Claude Code and OpenCode document this as a stronger case of
 the same model-judgment-mediated invocation, not a forced load; (b)
-skill invocation carries discovery, collision, permission-hiding, and
-post-compaction reachability failure modes a `Read` call does not; and
-(c) the weak-model tier — the
-roadmap's own stated audience for this line of investigation — makes
-those extra failure modes worse to depend on, not better, per this
-repository's own lite-profile design note. The claim protocol and
+skill invocation carries confirmed discovery, collision, and
+permission-hiding failure modes a `Read` call does not, plus a
+plausible but unconfirmed post-compaction reachability gap (Part D)
+this addendum could not independently verify; and (c) the weak-model
+tier — the roadmap's own
+stated audience for this line of investigation — makes those extra
+failure modes worse to depend on, not better, per this repository's
+own lite-profile design note. The claim protocol and
 merge-gate chain should continue to be delivered as phase files
 dispatched deterministically by the routing table's `Read` instruction,
 not as skills, under the current phase-file boundaries.
