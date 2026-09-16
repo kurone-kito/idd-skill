@@ -33,15 +33,21 @@ than relying on a manually maintained list of roots. A reproducible inventory
 can be produced with the following repo-wide command shape:
 
 ```sh
-phase_id_pattern='A1\.5|A1_5|A3\.5|A3_5|A4\.5|A4_5|F2\.5|F2_5|D3\.5|D3_5|D3\.6|D3_6|D3\.7|D3_7'
-git grep -l -E "$phase_id_pattern" -- . | sort -u
-git grep -h -o -E "$phase_id_pattern" -- . | wc -l
+legacy_phase_id_pattern='(^|[^[:alnum:]_])(A1([._-]5|5)|A3([._-]5|5)|A4([._-]5|5)|D3([._-]5|5)|D3([._-]6|6)|D3([._-]7|7)|F2([._-]5|5))([^[:alnum:]_]|$)'
+git grep -l -E "$legacy_phase_id_pattern" -- . | sort -u
+git grep -h -o -E "$legacy_phase_id_pattern" -- . | wc -l
 ```
 
 This inventory intentionally follows tracked repository content, so it
 includes hidden and generated files while excluding untracked dependency
 trees. The file list and count are evidence for the current batch, not
 success criteria that a later batch may reuse unchanged.
+The bounded pattern covers every literal old spelling in the alias table:
+dotted, hyphenated, underscored, and compact forms. Its surrounding token
+boundaries keep a compact alias such as `A15` from being counted inside a
+larger identifier. Separator-normalized inputs with arbitrary punctuation or
+whitespace are a resolver-test concern rather than a finite text inventory;
+each batch must test that compatibility path separately.
 
 The machine-facing resolver currently contains `A1_5`, `A3_5`, `A4_5`,
 and `F2_5` as canonical IDs with dotted, hyphenated, and compact aliases.
@@ -86,7 +92,11 @@ E3 -> E4 -> E5 -> E6 -> E7 -> E8
 E3 -> Esync (empty snapshot)
 E8 -> Esync (zero Accepted PATH A)
 E8 -> E9 -> E10 -> E11 -> E12 -> E13 -> E14 -> E15
+E7 -> E4 (missing disposition evidence)
+E10 -> E9 (additional critique findings)
 E15 -> E1 (CI success)
+E15 -> E11 (code-caused failure or timeout)
+Esync -> E1 (sync performed)
 Esync -> F1 -> F2
 F1 -> Esync (sync required)
 F2 -> E14 (REQUEST_NEEDED)
@@ -110,7 +120,13 @@ E3: an empty snapshot goes directly to `Esync`, while a non-empty snapshot
 goes through E4-E8.
 From E8, zero Accepted PATH A items goes to `Esync`; accepted PATH A work
 goes through E9-E15, and a successful E15 CI wait returns to E1 for a fresh
-snapshot. The F2 edge to E1 represents an unmet merge condition. `A` stays
+snapshot. E7 returns to the E4-E6 disposition sequence when required
+classifications, replies, or resolutions are missing. E10 returns to E9 when
+the critique pass finds additional issues. E15 returns to E11 for a
+code-caused failure or timeout, so the fix-and-validate loop runs before the
+next CI wait. After `Esync` performs a branch merge, it returns to E1 for a
+fresh review snapshot; only the no-sync path continues to F1. The F2 edge to
+E1 represents an unmet merge condition. `A` stays
 the collapsed return target for F5, and the shipped graph edge is
 `F5 -> A -> A5`. A fresh `idd-discover` session then applies its normal
 discovery-entry routing; this proposal does not replace the graph edge with a
