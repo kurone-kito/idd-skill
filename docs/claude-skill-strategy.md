@@ -140,6 +140,13 @@ or earlier if adopters explicitly request a skill-form execution loop,
 or if a Claude Code session is observed failing the `CLAUDE.md` routing
 path. Evidence should be captured as issues referencing this note.
 
+[`docs/skills-delivery-investigation.md`'s
+addendum](skills-delivery-investigation.md#addendum-orchestrator-directed-skill-invocation-2026-09-16-issue-3032)
+records a since-evaluated fifth invocation path — an always-loaded
+entry file's routing table explicitly naming and directing invocation
+of a skill — and finds it narrows, but does not close, the determinism
+gap this note and that investigation both turn on.
+
 ## Non-Goals
 
 This strategy does not:
