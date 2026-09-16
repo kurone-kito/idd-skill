@@ -695,5 +695,8 @@ stated audience for this line of investigation — makes those extra
 failure modes worse to depend on, not better, per this repository's
 own lite-profile design note. The claim protocol and
 merge-gate chain should continue to be delivered as phase files
-dispatched deterministically by the routing table's `Read` instruction,
-not as skills, under the current phase-file boundaries.
+dispatched by the routing table's `Read` instruction, not as skills,
+under the current phase-file boundaries — not because that dispatch is
+any more certain to be followed (Part A's own finding is that the
+agent must choose to comply either way), but because it avoids the
+skill listing/discovery precondition Part D describes.
