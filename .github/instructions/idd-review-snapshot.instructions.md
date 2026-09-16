@@ -301,15 +301,15 @@ E13); one whose E12 push landed but lost the session before E13; and a
 request (its exclusion needs both) -- if it already carries an E13
 `**Accepted** — fixed in` reply with no reviewer reply or reopen
 since, skip reclassification and route straight to E14. Otherwise
-Step 3's awaiting-reviewer exclusion
-(exceptions included) already draws the line: no IDD-agent reply
-exists, so the rebuild re-includes it as ordinary work. Before E5
+Step 3's awaiting-reviewer exclusion already draws the line: no
+IDD-agent reply exists, so the rebuild re-includes it as ordinary
+work. Before E5
 verifies it, check whether a branch commit newer than its timestamp
 already fixes it (a lost E12 push, or edge case 2's local-ahead diff
-below) -- both read false against E5's claim-truth test by design. A
-covered in-scope reviewer-feedback PATH A item Accepts without that
-test, skips E9, E13 cites the commit; everything else follows E5-E8 as
-normal.
+below) -- both read false against E5's claim-truth test by design;
+that commit is the confirmation, cap included. A covered in-scope
+reviewer-feedback PATH A item Accepts on that basis, skips E9, E13
+cites the commit; everything else follows E5-E8 as normal.
 
 **Edge case 2 -- an E9 fix committed but not yet pushed.** GitHub
 cannot see this; a fix for a session-local E2 finding may never
