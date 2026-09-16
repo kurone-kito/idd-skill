@@ -324,10 +324,11 @@ unconditionally, in the **same surviving claimed worktree**:
    reconciliation before E9 work.
 4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff, continue
    to E3. **E3 non-empty**: during E4, before E5 verifies each item,
-   check it against the recorded diff -- covered items Accept without
-   E5's claim-truth test (fixed reads false against the fixed tree by
-   design), skip E9, E13 cites the commit; others get normal E5
-   verification, then E9. Either way, even with zero Accepted items,
+   check it against the recorded diff -- covered reviewer-feedback
+   PATH A items Accept without E5's claim-truth test (fixed reads
+   false against the fixed tree by design), skip E9, E13 cites the
+   commit; everything else follows E5-E8 as normal. Either way, even
+   with zero Accepted items,
    the diff still runs E10-E12 and pushes before branch-sync. **E3
    empty** (an E2-only finding): resume at E10 for the diff itself --
    E10, not E12, because a cold session cannot know whether E10's
