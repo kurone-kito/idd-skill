@@ -154,11 +154,19 @@ Before any mutating action in F3, apply the
    - advisory `f3Outcome` is `SATISFIED` (the authoritative advisory
      gate — do not add stricter sub-conditions; e.g. a pending-window
      `SATISFIED` can keep `copilotPending` true and
-     `LAST_COPILOT_COMMIT` off the head);
+     `LAST_COPILOT_COMMIT` off the head). **Manual-fallback
+     equivalent** (helper unavailable or discarded): the AW1/AW2/AW3
+     decision table (`idd-advisory-wait.instructions.md`), run in full
+     for `PR_HEAD_SHA_F3`, returns `SATISFIED` — not merely any step 3
+     branch that says "proceed with the merge";
    - no unwaived `copilot-terminal-unavailable` in the helper's
      `blockers[]` — separate from `f3Outcome`, not a stricter
      sub-condition on it
-     ([Terminal routing](idd-advisory-wait.instructions.md#terminal-routing-1570));
+     ([Terminal routing](idd-advisory-wait.instructions.md#terminal-routing-1570)).
+     **Manual-fallback equivalent**: apply that Terminal routing
+     section in full — satisfied only when its **Unwaived** hold does
+     not apply to this HEAD; its waiver/declaration validity rules are
+     not paraphrased here;
    - all required CI checks pass for the current head;
    - claim ownership still uses your `{claim-id}`;
    - D3.5 steps 6-7 and D3.7 (`idd-pr-submit.instructions.md`) have
