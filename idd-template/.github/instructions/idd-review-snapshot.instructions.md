@@ -320,7 +320,9 @@ unconditionally, in the **same surviving claimed worktree**:
 4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff, continue
    to E3. **E3 non-empty**: after E4-E8, map each Accepted item
    against it -- covered items skip E9, E13 cites the commit; unmatched
-   items get their normal E9 fix. **E3 empty** (the diff addressed an
+   items get their normal E9 fix. Either way, even with zero Accepted
+   items, the diff still runs E10-E12 and pushes before branch-sync.
+   **E3 empty** (the diff addressed an
    E2-only finding): resume at E10 for the diff itself -- E10, not
    E12, because a cold session cannot know whether E10's critique pass
    already ran against it, and

@@ -765,8 +765,11 @@ pick up cleanly at Discover, rather than starting another issue and risking a
 mid-loop death.
 
 Mid-review carries a narrower, equivalent boundary. A session may
-deliberately exit right after E1's watermark posts (before E4 starts),
-after E8 finds zero Accepted PATH A items **and** no open `Awaiting
+deliberately exit after E3 completes with an empty snapshot (E1's
+watermark alone is not enough -- E2's critique pass must actually run
+first, which Resume's clean/successful-PR route to F2 does not
+guarantee), after E8 finds zero Accepted PATH A items **and** no open
+`Awaiting
 maintainer decision` thread (E7 permits one to stay unresolved, so a
 zero Accepted count alone does not mean nothing is pending; branch-sync
 and F1 come next only once that thread is also clear), or after a
