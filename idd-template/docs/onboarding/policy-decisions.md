@@ -230,9 +230,13 @@ template into `kurone-kito/kurone-kito` (`kurone-kito/kurone-kito#18` ->
 completed the whole hearing/import/substitute/record-policy sequence
 with `ephemeral-npx` or `package-manager` selected and simply never set
 `helperRuntime.packageSpec`, silently leaving every helper invocation
-resolving against the mutable default archive URL instead of an audited
-pin — caught only by a downstream reviewer independently reading
-`post-merge-cleanup.yml`'s own header comment about this same gap. The
+backed by the mutable default archive URL — embedded directly in the
+`ephemeral-npx` invocation string, or resolved through
+`package-manager`'s installed dependency (see
+[Helper Runtime Profile](../idd-helper-scripts.md#profile-wiring-surface)
+for that distinction) — instead of an audited pin, caught only by a
+downstream reviewer independently reading `post-merge-cleanup.yml`'s
+own header comment about this same gap. The
 2026-09-15 Groom hearing for issue `#2987` chose to surface this as a
 non-blocking advisory rather than a blocking check: `idd-onboard.mjs
 --verify` (and its underlying `runVerify` / `checkPackagePinWarning`
