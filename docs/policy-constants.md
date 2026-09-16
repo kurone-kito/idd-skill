@@ -594,12 +594,12 @@ default and **prefer trimming or splitting the net addition over another
 ratchet bump**. The trade-off inverts only here, at the top of the range:
 below the band, the churn and terminology-drift cost of trimming outweighs a
 small raise; near the ceiling, each further bump raises the **review/merge
-instruction floor** — `bundle-core` loads alongside each of its six phase
-bundles (the lite bundles are self-contained and never load it),
-`bundle-review-triage-phase` and `bundle-review-fix-phase` load during
-their respective E-phase sessions, and `bundle-merge-phase` loads on every
-F-phase session — together these form the scarcest budget for
-smaller-context models. Read the two as one policy: raise by default while
+instruction floor** for the standard (non-lite) profile — `bundle-core`
+loads alongside each of its six phase bundles, `bundle-review-triage-phase`
+and `bundle-review-fix-phase` load during their respective E-phase
+sessions, and `bundle-merge-phase` loads on every F-phase session —
+together these form the scarcest budget for smaller-context models. Read
+the two as one policy: raise by default while
 headroom remains, and trim or split once headroom is nearly gone.
 
 **Mechanically enforced (#2697).** `node scripts/audit-docs.mjs --check`
