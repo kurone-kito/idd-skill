@@ -216,32 +216,32 @@ header comment — not present in the portable stub this template
 ships). For a stuck or stale rollup entry, rerun the _existing_
 PR-linked run (`gh run rerun <run-id>`) instead of `workflow_dispatch`.
 
-A second cause: GitHub gates a bot-triggered run (e.g. Copilot's
-`pull_request_review`/`pull_request_review_comment` event) to
-`action_required`, and the bot event alone never refreshes the check.
-Recover by rerunning the _existing_ non-bot `pull_request`-triggered
-run for this HEAD (subject to `ciWait.rerunPolicy`) — never the gated
-bot run itself, which keeps the original actor's privileges and
-re-enters `action_required` (approve via `POST
-/repos/{owner}/{repo}/actions/runs/{run_id}/approve` if it must run).
-The check also self-heals on the next non-bot trigger — a push or a
-**review-thread** reply, not a regular PR comment (no `issue_comment`
-subscription).
+A second cause: GitHub gates bot-triggered runs to `action_required`
+(for example, the non-required
+`idd-advisory-convergence-comment.yml` companion run for Copilot's
+`pull_request_review`/`pull_request_review_comment` event), so the
+companion cannot refresh the required check. Rerun the existing non-bot
+required `pull_request`- or `pull_request_target`-triggered run for
+this HEAD (subject to `ciWait.rerunPolicy`), never the gated bot run
+itself (approve it via `POST
+/repos/{owner}/{repo}/actions/runs/{run_id}/approve` only if needed).
+The required check also self-heals on a push or a non-bot companion
+refresh from a review-thread reply or qualifying IDD-originated PR
+comment. Ordinary PR comments are filtered, although `issue_comment`
+is subscribed for qualifying comments.
 
 **If rerunning the passing non-bot instance alone does not clear the
-rollup (`#1745`)**: a HEAD can carry several `idd-advisory-convergence`
-check-run instances (the check fires on `pull_request` plus
-`pull_request_review`/`pull_request_review_comment`, and
-`cancel-in-progress` cancels most of them), and GitHub's own required-check
-rollup can stay pinned to a bot-triggered instance whose **conclusion** is
-`CANCELLED`. Unlike `action_required`, a `CANCELLED`-conclusion
-bot-triggered instance is **not** gated: rerunning it completes
-normally and does not re-enter `action_required` (confirmed by direct
-experiment, `#1745`). If the
-non-bot rerun above does not clear the block, rerun every
-`CANCELLED`-conclusion bot-triggered sibling instance for the same HEAD
-next (`gh run rerun <run-id>` on each, per the plan below) — only an
-`action_required`-conclusion instance stays withheld from rerun.
+rollup (`#1745`)**: a HEAD can carry several
+`idd-advisory-convergence` check-run instances: required
+`pull_request`/`pull_request_target` runs can coexist with companion
+reruns of those instances. Review submissions use
+`--refresh-latest --apply`; comment paths use plain `--apply`.
+`cancel-in-progress` can leave the required-check rollup pinned to a
+`CANCELLED` instance. Unlike `action_required`, it is not gated and
+can be rerun (the direct experiment confirmed this for `#1745`). If
+the non-bot rerun does not clear the block, rerun every
+`CANCELLED` sibling for the same HEAD (`gh run rerun <run-id>` on each,
+per the plan below); only an `action_required` instance stays withheld.
 
 Note: this is a known Rulesets platform behavior, not an `idd-skill`
 dedup bug — GitHub can require every same-named instance non-failing,
