@@ -223,6 +223,30 @@ emit a reviewed tag, commit, tarball, or internal mirror URL. Treat
 `refs/heads/main` as a manual opt-in when the repository explicitly
 wants a mutable helper source instead of a reviewed pinned spec.
 
+**Missing pin is a non-blocking advisory, not a blocking check.**
+Observed 2026-09-14, during the issue-mediated bootstrap of this
+template into `kurone-kito/kurone-kito` (`kurone-kito/kurone-kito#18` ->
+`#29`, merged; tracked upstream via issue `#2973` item 14): an adopter
+completed the whole hearing/import/substitute/record-policy sequence
+with `ephemeral-npx` or `package-manager` selected and simply never set
+`helperRuntime.packageSpec`, silently leaving every helper invocation
+backed by the mutable default archive URL — embedded directly in the
+`ephemeral-npx` invocation string, or resolved through
+`package-manager`'s installed dependency (see
+[Helper Runtime Profile](../idd-helper-scripts.md#profile-wiring-surface)
+for that distinction) — instead of an audited pin, caught only by a
+downstream reviewer independently reading `post-merge-cleanup.yml`'s
+own header comment about this same gap. The
+2026-09-15 Groom hearing for issue `#2987` chose to surface this as a
+non-blocking advisory rather than a blocking check: `idd-onboard.mjs
+--verify` (and its underlying `runVerify` / `checkPackagePinWarning`
+API) reports a stable, non-blocking warning whenever the effective
+`helperRuntime.profile` is `ephemeral-npx` or `package-manager` and no
+`helperRuntime.packageSpec` is configured, naming the mutable default
+archive URL and pointing back to this section — but it never fails
+`--verify` or changes its exit code, since a repository may deliberately
+accept the mutable default during early bootstrap.
+
 **pnpm `allowBuilds` requirement for a git-hosted pinned spec.** When a
 `package-manager` repository using pnpm pins the `devDependencies` entry
 to a git-hosted spec (for example
@@ -638,7 +662,11 @@ Keep these rules in mind:
   runtime section when helper support is enabled
 - set `helperRuntime.packageSpec` only when the repository has pinned a
   reviewed tarball, mirror URL, or commit archive for its `ephemeral-npx`
-  helper install; omit it to keep the mutable default archive URL
+  or `package-manager` helper install; omit it to keep the mutable
+  default archive URL for either profile — an omitted `packageSpec`
+  under `ephemeral-npx` or `package-manager` is a deliberate, supported
+  choice, but `idd-onboard.mjs --verify` surfaces it as a non-blocking
+  reminder (see [Helper runtime profile](#helper-runtime-profile) above)
 
 The file validates against the canonical schema at:
 

@@ -877,7 +877,10 @@ Node.js helper path.
   detection is ambiguous). The output includes the package-manager
   install command, the `@kurone-kito/idd-skill` helper dependency, and a
   `package.json` scripts block that calls stable `idd-*` bins without
-  assuming pnpm.
+  assuming pnpm. `--package-spec` (or a configured
+  `helperRuntime.packageSpec`, same as `ephemeral-npx` below) pins the
+  emitted `devDependencies` entry and install command to a reviewed
+  tarball, mirror URL, or commit archive instead of the mutable default.
 - `vendored-node`: use the manifest's `managedFiles` list to copy the
   helper bundle into matching paths in the target repository, then run
   the emitted local `node scripts/...` commands. The profile output also
@@ -900,7 +903,13 @@ Node.js helper path.
   default and idd-doctor's remediation hints), not only a one-shot
   `--package-spec` flag on a single invocation. An explicit
   `--package-spec` flag still wins over the configured value when both
-  are present.
+  are present. The `package-manager` profile above uses the same
+  configured pin for its install command and `devDependencies` entry
+  instead — its emitted helper commands are bare `idd-*` bin names, not
+  a parameterized invocation string, so the pin never appears inside
+  those commands themselves. `idd-onboard.mjs --verify` reports a
+  non-blocking advisory for either profile when no `packageSpec` is
+  configured.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 
