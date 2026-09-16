@@ -2851,7 +2851,7 @@ test('checkPackagePinWarning warns for package-manager with no packageSpec confi
   // pin, never the invocation string itself (unlike ephemeral-npx below).
   assert.match(
     result.warning as string,
-    /install their pinned dependency from/,
+    /install their helper dependency from/,
   );
   assert.doesNotMatch(result.warning as string, /resolve against/);
 });

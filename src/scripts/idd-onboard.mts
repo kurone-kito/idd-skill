@@ -2029,7 +2029,7 @@ export function checkPackagePinWarning(
   const packageSpecMechanism =
     profile === 'ephemeral-npx'
       ? 'resolve against'
-      : 'install their pinned dependency from';
+      : 'install their helper dependency from';
   const warning =
     applicable && !packageSpecConfigured
       ? `helper commands for the "${profile}" helper runtime profile ${packageSpecMechanism} the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
