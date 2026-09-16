@@ -486,12 +486,25 @@ dogfooding sessions (preventive; no observed incident yet):
   precedence across its six discovery paths is unspecified upstream.
   `Read` has no analogous collision class: a path is a path.
 - **Permission-based hiding**: OpenCode's `deny` permission status
-  removes a skill from the listing entirely for that session; Claude
-  Code's `disable-model-invocation: true` frontmatter flag removes a
-  skill's description from the listing the same way, so an orchestrator
-  directive could name a skill the agent cannot see at all. `Read` has
-  no equivalent "permission hides the file from the tool that would
-  open it" default.
+  removes a skill from the listing entirely for that session. Claude
+  Code's `disable-model-invocation: true` frontmatter is a confirmed,
+  explicit exception to the name-stays-listed rule above, verified two
+  ways rather than assumed: the startup listing omits the entry outright
+  — "Skills with `disable-model-invocation: true` are not in this list.
+  They stay completely out of context until you invoke them with
+  `/name`" — and separately, Claude Code's own enforcement actively
+  rejects a model-issued call even when the model already has the exact
+  name from elsewhere (an orchestrator directive, not the listing): "If
+  Claude tries anyway, Claude Code blocks the call and instructs it not
+  to reproduce the deploy steps another way" (first quote from the
+  `code.claude.com/docs/en/context-window` skill-listing walkthrough,
+  second from `code.claude.com/docs/en/skills`'s "Control who invokes a
+  skill" section, both retrieved 2026-09-16). So an orchestrator
+  directive naming a `disable-model-invocation` skill fails
+  twice over: the name is absent from the ambient listing, and even a
+  directive that supplies the name directly is blocked at the point of
+  the call. `Read` has no equivalent "permission hides the file from the
+  tool that would open it" default.
 
 ### C. Does the weak-model tier change the answer?
 
@@ -566,19 +579,27 @@ section, retrieved 2026-09-16.)
   evicted; only the fuzzy, description-dependent auto-trigger path
   section 4 already covers degrades this way. Do not read this as a
   discovery failure mode for the exact-name path — it is not one.
-- **A favorable nuance current documentation also surfaces, which
-  neither prior note recorded**: the listing itself is explicitly not
-  re-injected after `/compact` — "Unlike the rest of the startup
-  content, this listing is not re-injected after `/compact`. Only skills
-  you actually invoked get preserved."
-  (`code.claude.com/docs/en/context-window`, retrieved 2026-09-16). The
-  always-resident framing in Section 5 above and in
-  `docs/claude-skill-strategy.md`'s Context Economics section is
+- **A nuance current documentation surfaces that this addendum cannot
+  fully resolve**: the listing itself is explicitly not re-injected
+  after `/compact` — "Unlike the rest of the startup content, this
+  listing is not re-injected after `/compact`. Only skills you actually
+  invoked get preserved." (`code.claude.com/docs/en/context-window`,
+  retrieved 2026-09-16). The always-resident framing in Section 5 above
+  and in `docs/claude-skill-strategy.md`'s Context Economics section is
   accurate only up to a session's first compaction; past that point the
-  listing cost quantified above drops to zero for any never-invoked
-  skill. A plain instruction-file routing table has no equivalent
-  one-time-then-free property, because it lives inside the always-loaded
-  core file, which does reload after compaction per that same page.
+  listing's rendered-text cost drops to zero for any never-invoked
+  skill. Whether that also means a never-invoked skill's exact name
+  stops being a valid orchestrator-directed target after compaction —
+  since Part A's listing-membership observation was made against the
+  rendered text, not against whatever discovery state the harness may
+  separately retain independent of that text — is not settled by
+  anything this addendum found documented either way; treat it as an
+  open question this cost reduction raises, not a confirmed favorable
+  trade. A plain instruction-file routing table has no equivalent
+  tension: it lives inside the always-loaded core file, which does
+  reload after compaction, so the target it names (a phase file to
+  `Read`) never depends on a rendered listing that compaction may
+  already have dropped.
 
 Net effect: the cost side is real, current documentation now lets it be
 stated precisely rather than restated on faith, and it cuts in more than
@@ -586,13 +607,15 @@ one direction — confirmed and, at the documented average, illustrated
 as a session-wide, non-trivial tax that this repository's own Option A
 mapping would consume a large fraction of by itself, and a finer split
 moves it closer to or potentially past that budget, pending an actual
-measurement rather than the average alone; partly offset by the
-post-compaction reset the prior notes did not know to claim; and,
-narrowly, favorable to the exact-name path specifically, since listing
+measurement rather than the average alone; genuinely favorable to the
+exact-name path specifically on one narrow point, since listing
 pressure degrades fuzzy auto-matching without ever blocking a
-discovered skill's name from being invoked. None of that touches the
-Part A/B/C safety
-argument above, which is what the recorded no-go actually turns on.
+discovered skill's name from being invoked; and left genuinely open on
+the post-compaction question, which reduces the rendered-text cost but
+may or may not also affect exact-name reachability for a never-invoked
+skill, unresolved either way by anything this addendum found
+documented. None of that touches the Part A/B/C safety argument above,
+which is what the recorded no-go actually turns on.
 
 ### Verdict, restated
 
