@@ -465,6 +465,21 @@ Re-evaluate this note when any of the following holds:
 - This repository or an adopter wants to pilot `skills/issue-authoring/`
   alone via `apm install`, as a bounded, reversible experiment — the
   one candidate §7 found net-neutral-or-favorable.
+- An APM lockfile can record installed artifact versions in a stable,
+  machine-readable form that a named-gap re-import can consume. That
+  would serve `idd-template/ONBOARDING.md`'s "Re-importing: import named
+  gaps, not a blind resync" section and
+  `idd-template/docs/onboarding/template-distribution.md`'s "Anatomy of
+  a helper re-import" procedure.
+
+**Onboarding token cost is not an APM fit.** `idd-onboard.mjs` already
+automates Steps 0, 1A, 1B, 1C (`--hear`), 2 (`--import`), 3
+(`--record-policy`), 4 (`--substitute`), and 6 (`--verify`). The residual
+cost includes the manual Step 5 agent-entry updates and reading the
+documentation, neither of which a packaging mechanism reduces. At this
+revision, the front door measures 52,611 bytes and the manifest-defined
+companion Markdown bundle measures 165,971 bytes; `hearing-catalog.json`
+is a separate schema input and is not part of that bundle.
 
 Capture new evidence as issues referencing this document.
 
