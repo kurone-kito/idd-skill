@@ -22,15 +22,14 @@ before E9, the E12 push, and each E13/E14/E15 GitHub side effect
 ## E9 — Fix accepted issues
 
 Fix all Accepted PATH A items from ReviewItems_snapshot (cold:
-`idd-review-snapshot.instructions.md` reconstruction). Run
+`idd-review-snapshot.instructions.md`'s Cold-start section). Run
 **fix-validate**. Commit fixes atomically — one logical change per
 commit.
 
 **Within-round batching.** All of this round's Accepted PATH A fixes
 travel as their own atomic commits, but push together in a single push
 at E12 — do not push after each individual fix. See E12 for the push
-step and the bounded cross-round allowance for comments arriving before
-that push.
+step and the bounded cross-round allowance.
 
 These fix-side rules cut the advisory-review round count (complementing
 E5's "Verify before accept" rule):

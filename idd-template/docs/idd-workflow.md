@@ -423,17 +423,21 @@ when the branch and HEAD are unchanged — see
 forced-handoff recovery note for the authoritative rule.
 
 **Cold entry outside Resume**: `idd-resume.instructions.md`'s Step 3
-table already rebuilds at E1 for every mid-review resume it handles
-(crash, rate-limit, stale-claim takeover) — never directly at E4 or E9.
-The gap this closes is the two paths that table doesn't cover:
-`idd-overview-core.instructions.md`'s phase-routing entries for
-"Snapshot done" / "Review feedback accepted," followed without having
-just run E1, and an orchestrator fan-out delegation brief that hands a
-worker straight into mid-review
-(see [Orchestrator fan-out variant](#orchestrator-fan-out-variant)
-below). `idd-review-snapshot.instructions.md`'s cold-start
-reconstruction section is the named procedure for both entry paths,
-including the two edge cases a naive rebuild could get wrong.
+table rebuilds at E1 for the CI/review resume cases it covers (crash,
+rate-limit, stale-claim takeover with reviews already settled) — but
+two of its own worktree-state routes resume without that rebuild too:
+`docs/idd-resume-detail.md` §W3 (dirty worktree, reviews exist: resumes
+straight from E9) and §W5 (clean, unpushed: pushes before Step 3's
+table even runs). The gap this closes spans three paths: those two
+Resume routes, `idd-overview-core.instructions.md`'s phase-routing
+entries for "Snapshot done" / "Review feedback accepted," followed
+without having just run E1, and an orchestrator fan-out delegation
+brief that hands a worker straight into mid-review (see
+[Orchestrator fan-out variant](#orchestrator-fan-out-variant) below).
+`idd-review-snapshot.instructions.md`'s cold-start reconstruction
+section is the named procedure for all three, including the two edge
+cases a naive rebuild could get wrong; wiring §W3/§W5 to call it is a
+follow-up to `idd-resume.instructions.md` itself.
 
 ## Artifact taxonomy and ownership
 
@@ -737,11 +741,22 @@ a later session to untangle. Finishing the current issue to the F4/F5 boundary
 and exiting there converts that uncontrolled failure into a controlled handoff —
 durable claim and PR state plus the existing resume phase let a fresh session
 pick up cleanly at Discover, rather than starting another issue and risking a
-mid-loop death. The [ReviewItems_snapshot lifecycle](#reviewitems_snapshot-lifecycle)
-section above names the equivalent, narrower boundary inside a single E-phase
-pass: entering cold at E1 is always safe, and a session lost between E4 and a
-round's completed E13 replies recovers through that section's cold-start
-reconstruction instead.
+mid-loop death.
+
+Mid-review carries a narrower, equivalent boundary. A session may
+deliberately exit right after E1's watermark posts (before E4 starts),
+after E8 finds zero Accepted PATH A items (nothing pending; the
+branch-sync check and F1 come next), or after a round's E13 replies
+all land:
+each of these leaves every disposition durable on GitHub, so a
+successor re-enters cleanly via a fresh E1 pass with nothing to
+recover. Exiting anywhere between E4 and a round's completed E13
+replies is not recommended — an Accepted-PATH-A decision carries no
+durable marker until E13 posts it (E6 defers that reply on purpose) —
+so a session forced to exit or resume there instead relies on the
+recovery procedure the
+[ReviewItems_snapshot lifecycle](#reviewitems_snapshot-lifecycle)
+section names.
 
 Short sessions need cheap ramp-up, which the "facts live in docs and
 helpers, not in session memory" design already supports: a fresh session
@@ -870,13 +885,16 @@ Running this variant safely requires:
   with a resume-specific briefing rather than resuming the dead
   worker's own
   context.
-- **A delegation brief resuming mid-review must run the cold-start
-  reconstruction.** A fresh worker dispatched straight into E4-E15 for
-  a PR it did not just fetch itself must not assume
+- **A delegation brief resuming mid-review at E4 or E9 must run the
+  cold-start reconstruction.** A fresh worker dispatched straight into
+  E4 or E9 for a PR it did not just fetch itself must not assume
   `ReviewItems_snapshot` still reflects live state — see the
   ReviewItems_snapshot lifecycle section's Cold entry outside Resume
   note above and `idd-review-snapshot.instructions.md`'s cold-start
-  reconstruction section.
+  reconstruction section. This covers only those two named entry
+  points; a brief that instead hands a worker into E10, E13, E14, or
+  E15 has no supported cold-entry route yet and should route through
+  E4 (or E1) instead.
 - **Independently verify a worker's reported terminal outcome before
   trusting it.** A worker's final-turn text describes what it
   _attempted_, not proof of what actually landed on the forge. Before

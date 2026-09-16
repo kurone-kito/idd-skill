@@ -270,23 +270,28 @@ Otherwise → proceed to `idd-review-triage.instructions.md` (E4).
 
 Read this section when entering E4 (`idd-review-triage.instructions.md`)
 or E9 (`idd-review-fix.instructions.md`) without ReviewItems_snapshot
-from this episode's own E1-E3 pass -- a session resuming mid-review
-outside `idd-resume.instructions.md`'s formal routing (which already
-rebuilds at E1 for every mid-review resume), such as a fresh worker
-following `idd-overview-core.instructions.md`'s routing-table entry
-directly, or an orchestrator delegation brief that hands off mid-review.
+from this episode's own E1-E3 pass. Three paths land here with no
+rebuild of their own: `idd-overview-core.instructions.md`'s
+unconditional "Snapshot done" / "Review feedback accepted" routing
+rows; an orchestrator delegation brief that hands off mid-review; and
+`idd-resume.instructions.md`'s own worktree-state routes --
+`docs/idd-resume-detail.md` §W3 (dirty worktree, reviews exist: resumes
+straight from E9) and §W5 (clean, unpushed: pushes before Step 3's
+table runs) -- neither of which rebuilds at E1 either. Wiring those two
+routes to run this section first is a follow-up to
+`idd-resume.instructions.md` itself, outside this section's own file.
 
 **Procedure**: run E1 Steps 1-3 above. They already re-derive
 ReviewItems_snapshot entirely from live GitHub state on every
 execution -- no session memory required -- so re-running them now is
-the reconstruction; post a fresh watermark (Step 2) and continue to E2
-before E4/E9. This is the same rebuild `idd-resume.instructions.md`'s
-routing table already requires after a crash; this section names and
-generalizes it for the two entry paths formal Resume routing does not
-cover.
+the reconstruction; post a fresh watermark (Step 2), then continue
+through E2, E3, and E4-E8 in full before any E9 work -- a cold E9 entry
+has no durable Accepted-PATH-A set to trust (E6 defers that reply to
+E13), so triage must re-run, not just E1's fetch.
 
-Two correctness-sensitive gaps need an explicit rule, since a naive
-rebuild can silently drop or duplicate a reviewer-facing item:
+Two correctness-sensitive gaps need an explicit rule (preventive; no
+observed incident yet), since a naive rebuild can silently drop or
+duplicate a reviewer-facing item:
 
 **Edge case 1 -- an item mid-E4 classification, no disposition reply
 posted yet.** No special handling: Step 3's awaiting-reviewer
@@ -307,11 +312,13 @@ the **same surviving claimed worktree**:
    local history is not a simple ahead-of-`$PR_HEAD` case; fall back to
    edge case 1's rule instead of trusting the next step.
 3. On success, `git log "$PR_HEAD"..HEAD` lists commits already made.
-   Still run the Procedure above -- the rebuild is unconditional. When
-   E4 then re-surfaces an item those commits address, treat it as
-   Accepted-and-fixed and take it through E10-E15 rather than
-   re-fixing: E10, not E12, because a cold session cannot know whether
-   E10's critique pass already ran against them, and
+   Still run the Procedure above -- the rebuild, including E4-E8, is
+   unconditional. When E4 then re-surfaces an item, confirm the local
+   diff actually addresses it (never assume from the commit list
+   alone) before treating it as Accepted-and-fixed and taking it
+   through E10-E15 rather than re-fixing: E10, not E12, because a cold
+   session cannot know whether E10's critique pass already ran against
+   it, and
    [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
    governs that ambiguity.
 
