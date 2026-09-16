@@ -841,9 +841,9 @@ at a consumer's install time). `kurone-kito/idd-skill#3043` removed
 explicit pnpm-version check inside its own `verify-install-deps`
 helper instead, which is never exposed via `package.json`'s `bin` and
 so never reaches a consumer's install. The principle for any project
-that vends its own helper package under this profile: a `package.json`
+that vends its own helper package under this profile: an `engines`
 field added for contributor-local-dev reasons is not scoped to that
-project alone -- it is enforced under `engineStrict` against every
+project alone -- pnpm's `engineStrict` enforces `engines` against every
 consumer using the `package-manager` profile, so any such field needs
 the same consumer-impact check before landing.
 

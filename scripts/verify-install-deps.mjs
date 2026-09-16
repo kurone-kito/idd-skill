@@ -63,36 +63,66 @@ export function parsePnpmMajorFromPackageManager(packageManagerField) {
   return match === null ? null : Number(match[1]);
 }
 /**
- * Extracts the leading `<major>.<minor>.<patch>` token from `pnpm
- * --version` output. Uses a regex over a naive trim so incidental output
- * around the version -- a corepack first-run banner line, trailing CRLF --
- * doesn't break parsing.
+ * Extracts the pnpm version token from `pnpm --version` output: the
+ * *last* line consisting solely of a bare `<major>.<minor>.<patch>` value
+ * -- optionally followed by a SemVer prerelease (`-rc.1`) and/or build-
+ * metadata (`+abc123`) suffix, so a prerelease pnpm build still resolves
+ * instead of falling back to `undetermined` -- with optional surrounding
+ * spaces/tabs and an optional trailing CR. Real `pnpm --version` output is
+ * exactly one such bare version line, nothing else, so matching a whole
+ * line rather than any substring anywhere in the output correctly ignores
+ * incidental banner text in either direction: a corepack "Preparing
+ * pnpm@X.Y.Z for first use" line embeds its version in a longer line, not
+ * a line of its own, so it never matches; a hypothetical trailing
+ * notifier line is rejected the same way. Taking the *last* qualifying
+ * line (rather than the first) means a preamble line ahead of the real
+ * version can never win. A naive first-match-anywhere regex previously
+ * misread a preamble containing its own version-shaped text -- e.g.
+ * `corepack 0.30.0\n12.4.1\n` -- as major 0 instead of the real 12 (PR
+ * kurone-kito/idd-skill#3053 review).
+ */
+export function parsePnpmVersionToken(versionOutput) {
+  const versionLine =
+    /^[ \t]*(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)[ \t]*\r?$/gm;
+  const matches = [...versionOutput.matchAll(versionLine)];
+  return matches.length === 0 ? null : matches.at(-1)[1];
+}
+/**
+ * Extracts the major version from the token `parsePnpmVersionToken`
+ * resolves. A thin, independently-testable wrapper -- `classifyPnpmVersionCheck`
+ * below calls `parsePnpmVersionToken` directly so it can also report the
+ * clean token as `detectedVersion`, rather than re-deriving it here.
  */
 export function parsePnpmMajorFromVersionOutput(versionOutput) {
-  const match = /(\d+)\.\d+\.\d+/.exec(versionOutput);
-  return match === null ? null : Number(match[1]);
+  const token = parsePnpmVersionToken(versionOutput);
+  return token === null ? null : Number(token.split('.')[0]);
 }
 /**
  * Pure classification of the pnpm-version check: does the resolved `pnpm
  * --version` output satisfy the major pinned in package.json's
  * `packageManager` field? `requiredMajor` is `null` when `packageManager`
  * doesn't pin pnpm at all (`not-applicable` -- nothing to check).
- * `detectedVersionRaw` is `null`, or unparseable, when `pnpm --version`
- * could not be resolved (`undetermined` -- the check can't reach a
- * verdict, so it never blocks the install on an inconclusive read).
+ * `detectedVersionRaw` is `null`, or has no parseable version token, when
+ * `pnpm --version` could not be resolved (`undetermined` -- the check
+ * can't reach a verdict, so it never blocks the install on an
+ * inconclusive read). `detectedVersion` in the `match`/`mismatch` result
+ * is always the clean parsed token (e.g. `12.4.1`), never the raw
+ * possibly-multi-line output -- surfacing the whole raw blob in a
+ * mismatch message would defeat the "actionable, naming both versions"
+ * goal whenever the output carries incidental banner text.
  */
 export function classifyPnpmVersionCheck(requiredMajor, detectedVersionRaw) {
   if (requiredMajor === null) {
     return { status: 'not-applicable' };
   }
-  const detectedMajor =
+  const detectedVersion =
     detectedVersionRaw === null
       ? null
-      : parsePnpmMajorFromVersionOutput(detectedVersionRaw);
-  if (detectedMajor === null || detectedVersionRaw === null) {
+      : parsePnpmVersionToken(detectedVersionRaw);
+  if (detectedVersion === null) {
     return { status: 'undetermined', requiredMajor };
   }
-  const detectedVersion = detectedVersionRaw.trim();
+  const detectedMajor = Number(detectedVersion.split('.')[0]);
   return detectedMajor === requiredMajor
     ? { status: 'match', requiredMajor, detectedVersion }
     : { status: 'mismatch', requiredMajor, detectedVersion };
@@ -171,7 +201,14 @@ function runCli() {
         pnpmVersionCheck.requiredMajor,
       ),
     );
-    process.exit(1);
+    // Set exitCode and return rather than calling process.exit(1)
+    // directly: exit() can terminate the process before an async stderr
+    // write (e.g. a redirected pipe on Windows) has fully flushed,
+    // silently truncating this actionable message. Returning lets the
+    // event loop drain naturally and Node exit with the recorded code
+    // once the write has completed.
+    process.exitCode = 1;
+    return;
   }
   runInstallCommand(args.installCommand);
   const existsAfterInstall = existsSync(args.keyBinary);
