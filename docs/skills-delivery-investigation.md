@@ -376,3 +376,327 @@ This investigation does not:
 - propose follow-up implementation issues, since the recommendation is
   no-go (see Recommendation above and the paired
   [`idd-design-rationale.md`](idd-design-rationale.md) entry)
+
+## Addendum: orchestrator-directed `Skill()` invocation (2026-09-16, issue #3032)
+
+Section 4 above enumerated four Claude Code invocation paths (model
+judgment, `/name`, subagent preload, `paths` glob-match) and found none
+of them a "must load unconditionally" primitive. It did not evaluate a
+fifth path: **orchestrator-directed invocation**, where a routing
+table — reached via the always-loaded entry file's own directive to
+open it, per this repository's own two-step entry contract (Part D
+below) — names a skill explicitly and instructs the agent to invoke it
+at that exact step, structurally the same instruction shape as "open
+this file" (the routing table already dispatches to phase files this
+way), differing only in which tool executes the directive. This
+addendum records the verdict for
+[#3032](https://github.com/kurone-kito/idd-skill/issues/3032), a
+fourth-kind-of-new-evidence issue under this document's own Revisit
+conditions above.
+
+**Verdict: narrows the section 4 fuzzy-matching finding; does not supply
+the missing forced-load primitive. The recorded no-go stands.**
+
+### A. Is an explicit-invoke directive as reliable as a Read directive?
+
+Neither runtime documents "orchestrator-directed invocation" as a named
+primitive. The analysis below is this addendum's own inference from what
+each runtime does document — explicit `/skill-name` invocation and
+model-selected automatic loading for Claude Code, and a model-issued
+`skill({ name: ... })` call for OpenCode — not a third, separately
+documented mechanism. Read that way, both runtimes support
+orchestrator-direction only as a stronger case of the same
+model-judgment-mediated mechanism section 4 already found, not a
+separate forced-load primitive:
+
+- Claude Code: "Claude uses skills when relevant, or you can invoke one
+  directly with `/skill-name`," and frontmatter adds "the ability for
+  Claude to load them automatically when relevant" alongside a separate
+  field "to control whether you or Claude invokes them"
+  (`code.claude.com/docs/en/skills`, retrieved 2026-09-16). Nothing in
+  that page describes a third mode in which an instruction elsewhere in
+  context — including one in an always-loaded file — forces the call
+  independent of Claude's own choice to comply; an orchestrator
+  directive is a stronger nudge toward "when relevant," not a different
+  mechanism. The agent must still choose to comply and emit a matching
+  `Skill` tool call, exactly as it must choose to comply with an
+  instruction to call `Read` on a named path — the compliance step
+  itself is not more deterministic merely because the directive is
+  explicit rather than fuzzy.
+- OpenCode: "Skills are loaded on-demand via the native skill
+  tool—agents see available skills and can load the full content when
+  needed," and invocation is an explicit, agent-initiated call: "The
+  agent loads a skill by calling the tool: `skill({ name: "git-release"
+  })`" (`opencode.ai/docs/skills/`, retrieved 2026-09-16). Its
+  permission system (`opencode.json`'s `permission.skill` patterns)
+  only ever gates that same agent-initiated call — `allow` lets it load
+  without a prompt, `ask` requires approval, `deny` hides it entirely —
+  none of the three forces a load the agent did not itself choose to
+  make; the page documents no configuration path that does.
+- The categorical difference from a `Read` directive is not compliance
+  reliability but an added discovery-and-validity gate `Read` does not
+  have. Claude Code's own `Skill` tool schema, as surfaced to an agent in
+  this runtime (observed 2026-09-16), documents exactly this constraint:
+  only a name already present in the current skill listing — or one the
+  user typed explicitly — is a valid invocation target; the tool
+  description directs the agent not to guess a name outside that set.
+  This is a directly observable, reproducible constraint of the current
+  runtime, not an inference. An orchestrator directive naming a skill not
+  currently in that listing has no valid way to invoke it; a `Read`
+  directive naming any existing file path has no such listing
+  precondition to fail on in the first place — its own possible failure
+  mode is a separate, later concern (Part B's permission-hiding bullet
+  covers it), not a "listing" gate of any kind.
+
+### B. Failure modes a file `Read` cannot have
+
+Skill invocation depends on a prior, separate discovery/indexing step
+that `Read` does not. Each mode below is a documented mechanical
+possibility, not a recorded incident in this repository or its
+dogfooding sessions (preventive; no observed incident yet):
+
+- **Silent discovery/indexing failures**: a missing or malformed
+  required frontmatter field (`name`, `description`) leaves a skill
+  loadable by direct invocation but unmatched against a description
+  (Claude Code: "If the frontmatter YAML is malformed, Claude Code loads
+  the skill body with empty metadata, so `/skill-name` still works but
+  Claude can't match against your description"); OpenCode's own
+  troubleshooting list separately names incorrect `SKILL.md` casing,
+  missing `name`/`description` fields, and a non-unique name across
+  locations as reasons a skill fails to show up at all. Claude Code
+  additionally requires a session restart specifically for a
+  **brand-new top-level skills directory** that did not exist when the
+  session started — edits to a skill already under an already-watched
+  directory are picked up live, without a restart ("If you create a
+  top-level skills directory that didn't exist when the session
+  started, restart Claude Code so it can watch the new directory.")
+  (`code.claude.com/docs/en/skills` and `opencode.ai/docs/skills/`
+  troubleshooting/"Edit a skill during a session" sections, retrieved
+  2026-09-16). A `Read` on a missing or misnamed path fails immediately
+  and visibly to the calling turn; these two discovery/indexing cases
+  instead leave the directive silently unsatisfiable, or satisfiable
+  only by direct invocation and not by the routing table's ordinary
+  directive, with no comparable error surfaced at the step that needed
+  it. (This silence is specific to these two cases — the
+  permission-based case below is the opposite: an active, visible
+  block, not a silent one.)
+- **Name-collision precedence outside the routing table's control**:
+  Claude Code resolves same-named skills by a fixed hierarchy
+  (enterprise overrides personal, personal overrides project, either
+  overrides a same-named bundled skill), so an orchestrator directive
+  naming a skill by its bare name can silently resolve to a different
+  skill body than the one the routing table's author placed in the
+  repository, if a higher-precedence same-named skill exists in the
+  invoking user's own environment. OpenCode's own documentation leaves
+  this undefined rather than resolving it in the routing table's favor —
+  this document's own Section 2 above already records that same-name
+  precedence across its six discovery paths is unspecified upstream.
+  `Read` has no analogous collision class: a path is a path.
+- **Permission-based hiding**: OpenCode's `deny` permission status
+  removes a skill from the listing entirely for that session. Claude
+  Code's `disable-model-invocation: true` frontmatter is a confirmed,
+  explicit exception to the name-stays-listed rule above, verified two
+  ways rather than assumed: the startup listing omits the entry outright
+  — "Skills with `disable-model-invocation: true` are not in this list.
+  They stay completely out of context until you invoke them with
+  `/name`" — and separately, Claude Code's own enforcement actively
+  rejects a model-issued call even when the model already has the exact
+  name from elsewhere (an orchestrator directive, not the listing): "If
+  Claude tries anyway, Claude Code blocks the call and instructs it not
+  to reproduce the deploy steps another way" (first quote from the
+  `code.claude.com/docs/en/context-window` skill-listing walkthrough,
+  second from `code.claude.com/docs/en/skills`'s "Control who invokes a
+  skill" section, both retrieved 2026-09-16). So an orchestrator
+  directive naming a `disable-model-invocation` skill fails
+  twice over: the name is absent from the ambient listing, and even a
+  directive that supplies the name directly is blocked at the point of
+  the call — but, unlike the silent cases above, this failure is
+  visible: the quoted text confirms Claude Code blocks the call and
+  tells the model not to work around it, rather than leaving the
+  directive to fail with no signal. Call-time blocking alone is not
+  unique to `Skill`: both runtimes expose an equivalent deny rule for
+  `Read` itself (OpenCode's permission system covers `read` the same
+  way; Claude Code supports tool-specific `Read(...)` deny rules), so a
+  denied `Read` can fail at the point of the call too. What `Read` still
+  has no equivalent for is the listing-omission side: a permission-
+  denied `Read` target is still a nameable, attemptable path — the
+  agent's belief that the file exists never depended on any pre-rendered
+  inventory the way a `Skill` name depends on the skill listing.
+
+### C. Does the weak-model tier change the answer?
+
+No, and this repository already answers the closely related question for
+the lite profile. `docs/weak-model-lite-profile-design.md`'s
+Recommendation section states the lite profile's whole premise is
+"mechanical helper gates the primary control surface (fail-closed) …
+not model judgment," and concludes that adopting skills for load-bearing
+lite-phase content "would trade that deterministic property away for the
+exact tier least able to compensate for a missed trigger." Orchestrator
+direction does not change that conclusion: per Part A above it remains a
+model-judgment-mediated tool call, now layered with the Part B discovery
+and collision failure modes — and a weak model that already "drops
+constraints stated far from the point of action" (per
+`docs/weak-model-lite-profile-design.md`'s own account of the target
+model class's limitations) is not a better candidate for an extra,
+silent discovery-layer failure mode than a strong one is.
+
+### D. Always-resident listing cost, quantified
+
+The "scales at 1% of the model's context window" figure Section 5 above
+cites is genuine and current — it is not a paraphrase but the literal
+sentence Claude Code's own documentation uses to explain why descriptions
+get shortened: "Claude Code loads a listing of skill names and
+descriptions into context so Claude knows what's available. The listing
+always contains every skill name, but if you have many skills, Claude
+Code shortens descriptions to fit the listing's character budget, which
+can strip the keywords Claude needs to match your request. The budget
+scales at 1% of the model's context window." The same section states a
+mechanism neither prior note recorded: "When the listing overflows,
+Claude Code drops descriptions starting with the skills you invoke
+least, so the skills you use most keep their full text."
+(`code.claude.com/docs/en/skills`, "Skill descriptions are cut short"
+section, retrieved 2026-09-16.)
+
+- **Quantified**: the quoted mechanism above defines this as a
+  _character_ budget, not a token budget — it "shortens descriptions to
+  fit the listing's character budget," which "scales at 1% of the
+  model's context window." At the 200,000-token reference context size
+  Claude Code's own interactive context-window guide uses
+  (`code.claude.com/docs/en/context-window`, retrieved 2026-09-16), that
+  reading puts the character budget at roughly 2,000 characters for the
+  _entire_ listing across every installed skill, not per skill; the
+  source states no separate, token-denominated cap to compare against
+  directly. The general Agent Skills architecture separately states
+  Level 1 metadata (`name` plus `description`) costs "~100 tokens per
+  Skill" **at typical description lengths**
+  (`platform.claude.com/docs/en/agents-and-tools/agent-skills/overview`,
+  "How Skills work" table, retrieved 2026-09-16) — a token estimate, not
+  a character one, and an average the source states for ordinary
+  fuzzy-triggered skills, not a documented floor; an exact-name
+  orchestrator-directed skill's description carries no
+  fuzzy-trigger-keyword burden, so its real cost could run lower.
+  Comparing the two figures needs a character-to-token conversion
+  neither source documents; using the common rough approximation of
+  about 4 characters per token (this addendum's own estimate, not a
+  cited figure), that ~100-token average is roughly 400 characters per
+  skill. Applying that illustratively to this repository's own
+  Section 1 mapping, rather than repeating a file count here that could
+  drift out of sync with that table: at roughly 400 characters per
+  skill, even Option B's smaller count (5–6 bundle-aligned skills) alone
+  already lands at or near the entire roughly 2,000-character budget
+  before counting any other skill a user has installed, and Option A's
+  larger, one-skill-per-phase-file count (read that table live rather
+  than trusting a number restated here) lands well past it; a finer
+  future split — doubling either mapping into narrower skills — only
+  pushes further past the same fixed budget, not toward it. This is a
+  stronger conclusion than an earlier token-unit reading of this same
+  figure supported, because treating the character budget as if it were
+  already token-denominated understated the true cost; exactly how much
+  stronger depends on how reliable the roughly-4-characters-per-token
+  approximation is for these specific descriptions, which this addendum
+  has not independently measured against a real serialized listing.
+  Because the character budget caps the rendered listing itself, not
+  the underlying metadata demand, the listing a session actually sees
+  cannot exceed that cap regardless of the true count — a demand past
+  the cap forces the same truncation/eviction behavior described above
+  (shorter or dropped descriptions), not literally missing skills, so
+  heavier mappings degrade the listing's description text rather than
+  fail outright.
+- **A nuance that narrows, not widens, Part B's discovery concerns**:
+  the quoted eviction behavior only ever drops **descriptions**, never
+  the skill **name** — "the listing always contains every skill name"
+  is stated in the same sentence this addendum already quotes above.
+  An orchestrator directive invokes by exact name, not by
+  description-matched relevance, so a validly discovered skill's name
+  stays invocable under listing pressure even after its description is
+  evicted; only the fuzzy, description-dependent auto-trigger path
+  section 4 already covers degrades this way. Do not read this as a
+  discovery failure mode for the exact-name path — it is not one.
+- **The cost reduction below is not clearly favorable — on the most
+  evidence-consistent reading, it points to a fourth, preventive
+  discovery/validity failure mode (no observed incident yet, and not
+  independently confirmed), not a settled compensating win.** The
+  listing itself
+  is explicitly not re-injected after `/compact` — "Unlike the rest of
+  the startup content, this listing is not re-injected after `/compact`.
+  Only skills you actually invoked get preserved."
+  (`code.claude.com/docs/en/context-window`, retrieved 2026-09-16). Part
+  A's own observed rule is that only a name currently present in the
+  listing — or one the user typed explicitly — is a valid `Skill` call
+  target; nothing this addendum found documents any mechanism that
+  re-renders the listing, or restores one dropped skill's entry within
+  it, mid-session after a compaction event. What remains genuinely
+  unconfirmed is whether that call-time check reads the rendered
+  listing text itself or a separate, harness-internal discovery state
+  the text merely reflects; nothing this addendum found documents that
+  distinction either way. Taking the observed rule at face value — the
+  only form of the check anything here directly documents — a
+  never-invoked phase skill would stop being a valid orchestrator-
+  directed target the moment compaction occurs, its rendered-text cost
+  not merely dropping to zero but the call itself becoming
+  unsatisfiable; treat that as this addendum's best reading of the
+  available evidence, not a confirmed or independently reproduced
+  runtime fact. This repository's own wiring means the same
+  caution applies to overstating the `Read` side's own recovery: per
+  `docs/idd-workflow.md`'s entry-points table, Claude Code auto-loads
+  only `CLAUDE.md` (which imports `AGENTS.md`) — "None from
+  `.github/instructions/` by default" — so the file where the routing
+  table itself lives (`idd-overview-core.instructions.md`) is opened
+  manually via `Read`, not embedded in always-loaded content, and
+  nothing here claims compaction reloads that file automatically either.
+  What compaction does reload is the entry file carrying the directive
+  to open it — the same kind of explicit follow-up action an
+  orchestrator-directed `Skill` call also needs. The real asymmetry
+  is narrower than "one side needs no action": a `Read` target is a
+  fixed path with no other precondition once the agent acts on the
+  reloaded directive, while a `Skill` target additionally depends on
+  that specific skill's own listing entry, which the same event just
+  established does not reload.
+
+Net effect: the cost side is real, current documentation now lets it be
+stated precisely rather than restated on faith, and it cuts in more than
+one direction — confirmed and, once the character-versus-token units
+are read consistently, illustrated as a session-wide, non-trivial tax
+that this repository's own Option A mapping, and even Option B's
+smaller mapping, would already approach or exceed by itself, with a
+finer split pushing further past that same fixed budget rather than
+toward it, pending an actual measurement against a real serialized
+listing rather than the character-per-token approximation alone;
+genuinely favorable to the
+exact-name path specifically on one narrow point, since listing
+pressure degrades fuzzy auto-matching without ever blocking a
+discovered skill's name from being invoked; and, on the post-compaction
+question specifically, not clearly favorable after all — on this
+addendum's best reading, the same event that frees the rendered-text
+cost also removes a never-invoked skill's own listing entry with no
+documented way back, making post-compaction reachability a plausible,
+though unconfirmed, addition to Part B's failure-mode family rather
+than a settled offsetting benefit. None of that touches the Part
+A/B/C safety argument above, which is what the recorded no-go
+actually turns on.
+
+### Verdict, restated
+
+The recorded no-go stands. Orchestrator-directed invocation narrows one
+specific piece of the Section 4 finding — it removes the
+fuzzy-keyword-matching failure mode ("Skill not triggering" through an
+under-specified description) by replacing implicit relevance-matching
+with an explicit, exactly-named directive — but it does not supply the
+"must load unconditionally" primitive Section 4 found absent, because
+(a) both Claude Code and OpenCode document this as a stronger case of
+the same model-judgment-mediated invocation, not a forced load; (b)
+skill invocation carries confirmed discovery and collision failure
+modes, plus a listing-omission-specific permission-hiding gap that
+`Read`'s own equivalent deny rules do not share even though `Read`
+can also be permission-denied, and a plausible but unconfirmed
+post-compaction reachability gap (Part D) this addendum could not
+independently verify; and (c) the weak-model tier — the roadmap's own
+stated audience for this line of investigation — makes those extra
+failure modes worse to depend on, not better, per this repository's
+own lite-profile design note. The claim protocol and
+merge-gate chain should continue to be delivered as phase files
+dispatched by the routing table's `Read` instruction, not as skills,
+under the current phase-file boundaries — not because that dispatch is
+any more certain to be followed (Part A's own finding is that the
+agent must choose to comply either way), but because it avoids the
+skill listing/discovery precondition Part D describes.

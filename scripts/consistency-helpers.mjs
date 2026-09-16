@@ -466,6 +466,118 @@ export function selectStricterNoticeUtilizationPct(
   const basePct = normalizeNonNegativeNumber(baseNoticeUtilizationPct);
   return basePct === null ? currentPct : Math.min(currentPct, basePct);
 }
+/**
+ * Collect "near-ceiling ratchet" violations (#3028) for
+ * `instructionSizeBudgets`' own per-file limits, `phaseLimitBytes` and
+ * `alwaysLoadedLimitBytes`: `docs/policy-constants.md`'s near-ceiling
+ * exception explicitly covers "an individual per-file instruction file"
+ * too, but {@link collectNearCeilingRatchetViolations} only ever compared
+ * `bundleBudgets`. This extends the same base-ref-vs-current, threshold,
+ * and skip semantics to the per-file case.
+ *
+ * Pure (no I/O): the audit pipeline supplies the current entries' limits
+ * and the base entries' limits plus their own governed files' measured
+ * sizes (`collectInstructionSizeBudgetViolations`'s own file resolution
+ * and size basis, reused rather than re-derived, via
+ * {@link resolveInstructionSizeBudgetConfig}).
+ *
+ * Each field is checked independently against only the base-ref files
+ * classified into its own bucket: `phaseLimitBytes` against files where
+ * `alwaysLoaded` is `false`, `alwaysLoadedLimitBytes` against files where
+ * it is `true` -- a phase file sitting near its ceiling never blocks an
+ * `alwaysLoadedLimitBytes` raise, and vice versa. One error is emitted
+ * per near-ceiling file per raised field (not one aggregate error per
+ * entry): unlike a bundle's single summed total, each governed file here
+ * has its own independent byte count, so a raise can be near-ceiling for
+ * some governed files and not others.
+ *
+ * No violation (silently skipped) for a field when: the entry has no
+ * base-ref match (see the rename fallback below); the field's value did
+ * not increase relative to the base ref; or the base ref's own value for
+ * that field is zero or negative. Threshold comparison is cross-multiplied
+ * in byte space, inclusive `>=`, matching
+ * {@link collectNearCeilingRatchetViolations}'s own convention.
+ *
+ * **Entry-rename fallback** (#3028 critique finding, mirroring the
+ * bundle-side #2697 protection): matching current-to-base entries by `id`
+ * alone would let a PR dodge this guard by renaming an already-near-ceiling
+ * entry's `id` while leaving its `glob` unchanged and raising a limit --
+ * `id` and `glob` are independent manifest fields, so a rename reads as
+ * "no base-ref entry", the brand-new-entry exemption. When a current
+ * entry's `id` has no base match, this also looks for a base entry whose
+ * `glob` is identical to the current entry's own. A `glob` shared by two
+ * or more base entries is ambiguous and is never used as a fallback match,
+ * matching {@link collectNearCeilingRatchetViolations}'s own
+ * file-set-signature discipline.
+ */
+export function collectInstructionSizeBudgetRatchetViolations(
+  noticeUtilizationPct,
+  currentEntries,
+  baseEntries,
+) {
+  const baseById = new Map(baseEntries.map((entry) => [entry.id, entry]));
+  // `null` marks an ambiguous glob (shared by 2+ base entries) so it is
+  // never mistaken for "no entry" (`undefined`, via a plain Map miss) --
+  // both must resolve to "no fallback match", but for different reasons.
+  const baseByGlob = new Map();
+  for (const entry of baseEntries) {
+    baseByGlob.set(entry.glob, baseByGlob.has(entry.glob) ? null : entry);
+  }
+  const errors = [];
+  for (const current of currentEntries) {
+    const base =
+      baseById.get(current.id) ?? baseByGlob.get(current.glob) ?? undefined;
+    if (!base) {
+      continue;
+    }
+    errors.push(
+      ...instructionSizeBudgetFieldRatchetErrors(
+        current.id,
+        'phaseLimitBytes',
+        current.phaseLimitBytes,
+        base.phaseLimitBytes,
+        base.files.filter((file) => !file.alwaysLoaded),
+        noticeUtilizationPct,
+      ),
+    );
+    errors.push(
+      ...instructionSizeBudgetFieldRatchetErrors(
+        current.id,
+        'alwaysLoadedLimitBytes',
+        current.alwaysLoadedLimitBytes,
+        base.alwaysLoadedLimitBytes,
+        base.files.filter((file) => file.alwaysLoaded),
+        noticeUtilizationPct,
+      ),
+    );
+  }
+  return errors;
+}
+/** One field's near-ceiling check for one entry, shared by both
+ * `phaseLimitBytes` and `alwaysLoadedLimitBytes` in
+ * {@link collectInstructionSizeBudgetRatchetViolations}. */
+function instructionSizeBudgetFieldRatchetErrors(
+  id,
+  field,
+  currentLimit,
+  baseLimit,
+  baseFiles,
+  noticeUtilizationPct,
+) {
+  if (currentLimit <= baseLimit || baseLimit <= 0) {
+    return [];
+  }
+  const errors = [];
+  for (const file of baseFiles) {
+    if (file.bytes * 100 >= baseLimit * noticeUtilizationPct) {
+      const utilizationPct = (file.bytes / baseLimit) * 100;
+      errors.push(
+        `near-ceiling-ratchet: ${id} ${field} raised from ${baseLimit} to ${currentLimit} while ${file.path} was already at ${utilizationPct.toFixed(2)}% utilization at the base ref (${file.bytes}/${baseLimit} bytes) -- docs/policy-constants.md's near-ceiling exception prefers trimming or splitting the addition over raising here`,
+      );
+    }
+  }
+  return errors;
+}
 // Words after which a `/` must start a regex literal, not division.
 const REGEX_PRECEDING_KEYWORDS = new Set([
   'return',
@@ -633,6 +745,81 @@ function regexCanStartAfter(lastCodeChar, lastWord) {
     return true;
   }
   return !/[\w$)\]'"`/]/.test(lastCodeChar);
+}
+const DEFAULT_INSTRUCTION_SIZE_BUDGET_GLOB =
+  '.github/instructions/idd-*.instructions.md';
+const DEFAULT_ALWAYS_LOADED_PATTERN = 'applyTo:\\s*"\\*\\*"';
+const DEFAULT_ALWAYS_LOADED_LIMIT_BYTES = 20_000;
+const DEFAULT_PHASE_LIMIT_BYTES = 30_000;
+/**
+ * Validate and normalize one `instructionSizeBudgets` manifest entry into
+ * its effective id/glob/pattern/limits, applying the same defaults and
+ * rejecting the same malformed shapes
+ * {@link collectInstructionSizeBudgetViolations} always has (#1721).
+ * Shared (#3028) with that function's own current-tree check and with the
+ * base-ref stat computation `audit-docs.mts`'s near-ceiling ratchet uses,
+ * so the two can never derive a different effective limit, pattern, or
+ * glob from the same config shape. Returns either the resolved config or a
+ * single readable error string naming the offending field; never throws.
+ */
+export function resolveInstructionSizeBudgetConfig(config) {
+  const id = config.id ?? 'instruction-size-budgets';
+  const glob = config.glob ?? DEFAULT_INSTRUCTION_SIZE_BUDGET_GLOB;
+  // `??` only substitutes on null/undefined, so a manifest typo (a string
+  // where a number belongs, a non-positive limit, an unclosed regex group)
+  // used to flow straight through: a non-numeric limit coerced every size
+  // comparison to `NaN`, which is always false, silently passing the guard
+  // it exists to enforce (fail-open); a malformed pattern threw an unhandled
+  // `SyntaxError` from `new RegExp` instead of naming the bad field. Reject
+  // both explicitly, naming the offending field and value (#1721).
+  // `=== undefined` (not `??`) so an explicit `null` in the manifest is
+  // validated and rejected below rather than silently treated the same as
+  // "field not provided" and defaulted -- the same undefined-only-default
+  // distinction normalizePositiveIntegerBudget already makes for the two
+  // limit fields.
+  const alwaysLoadedPatternValue =
+    config.alwaysLoadedPattern === undefined
+      ? DEFAULT_ALWAYS_LOADED_PATTERN
+      : config.alwaysLoadedPattern;
+  if (typeof alwaysLoadedPatternValue !== 'string') {
+    return {
+      error: `${id}: alwaysLoadedPattern must be a string (got ${JSON.stringify(alwaysLoadedPatternValue)})`,
+    };
+  }
+  let alwaysLoadedRegex;
+  try {
+    alwaysLoadedRegex = new RegExp(alwaysLoadedPatternValue, 'm');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      error: `${id}: alwaysLoadedPattern ${JSON.stringify(alwaysLoadedPatternValue)} does not compile as a regular expression: ${message}`,
+    };
+  }
+  const alwaysLoadedLimitBytes = normalizePositiveIntegerBudget(
+    config.alwaysLoadedLimitBytes,
+    DEFAULT_ALWAYS_LOADED_LIMIT_BYTES,
+  );
+  if (alwaysLoadedLimitBytes === null) {
+    return {
+      error: `${id}: alwaysLoadedLimitBytes must be a positive integer (got ${JSON.stringify(config.alwaysLoadedLimitBytes)})`,
+    };
+  }
+  const phaseLimitBytes = normalizePositiveIntegerBudget(
+    config.phaseLimitBytes,
+    DEFAULT_PHASE_LIMIT_BYTES,
+  );
+  if (phaseLimitBytes === null) {
+    return {
+      error: `${id}: phaseLimitBytes must be a positive integer (got ${JSON.stringify(config.phaseLimitBytes)})`,
+    };
+  }
+  return {
+    id,
+    glob,
+    alwaysLoadedRegex,
+    alwaysLoadedLimitBytes,
+    phaseLimitBytes,
+  };
 }
 // ---------------------------------------------------------------------------
 // Generated-from banner for sync-docs-generated instruction targets
@@ -819,6 +1006,12 @@ export function collectInstructionSizeBudgetViolations(
     return { errors: [], notices: [] };
   }
   const id = config.id ?? 'instruction-size-budgets';
+  // The `changedFiles === null` skip must stay strictly ahead of config
+  // validation below (#3028 B2 critique finding): a checkout with no
+  // resolvable comparison base degrades this whole check to a notice, and
+  // an invalid manifest entry in that same run must still take the skip
+  // path rather than newly surfacing as a hard error -- see the regression
+  // test covering this exact ordering.
   if (changedFiles === null) {
     return {
       errors: [],
@@ -827,66 +1020,12 @@ export function collectInstructionSizeBudgetViolations(
       ],
     };
   }
-  // `??` only substitutes on null/undefined, so a manifest typo (a string
-  // where a number belongs, a non-positive limit, an unclosed regex group)
-  // used to flow straight through: a non-numeric limit coerced every size
-  // comparison to `NaN`, which is always false, silently passing the guard
-  // it exists to enforce (fail-open); a malformed pattern threw an unhandled
-  // `SyntaxError` from `new RegExp` instead of naming the bad field. Reject
-  // both explicitly, naming the offending field and value (#1721).
-  // `=== undefined` (not `??`) so an explicit `null` in the manifest is
-  // validated and rejected below rather than silently treated the same as
-  // "field not provided" and defaulted -- the same undefined-only-default
-  // distinction normalizePositiveIntegerBudget already makes for the two
-  // limit fields.
-  const alwaysLoadedPatternValue =
-    config.alwaysLoadedPattern === undefined
-      ? 'applyTo:\\s*"\\*\\*"'
-      : config.alwaysLoadedPattern;
-  if (typeof alwaysLoadedPatternValue !== 'string') {
-    return {
-      errors: [
-        `${id}: alwaysLoadedPattern must be a string (got ${JSON.stringify(alwaysLoadedPatternValue)})`,
-      ],
-      notices: [],
-    };
+  const resolved = resolveInstructionSizeBudgetConfig(config);
+  if ('error' in resolved) {
+    return { errors: [resolved.error], notices: [] };
   }
-  let alwaysLoadedRegex;
-  try {
-    alwaysLoadedRegex = new RegExp(alwaysLoadedPatternValue, 'm');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      errors: [
-        `${id}: alwaysLoadedPattern ${JSON.stringify(alwaysLoadedPatternValue)} does not compile as a regular expression: ${message}`,
-      ],
-      notices: [],
-    };
-  }
-  const alwaysLoadedLimitBytes = normalizePositiveIntegerBudget(
-    config.alwaysLoadedLimitBytes,
-    20_000,
-  );
-  if (alwaysLoadedLimitBytes === null) {
-    return {
-      errors: [
-        `${id}: alwaysLoadedLimitBytes must be a positive integer (got ${JSON.stringify(config.alwaysLoadedLimitBytes)})`,
-      ],
-      notices: [],
-    };
-  }
-  const phaseLimitBytes = normalizePositiveIntegerBudget(
-    config.phaseLimitBytes,
-    30_000,
-  );
-  if (phaseLimitBytes === null) {
-    return {
-      errors: [
-        `${id}: phaseLimitBytes must be a positive integer (got ${JSON.stringify(config.phaseLimitBytes)})`,
-      ],
-      notices: [],
-    };
-  }
+  const { alwaysLoadedRegex, alwaysLoadedLimitBytes, phaseLimitBytes } =
+    resolved;
   const errors = [];
   for (const path of listFiles()) {
     if (!changedFiles.has(path)) {

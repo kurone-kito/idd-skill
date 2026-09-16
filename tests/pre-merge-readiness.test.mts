@@ -42,6 +42,7 @@ import {
   hasFreshDisposition,
   indexLatestGatingReviewsByAuthor,
   isAdvisoryNonReviewNotice,
+  isCopilotErrorReviewBody,
   isNonReviewNoticeDisposition,
   resolveActiveClaimForWriteGate,
   resolveCodeownersForFiles,
@@ -2103,6 +2104,82 @@ test('mixed-precision timestamps compare by time instead of string order', () =>
       },
     ]),
     'new',
+  );
+});
+
+// --- findLastCopilotReviewCommit / isCopilotErrorReviewBody (#3015) -------
+//
+// Mirrors the sibling #1880 false-empty-review class (that fix lives in
+// review-clause.mts's `parseSuppressedCommentCount`, exercised via
+// `resolveLatestCopilotReviewClause` in tests/advisory-convergence.test.mts):
+// GitHub Copilot's "encountered an error and was unable to review this pull
+// request" review also reports `itemCount` 0 (`comments.totalCount`) even
+// though Copilot never reviewed the diff at all, so it must not win the
+// `LAST_COPILOT_COMMIT == PR_HEAD_SHA` short-circuit either. Observed live on
+// PR #3013 (issue #2986, commit 46bfb73b).
+
+const COPILOT_ERROR_REVIEW_BODY =
+  'Copilot encountered an error and was unable to review this pull ' +
+  'request. You can try again by re-requesting a review.';
+
+test('isCopilotErrorReviewBody matches only the exact observed Copilot error-review template', () => {
+  assert.equal(isCopilotErrorReviewBody(COPILOT_ERROR_REVIEW_BODY), true);
+  // Case-insensitive and tolerant of incidental whitespace differences.
+  assert.equal(
+    isCopilotErrorReviewBody(`  ${COPILOT_ERROR_REVIEW_BODY.toUpperCase()}  `),
+    true,
+  );
+  assert.equal(isCopilotErrorReviewBody(''), false);
+  assert.equal(isCopilotErrorReviewBody(null), false);
+  assert.equal(isCopilotErrorReviewBody(undefined), false);
+  // Must NOT broadly match any body containing "error" -- only the exact
+  // observed template, per the issue's own explicit guardrail.
+  assert.equal(
+    isCopilotErrorReviewBody(
+      'This change introduces an off-by-one error in the loop bound.',
+    ),
+    false,
+  );
+  // A genuine review body that merely quotes the template amid other prose
+  // must not match either -- whole-body equality, not a substring search.
+  assert.equal(
+    isCopilotErrorReviewBody(
+      `${COPILOT_ERROR_REVIEW_BODY} (quoted for the test fixture)`,
+    ),
+    false,
+  );
+});
+
+test('findLastCopilotReviewCommit: skips a Copilot error review when it is the ONLY Copilot signal (#3015)', () => {
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-05-12T00:00:00Z',
+        commitId: 'head-sha',
+        body: COPILOT_ERROR_REVIEW_BODY,
+      },
+    ]),
+    '',
+  );
+});
+
+test("findLastCopilotReviewCommit: an error review does not mask an earlier genuine review's commit_id (#3015)", () => {
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-05-12T00:00:00Z',
+        commitId: 'old-genuine',
+      },
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-05-12T00:00:00.100Z',
+        commitId: 'head-sha',
+        body: COPILOT_ERROR_REVIEW_BODY,
+      },
+    ]),
+    'old-genuine',
   );
 });
 
@@ -4829,6 +4906,95 @@ test('advisory wait summary keeps F2 and F3 outcomes distinct when Copilot is no
 
   assert.equal(summary.outcome, 'REQUEST_NEEDED');
   assert.equal(summary.f3Outcome, 'SATISFIED');
+});
+
+test('advisory wait outcome: a Copilot error review on HEAD does not win the AW1 LAST_COPILOT_COMMIT == PR_HEAD_SHA short-circuit (#3015)', () => {
+  // Observed live on PR #3013: `advisory-wait-state` reported `outcome:
+  // SATISFIED` with `lastCopilotCommit` equal to HEAD off exactly this
+  // review shape -- the review's own `commit_id` matches current HEAD, but
+  // the body is Copilot's "encountered an error" template, not a genuine
+  // completed review.
+  const headSha = 'a'.repeat(40);
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: headSha,
+      reviews: [
+        {
+          author: { login: 'copilot-pull-request-reviewer' },
+          submittedAt: '2026-05-12T00:00:00Z',
+          commitId: headSha,
+          body: COPILOT_ERROR_REVIEW_BODY,
+        },
+      ],
+      requestedReviewers: [],
+      timelineEvents: [],
+      comments: [],
+    },
+    {
+      now: '2026-05-12T00:10:00Z',
+      trustedMarkerLogins: ['idd-bot'],
+    },
+  );
+
+  assert.equal(summary.lastCopilotCommit, '');
+  assert.notEqual(summary.outcome, 'SATISFIED');
+  assert.equal(summary.outcome, 'REQUEST_NEEDED');
+  // `f3Outcome` (the field F3, the merge gate, actually reads --
+  // `evaluateAdvisoryWaitF3Outcome`'s own doc comment) is `SATISFIED` here
+  // for a REASON UNRELATED to this fix: with no timeline/requested-reviewer
+  // evidence at all, `copilotPending` is `false`, and F3's own pre-existing,
+  // documented rule is "Copilot no longer pending -> satisfied" regardless
+  // of itemCount/error-review classification -- true even for a PR Copilot
+  // was never asked to review. The companion test below covers the more
+  // realistic incident shape (Copilot WAS requested for this HEAD) where
+  // this fix's `f3Outcome` protection actually matters.
+  assert.equal(summary.f3Outcome, 'SATISFIED');
+});
+
+test('advisory wait outcome: a Copilot error review on HEAD does not satisfy F3 either, when Copilot was genuinely still requested for this HEAD (#3015)', () => {
+  // More realistic than the all-empty-evidence fixture above: Copilot was
+  // actually requested for the current HEAD (a `review_requested` timeline
+  // event following that HEAD's own `committed` event, matching how PR
+  // #3013's incident almost certainly looked), then errored out instead of
+  // completing a real review. Without this fix, `lastCopilotCommit` would
+  // equal `prHeadSha` off the error review alone and BOTH `outcome` and
+  // `f3Outcome` (the field F3, the merge gate, reads) would report
+  // `SATISFIED` -- the exact false positive that let PR #3013 merge.
+  const headSha = 'a'.repeat(40);
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: headSha,
+      reviews: [
+        {
+          author: { login: 'copilot-pull-request-reviewer' },
+          submittedAt: '2026-05-12T00:00:00Z',
+          commitId: headSha,
+          body: COPILOT_ERROR_REVIEW_BODY,
+        },
+      ],
+      requestedReviewers: [],
+      timelineEvents: [
+        { event: 'committed', sha: headSha },
+        {
+          event: 'review_requested',
+          requested_reviewer: { login: 'copilot-pull-request-reviewer' },
+        },
+      ],
+      comments: [],
+    },
+    {
+      now: '2026-05-12T00:10:00Z',
+      trustedMarkerLogins: ['idd-bot'],
+    },
+  );
+
+  assert.equal(summary.lastCopilotCommit, '');
+  assert.equal(summary.copilotPending, true);
+  assert.equal(summary.copilotPendingCoversHead, true);
+  assert.notEqual(summary.outcome, 'SATISFIED');
+  assert.notEqual(summary.f3Outcome, 'SATISFIED');
+  assert.equal(summary.outcome, 'RECOVERY_NEEDED');
+  assert.equal(summary.f3Outcome, 'RECOVERY_NEEDED');
 });
 
 function makeWaiverComment(fields: Record<string, string>) {

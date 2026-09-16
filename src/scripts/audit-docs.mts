@@ -13,7 +13,10 @@ import type {
   ContextCeilingConfig,
   DocBudgetGuardConfig,
   EnginesRangeMirrorSpec,
+  InstructionSizeBudgetBaseEntryStat,
   InstructionSizeBudgetConfig,
+  InstructionSizeBudgetFileStat,
+  InstructionSizeBudgetLimitStat,
   OkfBundleConfig,
   RootMarkdownAllowlistConfig,
   TypeSuppressionBudgetConfig,
@@ -26,6 +29,7 @@ import {
   collectDuplicateSyncPairTargets,
   collectEnginesRangeMirrorViolations,
   collectGeneratedFromBannerViolations,
+  collectInstructionSizeBudgetRatchetViolations,
   collectInstructionSizeBudgetViolations,
   collectNearCeilingRatchetViolations,
   collectOkfFrontmatterViolations,
@@ -38,6 +42,7 @@ import {
   parseGeneratedFromBannerSource,
   renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
+  resolveInstructionSizeBudgetConfig,
   selectStricterNoticeUtilizationPct,
   stripGeneratedFromBanner,
   uniqueSorted,
@@ -148,6 +153,15 @@ const notices: string[] = [];
 const manifest = JSON.parse(readText(manifestPath)) as AuditManifest;
 const repoFiles = listRepoFiles();
 const changedFiles = listChangedFiles();
+// Memoized by `${ref}:${file}` (#3028): the bundle-budget files and the
+// instructionSizeBudgets glob(s) overlap heavily in this repository's own
+// manifest, so without this cache adding the per-file near-ceiling ratchet
+// would roughly double the `git show` calls `readTextAtRef` already makes
+// per audit run. Safe to cache unconditionally -- the base ref is
+// immutable for the lifetime of one audit run. Declared at module top
+// level (rather than beside `readTextAtRef` itself further down) so it is
+// already initialized before the top-level check pipeline below runs.
+const readTextAtRefCache = new Map<string, string | null>();
 
 // The fixed, known mirror set for this repository's engines.node range
 // (#1706) -- not manifest-configurable, since these are this repository's
@@ -202,11 +216,17 @@ checkShellFileLists(
 checkSyncPairs(manifest.syncPairs ?? []);
 checkGeneratedModePlaceholders(manifest.syncPairs ?? []);
 checkGeneratedFromBanners(manifest.syncPairs ?? []);
-checkInstructionSizeBudgets(manifest.instructionSizeBudgets);
+const instructionSizeBudgetStats = checkInstructionSizeBudgets(
+  manifest.instructionSizeBudgets,
+);
 {
   const bundleStats = checkBundleBudgets(manifest.bundleBudgets ?? []);
   checkContextCeiling(manifest.contextCeiling ?? null, bundleStats);
-  checkNearCeilingRatchet(manifest.contextCeiling ?? null, bundleStats);
+  checkNearCeilingRatchet(
+    manifest.contextCeiling ?? null,
+    bundleStats,
+    instructionSizeBudgetStats,
+  );
 }
 checkDocBudgetNumbers();
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
@@ -1063,7 +1083,14 @@ function docsSyncCommandByPackageManager(packageManager: unknown): string {
   }
 }
 
-function checkInstructionSizeBudgets(configs: unknown) {
+// Returns the current entries' resolved per-file limits (id/glob/
+// phaseLimitBytes/alwaysLoadedLimitBytes) so `checkNearCeilingRatchet` can
+// reuse them for the near-ceiling ratchet (#3028) instead of re-resolving
+// the manifest a second time.
+function checkInstructionSizeBudgets(
+  configs: unknown,
+): InstructionSizeBudgetLimitStat[] {
+  const stats: InstructionSizeBudgetLimitStat[] = [];
   // One entry per audited glob: the dogfooding `.github/instructions/`
   // copy and the canonical `idd-template/.github/instructions/` source are
   // separate entries so a `structure`-mode divergence between them (prose
@@ -1080,13 +1107,13 @@ function checkInstructionSizeBudgets(configs: unknown) {
   // must fail closed with a readable audit error instead of throwing
   // "configs is not iterable" out of the `for` loop below.
   if (configs == null) {
-    return;
+    return stats;
   }
   if (!Array.isArray(configs)) {
     errors.push(
       'instructionSizeBudgets: must be an array of per-glob budget entries, one per audited glob (see audit/README.md#instruction-size-budgets); got the pre-#1667 single-object shape or another non-array value',
     );
-    return;
+    return stats;
   }
   // The scope/skip decision and budget evaluation for each entry live in
   // the pure helper so they can be unit-tested; the audit pipeline
@@ -1124,7 +1151,22 @@ function checkInstructionSizeBudgets(configs: unknown) {
     );
     errors.push(...result.errors);
     notices.push(...result.notices);
+
+    // Only usable for the near-ceiling ratchet (#3028) when the config
+    // itself resolves cleanly -- an invalid entry is already reported by
+    // the call above, and ratcheting against a meaningless normalized
+    // limit would be wrong.
+    const resolved = resolveInstructionSizeBudgetConfig(config);
+    if (!('error' in resolved)) {
+      stats.push({
+        id: resolved.id,
+        glob: resolved.glob,
+        phaseLimitBytes: resolved.phaseLimitBytes,
+        alwaysLoadedLimitBytes: resolved.alwaysLoadedLimitBytes,
+      });
+    }
   }
+  return stats;
 }
 
 // Returns the measured per-bundle stats so `checkContextCeiling` can reuse
@@ -1210,8 +1252,14 @@ function resolveNearCeilingBaseRef(): string | null {
 }
 
 function readTextAtRef(ref: string, file: string): string | null {
+  const key = `${ref}:${file}`;
+  const cached = readTextAtRefCache.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let text: string | null;
   try {
-    return normalizeText(git(['show', `${ref}:${file}`]));
+    text = normalizeText(git(['show', `${ref}:${file}`]));
   } catch {
     // Most commonly the file did not exist at the base ref (e.g. newly
     // added in this change), but any `git show` failure -- a corrupt
@@ -1220,7 +1268,26 @@ function readTextAtRef(ref: string, file: string): string | null {
     // resolveNearCeilingBaseRef already verified the ref itself resolves,
     // so failing this whole check closed over one file's read error would
     // be a worse outcome than counting it as a 0-byte contribution.
-    return null;
+    text = null;
+  }
+  readTextAtRefCache.set(key, text);
+  return text;
+}
+
+// `git ls-tree` listing of every file at `ref` (#3028), the base-ref
+// equivalent of `listRepoFiles()` -- used to glob-match
+// `instructionSizeBudgets` globs against the base ref's own file set
+// rather than the current tree's. `resolveNearCeilingBaseRef` already
+// verified the ref itself resolves, but a shallow or otherwise incomplete
+// checkout could still fail `ls-tree`; degrade to an empty list rather
+// than failing the whole audit closed over that.
+function listRepoFilesAtRef(ref: string): string[] {
+  try {
+    return git(['ls-tree', '-r', '--name-only', ref])
+      .split(/\r?\n/)
+      .filter(Boolean);
+  } catch {
+    return [];
   }
 }
 
@@ -1249,9 +1316,82 @@ function computeBaseBundleStats(
   return stats;
 }
 
+// Base-ref equivalent of `checkInstructionSizeBudgets`' stat collection
+// (#3028): for each base-manifest `instructionSizeBudgets` entry, resolves
+// its effective glob/pattern/limits the same way the current-tree check
+// does (`resolveInstructionSizeBudgetConfig`, so the two can never
+// disagree about a file's governing limit or classification), then
+// glob-matches against the base ref's own file listing and measures each
+// matched file exactly as `collectInstructionSizeBudgetViolations` does:
+// `bytes` from the banner-stripped text, `alwaysLoaded` from the raw text.
+// A malformed historical base-ref config is not this PR's problem to
+// surface as a new error -- skip that entry silently, the same
+// best-effort-extraction spirit `readTextAtRef` already applies to a
+// missing file.
+//
+// `configs` is declared `unknown` rather than trusted as
+// `InstructionSizeBudgetConfig[]` (#3028 PR #3042 review, Codex and
+// Copilot): `baseManifest` is only `JSON.parse(...) as AuditManifest`, a
+// type assertion with no runtime check, so a base ref whose
+// `audit/sync-manifest.json` still carries the pre-#1667 single-object
+// `instructionSizeBudgets` shape -- the same legacy shape
+// `checkInstructionSizeBudgets` explicitly guards against for the
+// current tree -- would otherwise reach the `for...of` below as a plain
+// object and throw `TypeError: configs is not iterable`, crashing the
+// entire audit instead of the graceful per-entry skip this function's
+// own contract promises.
+function computeBaseInstructionSizeBudgetStats(
+  ref: string,
+  configs: unknown,
+): InstructionSizeBudgetBaseEntryStat[] {
+  const stats: InstructionSizeBudgetBaseEntryStat[] = [];
+  if (!Array.isArray(configs)) {
+    return stats;
+  }
+  let baseRepoFiles: string[] | null = null;
+  for (const rawConfig of configs) {
+    if (
+      rawConfig === null ||
+      typeof rawConfig !== 'object' ||
+      Array.isArray(rawConfig)
+    ) {
+      continue;
+    }
+    const config = rawConfig as InstructionSizeBudgetConfig;
+    const resolved = resolveInstructionSizeBudgetConfig(config);
+    if ('error' in resolved) {
+      continue;
+    }
+    if (baseRepoFiles === null) {
+      baseRepoFiles = listRepoFilesAtRef(ref);
+    }
+    const files: InstructionSizeBudgetFileStat[] = [];
+    for (const path of globFiles(resolved.glob, baseRepoFiles)) {
+      const text = readTextAtRef(ref, path);
+      if (text === null) {
+        continue;
+      }
+      files.push({
+        path,
+        bytes: Buffer.byteLength(stripGeneratedFromBanner(text), 'utf8'),
+        alwaysLoaded: resolved.alwaysLoadedRegex.test(text),
+      });
+    }
+    stats.push({
+      id: resolved.id,
+      glob: resolved.glob,
+      phaseLimitBytes: resolved.phaseLimitBytes,
+      alwaysLoadedLimitBytes: resolved.alwaysLoadedLimitBytes,
+      files,
+    });
+  }
+  return stats;
+}
+
 function checkNearCeilingRatchet(
   config: ContextCeilingConfig | null,
   currentBundleStats: ContextCeilingBundleStat[],
+  currentInstructionSizeBudgetStats: InstructionSizeBudgetLimitStat[],
 ) {
   if (!config) {
     return;
@@ -1297,6 +1437,22 @@ function checkNearCeilingRatchet(
       effectiveNoticeUtilizationPct,
       currentBundleStats,
       baseBundleStats,
+    ),
+  );
+
+  // Per-file instructionSizeBudgets ratchet (#3028): same base ref and the
+  // same effective (stricter-of-base-and-current) threshold as the
+  // bundle-side check above, so a PR that raises a per-file limit and
+  // `noticeUtilizationPct` together in one change is still caught.
+  const baseInstructionSizeBudgetStats = computeBaseInstructionSizeBudgetStats(
+    baseRef,
+    baseManifest.instructionSizeBudgets ?? [],
+  );
+  errors.push(
+    ...collectInstructionSizeBudgetRatchetViolations(
+      effectiveNoticeUtilizationPct,
+      currentInstructionSizeBudgetStats,
+      baseInstructionSizeBudgetStats,
     ),
   );
 }
