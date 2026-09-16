@@ -10,7 +10,7 @@ resume file in the same turn.
 
 1. **When helper runtime is enabled** (`package-manager`, `ephemeral-npx`
    — see `docs/idd-helper-scripts.md` — or vendored-node): run the
-   commands below first. If a helper is **missing, fails, returns
+   commands below. If a helper is **missing, fails, returns
    invalid JSON, or disagrees with live GitHub state** → **stop and
    ask**. Do **not** fall through to the written tables.
 2. **When the repository is `instructions-only`** (no helper runtime
