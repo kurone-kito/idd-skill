@@ -731,6 +731,48 @@ process.exit(1);
   }
 });
 
+// --- #2957: runGh's stderr fallback must not discard e.message on an ---
+// --- empty-but-defined e.stderr (a bare gh timeout with nothing --------
+// --- captured) --------------------------------------------------------
+//
+// Before the fix, runGh's catch handler built its fallback as
+// `String(e.stderr?.toString?.() ?? e.message ?? 'unknown error')`. `??`
+// only falls through on null/undefined, but execFileSync's own timeout
+// kill throws with `e.stderr === ''` (defined, not nullish) and a
+// diagnostic e.message (e.g. "... ETIMEDOUT") -- so the `??` chain
+// stopped at the empty string and silently dropped e.message, leaving
+// probeSubject's `gh-graphql-error: ` reason with nothing useful after
+// the colon.
+test('probeSubject keeps e.message in its failure reason when gh is killed by timeout before writing stderr (#2957)', () => {
+  withGhHostEnv({}, () => {
+    // Sleeps far longer than the timeoutMs below and writes nothing to
+    // stdout/stderr before the timeout kills it -- reproduces
+    // execFileSync's defined-but-empty e.stderr timeout shape (same
+    // Atomics.wait technique, and the same ~7x safety margin, as the
+    // #2754 timeout test above).
+    const restore = stubExecutable(
+      'gh',
+      `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+process.exit(1);
+`,
+    );
+    try {
+      const result = probeSubject('IC_test', 150);
+      assert.equal(result.ok, false);
+      if (result.ok) {
+        return;
+      }
+      assert.match(result.reason, /^gh-graphql-error: /);
+      // The pre-fix behavior collapsed to exactly this string once
+      // e.stderr's empty value short-circuited past e.message.
+      assert.notEqual(result.reason, 'gh-graphql-error: ');
+      assert.match(result.reason, /ETIMEDOUT|signal|Command failed/i);
+    } finally {
+      restore();
+    }
+  });
+});
+
 // A generous (or omitted) deadlineMs still reaching a real, successful
 // applyMinimize mutation is already covered end-to-end by
 // tests/post-idd-marker.test.mts's hide-step integration tests, which
