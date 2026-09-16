@@ -477,17 +477,19 @@ Re-evaluate this note when any of the following holds:
 
 **Onboarding token cost is not an APM fit.** `idd-onboard.mjs` already
 automates Steps 0, 1A, 1B, 1C (`--hear`), 2 (`--import`), 3
-(`--record-policy`), 4 (`--substitute`), and 6 (`--verify`). Within the
-current skill-only onboarding path, the residual procedure cost includes
-the manual Step 5 agent-entry updates and reading the documentation. A
-future APM distribution could automate those entry-file writes, but it
-would not reduce the document-reading cost measured here. The byte totals
-below are context-size upper-bound proxies, not token-use measurements:
-an onboarding session reads only the front door and selected companion
-path, not necessarily the full bundle. At this revision, the front door
-measures 52,611 bytes and the manifest-defined companion Markdown bundle
-measures 165,971 bytes; `hearing-catalog.json` is a separate schema input
-and is not part of that bundle.
+(`--record-policy`), 4 (`--substitute`), and the mechanical subset of
+Step 6 (`--verify`). Within the current skill-only onboarding path, the
+residual procedure cost includes the manual Step 5 agent-entry updates,
+the policy, configuration, frontmatter, and entry-consistency checks that
+remain manual in Step 6, and reading the documentation. A future APM
+distribution could automate those entry-file writes, but it would not
+reduce the document-reading cost measured here. The byte totals below are
+context-size upper-bound proxies, not token-use measurements: an onboarding
+session reads only the front door and selected companion path, not
+necessarily the full bundle. At this revision, the front door measures
+52,611 bytes and the manifest-defined companion Markdown bundle measures
+165,971 bytes; `hearing-catalog.json` is a separate schema input and is
+not part of that bundle.
 
 Capture new evidence as issues referencing this document.
 
