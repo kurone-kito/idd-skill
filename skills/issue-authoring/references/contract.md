@@ -1730,7 +1730,23 @@ only approval boundary.
   retries, requiring the exact current owner, set, anchor, session, and marker
   body. If that guard is not found conclusively, leave all labels in place and
   stop. The guard suppresses Discover for the whole set during the provisional
-  label-removal window; it does not close the set. Then,
+  label-removal window; it does not close the set. When this release is
+  proceeding under the narrow review-fix-loop-cutoff auto-release
+  exception below instead of an explicit human release request, also
+  verify here -- immediately before the first label removal below,
+  whether that removal is a non-anchor target's or the anchor's own --
+  that the marked target is the sole member of its authoring set: it
+  carries no `<marker-prefix>-roadmap-id` marker (never a roadmap
+  anchor), and a repository-wide paginated issue-comment scan for
+  trusted owner markers whose exact `set` matches finds no sibling
+  target -- the same repository-wide, fail-closed enumeration the
+  resume procedure above requires, since a sibling's marker lives on
+  the sibling's own issue and never appears in the marked target's own
+  comment log; block on incomplete or inconclusive enumeration the
+  same way. If either condition fails, or the scan cannot be
+  completed, the exception does not authorize removing any label for
+  this release; fall back to the ordinary explicit human
+  release-request precondition for the whole set instead. Then,
   immediately before each label removal, append and verify the set anchor's
   `mode=heartbeat` first (or reuse one per the heartbeat-coalescing rule
   above), re-fetching it and requiring its current owner, set, anchor, and
