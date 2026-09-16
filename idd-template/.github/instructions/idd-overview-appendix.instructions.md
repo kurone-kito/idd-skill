@@ -158,7 +158,6 @@ The Project commands table (`fix-validate`, `pre-push-validate`,
 `post-fix-validate`, `install-deps`, `issue-scope`,
 `orphan-first-policy`) and its override rules live in
 [`docs/customization.md` → Project commands reference](../../docs/customization.md#project-commands-reference).
-`.github/idd/config.json` `commands` overrides the table.
 
 ## Critique pass
 
