@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { createPhaseIdResolver } from '../src/scripts/phase-id-resolver.mts';
 import {
   parseClaimComment,
   parseForcedHandoffComment,
@@ -1909,6 +1910,34 @@ test('validatePhaseGraph reports duplicate node ids', () => {
 test('phase-graph.json has no dangling references', () => {
   const graph = loadJson('schemas/phase-graph.json');
   assert.deepEqual(validatePhaseGraph(graph), []);
+});
+
+test('every phase-graph.json node id is a canonical phase id or the documented A exemption', () => {
+  const graph = loadJson('schemas/phase-graph.json') as {
+    nodes: { id: string }[];
+  };
+  const resolver = createPhaseIdResolver();
+  for (const node of graph.nodes) {
+    if (node.id === 'A') {
+      // Deliberate exemption: `phase-id-resolver.mts`'s own header comment
+      // documents `A` as "the collapsed routing-graph-only node in
+      // `schemas/phase-graph.json`" -- intentionally non-canonical, the
+      // same decision `tests/phase-id-resolver.test.mts`'s
+      // `assertUnknownPhaseId('A')` encodes from the opposite direction.
+      continue;
+    }
+    const resolution = resolver.resolve(node.id);
+    assert.equal(
+      resolution.matchedBy,
+      'canonical',
+      `phase-graph node id "${node.id}" must be a canonical phase id, not a legacy alias`,
+    );
+    assert.equal(
+      resolution.canonicalPhaseId,
+      node.id,
+      `phase-graph node id "${node.id}" must resolve to itself`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

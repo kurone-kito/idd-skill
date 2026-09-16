@@ -23,7 +23,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^[A-Z][A-Za-z0-9.-]*$",
+            "pattern": "^[A-Z][A-Za-z0-9_.-]*$",
             "description": "Unique identifier of an IDD phase node."
           },
           "next": {
@@ -31,7 +31,7 @@
             "description": "Phase identifiers reachable after this node.",
             "items": {
               "type": "string",
-              "pattern": "^[A-Z][A-Za-z0-9.-]*$"
+              "pattern": "^[A-Z][A-Za-z0-9_.-]*$"
             }
           }
         }
