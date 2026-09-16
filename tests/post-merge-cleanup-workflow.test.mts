@@ -105,8 +105,8 @@ test('workflow_dispatch is guarded to require an already-merged PR before cleanu
     );
     assert.match(
       guardBlock,
-      /\*\[!0-9\]\*/,
-      `${path} guard step must reject a PR_NUMBER that is not a plain decimal number`,
+      /''\|\*\[!0-9\]\*\)\s*\n\s*echo "::error::[^\n]*"\s*\n\s*exit 1\s*\n\s*;;/,
+      `${path} guard step must reject a non-numeric PR_NUMBER with an ::error:: message and exit non-zero, not merely match the glob (#2979 review, Copilot)`,
     );
     assert.match(
       guardBlock,
