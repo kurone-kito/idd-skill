@@ -65,23 +65,26 @@ stop and report.
        current `{claim-id}` and stop. If the claim was already lost, do
        not post release.
 6. When the policy is `fully_autonomous_merge`:
-   1. If this PR has no linked issue to claim against
-      (`closingIssuesReferences` empty — the claimless case
-      `idd-pre-merge.instructions.md`'s F2 readiness collector already
-      accepts via `--claimless`), this recovery path does not apply:
-      `idd-claim.instructions.md`'s A5 is issue-scoped, and the F3
-      merge-execution helper has no claimless mode either. Report and
-      stop rather than inventing an unsupported path (PR
-      kurone-kito/idd-skill#3051 review).
+   1. If the PR's head branch does not follow B1's
+      `issue/<number>-<slug>` naming convention
+      ([B1 Worktree creation](idd-work.instructions.md#worktree-creation)),
+      this PR was never IDD-claimed — the claimless case, for example an
+      automated dependency-update PR. `idd-claim.instructions.md`'s A5
+      is issue-scoped, and the F3 merge-execution helper has no
+      claimless mode either. Report and stop rather than inventing an
+      unsupported path (PR kurone-kito/idd-skill#3051 review) — do not
+      use `closingIssuesReferences` for this test, which is empty for
+      every PR on a non-default `{development-branch}` regardless of
+      whether it has a claimed issue (D3.5).
    2. Otherwise, if this session does not yet hold a verified active
-      `{claim-id}`, establish ownership through
-      `idd-claim.instructions.md` A5 — the same no-claim recovery step 5
-      uses for `separate_merge_agent` — then return to this handoff
-      phase. `idd-merge.instructions.md`'s F3 step 1 requires an active
-      claim regardless of policy, with no `fully_autonomous_merge`
-      exception; establishing one here before routing to F3 is what
-      keeps this no-active-claim continuation from contradicting that
-      check (kurone-kito/idd-skill#2977).
+      `{claim-id}`, establish ownership of the issue number in that
+      branch name through `idd-claim.instructions.md` A5 — the same
+      no-claim recovery step 5 uses for `separate_merge_agent` — then
+      return to this handoff phase. `idd-merge.instructions.md`'s F3
+      step 1 requires an active claim regardless of policy, with no
+      `fully_autonomous_merge` exception; establishing one here before
+      routing to F3 is what keeps this no-active-claim continuation
+      from contradicting that check (kurone-kito/idd-skill#2977).
    3. If this session has not yet recorded F2 evidence for the
       `{claim-id}` now active (for example, step 6.2 just established a
       fresh claim), return to `idd-pre-merge.instructions.md` and run F2
