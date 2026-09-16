@@ -282,8 +282,8 @@ below unconditionally before E3 -- a local fix can predate E4 and
 never re-surface there; edge case 1's check at E4 then covers it.
 Then continue through E2, E3, and, only when E3 finds
 ReviewItems_snapshot non-empty, E4-E8 in full before any E9 work --
-an item edge case 1 routed to E14 runs E14 even when E8's Accepted
-count is zero, before branch-sync.
+an item edge case 1 routed to E14 runs E14, after edge case 2's own
+push if any (targeting the post-push HEAD), before branch-sync.
 
 Two correctness-sensitive gaps need an explicit rule (preventive; no
 observed incident yet), since a naive rebuild can silently drop or
