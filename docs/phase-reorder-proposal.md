@@ -22,11 +22,11 @@ an otherwise family-and-number sequence:
 - PR submission: `D3.5`, `D3.6`, and `D3.7`; and
 - merge handoff: `F2.5`.
 
-The intake inventory for this issue recorded 763 matches across 106 files
-when both decimal and underscore spellings were searched. That number is
-a dated baseline, not a permanent repository invariant: later changes can
-alter the count, and the implementation must regenerate the inventory before
-every migration batch. The migration inventory should cover every tracked
+The issue acceptance criterion calls the migration corpus the “763-reference”
+corpus. This document repeats that label only to identify the issue scope; it
+does not assert that the current tree has that count or use it as a success
+threshold. The implementation must regenerate the inventory before every
+migration batch. The migration inventory should cover every tracked
 repository file, including hidden and generated surfaces such as
 `.claude/skills/`, `CHANGELOG.md`, and `audit/sync-manifest.json`, rather
 than relying on a manually maintained list of roots. A reproducible inventory
@@ -77,8 +77,9 @@ makes the inserted responsibilities explicit:
 A0 -> (A0_O | A0_T | A1)
 A1 -> A1_AUDIT -> A2 -> A3 -> A3_APPROVAL -> A4 -> A4_SUITABILITY -> A5
 A5 -> B1 -> B2 -> B3 -> C1 -> C2 -> C3 -> C4 -> C5 -> C6
-C6 -> C1 (non-clean critique loop)
-C6 -> D1 (clean exit)
+C2 -> D1 (zero findings and floor passed)
+C4 -> D1 (clean exit and floor passed)
+C6 -> C1 (next critique pass)
 D1 -> D2 -> D3 -> D3_IMPACT -> D3_CLOSE -> D4
 D4 -> E1 -> E2 -> E3
 E3 -> E4 -> E5 -> E6 -> E7 -> E8
@@ -96,9 +97,10 @@ The first line shows alternatives, not a requirement that all three A0
 routes execute. `A0_O` and `A0_T` remain their existing orphan and
 explicit-target shortcuts. `Resume` remains a routing entry that may
 return to the appropriate point in this sequence; it is not renumbered.
-The `C6 -> C1` edge is the non-clean critique loop; only the clean C-phase
-exit proceeds to D1. The E-phase has two exits from E3: an empty snapshot
-goes directly to `Esync`, while a non-empty snapshot goes through E4-E8.
+C2 and C4 provide the clean C-phase exits to D1 after the validation floor;
+C6 returns to C1 for the next critique pass. The E-phase has two exits from
+E3: an empty snapshot goes directly to `Esync`, while a non-empty snapshot
+goes through E4-E8.
 From E8, zero Accepted PATH A items goes to `Esync`; accepted PATH A work
 goes through E9-E15, and a successful E15 CI wait returns to E1 for a fresh
 snapshot. The F2 edge to E1 represents an unmet merge condition. `A` stays
@@ -186,8 +188,10 @@ The implementation must therefore keep `A` outside both the canonical
 resolver list and the alias map, while retaining the explicit graph-test
 exemption.
 
-## Finding 5 — Batch the 763-reference migration
+## Finding 5 — Batch the issue-scoped reference migration
 
+The issue-scoped corpus named in the acceptance criterion is the
+763-reference migration, but that number is not a current-tree invariant.
 The safe unit of migration is one phase family and its direct generated
 mirrors, with the compatibility contract landed first. The implementation
 should use this order:
