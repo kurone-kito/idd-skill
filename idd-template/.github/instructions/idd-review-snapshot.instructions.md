@@ -284,10 +284,13 @@ routes to run this section first is a follow-up to
 **Procedure**: run E1 Steps 1-3 above. They already re-derive
 ReviewItems_snapshot entirely from live GitHub state on every
 execution -- no session memory required -- so re-running them now is
-the reconstruction; post a fresh watermark (Step 2), then continue
-through E2, E3, and E4-E8 in full before any E9 work -- a cold E9 entry
-has no durable Accepted-PATH-A set to trust (E6 defers that reply to
-E13), so triage must re-run, not just E1's fetch.
+the reconstruction; post a fresh watermark (Step 2). Run edge case 2's
+local-worktree check below unconditionally, before trusting either of
+E3's branches -- a local fix can predate E4 and never re-surface
+there. Then continue through E2, E3, and, only when E3 finds
+ReviewItems_snapshot non-empty, E4-E8 in full before any E9 work -- a
+cold E9 entry has no durable Accepted-PATH-A set to trust (E6 defers
+that reply to E13), so triage must re-run.
 
 Two correctness-sensitive gaps need an explicit rule (preventive; no
 observed incident yet), since a naive rebuild can silently drop or
@@ -303,25 +306,29 @@ simply re-classifies it. Nothing to recover; state this explicitly so
 a resuming session invents no extra bookkeeping.
 
 **Edge case 2 -- an E9 fix committed but not yet pushed.** GitHub-side
-state cannot see this: the PR's `headRefOid` has not moved. The
-deciding signal is local, not the rebuild above, and exists only in
-the **same surviving claimed worktree**:
+state cannot see this, and a fix for a session-local E2 finding may
+never re-surface at E4 (E2's findings are not durable) -- an empty E3
+result alone is not proof there is nothing to recover, since F2 resets
+the worktree to the PR's remote HEAD before merge. Run this
+unconditionally, in the **same surviving claimed worktree**:
 
 1. `PR_HEAD=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')`
 2. `git merge-base --is-ancestor "$PR_HEAD" HEAD` -- a failure means
-   local history is not a simple ahead-of-`$PR_HEAD` case; fall back to
-   edge case 1's rule instead of trusting the next step.
-3. On success, `git log "$PR_HEAD"..HEAD` lists commits already made.
-   Still run the Procedure above -- the rebuild, including E4-E8, is
-   unconditional. When E4 then re-surfaces an item, confirm the local
-   diff actually addresses it (never assume from the commit list
-   alone) before treating it as Accepted-and-fixed and taking it
-   through E10-E15 rather than re-fixing: E10, not E12, because a cold
-   session cannot know whether E10's critique pass already ran against
-   it, and
+   local history is not a simple ahead-of-`$PR_HEAD` case; fall back
+   to edge case 1's rule instead.
+3. `git status --porcelain` must report clean -- a dirty worktree
+   can't prove which uncommitted lines belong to which item; route it
+   through E9 instead so its own fix-and-commit step absorbs them.
+4. `git log "$PR_HEAD"..HEAD` lists commits already made: treat this
+   as pending work regardless of whether E4 re-surfaces a matching
+   item, confirming the local diff actually addresses it (never assume
+   from the commit list alone) before taking it through E10-E15 rather
+   than re-fixing: E10, not E12, because a cold session cannot know
+   whether E10's critique pass already ran against it, and
    [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
    governs that ambiguity.
 
-A fresh or lost worktree has no path to this evidence; that item falls
-back to edge case 1's rule instead -- safely, if wastefully, re-triaged
+Clean worktree, no local-ahead commits: E3's own routing applies
+unchanged. A fresh or lost worktree has no path to this evidence and
+falls back to edge case 1's rule -- safely, if wastefully, re-triaged
 from scratch.

@@ -746,15 +746,21 @@ mid-loop death.
 Mid-review carries a narrower, equivalent boundary. A session may
 deliberately exit right after E1's watermark posts (before E4 starts),
 after E8 finds zero Accepted PATH A items (nothing pending; the
-branch-sync check and F1 come next), or after a round's E13 replies
-all land:
-each of these leaves every disposition durable on GitHub, so a
-successor re-enters cleanly via a fresh E1 pass with nothing to
-recover. Exiting anywhere between E4 and a round's completed E13
-replies is not recommended — an Accepted-PATH-A decision carries no
-durable marker until E13 posts it (E6 defers that reply on purpose) —
-so a session forced to exit or resume there instead relies on the
-recovery procedure the
+branch-sync check and F1 come next), or after a round completes
+**both** E13 and E14: each of these leaves every disposition durable
+on GitHub, so a successor re-enters cleanly via a fresh E1 pass with
+nothing to recover. E14 belongs in that boundary, not only E13 — E1
+Step 3 excludes a `CHANGES_REQUESTED` review body only once it has
+**both** a reply and a re-review request, so exiting right after
+E13's replies but before E14 requests review leaves that body's
+exclusion condition unmet, and a fresh E1 pass re-surfaces it (E4-E8
+still recognize it as already dispositioned, so no rework follows —
+only the unnecessary re-surfacing). Exiting anywhere between E4 and a
+round's completed E14 is not recommended — an Accepted-PATH-A decision
+carries no durable marker until E13 posts it (E6 defers that reply on
+purpose), and a `CHANGES_REQUESTED` body needs E14's request too for
+its own exclusion to hold — so a session forced to exit or resume
+there instead relies on the recovery procedure the
 [ReviewItems_snapshot lifecycle](#reviewitems_snapshot-lifecycle)
 section names.
 
