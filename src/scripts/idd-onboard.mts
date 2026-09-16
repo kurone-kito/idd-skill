@@ -1947,7 +1947,7 @@ const PACKAGE_SPEC_APPLICABLE_PROFILES: ReadonlySet<string> = new Set([
 export interface PackagePinWarningResult {
   /** The target's effective `helperRuntime.profile` (defaults to `instructions-only`). */
   profile: string;
-  /** True when `profile` is one `helperRuntime.packageSpec` applies to. */
+  /** True when `profile` is one that `helperRuntime.packageSpec` applies to. */
   applicable: boolean;
   /** True when the target's `helperRuntime.packageSpec` is configured. */
   packageSpecConfigured: boolean;

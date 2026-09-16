@@ -663,8 +663,8 @@ error), so an agent can gate on the exit code without parsing prose.
   profile with no configured `helperRuntime.packageSpec` — see
   [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)).
   A missing manifest file or a leftover onboarding placeholder is
-  blocking; the stale-import signal and the package-pin advisory never
-  are.
+  blocking; the stale-import signal and the package-pin advisory are
+  never blocking.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
