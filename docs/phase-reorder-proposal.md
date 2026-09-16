@@ -1,7 +1,7 @@
 ---
 type: investigation
 title: IDD Canonical Phase Re-order Proposal
-description: Records a readability-first proposal for replacing decimal phase IDs while preserving routing and marker compatibility.
+description: Records a readability-first proposal for replacing decimal phase IDs while preserving routing and historical marker-read compatibility.
 tags: [investigation, phase-model, routing]
 ---
 
@@ -62,8 +62,8 @@ the nested labels as an unrelated vocabulary.
 
 ## Finding 1 — Decimal insertion hides responsibility and order
 
-This is preventive; no observed incident yet has been recorded for this
-decimal-label readability concern. The decimal labels are
+No incident is being asserted here: this is a preventive concern
+(preventive; no observed incident yet). The decimal labels are
 understandable locally, but they make the global
 sequence look as though a late exception belongs between two numbered
 steps without saying what responsibility it owns. The problem is clearest
@@ -98,6 +98,8 @@ A1_AUDIT -> stop (non-autonomous gap)
 A1_AUDIT -> A2 (unresolved work or autonomous gap)
 A2 -> A3 -> A3_APPROVAL -> A4 -> A4_SUITABILITY -> A5
 A4_SUITABILITY -> A4 (rejection in normal discovery)
+A3_APPROVAL -> stop (only approval-needed fallback remains)
+A4_SUITABILITY -> stop (fresh invalid outcome)
 A4_SUITABILITY -> stop (rejection for explicit target)
 A4_SUITABILITY -> A5 (pass)
 A5 -> A (missing approval or claim race in a normal run)
@@ -159,7 +161,13 @@ empty scoped set, or suitability failure stops without fallback. A1's audit
 returns to A1 after closing a completed nested roadmap,
 stops on a non-autonomous gap, and reaches A2 only for unresolved work or
 an autonomous gap. A4's suitability rejection returns to A4 for the next
-normal-discovery survivor but stops for an explicit target.
+normal-discovery survivor when it is an ordinary rejection; a fresh `invalid`
+outcome stops for human trust/safety review, while a reconfirmed `invalid`
+outcome is excluded and discovery may continue. A3's approval gate stops an
+unattended run when only its approval-needed fallback bucket remains, or asks
+the operator in attended mode; it never auto-claims that bucket. A4's
+suitability rejection stops for an explicit target. This distinction is a
+preventive failure mode (preventive; no observed incident yet).
 C2 sends a zero-finding result to C5 when the objective validation floor
 fails; C3 has no findings to score in that case. C2 and C4 provide the
 clean C-phase exits to D1 after the validation floor;
@@ -327,9 +335,9 @@ should use this order:
    the tree is not green.
 
 This rule keeps each batch independently reviewable and prevents a partial
-rename from leaving a parser or generated mirror behind. This is preventive;
-no observed incident yet has been recorded for a partial migration leaving a
-parser or generated mirror behind. It also avoids treating the issue-scope
+rename from leaving a parser or generated mirror behind. Partial migration is
+a preventive failure mode (preventive; no observed incident yet). It also
+avoids treating the issue-scope
 label as a hard-coded success condition: the next batch starts from the
 inventory it actually observes.
 
