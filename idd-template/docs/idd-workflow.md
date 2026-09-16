@@ -410,8 +410,8 @@ literally immutable value a later session may reuse as-is.
 
 The name intentionally emphasizes snapshot semantics: E1-E3 builds and
 gates on a time-locked view, E4-E8 triages that view, and E9-E15 drives
-it to completion within the current session before the next E1 fetch
-supersedes it.
+it to completion, normally within the current session, before the next
+E1 fetch supersedes it.
 
 **Cross-session hygiene**: because the snapshot is session-local, a
 resumed or forced-handoff session must not inherit a prior session's
@@ -421,6 +421,19 @@ instead, and treat prior-claim operational markers as non-reusable even
 when the branch and HEAD are unchanged — see
 `idd-resume.instructions.md`'s CI/review routing table and its
 forced-handoff recovery note for the authoritative rule.
+
+**Cold entry outside Resume**: `idd-resume.instructions.md`'s Step 3
+table already rebuilds at E1 for every mid-review resume it handles
+(crash, rate-limit, stale-claim takeover) — never directly at E4 or E9.
+The gap this closes is the two paths that table doesn't cover:
+`idd-overview-core.instructions.md`'s phase-routing entries for
+"Snapshot done" / "Review feedback accepted," followed without having
+just run E1, and an orchestrator fan-out delegation brief that hands a
+worker straight into mid-review
+(see [Orchestrator fan-out variant](#orchestrator-fan-out-variant)
+below). `idd-review-snapshot.instructions.md`'s cold-start
+reconstruction section is the named procedure for both entry paths,
+including the two edge cases a naive rebuild could get wrong.
 
 ## Artifact taxonomy and ownership
 
@@ -853,6 +866,13 @@ Running this variant safely requires:
   with a resume-specific briefing rather than resuming the dead
   worker's own
   context.
+- **A delegation brief resuming mid-review must run the cold-start
+  reconstruction.** A fresh worker dispatched straight into E4-E15 for
+  a PR it did not just fetch itself must not assume
+  `ReviewItems_snapshot` still reflects live state — see the
+  ReviewItems_snapshot lifecycle section's Cold entry outside Resume
+  note above and `idd-review-snapshot.instructions.md`'s cold-start
+  reconstruction section.
 - **Independently verify a worker's reported terminal outcome before
   trusting it.** A worker's final-turn text describes what it
   _attempted_, not proof of what actually landed on the forge. Before

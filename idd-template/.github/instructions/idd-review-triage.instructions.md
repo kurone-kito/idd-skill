@@ -1,12 +1,12 @@
 # IDD — Review Triage Phase (E4–E8)
 
 Read this file after `idd-review-snapshot.instructions.md` (E3) finds
-ReviewItems_snapshot non-empty. Covers classifying, scoring, recording
+ReviewItems_snapshot non-empty; a cold E4 entry runs its cold-start
+reconstruction first. Covers classifying, scoring, recording
 dispositions, and counting accepted items.
 
 Before posting any E-phase operational comment or GitHub reply, apply
-the shared claim revalidation gate. The active claim must still use your
-current `{claim-id}`.
+the shared claim revalidation gate.
 
 **Skip condition E8**: if the Accepted PATH A count after verification
 is zero, proceed to the **E-phase branch-sync check** below (its

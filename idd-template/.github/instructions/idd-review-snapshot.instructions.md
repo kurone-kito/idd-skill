@@ -265,3 +265,56 @@ If ReviewItems_snapshot is empty → proceed to the E-phase branch-sync
 check in `idd-review-triage.instructions.md`.
 
 Otherwise → proceed to `idd-review-triage.instructions.md` (E4).
+
+## Cold-start ReviewItems_snapshot reconstruction
+
+Read this section when entering E4 (`idd-review-triage.instructions.md`)
+or E9 (`idd-review-fix.instructions.md`) without ReviewItems_snapshot
+from this episode's own E1-E3 pass -- a session resuming mid-review
+outside `idd-resume.instructions.md`'s formal routing (which already
+rebuilds at E1 for every mid-review resume), such as a fresh worker
+following `idd-overview-core.instructions.md`'s routing-table entry
+directly, or an orchestrator delegation brief that hands off mid-review.
+
+**Procedure**: run E1 Steps 1-3 above. They already re-derive
+ReviewItems_snapshot entirely from live GitHub state on every
+execution -- no session memory required -- so re-running them now is
+the reconstruction; post a fresh watermark (Step 2) and continue to E2
+before E4/E9. This is the same rebuild `idd-resume.instructions.md`'s
+routing table already requires after a crash; this section names and
+generalizes it for the two entry paths formal Resume routing does not
+cover.
+
+Two correctness-sensitive gaps need an explicit rule, since a naive
+rebuild can silently drop or duplicate a reviewer-facing item:
+
+**Edge case 1 -- an item mid-E4 classification, no disposition reply
+posted yet.** No special handling: Step 3's awaiting-reviewer
+exclusion, including its stated exceptions, already draws this line.
+An item a lost session classified Accepted but never replied to (E6
+defers that reply to E13) has no IDD-agent reply for Step 3 to see, so
+the rebuild re-includes it as ordinary undispositioned work -- E4
+simply re-classifies it. Nothing to recover; state this explicitly so
+a resuming session invents no extra bookkeeping.
+
+**Edge case 2 -- an E9 fix committed but not yet pushed.** GitHub-side
+state cannot see this: the PR's `headRefOid` has not moved. The
+deciding signal is local, not the rebuild above, and exists only in
+the **same surviving claimed worktree**:
+
+1. `PR_HEAD=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')`
+2. `git merge-base --is-ancestor "$PR_HEAD" HEAD` -- a failure means
+   local history is not a simple ahead-of-`$PR_HEAD` case; fall back to
+   edge case 1's rule instead of trusting the next step.
+3. On success, `git log "$PR_HEAD"..HEAD` lists commits already made.
+   Still run the Procedure above -- the rebuild is unconditional. When
+   E4 then re-surfaces an item those commits address, treat it as
+   Accepted-and-fixed and take it through E10-E15 rather than
+   re-fixing: E10, not E12, because a cold session cannot know whether
+   E10's critique pass already ran against them, and
+   [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
+   governs that ambiguity.
+
+A fresh or lost worktree has no path to this evidence; that item falls
+back to edge case 1's rule instead -- safely, if wastefully, re-triaged
+from scratch.
