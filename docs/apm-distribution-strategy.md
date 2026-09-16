@@ -465,6 +465,31 @@ Re-evaluate this note when any of the following holds:
 - This repository or an adopter wants to pilot `skills/issue-authoring/`
   alone via `apm install`, as a bounded, reversible experiment — the
   one candidate §7 found net-neutral-or-favorable.
+- A stable, post-1.0 APM lockfile contract can record an installed
+  artifact version and its mapping to the named gaps a re-import must
+  reconcile, in a machine-readable form. The current pre-1.0 lockfile
+  already records resolved commits and per-file hashes, so this condition
+  requires an additional version-to-gap signal rather than merely those
+  existing fields. That would serve `idd-template/ONBOARDING.md`'s
+  "Re-importing: import named gaps, not a blind resync" section and
+  `idd-template/docs/onboarding/template-distribution.md`'s "Anatomy of
+  a helper re-import" procedure.
+
+**Onboarding token cost is not an APM fit.** `idd-onboard.mjs` already
+automates Steps 0, 1A, 1B, 1C (`--hear`), 2 (`--import`), 3
+(`--record-policy`), 4 (`--substitute`), and the mechanical subset of
+Step 6 (`--verify`). In the documented helper-assisted path, residual
+procedure cost includes the manual Step 5 agent-entry updates,
+the policy, configuration, frontmatter, and entry-consistency checks that
+remain manual in Step 6, and reading the documentation. A future APM
+distribution could automate those entry-file writes, but it would not
+reduce the document-reading cost measured here. The byte totals below are
+context-size upper-bound proxies, not token-use measurements: an onboarding
+session reads only the front door and selected companion path, not
+necessarily the full bundle. At this revision, the front door measures
+52,611 bytes and the manifest-defined companion Markdown bundle measures
+165,971 bytes; `hearing-catalog.json` is a separate schema input and is
+not part of that bundle.
 
 Capture new evidence as issues referencing this document.
 
