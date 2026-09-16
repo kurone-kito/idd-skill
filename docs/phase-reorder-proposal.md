@@ -59,7 +59,9 @@ the nested labels as an unrelated vocabulary.
 
 ## Finding 1 — Decimal insertion hides responsibility and order
 
-The decimal labels are understandable locally, but they make the global
+The rationale here is preventive; no observed incident has yet been recorded
+for a decimal-label readability failure. The decimal labels are
+understandable locally, but they make the global
 sequence look as though a late exception belongs between two numbered
 steps without saying what responsibility it owns. The problem is clearest
 in D3: the current prose derives the IDD impact checklist before it
@@ -82,11 +84,14 @@ makes the inserted responsibilities explicit:
 ```text
 A0 -> (A0_O | A0_T | A1)
 A1 -> A1_AUDIT -> A2 -> A3 -> A3_APPROVAL -> A4 -> A4_SUITABILITY -> A5
+A5 -> A (missing approval or claim race in a normal run)
+A5 -> stop (explicit-target failure)
 A5 -> B1 -> B2 -> B3 -> C1 -> C2 -> C3 -> C4 -> C5 -> C6
 C2 -> D1 (zero findings and floor passed)
 C4 -> D1 (clean exit and floor passed)
 C6 -> C1 (next critique pass)
 D1 -> D2 -> D3 -> D3_IMPACT -> D3_CLOSE -> D4
+D4 -> D2 (code-caused required-check failure, cancellation, or timeout)
 D4 -> E1 -> E2 -> E3
 E3 -> E4 -> E5 -> E6 -> E7 -> E8
 E3 -> Esync (empty snapshot)
@@ -107,6 +112,12 @@ F2_HANDOFF -> F3 (authorized merge policy)
 F2_HANDOFF -> stop (human_merge or unknown policy)
 F2_HANDOFF -> A5 -> F2 (designated separate merge agent resumption)
 F3 -> F4 -> F5
+F3 -> E14 (advisory state drift)
+F3 -> F1 (base branch update or conflict)
+F3 -> D4 (CI condition no longer met)
+F3 -> E1 (review drift or new reviewer activity)
+F3 -> F2 (awaiting-reviewer resolution or acknowledgement)
+F3 -> stop (maintainer decision required)
 F5 -> A -> A5
 ```
 
@@ -118,6 +129,11 @@ C2 and C4 provide the clean C-phase exits to D1 after the validation floor;
 C6 returns to C1 for the next critique pass. The E-phase has two exits from
 E3: an empty snapshot goes directly to `Esync`, while a non-empty snapshot
 goes through E4-E8.
+A5 returns to the collapsed discovery node when a normal roadmap or orphan
+run loses a claim race or finds that approval is missing; an explicit-target
+run stops instead of selecting a different issue. A code-caused required
+check failure, cancellation, or timeout at D4 returns to D2 so the corrected
+HEAD is pushed and checked before review processing resumes.
 From E8, zero Accepted PATH A items goes to `Esync`; accepted PATH A work
 goes through E9-E15, and a successful E15 CI wait returns to E1 for a fresh
 snapshot. E7 returns to the E4-E6 disposition sequence when required
@@ -143,6 +159,11 @@ to E1 for a new snapshot. At F2.5, `F3` is reachable only under
 A designated separate merge agent may re-enter through A5 and F2 when it
 still needs to establish ownership or refresh merge evidence; an unrecorded
 or different merge-capable actor stops with a handoff instead.
+F3's successful path is conditional: advisory drift returns to E14, a base
+branch update or conflict returns to F1, a failed CI condition returns to D4,
+review drift or new reviewer activity returns to E1, and an awaiting-reviewer
+resolution or acknowledgement restarts F2. A maintainer-decision path stops
+without merging.
 
 The D3 entries are nested checkpoints in one PR-submission phase, so the
 future implementation should document their ownership as follows:
