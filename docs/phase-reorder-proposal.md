@@ -98,6 +98,7 @@ A4_SUITABILITY -> A5 (pass)
 A5 -> A (missing approval or claim race in a normal run)
 A5 -> stop (explicit-target failure)
 A5 -> B1 -> B2 -> B3 -> C1 -> C2 -> C3 -> C4 -> C5 -> C6
+C2 -> C5 (zero findings but floor failed)
 C2 -> D1 (zero findings and floor passed)
 C4 -> D1 (clean exit and floor passed)
 C6 -> C1 (next critique pass)
@@ -144,7 +145,9 @@ order. A1's audit returns to A1 after closing a completed nested roadmap,
 stops on a non-autonomous gap, and reaches A2 only for unresolved work or
 an autonomous gap. A4's suitability rejection returns to A4 for the next
 normal-discovery survivor but stops for an explicit target.
-C2 and C4 provide the clean C-phase exits to D1 after the validation floor;
+C2 sends a zero-finding result to C5 when the objective validation floor
+fails; C3 has no findings to score in that case. C2 and C4 provide the
+clean C-phase exits to D1 after the validation floor;
 C6 returns to C1 for the next critique pass. The E-phase has two exits from
 E3: an empty snapshot goes directly to `Esync`, while a non-empty snapshot
 goes through E4-E8.
@@ -233,6 +236,8 @@ already used by `src/scripts/phase-id-resolver.mts`:
 
 ```ts
 const DEFAULT_LEGACY_ALIASES: Record<string, string[]> = {
+  A0_O: ['A0-O', 'A0O'],
+  A0_T: ['A0-T', 'A0T'],
   A1_AUDIT: ['A1.5', 'A1-5', 'A15', 'A1_5'],
   A3_APPROVAL: ['A3.5', 'A3-5', 'A35', 'A3_5'],
   A4_SUITABILITY: ['A4.5', 'A4-5', 'A45', 'A4_5'],
@@ -301,9 +306,11 @@ should use this order:
    the tree is not green.
 
 This rule keeps each batch independently reviewable and prevents a partial
-rename from leaving a parser or generated mirror behind. It also avoids
-using the 763 baseline as a hard-coded success condition: the next batch
-starts from the inventory it actually observes.
+rename from leaving a parser or generated mirror behind. This is preventive;
+no observed incident yet has been recorded for a partial migration leaving a
+parser or generated mirror behind. It also avoids treating the issue-scope
+label as a hard-coded success condition: the next batch starts from the
+inventory it actually observes.
 
 Some live surfaces cannot be reached by a tree rewrite. Published issue
 and PR markers, review comments, claim or watermark records, and in-flight
