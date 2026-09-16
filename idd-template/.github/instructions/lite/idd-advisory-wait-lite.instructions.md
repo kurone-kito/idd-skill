@@ -32,10 +32,10 @@ cover, and a lite session must never attempt:
 - F2's live-fetch-plus-prose fallback for when the merge-readiness
   helper is unavailable, invalid, or discarded.
 - F3's merge-time call site.
-- The terminal Copilot stall-recovery contract (bounded stale-request
-  recovery, the `COPILOT_UNAVAILABLE` signal, and its waiver routing)
-  and the same-HEAD advisory reroll — both are F2/F3-only mechanisms
-  this file does not reproduce.
+- The terminal Copilot stall-recovery contract (`COPILOT_UNAVAILABLE`
+  plus waiver routing) and the same-HEAD advisory reroll stay
+  F2/F3-only; E14's own settled-elapsed-time case (`#2327`) is handled
+  in its own decision table instead.
 
 A lite session's own routing (A0-A4.5 excluded, E4-E8 excluded, the
 lite F1-F2 helper-read-only subset, the lite F2.5 handoff-stop, F3-F5
