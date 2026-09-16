@@ -477,7 +477,15 @@ when the install command itself fails), and fail loudly with an
 actionable message if it is still missing after the retry. The existing
 install-deps idempotency contract is preserved — the wrapper never
 deletes or resets state, so reruns in fresh, reused, or recreated
-worktrees still need no manual cleanup (#1237).
+worktrees still need no manual cleanup (#1237). It also validates the
+resolved `pnpm --version` against the major pinned in `package.json`'s
+`packageManager` field before running the install command at all,
+replacing the fail-fast behavior `engines.pnpm` used to provide via
+pnpm's own `engineStrict` — removed because `engineStrict` enforced
+that field transitively against every downstream consumer installing
+this package, not only this repository's own contributors (#3043; see
+[docs/idd-helper-scripts.md's package-manager profile
+note](idd-helper-scripts.md#helper-runtime-profiles)).
 
 ### WorkTrunk cwd caveat
 
