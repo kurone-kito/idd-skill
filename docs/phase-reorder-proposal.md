@@ -24,18 +24,24 @@ an otherwise family-and-number sequence:
 
 The intake inventory for this issue recorded 763 matches across 106 files
 when both decimal and underscore spellings were searched. That number is
-a dated baseline, not a permanent repository invariant: later changes
-can alter the count, and the implementation must regenerate the inventory
-before every migration batch. A reproducible inventory can be produced
-with the following shape, keeping the roots explicit and the compatibility
-allowlist reviewable:
+a dated baseline, not a permanent repository invariant: later changes can
+alter the count, and the implementation must regenerate the inventory before
+every migration batch. The migration inventory should cover every tracked
+repository file, including hidden and generated surfaces such as
+`.claude/skills/`, `CHANGELOG.md`, and `audit/sync-manifest.json`, rather
+than relying on a manually maintained list of roots. A reproducible inventory
+can be produced with the following repo-wide command shape:
 
 ```sh
 phase_id_pattern='A1\.5|A1_5|A3\.5|A3_5|A4\.5|A4_5|F2\.5|F2_5|D3\.5|D3_5|D3\.6|D3_6|D3\.7|D3_7'
-phase_id_roots='src schemas tests fixtures docs .github skills scripts idd-template'
-grep -rlE "$phase_id_pattern" $phase_id_roots | sort -u
-grep -rohE "$phase_id_pattern" $phase_id_roots | wc -l
+git grep -l -E "$phase_id_pattern" -- . | sort -u
+git grep -h -o -E "$phase_id_pattern" -- . | wc -l
 ```
+
+This inventory intentionally follows tracked repository content, so it
+includes hidden and generated files while excluding untracked dependency
+trees. The file list and count are evidence for the current batch, not
+success criteria that a later batch may reuse unchanged.
 
 The machine-facing resolver currently contains `A1_5`, `A3_5`, `A4_5`,
 and `F2_5` as canonical IDs with dotted, hyphenated, and compact aliases.
@@ -71,18 +77,32 @@ makes the inserted responsibilities explicit:
 A0 -> (A0_O | A0_T | A1)
 A1 -> A1_AUDIT -> A2 -> A3 -> A3_APPROVAL -> A4 -> A4_SUITABILITY -> A5
 A5 -> B1 -> B2 -> B3 -> C1 -> C2 -> C3 -> C4 -> C5 -> C6
-C6 -> D1 -> D2 -> D3
-D3_IMPACT -> D3_CLOSE -> D3_PREMERGE -> D4
-D4 -> E1 -> E2 -> E3 -> E4 -> E5 -> E6 -> E7 -> E8
-E8 -> E9 -> E10 -> E11 -> E12 -> E13 -> E14 -> E15 -> Esync
-Esync -> F1 -> F2 -> F2_HANDOFF -> F3 -> F4 -> F5
+C6 -> C1 (non-clean critique loop)
+C6 -> D1 (clean exit)
+D1 -> D2 -> D3 -> D3_IMPACT -> D3_CLOSE -> D4
+D4 -> E1 -> E2 -> E3
+E3 -> E4 -> E5 -> E6 -> E7 -> E8
+E3 -> Esync (empty snapshot)
+E8 -> Esync (zero Accepted PATH A)
+E8 -> E9 -> E10 -> E11 -> E12 -> E13 -> E14 -> E15
+E15 -> E1 (CI success)
+Esync -> F1 -> F2
+F2 -> E1 (not ready)
+F2 -> D3_PREMERGE -> F2_HANDOFF -> F3 -> F4 -> F5
+F5 -> A -> A1
 ```
 
 The first line shows alternatives, not a requirement that all three A0
 routes execute. `A0_O` and `A0_T` remain their existing orphan and
 explicit-target shortcuts. `Resume` remains a routing entry that may
 return to the appropriate point in this sequence; it is not renumbered.
-The E-phase loops and `Esync` retain their current control-flow meaning.
+The `C6 -> C1` edge is the non-clean critique loop; only the clean C-phase
+exit proceeds to D1. The E-phase has two exits from E3: an empty snapshot
+goes directly to `Esync`, while a non-empty snapshot goes through E4-E8.
+From E8, zero Accepted PATH A items goes to `Esync`; accepted PATH A work
+goes through E9-E15, and a successful E15 CI wait returns to E1 for a fresh
+snapshot. The F2 edge to E1 represents an unmet merge condition. `A` stays
+the collapsed return target for F5, after which discovery resumes at A1.
 
 The D3 entries are nested checkpoints in one PR-submission phase, so the
 future implementation should document their ownership as follows:
@@ -91,12 +111,14 @@ future implementation should document their ownership as follows:
    the body, before the PR is created.
 2. `D3_CLOSE` verifies the plain-text closing keyword and exact closing
    set after creation.
-3. `D3_PREMERGE` repeats the closing-set and impact-checklist verification
-   against the final HEAD immediately before merge.
+3. `D3_PREMERGE` is not a D3-to-D4 checkpoint. F2 runs the closing-set and
+   impact-checklist verification against the final HEAD at the F2/F2.5
+   boundary, and F3 repeats that gate immediately before merge.
 
 This is an ordering clarification, not a request to split D3 into three
 independent execution loops. The three names are still useful phase IDs
-for markers, routing documentation, and future on-demand packaging.
+for markers, routing documentation, and future on-demand packaging, while
+`D3_PREMERGE` remains owned by the pre-merge boundary in the route above.
 
 ## Finding 3 — Dispositions and compatibility aliases
 
@@ -113,6 +135,17 @@ rename; no historical issue or PR comment is rewritten.
 | `D3.6` / `D3_6` | `D3_IMPACT`      | Before PR body creation; names mechanical IDD impact-checklist derivation.                      |
 | `D3.7` / `D3_7` | `D3_PREMERGE`    | At the pre-merge boundary; names final-head re-verification.                                    |
 | `F2.5` / `F2_5` | `F2_HANDOFF`     | Between pre-merge conditions and merge execution; names merge-policy handoff.                   |
+
+Changing the canonical emitted IDs is a versioned breaking migration, not a
+transparent cleanup. The aliases let a new reader consume historical
+markers and other old records, but an older consumer cannot automatically
+understand a newly emitted semantic ID. Before changing emitted output, the
+future implementation must therefore either keep the existing machine
+canonicals and make semantic names display-only, or publish an explicit
+versioned migration with downstream consumer updates and notice. This
+proposal recommends the latter only as a separately scoped implementation
+decision; the alias map below covers historical-read compatibility, not
+backward interpretation of new output by old consumers.
 
 The future `DEFAULT_LEGACY_ALIASES` entry should retain the exact shape
 already used by `src/scripts/phase-id-resolver.mts`:
@@ -189,11 +222,13 @@ come back empty.
 
 ## Finding 6 — Sequence the lite mirror with the standard corpus
 
-The future implementation should migrate the 11
-`.github/instructions/lite/` shadow files in the same change and in the
-same corresponding phase-family batches as the standard corpus. A lite
-reader must not see a different phase vocabulary for the same gate, and
-the compatibility aliases must cover both profiles during rollout.
+The future implementation should migrate the `.github/instructions/lite/`
+shadow files in the same change and in the same corresponding phase-family
+batches as the standard corpus. Recompute the actual shadow-file set from
+the sync manifest when planning each batch rather than freezing its current
+topology in this proposal. A lite reader must not see a different phase
+vocabulary for the same gate, and the compatibility aliases must cover both
+profiles during rollout.
 
 That recommendation does not widen issue [#2968](https://github.com/kurone-kito/idd-skill/issues/2968).
 Only lines carrying the phase vocabulary and their existing mirror
@@ -208,9 +243,10 @@ Adopt the mapping in Finding 3 for a later, separately scoped
 implementation issue. It improves readability and routing correctness
 while preserving stable integer neighbors, retaining a permanent alias
 path for old live records, and keeping the graph's deliberate `A`
-abstraction. The implementation issue should not be opened until it can
-name the resolver, parser, schema, source-mirror, and lite-mirror changes
-as one bounded batch plan.
+abstraction. Because canonical output changes are breaking for older
+consumers, that implementation issue must also name its version boundary,
+downstream migration notice, resolver, parser, schema, source-mirror, and
+lite-mirror changes as one bounded batch plan.
 
 This is not a token-reduction proposal. Re-ordering moves bytes between
 positions; it removes none. The roadmap's measured literal cross-file
