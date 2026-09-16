@@ -2849,9 +2849,12 @@ test('checkPackagePinWarning warns for package-manager with no packageSpec confi
   // #3052 review: package-manager's emitted commands are bare `idd-*` bin
   // names -- only its install command / devDependencies entry resolve the
   // pin, never the invocation string itself (unlike ephemeral-npx below).
+  // The subject is the profile itself, not "helper commands" (a second
+  // review round: a shared "helper commands ... install" subject/verb
+  // pairing is a category error for this profile).
   assert.match(
     result.warning as string,
-    /install their helper dependency from/,
+    /the "package-manager" helper runtime profile installs its helper dependency from/,
   );
   assert.doesNotMatch(result.warning as string, /resolve against/);
 });

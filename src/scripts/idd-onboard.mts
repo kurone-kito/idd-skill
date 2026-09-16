@@ -2018,21 +2018,24 @@ export function checkPackagePinWarning(
     inspected.status === 'ok' ? (inspected.packageSpec ?? '') : '';
   const applicable = PACKAGE_SPEC_APPLICABLE_PROFILES.has(profile);
   const packageSpecConfigured = packageSpec !== '';
-  // Profile-specific mechanism (Copilot review, PR #3052): `ephemeral-npx`
-  // embeds the pin directly in its `npx --yes --package <spec> idd-*`
-  // invocation string, while `package-manager`'s emitted commands are bare
+  // Profile-specific subject and verb, not just a shared-subject verb swap
+  // (Copilot review, PR #3052, round 2): `ephemeral-npx` embeds the pin
+  // directly in its own `npx --yes --package <spec> idd-*` invocation
+  // string, so "helper commands ... resolve against" is literally true of
+  // the commands themselves. `package-manager`'s emitted commands are bare
   // `idd-*` bin names (buildProfileCatalog, helper-runtime-manifest.mts) --
-  // only its install command and `devDependencies` entry resolve the pin.
-  // Both wordings still name "the mutable default archive URL" per the
-  // acceptance criteria; only the verb describing how each profile reaches
-  // it differs.
-  const packageSpecMechanism =
-    profile === 'ephemeral-npx'
-      ? 'resolve against'
-      : 'install their helper dependency from';
+  // the commands install nothing; the *profile's own install step* does,
+  // pinning only its install command and `devDependencies` entry. Making
+  // "helper commands" the subject of an "install" verb for that profile is
+  // a category error a shared-subject template can't avoid, so the two
+  // branches use different subjects entirely rather than sharing one
+  // sentence shape. Both still name "the mutable default archive URL" per
+  // the acceptance criteria's own wording.
   const warning =
     applicable && !packageSpecConfigured
-      ? `helper commands for the "${profile}" helper runtime profile ${packageSpecMechanism} the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
+      ? profile === 'ephemeral-npx'
+        ? `helper commands for the "ephemeral-npx" helper runtime profile resolve against the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
+        : `the "package-manager" helper runtime profile installs its helper dependency from the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
       : null;
   return { profile, applicable, packageSpecConfigured, warning };
 }
