@@ -1328,11 +1328,26 @@ function computeBaseBundleStats(
 // surface as a new error -- skip that entry silently, the same
 // best-effort-extraction spirit `readTextAtRef` already applies to a
 // missing file.
+//
+// `configs` is declared `unknown` rather than trusted as
+// `InstructionSizeBudgetConfig[]` (#3028 PR #3042 review, Codex and
+// Copilot): `baseManifest` is only `JSON.parse(...) as AuditManifest`, a
+// type assertion with no runtime check, so a base ref whose
+// `audit/sync-manifest.json` still carries the pre-#1667 single-object
+// `instructionSizeBudgets` shape -- the same legacy shape
+// `checkInstructionSizeBudgets` explicitly guards against for the
+// current tree -- would otherwise reach the `for...of` below as a plain
+// object and throw `TypeError: configs is not iterable`, crashing the
+// entire audit instead of the graceful per-entry skip this function's
+// own contract promises.
 function computeBaseInstructionSizeBudgetStats(
   ref: string,
-  configs: InstructionSizeBudgetConfig[],
+  configs: unknown,
 ): InstructionSizeBudgetBaseEntryStat[] {
   const stats: InstructionSizeBudgetBaseEntryStat[] = [];
+  if (!Array.isArray(configs)) {
+    return stats;
+  }
   let baseRepoFiles: string[] | null = null;
   for (const rawConfig of configs) {
     if (

@@ -184,6 +184,58 @@ test('phaseLimitBytes raised while a governed file is at or above the notice thr
   );
 });
 
+test('alwaysLoadedLimitBytes unchanged does not error even at high base utilization', () => {
+  const current = [
+    {
+      id: 'entry-a',
+      glob: 'a/*.md',
+      phaseLimitBytes: 1000,
+      alwaysLoadedLimitBytes: 1000,
+    },
+  ];
+  const base = [
+    {
+      id: 'entry-a',
+      glob: 'a/*.md',
+      phaseLimitBytes: 1000,
+      alwaysLoadedLimitBytes: 1000,
+      files: [{ path: 'a/core.md', bytes: 990, alwaysLoaded: true }],
+    },
+  ];
+  const result = collectInstructionSizeBudgetRatchetViolations(
+    NOTICE_PCT,
+    current,
+    base,
+  );
+  assert.deepEqual(result, []);
+});
+
+test('alwaysLoadedLimitBytes decreased does not error even at high base utilization', () => {
+  const current = [
+    {
+      id: 'entry-a',
+      glob: 'a/*.md',
+      phaseLimitBytes: 1000,
+      alwaysLoadedLimitBytes: 900,
+    },
+  ];
+  const base = [
+    {
+      id: 'entry-a',
+      glob: 'a/*.md',
+      phaseLimitBytes: 1000,
+      alwaysLoadedLimitBytes: 1000,
+      files: [{ path: 'a/core.md', bytes: 990, alwaysLoaded: true }],
+    },
+  ];
+  const result = collectInstructionSizeBudgetRatchetViolations(
+    NOTICE_PCT,
+    current,
+    base,
+  );
+  assert.deepEqual(result, []);
+});
+
 test('alwaysLoadedLimitBytes raised while every governed file is below the notice threshold does not error', () => {
   const current = [
     {
