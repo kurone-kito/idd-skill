@@ -969,3 +969,91 @@ test('--deadline-ms is threaded through the CLI into runMinimize, actually bound
     restore();
   }
 });
+
+test('printTable includes deadlineSkipped in --format table output, matching the --format json shape (#2962)', () => {
+  // Same deadline-triggering setup as the --format json sibling test
+  // above (deadlineMs: 0, withProbeOnlyGhStub, a single candidate) --
+  // this test only swaps --format to prove the table view surfaces
+  // deadlineSkipped too, not only the JSON view. Asserting the FULL
+  // counts line (not just a substring) pins column order and proves no
+  // regression to the other columns, per the issue's own acceptance
+  // criteria.
+  const restore = withProbeOnlyGhStub();
+  try {
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        'IC_a',
+        '--allow-untrusted',
+        '--apply',
+        '--deadline-ms',
+        '0',
+        '--format',
+        'table',
+      ],
+      { encoding: 'utf8' },
+    );
+    const countsLine = result.stdout
+      .split('\n')
+      .find((line) => line.startsWith('counts:'));
+    assert.equal(
+      countsLine,
+      'counts: eligible=1 applied=0 failed=0 already=0 blocked=0 untrusted=0 unsupported=0 deadlineSkipped=1',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('printTable prints deadlineSkipped=0 even when --deadline-ms is omitted, matching the --format json shape (#2962)', () => {
+  // runMinimize() unconditionally seeds counts.deadlineSkipped = 0
+  // regardless of whether --deadline-ms was ever passed (see the
+  // "an omitted --deadline-ms keeps the pre-existing unbounded
+  // behavior" test above for the --format json equivalent of this same
+  // fact). printTable must therefore print "deadlineSkipped=0" on this
+  // ordinary run too, not only on a deadline-triggering one -- a
+  // `> 0`-guarded implementation would pass the test above but wrongly
+  // omit this line, silently diverging from --format json again for the
+  // common all-zero case. withProbeOnlyGhStub mirrors the stub choice of
+  // the "an omitted --deadline-ms keeps the pre-existing unbounded
+  // behavior" --format json sibling test above for this same
+  // no-apply/no-deadline scenario.
+  const restore = withProbeOnlyGhStub();
+  try {
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        'IC_a',
+        '--allow-untrusted',
+        '--format',
+        'table',
+      ],
+      { encoding: 'utf8' },
+    );
+    const countsLine = result.stdout
+      .split('\n')
+      .find((line) => line.startsWith('counts:'));
+    assert.equal(
+      countsLine,
+      'counts: eligible=1 applied=0 failed=0 already=0 blocked=0 untrusted=0 unsupported=0 deadlineSkipped=0',
+    );
+  } finally {
+    restore();
+  }
+});
