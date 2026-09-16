@@ -17,7 +17,8 @@
 // Kept deliberately small (only depends on `provider-adapter-github.mts`'s
 // shared GitHub port adapter -- #2267, replacing the direct `ghGraphql`
 // call this file used before -- `protocol-helpers.mts`'s shared
-// `isCopilotReviewerLogin`, and -- as of #1880 -- `markdown-code.mts`'s
+// `isCopilotReviewerLogin` (and, as of #3015, its sibling
+// `isCopilotErrorReviewBody`), and -- as of #1880 -- `markdown-code.mts`'s
 // shared `stripMarkdownCodeRegions`) so a read-only, low-dependency caller
 // like `rerun-advisory-convergence.mts` can import it without also pulling
 // in `advisory-convergence.mts`'s full claim/waiver/disposition machinery
@@ -26,7 +27,10 @@
 // surface to that caller either.
 
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
-import { isCopilotReviewerLogin } from './protocol-helpers.mts';
+import {
+  isCopilotErrorReviewBody,
+  isCopilotReviewerLogin,
+} from './protocol-helpers.mts';
 import { createGithubProviderAdapter } from './provider-adapter-github.mts';
 import type { ProviderPort } from './provider-port.mts';
 
@@ -58,7 +62,11 @@ export interface ReviewPayload {
    * finding into a `<details><summary>Suppressed comments (N)</summary>`
    * block here instead of posting it as a separate review comment, in
    * which case `itemCount` (from `comments.totalCount`) stays `0` even
-   * though a real finding exists -- see {@link parseSuppressedCommentCount}. */
+   * though a real finding exists -- see {@link parseSuppressedCommentCount}.
+   * Also consumed (#3015) to detect Copilot's "encountered an error"
+   * review, the sibling `itemCount === 0` false-empty shape where Copilot
+   * never reviewed the diff at all -- see
+   * `isCopilotErrorReviewBody` (protocol-helpers.mts). */
   body?: string | null;
 }
 
@@ -172,14 +180,26 @@ export function isVerifiedCopilotAuthor(
  * GitHub's GraphQL `reviews` connection returns reviews in submission
  * order -- this deliberately does NOT sort by `submittedAt`, since that
  * field is nullable and could otherwise let an earlier, differently-
- * ordered review win by comparator accident. */
+ * ordered review win by comparator accident.
+ *
+ * #3015: a review whose body is Copilot's exact "encountered an error"
+ * template (`isCopilotErrorReviewBody`, protocol-helpers.mts) is excluded
+ * entirely before taking the absolute-latest -- treated as if it did not
+ * exist, not merely as an off-HEAD review -- so it can neither win this
+ * "latest" selection itself nor mask an earlier genuine review of the same
+ * HEAD underneath it. See that function's doc comment for the observed
+ * incident and matching rationale. */
 export function resolveLatestCopilotReviewClause(
   reviews: ReviewPayload[],
   prHeadSha: string,
   primaryBotLogin: string,
 ): AdvisoryConvergenceReviewClause {
   const latest = reviews
-    .filter((review) => isVerifiedCopilotAuthor(review.author, primaryBotLogin))
+    .filter(
+      (review) =>
+        isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
+        !isCopilotErrorReviewBody(review.body),
+    )
     .at(-1);
   if (!latest) {
     return {

@@ -1350,6 +1350,7 @@ export function normalizeReview(review) {
     submittedAt: review.submitted_at ?? '',
     createdAt: review.submitted_at ?? '',
     updatedAt: review.updated_at ?? review.submitted_at ?? '',
+    body: review.body ?? '',
   };
 }
 /**

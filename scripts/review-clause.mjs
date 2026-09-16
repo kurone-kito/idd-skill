@@ -17,7 +17,8 @@
 // Kept deliberately small (only depends on `provider-adapter-github.mts`'s
 // shared GitHub port adapter -- #2267, replacing the direct `ghGraphql`
 // call this file used before -- `protocol-helpers.mts`'s shared
-// `isCopilotReviewerLogin`, and -- as of #1880 -- `markdown-code.mts`'s
+// `isCopilotReviewerLogin` (and, as of #3015, its sibling
+// `isCopilotErrorReviewBody`), and -- as of #1880 -- `markdown-code.mts`'s
 // shared `stripMarkdownCodeRegions`) so a read-only, low-dependency caller
 // like `rerun-advisory-convergence.mts` can import it without also pulling
 // in `advisory-convergence.mts`'s full claim/waiver/disposition machinery
@@ -25,7 +26,10 @@
 // code.mts` has no imports of its own, so this adds no heavy dependency
 // surface to that caller either.
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
-import { isCopilotReviewerLogin } from './protocol-helpers.mjs';
+import {
+  isCopilotErrorReviewBody,
+  isCopilotReviewerLogin,
+} from './protocol-helpers.mjs';
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
 
 /** Matches GitHub Copilot's `<summary>Suppressed comments (N)</summary>`
@@ -108,14 +112,26 @@ export function isVerifiedCopilotAuthor(author, primaryBotLogin) {
  * GitHub's GraphQL `reviews` connection returns reviews in submission
  * order -- this deliberately does NOT sort by `submittedAt`, since that
  * field is nullable and could otherwise let an earlier, differently-
- * ordered review win by comparator accident. */
+ * ordered review win by comparator accident.
+ *
+ * #3015: a review whose body is Copilot's exact "encountered an error"
+ * template (`isCopilotErrorReviewBody`, protocol-helpers.mts) is excluded
+ * entirely before taking the absolute-latest -- treated as if it did not
+ * exist, not merely as an off-HEAD review -- so it can neither win this
+ * "latest" selection itself nor mask an earlier genuine review of the same
+ * HEAD underneath it. See that function's doc comment for the observed
+ * incident and matching rationale. */
 export function resolveLatestCopilotReviewClause(
   reviews,
   prHeadSha,
   primaryBotLogin,
 ) {
   const latest = reviews
-    .filter((review) => isVerifiedCopilotAuthor(review.author, primaryBotLogin))
+    .filter(
+      (review) =>
+        isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
+        !isCopilotErrorReviewBody(review.body),
+    )
     .at(-1);
   if (!latest) {
     return {

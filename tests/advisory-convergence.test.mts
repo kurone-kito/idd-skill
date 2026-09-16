@@ -2335,6 +2335,124 @@ test('reasons: itemCount > 0 AND a suppressed section both mentioned, existing #
   assert.match(verdict.reasons.join('\n'), /1 suppressed comment/);
 });
 
+// --- 9d. Copilot "encountered an error" false-empty review (#3015) --------
+//
+// Observed live on PR #3013 (issue #2986, commit 46bfb73b,
+// https://github.com/kurone-kito/idd-skill/pull/3013#pullrequestreview-5212307067,
+// submitted 2026-09-15T15:44:53Z): a Copilot review that failed outright
+// still carries `itemCount` 0 -- the same false-empty shape #1880 (9c
+// above) closed for the "Suppressed comments (N)" case, but with Copilot
+// never having reviewed the diff at all rather than folding a low-
+// confidence finding into a collapsed section.
+
+const COPILOT_ERROR_REVIEW_BODY =
+  'Copilot encountered an error and was unable to review this pull ' +
+  'request. You can try again by re-requesting a review.';
+
+test('review: a Copilot error review is the ONLY signal on HEAD -- treated as no review at all, not a covering empty one', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: COPILOT_ERROR_REVIEW_BODY }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  // Flipping only `satisfied` would not be enough (the issue's own
+  // acceptance criteria): the live Clause 1 recomputes `matchesHead` and
+  // `itemCount` from the filtered review list, so with the error review
+  // excluded there is no Copilot review left at all.
+  assert.equal(verdict.review.found, false);
+  assert.equal(verdict.review.matchesHead, false);
+  assert.equal(verdict.review.itemCount, null);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('review: a Copilot error review on HEAD does NOT un-satisfy an earlier genuine empty Copilot review of the same HEAD', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        // Fetch order: the earlier, genuine empty review comes first...
+        copilotReview({ itemCount: 0, submittedAt: OLD }),
+        // ...followed by the later error review that must be skipped when
+        // selecting the absolute-latest, falling back to the genuine one.
+        copilotReview({
+          itemCount: 0,
+          submittedAt: RECENT,
+          body: COPILOT_ERROR_REVIEW_BODY,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.found, true);
+  assert.equal(verdict.review.matchesHead, true);
+  assert.equal(verdict.review.itemCount, 0);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('review: a genuine empty Copilot review of HEAD (no error body, no suppressed heading) still converges normally', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 0 })] }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.found, true);
+  assert.equal(verdict.review.matchesHead, true);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('review: a review body that merely QUOTES the error template inside other prose does NOT match (whole-body equality only, prose-quoting class #1614)', () => {
+  // An advisory bot discussing THIS exact fix's own test fixture could
+  // quote the sentence back in ordinary review prose alongside other
+  // commentary -- whole-body equality (rather than a substring search)
+  // already excludes that case, the same protection #1880's suppressed-
+  // comments heading needed explicit code-region stripping for.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: `nit: consider quoting "${COPILOT_ERROR_REVIEW_BODY}" verbatim in the regression test instead of paraphrasing it.`,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.found, true);
+  assert.equal(verdict.review.matchesHead, true);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('review: #1880 suppressed-comments case is unaffected by the #3015 error-review filter', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.matchesHead, true);
+  assert.equal(verdict.review.suppressedCount, 1);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
 test('dispositionEvidence: exposes missingRegularCommentCount feeding sameHeadReroll.eligible, plus its missingThreadCount sibling', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({

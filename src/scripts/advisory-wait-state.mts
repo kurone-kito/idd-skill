@@ -122,6 +122,10 @@ interface ReviewPayload {
   user?: GhAuthorPayload | null;
   submitted_at?: string | null;
   commit_id?: string | null;
+  /** #3015: consumed by `findLastCopilotReviewCommit`
+   * (protocol-helpers.mts) to exclude a Copilot "encountered an error"
+   * review from the latest-review selection. */
+  body?: string | null;
 }
 
 /** Timeline event payload fields consumed by the Copilot coverage check. */
