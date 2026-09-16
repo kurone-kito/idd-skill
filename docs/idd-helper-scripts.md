@@ -4333,8 +4333,10 @@ review). Snapshot and signal back-to-back, with nothing in between:
 that is what keeps a bare recorded PID number trustworthy without
 needing a separate identity check, since the gap in which an exited
 PID could be reused by an unrelated process stays sub-second on any
-real host. Then wait up to 30 seconds for each recorded PID
-individually to exit (not a fresh tree walk); SIGTERM is asynchronous,
+real host. Then wait up to 30 seconds, as one shared wall-clock deadline
+across the whole recorded PID set, for those PIDs to exit (not a
+fresh tree walk, and not a fresh 30-second allowance per PID);
+SIGTERM is asynchronous,
 so checking state immediately can race git's own unwind (still
 removing `index.lock`) or observe stale state.
 
@@ -4450,8 +4452,9 @@ mid-progress, or never started at all:
 
 No step in this recovery procedure waits indefinitely: the original
 wrapper invocation and every fallback or continuation share the same
-2-minute bound, and the termination wait above has its own 30-second
-bound — every step that exceeds its bound routes to the same
+2-minute bound, and the termination wait above has its own single
+shared 30-second bound across the whole recorded PID set — every
+step that exceeds its bound routes to the same
 terminate-and-verify-or-hold outcome, not a fresh unbounded wait. A
 hook or other non-signing cause can hang the plain-commit
 `--no-gpg-sign` fallback or the `--continue` completion just as it
