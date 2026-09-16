@@ -745,19 +745,18 @@ durable claim and PR state plus the existing resume phase let a fresh session
 pick up cleanly at Discover, rather than starting another issue and risking a
 mid-loop death.
 
-Mid-review carries a narrower, equivalent boundary. A session may
+Mid-review carries a narrower, equivalent boundary, and each point
+below shares two conditions: no pending `Awaiting maintainer
+decision` item remains, thread or regular comment (E7 permits one to
+stay unresolved during triage, so its absence needs a separate check
+at exit), and the worktree is clean with no local-ahead commit still
+unpushed (the cold-start reconstruction section's edge case 2 pushes
+one first, via E10-E12, before any point applies). A session may
 deliberately exit after E3 completes with an empty snapshot (E1's
 watermark alone is not enough -- E2's critique pass must actually run
 first, which Resume's clean/successful-PR route to F2 does not
-guarantee) or after E8 finds zero Accepted PATH A items **and** no
-pending `Awaiting maintainer decision` item, thread or regular
-comment (E7 permits one to stay unresolved, so a zero Accepted count
-alone does not mean nothing is pending; branch-sync and F1 come next
-only once that item is also clear) -- both only when the worktree is
-clean and no local-ahead commit is still unpushed (the cold-start
-reconstruction section's edge case 2 pushes one first, via E10-E12,
-before either point applies) -- or after a round completes **both**
-E13 and E14: the
+guarantee), after E8 finds zero Accepted PATH A items, or after a
+round completes **both** E13 and E14: the
 first point has no dispositions to preserve; the other two leave
 every reviewer-visible disposition durable on GitHub. A successor
 re-enters through Resume's own routing. E14 belongs in that boundary,
