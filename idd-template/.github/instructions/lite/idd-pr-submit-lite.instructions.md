@@ -196,12 +196,11 @@ loop instead of returning to this D1 rebase path.
    above — do not push with `--force-with-lease` and do not continue in
    this lite flow; the merge-based resync path is out of this file's
    scope.
-4. New CI job whose workflow file isn't on `main` yet: land a
-   bootstrap PR first (trigger wiring only, job inert) — `gh workflow
-   run` can't dispatch a branch-only file. Once the file is on `main`:
-   land the job `workflow_dispatch`-only, validate with a manual
-   dispatch run, commit the trigger-flip edit, re-run
-   **pre-push-validate**, and push, before D3.
+4. New CI job: land it `workflow_dispatch`-only first (if its workflow
+   file isn't on `main` yet, land a bootstrap PR for just the trigger
+   wiring first — `gh workflow run` can't dispatch a branch-only
+   file), validate with a manual dispatch run, commit the trigger-flip
+   edit, re-run **pre-push-validate**, and push, before D3.
 
 ## D3 — Create PR
 
