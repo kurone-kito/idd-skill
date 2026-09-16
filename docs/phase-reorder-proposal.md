@@ -34,9 +34,10 @@ can be produced with the following repo-wide command shape:
 
 ```sh
 legacy_phase_id_pattern='(^|[^[:alnum:]_])(A1([._-]5|5)|A3([._-]5|5)|A4([._-]5|5)|D3([._-]5|5)|D3([._-]6|6)|D3([._-]7|7)|F2([._-]5|5))([^[:alnum:]_]|$)'
-git grep -l -E "$legacy_phase_id_pattern" -- . | sort -u
+git grep -l -i -E "$legacy_phase_id_pattern" -- . | sort -u
+git ls-files -z | tr '\0' '\n' | grep -i -E "$legacy_phase_id_pattern" | sort -u
 git grep -h -I -e '.' -- . |
-  perl -ne '$count += () = /(?<![A-Za-z0-9_])(?:A1(?:[._-]5|5)|A3(?:[._-]5|5)|A4(?:[._-]5|5)|D3(?:[._-]5|5)|D3(?:[._-]6|6)|D3(?:[._-]7|7)|F2(?:[._-]5|5))(?![A-Za-z0-9_])/g; END { print "$count\n" }'
+  perl -ne '$count += () = /(?<![A-Za-z0-9_])(?:A1(?:[._-]5|5)|A3(?:[._-]5|5)|A4(?:[._-]5|5)|D3(?:[._-]5|5)|D3(?:[._-]6|6)|D3(?:[._-]7|7)|F2(?:[._-]5|5))(?![A-Za-z0-9_])/gi; END { print "$count\n" }'
 ```
 
 This inventory intentionally follows tracked repository content, so it
@@ -47,7 +48,15 @@ The bounded pattern covers every literal old spelling in the alias table:
 dotted, hyphenated, underscored, and compact forms. Its surrounding token
 boundaries keep a compact alias such as `A15` from being counted inside a
 larger identifier. The per-line Perl count uses non-consuming lookarounds so
-adjacent aliases on one line are counted independently. Separator-normalized
+adjacent aliases on one line are counted independently. The inventory scans
+tracked pathnames in addition to file contents, and matches
+case-insensitively: a compact alias can appear only in a file name, such as
+the tracked fixture `tests/fixtures/consistency/a45-outcomes.json`, which a
+content-only, case-sensitive `git grep` never lists. That fixture and this
+proposal's own retained-spelling examples are deliberately allowlisted
+evidence for the migration itself (Finding 5); the inventory still reports
+them so the allowlist stays an explicit, reviewed decision rather than a
+silent gap. Separator-normalized
 inputs using only the resolver's supported `.`, `-`, `/`, `:`, `\`, `_`, and
 whitespace separators are a resolver-test concern rather than a finite text
 inventory; punctuation outside that set remains rejected.
@@ -82,7 +91,11 @@ give each inserted phase a semantic canonical suffix.
 ## Finding 2 — Proposed canonical route
 
 The recommended route preserves the existing major-family order and
-makes the inserted responsibilities explicit:
+makes the inserted responsibilities explicit. This route illustrates
+where each renamed phase sits in the sequence; it is not a restatement
+of every conditional edge already defined in `schemas/phase-graph.json`
+and the phase instruction files, which remain the authoritative routing
+source:
 
 ```text
 A0_T -> A3 -> A4 -> A3_APPROVAL -> A4_SUITABILITY -> A5 (explicit execution-leaf target; approval-after-viability exception)
@@ -108,7 +121,7 @@ A5 -> stop (explicit-target failure)
 A5 -> B1 -> B2 -> B3 -> C1 -> C2 -> C3 -> C4 -> C5 -> C6
 C2 -> C5 (zero findings but floor failed)
 C2 -> D1 (zero findings and floor passed)
-C4 -> D1 (clean exit and floor passed)
+C4 -> D1 (clean exit and floor passed; also the bounded low-severity exit once loop count exceeds critiqueLoop.cPhaseLowSeveritySkipAfter with only Low Accepts remaining and the floor passed)
 C6 -> C1 (next critique pass)
 D1 -> D2 -> D3_IMPACT -> D3 -> D3_CLOSE -> D4
 D2 -> D3 (no IDD impact heading; skip D3_IMPACT and D3_PREMERGE)
@@ -130,8 +143,8 @@ F2 -> E14 (REQUEST_NEEDED)
 F2 -> F2 (WAIT or RECOVERY_NEEDED after bounded polling)
 F2 -> E1 (stale review or other non-advisory evidence)
 F2 -> D4 (required CI failure, cancellation, or timeout)
-F2 -> D3_PREMERGE -> F2_HANDOFF (IDD impact heading exists)
-F2 -> F2_HANDOFF (no IDD impact heading; skip D3_PREMERGE)
+F2 -> D3_CLOSE -> D3_PREMERGE -> F2_HANDOFF (IDD impact heading exists)
+F2 -> D3_CLOSE -> F2_HANDOFF (no IDD impact heading; skip D3_PREMERGE)
 F2_HANDOFF -> F3 (authorized merge policy)
 F2_HANDOFF -> stop (human_merge or unknown policy)
 F2_HANDOFF -> A5 -> F2_HANDOFF (designated separate merge agent establishes ownership)
@@ -179,8 +192,10 @@ suitability rejection stops for an explicit target. This distinction is a
 preventive failure mode (preventive; no observed incident yet).
 C2 sends a zero-finding result to C5 when the objective validation floor
 fails; C3 has no findings to score in that case. C2 and C4 provide the
-clean C-phase exits to D1 after the validation floor;
-C6 returns to C1 for the next critique pass. When E10 finds additional
+clean C-phase exits to D1 after the validation floor; C4 also exits to
+D1 once `critiqueLoop.cPhaseLowSeveritySkipAfter` is exceeded with only
+Low-severity Accepts remaining and the floor still passed. C6 returns
+to C1 for the next critique pass. When E10 finds additional
 critique findings, it returns to E9 for the fix-and-validate step and then
 repeats E10; E9 remains the disposition-to-fix entry. The E-phase has two
 exits from
@@ -236,11 +251,15 @@ future implementation should document their ownership as follows:
    closing keyword and exact closing set after creation. On a non-default
    development branch, skip that closing-set check because GitHub cannot
    populate `closingIssuesReferences` there.
-3. When the impact heading exists, `D3_PREMERGE` is not a D3-to-D4
-   checkpoint. F2 runs the closing-set and
+3. `D3_CLOSE`'s closing-set and commit-message re-verification runs
+   again at F2 against the final HEAD regardless of whether the impact
+   heading exists, skipped only under D3.5's own
+   non-default-development-branch exemption. When the impact heading
+   exists, `D3_PREMERGE` is not a D3-to-D4
+   checkpoint: F2 additionally re-runs the
    impact-checklist verification against the final HEAD at the
    F2/`F2_HANDOFF`
-   boundary, and F3 repeats that gate immediately before merge.
+   boundary, and F3 repeats the full gate immediately before merge.
 
 This is an ordering clarification, not a request to split D3 into three
 independent execution loops. The three names are still useful phase IDs
