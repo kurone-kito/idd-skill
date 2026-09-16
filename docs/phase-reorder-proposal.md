@@ -88,8 +88,15 @@ E8 -> Esync (zero Accepted PATH A)
 E8 -> E9 -> E10 -> E11 -> E12 -> E13 -> E14 -> E15
 E15 -> E1 (CI success)
 Esync -> F1 -> F2
-F2 -> E1 (not ready)
-F2 -> D3_PREMERGE -> F2_HANDOFF -> F3 -> F4 -> F5
+F1 -> Esync (sync required)
+F2 -> E14 (REQUEST_NEEDED)
+F2 -> F2 (WAIT or RECOVERY_NEEDED after bounded polling)
+F2 -> E1 (stale review or other non-advisory evidence)
+F2 -> D3_PREMERGE -> F2_HANDOFF
+F2_HANDOFF -> F3 (authorized merge policy)
+F2_HANDOFF -> stop (human_merge or unknown policy)
+F2_HANDOFF -> A5 -> F2 (designated separate merge agent resumption)
+F3 -> F4 -> F5
 F5 -> A -> A5
 ```
 
@@ -108,6 +115,18 @@ the collapsed return target for F5, and the shipped graph edge is
 `F5 -> A -> A5`. A fresh `idd-discover` session then applies its normal
 discovery-entry routing; this proposal does not replace the graph edge with a
 direct `A -> A1` transition.
+
+The F1 sync-required edge returns to the E-phase branch-sync check before
+pre-merge conditions are evaluated again. F2's not-ready outcomes are not a
+single E1 shortcut: `REQUEST_NEEDED` returns to E14, while `WAIT` and
+`RECOVERY_NEEDED` use their bounded polling or recovery path and re-enter the
+first F2 condition. Review-currency or other non-advisory staleness returns
+to E1 for a new snapshot. At F2.5, `F3` is reachable only under
+`fully_autonomous_merge` or an explicitly designated and resumed
+`separate_merge_agent`; `human_merge` and unknown policies stop for handoff.
+A designated separate merge agent may re-enter through A5 and F2 when it
+still needs to establish ownership or refresh merge evidence; an unrecorded
+or different merge-capable actor stops with a handoff instead.
 
 The D3 entries are nested checkpoints in one PR-submission phase, so the
 future implementation should document their ownership as follows:
