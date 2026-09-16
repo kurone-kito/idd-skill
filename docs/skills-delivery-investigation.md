@@ -580,17 +580,21 @@ section, retrieved 2026-09-16.)
   already-larger phase-file mapping into roughly twice as many
   still-narrower skills, not Option B's 5–6, which even doubled stays
   comfortably under the budget — the same illustrative average, applied
-  to that Option-A-based doubled count, plausibly exceeds the full
-  budget on its own, though the actual number depends on the descriptions
-  actually written
-  and would need measuring against a concrete proposal rather than
-  assumed from the average alone; this rate-times-count method is the
-  concrete, checkable calculation the "roughly linear" claim otherwise
-  leaves abstract, not a proven conclusion that the finer split exceeds
-  the budget. Either way, a finer split raises the skill count without
-  shrinking any file's body content (which stays deferred either way),
-  so it moves this mapping closer to, or potentially past, the same
-  fixed budget rather than away from it.
+  to that Option-A-based doubled count, plausibly pushes the uncapped
+  per-skill metadata demand past the budget, though the actual number
+  depends on the descriptions actually written and would need measuring
+  against a concrete proposal rather than assumed from the average
+  alone; this rate-times-count method is the concrete, checkable
+  calculation the "roughly linear" claim otherwise leaves abstract, not
+  a proven conclusion about exactly where that threshold falls. Because
+  the 1% figure caps the rendered listing itself, not the underlying
+  metadata demand, the listing a session actually sees cannot exceed
+  that cap — a demand past the cap forces the same truncation/eviction
+  behavior described above (shorter or dropped descriptions), not
+  literally missing skills. Either way, a finer split raises the skill
+  count without shrinking any file's body content (which stays deferred
+  either way), so it moves this mapping closer to, or into, that
+  truncation/eviction territory rather than away from it.
 - **A nuance that narrows, not widens, Part B's discovery concerns**:
   the quoted eviction behavior only ever drops **descriptions**, never
   the skill **name** — "the listing always contains every skill name"
