@@ -98,10 +98,8 @@ This section's rebase only applies **before the branch's first push**.
    remote; stop on any other nonzero exit status. When it already
    exists, do not rebase it — instead check for an open PR:
    `gh pr list --head {branch-name} --state open --json number --jq
-   '.[0].number // empty'` (the `// empty` matters: an empty list's
-   `.[0].number` is the literal string `null`, not blank, and a
-   literal `null` can be misread as a real PR number instead of "no
-   open PR").
+   '.[0].number // empty'` (`// empty` avoids misreading an empty
+   list's literal `null` as a real PR number).
    - No output (empty): D2's push already happened in an earlier,
      interrupted session. `git fetch origin {branch-name}`, then check
      `git log --oneline origin/{branch-name}..HEAD` — if it lists any
@@ -198,6 +196,9 @@ loop instead of returning to this D1 rebase path.
    above — do not push with `--force-with-lease` and do not continue in
    this lite flow; the merge-based resync path is out of this file's
    scope.
+4. New CI job: land it `workflow_dispatch`-only, validate with
+   `gh workflow run <file> --ref {branch-name}`, flip the trigger, then
+   re-run **pre-push-validate** and push, before D3.
 
 ## D3 — Create PR
 
@@ -216,10 +217,10 @@ loop instead of returning to this D1 rebase path.
    from `.github/idd/config.json` (fixed tag, the claimed issue's own body
    language for `match-source`, or English if absent — see
    [Authoring Language](../../../docs/customization.md#authoring-language));
-   this never changes any machine-parsed marker or exact-regex-matched visible
-   line, which stays canonical regardless — concretely, the closing keyword line
-   stays canonical English: GitHub's parser and D3.5's verification regex below
-   match only the English keyword forms.
+   this never changes a machine-parsed marker or exact-regex-matched
+   visible line — the closing keyword line stays canonical English,
+   since GitHub's parser and D3.5's regex below match only English
+   keyword forms.
 4. **Closing keyword**: write a plain-text line such as `Closes #N` for
    the claimed issue number, on its own line. GitHub recognizes these
    keyword forms (case-insensitive): `close`, `closes`, `closed`, `fix`,
