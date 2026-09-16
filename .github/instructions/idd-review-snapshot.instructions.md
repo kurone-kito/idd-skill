@@ -287,11 +287,11 @@ section too).
 watermark; do not post a second one). No session memory is required --
 re-running them now is the reconstruction. Run edge case 2's steps 1-3
 below unconditionally before E3 -- a local fix can predate E4 and
-never re-surface there; its step 4 resumes after E3 routes. Then
-continue through E2, E3, and, only when E3 finds ReviewItems_snapshot
-non-empty, E4-E8 in full before any E9 work -- a cold E9 entry has no
-durable Accepted-PATH-A set to trust (E6 defers that reply to E13), so
-triage must re-run.
+never re-surface there; its step 4 resumes at E4 for the non-empty
+case. Then continue through E2, E3, and, only when E3 finds
+ReviewItems_snapshot non-empty, E4-E8 in full before any E9 work -- a
+cold E9 entry has no durable Accepted-PATH-A set to trust (E6 defers
+that reply to E13), so triage must re-run.
 
 Two correctness-sensitive gaps need an explicit rule (preventive; no
 observed incident yet), since a naive rebuild can silently drop or
@@ -323,14 +323,15 @@ unconditionally, in the **same surviving claimed worktree**:
    as unverified input (never trust or discard): stop for
    reconciliation before E9 work.
 4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff, continue
-   to E3. **E3 non-empty**: after E4-E8, map each Accepted item
-   against it -- covered items skip E9, E13 cites the commit; unmatched
-   items get their normal E9 fix. Either way, even with zero Accepted
-   items, the diff still runs E10-E12 and pushes before branch-sync.
-   **E3 empty** (the diff addressed an
-   E2-only finding): resume at E10 for the diff itself -- E10, not
-   E12, because a cold session cannot know whether E10's critique pass
-   already ran against it, and
+   to E3. **E3 non-empty**: during E4, before E5 verifies each item,
+   check it against the recorded diff -- covered items Accept without
+   E5's claim-truth test (fixed reads false against the fixed tree by
+   design), skip E9, E13 cites the commit; others get normal E5
+   verification, then E9. Either way, even with zero Accepted items,
+   the diff still runs E10-E12 and pushes before branch-sync. **E3
+   empty** (an E2-only finding): resume at E10 for the diff itself --
+   E10, not E12, because a cold session cannot know whether E10's
+   critique pass already ran against it, and
    [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
    governs that ambiguity.
 
