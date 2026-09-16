@@ -560,22 +560,24 @@ section, retrieved 2026-09-16.)
   an exact-name orchestrator-directed skill's description carries no
   fuzzy-trigger-keyword burden, so its real cost could run lower.
   Applying that average illustratively to this repository's own
-  Section 1 mapping: Option A (16 phase-file skills) alone would
-  consume on the order of 1,600 tokens, a large fraction of the
-  documented single-session budget before counting any other skill a
-  user has installed. At a finer future granularity — for example
-  Option B split further into roughly 32 narrower skills, doubling
-  Section 1's own count — the same illustrative average puts the
-  estimate at roughly 3,200 tokens, past the 2,000-token budget on
-  its own at that average, though the actual number depends on the
-  descriptions actually written and would need measuring against a
-  concrete proposal rather than assumed from the average alone; this
-  is the concrete, checkable example the "roughly linear" claim
-  otherwise leaves abstract, not a proven conclusion that the finer
-  split exceeds the budget. Either way, a finer split raises the skill
-  count without shrinking any file's body content (which stays
-  deferred either way), so it moves this mapping closer to, or
-  potentially past, the same fixed budget rather than away from it.
+  Section 1 mapping, rather than repeating a file count here that could
+  drift out of sync with that table: Option A, at roughly 100 tokens per
+  skill times Section 1's own current phase-file count (read that table
+  live rather than trusting a number restated here), would consume a
+  large fraction of the documented single-session budget on its own
+  before counting any other skill a user has installed. At a finer
+  future granularity — for example Option B split further into roughly
+  twice as many narrower skills — the same illustrative average, applied
+  to that doubled count, plausibly exceeds the full budget on its own,
+  though the actual number depends on the descriptions actually written
+  and would need measuring against a concrete proposal rather than
+  assumed from the average alone; this rate-times-count method is the
+  concrete, checkable calculation the "roughly linear" claim otherwise
+  leaves abstract, not a proven conclusion that the finer split exceeds
+  the budget. Either way, a finer split raises the skill count without
+  shrinking any file's body content (which stays deferred either way),
+  so it moves this mapping closer to, or potentially past, the same
+  fixed budget rather than away from it.
 - **A nuance that narrows, not widens, Part B's discovery concerns**:
   the quoted eviction behavior only ever drops **descriptions**, never
   the skill **name** — "the listing always contains every skill name"
@@ -601,13 +603,22 @@ section, retrieved 2026-09-16.)
   never-invoked phase skill therefore genuinely stops being a valid
   orchestrator-directed target the moment compaction occurs — its
   rendered-text cost does not merely drop to zero, the call itself
-  becomes unsatisfiable — even though the always-loaded routing table
-  naming it does survive (compaction reloads the core instruction file
-  itself, just not the skill listing a call to that skill would need). A
-  plain instruction-file routing table has no equivalent gap: it lives
-  inside the same always-loaded core file, and the target it names (a
-  phase file to `Read`) is always openable regardless of what else is
-  currently rendered in context.
+  becomes unsatisfiable. This repository's own wiring means the same
+  caution applies to overstating the `Read` side's own recovery: per
+  `docs/idd-workflow.md`'s entry-points table, Claude Code auto-loads
+  only `CLAUDE.md` (which imports `AGENTS.md`) — "None from
+  `.github/instructions/` by default" — so `idd-overview-core
+  .instructions.md`, where the routing table itself lives, is opened
+  manually via `Read`, not embedded in always-loaded content, and
+  nothing here claims compaction reloads that file automatically either.
+  What compaction does reload is the entry file carrying the directive
+  to open it — the same kind of explicit follow-up action an
+  orchestrator-directed `Skill` call also needs. The real asymmetry
+  is narrower than "one side needs no action": a `Read` target is a
+  fixed path with no other precondition once the agent acts on the
+  reloaded directive, while a `Skill` target additionally depends on
+  that specific skill's own listing entry, which the same event just
+  established does not reload.
 
 Net effect: the cost side is real, current documentation now lets it be
 stated precisely rather than restated on faith, and it cuts in more than
