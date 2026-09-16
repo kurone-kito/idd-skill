@@ -265,3 +265,72 @@ If ReviewItems_snapshot is empty → proceed to the E-phase branch-sync
 check in `idd-review-triage.instructions.md`.
 
 Otherwise → proceed to `idd-review-triage.instructions.md` (E4).
+
+## Cold-start ReviewItems_snapshot reconstruction
+
+Read this section when entering E4 (`idd-review-triage.instructions.md`)
+or E9 (`idd-review-fix.instructions.md`) without ReviewItems_snapshot
+from this episode's own E1-E3 pass -- following
+`idd-overview-core.instructions.md`'s unconditional "Snapshot done" /
+"Review feedback accepted" routing rows, or an orchestrator delegation
+brief that hands off mid-review.
+
+**Procedure**: run E1 Steps 1-3 above (Step 2 already posts the
+watermark; do not post a second one) -- re-running them now _is_ the
+reconstruction. Run edge case 2's steps 1-3
+below unconditionally before E3 -- a local fix can predate E4 and
+never re-surface there; edge case 1's check at E4 then covers it.
+Then continue through E2, E3, and, only when E3 finds
+ReviewItems_snapshot non-empty, E4-E8 in full before any E9 work --
+an item edge case 1 routed to E14 runs E14, after edge case 2's own
+push if any (targeting the post-push HEAD), before branch-sync.
+
+Two correctness-sensitive gaps need an explicit rule (preventive; no
+observed incident yet), since a naive rebuild can silently drop or
+duplicate an item:
+
+**Edge case 1 -- an item without a completed disposition.** Covers a
+lost session mid-E4 classification (E6 defers PATH A Accept replies to
+E13); one whose E12 push landed but lost the session before E13; and a
+`CHANGES_REQUESTED` body Step 3 re-surfaces solely for a missing E14
+request (its exclusion needs both) -- if it already carries an E13
+`**Accepted** — fixed in` reply with no reviewer reply or reopen
+since, skip reclassification and route straight to E14. Otherwise
+Step 3 decides inclusion; the rebuild re-includes each as ordinary
+work only when Step 3 does. Before E5
+verifies it, check whether a branch commit newer than its timestamp
+already fixes it (a lost E12 push, or edge case 2's local-ahead diff
+below) -- both read false against E5's claim-truth test by design;
+that commit is the confirmation, cap included. A covered in-scope
+reviewer-feedback PATH A item Accepts on that basis, skips E9, E13
+cites the commit; everything else follows E5-E8 as normal.
+
+**Edge case 2 -- an E9 fix committed but not yet pushed.** GitHub
+cannot see this; a fix for a session-local E2 finding may never
+re-surface at E4 (E2's findings are not durable) -- an empty E3
+result alone is not proof there is nothing to recover, since F2 resets
+the worktree to the PR's remote HEAD before merge. Run this
+unconditionally, in the **same surviving claimed worktree**:
+
+1. `PR_HEAD={head-SHA}` -- E1 Step 1's stored value; a re-fetch
+   here could race an external rewrite and pass step 2 falsely.
+2. `git merge-base --is-ancestor "$PR_HEAD" HEAD` -- a failure
+   (external rewrite, diverged worktree) stops for reconciliation;
+   never fall through to edge case 1's rule instead, which
+   risks F2 discarding real local work.
+3. `git status --porcelain` must report clean -- a dirty worktree
+   can't prove which uncommitted lines belong to which item. Treat it
+   as unverified input (never trust or discard): stop for
+   reconciliation before E9 work.
+4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff -- edge
+   case 1's check above covers this diff too. Either way, even with
+   zero Accepted items, the diff still runs E10-E12 and pushes before
+   branch-sync. **E3 empty** (an E2-only finding): resume at E10 for
+   the diff itself -- E10, not E12, because a cold session cannot know
+   whether E10's critique pass already ran against it, and
+   [the fail-closed default](idd-overview-core.instructions.md#fail-closed-default)
+   governs that ambiguity.
+
+Clean worktree, no local-ahead commits: E3's own routing applies
+unchanged. A fresh or lost worktree falls back to edge case 1's rule
+instead, re-triaged from scratch.

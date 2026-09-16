@@ -410,8 +410,8 @@ literally immutable value a later session may reuse as-is.
 
 The name intentionally emphasizes snapshot semantics: E1-E3 builds and
 gates on a time-locked view, E4-E8 triages that view, and E9-E15 drives
-it to completion within the current session before the next E1 fetch
-supersedes it.
+it to completion, normally within the current session, before the next
+E1 fetch supersedes it.
 
 **Cross-session hygiene**: because the snapshot is session-local, a
 resumed or forced-handoff session must not inherit a prior session's
@@ -421,6 +421,25 @@ instead, and treat prior-claim operational markers as non-reusable even
 when the branch and HEAD are unchanged — see
 `idd-resume.instructions.md`'s CI/review routing table and its
 forced-handoff recovery note for the authoritative rule.
+
+**Cold entry outside Resume**: `idd-resume.instructions.md` owns
+mid-review resume routing -- see its Step 3 table and forced-handoff
+note, and `docs/idd-resume-detail.md` §W3/§W5. Where any of those
+routes lands a session at E4 or E9 without a `ReviewItems_snapshot`
+from its own E1-E3 pass, the cold-start reconstruction section below
+applies; reconciling §W3's own dirty-worktree instructions with that
+section's stop-and-reconcile rule is a follow-up to
+`idd-resume-detail.md` itself, not a gap this section can close by
+restating Resume's routing here. The gap this section closes directly
+spans two paths:
+`idd-overview-core.instructions.md`'s phase-routing entries for
+"Snapshot done" / "Review feedback accepted," followed without having
+just run E1, and an orchestrator fan-out delegation brief that hands a
+worker straight into mid-review (see
+[Orchestrator fan-out variant](#orchestrator-fan-out-variant) below).
+`idd-review-snapshot.instructions.md`'s cold-start reconstruction
+section is the named procedure for both, including the two edge cases
+a naive rebuild could get wrong.
 
 ## Artifact taxonomy and ownership
 
@@ -726,6 +745,44 @@ durable claim and PR state plus the existing resume phase let a fresh session
 pick up cleanly at Discover, rather than starting another issue and risking a
 mid-loop death.
 
+Mid-review carries a narrower, equivalent boundary, and each point
+below shares two conditions: no pending `Awaiting maintainer
+decision` item remains, thread or regular comment (E7 permits one to
+stay unresolved during triage, so its absence needs a separate check
+at exit), and the worktree is clean with no local-ahead commit still
+unpushed (the cold-start reconstruction section's edge case 2 pushes
+one first, via E10-E12, before any point applies). A session may
+deliberately exit after E3 completes with an empty snapshot (E1's
+watermark alone is not enough -- E2's critique pass must actually run
+first, which Resume's clean/successful-PR route to F2 does not
+guarantee), after E8 finds zero Accepted PATH A items, or after a
+round completes **both** E13 and E14: the
+first point has no dispositions to preserve; the other two leave
+every reviewer-visible disposition durable on GitHub. A successor
+re-enters through Resume's own routing. E14 belongs in that boundary,
+not only E13 — E1 Step 3 excludes a `CHANGES_REQUESTED` review body
+only once it has **both** a reply and a re-review request, so exiting
+right after E13's replies but before E14 requests review leaves that
+body's exclusion condition unmet, and a fresh E1 pass re-surfaces it.
+Exiting anywhere between
+E4 and a round's completed E14 is not recommended — an Accepted-PATH-A
+decision carries no durable marker until E13 posts it (E6 defers that
+reply on purpose), and a `CHANGES_REQUESTED` body needs E14's request
+too for its own exclusion to hold — so a session forced to exit or
+resume there instead relies on the recovery procedure the
+[ReviewItems_snapshot lifecycle](#reviewitems_snapshot-lifecycle)
+section names.
+
+This boundary covers same-session continuation and orchestrator
+fan-out delegation, which already carries the active claim verbatim to
+the next worker (see [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation)).
+It does not by itself authorize a genuine cross-session handoff: the
+claim stays active and owned until released, so an unrelated session
+that simply shows up hits `idd-resume.instructions.md`'s
+non-owned-active-claim stop path. A deliberate operator-driven handoff
+at this boundary uses [Operator-present release](../.github/instructions/idd-resume.instructions.md#operator-present-release)
+instead of a new mechanism.
+
 Short sessions need cheap ramp-up, which the "facts live in docs and
 helpers, not in session memory" design already supports: a fresh session
 reconstructs what it needs from the instruction files, `.github/idd/`
@@ -853,6 +910,17 @@ Running this variant safely requires:
   with a resume-specific briefing rather than resuming the dead
   worker's own
   context.
+- **A delegation brief resuming mid-review at E4 or E9 must run the
+  cold-start reconstruction.** A fresh worker dispatched straight into
+  E4 or E9 without a `ReviewItems_snapshot` from its own E1-E3 pass
+  must not assume `ReviewItems_snapshot` still reflects live state —
+  see the ReviewItems_snapshot lifecycle section's Cold entry outside
+  Resume
+  note above and `idd-review-snapshot.instructions.md`'s cold-start
+  reconstruction section. This covers only those two named entry
+  points; a brief that instead hands a worker into E10, E13, E14, or
+  E15 has no supported cold-entry route yet -- stop and report rather
+  than improvising one.
 - **Independently verify a worker's reported terminal outcome before
   trusting it.** A worker's final-turn text describes what it
   _attempted_, not proof of what actually landed on the forge. Before
