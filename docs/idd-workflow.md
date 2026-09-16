@@ -756,7 +756,11 @@ a later session to untangle. Finishing the current issue to the F4/F5 boundary
 and exiting there converts that uncontrolled failure into a controlled handoff —
 durable claim and PR state plus the existing resume phase let a fresh session
 pick up cleanly at Discover, rather than starting another issue and risking a
-mid-loop death.
+mid-loop death. The [ReviewItems_snapshot lifecycle](#reviewitems_snapshot-lifecycle)
+section above names the equivalent, narrower boundary inside a single E-phase
+pass: entering cold at E1 is always safe, and a session lost between E4 and a
+round's completed E13 replies recovers through that section's cold-start
+reconstruction instead.
 
 Short sessions need cheap ramp-up, which the "facts live in docs and
 helpers, not in session memory" design already supports: a fresh session
