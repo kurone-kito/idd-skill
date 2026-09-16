@@ -281,9 +281,9 @@ reconstruction. Run edge case 2's steps 1-3
 below unconditionally before E3 -- a local fix can predate E4 and
 never re-surface there; edge case 1's check at E4 then covers it.
 Then continue through E2, E3, and, only when E3 finds
-ReviewItems_snapshot non-empty, E4-E8 in full before any E9 work -- a
-cold E9 entry has no durable Accepted-PATH-A set to trust (E6 defers
-that reply to E13), so triage must re-run.
+ReviewItems_snapshot non-empty, E4-E8 in full before any E9 work --
+an item edge case 1 routed to E14 runs E14 even when E8's Accepted
+count is zero, before branch-sync.
 
 Two correctness-sensitive gaps need an explicit rule (preventive; no
 observed incident yet), since a naive rebuild can silently drop or
@@ -296,9 +296,8 @@ E13); one whose E12 push landed but lost the session before E13; and a
 request (its exclusion needs both) -- if it already carries an E13
 `**Accepted** — fixed in` reply with no reviewer reply or reopen
 since, skip reclassification and route straight to E14. Otherwise
-Step 3's awaiting-reviewer exclusion already draws the line: no
-IDD-agent reply exists, so the rebuild re-includes it as ordinary
-work. Before E5
+Step 3 decides inclusion; the rebuild re-includes each as ordinary
+work only when Step 3 does. Before E5
 verifies it, check whether a branch commit newer than its timestamp
 already fixes it (a lost E12 push, or edge case 2's local-ahead diff
 below) -- both read false against E5's claim-truth test by design;
