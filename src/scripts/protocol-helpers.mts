@@ -112,6 +112,14 @@ interface ReviewLike {
   createdAt?: string | null;
   commitId?: string | null;
   commit_id?: string | null;
+  /** #3015: the review's own top-level body text -- both REST
+   * (`GET /pulls/{n}/reviews`) and GraphQL already return this field under
+   * the same `body` name, so no snake_case alias is needed here unlike
+   * `submitted_at`/`commit_id` above. Consumed by
+   * {@link isCopilotErrorReviewBody} to exclude a Copilot
+   * "encountered an error" review from `findLastCopilotReviewCommit`'s
+   * latest-review selection. */
+  body?: string | null;
 }
 
 /**
@@ -3980,16 +3988,65 @@ export function isCopilotReviewerLogin(
   return normalized === configured;
 }
 
+/**
+ * #3015: GitHub Copilot's "encountered an error" review body, observed live
+ * on PR `#3013` (issue `#2986`, commit `46bfb73b`,
+ * <https://github.com/kurone-kito/idd-skill/pull/3013#pullrequestreview-5212307067>,
+ * `copilot-pull-request-reviewer[bot]`, `COMMENTED`, submitted
+ * 2026-09-15T15:44:53Z): Copilot failed to review the PR at all, yet the
+ * review still carries `comments.totalCount` (`itemCount`) `0`, the same
+ * shape a genuine "no findings" empty review has. Without this check, that
+ * false-empty review both satisfies `resolveLatestCopilotReviewClause`'s
+ * Clause 1 (review-clause.mts) and wins `findLastCopilotReviewCommit`'s
+ * `LAST_COPILOT_COMMIT == PR_HEAD_SHA` short-circuit below, even though
+ * Copilot never actually looked at the diff -- the same `itemCount === 0`
+ * false-empty class `parseSuppressedCommentCount` (review-clause.mts,
+ * #1880) already closed for the sibling "Suppressed comments (N)" shape.
+ *
+ * Matched by whole-body equality (after trimming and collapsing internal
+ * whitespace, case-insensitively) against the exact observed template,
+ * never a broad "error" substring search: this keeps the classifier
+ * fail-closed toward under-matching, in the same spirit as
+ * `isAdvisoryNonReviewNotice`, and -- unlike that function's substring/
+ * heading search -- whole-body equality alone already excludes an advisory
+ * bot quoting this exact sentence back in a larger review body (the
+ * prose-quoting false-positive class `#1614` first found), with no need
+ * for `parseSuppressedCommentCount`'s separate code-region-stripping step:
+ * any additional content in the body (the bot's own commentary around the
+ * quote) already breaks the equality match.
+ */
+const COPILOT_ERROR_REVIEW_BODY =
+  'copilot encountered an error and was unable to review this pull ' +
+  'request. you can try again by re-requesting a review.';
+
+/**
+ * `true` when `body` is GitHub Copilot's exact "encountered an error"
+ * review-body template (#3015) -- see {@link COPILOT_ERROR_REVIEW_BODY}'s
+ * doc comment for the observed incident and matching rationale. Reused by
+ * `findLastCopilotReviewCommit` below and by
+ * `resolveLatestCopilotReviewClause` (review-clause.mts) so both "latest
+ * covering review" selectors skip this review the same way, mirroring how
+ * both already share {@link isCopilotReviewerLogin}.
+ */
+export function isCopilotErrorReviewBody(body: unknown): boolean {
+  const normalized = String(body ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  return normalized === COPILOT_ERROR_REVIEW_BODY;
+}
+
 export function findLastCopilotReviewCommit(
   reviews: ReviewLike[],
   primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ): string {
   const latest = reviews
-    .filter((review) =>
-      isCopilotReviewerLogin(
-        review.user?.login ?? review.author?.login ?? '',
-        primaryBotLogin,
-      ),
+    .filter(
+      (review) =>
+        isCopilotReviewerLogin(
+          review.user?.login ?? review.author?.login ?? '',
+          primaryBotLogin,
+        ) && !isCopilotErrorReviewBody(review.body),
     )
     .map((review) => ({
       submittedAt: review.submitted_at ?? review.submittedAt ?? '',

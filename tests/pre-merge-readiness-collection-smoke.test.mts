@@ -88,6 +88,11 @@ test('normalizeReview maps REST review fields, deriving createdAt from submitted
       submittedAt: '2026-07-31T12:00:00Z',
       createdAt: '2026-07-31T12:00:00Z',
       updatedAt: '2026-07-31T12:00:00Z',
+      // #3015: forwarded so `findLastCopilotReviewCommit`
+      // (protocol-helpers.mts, reached via `buildAdvisoryWaitSummary`) can
+      // exclude a Copilot "encountered an error" review -- empty here since
+      // the input fixture carries no `body`.
+      body: '',
     },
   );
   assert.equal(

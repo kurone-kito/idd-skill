@@ -107,6 +107,12 @@ interface ReviewPayload {
   submitted_at?: string | null;
   updated_at?: string | null;
   commit_id?: string | null;
+  /** #3015: threaded through `normalizeReview` so
+   * `findLastCopilotReviewCommit` (protocol-helpers.mts, reached via
+   * `buildPreMergeReadinessSummary`'s call into `buildAdvisoryWaitSummary`)
+   * can exclude a Copilot "encountered an error" review from the
+   * latest-review selection. */
+  body?: string | null;
 }
 
 /**
@@ -1624,6 +1630,7 @@ export function normalizeReview(review: ReviewPayload) {
     submittedAt: review.submitted_at ?? '',
     createdAt: review.submitted_at ?? '',
     updatedAt: review.updated_at ?? review.submitted_at ?? '',
+    body: review.body ?? '',
   };
 }
 
