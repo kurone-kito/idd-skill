@@ -666,11 +666,12 @@ with an explicit, exactly-named directive — but it does not supply the
 "must load unconditionally" primitive Section 4 found absent, because
 (a) both Claude Code and OpenCode document this as a stronger case of
 the same model-judgment-mediated invocation, not a forced load; (b)
-skill invocation carries confirmed discovery, collision, and
-permission-hiding failure modes a `Read` call does not, plus a
-plausible but unconfirmed post-compaction reachability gap (Part D)
-this addendum could not independently verify; and (c) the weak-model
-tier — the roadmap's own
+skill invocation carries confirmed discovery and collision failure
+modes, plus a listing-omission-specific permission-hiding gap that
+`Read`'s own equivalent deny rules do not share even though `Read`
+can also be permission-denied, and a plausible but unconfirmed
+post-compaction reachability gap (Part D) this addendum could not
+independently verify; and (c) the weak-model tier — the roadmap's own
 stated audience for this line of investigation — makes those extra
 failure modes worse to depend on, not better, per this repository's
 own lite-profile design note. The claim protocol and
