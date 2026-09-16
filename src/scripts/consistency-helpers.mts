@@ -769,6 +769,98 @@ export interface InstructionSizeBudgetConfig {
   phaseLimitBytes?: unknown;
 }
 
+/** An `instructionSizeBudgets` entry's fully validated, defaulted
+ * effective values, as returned by
+ * {@link resolveInstructionSizeBudgetConfig}. */
+export interface ResolvedInstructionSizeBudgetConfig {
+  id: string;
+  glob: string;
+  alwaysLoadedRegex: RegExp;
+  alwaysLoadedLimitBytes: number;
+  phaseLimitBytes: number;
+}
+
+const DEFAULT_INSTRUCTION_SIZE_BUDGET_GLOB =
+  '.github/instructions/idd-*.instructions.md';
+const DEFAULT_ALWAYS_LOADED_PATTERN = 'applyTo:\\s*"\\*\\*"';
+const DEFAULT_ALWAYS_LOADED_LIMIT_BYTES = 20_000;
+const DEFAULT_PHASE_LIMIT_BYTES = 30_000;
+
+/**
+ * Validate and normalize one `instructionSizeBudgets` manifest entry into
+ * its effective id/glob/pattern/limits, applying the same defaults and
+ * rejecting the same malformed shapes
+ * {@link collectInstructionSizeBudgetViolations} always has (#1721).
+ * Shared (#3028) with that function's own current-tree check and with the
+ * base-ref stat computation `audit-docs.mts`'s near-ceiling ratchet uses,
+ * so the two can never derive a different effective limit, pattern, or
+ * glob from the same config shape. Returns either the resolved config or a
+ * single readable error string naming the offending field; never throws.
+ */
+export function resolveInstructionSizeBudgetConfig(
+  config: InstructionSizeBudgetConfig,
+): ResolvedInstructionSizeBudgetConfig | { error: string } {
+  const id = config.id ?? 'instruction-size-budgets';
+  const glob = config.glob ?? DEFAULT_INSTRUCTION_SIZE_BUDGET_GLOB;
+
+  // `??` only substitutes on null/undefined, so a manifest typo (a string
+  // where a number belongs, a non-positive limit, an unclosed regex group)
+  // used to flow straight through: a non-numeric limit coerced every size
+  // comparison to `NaN`, which is always false, silently passing the guard
+  // it exists to enforce (fail-open); a malformed pattern threw an unhandled
+  // `SyntaxError` from `new RegExp` instead of naming the bad field. Reject
+  // both explicitly, naming the offending field and value (#1721).
+  // `=== undefined` (not `??`) so an explicit `null` in the manifest is
+  // validated and rejected below rather than silently treated the same as
+  // "field not provided" and defaulted -- the same undefined-only-default
+  // distinction normalizePositiveIntegerBudget already makes for the two
+  // limit fields.
+  const alwaysLoadedPatternValue =
+    config.alwaysLoadedPattern === undefined
+      ? DEFAULT_ALWAYS_LOADED_PATTERN
+      : config.alwaysLoadedPattern;
+  if (typeof alwaysLoadedPatternValue !== 'string') {
+    return {
+      error: `${id}: alwaysLoadedPattern must be a string (got ${JSON.stringify(alwaysLoadedPatternValue)})`,
+    };
+  }
+  let alwaysLoadedRegex: RegExp;
+  try {
+    alwaysLoadedRegex = new RegExp(alwaysLoadedPatternValue, 'm');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      error: `${id}: alwaysLoadedPattern ${JSON.stringify(alwaysLoadedPatternValue)} does not compile as a regular expression: ${message}`,
+    };
+  }
+  const alwaysLoadedLimitBytes = normalizePositiveIntegerBudget(
+    config.alwaysLoadedLimitBytes,
+    DEFAULT_ALWAYS_LOADED_LIMIT_BYTES,
+  );
+  if (alwaysLoadedLimitBytes === null) {
+    return {
+      error: `${id}: alwaysLoadedLimitBytes must be a positive integer (got ${JSON.stringify(config.alwaysLoadedLimitBytes)})`,
+    };
+  }
+  const phaseLimitBytes = normalizePositiveIntegerBudget(
+    config.phaseLimitBytes,
+    DEFAULT_PHASE_LIMIT_BYTES,
+  );
+  if (phaseLimitBytes === null) {
+    return {
+      error: `${id}: phaseLimitBytes must be a positive integer (got ${JSON.stringify(config.phaseLimitBytes)})`,
+    };
+  }
+
+  return {
+    id,
+    glob,
+    alwaysLoadedRegex,
+    alwaysLoadedLimitBytes,
+    phaseLimitBytes,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Generated-from banner for sync-docs-generated instruction targets
 //
@@ -983,6 +1075,12 @@ export function collectInstructionSizeBudgetViolations(
   }
 
   const id = config.id ?? 'instruction-size-budgets';
+  // The `changedFiles === null` skip must stay strictly ahead of config
+  // validation below (#3028 B2 critique finding): a checkout with no
+  // resolvable comparison base degrades this whole check to a notice, and
+  // an invalid manifest entry in that same run must still take the skip
+  // path rather than newly surfacing as a hard error -- see the regression
+  // test covering this exact ordering.
   if (changedFiles === null) {
     return {
       errors: [],
@@ -992,66 +1090,12 @@ export function collectInstructionSizeBudgetViolations(
     };
   }
 
-  // `??` only substitutes on null/undefined, so a manifest typo (a string
-  // where a number belongs, a non-positive limit, an unclosed regex group)
-  // used to flow straight through: a non-numeric limit coerced every size
-  // comparison to `NaN`, which is always false, silently passing the guard
-  // it exists to enforce (fail-open); a malformed pattern threw an unhandled
-  // `SyntaxError` from `new RegExp` instead of naming the bad field. Reject
-  // both explicitly, naming the offending field and value (#1721).
-  // `=== undefined` (not `??`) so an explicit `null` in the manifest is
-  // validated and rejected below rather than silently treated the same as
-  // "field not provided" and defaulted -- the same undefined-only-default
-  // distinction normalizePositiveIntegerBudget already makes for the two
-  // limit fields.
-  const alwaysLoadedPatternValue =
-    config.alwaysLoadedPattern === undefined
-      ? 'applyTo:\\s*"\\*\\*"'
-      : config.alwaysLoadedPattern;
-  if (typeof alwaysLoadedPatternValue !== 'string') {
-    return {
-      errors: [
-        `${id}: alwaysLoadedPattern must be a string (got ${JSON.stringify(alwaysLoadedPatternValue)})`,
-      ],
-      notices: [],
-    };
+  const resolved = resolveInstructionSizeBudgetConfig(config);
+  if ('error' in resolved) {
+    return { errors: [resolved.error], notices: [] };
   }
-  let alwaysLoadedRegex: RegExp;
-  try {
-    alwaysLoadedRegex = new RegExp(alwaysLoadedPatternValue, 'm');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      errors: [
-        `${id}: alwaysLoadedPattern ${JSON.stringify(alwaysLoadedPatternValue)} does not compile as a regular expression: ${message}`,
-      ],
-      notices: [],
-    };
-  }
-  const alwaysLoadedLimitBytes = normalizePositiveIntegerBudget(
-    config.alwaysLoadedLimitBytes,
-    20_000,
-  );
-  if (alwaysLoadedLimitBytes === null) {
-    return {
-      errors: [
-        `${id}: alwaysLoadedLimitBytes must be a positive integer (got ${JSON.stringify(config.alwaysLoadedLimitBytes)})`,
-      ],
-      notices: [],
-    };
-  }
-  const phaseLimitBytes = normalizePositiveIntegerBudget(
-    config.phaseLimitBytes,
-    30_000,
-  );
-  if (phaseLimitBytes === null) {
-    return {
-      errors: [
-        `${id}: phaseLimitBytes must be a positive integer (got ${JSON.stringify(config.phaseLimitBytes)})`,
-      ],
-      notices: [],
-    };
-  }
+  const { alwaysLoadedRegex, alwaysLoadedLimitBytes, phaseLimitBytes } =
+    resolved;
 
   const errors: string[] = [];
   for (const path of listFiles()) {
