@@ -784,7 +784,18 @@ function runGh(argv: string[], timeoutMs: number = GH_TIMEOUT_MS): GhResult {
     };
     return {
       ok: false,
-      stderr: String(e.stderr?.toString?.() ?? e.message ?? 'unknown error'),
+      // `??` only falls through on null/undefined, but execFileSync can
+      // throw with a *defined, empty* e.stderr (e.g. a bare timeout that
+      // kills the child before it writes anything) -- `''` is not
+      // nullish, so a `??` chain here would short-circuit on it and
+      // silently discard the actually-useful e.message (the
+      // ETIMEDOUT/"Command failed" diagnostic). Use `||` for both
+      // fallback steps instead, so an empty string is treated the same
+      // as absent. The outer String(...) stays: e.message is typed
+      // `unknown` above, and TypeScript's strict mode rejects an
+      // `unknown`-typed value assigned directly to GhResult's
+      // `stderr: string` field. See kurone-kito/idd-skill#2957.
+      stderr: String(e.stderr?.toString?.() || e.message || 'unknown error'),
     };
   }
 }
