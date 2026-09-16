@@ -9,10 +9,13 @@
 // (#1431). Automates the manual recovery documented in
 // `idd-ci.instructions.md` §Rerun mechanics (#1381, extended by #1424): a
 // PR HEAD can accumulate several `idd-advisory-convergence` check-run
-// instances (the check fires on pull_request + pull_request_review +
-// pull_request_review_comment, and `cancel-in-progress` cancels most of
-// them), and the required-check rollup can stay pinned to a stale
-// non-passing instance even after the real verdict converges. This helper
+// instances: the required workflow fires on pull_request and
+// pull_request_target, while the non-required companion receives
+// pull_request_review submissions, IDD-originated
+// pull_request_review_comment, and qualifying issue_comment events;
+// `cancel-in-progress` cancels most of them. The
+// required-check rollup can stay pinned to a stale non-passing instance
+// even after the real verdict converges. This helper
 // fetches every check-run instance for the current HEAD via the commit
 // check-runs API (not the recent-runs list, which can page the target run
 // out of view -- see the module-level `fetchCheckRunsForRef` doc comment),

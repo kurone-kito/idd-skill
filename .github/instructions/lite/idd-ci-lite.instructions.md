@@ -144,14 +144,27 @@ CI-polling shared helper file), never this one. Read
   `<run-id>` from the failing check's `link` field, or query the
   Actions API for runs filtered to the current PR head SHA and check
   name.
-- `idd-advisory-convergence`'s own `workflow_dispatch` trigger does not
-  reliably refresh the PR's required-check rollup for the current HEAD
-  SHA. Rerun the existing PR-linked run for the current HEAD instead of
-  dispatching a new one.
-- A gated bot-triggered run (for example, Copilot posting its review)
-  can stick at `action_required`. Rerun the existing non-bot run that
-  already executed for this HEAD, subject to `ciWait.rerunPolicy`;
-  never rerun the gated bot run itself.
+- Required `idd-advisory-convergence` runs use `pull_request` /
+  `pull_request_target`; the non-required companion
+  `idd-advisory-convergence-comment.yml` handles Copilot
+  `pull_request_review` submissions, IDD-originated
+  `pull_request_review_comment`, and qualifying `issue_comment` events.
+  Its bot-triggered run can be `action_required`
+  and cannot refresh the required check. For a review submission use
+  `--refresh-latest --apply`; comment paths use plain `--apply`. Only
+  IDD-originated review-thread replies or qualifying IDD-originated PR
+  comments refresh; ordinary comments/replies are filtered.
+- The required `idd-advisory-convergence` workflow's `workflow_dispatch`
+  trigger does not reliably refresh the PR's
+  required-check rollup for the current HEAD SHA. Rerun the existing
+  non-bot PR-linked run for that HEAD instead of dispatching a new one;
+  never rerun a gated bot run.
+- If same-HEAD `CANCELLED` siblings remain, rerun only those the plan
+  marks `rerun-eligible`. For the ordinary plan, leave `action_required`,
+  `pending`, `unresolved`, `awaiting-fresh-review`, and
+  `rerun-budget-held` instances withheld; the review exception
+  `--refresh-latest --apply` may rerun a budget-held pull_request-family
+  instance unless `ciWait.rerunPolicy` is `hold`.
 - Helper-first diagnosis (read-only): `node
   scripts/rerun-advisory-convergence.mjs --pr <n>`. Resolve the
   package-manager equivalent from `docs/idd-helper-scripts.md`.
