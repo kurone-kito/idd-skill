@@ -36,7 +36,7 @@ can be produced with the following repo-wide command shape:
 legacy_phase_id_pattern='(^|[^[:alnum:]_])(A1([._-]5|5)|A3([._-]5|5)|A4([._-]5|5)|D3([._-]5|5)|D3([._-]6|6)|D3([._-]7|7)|F2([._-]5|5))([^[:alnum:]_]|$)'
 git grep -l -i -E "$legacy_phase_id_pattern" -- . | sort -u
 git ls-files -z | tr '\0' '\n' | grep -i -E "$legacy_phase_id_pattern" | sort -u
-git grep -h -I -e '.' -- . |
+{ git grep -h -I -e '.' -- . ; git ls-files -z | tr '\0' '\n'; } |
   perl -ne '$count += () = /(?<![A-Za-z0-9_])(?:A1(?:[._-]5|5)|A3(?:[._-]5|5)|A4(?:[._-]5|5)|D3(?:[._-]5|5)|D3(?:[._-]6|6)|D3(?:[._-]7|7)|F2(?:[._-]5|5))(?![A-Za-z0-9_])/gi; END { print "$count\n" }'
 ```
 
@@ -52,11 +52,13 @@ adjacent aliases on one line are counted independently. The inventory scans
 tracked pathnames in addition to file contents, and matches
 case-insensitively: a compact alias can appear only in a file name, such as
 the tracked fixture `tests/fixtures/consistency/a45-outcomes.json`, which a
-content-only, case-sensitive `git grep` never lists. That fixture and this
-proposal's own retained-spelling examples are deliberately allowlisted
-evidence for the migration itself (Finding 5); the inventory still reports
-them so the allowlist stays an explicit, reviewed decision rather than a
-silent gap. Separator-normalized
+content-only, case-sensitive `git grep` never lists. The count command feeds
+the same tracked-pathname stream into its counter alongside file contents, so
+a filename-only occurrence is not silently excluded from the reported total.
+That fixture and this proposal's own retained-spelling examples are
+deliberately allowlisted evidence for the migration itself (Finding 5); the
+inventory still reports and counts them so the allowlist stays an explicit,
+reviewed decision rather than a silent gap. Separator-normalized
 inputs using only the resolver's supported `.`, `-`, `/`, `:`, `\`, `_`, and
 whitespace separators are a resolver-test concern rather than a finite text
 inventory; punctuation outside that set remains rejected.
