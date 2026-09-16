@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -8,7 +15,11 @@ import { fileURLToPath } from 'node:url';
 
 import {
   classifyInstallDepsOutcome,
+  classifyPnpmVersionCheck,
   describeCorepackGuidance,
+  describePnpmVersionMismatch,
+  parsePnpmMajorFromPackageManager,
+  parsePnpmMajorFromVersionOutput,
 } from '../src/scripts/verify-install-deps.mts';
 
 test('present-after-install when the key binary exists before any retry', () => {
@@ -43,6 +54,80 @@ test('describeCorepackGuidance hints at installing corepack when absent', () => 
   const hint = describeCorepackGuidance(false);
   assert.match(hint ?? '', /corepack was not found/);
   assert.match(hint ?? '', /npm install -g corepack/);
+});
+
+test('parsePnpmMajorFromPackageManager extracts the major from a pnpm pin', () => {
+  assert.equal(parsePnpmMajorFromPackageManager('pnpm@12.4.1+sha512-abc'), 12);
+});
+
+test('parsePnpmMajorFromPackageManager returns null for a non-pnpm packageManager', () => {
+  assert.equal(parsePnpmMajorFromPackageManager('yarn@4.0.0'), null);
+  assert.equal(parsePnpmMajorFromPackageManager('npm@10.2.0'), null);
+});
+
+test('parsePnpmMajorFromPackageManager returns null when the field is absent', () => {
+  assert.equal(parsePnpmMajorFromPackageManager(undefined), null);
+});
+
+test('parsePnpmMajorFromVersionOutput extracts the major from a plain version string', () => {
+  assert.equal(parsePnpmMajorFromVersionOutput('12.4.1\n'), 12);
+});
+
+test('parsePnpmMajorFromVersionOutput tolerates incidental output around the version token', () => {
+  // A corepack first-run banner line ahead of the version, plus a trailing
+  // CRLF, must not break parsing (#3043 critique finding).
+  assert.equal(
+    parsePnpmMajorFromVersionOutput(
+      'Preparing pnpm@11.9.0 for first use\n11.9.0\r\n',
+    ),
+    11,
+  );
+});
+
+test('parsePnpmMajorFromVersionOutput returns null when no version-like token is present', () => {
+  assert.equal(parsePnpmMajorFromVersionOutput('command not found'), null);
+});
+
+test('classifyPnpmVersionCheck returns not-applicable when packageManager does not pin pnpm', () => {
+  assert.deepEqual(classifyPnpmVersionCheck(null, '12.4.1'), {
+    status: 'not-applicable',
+  });
+});
+
+test('classifyPnpmVersionCheck returns match when majors are equal', () => {
+  assert.deepEqual(classifyPnpmVersionCheck(12, '12.4.1'), {
+    status: 'match',
+    requiredMajor: 12,
+    detectedVersion: '12.4.1',
+  });
+});
+
+test('classifyPnpmVersionCheck returns mismatch when majors differ', () => {
+  assert.deepEqual(classifyPnpmVersionCheck(12, '11.9.0'), {
+    status: 'mismatch',
+    requiredMajor: 12,
+    detectedVersion: '11.9.0',
+  });
+});
+
+test('classifyPnpmVersionCheck returns undetermined when the resolved version could not be read', () => {
+  assert.deepEqual(classifyPnpmVersionCheck(12, null), {
+    status: 'undetermined',
+    requiredMajor: 12,
+  });
+});
+
+test('classifyPnpmVersionCheck returns undetermined when the resolved version output is unparseable', () => {
+  assert.deepEqual(classifyPnpmVersionCheck(12, 'command not found'), {
+    status: 'undetermined',
+    requiredMajor: 12,
+  });
+});
+
+test('describePnpmVersionMismatch names both the detected and required versions', () => {
+  const message = describePnpmVersionMismatch('11.9.0', 12);
+  assert.match(message, /11\.9\.0/);
+  assert.match(message, /12\.x/);
 });
 
 // ---------------------------------------------------------------------------
@@ -217,6 +302,107 @@ test('CLI: hints at installing corepack when it is absent from PATH', {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(isolatedBin, { recursive: true, force: true });
   }
+});
+
+/**
+ * Writes a fake, executable `pnpm` script into `binDir` that always prints
+ * `version` to stdout, so the CLI's `pnpm --version` shell-out resolves to
+ * a controlled value regardless of whether real pnpm/corepack are present
+ * on this host. POSIX-only (shebang + executable bit) -- callers skip this
+ * on win32, mirroring the absent-corepack isolation test above.
+ */
+function writeFakePnpmScript(binDir: string, version: string): void {
+  const scriptPath = join(binDir, 'pnpm');
+  writeFileSync(scriptPath, `#!/bin/sh\necho "${version}"\n`);
+  chmodSync(scriptPath, 0o755);
+}
+
+/**
+ * Runs the CLI in an isolated cwd carrying a `package.json` with the given
+ * `packageManager` pin, and an isolated PATH containing only a `node`
+ * symlink and a fake `pnpm` script reporting `fakePnpmVersion`. Mirrors
+ * the absent-corepack isolation test's PATH-replacement approach so the
+ * pnpm-version check is exercised deterministically, independent of the
+ * host's real corepack/pnpm state.
+ */
+function runCliWithFakePnpm(
+  installCommand: string,
+  packageManagerField: string,
+  fakePnpmVersion: string,
+): CliRun {
+  const cwd = mkdtempSync(join(tmpdir(), 'idd-verify-install-deps-'));
+  const isolatedBin = mkdtempSync(join(tmpdir(), 'idd-fake-pnpm-bin-'));
+  const callLog = join(cwd, '.call-log');
+  try {
+    writeFileSync(
+      join(cwd, 'package.json'),
+      JSON.stringify({ packageManager: packageManagerField }),
+    );
+    symlinkSync(process.execPath, join(isolatedBin, 'node'));
+    writeFakePnpmScript(isolatedBin, fakePnpmVersion);
+    const result = spawnSync(
+      'node',
+      [
+        CLI_ENTRY,
+        '--key-binary',
+        KEY_BINARY,
+        '--install-command',
+        installCommand,
+      ],
+      {
+        cwd,
+        env: { PATH: isolatedBin, CALL_LOG: callLog },
+        encoding: 'utf8',
+      },
+    );
+    let attempts = 0;
+    try {
+      attempts = readFileSync(callLog, 'utf8')
+        .split('\n')
+        .filter((line) => line.length > 0).length;
+    } catch {
+      attempts = 0;
+    }
+    return { status: result.status, stderr: result.stderr ?? '', attempts };
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(isolatedBin, { recursive: true, force: true });
+  }
+}
+
+test('CLI: pnpm-version check passes and proceeds to install when the resolved major matches packageManager', {
+  skip: process.platform === 'win32',
+}, () => {
+  const { status, attempts, stderr } = runCliWithFakePnpm(
+    fakeInstallCommand(1),
+    'pnpm@12.4.1+sha512-fakehash',
+    '12.4.1',
+  );
+  assert.equal(status, 0);
+  assert.equal(attempts, 1);
+  assert.doesNotMatch(stderr, /does not satisfy/);
+});
+
+test('CLI: pnpm-version check fails fast with an actionable message on a major mismatch, before any install attempt', {
+  skip: process.platform === 'win32',
+}, () => {
+  const { status, attempts, stderr } = runCliWithFakePnpm(
+    fakeInstallCommand(1),
+    'pnpm@12.4.1+sha512-fakehash',
+    '11.9.0',
+  );
+  assert.equal(status, 1);
+  // The install command must never run at all on a mismatch.
+  assert.equal(attempts, 0);
+  assert.match(stderr, /resolved pnpm 11\.9\.0 does not satisfy/);
+  assert.match(stderr, /pnpm 12\.x major/);
+});
+
+test('CLI: pnpm-version check is a no-op when package.json has no packageManager field (existing missing-after-retry path unaffected)', () => {
+  const { status, attempts, stderr } = runCli(fakeInstallCommand(99));
+  assert.equal(status, 1);
+  assert.equal(attempts, 2);
+  assert.doesNotMatch(stderr, /does not satisfy/);
 });
 
 test('CLI: --help prints usage and exits 0 without running any install', () => {

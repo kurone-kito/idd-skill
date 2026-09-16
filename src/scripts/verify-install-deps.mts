@@ -12,15 +12,37 @@
 // worktrees sharing a store). Run the install command, verify the key
 // binary exists, retry the install exactly once if it does not, and
 // fail loudly rather than continuing in a silently broken state.
+//
+// Also validates the locally resolved `pnpm --version` against the major
+// pinned in package.json's `packageManager` field before running the
+// install command at all, failing fast with an actionable message on a
+// mismatch (#3043). This replaces the fail-fast behavior package.json's
+// own `engines.pnpm` used to provide via pnpm's `engineStrict` -- removed
+// because `engineStrict` enforces `engines` transitively across the whole
+// dependency graph, so `engines.pnpm` also constrained every downstream
+// `package-manager`-profile consumer installing this package as a real
+// dependency, with no compensating benefit to them (see
+// docs/idd-helper-scripts.md's package-manager profile note). This
+// script is never exposed via `package.json`'s `bin`, so the replacement
+// check only ever runs against this repository's own `package.json` --
+// it cannot reintroduce the leak. Scope note: unlike `engines.pnpm`, this
+// check only fires through this script's own `install-deps` invocation,
+// not on every bare `pnpm install` a contributor might run directly.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mts';
 
 export type VerifyInstallDepsOutcome =
   | { status: 'present-after-install' }
   | { status: 'recovered-after-retry' }
   | { status: 'missing-after-retry' };
+
+export type PnpmVersionCheckResult =
+  | { status: 'not-applicable' }
+  | { status: 'undetermined'; requiredMajor: number }
+  | { status: 'match'; requiredMajor: number; detectedVersion: string }
+  | { status: 'mismatch'; requiredMajor: number; detectedVersion: string };
 
 /**
  * Pure classification of the two existence checks around the retry.
@@ -37,6 +59,83 @@ export function classifyInstallDepsOutcome(
   return existsAfterRetry
     ? { status: 'recovered-after-retry' }
     : { status: 'missing-after-retry' };
+}
+
+/**
+ * Parses the pnpm major version pinned in package.json's `packageManager`
+ * field (e.g. `pnpm@12.4.1+sha512-...`). Returns `null` when the field is
+ * absent or pins a different package manager (npm, yarn) -- the pnpm
+ * version check is a no-op in either case. This script is never exposed
+ * via `package.json`'s `bin` (see the module header), so it only ever
+ * reads this repository's own `packageManager` pin, never a consumer's.
+ */
+export function parsePnpmMajorFromPackageManager(
+  packageManagerField: string | undefined,
+): number | null {
+  if (packageManagerField === undefined) {
+    return null;
+  }
+  const match = /^pnpm@(\d+)\./.exec(packageManagerField);
+  return match === null ? null : Number(match[1]);
+}
+
+/**
+ * Extracts the leading `<major>.<minor>.<patch>` token from `pnpm
+ * --version` output. Uses a regex over a naive trim so incidental output
+ * around the version -- a corepack first-run banner line, trailing CRLF --
+ * doesn't break parsing.
+ */
+export function parsePnpmMajorFromVersionOutput(
+  versionOutput: string,
+): number | null {
+  const match = /(\d+)\.\d+\.\d+/.exec(versionOutput);
+  return match === null ? null : Number(match[1]);
+}
+
+/**
+ * Pure classification of the pnpm-version check: does the resolved `pnpm
+ * --version` output satisfy the major pinned in package.json's
+ * `packageManager` field? `requiredMajor` is `null` when `packageManager`
+ * doesn't pin pnpm at all (`not-applicable` -- nothing to check).
+ * `detectedVersionRaw` is `null`, or unparseable, when `pnpm --version`
+ * could not be resolved (`undetermined` -- the check can't reach a
+ * verdict, so it never blocks the install on an inconclusive read).
+ */
+export function classifyPnpmVersionCheck(
+  requiredMajor: number | null,
+  detectedVersionRaw: string | null,
+): PnpmVersionCheckResult {
+  if (requiredMajor === null) {
+    return { status: 'not-applicable' };
+  }
+  const detectedMajor =
+    detectedVersionRaw === null
+      ? null
+      : parsePnpmMajorFromVersionOutput(detectedVersionRaw);
+  if (detectedMajor === null || detectedVersionRaw === null) {
+    return { status: 'undetermined', requiredMajor };
+  }
+  const detectedVersion = detectedVersionRaw.trim();
+  return detectedMajor === requiredMajor
+    ? { status: 'match', requiredMajor, detectedVersion }
+    : { status: 'mismatch', requiredMajor, detectedVersion };
+}
+
+/**
+ * Actionable error message for a `mismatch` verdict, naming both the
+ * detected and required pnpm versions so a contributor knows exactly what
+ * to install.
+ */
+export function describePnpmVersionMismatch(
+  detectedVersion: string,
+  requiredMajor: number,
+): string {
+  return (
+    `verify-install-deps: resolved pnpm ${detectedVersion} does not satisfy ` +
+    `the pnpm ${requiredMajor}.x major pinned in package.json's ` +
+    `"packageManager" field. Install pnpm ${requiredMajor}.x (for example ` +
+    'via corepack) and retry.\n'
+  );
 }
 
 /**
@@ -92,6 +191,21 @@ function runCli(): void {
   }
   if (args.installCommand === null) {
     throw new Error('--install-command is required');
+  }
+
+  const requiredPnpmMajor = resolveRequiredPnpmMajor();
+  const pnpmVersionCheck = classifyPnpmVersionCheck(
+    requiredPnpmMajor,
+    requiredPnpmMajor === null ? null : resolveDetectedPnpmVersion(),
+  );
+  if (pnpmVersionCheck.status === 'mismatch') {
+    process.stderr.write(
+      describePnpmVersionMismatch(
+        pnpmVersionCheck.detectedVersion,
+        pnpmVersionCheck.requiredMajor,
+      ),
+    );
+    process.exit(1);
   }
 
   runInstallCommand(args.installCommand);
@@ -179,6 +293,47 @@ function isCorepackAvailable(): boolean {
   }
 }
 
+/**
+ * Reads package.json's `packageManager` field from the current working
+ * directory to resolve the pnpm major the version check enforces.
+ * Read/parse failures resolve to `null` (`not-applicable`) rather than
+ * throwing -- `install-deps` must never fail merely because package.json
+ * couldn't be read here; a genuinely broken package.json will already
+ * fail loudly once `runInstallCommand` runs.
+ */
+function resolveRequiredPnpmMajor(): number | null {
+  try {
+    const raw = readFileSync('package.json', 'utf8');
+    const parsed = JSON.parse(raw) as { packageManager?: unknown };
+    const packageManager =
+      typeof parsed.packageManager === 'string'
+        ? parsed.packageManager
+        : undefined;
+    return parsePnpmMajorFromPackageManager(packageManager);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Shells out to `pnpm --version` to resolve the locally resolvable pnpm
+ * version. `shell: true` is required for the same reason as
+ * `isCorepackAvailable` above: a globally installed pnpm can be a
+ * `.CMD`/`.ps1` shim on Windows that isn't directly executable without a
+ * shell. Failures (pnpm absent, non-zero exit) resolve to `null`
+ * (`undetermined` once classified) rather than throwing.
+ */
+function resolveDetectedPnpmVersion(): string | null {
+  try {
+    return execFileSync('pnpm', ['--version'], {
+      shell: true,
+      encoding: 'utf8',
+    });
+  } catch {
+    return null;
+  }
+}
+
 interface ParsedArgs {
   keyBinary: string | null;
   installCommand: string | null;
@@ -198,10 +353,14 @@ function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/verify-install-deps.mjs --key-binary <path> --install-command <command>
 
-Runs <command>, then verifies <path> exists. If missing, re-runs
-<command> exactly once and re-checks. Exits 0 when the binary is
-present (before or after the retry); exits 1 with an actionable error
-when it is still missing after the retry.
+If package.json's "packageManager" field pins pnpm, first verifies the
+locally resolved pnpm version satisfies that pinned major, exiting 1
+with an actionable error naming both versions on a mismatch, before
+running <command> at all. Otherwise (or once that check passes): runs
+<command>, then verifies <path> exists. If missing, re-runs <command>
+exactly once and re-checks. Exits 0 when the binary is present (before
+or after the retry); exits 1 with an actionable error when it is still
+missing after the retry.
 
 Example:
   node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command "pnpm install --frozen-lockfile"

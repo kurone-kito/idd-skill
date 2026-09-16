@@ -821,6 +821,32 @@ selected from one of these profiles:
 | `ephemeral-npx`     | The adopter has Node.js available, does not vend helper files, and can resolve a runnable helper command at execution time. | Resolve helper execution through one-shot `npx` commands.                      | Reserved for cases where a published or otherwise resolvable helper command already exists; otherwise fall back to `instructions-only`. |
 | `instructions-only` | The adopter does not want or cannot use helper scripts.                                                                     | No helper runtime. Agents follow the Markdown instructions directly.           | First-class supported fallback; no helper config is required.                                                                           |
 
+**`package-manager`-profile consumers install this package's own
+`package.json`, `engines`/`packageManager` fields included.** A
+Copilot review on `kurone-kito/lints-config` PR #338 (observed
+2026-09-16, review comment
+[#338#discussion_r4001884943](https://github.com/kurone-kito/lints-config/pull/338#discussion_r4001884943))
+flagged that `kurone-kito/idd-skill`'s own `engines.pnpm` field --
+added in commit `9041d4ff` (issue `kurone-kito/idd-skill#2690`) purely
+as a contributor-local-dev safety net for Node's dropped corepack
+bundling -- was unintentionally enforced against `lints-config` too,
+because pnpm's `engineStrict` enforces `engines` transitively across
+the whole dependency graph, not only the installing project's own
+root. `lints-config` installs `@kurone-kito/idd-skill` as a real
+dependency under exactly this `package-manager` profile, so it
+inherited a version constraint that gave it no compensating benefit
+(the helper package's own pnpm-version-sensitive build step never runs
+at a consumer's install time). `kurone-kito/idd-skill#3043` removed
+`engines.pnpm` and replaced its contributor-facing safety net with an
+explicit pnpm-version check inside its own `verify-install-deps`
+helper instead, which is never exposed via `package.json`'s `bin` and
+so never reaches a consumer's install. The principle for any project
+that vends its own helper package under this profile: a `package.json`
+field added for contributor-local-dev reasons is not scoped to that
+project alone -- it is enforced under `engineStrict` against every
+consumer using the `package-manager` profile, so any such field needs
+the same consumer-impact check before landing.
+
 ## Import-Time Selection Order
 
 Helper runtime choice is an import-time policy decision. Use repository
