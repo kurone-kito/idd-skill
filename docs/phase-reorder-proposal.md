@@ -35,7 +35,8 @@ can be produced with the following repo-wide command shape:
 ```sh
 legacy_phase_id_pattern='(^|[^[:alnum:]_])(A1([._-]5|5)|A3([._-]5|5)|A4([._-]5|5)|D3([._-]5|5)|D3([._-]6|6)|D3([._-]7|7)|F2([._-]5|5))([^[:alnum:]_]|$)'
 git grep -l -E "$legacy_phase_id_pattern" -- . | sort -u
-git grep -h -o -E "$legacy_phase_id_pattern" -- . | wc -l
+git grep -h -I -e '.' -- . |
+  perl -ne '$count += () = /(?<![A-Za-z0-9_])(?:A1(?:[._-]5|5)|A3(?:[._-]5|5)|A4(?:[._-]5|5)|D3(?:[._-]5|5)|D3(?:[._-]6|6)|D3(?:[._-]7|7)|F2(?:[._-]5|5))(?![A-Za-z0-9_])/g; END { print "$count\n" }'
 ```
 
 This inventory intentionally follows tracked repository content, so it
@@ -45,9 +46,11 @@ success criteria that a later batch may reuse unchanged.
 The bounded pattern covers every literal old spelling in the alias table:
 dotted, hyphenated, underscored, and compact forms. Its surrounding token
 boundaries keep a compact alias such as `A15` from being counted inside a
-larger identifier. Separator-normalized inputs with arbitrary punctuation or
-whitespace are a resolver-test concern rather than a finite text inventory;
-each batch must test that compatibility path separately.
+larger identifier. The per-line Perl count uses non-consuming lookarounds so
+adjacent aliases on one line are counted independently. Separator-normalized
+inputs using only the resolver's supported `.`, `-`, `/`, `:`, `\`, `_`, and
+whitespace separators are a resolver-test concern rather than a finite text
+inventory; punctuation outside that set remains rejected.
 
 The machine-facing resolver currently contains `A1_5`, `A3_5`, `A4_5`,
 and `F2_5` as canonical IDs with dotted, hyphenated, and compact aliases.
@@ -59,8 +62,8 @@ the nested labels as an unrelated vocabulary.
 
 ## Finding 1 — Decimal insertion hides responsibility and order
 
-The rationale here is preventive; no observed incident has yet been recorded
-for a decimal-label readability failure. The decimal labels are
+This is preventive; no observed incident yet has been recorded for this
+decimal-label readability concern. The decimal labels are
 understandable locally, but they make the global
 sequence look as though a late exception belongs between two numbered
 steps without saying what responsibility it owns. The problem is clearest
@@ -82,8 +85,16 @@ The recommended route preserves the existing major-family order and
 makes the inserted responsibilities explicit:
 
 ```text
-A0 -> (A0_O | A0_T | A1)
-A1 -> A1_AUDIT -> A2 -> A3 -> A3_APPROVAL -> A4 -> A4_SUITABILITY -> A5
+A0_T -> A3 -> A4 -> A3_APPROVAL -> A4_SUITABILITY -> A5 (explicit target)
+A0 -> (A0_O | A1)
+A1 -> A1_AUDIT
+A1_AUDIT -> A1 (completed nested roadmap)
+A1_AUDIT -> stop (non-autonomous gap)
+A1_AUDIT -> A2 (unresolved work or autonomous gap)
+A2 -> A3 -> A3_APPROVAL -> A4 -> A4_SUITABILITY -> A5
+A4_SUITABILITY -> A4 (rejection in normal discovery)
+A4_SUITABILITY -> stop (rejection for explicit target)
+A4_SUITABILITY -> A5 (pass)
 A5 -> A (missing approval or claim race in a normal run)
 A5 -> stop (explicit-target failure)
 A5 -> B1 -> B2 -> B3 -> C1 -> C2 -> C3 -> C4 -> C5 -> C6
@@ -107,6 +118,7 @@ F1 -> Esync (sync required)
 F2 -> E14 (REQUEST_NEEDED)
 F2 -> F2 (WAIT or RECOVERY_NEEDED after bounded polling)
 F2 -> E1 (stale review or other non-advisory evidence)
+F2 -> D4 (required CI failure, cancellation, or timeout)
 F2 -> D3_PREMERGE -> F2_HANDOFF
 F2_HANDOFF -> F3 (authorized merge policy)
 F2_HANDOFF -> stop (human_merge or unknown policy)
@@ -125,6 +137,13 @@ The first line shows alternatives, not a requirement that all three A0
 routes execute. `A0_O` and `A0_T` remain their existing orphan and
 explicit-target shortcuts. `Resume` remains a routing entry that may
 return to the appropriate point in this sequence; it is not renumbered.
+The explicit-target `A0_T` line is a separate entry: it skips A0's normal
+scope and orphan discovery, then applies readiness at A3, viability at A4,
+approval at `A3_APPROVAL`, and suitability at `A4_SUITABILITY` in that
+order. A1's audit returns to A1 after closing a completed nested roadmap,
+stops on a non-autonomous gap, and reaches A2 only for unresolved work or
+an autonomous gap. A4's suitability rejection returns to A4 for the next
+normal-discovery survivor but stops for an explicit target.
 C2 and C4 provide the clean C-phase exits to D1 after the validation floor;
 C6 returns to C1 for the next critique pass. The E-phase has two exits from
 E3: an empty snapshot goes directly to `Esync`, while a non-empty snapshot
@@ -153,7 +172,8 @@ pre-merge conditions are evaluated again. F2's not-ready outcomes are not a
 single E1 shortcut: `REQUEST_NEEDED` returns to E14, while `WAIT` and
 `RECOVERY_NEEDED` use their bounded polling or recovery path and re-enter the
 first F2 condition. Review-currency or other non-advisory staleness returns
-to E1 for a new snapshot. At F2.5, `F3` is reachable only under
+to E1 for a new snapshot. A required CI failure, cancellation, or timeout at
+F2 returns to D4 for the fix-and-push cycle. At F2.5, `F3` is reachable only under
 `fully_autonomous_merge` or an explicitly designated and resumed
 `separate_merge_agent`; `human_merge` and unknown policies stop for handoff.
 A designated separate merge agent may re-enter through A5 and F2 when it
