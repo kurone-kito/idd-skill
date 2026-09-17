@@ -37,11 +37,11 @@ routing), or the same-HEAD advisory reroll — all F2/F3-only (E14's own
 settled-elapsed-time case, `#2327`, has its own decision table
 instead).
 
-A lite session's own routing (A0-A4.5, E4-E8, the lite F1-F2
-helper-read-only subset, the lite F2.5 handoff-stop, F3-F5 — all
-excluded) never reaches those call sites. If it somehow does, stop and
-ask for a stronger session or human to run the full-size instructions
-directly.
+A lite session's own routing (A0-A4.5 and E4-E8 excluded, F3-F5
+excluded; only the lite F1-F2 helper-read-only subset and the lite
+F2.5 handoff-stop apply) never reaches those call sites. If it somehow
+does, stop and ask for a stronger session or human to run the
+full-size instructions directly.
 
 **Do not build a substitute wait for a non-primary bot** — same
 prohibition as the full-size file's Scope section: rely on the
