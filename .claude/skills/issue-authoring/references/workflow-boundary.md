@@ -33,14 +33,27 @@ approval boundary that hands off to IDD execution.
   session. If the target runtime cannot provide that operation, stop before
   creating the issue. Never intentionally create an unlabeled issue for the
   Stage 1 set
-- The publication token uses this exact HTML-first format:
+- The publication token uses this exact HTML-first format. Generate the
+  opaque `target` id and token for both markers below -- the new
+  issue's own number is not yet known. `anchor` in **both** markers
+  depends on the new issue's role in the set: when this new issue is
+  itself the set anchor, `anchor` reuses that same opaque `target`
+  value (self-reference) -- the `<opaque-anchor-id>` placeholder below
+  depicts this self-anchor case only. For a **non-anchor child**,
+  `anchor` is instead the set anchor's already-resolved real
+  `<owner>/<repo>#<number>` reference, not an opaque id, since the
+  anchor already exists with a known number by the time a child is
+  created (see the bundle's canonical contract,
+  `references/contract.md`'s "New-issue ownership" section, for the
+  full rule):
 
   ```html
   <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
   ```
 
   The originating Stage 1 hold uses this append-only publication-intent
-  record:
+  record, whose `anchor` field follows the same self-anchor/non-anchor-child
+  rule above:
 
   ```html
   <!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; journal=<owner>/<repo>#<number>; issue=<owner>/<repo>#<number>|none; actor=<trusted-marker-actor>; state=<pending|member|cleanup|abandoned> -->
@@ -71,8 +84,12 @@ approval boundary that hands off to IDD execution.
   configured bot/app trust. An untrusted, malformed, or conflicting
   exact-token record is not valid evidence; fail closed and retain the hold.
 
-  Generate the opaque target/anchor IDs and publication token before creation
-  and persist those preallocated IDs, the exact token, and `state=pending` in
+  Generate the opaque `target` id and publication token before creation
+  because the new issue's own number is not yet known, and generate
+  `anchor` the same way only when this new issue is the set anchor
+  itself -- otherwise reuse the anchor's already-resolved real
+  reference, per the self-anchor/non-anchor-child rule above. Persist
+  those preallocated IDs, the exact token, and `state=pending` in
   that journal before issuing the create. After a successful create, attach and
   verify the returned issue identities before appending the owner marker; an
   unverifiable pre-create write blocks creation, while an unverifiable
