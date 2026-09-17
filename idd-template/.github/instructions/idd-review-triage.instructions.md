@@ -509,14 +509,14 @@ Route based on `branchState` from the helper (or `mergeable` /
 - **`clean`** or **`behind-no-conflict`** when branch protection does not
   require an up-to-date head: **first** apply the
   **Zero-Accepted-PATH-A advisory re-review gate** below if it applies
-  (no-op otherwise). **Then**, if E6 posted any disposition reply this
-  pass, refresh the `review-watermark` for the same `{head-SHA}`
-  (recompute `{max-activity-updatedAt}` / `{total-item-count}` /
-  `{latest-ci-completed-at}`, following the E1 Step 2 rules) — otherwise
-  F2's review-currency check treats your own dispositions as new
-  activity and bounces back to E1 needlessly. Skip the refresh on the
-  sync path (E1 re-snapshots after merging `{development-branch}`) or on
-  a hold. `clean`
+  (no-op otherwise). **Then**, if E6 posted a disposition reply or the
+  gate above posted a marker this pass, refresh the `review-watermark`
+  for the same `{head-SHA}` (recompute `{max-activity-updatedAt}` /
+  `{total-item-count}` / `{latest-ci-completed-at}`, following the E1
+  Step 2 rules) — otherwise F2's review-currency check treats this as
+  new activity and bounces back to E1 needlessly. Skip the refresh on
+  the sync path (E1 re-snapshots after merging `{development-branch}`)
+  or on a hold. `clean`
   here means conflict-freeness only — see the `baseAdvancedSinceMergeBase`
   note under F1 in `idd-pre-merge.instructions.md`. **Then** proceed to
   `idd-pre-merge.instructions.md` (F1).
@@ -575,27 +575,34 @@ rollup: see [rerun mechanics](idd-ci.instructions.md#rerun-mechanics).
 
 Applies only from the branch-sync check's no-sync-required `clean` /
 `behind-no-conflict` exit, and fires under either of two conditions:
-(a) the last non-empty `ReviewItems_snapshot` pass this episode had
-zero Accepted PATH A items **and** at least one PATH B item got a
-_completed-review_ disposition (never a notice-only rejection — see
-the E6 non-review-notice rule); or (b) the current HEAD is eligible
-for **AW3-S**'s settled-window (non-pending) entry (running
+(a) the last non-empty `ReviewItems_snapshot` pass at current
+HEAD had zero Accepted PATH A items **and** at least one PATH B item
+got a _completed-review_ disposition (never a notice-only rejection —
+see the E6 non-review-notice rule), as recorded by the durable
+`zero-accepted-path-a-gate` marker below; or (b) current HEAD is eligible for
+**AW3-S**'s settled-window (non-pending) entry (running
 `advisory-wait-state` reports `staleRequestRecovery.action` as
-`"attempt"` for that entry) — D4 and F2 each already consult **AW3-S**
-independently for this same settled-window entry (`#2726`), but a
-true-virgin empty snapshot otherwise never runs E14 through this gate
-specifically; condition (b) is a defense-in-depth backstop that
-guarantees this path also reaches the stale-request recovery cycle
-(and its route to `COPILOT_UNAVAILABLE`), rather than depending
-solely on D4/F2 revisits eventually accumulating enough AW3-S cycles
-on their own. Otherwise a no-op: a true-virgin empty snapshot with no
-entry eligible for AW3-S's settled-window (no PATH B ever
-dispositioned this episode, and no stale same-head request either)
-never fires it; a
-later-pass empty snapshot after a sync loop-back still fires via (a),
-since the lookback still finds the prior non-empty pass. (Rationale
-for the gap condition (a) closes:
-[design rationale](../../docs/idd-design-rationale.md#zero-accepted-path-a-advisory-re-review-gate).)
+`"attempt"` for that entry) — a defense-in-depth backstop
+([rationale](../../docs/idd-design-rationale.md#zero-accepted-path-a-advisory-re-review-gate)).
+Otherwise a no-op.
+
+**Durable state.** The gate posts which condition, (a) or (b), and its
+HEAD SHA to a dedicated marker (not folded into `review-watermark`'s
+schema), via the same trusted direct HTTP `POST` mechanics:
+
+```markdown
+<!-- zero-accepted-path-a-gate: {agent-id} {claim-id} {a|b} {head-SHA} -->
+
+_{agent-id}: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._
+```
+
+Before evaluating (a), read back the latest same-claim, trusted-author
+marker: a HEAD match means the gate already applies for its recorded
+condition; any other `{head-SHA}` — a push always advances HEAD — is
+stale, so (a) must be reproduced fresh there, or the gate falls
+through to (b). Post a fresh
+marker the first time (a) or (b) is observed true (skip a duplicate),
+replacing in-session memory so the gate survives a crash or resume.
 Run this gate **after** any branch-sync merge settles — requesting
 first would let a later merge invalidate the review just obtained.
 
