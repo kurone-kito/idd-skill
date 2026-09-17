@@ -188,14 +188,14 @@ loop instead of returning to this D1 rebase path.
    (even under the same agent id), the claim was lost — stop.
 2. Run **pre-push-validate**. (E2E tests are verified by CI; do not run
    them locally.)
-3. Push the branch. Use a normal push on first publication. Use
-   `--force-with-lease` only when every one of these holds: the branch
-   is already published, a repository policy explicitly permits a
-   force-push exception here, and this exact exception already required
-   a rebase. If any of those does not hold, stop per the condition
-   above — do not push with `--force-with-lease` and do not continue in
-   this lite flow; the merge-based resync path is out of this file's
-   scope.
+3. Push the branch: `git push -u origin {branch-name}` on first
+   publication. Use `--force-with-lease` only when every one of these
+   holds: the branch is already published, a repository policy
+   explicitly permits a force-push exception here, and this exact
+   exception already required a rebase. If any of those does not hold,
+   stop per the condition above — do not push with `--force-with-lease`
+   and do not continue in this lite flow; the merge-based resync path
+   is out of this file's scope.
 4. New CI job: land it `workflow_dispatch`-only first (if its workflow
    file isn't on `main` yet, land a bootstrap PR for just the trigger
    wiring first — `gh workflow run` can't dispatch a branch-only

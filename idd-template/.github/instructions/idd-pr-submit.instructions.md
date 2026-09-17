@@ -108,22 +108,22 @@ here turns a confusing later failure into an immediate, recoverable signal.
    (E2E tests are verified by CI; do not run them locally.)
 
    The same conservative scoping discretion as post-fix re-validation
-   (`idd-ci.instructions.md`'s Wake-up discipline) applies here: skip an
-   individual command in the chain only when the diff's changed paths
-   provably fall entirely outside that command's input surface, never
-   as a default shortcut. Run the full chain whenever that exclusion
-   cannot be established.
-3. Push the branch to the remote. On the first publication push, use a
-   normal push. If you are recovering an already-published branch under
-   an explicit force-push exception, use `--force-with-lease` only when
-   repository policy permits it and the exceptional route already
-   required a rebase; otherwise stop and return to the merge-based sync
-   path.
+   (`idd-ci.instructions.md`'s Wake-up discipline) applies here: skip a
+   command in the chain only when the diff's changed paths provably
+   fall entirely outside that command's input surface, never as a
+   default shortcut. Run the full chain whenever that exclusion cannot
+   be established.
+3. Push the branch. On the first publication push, run
+   `git push -u origin {branch-name}`. If you are recovering an
+   already-published branch under an explicit force-push exception, use
+   `--force-with-lease` only when repository policy permits it and the
+   exceptional route already required a rebase; otherwise stop and
+   return to the merge-based sync path.
 
 Once the branch is pushed, treat it as published review history. A PR
-that is merely `BEHIND` does not force a branch update by itself unless
-branch protection or explicit repository policy requires an up-to-date
-head before merge.
+that is merely `BEHIND` does not force a branch update unless branch
+protection or explicit repository policy requires an up-to-date head
+before merge.
 
 ### Adding a new CI job
 
