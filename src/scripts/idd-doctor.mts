@@ -403,8 +403,29 @@ export function classifyPrimaryHead(
   return { isB1Violation: true, kind: 'implementation' };
 }
 
+/**
+ * Find unresolved `{{...}}`-shaped onboarding-placeholder tokens in raw
+ * text. Restricted to idd-skill's actual placeholder shape -- an
+ * uppercase letter followed by uppercase letters, digits, or
+ * underscores (e.g. REPO_NAME, PROJECT_MARKER_PREFIX; matches the
+ * substitution side's own `PLACEHOLDER_TOKEN_PATTERN` in
+ * `idd-onboard.mts`) -- so a common lowercase `{{...}}`-shaped token
+ * from an unrelated third-party templating convention (Go templates,
+ * Mustache, Jinja control words such as "else" or "end") inside an
+ * otherwise in-scope IDD-managed file is never mistaken for a leftover
+ * onboarding placeholder (idd-skill#3074). Interior whitespace around
+ * the name is still tolerated, unlike the substitution-side pattern,
+ * since a leftover placeholder with stray spaces still needs to be
+ * flagged even though the substituter would have skipped it.
+ *
+ * Per this module's own scanned-raw convention (see the comment above
+ * `PLACEHOLDER_TOKEN_PATTERN` in `idd-onboard.mts`), every token name in
+ * this comment is spelled WITHOUT the doubled braces, so this doc
+ * comment itself is never flagged as a leftover placeholder once
+ * compiled into the raw-scanned `scripts/idd-doctor.mjs` mirror.
+ */
 export function findPlaceholders(text: string): string[] {
-  return [...text.matchAll(/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/g)].map(
+  return [...text.matchAll(/\{\{\s*[A-Z][A-Z0-9_]*\s*\}\}/g)].map(
     (match) => match[0],
   );
 }
