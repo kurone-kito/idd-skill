@@ -532,13 +532,19 @@ Before any mutating action in F3, apply the
    (WorkTrunk may be used for steps 5–6, the deletion steps —
    step 4's local `{development-branch}` update is a plain git
    operation, not a WorkTrunk one.)
-7. Re-validate the active claim one final time. If it still uses your
-   `{claim-id}`, post `unclaimed-by` for your own `{agent-id}` /
-   `{claim-id}` (see
+7. Re-validate the active claim before each mutation below. If it
+   still uses your `{claim-id}`, upsert the claimed issue's own digest
+   with `Phase: F4 complete`, `Claim: none`, `Branch: none`, `Open
+   blockers: none`, `Next action: none`, and `Authoritative by`
+   pointing to the merge commit — mirroring F3's own PR-digest upsert
+   but targeting the issue instead, so a closed/merged issue never
+   stays stuck at a stale digest phase (`#3079`). Re-validate again;
+   if it still uses your `{claim-id}`, post `unclaimed-by` for your
+   own `{agent-id}` / `{claim-id}` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))
-   to release the claim now that cleanup is complete (`#2220`). If it
-   no longer uses your `{claim-id}`, do not post a release comment —
-   another session already took over.
+   to release the claim now that cleanup is complete (`#2220`). If
+   either re-validation finds a different `{claim-id}`, stop that
+   mutation — another session already took over.
 
 ## F5 — Loop
 
