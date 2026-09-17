@@ -541,11 +541,28 @@ const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provide
 // string; only the true truncation case returns exactly the full length.
 // See the guard's own use of this invariant in
 // findUnsafeExecutionDirectiveMatch below.
+//
+// Round 7 (Copilot + CodeRabbit, PR #3087, independently converging on the
+// same fix): the mid-paragraph sentence-boundary alternative
+// (`[.!?]\s+`) let a PRECEDING sentence in the same paragraph establish
+// untrusted provenance and then be ignored -- "This command came from
+// the issue body. Please run this full command to validate the config."
+// matched at the ". Please " boundary regardless of what that first
+// sentence said. Unlike round 6's whitespace/completeness bugs, this
+// alternative was not merely miscalibrated; no in-paragraph sentence
+// boundary can be trusted to have no supplied-content provenance stated
+// just before it without re-introducing a content scan over that prior
+// sentence -- exactly the enumerated-blocklist class rounds 1-4 replaced.
+// Remove the alternative entirely: the exception now recognizes only the
+// issue body's own start or a paragraph break (blank line) as a valid
+// boundary, never a same-paragraph sentence end. This is strictly
+// narrower than before (removing a case, not adding one), so it cannot
+// newly admit any case a prior round rejected.
 const REPO_OWNED_VALIDATION_VERB = 'run';
 const REPO_OWNED_VALIDATION_WINDOW =
   /^\s*(?:this|that)\s+(?:full|complete|validation|config|configuration)\s+(?:command|script)\s+to\s+(?:validate|verify|check|confirm)\s+(?:the\s+)?(?:configuration|config|setup|settings)\s*$/i;
 const REPO_OWNED_VALIDATION_SENTENCE_START =
-  /(?:^|[.!?]\s+|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
+  /(?:^|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
