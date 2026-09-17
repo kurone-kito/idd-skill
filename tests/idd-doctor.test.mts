@@ -348,14 +348,54 @@ test('findPlaceholders returns template tokens', () => {
   ]);
 });
 
-test('findPlaceholders also captures lowercase and hyphenated tokens', () => {
+test('findPlaceholders no longer captures lowercase or hyphenated tokens (idd-skill#3074)', () => {
   const placeholders = findPlaceholders(`
-  keep {{repo_name}}
+  drop {{repo_name}}
   and {{marker-prefix}}
   but ignore {NOT_A_PLACEHOLDER}
   `);
 
-  assert.deepEqual(placeholders, ['{{repo_name}}', '{{marker-prefix}}']);
+  assert.deepEqual(placeholders, []);
+});
+
+test('findPlaceholders ignores non-idd-skill template control tokens (idd-skill#3074)', () => {
+  // A Go-template `docker inspect --format` snippet, or similar
+  // Mustache/Jinja-style third-party templating, uses lowercase bare
+  // words that must never be mistaken for a leftover onboarding
+  // placeholder inside an otherwise in-scope IDD-managed file.
+  const placeholders = findPlaceholders(`
+  {{if .State.Running}}{{else}}{{end}}
+  `);
+
+  assert.deepEqual(placeholders, []);
+
+  // Uppercase but hyphenated is excluded too -- idd-skill's real
+  // placeholder shape never uses hyphens.
+  assert.deepEqual(findPlaceholders('{{REPO-NAME}}'), []);
+
+  // Every real idd-skill placeholder name (from
+  // idd-template/docs/onboarding/placeholders.md's "Final placeholder
+  // meanings" table) still flags correctly.
+  assert.deepEqual(
+    findPlaceholders(`
+    {{REPO_NAME}}
+    {{PROJECT_MARKER_PREFIX}}
+    {{TRUSTED_MARKER_ACTOR}}
+    {{FIX_VALIDATE_COMMANDS}}
+    {{PRE_PUSH_VALIDATE_COMMANDS}}
+    {{POST_FIX_VALIDATE_COMMANDS}}
+    {{INSTALL_DEPS_COMMAND}}
+    `),
+    [
+      '{{REPO_NAME}}',
+      '{{PROJECT_MARKER_PREFIX}}',
+      '{{TRUSTED_MARKER_ACTOR}}',
+      '{{FIX_VALIDATE_COMMANDS}}',
+      '{{PRE_PUSH_VALIDATE_COMMANDS}}',
+      '{{POST_FIX_VALIDATE_COMMANDS}}',
+      '{{INSTALL_DEPS_COMMAND}}',
+    ],
+  );
 });
 
 test('parseProjectCommandRows extracts command rows from the table', () => {
