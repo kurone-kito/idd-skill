@@ -36,6 +36,9 @@ CI-polling instructions instead of this file.
   current failure.
 - Every job in every workflow fails near-instantly with an identical
   platform banner (an Actions billing/spend-limit block).
+- **Exception — provider outage** (`providerHealth` `unavailable`) as
+  sole blocker: park, don't stop-and-ask, then release the claim — see
+  `docs/idd-helper-scripts.md#provider-outage-park-helper`.
 - A running check never reports `startedAt` and `ciWait.generationTimeout`
   elapses with still no `startedAt`.
 
@@ -173,7 +176,11 @@ CI-polling shared helper file), never this one. Read
 
 Schedule one wake at the expected completion interval, or background
 the wait only when the topology is confirmed to route completion back
-to this turn; otherwise wait synchronously. Batch every post-wait
+to this turn; otherwise wait synchronously. Before a heavy local
+command expected to run long, set an execution-timeout override near
+the tool's ceiling, not its default (`#2933`). Never blindly re-issue
+an already-backgrounded heavy command — check first if it's still
+running. Batch every post-wait
 action (disposition, replies, marker, next gate) into one turn. Do not
 insert "is it done yet?" turns. Never end a turn on a future-tense wait
 promise ("I will wait...") with no wait mechanism actually armed — arm
