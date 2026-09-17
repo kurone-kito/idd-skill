@@ -40,9 +40,9 @@ model.
   regenerated target never exempts a file here.
 - **Reference-only inputs** (read for R2/R4, never a finding target):
   `docs/idd-concept-ownership.md` (R2's closed concept-index seed) and
-  `docs/idd-autonomy-contract.md` (R4's reversible/irreversible source
-  of truth), both at `docs/` in an installed repository. Both are read
-  in full every pass.
+  `docs/idd-autonomy-contract.md` (R4's reversible/irreversible
+  classification baseline), both at `docs/` in an installed repository.
+  Both are read in full every pass.
 - **Out of scope as an audit target / finding source**: this skill's
   own bundle wherever it is installed (`skills/idd-spec-audit/**` — the
   skill necessarily reads its own bundle, this `SKILL.md` and
