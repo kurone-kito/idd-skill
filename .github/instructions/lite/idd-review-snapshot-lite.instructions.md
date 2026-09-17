@@ -129,9 +129,9 @@ scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
 --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`
 (or the package-manager equivalent). Always pass `--expected-head-sha`
-with the exact Step 1 `{head-SHA}`; the helper fails closed — posts
-nothing — when the branch moved since Step 1. On that failure, do not
-retry Step 2 as-is: return to Step 1 and re-snapshot the moved branch.
+with the exact Step 1 `{head-SHA}`; the helper fails closed (posts
+nothing) when the branch moved since Step 1 — on that failure, return
+to Step 1 and re-snapshot the moved branch, not a Step 2 retry.
 
 The manual six-field fallback — `--type watermark --target pr
 {pr-number} --agent-id <id> --claim-id <id> --head-sha {head-SHA}
@@ -200,9 +200,9 @@ record each item's source URL:
 Also carry, from the same Step 1 thread set, a light
 **resolved-thread index** (`isResolved=true`): each entry's file/area,
 a short claim summary, source URL, and any recorded `**Accepted**` /
-`**Rejected**` disposition marker. Do not add resolved threads back
-into ReviewItems_snapshot — a routing hint only for E5's duplicate
-pre-check in `idd-review-triage.instructions.md`, not a conclusion.
+`**Rejected**` marker. Do not add resolved threads back into
+ReviewItems_snapshot — a routing hint only for E5's duplicate pre-check
+in `idd-review-triage.instructions.md`, not a conclusion.
 
 ## E2 — Critique pass
 
@@ -222,12 +222,12 @@ Snapshot identity; Point-in-time parity.
 **Incremental scope**: on the second and later passes within the same
 claim, scope the review to the diff since the previous E2's head SHA,
 tracked by the latest trusted same-claim `review-baseline` comment.
-Reset to the full-branch diff after any of: a rebase, a multi-fix batch,
-the baseline SHA is not an ancestor of the current HEAD, no trusted
-same-claim baseline exists, or the active claim changed (restart,
-takeover, or forced handoff). ReviewItems_snapshot is session-local — do
-not inherit a previous claim's critique findings unless they were
-already persisted as reviewer-visible comments.
+Reset to the full-branch diff after: a rebase, a multi-fix batch, a
+baseline SHA that isn't an ancestor of HEAD, no trusted same-claim
+baseline, or an active-claim change (restart, takeover, forced
+handoff). ReviewItems_snapshot is session-local — do not inherit a
+previous claim's critique findings unless already persisted as
+reviewer-visible comments.
 
 After the critique pass completes, re-read the current PR HEAD SHA —
 `gh pr view {pr-number} --json headRefOid --jq '.headRefOid'` — and
@@ -260,9 +260,9 @@ follow the note here either.
 
 ## Cold-start ReviewItems_snapshot reconstruction
 
-Read this entering E4/E9 without this episode's own E1-E3
-ReviewItems_snapshot (lost/restarted session, or a mid-review
-delegation hand-off).
+Read this entering E4/E9 without this episode's E1-E3
+ReviewItems_snapshot (lost/restarted session, or mid-review delegation
+hand-off).
 
 **Procedure**: rerun Step 1-3 (Step 2 already posts the watermark —
 never a second one), then edge case 2's steps 1-3 unconditionally
@@ -277,7 +277,7 @@ session mid-classification, a landed-but-unreplied E12 push, or a
 an E13 `**Accepted** — fixed in` reply with no reviewer reply/reopen
 since → skip reclassification, hand off straight to E14. Otherwise
 Step 3/E4-E8 decide as usual, flagging whether a newer branch commit
-already fixes it (a lost E12 push, or edge case 2's diff below): that
+fixes it (a lost E12 push, or edge case 2's diff below): that
 reads **false** against E5's claim-truth test by design, so an
 in-scope reviewer-feedback PATH A item can Accept and cite the commit,
 skipping E9, instead of wrongly Rejecting.
@@ -291,14 +291,15 @@ surviving claimed worktree:
    external rewrite).
 2. `git merge-base --is-ancestor "$PR_HEAD" HEAD` — failure (rewrite,
    diverged worktree): stop and ask, never fall through to edge case 1.
-3. `git status --porcelain` must be clean — dirty can't prove which
-   lines belong to which item: stop and ask, never guess.
+3. `git status --porcelain` must be clean — dirty can't attribute
+   lines to items: stop and ask, never guess.
 4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff (edge case 1
-   covers it too). After E3, hand it to
-   `idd-review-fix-lite.instructions.md` (E10, not E12) to validate and
-   push before branch-sync, even with zero Accepted items — a cold
-   session can't know if E10's critique already ran; fail-closed
-   default governs.
+   covers it too); it reaches
+   `idd-review-fix-lite.instructions.md`'s E10-E12 to validate and push
+   before branch-sync, even with zero Accepted items. **E3 empty**:
+   resume at E10, not E12 — a cold session can't know if E10's critique
+   already ran; fail-closed default governs. **E3 non-empty**: complete
+   E4-E9 first, then E10-E12 for the diff.
 
 Clean worktree, no local-ahead commits: E3's routing applies unchanged.
 A fresh or lost worktree falls back to edge case 1 instead, re-triaged
