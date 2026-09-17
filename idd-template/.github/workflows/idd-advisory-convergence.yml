@@ -571,7 +571,26 @@ jobs:
           # Read the PR files REST endpoint directly instead, which
           # reports both `filename` and (when present) `previous_filename`
           # for a renamed entry.
+          # kurone-kito/idd-skill#3104: this raw `gh api` call always
+          # targeted `github.com` regardless of the runner's actual host --
+          # `GH_ENTERPRISE_TOKEN` above only covers auth, not host
+          # targeting. Mirror `gh-exec.mts`'s `resolveGhApiHostname` (#1962)
+          # in shell: respect an already-set `GH_HOST`; otherwise derive the
+          # host from the Actions-provided `GITHUB_SERVER_URL`, and only
+          # pass `--hostname` when that host is non-empty and not
+          # `github.com`, so this repository's own GitHub.com-hosted runs
+          # keep their existing argv unchanged.
+          GH_API_HOSTNAME_ARGS=()
+          if [ -z "${GH_HOST:-}" ]; then
+            SERVER_HOST=$(printf '%s' "$GITHUB_SERVER_URL" \
+              | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/+$##' \
+              | tr '[:upper:]' '[:lower:]')
+            if [ -n "$SERVER_HOST" ] && [ "$SERVER_HOST" != "github.com" ]; then
+              GH_API_HOSTNAME_ARGS=(--hostname "$SERVER_HOST")
+            fi
+          fi
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" \
+            "${GH_API_HOSTNAME_ARGS[@]}" \
             --paginate --jq '.[] | .filename, (.previous_filename // empty)')
           TOUCHED=false
           for FILE in "${ALLOWLIST[@]}"; do

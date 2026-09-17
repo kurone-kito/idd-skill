@@ -143,6 +143,139 @@ test('ghText throws ENOBUFS on output exceeding the default 1 MiB buffer, but su
   }
 });
 
+test('ghText adds --hostname immediately after the api subcommand on a GHES GITHUB_SERVER_URL, and never on github.com (#3104)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghText(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      '--hostname',
+      'ghes.example.com',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://github.com' }, () => {
+      ghText(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghText inserts --hostname before a --method flag that precedes the endpoint, without splitting --method from its value (CodeRabbit critique delegate finding, #3104)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    // Mirrors disposition-non-review-notices.mts's postDisposition, whose
+    // args put --method/POST before the endpoint. A fixed args.slice(0, 2)
+    // insertion -- assuming args[1] is always the endpoint, as ghApiJson/
+    // ghGraphql's own callers guarantee but a ghText caller's raw args do
+    // not -- would land --hostname between --method and its own POST
+    // value here instead (Copilot review, PR #3108).
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghText([
+        'api',
+        '--method',
+        'POST',
+        'repos/o/r/issues/1/comments',
+        '--input',
+        '-',
+      ]);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      '--hostname',
+      'ghes.example.com',
+      '--method',
+      'POST',
+      'repos/o/r/issues/1/comments',
+      '--input',
+      '-',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghText never adds --hostname for a non-api subcommand, even on a GHES GITHUB_SERVER_URL (#3104)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('ok');
+`);
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghText(['repo', 'view', '--json', 'name']);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'repo',
+      'view',
+      '--json',
+      'name',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghText never adds a second --hostname when the caller already spliced its own resolved value (#3104)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghText([
+        'api',
+        'graphql',
+        '--hostname',
+        'ghes.example.com',
+        '-f',
+        'query=query { viewer { login } }',
+      ]);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'graphql',
+      '--hostname',
+      'ghes.example.com',
+      '-f',
+      'query=query { viewer { login } }',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('ghTextUnbounded reads a response far larger than any fixed maxBuffer guess, via a temp file (#2935 review, rounds 4-6)', () => {
   // 40 MiB: bigger than ghText's default 1 MiB AND bigger than every
   // fixed maxBuffer this codebase tried and had second-guessed away
