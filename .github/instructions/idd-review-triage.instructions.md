@@ -229,9 +229,9 @@ reviewer feedback:
   gate structurally — instead post the hold comment stating you will
   **not** merge until the decision appears, and stop. Either way, wait
   for the response in a future E1 pass (see the transitions below).
-- **When an `Awaiting maintainer decision` thread re-appears in ReviewItems_snapshot**:
+- **When an `Awaiting maintainer decision` item re-appears in ReviewItems_snapshot**:
   scan the activity universe for a **qualifying response** — a reply on
-  this thread, or a separate comment/review that clearly references
+  this item, or a separate comment/review that clearly references
   this item — from a **qualifying person** (any CODEOWNER, required
   reviewer, or a collaborator with Write/Maintain/Admin access per
   `GET /repos/{owner}/{repo}/collaborators/{username}/permission`),
@@ -257,6 +257,9 @@ reviewer feedback:
     maintainer's separate comment** (e.g., "Decision mirrored to the
     review thread — {link}") so that F2's unreplied-comments gate does
     not block merge on that comment.
+  - **No thread (regular-comment AMD)**: apply the same
+    agree/disagree logic via a reply on the original comment; skip
+    every "resolve the thread" step above.
 - For a `CHANGES_REQUESTED` review body you are rejecting: post a PR
   comment explaining your reasoning and ask the reviewer to reconsider.
   - If the reviewer does not respond and the state does not change: post
