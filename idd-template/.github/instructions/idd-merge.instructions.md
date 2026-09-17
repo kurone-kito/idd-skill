@@ -541,8 +541,9 @@ Before any mutating action in F3, apply the
    `{agent-id}` / `{claim-id}` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))
    to release the claim now that cleanup is complete (`#2220`). If
-   either re-validation finds a different `{claim-id}`, stop that
-   mutation — another session already took over.
+   either re-validation finds anything other than your `{claim-id}`
+   — including no active claim — stop that mutation: the claim was
+   lost.
 
 ## F5 — Loop
 
