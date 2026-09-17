@@ -51,8 +51,8 @@ GitHub side effect, confirm all of the following:
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
    --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
    the package-manager-profile `idd:claim-lock` command with the same
-   arguments, or the ephemeral-npx equivalent — resolve the exact
-   command from `docs/idd-helper-scripts.md` if unsure). A `collision` result is
+   arguments, or the ephemeral-npx equivalent (see
+   `docs/idd-helper-scripts.md`). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
    `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
    and require `present: true` with no `malformed`; otherwise recover
@@ -273,8 +273,8 @@ E13 `**Accepted** — fixed in` reply with no reviewer reply/reopen
 since → skip reclassification, straight to E14. Otherwise
 Step 3/E4-E8 decide as usual, flagging whether a commit newer than the
 item's timestamp touches its anchored path(s) (thread `path` or a
-regular comment's file) and fixes it (a lost E12 push, or edge case
-2's diff below): that reads **false** against
+file named in a regular comment's context) and fixes it (a lost
+E12 push, or edge case 2's diff below): that reads **false** against
 E5's claim-truth test by design, so an in-scope reviewer-feedback
 PATH A item can Accept and cite the commit (path-touch and cap
 included) — E9 skipped, E13 still cites it — rather than wrongly
