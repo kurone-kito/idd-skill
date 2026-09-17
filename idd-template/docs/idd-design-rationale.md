@@ -50,8 +50,9 @@ Three guards keep it safe:
 - **At most once per pass.** A0-O runs at most once as the
   roadmap-first fallback per Discover pass. Once spent (via trigger
   (a), (b), (c), or (d)), any later A4 Step 1 / Step 1.5 exhaustion —
-  reachable only after trigger (b) — reports and stops (not an abort)
-  without re-entering A0-O. A **trigger (a)** or **trigger (c)** A0-O
+  reachable after trigger (b) or (d), once either one's own A0-O run
+  yields orphan candidates that later fail A4 — reports and stops (not
+  an abort) without re-entering A0-O. A **trigger (a)** or **trigger (c)** A0-O
   run that finds no orphan routes to the A3 decision tree (both paths
   genuinely empty); a **trigger (b)** or **trigger (d)** one reports
   and stops instead — (b) because roadmap candidates reached A4, an

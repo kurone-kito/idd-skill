@@ -101,11 +101,15 @@ outside the selected roadmap graph.
   `idd-discover.instructions.md` A1 roadmap-selection path — never
   A0-T's own scoped A1.5 invocation, which already governs its own
   outcome unconditionally and with no fallback (see A0-T step 2) —
-  **and** `issue-scope` is `roadmap-first`, release the roadmap-audit
-  claim per the claim-release rule below, then fall back to A0-O
-  instead of stopping. The blocked roadmap's own children are not
-  orphan candidates, so this fallback can only ever surface unrelated
-  orphan issues.
+  **and** `issue-scope` is `roadmap-first`, fall back to A0-O instead
+  of stopping, excluding this roadmap's already-fetched descendant set
+  (an execution leaf carries no marker distinguishing it from a true
+  orphan) from the orphan candidate pool before A3.5. This bullet's own
+  behavior needs no claim, so most runs reach A0-O with nothing to
+  release; only if this session already holds the roadmap-audit claim
+  (for example from an earlier bullet's side effect on this same run),
+  release it per the claim-release rule below first — never release a
+  claim this session does not itself hold.
 - If any referenced child or descendant issue is open, inaccessible, or
   unresolved, report the provenance path and reason, then continue to
   A2, unless the open descendant is a nested roadmap with at least one
@@ -240,11 +244,15 @@ Apply one outcome:
   **Roadmap-first fallback (trigger (d)):** the same fallback as the
   blocked-label check above applies here too, under the same two
   conditions (normal A1 path, never A0-T's own scoped invocation; and
-  `issue-scope: roadmap-first`) — release the roadmap-audit claim per
-  the claim-release rule below, then fall back to A0-O instead of
-  stopping. This roadmap's own children still need human input first,
-  so the fallback still reaches only unrelated orphan issues, never
-  this roadmap's own children.
+  `issue-scope: roadmap-first`) — release the roadmap-audit claim
+  (already held here, unlike the blocked-label check, since posting
+  this outcome's own comment/label already required it) per the
+  claim-release rule below, then fall back to A0-O instead of stopping,
+  excluding this roadmap's already-fetched descendant set from the
+  orphan candidate pool before A3.5, the same way the blocked-label
+  check does. This roadmap's own children still need human input
+  first, so the fallback still reaches only unrelated orphan issues,
+  never this roadmap's own children.
 
 **Child issue split.** A further roadmap-currency trigger, orthogonal to
 the three outcomes above: when a child issue is split into two or more

@@ -105,7 +105,7 @@ routing:
      candidates exactly as in the normal roadmap path — no
      stop-without-fallback applies at this filtering step. This
      graph-scoped continuation excludes **A0**'s own A0-O
-     orphan-fallback triggers (a)/(b)/(c) throughout: an empty or
+     orphan-fallback triggers (a)/(b)/(c)/(d) throughout: an empty or
      fully-discarded scoped set ends the run the same way A0-T's other
      failure branches do — report and stop.
    - Rank the survivors down to a single highest-suitability open
@@ -171,7 +171,7 @@ search.
 When A0-O runs as the `roadmap-first` fallback, every exit below that
 would re-enter **A1** or reach the **A3 decision tree** is redirected by
 the invoking trigger instead — (a)/(c) to the A3 decision tree, (b) (A4
-exhaustion) to the A4 **"report and stop"** terminal, (d) to A1.5's own
+exhaustion) to the A4 **"report and stop"** terminal, (d) to A1.5's
 stop — since A1 already ran and must not be re-entered (no A1 ↔ A0-O or
 A4 ↔ A0-O loop).
 
