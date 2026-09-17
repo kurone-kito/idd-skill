@@ -521,11 +521,31 @@ const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provide
 //
 // Any other shape falls through unchanged to the ordinary unsafe-directive
 // match, exactly like the original ambiguous-determiner branch already did.
+//
+// Round 6 (Copilot, PR #3087): two bugs in this anchor's own definition,
+// not the enumeration class rounds 1-4 replaced. (a) The punctuation
+// alternative allowed zero whitespace after `.`/`?`/`!`
+// (`copied-script.Please run ...`), unlike the forward
+// `isUnsafeDirectiveSentenceEnd` this mirrors, which already requires
+// whitespace there -- tightened to `\s+` (which already covers `\r`/`\n`,
+// so the separate `\r?\n?` is redundant and dropped). (b)
+// REPO_OWNED_VALIDATION_WINDOW is tested against `window`, but
+// `sliceUnsafeDirectiveWindow` returns an unmarked, exactly
+// UNSAFE_DIRECTIVE_WINDOW_CHARS-long truncation when it finds no
+// sentence/blank-line boundary within that span -- whitespace padding
+// could then push real content (e.g. "from the issue body") past the cut,
+// hidden from this guard. `window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS`
+// is a sound completeness check without changing that shared #2146
+// helper: every other exit from `sliceUnsafeDirectiveWindow` (a genuine
+// boundary found, or the corpus simply ending) already returns a shorter
+// string; only the true truncation case returns exactly the full length.
+// See the guard's own use of this invariant in
+// findUnsafeExecutionDirectiveMatch below.
 const REPO_OWNED_VALIDATION_VERB = 'run';
 const REPO_OWNED_VALIDATION_WINDOW =
   /^\s*(?:this|that)\s+(?:full|complete|validation|config|configuration)\s+(?:command|script)\s+to\s+(?:validate|verify|check|confirm)\s+(?:the\s+)?(?:configuration|config|setup|settings)\s*$/i;
 const REPO_OWNED_VALIDATION_SENTENCE_START =
-  /(?:^|[.!?]\s*\r?\n?\s*|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
+  /(?:^|[.!?]\s+|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
@@ -1978,18 +1998,23 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
-      // #3073 round 4-5: the repository-owned-validation exception is now
+      // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
-      // template, the verb itself must be REPO_OWNED_VALIDATION_VERB
-      // (round 5: every other unsafe verb stays classified as unsafe),
-      // AND the verb's own preceding text, from the body's own start only
-      // (never the issue title), must be nothing but a sentence/paragraph
+      // template, the window itself must be known-complete (round 6: a
+      // window exactly UNSAFE_DIRECTIVE_WINDOW_CHARS long means
+      // sliceUnsafeDirectiveWindow hit its truncation limit with no
+      // boundary found, so later content could be hidden past the cut),
+      // the verb itself must be REPO_OWNED_VALIDATION_VERB (round 5:
+      // every other unsafe verb stays classified as unsafe), AND the
+      // verb's own preceding text, from the body's own start only (never
+      // the issue title), must be nothing but a sentence/paragraph
       // boundary plus an optional "Please ".
       if (
         targetMatch &&
         !(
           verbText.toLowerCase() === REPO_OWNED_VALIDATION_VERB &&
+          window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
           REPO_OWNED_VALIDATION_WINDOW.test(window) &&
           verbStart >= bodyOffset &&
           REPO_OWNED_VALIDATION_SENTENCE_START.test(
