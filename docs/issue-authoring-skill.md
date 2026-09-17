@@ -2110,6 +2110,18 @@ That same request also authorizes removing the authoring label (see
 ready issue set under the hold does not by itself authorize the agent
 to move into Discover or Claim.
 
+This is the approval-authority section, so it is also where an
+orchestrator and delegated-worker split needs stating explicitly:
+under such a split, the release action itself must be performed by
+whichever party directly holds the user's verified hold-release
+request, never relayed as a claim for the other party to trust. This
+mirrors how Discover and Claim already stay the orchestrator's own
+job under `docs/idd-workflow.md`'s Orchestrator fan-out variant. A
+delegated worker that receives only a relayed release claim must
+refuse it and require the party holding the actual request to act
+directly, even when that party is its own orchestrator (observed
+2026-09-17, kurone-kito/idd-skill#3102).
+
 ## Non-goals
 
 This document does not define:
