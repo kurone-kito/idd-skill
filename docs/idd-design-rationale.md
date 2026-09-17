@@ -1179,6 +1179,24 @@ kurone-kito/idd-skill#1377 is why
 `404` on these reads exactly like a `403` unless the repository opts
 out via `ciGate.trustEmptyProtectionReads: true`.
 
+### Rulesets-API write-side 404 for `gh`-CLI-default-OAuth-App tokens
+
+kurone-kito/idd-skill#3080 (2026-09-17) recorded a separate,
+write-side finding from the read-side ambiguity documented above:
+`PATCH /repos/{owner}/{repo}/rulesets/{id}` can 404 for a
+`gh`-CLI-default-OAuth-App-authenticated token even with confirmed
+`admin: true` permission and a successful `GET` on the identical
+resource immediately before the `PATCH`. The classic
+`PUT /repos/{owner}/{repo}/branches/{branch}/protection` endpoint
+remains a working fallback for the equivalent write with the same
+token. This was observed specifically with the `gh` CLI's default
+OAuth App token; whether a fine-grained PAT or a GitHub App
+installation token behaves differently was not tested, and is left as
+an open question rather than asserted either way. idd-skill ships no
+helper or documented procedure that writes a ruleset via the REST API
+today, so this is a defensive documentation note rather than a
+functional gap.
+
 ## Pre-merge
 
 ### The non-advisory pre-merge dimensions are model-attested, not GitHub-side enforced
