@@ -273,12 +273,12 @@ E13 `**Accepted** — fixed in` reply with no reviewer reply/reopen
 since → skip reclassification, straight to E14. Otherwise
 Step 3/E4-E8 decide as usual, flagging whether a commit newer than the
 item's timestamp touches its anchored path(s) (thread `path` or a
-file named in a regular comment's context) and fixes it (a lost
-E12 push, or edge case 2's diff below): that reads **false** against
+file named in a regular comment's context) and fixes it (a lost E12
+push, or edge case 2's diff below): a match reads **false** against
 E5's claim-truth test by design, so an in-scope reviewer-feedback
-PATH A item can Accept and cite the commit (path-touch and cap
-included) — E9 skipped, E13 still cites it — rather than wrongly
-Rejecting.
+PATH A item can Accept, not wrongly Reject, and cite it (cap
+included) — E9 skipped, E13 still cites it. No match: never coverage,
+normal handling applies.
 
 **Edge case 2 — an E9 fix committed but not pushed.** GitHub can't see
 this; an empty E3 alone isn't proof nothing needs recovery (F2
