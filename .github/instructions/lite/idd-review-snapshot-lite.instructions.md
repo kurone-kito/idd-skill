@@ -299,8 +299,9 @@ surviving claimed worktree:
    `idd-review-fix-lite.instructions.md`'s E10-E12 to validate and push
    before branch-sync, even with zero Accepted items. **E3 empty**:
    resume at E10, not E12 — a cold session can't know if E10's critique
-   already ran; fail-closed default governs. **E3 non-empty**: complete
-   E4-E9 first, then E10-E12 for the diff.
+   already ran; fail-closed default governs. **E3 non-empty**: hand off
+   E4-E8 to the stronger triage session, then run E9 and E10-E12 for
+   the diff.
 
 Clean worktree, no local-ahead commits: E3's routing applies unchanged.
 A fresh or lost worktree falls back to edge case 1 instead, re-triaged
