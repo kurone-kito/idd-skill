@@ -260,31 +260,30 @@ follow the note here either.
 
 ## Cold-start ReviewItems_snapshot reconstruction
 
-Read this entering E4/E9 without this episode's E1-E3
-ReviewItems_snapshot (lost/restarted session, or mid-review delegation
-hand-off).
+Read this entering E4/E9 without this episode's ReviewItems_snapshot
+(lost/restarted session, or mid-review delegation hand-off).
 
 **Procedure**: rerun Step 1-3 (Step 2 already posts the watermark —
 never a second one), then edge case 2's steps 1-3 unconditionally
-before E3, then E2, E3. Only when E3 is non-empty, hand off E4-E8 in
-full before E9. An edge-case-1 item routed to E14 runs E14 after edge
+before E3, then E2, E3. Only when E3 is non-empty, hand off E4-E8
+fully before E9. An edge-case-1 item routed to E14 runs E14 after edge
 case 2's own push (if any, targeting post-push HEAD), before
 branch-sync.
 
 **Edge case 1 — item with no completed disposition.** Covers a lost
 session mid-classification, a landed-but-unreplied E12 push, or a
-`CHANGES_REQUESTED` body missing only its E14 request. Already carries
-an E13 `**Accepted** — fixed in` reply with no reviewer reply/reopen
+`CHANGES_REQUESTED` body missing only its E14 request. Already has an
+E13 `**Accepted** — fixed in` reply with no reviewer reply/reopen
 since → skip reclassification, straight to E14. Otherwise
 Step 3/E4-E8 decide as usual, flagging whether a commit newer than the
 item's timestamp fixes it (a lost E12 push, or edge case 2's diff
 below): that reads **false** against E5's claim-truth test by design,
 so an in-scope reviewer-feedback PATH A item can Accept and cite the
-commit (cap included) — E9 skipped, E13 still cites it — rather than
-wrongly Rejecting.
+commit — E9 skipped, E13 still cites it — rather than wrongly
+Rejecting.
 
 **Edge case 2 — an E9 fix committed but not pushed.** GitHub can't see
-this; an empty E3 result alone isn't proof nothing needs recovery (F2
+this; an empty E3 alone isn't proof nothing needs recovery (F2
 resets the worktree before merge). Run unconditionally in the same
 surviving claimed worktree:
 
@@ -295,14 +294,14 @@ surviving claimed worktree:
 3. `git status --porcelain` must be clean — dirty can't attribute
    lines to items: stop and ask, never guess.
 4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff (edge case 1
-   covers it too); it reaches
-   `idd-review-fix-lite.instructions.md`'s E10-E12 to validate and push
-   before branch-sync, even with zero Accepted items. **E3 empty**:
-   resume at E10, not E12 — a cold session can't know if E10's critique
-   already ran; fail-closed default governs. **E3 non-empty**: hand off
-   E4-E8 to the stronger triage session, then run E9 and E10-E12 for
-   the diff.
+   covers it too) and hand it to the standard
+   `idd-review-fix.instructions.md`: E10-E12 validate and push before
+   branch-sync either way, even with zero Accepted items. **E3
+   empty**: resume there at E10, not E12 (a cold session can't know if
+   E10's critique already ran; fail-closed governs). **E3 non-empty**:
+   hand off E4-E8 first; that flow runs E9 only when Accepted PATH A
+   items remain (E8's skip), then E10-E12.
 
-Clean worktree, no local-ahead commits: E3's routing applies unchanged.
-A fresh or lost worktree falls back to edge case 1 instead, re-triaged
-from scratch.
+Clean worktree, no local-ahead commits: E3's routing applies unchanged;
+a fresh or lost worktree falls back to edge case 1, re-triaged from
+scratch.
