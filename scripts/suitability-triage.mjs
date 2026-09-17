@@ -307,6 +307,28 @@ const SUPPLIED_CONTENT_OBJECT_FILLER = String.raw`(?:(?!\b(?:${SUPPLIED_CONTENT_
 const SUPPLIED_CONTENT_REFERENCE = String.raw`${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER}\s+(?:\S+\s+){0,2}?[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
 const SUPPLIED_CONTENT_OBJECT_REFERENCE = String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+${SUPPLIED_CONTENT_OBJECT_FILLER}[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
 const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
+// #3073: "run this full command to validate the config" matches only
+// SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
+// above -- the filler word here is a repository-scoping adjective, not an
+// untrusted-origin signal, so the sentence is repository-owned validation
+// prose rather than a directive to act on supplied content. Recognize this
+// narrow shape (the same anchored "this/that" object reference, but with the
+// filler restricted to a small fixed set of repository-scoping adjectives)
+// as a non-match, but only when the same post-verb window carries none of
+// the untrusted-origin vocabulary already used by this pattern's own strong
+// branch above -- a mixed phrase such as "this full, pasted command" must
+// still fail. Every other branch (the strong untrusted-origin branch, and
+// the ambiguous branch for any other filler word) is unchanged.
+const REPO_OWNED_VALIDATION_FILLER =
+  '(?:full|complete|validation|config|configuration)';
+const REPO_OWNED_VALIDATION_OBJECT_REFERENCE = new RegExp(
+  String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+${REPO_OWNED_VALIDATION_FILLER}\s+[\x60'"]?${SUPPLIED_CONTENT_NOUN}`,
+  'i',
+);
+const UNTRUSTED_ORIGIN_SIGNAL = new RegExp(
+  String.raw`\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER})\b`,
+  'i',
+);
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
@@ -1672,7 +1694,10 @@ function isVerbWhollyInBodyCode(
 // #2146: new skip rules on this screen only. Do not copy
 // findPolicyOverrideMatch — its raw fallback still fires when the whole
 // match is not inside one code range, which is exactly the #1911
-// false-positive (code-wrapped verb + later visible noun).
+// false-positive (code-wrapped verb + later visible noun). #3073: a target
+// match is also discarded (not returned) when it is a repository-owned
+// validation/configuration directive per REPO_OWNED_VALIDATION_OBJECT_REFERENCE
+// -- see that constant's own comment above.
 function findUnsafeExecutionDirectiveMatch(
   corpus,
   bodyOffset,
@@ -1702,7 +1727,13 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
-      if (targetMatch) {
+      if (
+        targetMatch &&
+        !(
+          REPO_OWNED_VALIDATION_OBJECT_REFERENCE.test(window) &&
+          !UNTRUSTED_ORIGIN_SIGNAL.test(window)
+        )
+      ) {
         const targetStart = targetMatch.index ?? 0;
         const targetText = targetMatch[0] ?? '';
         return corpus.slice(
