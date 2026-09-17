@@ -204,6 +204,22 @@ layered on top of the distributed IDD defaults:
   fire-and-forget contract, an operator or remote/cloud agent without
   that binary on `PATH` gets a silent no-op, the same as leaving the
   hook unconfigured, rather than a failure.
+- **Gist-retrospective field-feedback label**: this repository applies
+  the `feedback:idd-core` label to every "IDD loop field-feedback
+  intake" gist-retrospective roadmap (title beginning with `roadmap:
+  IDD loop field-feedback intake`) and every child issue linked from
+  its `## Tracks` list, at authoring time alongside the normal
+  `status:authoring` hold label. The label is visibility-only -- it
+  lets a maintainer find and review these issues with extra scrutiny,
+  since they originate from second-hand narrative gist material about
+  another repository rather than a locally reproduced observation --
+  and it must never gate Discover, Claim, or any other autopilot
+  phase. It is a distinct axis from the adopter-side
+  `status:upstream-candidate` label (roadmap `#2700`): that label
+  stays local to each adopter repository and is never applied in
+  `kurone-kito/idd-skill` itself; `feedback:idd-core` is the
+  source-repo-side counterpart applied once the maintainer has already
+  decided to report the observed problem here.
 
 ## Branch strategy
 
