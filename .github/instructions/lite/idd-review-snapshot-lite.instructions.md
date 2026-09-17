@@ -298,8 +298,9 @@ surviving claimed worktree:
    covers it too); it still needs E10-E12 to validate and push before
    branch-sync. **E3 empty**: resume at E10, not E12 (a cold session
    can't know if E10's critique already ran; fail-closed governs).
-   **E3 non-empty**: hand off E4-E8 first; the receiving triage flow's
-   own E8 decides E9, then E10-E12 for the diff.
+   **E3 non-empty**: hand off E4-E8 first; the receiving flow's own E8
+   decides E9, but E10-E12 for the diff still runs even if E8 accepts
+   zero items.
 
 Clean worktree, no local-ahead commits: E3's routing applies unchanged;
 a fresh or lost worktree falls back to edge case 1, re-triaged from
