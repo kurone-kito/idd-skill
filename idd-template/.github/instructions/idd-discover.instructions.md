@@ -358,21 +358,18 @@ Report every A2 execution candidate with its provenance paths (e.g.
 references, and unresolvable references before passing to A3.
 
 **Autopilot cross-roadmap union (optional, additive).** When A1 elected
-the cross-roadmap mode, enumerate from **each** open roadmap root and
-take the **union** of open execution leaves, de-duplicating a leaf
-reached from several roots. Rank by autopilot-suitability
-**descending**, tie-broken by issue number **ascending**, using the
-same scored-vs-unscored floor tie-breaker as A4 Step 2. The
-`discover-roadmap-graph` helper's `--all-roadmaps` mode produces exactly
-this ranked union (see `docs/idd-helper-scripts.md`). The score is an
-advisory ranking hint only — A3/A4/A4.5/A5 still run on the selected
-candidate.
-
-**Per-root completion audit.** Once per `--all-roadmaps`
-re-enumeration, audit each root via A1.5. `ready: true` routes it
-through A1.5's own close steps (it contributes zero leaves anyway); a
-blocked-by-human or needs-decision label drops its leaves from this pass;
-any A1.5 outcome that continues to A2 still unions the root.
+the cross-roadmap mode, take the de-duplicated **union** of open
+execution leaves from **each** open root (`sourceRoots` provenance).
+`--all-roadmaps` emits only this **raw** ranked union; it does not run
+A1.5. Once per `--all-roadmaps` re-enumeration, audit each root via
+A1.5 **before** adding its leaves (re-enumerate after close/link). Drop
+a root only when **that root** has a blocked-by-human or needs-decision
+label; omit a leaf whose `sourceRoots` are all dropped. Per-root
+human-gate or non-autonomous-gap drops that root only (no A1.5
+early-stop / trigger (d)). Close only after A1.5's written checks, not
+helper `ready: true`. Any other A1.5 outcome that continues to A2 still
+unions that root. Then rank as in A4 Step 2. Score is advisory —
+A3/A4/A4.5/A5 still run on the selected candidate.
 
 ## A3 — Filter to ready-to-start
 
