@@ -270,12 +270,13 @@ branch-sync.
 session mid-classification, a landed-but-unreplied E12 push, or a
 `CHANGES_REQUESTED` body missing only its E14 request. Already carries
 an E13 `**Accepted** — fixed in` reply with no reviewer reply/reopen
-since → skip reclassification, hand off straight to E14. Otherwise
-Step 3/E4-E8 decide as usual, flagging whether a newer branch commit
-fixes it (a lost E12 push, or edge case 2's diff below): that
-reads **false** against E5's claim-truth test by design, so an
-in-scope reviewer-feedback PATH A item can Accept and cite the commit,
-skipping E9, instead of wrongly Rejecting.
+since → skip reclassification, straight to E14. Otherwise
+Step 3/E4-E8 decide as usual, flagging whether a commit newer than the
+item's timestamp fixes it (a lost E12 push, or edge case 2's diff
+below): that reads **false** against E5's claim-truth test by design,
+so an in-scope reviewer-feedback PATH A item can Accept and cite the
+commit — E9 skipped, E13 still cites it — rather than wrongly
+Rejecting.
 
 **Edge case 2 — an E9 fix committed but not pushed.** GitHub can't see
 this; an empty E3 result alone isn't proof nothing needs recovery (F2

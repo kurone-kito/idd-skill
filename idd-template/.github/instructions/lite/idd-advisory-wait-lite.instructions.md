@@ -145,11 +145,10 @@ duplicated here).
 3. If `earliestSameHeadAt` is now empty, stop and ask (see
    Stop-and-ask conditions).
 4. If `outcome` is now `SATISFIED`, exit this wait and continue. The
-   helper already folds the `pendingWindowMinutes` /
-   `settledWindowMinutes` elapsed-window check into `outcome` on every
-   call, including the stalled/rate-limited case where the primary bot
-   never reviews this HEAD — never re-derive that decision by hand from
-   the raw window values.
+   helper already folds `pendingWindowMinutes`/`settledWindowMinutes`
+   into `outcome` on every call, including the stalled/rate-limited
+   case — never re-derive that decision by hand from raw window
+   values.
 5. Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
    keep polling.
 
