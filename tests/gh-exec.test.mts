@@ -188,9 +188,11 @@ process.stdout.write('{}');
 `);
   try {
     // Mirrors disposition-non-review-notices.mts's postDisposition, whose
-    // args put --method/POST before the endpoint -- a fixed-offset
-    // insertion (e.g. right after the endpoint) would land --hostname
-    // between --method and its own value instead.
+    // args put --method/POST before the endpoint. A fixed args.slice(0, 2)
+    // insertion -- assuming args[1] is always the endpoint, as ghApiJson/
+    // ghGraphql's own callers guarantee but a ghText caller's raw args do
+    // not -- would land --hostname between --method and its own POST
+    // value here instead (Copilot review, PR #3108).
     withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
       ghText([
         'api',
