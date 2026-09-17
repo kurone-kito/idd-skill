@@ -229,9 +229,9 @@ reviewer feedback:
   gate structurally — instead post the hold comment stating you will
   **not** merge until the decision appears, and stop. Either way, wait
   for the response in a future E1 pass (see the transitions below).
-- **When an `Awaiting maintainer decision` thread re-appears in ReviewItems_snapshot**:
+- **When an `Awaiting maintainer decision` item re-appears in ReviewItems_snapshot**:
   scan the activity universe for a **qualifying response** — a reply on
-  this thread, or a separate comment/review that clearly references
+  this item, or a separate comment/review that clearly references
   this item — from a **qualifying person** (any CODEOWNER, required
   reviewer, or a collaborator with Write/Maintain/Admin access per
   `GET /repos/{owner}/{repo}/collaborators/{username}/permission`),
@@ -257,6 +257,9 @@ reviewer feedback:
     maintainer's separate comment** (e.g., "Decision mirrored to the
     review thread — {link}") so that F2's unreplied-comments gate does
     not block merge on that comment.
+  - **No thread (regular-comment AMD)**: apply the same
+    agree/disagree logic in a new comment naming it (no reply
+    endpoint exists); skip every "resolve the thread" step above.
 - For a `CHANGES_REQUESTED` review body you are rejecting: post a PR
   comment explaining your reasoning and ask the reviewer to reconsider.
   - If the reviewer does not respond and the state does not change: post
@@ -368,9 +371,6 @@ review-ack --from-pr <pr-number> --agent-id <id> --timestamp
 ```text
 review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}
 ```
-
-_Worked example_: see
-[rationale](../../docs/idd-design-rationale.md#review-ack-worked-example).
 
 PATH B — Advisory non-review notice (rate-limit / quota / queued / bare
 ack / error, as defined in E4):
@@ -633,10 +633,6 @@ later **ack-only** comment from a trusted advisory bot does not reopen
 the loop — bind the merge to current HEAD and proceed. An **ack-only**
 comment opens no new thread, carries no `CHANGES_REQUESTED`, and raises
 no new finding; anything else re-opens the loop normally.
-
-_Example_: CodeRabbit replies "Thanks for confirming" after your
-`**Rejected**` disposition — no new thread or finding, so continue to
-F-phase on the current HEAD despite the `updatedAt` advance.
 
 **Helper evidence**: when the advisory-bot identity is configured, the
 activity-snapshot / `pre-merge-readiness` evidence emits the structural
