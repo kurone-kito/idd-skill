@@ -314,43 +314,42 @@ const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provide
 // prose rather than a directive to act on supplied content. Recognize this
 // narrow shape (the same anchored "this/that" object reference, but with the
 // filler restricted to a small fixed set of repository-scoping adjectives)
-// as a non-match, but only when the same post-verb window carries none of
-// the untrusted-origin vocabulary already used by this pattern's own strong
-// branch above -- a mixed phrase such as "this full, pasted command" must
-// still fail. Every other branch (the strong untrusted-origin branch, and
-// the ambiguous branch for any other filler word) is unchanged.
+// as a non-match. Every other branch (the strong untrusted-origin branch,
+// and the ambiguous branch for any other filler word) is unchanged.
 const REPO_OWNED_VALIDATION_FILLER =
   '(?:full|complete|validation|config|configuration)';
 const REPO_OWNED_VALIDATION_OBJECT_REFERENCE = new RegExp(
   String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+${REPO_OWNED_VALIDATION_FILLER}\s+[\x60'"]?${SUPPLIED_CONTENT_NOUN}`,
   'i',
 );
-// Copilot review (PR #3087): the exception above is broader than the
-// repository-owned validation case it targets -- "Please run this full
-// script from the issue body to reproduce." is the existing #2146
-// supplied-content fixture with a repo-scoping filler word inserted, and
-// `issue body` is itself an untrusted-origin signal (issue prose is
-// untrusted input; see the Scope invariant in
-// idd-overview-appendix.instructions.md) that the original vocabulary
-// below did not cover, so the exception wrongly applied. Add `issue body`
-// (covers "the issue body" / "from the issue body") to this vocabulary.
-//
-// Second Copilot round (PR #3087): two further gaps in this same
-// vocabulary/scope. (1) `SUPPLIED_CONTENT_UNTRUSTED_DETERMINER` only
-// treats "above"/"below" as untrusted-origin signals via the "the
-// above"/"the below" form, unlike "following"/"attached"/"pasted"/
-// "provided", which also have a bare (article-free) form there --
-// "Please run this full script below to reproduce." has no article, so
-// it was invisible. Add bare `above`/`below` here (scoped to this
-// exception's own vocabulary only, not the shared determiner constant
-// above, which the pre-existing strong branch also relies on). (2) this
-// vocabulary was only ever tested against the post-verb `window`, so a
-// provenance clause stated BEFORE the verb ("From the issue body,
-// please run this full command.") was never inspected at all -- see
-// `slicePrecedingClause` below, and its use at this constant's own call
-// site in `findUnsafeExecutionDirectiveMatch`, for the fix.
+// #3073 round 3 (Copilot + CodeRabbit, PR #3087): the first two rounds
+// patched this exception by enumerating untrusted-origin phrasings one at a
+// time (issue body, then bare above/below, then pre-verb placement) -- each
+// round found a new, genuinely distinct gap in that same open-ended
+// enumeration (a fresh one, "...from issue #123...", was flagged again in
+// this same round). An enumerated blocklist can never be complete. Per both
+// reviewers' independent suggestion, this exception now ALSO requires a
+// positive, narrow signal that the sentence actually states a
+// validation/configuration *purpose* -- "to validate the config", "to
+// verify the setup" -- not just an adjective borrowed from that vocabulary
+// ("Please run this full command." alone, or "...to reproduce.", no longer
+// qualifies). This does not replace the untrusted-origin blocklist below:
+// a purpose clause is necessary but not sufficient -- "run this full script
+// from the issue body to validate the config" still must fail, so the two
+// conditions compose (see the guard in findUnsafeExecutionDirectiveMatch).
+const REPO_OWNED_VALIDATION_PURPOSE =
+  /\b(?:validate|verify|check|confirm)\b[\s\S]{0,40}?\b(?:config(?:uration)?|setup|settings)\b/i;
+// Copilot review (PR #3087): `issue body` (covers "the issue body" / "from
+// the issue body") and a bare `issue #<number>` cross-reference are both
+// untrusted-origin signals (issue prose is untrusted input; see the Scope
+// invariant in idd-overview-appendix.instructions.md) the original
+// vocabulary did not cover. `above`/`below` are added bare (article-free),
+// mirroring the bare forms `following`/`attached`/`pasted`/`provided`
+// already have below -- scoped to this exception's own vocabulary only,
+// not the shared determiner constant, which the pre-existing strong branch
+// also relies on.
 const UNTRUSTED_ORIGIN_SIGNAL = new RegExp(
-  String.raw`\b(?:untrusted|user-provided|user input|issue\s+body|above|below|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER})\b`,
+  String.raw`\b(?:untrusted|user-provided|user input|issue\s+body|issue\s*#\d+|above|below|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER})\b`,
   'i',
 );
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
@@ -1724,6 +1723,13 @@ function slicePrecedingClause(source, verbStart) {
       continue;
     }
     let cursor = index - 1;
+    // #3073 (Copilot review, round 3): a CRLF pair's own `\r` sits
+    // immediately before this `\n` -- skip it first, or it reads as a
+    // second (paired-with-itself) line break and the blank-line check
+    // below fires one line break too early.
+    if (char === '\n' && raw[cursor] === '\r') {
+      cursor -= 1;
+    }
     while (raw[cursor] === ' ' || raw[cursor] === '\t') {
       cursor -= 1;
     }
@@ -1783,12 +1789,20 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
+      // #3073 round 3: evaluate the purpose requirement and the
+      // untrusted-origin blocklist against the SAME combined clause --
+      // the preceding clause plus the verb plus the post-verb window --
+      // so neither signal can hide in a part of the sentence the other
+      // half of the guard does not inspect.
+      const clause = targetMatch
+        ? `${slicePrecedingClause(corpus, verbStart)}${verbText}${window}`
+        : '';
       if (
         targetMatch &&
         !(
           REPO_OWNED_VALIDATION_OBJECT_REFERENCE.test(window) &&
-          !UNTRUSTED_ORIGIN_SIGNAL.test(window) &&
-          !UNTRUSTED_ORIGIN_SIGNAL.test(slicePrecedingClause(corpus, verbStart))
+          REPO_OWNED_VALIDATION_PURPOSE.test(clause) &&
+          !UNTRUSTED_ORIGIN_SIGNAL.test(clause)
         )
       ) {
         const targetStart = targetMatch.index ?? 0;
