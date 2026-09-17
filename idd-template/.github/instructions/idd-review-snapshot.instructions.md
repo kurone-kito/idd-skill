@@ -123,9 +123,8 @@ no-code-fence note.
   pass observed during this E1 snapshot (or `none`). F2 uses this to
   detect a new CI pass that completed after the snapshot fetch.
 - **E1 execution marker**: the GitHub-assigned `createdAt` of this
-  comment (set server-side). Used only to verify the watermark is
-  recent; activity and CI freshness are tracked via the data fields
-  above.
+  comment (set server-side), used only to verify watermark recency —
+  activity/CI freshness track via the data fields above.
 
 Use server-reported timestamps, not the local wall clock.
 
@@ -158,9 +157,9 @@ ignore them and rerun E1 under the successor claim.
 
 **Hide superseded same-claim watermarks.** After the new watermark is
 verified on GitHub, minimize every strictly older trusted **same-claim**
-`review-watermark`/`review-baseline` comment as `OUTDATED` (cuts F4
-backlog and review-page noise). Find candidate subject IDs (older
-trusted same-claim watermarks), then call:
+`review-watermark`/`review-baseline` comment as `OUTDATED`. Find
+candidate subject IDs (older trusted same-claim watermarks), then
+call:
 
 `--subject-ids` needs a GraphQL node id, not a REST numeric id;
 convert with `gh api repos/{owner}/{repo}/issues/comments/{comment_id}
@@ -202,11 +201,10 @@ regardless of maintainer response).
 re-review-requested in a previous E13/E14 pass. **Embedded-finding
 gap (helper-first, optional):** a `COMMENTED`-state review can still
 carry a file/line-cited finding with no thread of its own, in an
-older collapsible body format some bots use (e.g. CodeRabbit's
-"Nitpick comments" / "Outside diff range comments") — a helper that
-parses the embedded findings and compares against the threaded-comment
-count (see `docs/idd-design-rationale.md`) detects this; add one
-PATH B item per uncovered finding.
+older collapsible body format some bots use — a helper that parses
+the embedded findings and compares against the threaded-comment count
+(see `docs/idd-design-rationale.md`) detects this; add one PATH B
+item per uncovered finding.
 
 **Regular comments** where the last speaker isn't any IDD agent and no
 reply from **you** exists after that comment's timestamp, or where the
