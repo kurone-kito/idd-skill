@@ -234,9 +234,9 @@ abort if no roadmap issue exists. Under `roadmap-first` scope, this is
 **Autopilot cross-roadmap mode (optional, additive).** When several
 roadmaps run in parallel and the active autopilot-suitable work may live
 under **sibling** epics, do not commit to a single umbrella here. Instead,
-enumerate the open execution leaves across **all** open roadmap roots and
-rank them by autopilot-suitability (see A2), then carry the top-ranked
-candidate through the normal A3/A4/A4.5/A5 gates. This is additive: the
+enumerate the open execution leaves across **all** open roadmap roots via
+A2's per-root A1.5 audit, then carry the top-ranked candidate through the
+normal A3/A4/A4.5/A5 gates. This is additive: the
 single-root selection above stays the default; orphan-first filtering
 still applies only to true orphans, since cross-roadmap leaves are
 reached via a parent roadmap's task list and never carry their own
@@ -358,17 +358,20 @@ Report every A2 execution candidate with its provenance paths (e.g.
 references, and unresolvable references before passing to A3.
 
 **Autopilot cross-roadmap union (optional, additive).** When A1 elected
-the cross-roadmap mode, enumerate from **each** open roadmap root and
-take the **union** of open execution leaves, de-duplicating a leaf
-reached from several roots (record every source root as provenance;
-never double-count). Rank by autopilot-suitability **descending**,
-tie-broken by issue number **ascending**, using the same
-scored-vs-unscored floor tie-breaker as A4 Step 2. The
-`discover-roadmap-graph` helper's `--all-roadmaps` mode produces exactly
-this ranked union (see
-[IDD helper script evaluation](../../docs/idd-helper-scripts.md)). The
-score is an advisory ranking hint only — A3/A4/A4.5/A5 still run on the
-selected candidate.
+the cross-roadmap mode, take the de-duplicated **union** of open
+execution leaves from **each** open root (`sourceRoots` provenance).
+`--all-roadmaps` emits only this **raw** ranked union; it does not run
+A1.5. Once per `--all-roadmaps` re-enumeration, audit each root via
+A1.5 **before** adding its leaves (re-enumerate after close/link). Drop
+a root that itself has a blocked-by-human or needs-decision label, or
+whose A1.5 outcome is a non-autonomous-gap; descendant blockers still
+continue to A2. Omit a leaf whose `sourceRoots` are all dropped. Do
+not invoke A0-O / trigger (d) for a dropped root; continue auditing
+remaining roots. Close only after A1.5's written checks, not helper
+`ready: true`. Any other A1.5 outcome that continues to A2 still unions
+that root.
+Then rank as in A4 Step 2. Score is advisory — A3/A4/A4.5/A5 still run
+on the selected candidate.
 
 ## A3 — Filter to ready-to-start
 
