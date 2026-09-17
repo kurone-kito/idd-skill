@@ -360,15 +360,19 @@ references, and unresolvable references before passing to A3.
 **Autopilot cross-roadmap union (optional, additive).** When A1 elected
 the cross-roadmap mode, enumerate from **each** open roadmap root and
 take the **union** of open execution leaves, de-duplicating a leaf
-reached from several roots (record every source root as provenance;
-never double-count). Rank by autopilot-suitability **descending**,
-tie-broken by issue number **ascending**, using the same
-scored-vs-unscored floor tie-breaker as A4 Step 2. The
+reached from several roots. Rank by autopilot-suitability
+**descending**, tie-broken by issue number **ascending**, using the
+same scored-vs-unscored floor tie-breaker as A4 Step 2. The
 `discover-roadmap-graph` helper's `--all-roadmaps` mode produces exactly
-this ranked union (see
-[IDD helper script evaluation](../../docs/idd-helper-scripts.md)). The
-score is an advisory ranking hint only — A3/A4/A4.5/A5 still run on the
-selected candidate.
+this ranked union (see `docs/idd-helper-scripts.md`). The score is an
+advisory ranking hint only — A3/A4/A4.5/A5 still run on the selected
+candidate.
+
+**Per-root completion audit.** Once per `--all-roadmaps`
+re-enumeration, audit each root via A1.5. `ready: true` routes it
+through A1.5's own close steps (it contributes zero leaves anyway); a
+`human-gate` blocker drops that root's leaves from this pass only; any
+other blocker leaves it unioned as today.
 
 ## A3 — Filter to ready-to-start
 
