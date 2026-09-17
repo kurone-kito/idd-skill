@@ -625,7 +625,7 @@ set.
 ### High-contention shared files
 
 A small set of files concentrates concurrent autopilot edits and therefore
-conflicts most often: the **F-phase bundle instruction files** (the
+conflicts most often: the **review/merge instruction bundle files** (the
 `bundle-core`, `bundle-review-triage-phase`, `bundle-review-fix-phase`, and
 `bundle-merge-phase` members — `idd-overview-core`,
 `idd-overview-appendix`, `idd-review-snapshot`, `idd-review-triage`,
