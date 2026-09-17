@@ -124,7 +124,7 @@ no-code-fence note.
   detect a new CI pass that completed after the snapshot fetch.
 - **E1 execution marker**: the GitHub-assigned `createdAt` of this
   comment (set server-side), used only to verify watermark recency —
-  activity/CI freshness track via the data fields above.
+  activity/CI freshness are tracked via the data fields above.
 
 Use server-reported timestamps, not the local wall clock.
 
