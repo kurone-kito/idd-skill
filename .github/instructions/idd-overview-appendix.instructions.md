@@ -46,7 +46,8 @@ On abort, re-validate ownership first. If the active claim still uses
 your current `{claim-id}`, update the digest before posting
 `unclaimed-by` so it shows `Phase: aborted/released`, the planned
 release in `Next action`, and the verified claim plus abort reason in
-`Authoritative by`; then post a matching `unclaimed-by` comment. If the
+`Authoritative by`; then post an `unclaimed-by` comment for that same
+`{claim-id}`. If the
 active claim no longer uses your `{claim-id}`, do not update the digest
 or post a release comment, since another session already took over.
 Open PR and remote branch left by a stale or
@@ -152,8 +153,8 @@ local customization).
 
 **What to do.** Author (or extend, via the normal reuse-first checks)
 a local issue through `skills/issue-authoring/` as usual, additionally
-carrying the GitHub label `status:upstream-candidate` and the hidden
-marker
+carrying the GitHub label `status:upstream-candidate` (create it on
+first use) and the hidden marker
 `<!-- idd-skill-upstream-candidate: true -->`.
 
 **What never to do.** Never write to `kurone-kito/idd-skill` or any
@@ -163,9 +164,8 @@ this workflow.
 
 ## Project commands
 
-The Project commands table (`fix-validate`, `pre-push-validate`,
-`post-fix-validate`, `install-deps`, `issue-scope`,
-`orphan-first-policy`) and its override rules live in
+The Project commands table (named in full in
+`idd-overview-core.instructions.md`) and its override rules live in
 [`docs/customization.md` → Project commands reference](../../docs/customization.md#project-commands-reference).
 
 ## Critique pass
@@ -173,8 +173,8 @@ The Project commands table (`fix-validate`, `pre-push-validate`,
 A **critique pass** is an independent review of a plan or diff that
 produces a list of issues with severity, correctness, and coverage
 assessment. For the per-agent invocation table (Copilot / Claude Code /
-Codex CLI / Antigravity CLI (formerly Gemini CLI)) and the optional
-repository-configurable `critiqueLoop.delegate` surface, see
+Codex CLI / Antigravity CLI) and the optional repository-configurable
+`critiqueLoop.delegate` surface, see
 [`docs/idd-workflow.md` → Critique pass invocation](../../docs/idd-workflow.md#critique-pass-invocation).
 For **C1 and E10** (not E2), when helper runtime is enabled, resolve the
 effective delegate with the `idd-critique-delegate` helper documented
