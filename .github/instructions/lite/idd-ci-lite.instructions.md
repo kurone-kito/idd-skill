@@ -180,7 +180,7 @@ to this turn; otherwise wait synchronously. Before a heavy local
 command expected to run long, set an execution-timeout override near
 the tool's ceiling, not its default (`#2933`). Never blindly re-issue
 an already-backgrounded heavy command — check first if it's still
-running. Batch every post-wait
+running, then await or reuse it. Batch every post-wait
 action (disposition, replies, marker, next gate) into one turn. Do not
 insert "is it done yet?" turns. Never end a turn on a future-tense wait
 promise ("I will wait...") with no wait mechanism actually armed — arm
