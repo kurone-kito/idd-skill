@@ -341,9 +341,22 @@ const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provide
 //    the body's start) to the verb, is nothing but a sentence/paragraph
 //    boundary plus an optional "Please " -- see
 //    REPO_OWNED_VALIDATION_SENTENCE_START below.
+// 3. Round 5 (Copilot, PR #3087): the exception above checked only the
+//    text AFTER the verb, so it applied to every verb in
+//    UNSAFE_DIRECTIVE_VERB alike -- "Please install/paste/invoke this
+//    full script to validate the config." bypassed the check even
+//    though those verbs are explicitly unsafe. Restrict the exception
+//    to the verb literally spelled `run` -- the only verb the
+//    reproduced field-feedback case and every accepted regression below
+//    actually uses. This is a deliberate, narrower fail-closed choice,
+//    not an oversight: `execute` reads as an equally plausible
+//    repository-owned-validation verb ("Execute this full script to
+//    verify the setup"), but nothing in the reported case requires
+//    exempting it, so it is left classified as unsafe here.
 //
 // Any other shape falls through unchanged to the ordinary unsafe-directive
 // match, exactly like the original ambiguous-determiner branch already did.
+const REPO_OWNED_VALIDATION_VERB = 'run';
 const REPO_OWNED_VALIDATION_WINDOW =
   /^\s*(?:this|that)\s+(?:full|complete|validation|config|configuration)\s+(?:command|script)\s+to\s+(?:validate|verify|check|confirm)\s+(?:the\s+)?(?:configuration|config|setup|settings)\s*$/i;
 const REPO_OWNED_VALIDATION_SENTENCE_START =
@@ -1747,15 +1760,18 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
-      // #3073 round 4: the repository-owned-validation exception is now a
-      // single fully anchored positive signature (see the constants'
+      // #3073 round 4-5: the repository-owned-validation exception is now
+      // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
-      // template, AND the verb's own preceding text, from the body's own
-      // start only (never the issue title), must be nothing but a
-      // sentence/paragraph boundary plus an optional "Please ".
+      // template, the verb itself must be REPO_OWNED_VALIDATION_VERB
+      // (round 5: every other unsafe verb stays classified as unsafe),
+      // AND the verb's own preceding text, from the body's own start only
+      // (never the issue title), must be nothing but a sentence/paragraph
+      // boundary plus an optional "Please ".
       if (
         targetMatch &&
         !(
+          verbText.toLowerCase() === REPO_OWNED_VALIDATION_VERB &&
           REPO_OWNED_VALIDATION_WINDOW.test(window) &&
           verbStart >= bodyOffset &&
           REPO_OWNED_VALIDATION_SENTENCE_START.test(
