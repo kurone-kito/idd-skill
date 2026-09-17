@@ -427,6 +427,32 @@ export function combineOwnerRepoFlags(args: {
  *
  * Targets the correct GHES host via {@link resolveGhApiHostname} (#1962)
  * instead of always defaulting to `github.com`.
+ *
+ * **Stderr suppression (#3076).** Field feedback (gist round 17) traced an
+ * unexplained raw `gh: Not Found (HTTP 404)` line on `pre-merge-readiness`'s
+ * real stderr/CI-log stream, even on a fully successful run, to this
+ * function: `execFileSync` with no explicit `stdio` sets Node's own
+ * `inheritStderr = !options.stdio` internal flag, which relays the
+ * captured stderr buffer to the real process stderr via
+ * `process.stderr.write(ret.stderr)` after the child exits, regardless of
+ * exit status -- independent of whether the caller goes on to catch and
+ * correctly handle the failure (as every existing `allowStatuses`/404
+ * caller here already does). Passing `stdio: ['ignore', 'pipe', 'pipe']`
+ * disables that relay while leaving stdout/stderr fully captured via the
+ * pipe, so `error.stdout`/`error.stderr` and the message text
+ * `checkExecSyncError` embeds from that same captured buffer are
+ * unaffected -- confirmed empirically against a throwaway Node script.
+ * The one behavior change this introduces: a *successful* call that
+ * happens to write to stderr (e.g. a `gh` deprecation notice) no longer
+ * prints it either, matching the existing `GH_TEXT_LOOP_OPTIONS` opt-in
+ * callers elsewhere in this module. A caller whose own `catch` swallows a
+ * failure with no logging of its own (several best-effort collectors in
+ * `provider-health.mts`, `live-status-digest.mts`, and
+ * `provider-outage-park.mts`) loses that failure's only diagnostic
+ * surface, which used to be this same accidental stderr leak -- that is
+ * this fix's intended effect, not a regression to chase; a future report
+ * of silent degradation there should add a log line at the caller, not
+ * revert this change.
  */
 export function ghApiJson(
   path: string,
@@ -448,7 +474,11 @@ export function ghApiJson(
     (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
   let raw: string;
   try {
-    raw = execFileSync('gh', args, { encoding: 'utf8', timeout });
+    raw = execFileSync('gh', args, {
+      encoding: 'utf8',
+      timeout,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
   } catch (error) {
     const failure = error as { status?: unknown; stdout?: unknown } | null;
     const status = Number(failure?.status ?? -1);
