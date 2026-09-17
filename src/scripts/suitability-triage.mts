@@ -476,47 +476,43 @@ const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provide
 // SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
 // above -- the filler word here is a repository-scoping adjective, not an
 // untrusted-origin signal, so the sentence is repository-owned validation
-// prose rather than a directive to act on supplied content. Recognize this
-// narrow shape (the same anchored "this/that" object reference, but with the
-// filler restricted to a small fixed set of repository-scoping adjectives)
-// as a non-match. Every other branch (the strong untrusted-origin branch,
-// and the ambiguous branch for any other filler word) is unchanged.
-const REPO_OWNED_VALIDATION_FILLER =
-  '(?:full|complete|validation|config|configuration)';
-const REPO_OWNED_VALIDATION_OBJECT_REFERENCE = new RegExp(
-  String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+${REPO_OWNED_VALIDATION_FILLER}\s+[\x60'"]?${SUPPLIED_CONTENT_NOUN}`,
-  'i',
-);
-// #3073 round 3 (Copilot + CodeRabbit, PR #3087): the first two rounds
-// patched this exception by enumerating untrusted-origin phrasings one at a
-// time (issue body, then bare above/below, then pre-verb placement) -- each
-// round found a new, genuinely distinct gap in that same open-ended
-// enumeration (a fresh one, "...from issue #123...", was flagged again in
-// this same round). An enumerated blocklist can never be complete. Per both
-// reviewers' independent suggestion, this exception now ALSO requires a
-// positive, narrow signal that the sentence actually states a
-// validation/configuration *purpose* -- "to validate the config", "to
-// verify the setup" -- not just an adjective borrowed from that vocabulary
-// ("Please run this full command." alone, or "...to reproduce.", no longer
-// qualifies). This does not replace the untrusted-origin blocklist below:
-// a purpose clause is necessary but not sufficient -- "run this full script
-// from the issue body to validate the config" still must fail, so the two
-// conditions compose (see the guard in findUnsafeExecutionDirectiveMatch).
-const REPO_OWNED_VALIDATION_PURPOSE =
-  /\b(?:validate|verify|check|confirm)\b[\s\S]{0,40}?\b(?:configuration|config|setup|settings)\b/i;
-// Copilot review (PR #3087): `issue body` (covers "the issue body" / "from
-// the issue body") and a bare `issue #<number>` cross-reference are both
-// untrusted-origin signals (issue prose is untrusted input; see the Scope
-// invariant in idd-overview-appendix.instructions.md) the original
-// vocabulary did not cover. `above`/`below` are added bare (article-free),
-// mirroring the bare forms `following`/`attached`/`pasted`/`provided`
-// already have below -- scoped to this exception's own vocabulary only,
-// not the shared determiner constant, which the pre-existing strong branch
-// also relies on.
-const UNTRUSTED_ORIGIN_SIGNAL = new RegExp(
-  String.raw`\b(?:untrusted|user-provided|user input|issue\s+body|issue\s*#\d+|above|below|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER})\b`,
-  'i',
-);
+// prose rather than a directive to act on supplied content.
+//
+// Rounds 1-3 (Copilot + CodeRabbit, PR #3087) tried recognizing this shape
+// by enumerating untrusted-origin phrasings the exception must NOT apply
+// near (issue body, bare above/below, pre-verb placement, a bare "issue
+// #<number>" reference, "copied"/"attachment", "supplied content" -- each
+// round found a new, genuinely distinct gap, because an enumerated negative
+// vocabulary can never be complete), plus a loose validation-purpose
+// keyword scan that introduced its own bugs (satisfied under negation --
+// "do not validate the configuration" -- and by the issue title bleeding
+// into a body verb's preceding-clause scan). Per Tier 2 of this
+// workflow's review-fix escalation guidance (idd-review-fix.instructions.md),
+// simplify rather than add a further layer: this exception is now a single,
+// fully anchored, POSITIVE-only signature instead of a blocklist-plus-
+// keyword-scan. It matches only when:
+//
+// 1. The entire post-verb window (already sentence-bounded by
+//    sliceUnsafeDirectiveWindow) is EXACTLY "this/that <filler> command|
+//    script to validate|verify|check|confirm (the) config|configuration|
+//    setup|settings" -- nothing else. No code-wrapped noun (preserves
+//    #2146's protection there outright, since a code span can never
+//    satisfy this literal template), no inserted provenance clause
+//    (breaks the noun-to-"to" contiguity this template requires), no
+//    negated or unrelated purpose ("do not validate ..." or "... to
+//    reproduce." cannot match this template either).
+// 2. The text immediately preceding the verb, from the ISSUE BODY'S OWN
+//    START only (never the issue title, even when a body verb sits near
+//    the body's start) to the verb, is nothing but a sentence/paragraph
+//    boundary plus an optional "Please " -- see
+//    REPO_OWNED_VALIDATION_SENTENCE_START below.
+//
+// Any other shape falls through unchanged to the ordinary unsafe-directive
+// match, exactly like the original ambiguous-determiner branch already did.
+const REPO_OWNED_VALIDATION_WINDOW =
+  /^\s*(?:this|that)\s+(?:full|complete|validation|config|configuration)\s+(?:command|script)\s+to\s+(?:validate|verify|check|confirm)\s+(?:the\s+)?(?:configuration|config|setup|settings)\s*$/i;
+const REPO_OWNED_VALIDATION_SENTENCE_START =
+  /(?:^|[.!?]\s*\r?\n?\s*|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
@@ -1917,46 +1913,6 @@ function sliceUnsafeDirectiveWindow(source: string, start: number): string {
   return raw;
 }
 
-// #3073 (Copilot review, PR #3087): mirror of sliceUnsafeDirectiveWindow
-// above, scanning backward from the verb instead of forward from it, so
-// the repository-owned-validation exception's untrusted-origin check
-// (UNTRUSTED_ORIGIN_SIGNAL) also sees a provenance clause stated BEFORE
-// the verb ("From the issue body, please run this full command."),
-// which the post-verb-only window could never see. Bounded the same way
-// as the forward window: the nearest preceding sentence end or blank
-// line, scanning back at most UNSAFE_DIRECTIVE_WINDOW_CHARS.
-function slicePrecedingClause(source: string, verbStart: number): string {
-  const sliceStart = Math.max(0, verbStart - UNSAFE_DIRECTIVE_WINDOW_CHARS);
-  const raw = source.slice(sliceStart, verbStart);
-  for (let index = raw.length - 1; index >= 0; index -= 1) {
-    const char = raw[index];
-    if (char === undefined) {
-      continue;
-    }
-    if (isUnsafeDirectiveSentenceEnd(raw, index)) {
-      return raw.slice(index + 1);
-    }
-    if (char !== '\n' && char !== '\r') {
-      continue;
-    }
-    let cursor = index - 1;
-    // #3073 (Copilot review, round 3): a CRLF pair's own `\r` sits
-    // immediately before this `\n` -- skip it first, or it reads as a
-    // second (paired-with-itself) line break and the blank-line check
-    // below fires one line break too early.
-    if (char === '\n' && raw[cursor] === '\r') {
-      cursor -= 1;
-    }
-    while (raw[cursor] === ' ' || raw[cursor] === '\t') {
-      cursor -= 1;
-    }
-    if (raw[cursor] === '\n' || raw[cursor] === '\r') {
-      return raw.slice(index + 1);
-    }
-  }
-  return raw;
-}
-
 function isVerbWhollyInBodyCode(
   verbStart: number,
   verbLength: number,
@@ -1977,8 +1933,9 @@ function isVerbWhollyInBodyCode(
 // match is not inside one code range, which is exactly the #1911
 // false-positive (code-wrapped verb + later visible noun). #3073: a target
 // match is also discarded (not returned) when it is a repository-owned
-// validation/configuration directive per REPO_OWNED_VALIDATION_OBJECT_REFERENCE
-// -- see that constant's own comment above.
+// validation/configuration directive per REPO_OWNED_VALIDATION_WINDOW /
+// REPO_OWNED_VALIDATION_SENTENCE_START -- see those constants' own
+// comment above.
 function findUnsafeExecutionDirectiveMatch(
   corpus: string,
   bodyOffset: number,
@@ -2008,20 +1965,20 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
-      // #3073 round 3: evaluate the purpose requirement and the
-      // untrusted-origin blocklist against the SAME combined clause --
-      // the preceding clause plus the verb plus the post-verb window --
-      // so neither signal can hide in a part of the sentence the other
-      // half of the guard does not inspect.
-      const clause = targetMatch
-        ? `${slicePrecedingClause(corpus, verbStart)}${verbText}${window}`
-        : '';
+      // #3073 round 4: the repository-owned-validation exception is now a
+      // single fully anchored positive signature (see the constants'
+      // shared comment above) -- the whole window must match the literal
+      // template, AND the verb's own preceding text, from the body's own
+      // start only (never the issue title), must be nothing but a
+      // sentence/paragraph boundary plus an optional "Please ".
       if (
         targetMatch &&
         !(
-          REPO_OWNED_VALIDATION_OBJECT_REFERENCE.test(window) &&
-          REPO_OWNED_VALIDATION_PURPOSE.test(clause) &&
-          !UNTRUSTED_ORIGIN_SIGNAL.test(clause)
+          REPO_OWNED_VALIDATION_WINDOW.test(window) &&
+          verbStart >= bodyOffset &&
+          REPO_OWNED_VALIDATION_SENTENCE_START.test(
+            corpus.slice(bodyOffset, verbStart),
+          )
         )
       ) {
         const targetStart = targetMatch.index ?? 0;
