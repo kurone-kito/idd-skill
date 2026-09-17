@@ -20,6 +20,7 @@ import {
   parseAutopilotSuitabilityMarker,
 } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
+import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mts';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
 import {
@@ -3650,11 +3651,15 @@ function checkGithubReadiness(
       {},
       (path, paginate) => fetchGhApiJsonAt(root, ghHostname, path, paginate),
     );
-  } catch {
+  } catch (error) {
     const message = formatBranchProtectionUnreadableWarning(
       owner,
       repo,
       branch,
+      classifyBranchProtectionUnreadableCatchCause(
+        deriveGhHttpStatus(error),
+        ghErrorText(error),
+      ),
     );
     if (requireGithub) {
       report.errors.push(message);
@@ -3669,6 +3674,7 @@ function checkGithubReadiness(
       owner,
       repo,
       branch,
+      'ambiguous-404',
     );
     if (requireGithub) {
       report.errors.push(message);
@@ -3778,6 +3784,63 @@ export function isBranchProtectionUnreadable(
 }
 
 /**
+ * The distinguishable causes {@link formatBranchProtectionUnreadableWarning}
+ * renders text for:
+ *
+ * - `'ambiguous-404'`: both governance reads quietly 404'd
+ *   ({@link isBranchProtectionUnreadable}). GitHub's documented behavior for
+ *   these endpoints masks a permission failure as `404` rather than `403`,
+ *   so this genuinely cannot be told apart from "no protection configured"
+ *   -- the same can't-tell-genuine-from-masked ambiguity
+ *   {@link formatRulesetsOnlyTrustGapWarning} already describes for its
+ *   single-endpoint case, just on both endpoints at once.
+ * - `'explicit-permission-denied'`: `checkGithubReadiness`'s catch block
+ *   caught a re-thrown error whose derived HTTP status
+ *   (`deriveGhHttpStatus`) is `401` or `403` -- an explicit, unmasked
+ *   authentication/authorization failure. Distinct from `'ambiguous-404'`:
+ *   no masking happened here, so the message must not claim GitHub
+ *   "returned a 404 instead of a 403" when a 403 (or 401) is exactly what
+ *   it returned (C1 self-review, idd-skill#3075).
+ * - `'other'`: every other catch-block cause (network failure, `5xx`,
+ *   timeout, or a status `deriveGhHttpStatus` could not determine) --
+ *   unrelated to `administration: read`, so it gets a generic diagnostic
+ *   instead of the `GITHUB_TOKEN`-specific remedy.
+ */
+export type BranchProtectionUnreadableCause =
+  | 'ambiguous-404'
+  | 'explicit-permission-denied'
+  | 'other';
+
+/**
+ * Classify a `checkGithubReadiness` catch-block error's derived HTTP status
+ * (and raw error text) into the two catch-block-only
+ * {@link BranchProtectionUnreadableCause} values. Extracted as its own pure
+ * function -- mirroring this file's existing "pure so testable without
+ * mocking `gh`" pattern ({@link isBranchProtectionUnreadable},
+ * {@link isRulesetsOnlyTrustGap}) -- so the classification itself is
+ * independently unit-tested instead of only exercised indirectly through
+ * the one inline call site (C1 self-review, idd-skill#3075).
+ *
+ * `errorText` (from `ghErrorText`) is consulted, not just `httpStatus`,
+ * because GitHub signals rate limiting -- both the primary per-hour limit
+ * ("API rate limit exceeded") and the secondary abuse-detection limit ("You
+ * have exceeded a secondary rate limit") -- with the same `403` status a
+ * genuine permission denial uses (C1 self-review, idd-skill#3075): a `403`
+ * alone cannot tell the two apart, and reporting a token-permission gap for
+ * a transient rate limit would be as misleading as this function's original
+ * unconditional `GITHUB_TOKEN` claim.
+ */
+export function classifyBranchProtectionUnreadableCatchCause(
+  httpStatus: number | null,
+  errorText: string,
+): Exclude<BranchProtectionUnreadableCause, 'ambiguous-404'> {
+  const isPermissionStatus = httpStatus === 401 || httpStatus === 403;
+  return isPermissionStatus && !/rate limit/i.test(errorText)
+    ? 'explicit-permission-denied'
+    : 'other';
+}
+
+/**
  * Render {@link isBranchProtectionUnreadable}'s warning/error text. Extracted
  * as its own function -- mirroring {@link formatRulesetsOnlyTrustGapWarning}'s
  * own extraction rationale below -- so `checkGithubReadiness`'s catch block
@@ -3793,35 +3856,79 @@ export function isBranchProtectionUnreadable(
  * misconfiguration: GitHub Actions' `permissions:` model cannot grant a
  * workflow's own token `administration: read` at all
  * (`idd-template/docs/onboarding/optional-host-setup.md` already discloses
- * this ceiling in prose). Naming that limitation and its one remedy here
- * gives the same class of cause-aware guidance
- * {@link formatRulesetsOnlyTrustGapWarning} already gives for the narrower
- * Rulesets-only case, so an operator reading either warning is not left to
- * rediscover the platform limitation on their own.
+ * this ceiling in prose).
  *
- * Unlike {@link formatRulesetsOnlyTrustGapWarning}'s two cause-conditional
- * remedies (fix the token's permissions, or set
- * `ciGate.trustEmptyProtectionReads`), there is exactly one remedy here:
- * both governance reads failed, so there is no successful Rulesets read to
- * fall back on, and no trust flag that would let either read be treated as
- * genuinely empty. Supplying an external credential -- a personal access
- * token or a GitHub App installation token, provided as a repository
- * secret -- is the only way a CI-hosted invocation can make this check
- * assert a positive result.
+ * {@link BranchProtectionUnreadableCause} keeps this cause-conditional the
+ * same way {@link formatRulesetsOnlyTrustGapWarning} already is, rather
+ * than asserting the `GITHUB_TOKEN` cause unconditionally (C1 self-review,
+ * idd-skill#3075): `checkGithubReadiness`'s catch block also fires for a
+ * `gh api` failure that has nothing to do with `administration: read` at
+ * all, where "add a repository secret" would be actively misleading
+ * advice, and a caught explicit `401`/`403` is not the same shape as the
+ * direct check's masked `404` -- see the cause type's own doc comment for
+ * the full breakdown driving each branch below. The shared `remedy` text
+ * below points the reader at gh's own error output for the specific cause
+ * rather than asserting one, and calls out the `GITHUB_TOKEN` platform
+ * ceiling as the exception that needs a different remedy, rather than
+ * presenting the `GITHUB_TOKEN`/`administration: read` case as the default
+ * explanation for every cause this function renders text for. This
+ * hedging matters even after {@link classifyBranchProtectionUnreadableCatchCause}
+ * already filters out the rate-limit sub-case: an explicit `401`/`403` the
+ * catch block still classifies as `'explicit-permission-denied'` can also
+ * be an SSO or organization-policy restriction unrelated to any specific
+ * missing permission, and (per {@link fetchGovernanceJson}'s own doc
+ * comment noting that a permission gap on these endpoints typically
+ * surfaces as a masked `404` instead) is a somewhat less likely fit for
+ * the `GITHUB_TOKEN` case specifically than the direct check's
+ * `'ambiguous-404'` case is -- asserting a single specific cause here
+ * would just trade one misleading claim for another (C1 self-review,
+ * idd-skill#3075).
  */
 export function formatBranchProtectionUnreadableWarning(
   owner: string,
   repo: string,
   branch: string,
+  cause: BranchProtectionUnreadableCause,
 ): string {
+  const identifier = `${owner}/${repo}:${branch}`;
+  if (cause === 'other') {
+    return (
+      `branch protection not readable for ${identifier}: the GitHub API ` +
+      `call failed for a reason other than a permission or not-found ` +
+      `response (a rate limit, a network error, a 5xx, or an unrecognized ` +
+      `status) -- ` +
+      `check gh's own error output, network connectivity, and \`gh auth ` +
+      `status\` before assuming a token-permission gap`
+    );
+  }
+  const remedy =
+    `Resolve whatever gh's own error output names as the specific cause ` +
+    `(commonly a missing administration: read permission, an expired or ` +
+    `invalid credential, or an SSO/organization-policy restriction) -- ` +
+    `unless the credential is a workflow's own GITHUB_TOKEN, which can ` +
+    `never be granted administration: read no matter what ` +
+    `\`permissions:\` requests (a GitHub Actions platform limitation, not ` +
+    `a configuration gap). In that one case, the only remedy is supplying ` +
+    `an external credential as a repository secret instead: a ` +
+    `fine-grained personal access token with the Administration: read ` +
+    `repository permission, or a GitHub App installation token (it ` +
+    `expires after about one hour, so it must be minted fresh from the ` +
+    `App's private key each run rather than stored as a static secret)`;
+  if (cause === 'explicit-permission-denied') {
+    return (
+      `branch protection not readable for ${identifier}: GitHub rejected ` +
+      `this read for an authentication or authorization reason (not a ` +
+      `masked 404) -- inspect gh's own error output for the specific ` +
+      `cause rather than assuming it is always a missing ` +
+      `administration: read permission. ${remedy}`
+    );
+  }
   return (
-    `branch protection not readable for ${owner}/${repo}:${branch} -- a ` +
-    `workflow's own GITHUB_TOKEN can never be granted administration: read ` +
-    `(a GitHub Actions platform limitation, not a configuration gap), so a ` +
-    `CI-hosted invocation using only that token cannot make this check ` +
-    `assert a positive result here. The only remedy is supplying an ` +
-    `external credential -- a personal access token or a GitHub App ` +
-    `installation token -- as a repository secret`
+    `branch protection not readable for ${identifier}: this can mean ` +
+    `either (1) the branch genuinely has no protection configured, or ` +
+    `(2) the reading credential lacks the administration: read ` +
+    `permission and GitHub is masking that as a 404 rather than a 403. ` +
+    `${remedy}`
   );
 }
 
