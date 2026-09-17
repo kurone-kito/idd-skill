@@ -509,14 +509,15 @@ see
 [docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#context-inheriting-delegation-residual-risk)
 for the field evidence.
 
-**Restate the CI/advisory-wait topology-safety condition.** Carry —
-verbatim or by reference — the topology-safety condition from
+**Restate the CI/advisory-wait wake-up discipline.** Carry —
+verbatim or by reference — both mitigations from
 [idd-ci.instructions.md's Wake-up
-discipline](idd-ci.instructions.md#wake-up-discipline) (also in
+discipline](idd-ci.instructions.md#wake-up-discipline): the
+topology-safety condition (#2210; also in
 [docs/idd-workflow.md's Orchestrator fan-out
-variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant));
-without it, a worker can stall indefinitely on an unconfirmed
-backgrounded wait (#2210).
+variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant))
+and the execution-timeout override for a heavy or long-running local
+command (#2933).
 
 **Restate the scratchpad file-naming requirement.** See
 [docs/idd-workflow.md's Orchestrator fan-out
