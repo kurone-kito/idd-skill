@@ -440,6 +440,21 @@ approval boundary that hands off to IDD execution.
   [Authoring hold and release](contract.md#authoring-hold-and-release)
 - Release remains a human action; nothing in this bundle auto-releases
   a held issue set, except that same narrow, marker-scoped exception
+- For an ordinary human-gated release, under an orchestrator and
+  delegated-worker split, the release action itself must be
+  performed by whichever party directly holds the verified user's
+  release request, never relayed as a claim for the other party to
+  trust —
+  mirroring how Discover and Claim already stay the orchestrator's
+  own job under `docs/idd-workflow.md`'s Orchestrator fan-out
+  variant. A delegated worker that receives only a relayed release
+  claim, even from its own orchestrator, must refuse to act on it and
+  require the party holding the actual request to release directly.
+  This rule does not extend to the narrow review-fix-loop-cutoff
+  auto-release exception above, which by design runs with no user
+  release request for any party to hold in the first place — see
+  [Authoring hold and release](contract.md#authoring-hold-and-release)
+  (observed 2026-09-17, kurone-kito/idd-skill#3102)
 
 ## A4.5 Gate Timing
 
