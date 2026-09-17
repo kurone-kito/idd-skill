@@ -267,12 +267,9 @@ node scripts/rerun-advisory-convergence.mjs --pr <n> [--apply]
 <profile-selected-rerun-advisory-convergence-command> --pr <n> [--apply]
 ```
 
-Resolve `<profile-selected-rerun-advisory-convergence-command>` from
-`docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
-non-vendored profiles. On `instructions-only` (no helper runtime), fall
-back to the manual sequence: run the diagnostic, then `gh run rerun
-<run-id>` on each plan entry, waiting for each to finish before the
-next.
+On `instructions-only` (no helper runtime), fall back to the manual
+sequence: run the diagnostic, then `gh run rerun <run-id>` on each plan
+entry, waiting for each to finish before the next.
 
 **Terminal-waiver recheck (`#1570`)**: once a maintainer waives a proven
 `COPILOT_UNAVAILABLE` state
@@ -311,6 +308,9 @@ in, never rebase — see the E-phase branch-sync check in
 Treat this as reachable at D4/pre-review, not only after E8 — the
 ordering dependency a shared check-definition change creates is
 invisible to disjoint-file-set track planning.
+
+**Code-scanning-alerts lookup**: an unscoped call hides a PR-only
+alert, even one failing this PR's own check. Pass `pr=<n>` explicitly.
 
 ## Interpretation
 
