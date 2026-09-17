@@ -184,8 +184,9 @@ record each item's source URL:
 - **Unresolved review threads** (`isResolved=false`) — exclude only
   when the latest substantive reply is from an IDD agent or the PR
   author with no reviewer reply since; keep it active anyway when the
-  reviewer reopened it since (even with no new text), or an agent reply
-  starts with `**Awaiting maintainer decision**` (blocks regardless of
+  reviewer reopened it after that reply (even with no new text), or an
+  agent reply starts with `**Awaiting maintainer decision**` (blocks
+  regardless of
   maintainer response).
 - **Review bodies** whose reviewer's latest state is
   `CHANGES_REQUESTED` — exclude any already replied-to and
@@ -279,8 +280,8 @@ Step 3/E4-E8 decide as usual, flagging whether a commit newer than the
 item's timestamp fixes it (a lost E12 push, or edge case 2's diff
 below): that reads **false** against E5's claim-truth test by design,
 so an in-scope reviewer-feedback PATH A item can Accept and cite the
-commit — E9 skipped, E13 still cites it — rather than wrongly
-Rejecting.
+commit (cap included) — E9 skipped, E13 still cites it — rather than
+wrongly Rejecting.
 
 **Edge case 2 — an E9 fix committed but not pushed.** GitHub can't see
 this; an empty E3 alone isn't proof nothing needs recovery (F2
@@ -294,13 +295,11 @@ surviving claimed worktree:
 3. `git status --porcelain` must be clean — dirty can't attribute
    lines to items: stop and ask, never guess.
 4. `git log "$PR_HEAD"..HEAD` non-empty: record the diff (edge case 1
-   covers it too) and hand it to the standard
-   `idd-review-fix.instructions.md`: E10-E12 validate and push before
-   branch-sync either way, even with zero Accepted items. **E3
-   empty**: resume there at E10, not E12 (a cold session can't know if
-   E10's critique already ran; fail-closed governs). **E3 non-empty**:
-   hand off E4-E8 first; that flow runs E9 only when Accepted PATH A
-   items remain (E8's skip), then E10-E12.
+   covers it too); it still needs E10-E12 to validate and push before
+   branch-sync. **E3 empty**: resume at E10, not E12 (a cold session
+   can't know if E10's critique already ran; fail-closed governs).
+   **E3 non-empty**: hand off E4-E8 first; the receiving triage flow's
+   own E8 decides E9, then E10-E12 for the diff.
 
 Clean worktree, no local-ahead commits: E3's routing applies unchanged;
 a fresh or lost worktree falls back to edge case 1, re-triaged from
