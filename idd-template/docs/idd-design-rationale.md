@@ -782,9 +782,34 @@ only step that requests a fresh primary-advisory-bot review) entirely,
 so a PR whose Copilot findings were all Rejected in a given pass could
 reach F2's advisory-convergence check with the bot never having
 reviewed the resulting HEAD. The gate closes that gap by running E14's
-Primary advisory bot procedure at the now-stable HEAD whenever the last
-non-empty snapshot this episode zeroed out on a completed-review PATH B
-disposition, before proceeding to F1.
+Primary advisory bot procedure at the now-stable HEAD whenever a
+durable marker records that the last non-empty snapshot at the current
+HEAD zeroed out on a completed-review PATH B disposition (condition
+(a)), before proceeding to F1.
+
+Condition (b) — the current HEAD's eligibility for AW3-S's
+settled-window (non-pending) entry — is a defense-in-depth backstop
+for a narrower subset of cases: D4 and F2 each already consult AW3-S
+independently for this same settled-window entry, but a true-virgin
+empty snapshot (one that never satisfies condition (a) on its own)
+otherwise never runs E14 through this gate specifically. Condition (b)
+guarantees that path also reaches the stale-request recovery cycle
+(and its route to `COPILOT_UNAVAILABLE`), rather than depending solely
+on D4/F2 revisits eventually accumulating enough AW3-S cycles on their
+own.
+
+The gate's own state was originally tracked only in the current
+session's in-memory recollection of its last E1-E3 pass ("this
+episode"), with no durable, GitHub-visible record: a session that
+crashed, restarted, or resumed after that pass had no way to
+reconstruct whether the gate should have fired for the current HEAD.
+A dedicated `zero-accepted-path-a-gate` marker (see
+`idd-review-triage.instructions.md`) now persists which condition
+fired and the HEAD SHA it was evaluated against, read back on every
+evaluation instead of relying on session-local memory; a marker
+recorded against a HEAD SHA that no longer matches the PR's current
+HEAD — for example, after a sync-path merge advances HEAD — is stale
+and does not satisfy the gate for the new HEAD.
 
 ### An advisory bot's embedded-but-unthreaded findings: mirror the detection scope, not the gate scope
 

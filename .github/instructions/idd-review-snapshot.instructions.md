@@ -42,6 +42,7 @@ prefixes and whose GitHub author is a trusted marker actor per
 
 - `<!-- review-watermark:`
 - `<!-- review-baseline:`
+- `<!-- zero-accepted-path-a-gate:`
 - `<!-- claimed-by:`
 - `<!-- unclaimed-by:`
 - `advisory-wait:`
@@ -70,12 +71,10 @@ Additionally, fetch the **current CI state** for `{head-SHA}`:
 treated-as-passed) CI run as `{latest-ci-completed-at}`, or `none` if no
 CI pass exists yet for this HEAD.
 
-**Non-Copilot advisory safety net.** This E1 snapshot + the Step 2
-watermark are the load-bearing safety net for non-Copilot advisory
-bots, which get no settle/wait window from the advisory-wait protocol
-— see `idd-advisory-wait.instructions.md`'s Scope section. This is why
-Step 1 fetches the entire activity universe and Step 2 watermarks all
-of it.
+**Non-Copilot advisory safety net.** This E1 snapshot and Step 2's
+watermark are the only settle/wait coverage non-Copilot advisory bots
+get (`idd-advisory-wait.instructions.md`'s Scope section) — why Step 1
+fetches the full activity universe and Step 2 watermarks all of it.
 
 **Step 2 — Record the watermark.** Using the `{head-SHA}` stored at the
 start of Step 1, compute `{max-activity-updatedAt}` as the highest
