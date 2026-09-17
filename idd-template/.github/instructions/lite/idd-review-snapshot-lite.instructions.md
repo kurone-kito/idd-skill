@@ -1,10 +1,10 @@
 # IDD — Review Snapshot Phase (Lite) (E1-E3)
 
 Lite profile for helper-enabled weak/local models. Same semantics as
-`idd-review-snapshot.instructions.md`. Use only for the single issue this
-session already claimed, with an open PR whose CI has passed or that
-already has reviews. If the repository is `instructions-only`, use the
-standard review-snapshot instructions instead.
+`idd-review-snapshot.instructions.md`. Use only for this session's
+claimed issue, with an open PR whose CI has passed or that already has
+reviews. If the repository is `instructions-only`, use the standard
+review-snapshot instructions instead.
 
 ## Helper runtime contract
 
@@ -19,8 +19,7 @@ standard review-snapshot instructions instead.
 ## Triage hand-off boundary (E4-E8 excluded)
 
 This file only fetches, freezes, and routes ReviewItems_snapshot — it
-never classifies findings, scores severity, or decides Accept/Reject
-(excluded E4-E8 judgment calls).
+never classifies findings, scores severity, or decides Accept/Reject.
 
 1. E3's non-empty-list outcome hands off to
    `idd-review-triage.instructions.md` (E4-E8) for a stronger session
@@ -247,9 +246,9 @@ follow the note here either.
 ## E3 — Empty/non-empty routing
 
 - **ReviewItems_snapshot is empty** → proceed to
-  `idd-pre-merge-lite.instructions.md` (F1), which covers the
-  branch-sync decision. Do not route this case directly to the
-  excluded `idd-review-triage.instructions.md`.
+  `idd-pre-merge-lite.instructions.md` (F1, branch-sync decision). Do
+  not route this case directly to the excluded
+  `idd-review-triage.instructions.md`.
 - **ReviewItems_snapshot is non-empty** → this lite session's job ends
   here (see Triage hand-off boundary above); hand off to
   `idd-review-triage.instructions.md` (E4) for a stronger session or a
@@ -273,11 +272,13 @@ session mid-classification, a landed-but-unreplied E12 push, or a
 E13 `**Accepted** — fixed in` reply with no reviewer reply/reopen
 since → skip reclassification, straight to E14. Otherwise
 Step 3/E4-E8 decide as usual, flagging whether a commit newer than the
-item's timestamp fixes it (a lost E12 push, or edge case 2's diff
-below): that reads **false** against E5's claim-truth test by design,
-so an in-scope reviewer-feedback PATH A item can Accept and cite the
-commit (cap included) — E9 skipped, E13 still cites it — rather than
-wrongly Rejecting.
+item's timestamp touches its anchored path(s) (thread `path` or a
+regular comment's file) and fixes it (a lost E12 push, or edge case
+2's diff below): that reads **false** against
+E5's claim-truth test by design, so an in-scope reviewer-feedback
+PATH A item can Accept and cite the commit (path-touch and cap
+included) — E9 skipped, E13 still cites it — rather than wrongly
+Rejecting.
 
 **Edge case 2 — an E9 fix committed but not pushed.** GitHub can't see
 this; an empty E3 alone isn't proof nothing needs recovery (F2
