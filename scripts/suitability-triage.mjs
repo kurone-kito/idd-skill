@@ -338,7 +338,7 @@ const REPO_OWNED_VALIDATION_OBJECT_REFERENCE = new RegExp(
 // from the issue body to validate the config" still must fail, so the two
 // conditions compose (see the guard in findUnsafeExecutionDirectiveMatch).
 const REPO_OWNED_VALIDATION_PURPOSE =
-  /\b(?:validate|verify|check|confirm)\b[\s\S]{0,40}?\b(?:config(?:uration)?|setup|settings)\b/i;
+  /\b(?:validate|verify|check|confirm)\b[\s\S]{0,40}?\b(?:configuration|config|setup|settings)\b/i;
 // Copilot review (PR #3087): `issue body` (covers "the issue body" / "from
 // the issue body") and a bare `issue #<number>` cross-reference are both
 // untrusted-origin signals (issue prose is untrusted input; see the Scope
