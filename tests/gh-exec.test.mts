@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -321,6 +322,97 @@ process.stdout.write('{}');
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Run `body` with `process.stderr.write` captured; return the joined
+ * output. Mirrors the same local helper already duplicated in
+ * `discover-roadmap-graph.test.mts` / `idd-doctor.test.mts` /
+ * `suitability-triage.test.mts` (swallow-only, no forwarding to the real
+ * stream) rather than introducing a fourth, differently-shaped variant.
+ */
+function captureStderr(body: () => void): string {
+  const original = process.stderr.write.bind(process.stderr);
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    body();
+  } finally {
+    process.stderr.write = original;
+  }
+  return chunks.join('');
+}
+
+test('ghApiJson does not leak gh CLI stderr to the real stream on a tolerated allowStatuses failure (#3076)', () => {
+  const marker = 'idd-skill-3076-tolerated-stderr-marker';
+  const restore = stubGh(`
+process.stdout.write(JSON.stringify({ tolerated: true }));
+process.stderr.write(${JSON.stringify(marker)});
+process.exit(1);
+`);
+  try {
+    let result: unknown;
+    const captured = captureStderr(() => {
+      result = ghApiJson('repos/o/r/issues/1', { allowStatuses: [1] });
+    });
+    assert.deepEqual(result, { tolerated: true });
+    assert.ok(
+      !captured.includes(marker),
+      "expected no real-stderr write to contain the tolerated failure's stderr text",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('control: a raw execFileSync with no stdio override DOES leak stderr to the real stream (proves the detection method above actually works, #3076)', () => {
+  const marker = 'idd-skill-3076-control-stderr-marker';
+  const restore = stubGh(`
+process.stdout.write('{}');
+process.stderr.write(${JSON.stringify(marker)});
+process.exit(1);
+`);
+  try {
+    const captured = captureStderr(() => {
+      assert.throws(() =>
+        execFileSync('gh', ['api', 'repos/o/r/issues/1'], {
+          encoding: 'utf8',
+        }),
+      );
+    });
+    assert.ok(
+      captured.includes(marker),
+      'expected the control call (no stdio override) to leak stderr to the real stream',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson still surfaces stderr text in the thrown error on an unhandled (non-allowStatuses) failure (#3076)', () => {
+  const marker = 'idd-skill-3076-unhandled-stderr-marker';
+  const restore = stubGh(`
+process.stdout.write('not json');
+process.stderr.write(${JSON.stringify(marker)});
+process.exit(2);
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues/1', { allowStatuses: [1] }),
+      (error: unknown) => {
+        const failure = error as { message?: unknown; stderr?: unknown };
+        return (
+          String(failure.message ?? '').includes(marker) &&
+          String(failure.stderr ?? '').includes(marker)
+        );
+      },
+    );
+  } finally {
+    restore();
   }
 });
 
