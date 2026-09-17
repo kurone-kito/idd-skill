@@ -49,14 +49,17 @@ Three guards keep it safe:
   candidates but keeps others.
 - **At most once per pass.** A0-O runs at most once as the
   roadmap-first fallback per Discover pass. Once spent (via trigger
-  (a), (b), or (c)), any later A4 Step 1 / Step 1.5 exhaustion —
-  reachable only after trigger (b) — reports and stops (not an abort)
-  without re-entering A0-O. A **trigger (a)** or **trigger (c)** A0-O
+  (a), (b), (c), or (d)), any later A4 Step 1 / Step 1.5 exhaustion —
+  reachable after trigger (b) or (d), once either one's own A0-O run
+  yields orphan candidates that later fail A4 — reports and stops (not
+  an abort) without re-entering A0-O. A **trigger (a)** or **trigger (c)** A0-O
   run that finds no orphan routes to the A3 decision tree (both paths
-  genuinely empty); a **trigger (b)** one reports and stops instead,
-  because roadmap candidates reached A4 — an exhaustion the A3 tree's
-  A2/A3-empty cases do not describe. This prevents an
-  A1 ↔ A0-O or A4 ↔ A0-O loop.
+  genuinely empty); a **trigger (b)** or **trigger (d)** one reports
+  and stops instead — (b) because roadmap candidates reached A4, an
+  exhaustion the A3 tree's A2/A3-empty cases do not describe; (d)
+  because A1.5 already reported its own specific blocker, which the A3
+  tree's generic wording would misdescribe or duplicate. This prevents
+  an A1 ↔ A0-O or A4 ↔ A0-O loop.
 
 When **trigger (a)** (zero A3.5-reaching candidates) and the orphan
 fallback both yield nothing, discovery lands in the A3 decision tree,
@@ -89,9 +92,34 @@ absent, since there is no roadmap candidate for it to run on — A0-O's
 own A3.5 pass on any orphan candidates it finds still runs and can
 still produce its own approval-needed bucket. Because
 (a)/(b) require A1 to have found a roadmap and (c) requires it to have
-found none, the three triggers are mutually exclusive within one
-Discover pass — so "at most once per pass" holds automatically across
-all three, not only within the (a)/(b) pair.
+found none, triggers (a)/(b)/(c) are mutually exclusive within one
+Discover pass — so "at most once per pass" already held across all
+three before trigger (d) below extends the same property to a fourth.
+
+**Trigger (d)** closes a fourth gap, this one downstream of A1 but
+upstream of A2. `idd-roadmap-audit.instructions.md`'s A1.5 (Audit
+completed roadmaps) can itself stop before A2 for two human-input
+outcomes — the roadmap-level blocked-by-human/needs-decision label
+check, and the "Non-autonomous gaps found" outcome — and both stopped
+unconditionally, with no `roadmap-first` fallback at all. Under
+`roadmap-first`, when either fires, A1 has already found a roadmap (so
+trigger (c) cannot fire) and A2 never runs (so triggers (a)/(b), which
+both presuppose A2 ran, cannot fire either) — the whole Discover pass
+simply stopped even when unrelated, claimable orphan issues existed in
+the repository, the exact situation `roadmap-first` exists to avoid.
+Trigger (d) fires strictly between A1 and A2 — after A1 finds a
+roadmap, before A2 ever runs — which is disjoint by construction from
+trigger (c) (A1 finds zero roadmaps) and from triggers (a)/(b) (both
+presuppose A2 already ran): all four triggers remain mutually
+exclusive within one Discover pass, and "at most once per pass"
+continues to hold automatically. Trigger (d) is scoped to A1.5's
+outcome reached via the normal A1 roadmap-selection path only — never
+A0-T's own scoped A1.5 invocation, which already governs its own
+outcome unconditionally and with no fallback. Preventive; no observed
+incident yet — kurone-kito/idd-skill#3090 identified the gap by
+inspection of A1.5's two stop outcomes against the triggers already
+defined here, not from a reproduced session that actually hit the
+stop.
 
 The `orphan-first` symmetric case — orphan candidates all failing A4,
 which would fall back to the roadmap path — is a separate concern and

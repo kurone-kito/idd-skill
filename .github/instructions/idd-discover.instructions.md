@@ -19,7 +19,8 @@ missing or disagrees.
 
 **Abort conditions**: A0-T, A1 (`orphan-first`/`roadmap` scope only —
 see A0), A3 (default; see decision tree).
-**Early stop condition**: A0-T, A4, or A4.5 (no claim made — see below).
+**Early stop condition**: A0-T, A1.5, A4, or A4.5 (no claim made — see
+below).
 
 ## Authoring label guard
 
@@ -104,7 +105,7 @@ routing:
      candidates exactly as in the normal roadmap path — no
      stop-without-fallback applies at this filtering step. This
      graph-scoped continuation excludes **A0**'s own A0-O
-     orphan-fallback triggers (a)/(b)/(c) throughout: an empty or
+     orphan-fallback triggers (a)/(b)/(c)/(d) throughout: an empty or
      fully-discarded scoped set ends the run the same way A0-T's other
      failure branches do — report and stop.
    - Rank the survivors down to a single highest-suitability open
@@ -151,7 +152,8 @@ Read the **issue-scope** value from the Project commands table in
   **trigger (a)** (zero candidates reach A3.5: A2 found none, or A3
   filtered them all), **trigger (b)** (candidates reach A3.5 but A4
   Step 1, Step 1.5, or Step 2's floor skip discards every one), or
-  **trigger (c)** (A1 finds no roadmap issues). A0-O runs **at most
+  **trigger (c)** (A1 finds no roadmap issues), or **trigger (d)** (A1.5
+  stop). A0-O runs **at most
   once** per Discover pass as this fallback; once spent, a later A4
   exhaustion reports and stops
   (not an abort) without re-entering A0-O. A non-empty A3.5
@@ -169,8 +171,9 @@ search.
 When A0-O runs as the `roadmap-first` fallback, every exit below that
 would re-enter **A1** or reach the **A3 decision tree** is redirected by
 the invoking trigger instead — (a)/(c) to the A3 decision tree, (b) (A4
-exhaustion) to the A4 **"report and stop"** terminal — since A1 already
-ran and must not be re-entered (no A1 ↔ A0-O or A4 ↔ A0-O loop).
+exhaustion) to the A4 **"report and stop"** terminal, (d) to A1.5's
+report-and-stop — since A1 already ran and must not be re-entered (no
+A1 ↔ A0-O or A4 ↔ A0-O loop).
 
 - If `orphan-first-policy` is `public-disabled`: for a public repository
   (or when visibility cannot be determined), skip A0-O without searching

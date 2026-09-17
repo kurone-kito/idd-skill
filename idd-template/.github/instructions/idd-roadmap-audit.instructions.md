@@ -96,7 +96,20 @@ outside the selected roadmap graph.
   `status:blocked-by-human`) or configured needs-decision label from
   `labels.needsDecisionLabelName` (default: `status:needs-decision`),
   report the blocker and stop before A2. Do not continue selecting
-  child issues under a blocked roadmap.
+  child issues under a blocked roadmap. **Roadmap-first fallback
+  (trigger (d)):** when this A1.5 run was reached via the normal
+  `idd-discover.instructions.md` A1 roadmap-selection path — never
+  A0-T's own scoped A1.5 invocation, which already governs its own
+  outcome unconditionally and with no fallback (see A0-T step 2) —
+  **and** `issue-scope` is `roadmap-first`, fall back to A0-O instead
+  of stopping, excluding this roadmap's already-fetched descendant set
+  (an execution leaf carries no marker distinguishing it from a true
+  orphan) from the orphan candidate pool before A3.5. This bullet's own
+  behavior needs no claim, so most runs reach A0-O with nothing to
+  release; only if this session already holds the roadmap-audit claim
+  (for example from an earlier bullet's side effect on this same run),
+  release it per the claim-release rule below first — never release a
+  claim this session does not itself hold.
 - If any referenced child or descendant issue is open, inaccessible, or
   unresolved, report the provenance path and reason, then continue to
   A2, unless the open descendant is a nested roadmap with at least one
@@ -189,8 +202,8 @@ Treat `stale` and `non-stale` in this section using the
 - Re-validate that roadmap claim before every roadmap comment,
   follow-up issue creation, body edit, label change, or close action.
 - If the roadmap remains open and no PR branch will continue from the
-  audit, release the roadmap-audit claim before returning to A2 or
-  stopping.
+  audit, release the roadmap-audit claim before returning to A2,
+  stopping, or invoking A0-O (trigger (d)).
 - Example: when another agent holds a non-stale roadmap claim, do not
   mutate that roadmap in A1.5, but continue to A2/A3 and allow child
   issues that pass readiness and A5 to proceed.
@@ -228,6 +241,18 @@ Apply one outcome:
   before A2 after reporting a non-autonomous gap, even if the
   repository does not have the blocker labels, so the same unattended
   run cannot select child work under a roadmap that needs human input.
+  **Roadmap-first fallback (trigger (d)):** the same fallback as the
+  blocked-label check above applies here too, under the same two
+  conditions (normal A1 path, never A0-T's own scoped invocation; and
+  `issue-scope: roadmap-first`) — release the roadmap-audit claim
+  (already held here, unlike the blocked-label check, since posting
+  this outcome's own comment/label already required it) per the
+  claim-release rule below, then fall back to A0-O instead of stopping,
+  excluding this roadmap's already-fetched descendant set from the
+  orphan candidate pool before A3.5, the same way the blocked-label
+  check does. This roadmap's own children still need human input
+  first, so the fallback still reaches only unrelated orphan issues,
+  never this roadmap's own children.
 
 **Child issue split.** A further roadmap-currency trigger, orthogonal to
 the three outcomes above: when a child issue is split into two or more
