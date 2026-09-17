@@ -46,6 +46,7 @@ import {
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
   findPlaceholders,
+  formatBranchProtectionUnreadableWarning,
   formatCleanupBacklogExamples,
   formatCleanupBacklogRemediation,
   formatCleanupBacklogScanPreamble,
@@ -4149,6 +4150,39 @@ test('isBranchProtectionUnreadable is true only when both reads are unreadable',
   assert.equal(
     isBranchProtectionUnreadable({ unreadable: true }, { unreadable: true }),
     true,
+  );
+});
+
+// idd-skill#3075: formatBranchProtectionUnreadableWarning names the
+// structural cause (GITHUB_TOKEN can never be granted administration: read)
+// and its one remedy (an external credential as a repository secret),
+// extending the same class of cause-aware remedy text
+// formatRulesetsOnlyTrustGapWarning already gives for the narrower
+// Rulesets-only case to this more common fully-unreadable case.
+test('formatBranchProtectionUnreadableWarning states that GITHUB_TOKEN cannot be granted administration: read and that an external credential is the remedy', () => {
+  const message = formatBranchProtectionUnreadableWarning(
+    'example-owner',
+    'example-repo',
+    'master',
+  );
+  assert.match(message, /example-owner\/example-repo:master/);
+  assert.match(message, /GITHUB_TOKEN/);
+  assert.match(message, /administration: read/);
+  assert.match(message, /GitHub Actions platform limitation/);
+  assert.match(message, /personal access token/);
+  assert.match(message, /GitHub App installation token/);
+  assert.match(message, /repository secret/);
+});
+
+test('formatBranchProtectionUnreadableWarning still leads with the original bare "not readable" string', () => {
+  const message = formatBranchProtectionUnreadableWarning(
+    'example-owner',
+    'example-repo',
+    'release/1.0',
+  );
+  assert.match(
+    message,
+    /^branch protection not readable for example-owner\/example-repo:release\/1\.0/,
   );
 });
 

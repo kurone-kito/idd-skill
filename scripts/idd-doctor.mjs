@@ -3200,7 +3200,11 @@ function checkGithubReadiness(root, requireGithub, strict, report) {
       (path, paginate) => fetchGhApiJsonAt(root, ghHostname, path, paginate),
     );
   } catch {
-    const message = `branch protection not readable for ${owner}/${repo}:${branch}`;
+    const message = formatBranchProtectionUnreadableWarning(
+      owner,
+      repo,
+      branch,
+    );
     if (requireGithub) {
       report.errors.push(message);
     } else {
@@ -3209,7 +3213,11 @@ function checkGithubReadiness(root, requireGithub, strict, report) {
     return;
   }
   if (isBranchProtectionUnreadable(branchRulesRead, branchProtectionRead)) {
-    const message = `branch protection not readable for ${owner}/${repo}:${branch}`;
+    const message = formatBranchProtectionUnreadableWarning(
+      owner,
+      repo,
+      branch,
+    );
     if (requireGithub) {
       report.errors.push(message);
     } else {
@@ -3278,6 +3286,49 @@ export function isBranchProtectionUnreadable(
   branchProtectionRead,
 ) {
   return branchRulesRead.unreadable && branchProtectionRead.unreadable;
+}
+/**
+ * Render {@link isBranchProtectionUnreadable}'s warning/error text. Extracted
+ * as its own function -- mirroring {@link formatRulesetsOnlyTrustGapWarning}'s
+ * own extraction rationale below -- so `checkGithubReadiness`'s catch block
+ * and its direct `isBranchProtectionUnreadable` check share one wording
+ * instead of two independently-maintained inline template literals, and so
+ * the message is directly unit-testable without mocking `gh` (idd-skill#3075).
+ *
+ * Field feedback (gist round 15) found that this fully-unreadable case
+ * printed only the bare "branch protection not readable for
+ * {owner}/{repo}:{branch}" string, with no indication of *why* -- even
+ * though the most common cause, running in GitHub Actions with only the
+ * workflow's own `GITHUB_TOKEN`, is structural rather than a fixable
+ * misconfiguration: GitHub Actions' `permissions:` model cannot grant a
+ * workflow's own token `administration: read` at all
+ * (`idd-template/docs/onboarding/optional-host-setup.md` already discloses
+ * this ceiling in prose). Naming that limitation and its one remedy here
+ * gives the same class of cause-aware guidance
+ * {@link formatRulesetsOnlyTrustGapWarning} already gives for the narrower
+ * Rulesets-only case, so an operator reading either warning is not left to
+ * rediscover the platform limitation on their own.
+ *
+ * Unlike {@link formatRulesetsOnlyTrustGapWarning}'s two cause-conditional
+ * remedies (fix the token's permissions, or set
+ * `ciGate.trustEmptyProtectionReads`), there is exactly one remedy here:
+ * both governance reads failed, so there is no successful Rulesets read to
+ * fall back on, and no trust flag that would let either read be treated as
+ * genuinely empty. Supplying an external credential -- a personal access
+ * token or a GitHub App installation token, provided as a repository
+ * secret -- is the only way a CI-hosted invocation can make this check
+ * assert a positive result.
+ */
+export function formatBranchProtectionUnreadableWarning(owner, repo, branch) {
+  return (
+    `branch protection not readable for ${owner}/${repo}:${branch} -- a ` +
+    `workflow's own GITHUB_TOKEN can never be granted administration: read ` +
+    `(a GitHub Actions platform limitation, not a configuration gap), so a ` +
+    `CI-hosted invocation using only that token cannot make this check ` +
+    `assert a positive result here. The only remedy is supplying an ` +
+    `external credential -- a personal access token or a GitHub App ` +
+    `installation token -- as a repository secret`
+  );
 }
 /**
  * Whether `checkGithubReadiness` should warn (or, under `--strict`, error)
