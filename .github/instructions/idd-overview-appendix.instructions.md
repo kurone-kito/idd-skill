@@ -12,10 +12,9 @@ are in `idd-overview-core.instructions.md`.
 ## Policy Constants
 
 The distributed claim, advisory, CI, and critique-loop defaults are
-named in `docs/policy-constants.md`. Read that page before changing any
-timing or loop constant, and record local deviations in onboarding or
-repository docs so future sessions can find the selected policy values
-without scanning every phase file.
+named in `docs/policy-constants.md`. Read it before changing any timing
+or loop constant, and record local deviations in onboarding or
+repository docs so later sessions need not scan every phase file.
 
 ## Live status digest
 
@@ -30,16 +29,16 @@ unattended run. See
 `node scripts/live-status-digest.mjs` helper (convenience only).
 
 Treat every digest create or edit as a GitHub side effect: re-validate
-the active claim first, write fields from the state just collected, and
-set `Authoritative by` to the evidence used. If the claim was lost, do
-not repair or update the digest.
+the active claim first, write fields from that state, and set
+`Authoritative by` to the evidence used. If the claim was lost, do not
+repair or update the digest.
 
 On pull requests, a digest edit is still PR activity: do not edit a PR
 digest between a valid E1 review watermark and an intended F3 merge
 (it would perturb review-currency). Edit it only when leaving merge
 intent (returning to E1, routing F3 to F1/D4 as blocked, or a hold/stop)
 or after F3 has merged; the F3 awaiting-reviewer restart-F2 path skips
-digest edits for the same reason.
+edits too.
 
 ## Abort
 
@@ -47,10 +46,11 @@ On abort, re-validate ownership first. If the active claim still uses
 your current `{claim-id}`, update the digest before posting
 `unclaimed-by` so it shows `Phase: aborted/released`, the planned
 release in `Next action`, and the verified claim plus abort reason in
-`Authoritative by`; then post an `unclaimed-by` comment with that same
-`{claim-id}`. If the active claim no longer uses your `{claim-id}`, do
-not update the digest and do not post a release comment because another
-session already took over. Open PR and remote branch left by a stale or
+`Authoritative by`; then post an `unclaimed-by` comment for that same
+`{claim-id}`. If the
+active claim no longer uses your `{claim-id}`, do not update the digest
+or post a release comment, since another session already took over.
+Open PR and remote branch left by a stale or
 unclaimed state are inheritable by the next agent (see
 `idd-resume.instructions.md`).
 
@@ -63,19 +63,24 @@ hold phase, the blocking condition in `Open blockers`, and the resume
 condition in `Next action`. The digest does not reset the stale clock.
 
 For an externally owned blocker (sibling PR/issue, maintainer-owned
-check, base-branch health), phrase the resume condition as the checkable
-invariant (e.g. a named check passing on main), not the sibling alone —
-the proxy may resolve differently, or never. A pollable invariant keeps
-the claim and the 12 h heartbeat.
+check, base-branch health), phrase the resume condition as a checkable
+invariant (e.g. a named check passing on main) rather than the sibling
+alone, since the proxy may resolve differently or never; this keeps the
+claim and 12 h heartbeat active.
 
 **Needs-decision claim release.** When no further session-side action
 is expected before a human responds, the holding session may apply the
 configured needs-decision label (`labels.needsDecisionLabelName`,
 default `status:needs-decision`) and release the claim. Any phase may
-do this, not only E6. After release, stop heartbeating. Once a
-qualifying human decision resolves the hold, a later session removes
-the label and re-claims. A response that leaves the decision open
-does not re-enter.
+do this, not only E6. After release, stop heartbeating. A qualifying
+human decision lets a later session drop the label and re-claim; a
+response leaving the decision open does not re-enter.
+
+**Hold consolidation.** When a hold traces to the same root file or
+dependency as an earlier hold from this session (even on a different
+issue), pause further per-issue escalation and audit the shared root
+cause's full scope once, bringing one consolidated decision to the
+human instead of re-escalating per newly discovered layer.
 
 **Provider-outage park**: release the claim immediately, no 12 h
 heartbeat -- see idd-ci.instructions.md's Hold-and-report failure shapes.
@@ -111,14 +116,14 @@ on `git commit`/`git merge` is the last resort.
 
 Record material progress, decisions, and hold reasons as issue or PR
 comments as they happen -- including any non-default signing outcome
-(e.g. `--no-gpg-sign`) -- so a resuming agent needs no session memory
-to continue correctly.
+(e.g. `--no-gpg-sign`) -- so a resuming agent can continue without
+session memory.
 
 Operational restore markers (`review-watermark` and `review-baseline`)
 must include the current `{claim-id}` and must never be restored across
 a claim change. A takeover starts a new restore scope. These markers
-must be authored by a trusted marker actor with a visible
-human-readable note (see `idd-review-snapshot.instructions.md`).
+must be authored by a trusted marker actor with a visible note (see
+`idd-review-snapshot.instructions.md`).
 
 ## Review item classes
 
@@ -130,21 +135,21 @@ handling rules, see `idd-review-triage.instructions.md`.
 **Gating.** Applies only when `upstreamEscalation.enabled` is `true`
 in `.github/idd/config.json` (absent or `false`: skip silently).
 
-**Qualifying criteria** (high-confidence bar, mirroring A4.5's
+**Qualifying criteria** (high-confidence, mirroring A4.5's
 `invalid`/`out-of-scope` rigor in `idd-suitability.instructions.md`):
 the discovered problem's root cause must be that an
 `idd-template`-sourced instruction/doc/helper's own stated logic is
 self-contradictory, or its steps as written cannot produce the outcome
-it claims. Never for a subjective "unclear wording" complaint, and
-never when the root cause is local to the current repository (its own
-code, config, or a local customization).
+it claims. Never for a subjective "unclear wording" complaint, or when
+the root cause is local to this repository (its own code, config, or a
+local customization).
 
-- **Qualifying**: a step tells the reader to "proceed to step N" from
-  inside step N itself, with no later step N in the section — the
-  stated control flow cannot be followed as written.
-- **Non-qualifying**: an adopter finds a step confusing given their
-  own branch-naming convention — followable exactly as written; the
-  friction is local interpretation.
+- **Qualifying**: a step says "proceed to step N" from inside step N
+  itself, with no later step N — the control flow cannot be followed
+  as written.
+- **Non-qualifying**: an adopter finds a step confusing given their own
+  branch-naming convention — followable as written; the friction is
+  local interpretation.
 
 **What to do.** Author (or extend, via the normal reuse-first checks)
 a local issue through `skills/issue-authoring/` as usual, additionally
@@ -159,9 +164,8 @@ this workflow.
 
 ## Project commands
 
-The Project commands table (`fix-validate`, `pre-push-validate`,
-`post-fix-validate`, `install-deps`, `issue-scope`,
-`orphan-first-policy`) and its override rules live in
+The Project commands table (named in full in
+`idd-overview-core.instructions.md`) and its override rules live in
 [`docs/customization.md` → Project commands reference](../../docs/customization.md#project-commands-reference).
 
 ## Critique pass
@@ -169,18 +173,18 @@ The Project commands table (`fix-validate`, `pre-push-validate`,
 A **critique pass** is an independent review of a plan or diff that
 produces a list of issues with severity, correctness, and coverage
 assessment. For the per-agent invocation table (Copilot / Claude Code /
-Codex CLI / Antigravity CLI (formerly Gemini CLI)) and the optional
-repository-configurable `critiqueLoop.delegate` surface, see
+Codex CLI / Antigravity CLI) and the optional repository-configurable
+`critiqueLoop.delegate` surface, see
 [`docs/idd-workflow.md` → Critique pass invocation](../../docs/idd-workflow.md#critique-pass-invocation).
-For **C1 and E10** — this surface does not extend to E2 — when
-helper runtime is enabled, resolve the effective delegate with the
-`idd-critique-delegate` helper documented at
+For **C1 and E10** (not E2), when helper runtime is enabled, resolve the
+effective delegate with the `idd-critique-delegate` helper documented
+at
 [`docs/idd-helper-scripts.md` → Effective C1 critique delegate](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate).
 
 ### Critique lenses
 
-Two lenses in `docs/idd-workflow.md` apply on top of the general
-critique, and compose when both fit. Apply
+Two lenses in `docs/idd-workflow.md` apply atop the general critique,
+and compose when both fit. Apply
 [Mutation / write-side](../../docs/idd-workflow.md#mutation--write-side-helper-lens)
 to a helper that mutates GitHub or git state or merges, and
 [Gate-mirroring](../../docs/idd-workflow.md#gate-mirroring-helper-lens)
@@ -192,7 +196,6 @@ When this repository ships `idd-template/` for adopters, that tree is
 canonical. Edit `idd-template/` first for any `idd-*.instructions.md`,
 `docs/idd-workflow.md`, or `docs/customization.md`, then regenerate the
 live target with `node scripts/sync-docs.mjs --apply` (`structure`/
-`contains` pairs such as `docs/idd-workflow.md` need a hand-mirrored
-live edit). See
+`contains` pairs need a hand-mirrored live edit). See
 [`docs/customization.md` → Template sync mapping](../../docs/customization.md#template-sync-mapping).
 Include the live target in the same commit as the template source.
