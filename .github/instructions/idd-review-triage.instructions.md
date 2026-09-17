@@ -258,8 +258,8 @@ reviewer feedback:
     review thread — {link}") so that F2's unreplied-comments gate does
     not block merge on that comment.
   - **No thread (regular-comment AMD)**: apply the same
-    agree/disagree logic via a reply on the original comment; skip
-    every "resolve the thread" step above.
+    agree/disagree logic in a new comment naming it (no reply
+    endpoint exists); skip every "resolve the thread" step above.
 - For a `CHANGES_REQUESTED` review body you are rejecting: post a PR
   comment explaining your reasoning and ask the reviewer to reconsider.
   - If the reviewer does not respond and the state does not change: post
@@ -371,9 +371,6 @@ review-ack --from-pr <pr-number> --agent-id <id> --timestamp
 ```text
 review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}
 ```
-
-_Worked example_: see
-[rationale](../../docs/idd-design-rationale.md#review-ack-worked-example).
 
 PATH B — Advisory non-review notice (rate-limit / quota / queued / bare
 ack / error, as defined in E4):
