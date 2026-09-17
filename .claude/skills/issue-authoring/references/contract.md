@@ -1232,28 +1232,29 @@ only approval boundary.
   the authoring label atomically and carries an exact hidden publication token
   for target, anchor, set, and session. If the target runtime cannot provide
   that operation, stop before creation. Before the create, generate the
-  opaque target/anchor IDs and token because issue numbers are not yet known,
-  and carry this exact HTML-first body line:
+  opaque `target` id and token for both markers below -- the new issue's
+  own number is not yet known. `anchor` in **both** markers depends on
+  the new issue's role in the set, not on a blanket "not yet known"
+  rule: when this new issue is itself the set anchor, `anchor` reuses
+  that same opaque `target` value (self-reference, since the anchor's
+  own number is equally unknown at this point) -- the template's
+  `<opaque-anchor-id>` placeholder below depicts this self-anchor case
+  only. For a **non-anchor child**, `anchor` is instead the set
+  anchor's **already-resolved real** `<owner>/<repo>#<number>`
+  reference, not an opaque id, since the anchor already exists with a
+  known number by the time a child is created. See also the CLI
+  `--help` text's `authoring-owner`/`authoring-publication-intent`
+  shape notes (`bin/idd-post-idd-marker.mjs --help`) for the related,
+  but not identical, per-marker-type distinction those two carry.
+  Carry this exact HTML-first body line:
 
   ```html
   <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
   ```
 
-  The opaque-`anchor` framing above covers the set anchor's own
-  `authoring-publication` marker specifically, where the anchor's own
-  number is exactly what is not yet known, so `anchor` legitimately
-  reuses the same opaque placeholder as `target` (self-reference). A
-  **non-anchor child's** own `authoring-publication` marker instead
-  sets `anchor` to the set anchor's **already-resolved real**
-  `<owner>/<repo>#<number>` reference, not an opaque id, since the
-  anchor already exists with a known number by the time a child is
-  created. See also the CLI `--help` text's `authoring-owner`/
-  `authoring-publication-intent` shape notes
-  (`bin/idd-post-idd-marker.mjs --help`) for the related, but not
-  identical, per-marker-type distinction those two carry.
-
   The originating Stage 1 hold uses this append-only publication-intent
-  record:
+  record, whose `anchor` field follows the same self-anchor/non-anchor-child
+  rule above:
 
   ```html
   <!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; journal=<owner>/<repo>#<number>; issue=<owner>/<repo>#<number>|none; actor=<trusted-marker-actor>; state=<pending|member|cleanup|abandoned> -->
