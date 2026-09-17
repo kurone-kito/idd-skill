@@ -1239,6 +1239,19 @@ only approval boundary.
   <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
   ```
 
+  The opaque-`anchor` framing above covers the set anchor's own
+  `authoring-publication` marker specifically, where the anchor's own
+  number is exactly what is not yet known, so `anchor` legitimately
+  reuses the same opaque placeholder as `target` (self-reference). A
+  **non-anchor child's** own `authoring-publication` marker instead
+  sets `anchor` to the set anchor's **already-resolved real**
+  `<owner>/<repo>#<number>` reference, not an opaque id, since the
+  anchor already exists with a known number by the time a child is
+  created. This mirrors the shape distinction the CLI `--help` text
+  already documents for `authoring-owner`/`authoring-publication-intent`
+  (`bin/idd-post-idd-marker.mjs --help`), extended here to
+  `authoring-publication` itself.
+
   The originating Stage 1 hold uses this append-only publication-intent
   record:
 
