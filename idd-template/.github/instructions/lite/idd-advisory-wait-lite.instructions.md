@@ -128,8 +128,8 @@ Helper-first posting: `post-idd-marker --type advisory --target pr
 `docs/idd-helper-scripts.md`. The manual JSON `POST` is the fallback
 when the helper is unavailable.
 
-Only a trusted marker actor's `created_at` counts for the clock —
-never commit author/committer timestamps.
+Only a trusted marker actor's comment `created_at` counts for the
+clock — never commit author/committer timestamps.
 
 ## Polling guidance (protocol-level only)
 
