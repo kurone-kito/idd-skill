@@ -109,9 +109,10 @@ other GitHub side effect, confirm all of the following:
 6. When a fix introduces a precision (a name, value, path, or described
    behavior) to satisfy a reviewer, verify it against the actual
    implementation before committing.
-7. If an Accepted item is already fixed by an earlier commit -- this
-   round's own prior fix, or a previous round's E12 push -- confirm
-   the commit addresses it, applying the same file-path-touch check as
+7. If an Accepted PATH A item is already fixed by an earlier commit --
+   this round's own prior fix, or a previous round's E12 push --
+   confirm the commit addresses it, applying the same file-path-touch
+   check as
    `idd-review-snapshot-lite.instructions.md`'s Cold-start edge case 1.
    Do not duplicate the fix; let E13 cite that SHA.
 8. Do not push yet. All of this round's fixes push together at E12.
@@ -248,7 +249,8 @@ other GitHub side effect, confirm all of the following:
    `**Accepted** — fixed in {commit-sha or comma-separated list}: {brief explanation}`
    Citing a commit that did not fix this item in the current round
    requires it to have already passed the file-path-touch check (E9
-   item 7, or Cold-start edge case 1).
+   item 7, or `idd-review-snapshot-lite.instructions.md`'s Cold-start
+   edge case 1).
 3. For a review thread, immediately resolve the thread after posting
    the reply. Reply first, resolve second, so a failed reply never
    leaves a silently-resolved thread.

@@ -257,8 +257,9 @@ unambiguous:
 - `**Accepted** — fixed in {commit-sha or comma-separated list}: {brief explanation}`
   Citing a commit that did not fix this item in the current round (E9's
   batching case, or a Cold-start edge case 1 citation) requires that
-  commit to have already passed the file-path-touch check Cold-start
-  edge case 1 defines. After that visible prefix, include the
+  commit to have already passed the file-path-touch check
+  `idd-review-snapshot.instructions.md`'s Cold-start edge case 1
+  defines. After that visible prefix, include the
   reply-identity stamp exactly as
   `idd-review-triage.instructions.md`'s E6 defines it
   (`<!-- {markerPrefix}-review-reply -->`) — same stamp mechanics and
