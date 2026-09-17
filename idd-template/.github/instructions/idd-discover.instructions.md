@@ -234,9 +234,9 @@ abort if no roadmap issue exists. Under `roadmap-first` scope, this is
 **Autopilot cross-roadmap mode (optional, additive).** When several
 roadmaps run in parallel and the active autopilot-suitable work may live
 under **sibling** epics, do not commit to a single umbrella here. Instead,
-enumerate the open execution leaves across **all** open roadmap roots and
-rank them by autopilot-suitability (see A2), then carry the top-ranked
-candidate through the normal A3/A4/A4.5/A5 gates. This is additive: the
+enumerate the open execution leaves across **all** open roadmap roots via
+A2's per-root A1.5 audit, then carry the top-ranked candidate through the
+normal A3/A4/A4.5/A5 gates. This is additive: the
 single-root selection above stays the default; orphan-first filtering
 still applies only to true orphans, since cross-roadmap leaves are
 reached via a parent roadmap's task list and never carry their own
@@ -363,13 +363,13 @@ execution leaves from **each** open root (`sourceRoots` provenance).
 `--all-roadmaps` emits only this **raw** ranked union; it does not run
 A1.5. Once per `--all-roadmaps` re-enumeration, audit each root via
 A1.5 **before** adding its leaves (re-enumerate after close/link). Drop
-a root only when **that root** has a blocked-by-human or needs-decision
-label; omit a leaf whose `sourceRoots` are all dropped. Per-root
-human-gate or non-autonomous-gap drops that root only (no A1.5
-early-stop / trigger (d)). Close only after A1.5's written checks, not
-helper `ready: true`. Any other A1.5 outcome that continues to A2 still
-unions that root. Then rank as in A4 Step 2. Score is advisory —
-A3/A4/A4.5/A5 still run on the selected candidate.
+a root whose A1.5 outcome is a root-level blocker or
+non-autonomous-gap (labels optional); omit a leaf whose `sourceRoots`
+are all dropped. Suppress only the global A1.5 early-stop / trigger
+(d). Close only after A1.5's written checks, not helper `ready: true`.
+Any other A1.5 outcome that continues to A2 still unions that root.
+Then rank as in A4 Step 2. Score is advisory — A3/A4/A4.5/A5 still run
+on the selected candidate.
 
 ## A3 — Filter to ready-to-start
 
