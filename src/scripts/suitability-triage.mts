@@ -490,8 +490,17 @@ const REPO_OWNED_VALIDATION_OBJECT_REFERENCE = new RegExp(
   String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+${REPO_OWNED_VALIDATION_FILLER}\s+[\x60'"]?${SUPPLIED_CONTENT_NOUN}`,
   'i',
 );
+// Copilot review (PR #3087): the exception above is broader than the
+// repository-owned validation case it targets -- "Please run this full
+// script from the issue body to reproduce." is the existing #2146
+// supplied-content fixture with a repo-scoping filler word inserted, and
+// `issue body` is itself an untrusted-origin signal (issue prose is
+// untrusted input; see the Scope invariant in
+// idd-overview-appendix.instructions.md) that the original vocabulary
+// below did not cover, so the exception wrongly applied. Add `issue body`
+// (covers "the issue body" / "from the issue body") to this vocabulary.
 const UNTRUSTED_ORIGIN_SIGNAL = new RegExp(
-  String.raw`\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER})\b`,
+  String.raw`\b(?:untrusted|user-provided|user input|issue\s+body|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER})\b`,
   'i',
 );
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
