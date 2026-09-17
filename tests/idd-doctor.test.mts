@@ -22,6 +22,7 @@ import {
   checkProjectCommands,
   classifyBacklog,
   classifyBootstrapEraPrNumbers,
+  classifyBranchProtectionUnreadableCatchCause,
   classifyClaimTimingConsistency,
   classifyLiveConfigSchemaFinding,
   classifyMergePolicyAcknowledgement,
@@ -46,6 +47,7 @@ import {
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
   findPlaceholders,
+  formatBranchProtectionUnreadableWarning,
   formatCleanupBacklogExamples,
   formatCleanupBacklogRemediation,
   formatCleanupBacklogScanPreamble,
@@ -4149,6 +4151,184 @@ test('isBranchProtectionUnreadable is true only when both reads are unreadable',
   assert.equal(
     isBranchProtectionUnreadable({ unreadable: true }, { unreadable: true }),
     true,
+  );
+});
+
+// idd-skill#3075: formatBranchProtectionUnreadableWarning names the
+// structural cause (GITHUB_TOKEN can never be granted administration: read)
+// and its one remedy (an external credential as a repository secret),
+// extending the same class of cause-aware remedy text
+// formatRulesetsOnlyTrustGapWarning already gives for the narrower
+// Rulesets-only case to this more common fully-unreadable case. The
+// `cause` parameter itself keeps this cause-conditional (Codex/CodeRabbit
+// review) instead of asserting the GITHUB_TOKEN cause unconditionally --
+// checkGithubReadiness's catch block also fires for a `gh api` failure with
+// nothing to do with administration: read at all, and a caught explicit
+// 401/403 is a different shape than the direct check's masked 404.
+test("formatBranchProtectionUnreadableWarning('ambiguous-404') states that GITHUB_TOKEN cannot be granted administration: read, mentions the masked-404 ambiguity, and names an external credential as the remedy", () => {
+  const message = formatBranchProtectionUnreadableWarning(
+    'example-owner',
+    'example-repo',
+    'master',
+    'ambiguous-404',
+  );
+  assert.match(message, /example-owner\/example-repo:master/);
+  assert.match(message, /GITHUB_TOKEN/);
+  assert.match(message, /administration: read/);
+  assert.match(message, /GitHub Actions platform limitation/);
+  assert.match(message, /personal access token/);
+  assert.match(message, /GitHub App installation token/);
+  assert.match(message, /repository secret/);
+  assert.match(message, /genuinely has no protection configured/);
+  assert.match(message, /masking that as a 404 rather than a 403/);
+});
+
+test('formatBranchProtectionUnreadableWarning(\'ambiguous-404\') still leads with the original bare "not readable" string', () => {
+  const message = formatBranchProtectionUnreadableWarning(
+    'example-owner',
+    'example-repo',
+    'release/1.0',
+    'ambiguous-404',
+  );
+  assert.match(
+    message,
+    /^branch protection not readable for example-owner\/example-repo:release\/1\.0/,
+  );
+});
+
+test("formatBranchProtectionUnreadableWarning('explicit-permission-denied') states GITHUB_TOKEN/administration: read guidance without claiming GitHub masked the failure as a 404", () => {
+  const message = formatBranchProtectionUnreadableWarning(
+    'example-owner',
+    'example-repo',
+    'master',
+    'explicit-permission-denied',
+  );
+  assert.match(
+    message,
+    /^branch protection not readable for example-owner\/example-repo:master/,
+  );
+  assert.match(message, /GITHUB_TOKEN/);
+  assert.match(message, /administration: read/);
+  assert.match(message, /repository secret/);
+  assert.match(message, /not a masked 404/);
+  assert.doesNotMatch(message, /masking that as a 404/);
+});
+
+// idd-skill#3075 (C1 self-review, CodeRabbit round 4): a 403 can also be an
+// SSO or organization-policy restriction unrelated to any specific missing
+// permission, so this branch must point the reader at gh's own error output
+// for the specific cause rather than unconditionally asserting it is always
+// a missing administration: read permission.
+test("formatBranchProtectionUnreadableWarning('explicit-permission-denied') hedges the specific cause instead of unconditionally attributing every failure to a missing permission", () => {
+  const message = formatBranchProtectionUnreadableWarning(
+    'example-owner',
+    'example-repo',
+    'master',
+    'explicit-permission-denied',
+  );
+  assert.match(message, /inspect gh's own error output/);
+  assert.match(message, /SSO\/organization-policy restriction/);
+  assert.doesNotMatch(message, /the reading credential lacks the/);
+});
+
+test("formatBranchProtectionUnreadableWarning('other') does not assert the GITHUB_TOKEN/administration: read cause for an unrelated gh api failure", () => {
+  const message = formatBranchProtectionUnreadableWarning(
+    'example-owner',
+    'example-repo',
+    'master',
+    'other',
+  );
+  assert.match(
+    message,
+    /^branch protection not readable for example-owner\/example-repo:master/,
+  );
+  assert.doesNotMatch(message, /GITHUB_TOKEN/);
+  assert.doesNotMatch(message, /administration: read/);
+  assert.doesNotMatch(message, /repository secret/);
+  assert.match(message, /rate limit/);
+  assert.match(message, /network error/);
+  assert.match(message, /gh auth\s+status/);
+});
+
+// idd-skill#3075 (C1 self-review): classifyBranchProtectionUnreadableCatchCause
+// is extracted as its own pure function, mirroring this file's existing
+// "pure so testable without mocking gh" pattern, so the catch-block's
+// 401/403 classification is independently unit-tested instead of only
+// exercised indirectly through checkGithubReadiness (which isn't exported).
+test('classifyBranchProtectionUnreadableCatchCause classifies 401 and 403 as explicit-permission-denied when the error text carries no rate-limit signature', () => {
+  assert.equal(
+    classifyBranchProtectionUnreadableCatchCause(
+      401,
+      'gh: Bad credentials (HTTP 401)',
+    ),
+    'explicit-permission-denied',
+  );
+  assert.equal(
+    classifyBranchProtectionUnreadableCatchCause(
+      403,
+      'gh: Resource not accessible by integration (HTTP 403)',
+    ),
+    'explicit-permission-denied',
+  );
+});
+
+test('classifyBranchProtectionUnreadableCatchCause classifies every other status (and null) as other', () => {
+  assert.equal(
+    classifyBranchProtectionUnreadableCatchCause(
+      500,
+      'gh: Internal Server Error (HTTP 500)',
+    ),
+    'other',
+  );
+  assert.equal(
+    classifyBranchProtectionUnreadableCatchCause(
+      429,
+      'gh: Too Many Requests (HTTP 429)',
+    ),
+    'other',
+  );
+  assert.equal(classifyBranchProtectionUnreadableCatchCause(null, ''), 'other');
+  // fetchGovernanceJson swallows a genuine 404 internally and never
+  // re-throws it, so checkGithubReadiness's catch block should never see
+  // one in practice -- still classified as 'other' here since this
+  // function has no way to know that context, and 'other's generic
+  // diagnostic is the safer default for an unrecognized status.
+  assert.equal(
+    classifyBranchProtectionUnreadableCatchCause(
+      404,
+      'gh: Not Found (HTTP 404)',
+    ),
+    'other',
+  );
+});
+
+// idd-skill#3075 (C1 self-review, CodeRabbit round 3): GitHub signals both
+// primary and secondary rate limiting with the same 403 status a genuine
+// permission denial uses, so a bare 403 must not be classified as
+// explicit-permission-denied when the error text carries either documented
+// rate-limit message shape.
+test('classifyBranchProtectionUnreadableCatchCause classifies a 403 rate-limit response as other, not explicit-permission-denied', () => {
+  assert.equal(
+    classifyBranchProtectionUnreadableCatchCause(
+      403,
+      'gh: API rate limit exceeded for installation ID 123. (HTTP 403)',
+    ),
+    'other',
+  );
+  assert.equal(
+    classifyBranchProtectionUnreadableCatchCause(
+      403,
+      'gh: You have exceeded a secondary rate limit. (HTTP 403)',
+    ),
+    'other',
+  );
+  // Case-insensitive: GitHub's own message casing shouldn't matter here.
+  assert.equal(
+    classifyBranchProtectionUnreadableCatchCause(
+      403,
+      'gh: Secondary Rate Limit hit (HTTP 403)',
+    ),
+    'other',
   );
 });
 
