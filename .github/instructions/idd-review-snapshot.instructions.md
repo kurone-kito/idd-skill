@@ -109,8 +109,7 @@ _{agent-id}: review triage snapshot — IDD automation marker. Do not edit._
 The HTML comment is the machine-readable token; the italic line is a
 visible note for human readers. Detect the language of the PR body and
 write the visible note in that language (default to English if
-ambiguous). Example Japanese note:
-`_{agent-id}: レビュートリアージのスナップショット — IDD 自動化マーカー。編集しないでください。_`
+ambiguous).
 
 **Nothing appended after the note.** As with `claimed-by`/`unclaimed-by`
 in `idd-claim.instructions.md`, a `review-watermark` (and
@@ -218,10 +217,14 @@ count (see `docs/idd-design-rationale.md`) detects this; add one
 PATH B item per uncovered finding.
 
 **Regular comments** where the last speaker isn't any IDD agent and no
-reply from **you** exists after that comment's timestamp — exclude
-periodic notification bots (Renovate, etc.). Include Copilot/CI
-advisory bot comments; they follow PATH B in E4-E7 (non-review notices
-are dispositioned under the E6 rule).
+reply from **you** exists after that comment's timestamp, or where the
+comment's most recent IDD-agent reply starts
+`**Awaiting maintainer decision**` (remains an active
+`ReviewItems_snapshot` entry regardless of the last-speaker exclusion
+rule for this plain comment) — exclude periodic notification bots
+(Renovate, etc.). Include Copilot/CI advisory bot comments; they follow
+PATH B in E4-E7 (non-review notices are dispositioned under the E6
+rule).
 
 **Resolved-thread index (for the E5 duplicate pre-check).** Also carry
 forward a light index of this PR's **resolved** threads

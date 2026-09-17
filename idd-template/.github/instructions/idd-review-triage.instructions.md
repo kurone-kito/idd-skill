@@ -629,10 +629,6 @@ the loop — bind the merge to current HEAD and proceed. An **ack-only**
 comment opens no new thread, carries no `CHANGES_REQUESTED`, and raises
 no new finding; anything else re-opens the loop normally.
 
-_Example_: CodeRabbit replies "Thanks for confirming" after your
-`**Rejected**` disposition — no new thread or finding, so continue to
-F-phase on the current HEAD despite the `updatedAt` advance.
-
 **Helper evidence**: when the advisory-bot identity is configured, the
 activity-snapshot / `pre-merge-readiness` evidence emits the structural
 half of this classification (`reviewCurrency.live.ackOnly.items`,
