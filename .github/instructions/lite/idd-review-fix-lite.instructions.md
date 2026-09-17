@@ -109,11 +109,11 @@ other GitHub side effect, confirm all of the following:
 6. When a fix introduces a precision (a name, value, path, or described
    behavior) to satisfy a reviewer, verify it against the actual
    implementation before committing.
-7. If an Accepted item is already fixed by a prior commit in this same
-   round, confirm the commit's diff touches the item's anchored
-   path(s) (`idd-review-snapshot-lite.instructions.md`'s Cold-start
-   edge case 1) before citing it. Do not duplicate the fix; let E13
-   cite that SHA.
+7. If an Accepted item is already fixed by an earlier commit -- this
+   round's own prior fix, or a previous round's E12 push -- confirm
+   the commit addresses it, applying the same file-path-touch check as
+   `idd-review-snapshot-lite.instructions.md`'s Cold-start edge case 1.
+   Do not duplicate the fix; let E13 cite that SHA.
 8. Do not push yet. All of this round's fixes push together at E12.
 
 ## E10 — Validate fixes with critique pass
