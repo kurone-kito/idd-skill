@@ -371,8 +371,8 @@ candidate.
 **Per-root completion audit.** Once per `--all-roadmaps`
 re-enumeration, audit each root via A1.5. `ready: true` routes it
 through A1.5's own close steps (it contributes zero leaves anyway); a
-`human-gate` blocker drops that root's leaves from this pass only; any
-other blocker leaves it unioned as today.
+blocked-by-human or needs-decision label drops its leaves from this pass;
+any A1.5 outcome that continues to A2 still unions the root.
 
 ## A3 — Filter to ready-to-start
 
