@@ -472,6 +472,97 @@ const SUPPLIED_CONTENT_OBJECT_FILLER = String.raw`(?:(?!\b(?:${SUPPLIED_CONTENT_
 const SUPPLIED_CONTENT_REFERENCE = String.raw`${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER}\s+(?:\S+\s+){0,2}?[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
 const SUPPLIED_CONTENT_OBJECT_REFERENCE = String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+${SUPPLIED_CONTENT_OBJECT_FILLER}[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
 const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
+// #3073: "run this full command to validate the config" matches only
+// SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
+// above -- the filler word here is a repository-scoping adjective, not an
+// untrusted-origin signal, so the sentence is repository-owned validation
+// prose rather than a directive to act on supplied content.
+//
+// Rounds 1-3 (Copilot + CodeRabbit, PR #3087) tried recognizing this shape
+// by enumerating untrusted-origin phrasings the exception must NOT apply
+// near (issue body, bare above/below, pre-verb placement, a bare "issue
+// #<number>" reference, "copied"/"attachment", "supplied content" -- each
+// round found a new, genuinely distinct gap, because an enumerated negative
+// vocabulary can never be complete), plus a loose validation-purpose
+// keyword scan that introduced its own bugs (satisfied under negation --
+// "do not validate the configuration" -- and by the issue title bleeding
+// into a body verb's preceding-clause scan). Per Tier 2 of this
+// workflow's review-fix escalation guidance (idd-review-fix.instructions.md),
+// simplify rather than add a further layer: this exception is now a single,
+// fully anchored, POSITIVE-only signature instead of a blocklist-plus-
+// keyword-scan. It matches only when:
+//
+// 1. The entire post-verb window (already sentence-bounded by
+//    sliceUnsafeDirectiveWindow) is EXACTLY "this/that <filler> command|
+//    script to validate|verify|check|confirm (the) config|configuration|
+//    setup|settings" -- nothing else. No code-wrapped noun (preserves
+//    #2146's protection there outright, since a code span can never
+//    satisfy this literal template), no inserted provenance clause
+//    (breaks the noun-to-"to" contiguity this template requires), no
+//    negated or unrelated purpose ("do not validate ..." or "... to
+//    reproduce." cannot match this template either).
+// 2. The text immediately preceding the verb, from the ISSUE BODY'S OWN
+//    START only (never the issue title, even when a body verb sits near
+//    the body's start) to the verb, is nothing but a sentence/paragraph
+//    boundary plus an optional "Please " -- see
+//    REPO_OWNED_VALIDATION_SENTENCE_START below.
+// 3. Round 5 (Copilot, PR #3087): the exception above checked only the
+//    text AFTER the verb, so it applied to every verb in
+//    UNSAFE_DIRECTIVE_VERB alike -- "Please install/paste/invoke this
+//    full script to validate the config." bypassed the check even
+//    though those verbs are explicitly unsafe. Restrict the exception
+//    to the verb literally spelled `run` -- the only verb the
+//    reproduced field-feedback case and every accepted regression below
+//    actually uses. This is a deliberate, narrower fail-closed choice,
+//    not an oversight: `execute` reads as an equally plausible
+//    repository-owned-validation verb ("Execute this full script to
+//    verify the setup"), but nothing in the reported case requires
+//    exempting it, so it is left classified as unsafe here.
+//
+// Any other shape falls through unchanged to the ordinary unsafe-directive
+// match, exactly like the original ambiguous-determiner branch already did.
+//
+// Round 6 (Copilot, PR #3087): two bugs in this anchor's own definition,
+// not the enumeration class rounds 1-4 replaced. (a) The punctuation
+// alternative allowed zero whitespace after `.`/`?`/`!`
+// (`copied-script.Please run ...`), unlike the forward
+// `isUnsafeDirectiveSentenceEnd` this mirrors, which already requires
+// whitespace there -- tightened to `\s+` (which already covers `\r`/`\n`,
+// so the separate `\r?\n?` is redundant and dropped). (b)
+// REPO_OWNED_VALIDATION_WINDOW is tested against `window`, but
+// `sliceUnsafeDirectiveWindow` returns an unmarked, exactly
+// UNSAFE_DIRECTIVE_WINDOW_CHARS-long truncation when it finds no
+// sentence/blank-line boundary within that span -- whitespace padding
+// could then push real content (e.g. "from the issue body") past the cut,
+// hidden from this guard. `window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS`
+// is a sound completeness check without changing that shared #2146
+// helper: every other exit from `sliceUnsafeDirectiveWindow` (a genuine
+// boundary found, or the corpus simply ending) already returns a shorter
+// string; only the true truncation case returns exactly the full length.
+// See the guard's own use of this invariant in
+// findUnsafeExecutionDirectiveMatch below.
+//
+// Round 7 (Copilot + CodeRabbit, PR #3087, independently converging on the
+// same fix): the mid-paragraph sentence-boundary alternative
+// (`[.!?]\s+`) let a PRECEDING sentence in the same paragraph establish
+// untrusted provenance and then be ignored -- "This command came from
+// the issue body. Please run this full command to validate the config."
+// matched at the ". Please " boundary regardless of what that first
+// sentence said. Unlike round 6's whitespace/completeness bugs, this
+// alternative was not merely miscalibrated; no in-paragraph sentence
+// boundary can be trusted to have no supplied-content provenance stated
+// just before it without re-introducing a content scan over that prior
+// sentence -- exactly the enumerated-blocklist class rounds 1-4 replaced.
+// Remove the alternative entirely: the exception now recognizes only the
+// issue body's own start or a paragraph break (blank line) as a valid
+// boundary, never a same-paragraph sentence end. This is strictly
+// narrower than before (removing a case, not adding one), so it cannot
+// newly admit any case a prior round rejected.
+const REPO_OWNED_VALIDATION_VERB = 'run';
+const REPO_OWNED_VALIDATION_WINDOW =
+  /^\s*(?:this|that)\s+(?:full|complete|validation|config|configuration)\s+(?:command|script)\s+to\s+(?:validate|verify|check|confirm)\s+(?:the\s+)?(?:configuration|config|setup|settings)\s*$/i;
+const REPO_OWNED_VALIDATION_SENTENCE_START =
+  /(?:^|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
@@ -1890,7 +1981,11 @@ function isVerbWhollyInBodyCode(
 // #2146: new skip rules on this screen only. Do not copy
 // findPolicyOverrideMatch — its raw fallback still fires when the whole
 // match is not inside one code range, which is exactly the #1911
-// false-positive (code-wrapped verb + later visible noun).
+// false-positive (code-wrapped verb + later visible noun). #3073: a target
+// match is also discarded (not returned) when it is a repository-owned
+// validation/configuration directive per REPO_OWNED_VALIDATION_WINDOW /
+// REPO_OWNED_VALIDATION_SENTENCE_START -- see those constants' own
+// comment above.
 function findUnsafeExecutionDirectiveMatch(
   corpus: string,
   bodyOffset: number,
@@ -1920,7 +2015,30 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
-      if (targetMatch) {
+      // #3073 round 4-6: the repository-owned-validation exception is now
+      // a single fully anchored positive signature (see the constants'
+      // shared comment above) -- the whole window must match the literal
+      // template, the window itself must be known-complete (round 6: a
+      // window exactly UNSAFE_DIRECTIVE_WINDOW_CHARS long means
+      // sliceUnsafeDirectiveWindow hit its truncation limit with no
+      // boundary found, so later content could be hidden past the cut),
+      // the verb itself must be REPO_OWNED_VALIDATION_VERB (round 5:
+      // every other unsafe verb stays classified as unsafe), AND the
+      // verb's own preceding text, from the body's own start only (never
+      // the issue title), must be nothing but a sentence/paragraph
+      // boundary plus an optional "Please ".
+      if (
+        targetMatch &&
+        !(
+          verbText.toLowerCase() === REPO_OWNED_VALIDATION_VERB &&
+          window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
+          REPO_OWNED_VALIDATION_WINDOW.test(window) &&
+          verbStart >= bodyOffset &&
+          REPO_OWNED_VALIDATION_SENTENCE_START.test(
+            corpus.slice(bodyOffset, verbStart),
+          )
+        )
+      ) {
         const targetStart = targetMatch.index ?? 0;
         const targetText = targetMatch[0] ?? '';
         return corpus.slice(
