@@ -153,7 +153,7 @@ Read the **issue-scope** value from the Project commands table in
   filtered them all), **trigger (b)** (candidates reach A3.5 but A4
   Step 1, Step 1.5, or Step 2's floor skip discards every one), or
   **trigger (c)** (A1 finds no roadmap issues), or **trigger (d)** (A1.5
-  stops before A2). A0-O runs **at most
+  stop). A0-O runs **at most
   once** per Discover pass as this fallback; once spent, a later A4
   exhaustion reports and stops
   (not an abort) without re-entering A0-O. A non-empty A3.5
@@ -172,8 +172,8 @@ When A0-O runs as the `roadmap-first` fallback, every exit below that
 would re-enter **A1** or reach the **A3 decision tree** is redirected by
 the invoking trigger instead — (a)/(c) to the A3 decision tree, (b) (A4
 exhaustion) to the A4 **"report and stop"** terminal, (d) to A1.5's
-stop — since A1 already ran and must not be re-entered (no A1 ↔ A0-O or
-A4 ↔ A0-O loop).
+report-and-stop — since A1 already ran and must not be re-entered (no
+A1 ↔ A0-O or A4 ↔ A0-O loop).
 
 - If `orphan-first-policy` is `public-disabled`: for a public repository
   (or when visibility cannot be determined), skip A0-O without searching
