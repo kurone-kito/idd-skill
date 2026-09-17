@@ -1247,10 +1247,10 @@ only approval boundary.
   sets `anchor` to the set anchor's **already-resolved real**
   `<owner>/<repo>#<number>` reference, not an opaque id, since the
   anchor already exists with a known number by the time a child is
-  created. This mirrors the shape distinction the CLI `--help` text
-  already documents for `authoring-owner`/`authoring-publication-intent`
-  (`bin/idd-post-idd-marker.mjs --help`), extended here to
-  `authoring-publication` itself.
+  created. See also the CLI `--help` text's `authoring-owner`/
+  `authoring-publication-intent` shape notes
+  (`bin/idd-post-idd-marker.mjs --help`) for the related, but not
+  identical, per-marker-type distinction those two carry.
 
   The originating Stage 1 hold uses this append-only publication-intent
   record:
