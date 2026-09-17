@@ -143,12 +143,10 @@ the Step 1 snapshot and post the watermark — a merge-gate run
 completing _after_ the watermark forces a wasted E1↔F2 round-trip
 (F2's `ci-pass-drift`) with no new review activity.
 
-Note: some GitHub client tools (e.g., `gh issue comment`, `gh api -f
-body=`) silently reject HTML-comment-only bodies; this format's
-visible text avoids that, but the HTTP `POST` path is still
-recommended for reliability. `gh api`'s `-f` also treats a leading `@`
-as literal — only `-F` reads `@file` contents. The post-idd-marker
-helper above performs this JSON `POST` under `--apply`.
+Note: the post-idd-marker helper above performs this JSON `POST`
+under `--apply`, sidestepping the `gh issue comment`/`gh api -f body=`
+HTML-body and leading-`@` pitfalls `idd-overview-core.instructions.md`'s
+Claim format note already covers.
 
 On resume or restart, read the latest same-claim, trusted-author
 `<!-- review-watermark: {agent-id} {claim-id} … -->` comment to
@@ -304,7 +302,10 @@ work only when Step 3 does. Before E5
 verifies it, check whether a branch commit newer than its timestamp
 already fixes it (a lost E12 push, or edge case 2's local-ahead diff
 below) -- both read false against E5's claim-truth test by design;
-that commit is the confirmation, cap included. A covered in-scope
+that commit is the confirmation, cap included, only when its diff
+touches the item's anchored path(s) (its review-thread `path`, or a
+comment's named file) -- the file-path-touch check; otherwise it is
+not coverage and normal E5/E9 handling applies. A covered in-scope
 reviewer-feedback PATH A item Accepts on that basis, skips E9, E13
 cites the commit; everything else follows E5-E8 as normal.
 
