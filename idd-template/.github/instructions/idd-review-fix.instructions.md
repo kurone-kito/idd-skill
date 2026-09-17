@@ -5,9 +5,8 @@ Accepted PATH A items. Covers implementing fixes, validating, pushing,
 replying to reviewers, and waiting for CI — including E14's GitHub
 Copilot advisory-review step, which follows even when another local
 agent drives the workflow, since it depends on GitHub review state, not
-the local CLI. E14's timing defaults are named in
-[IDD policy constants](../../docs/policy-constants.md); refer there for
-values, but keep the phase logic here unchanged.
+the local CLI. E14's timing defaults live in
+[IDD policy constants](../../docs/policy-constants.md).
 
 Apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
@@ -38,7 +37,9 @@ E5's "Verify before accept" rule):
   before committing.
 - **Already fixed via batching.** A PATH A item Accepted (E4/E5) may
   already be folded into a prior E12 push — confirm the commit
-  addresses it and let E13 cite that SHA, without duplicating the fix.
+  addresses it, applying the same file-path-touch check as
+  `idd-review-snapshot.instructions.md`'s Cold-start edge case 1, and
+  let E13 cite that SHA, without duplicating the fix.
 
 ## E10 — Validate fixes with critique pass
 
@@ -50,18 +51,9 @@ current E9 fix batch.
 
 A repository may also configure `critiqueLoop.delegate` to point this
 pass at a different reviewer instead of the per-agent mechanism, using
-the same resolution chain and `mode` semantics C1 already has. When
-helper runtime is enabled, resolve the effective `critiqueLoop.delegate`
-with the
-[`idd-critique-delegate`](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate)
-helper: `node scripts/idd-critique-delegate.mjs` for source-repo /
-vendored-node profiles, or the profile-selected command named in
-`docs/idd-helper-scripts.md` for package-manager / ephemeral-npx
-profiles — never hardcode the bare binary name for those profiles.
-For `instructions-only` execution (no helper runtime), apply the
-resolution order directly: repo-local `critiqueLoop.delegate` always
-wins outright, and only when it is genuinely absent does a local
-runtime's user-global config file apply. `critiqueLoop.telemetryHook`
+the same resolution chain, `mode` semantics, and helper resolution
+(`idd-critique-delegate`) C1 (`idd-work.instructions.md`) already
+defines. `critiqueLoop.telemetryHook`
 remains C1-only and is never consulted here. Delegate findings enter
 this pass the way `mode`
 governs at C1 — see `docs/idd-workflow.md`'s "Critique pass invocation"
@@ -258,7 +250,12 @@ Start every reply with one of these prefixes so that disposition is
 unambiguous:
 
 - `**Accepted** — fixed in {commit-sha or comma-separated list}: {brief explanation}`
-  After that visible prefix, include the reply-identity stamp exactly as
+  Citing a commit that did not fix this item in the current round (E9's
+  batching case, or a Cold-start edge case 1 citation) requires that
+  commit to have already passed the file-path-touch check
+  `idd-review-snapshot.instructions.md`'s Cold-start edge case 1
+  defines. After that visible prefix, include the
+  reply-identity stamp exactly as
   `idd-review-triage.instructions.md`'s E6 defines it
   (`<!-- {markerPrefix}-review-reply -->`) — same stamp mechanics and
   constraints, applied here to the `**Accepted**`-only prefix this
