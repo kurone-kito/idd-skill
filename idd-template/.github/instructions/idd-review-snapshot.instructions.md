@@ -304,7 +304,8 @@ already fixes it (a lost E12 push, or edge case 2's local-ahead diff
 below) -- both read false against E5's claim-truth test by design;
 that commit is the confirmation, cap included, only when its diff
 touches the item's anchored path(s) (its review-thread `path`, or a
-comment's named file) -- the file-path-touch check; otherwise it is
+file explicitly named in a regular comment's context) -- the
+file-path-touch check; otherwise it is
 not coverage and normal E5/E9 handling applies. A covered in-scope
 reviewer-feedback PATH A item Accepts on that basis, skips E9, E13
 cites the commit; everything else follows E5-E8 as normal.
