@@ -77,11 +77,10 @@ human decision lets a later session drop the label and re-claim; a
 response leaving the decision open does not re-enter.
 
 **Hold consolidation.** When a hold traces to the same root file or
-dependency as an earlier hold from this session or a coordinating
-operator (even on a different issue), pause further per-issue
-escalation and audit the shared root cause's full scope once, bringing
-one consolidated decision to the human instead of re-escalating per
-newly discovered layer.
+dependency as an earlier hold from this session (even on a different
+issue), pause further per-issue escalation and audit the shared root
+cause's full scope once, bringing one consolidated decision to the
+human instead of re-escalating per newly discovered layer.
 
 **Provider-outage park**: release the claim immediately, no 12 h
 heartbeat -- see idd-ci.instructions.md's Hold-and-report failure shapes.
