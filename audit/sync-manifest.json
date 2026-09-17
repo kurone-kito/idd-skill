@@ -314,7 +314,7 @@
   "bundleBudgets": [
     {
       "id": "bundle-core",
-      "description": "Shared core: idd-overview-core + idd-overview-appendix, always loaded alongside bundle-discovery-phase, bundle-resume-phase, bundle-work-phase, bundle-review-triage-phase, bundle-review-fix-phase, or bundle-merge-phase",
+      "description": "Shared core: idd-overview-core + idd-overview-appendix, always loaded alongside bundle-discovery-phase, bundle-suitability-phase, bundle-resume-phase, bundle-work-phase, bundle-review-triage-phase, bundle-review-fix-phase, or bundle-merge-phase",
       "files": [
         ".github/instructions/idd-overview-appendix.instructions.md",
         ".github/instructions/idd-overview-core.instructions.md"
@@ -323,13 +323,20 @@
     },
     {
       "id": "bundle-discovery-phase",
-      "description": "Discovery path phase-specific files: idd-discover + idd-suitability + idd-claim (loaded with bundle-core)",
+      "description": "Discovery path phase-specific files: idd-discover + idd-claim (loaded with bundle-core)",
       "files": [
         ".github/instructions/idd-claim.instructions.md",
-        ".github/instructions/idd-discover.instructions.md",
+        ".github/instructions/idd-discover.instructions.md"
+      ],
+      "limitBytes": 78600
+    },
+    {
+      "id": "bundle-suitability-phase",
+      "description": "Pre-claim suitability triage phase-specific file: idd-suitability (loaded with bundle-core)",
+      "files": [
         ".github/instructions/idd-suitability.instructions.md"
       ],
-      "limitBytes": 92300
+      "limitBytes": 21000
     },
     {
       "id": "bundle-resume-phase",
