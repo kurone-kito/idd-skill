@@ -122,18 +122,66 @@ export const GH_TEXT_LOOP_TIMEOUT_OPTIONS: GhTextOptions = {
 };
 
 /**
+ * Insert a resolved GHES `--hostname` into a `gh api ...` args array,
+ * mirroring {@link ghApiJson}/{@link ghGraphql}'s own resolution (#1962) so
+ * every {@link ghText} caller that shells out to `gh api` -- directly, or
+ * via a sibling wrapper that shells out through `ghText` (e.g.
+ * `advisory-comment-debounce.mts`'s `ghPaginatedJson`) -- picks up the same
+ * GHES awareness at once (#3104), instead of only the handful of call
+ * sites (`suitability-triage.mts`, `provider-adapter-github.mts`'s
+ * `graphqlHostnameArgs`, `minimize-superseded-markers.mts`,
+ * `sweep-authoring-markers.mts`'s `resolveGhHostnameArgs`) that already
+ * splice their own resolved hostname into a hand-built args array one at a
+ * time.
+ *
+ * A no-op for:
+ * - any non-`api` subcommand -- `--hostname` is `gh api`-specific; other
+ *   commands (`repo view`, `pr view`, `branch`, ...) resolve their target
+ *   host from the git remote or an explicit `-R owner/repo`, never from a
+ *   `--hostname` flag of their own;
+ * - an args array that already names `--hostname` -- a caller that already
+ *   spliced its own resolved value (the call sites named above) never sees
+ *   a duplicated flag.
+ *
+ * Inserts immediately after the `api` subcommand itself (`args[0]`), before
+ * every caller-supplied option or endpoint -- never at a fixed
+ * `args.slice(0, 2)` position. `ghApiJson`/`ghGraphql` can safely assume
+ * their own second element is the endpoint/`graphql`, since they build
+ * their entire args array from a dedicated `path` parameter, but a
+ * `ghText` caller's raw args are not that shape-constrained: e.g.
+ * `disposition-non-review-notices.mts`'s `postDisposition` passes
+ * `['api', '--method', 'POST', 'repos/.../comments', ...]`, where the
+ * second element is a flag, not the endpoint. Inserting at a fixed offset
+ * would land `--hostname <host>` between `--method` and its own `POST`
+ * value there (CodeRabbit critique delegate finding, #3104); inserting
+ * right after `args[0]` is safe for every observed shape because `gh`'s
+ * Cobra-based flag parsing accepts `--hostname` interspersed anywhere
+ * among a command's other flags and positional arguments.
+ */
+function withResolvedApiHostname(args: string[]): string[] {
+  if (args[0] !== 'api' || args.includes('--hostname')) return args;
+  const hostname = resolveGhApiHostname();
+  return hostname ? [args[0], '--hostname', hostname, ...args.slice(1)] : args;
+}
+
+/**
  * Run `gh` synchronously and return its trimmed stdout.
  *
  * Applies {@link DEFAULT_GH_TIMEOUT_MS} when the caller supplies no
  * `timeout` (#1675) — a caller-supplied value, including `0`, always
  * wins.
  *
+ * Targets the correct GHES host via {@link withResolvedApiHostname} (#3104)
+ * for a `gh api ...` call instead of always defaulting to `github.com`,
+ * mirroring {@link ghApiJson}/{@link ghGraphql}'s existing (#1962)
+ * resolution.
+ *
  * Throws (propagating the child-process error) on any non-zero exit —
  * callers that need to tolerate specific failures use {@link safeGhText}
  * or {@link ghApiJson}'s `allowStatuses` option instead.
  */
 export function ghText(args: string[], options: GhTextOptions = {}): string {
-  return execFileSync('gh', args, {
+  return execFileSync('gh', withResolvedApiHostname(args), {
     encoding: 'utf8',
     timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
     ...(options.stdio ? { stdio: options.stdio } : {}),
