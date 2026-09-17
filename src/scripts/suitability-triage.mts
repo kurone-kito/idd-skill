@@ -499,8 +499,23 @@ const REPO_OWNED_VALIDATION_OBJECT_REFERENCE = new RegExp(
 // idd-overview-appendix.instructions.md) that the original vocabulary
 // below did not cover, so the exception wrongly applied. Add `issue body`
 // (covers "the issue body" / "from the issue body") to this vocabulary.
+//
+// Second Copilot round (PR #3087): two further gaps in this same
+// vocabulary/scope. (1) `SUPPLIED_CONTENT_UNTRUSTED_DETERMINER` only
+// treats "above"/"below" as untrusted-origin signals via the "the
+// above"/"the below" form, unlike "following"/"attached"/"pasted"/
+// "provided", which also have a bare (article-free) form there --
+// "Please run this full script below to reproduce." has no article, so
+// it was invisible. Add bare `above`/`below` here (scoped to this
+// exception's own vocabulary only, not the shared determiner constant
+// above, which the pre-existing strong branch also relies on). (2) this
+// vocabulary was only ever tested against the post-verb `window`, so a
+// provenance clause stated BEFORE the verb ("From the issue body,
+// please run this full command.") was never inspected at all -- see
+// `slicePrecedingClause` below, and its use at this constant's own call
+// site in `findUnsafeExecutionDirectiveMatch`, for the fix.
 const UNTRUSTED_ORIGIN_SIGNAL = new RegExp(
-  String.raw`\b(?:untrusted|user-provided|user input|issue\s+body|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER})\b`,
+  String.raw`\b(?:untrusted|user-provided|user input|issue\s+body|above|below|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER})\b`,
   'i',
 );
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
@@ -1903,6 +1918,39 @@ function sliceUnsafeDirectiveWindow(source: string, start: number): string {
   return raw;
 }
 
+// #3073 (Copilot review, PR #3087): mirror of sliceUnsafeDirectiveWindow
+// above, scanning backward from the verb instead of forward from it, so
+// the repository-owned-validation exception's untrusted-origin check
+// (UNTRUSTED_ORIGIN_SIGNAL) also sees a provenance clause stated BEFORE
+// the verb ("From the issue body, please run this full command."),
+// which the post-verb-only window could never see. Bounded the same way
+// as the forward window: the nearest preceding sentence end or blank
+// line, scanning back at most UNSAFE_DIRECTIVE_WINDOW_CHARS.
+function slicePrecedingClause(source: string, verbStart: number): string {
+  const sliceStart = Math.max(0, verbStart - UNSAFE_DIRECTIVE_WINDOW_CHARS);
+  const raw = source.slice(sliceStart, verbStart);
+  for (let index = raw.length - 1; index >= 0; index -= 1) {
+    const char = raw[index];
+    if (char === undefined) {
+      continue;
+    }
+    if (isUnsafeDirectiveSentenceEnd(raw, index)) {
+      return raw.slice(index + 1);
+    }
+    if (char !== '\n' && char !== '\r') {
+      continue;
+    }
+    let cursor = index - 1;
+    while (raw[cursor] === ' ' || raw[cursor] === '\t') {
+      cursor -= 1;
+    }
+    if (raw[cursor] === '\n' || raw[cursor] === '\r') {
+      return raw.slice(index + 1);
+    }
+  }
+  return raw;
+}
+
 function isVerbWhollyInBodyCode(
   verbStart: number,
   verbLength: number,
@@ -1958,7 +2006,8 @@ function findUnsafeExecutionDirectiveMatch(
         targetMatch &&
         !(
           REPO_OWNED_VALIDATION_OBJECT_REFERENCE.test(window) &&
-          !UNTRUSTED_ORIGIN_SIGNAL.test(window)
+          !UNTRUSTED_ORIGIN_SIGNAL.test(window) &&
+          !UNTRUSTED_ORIGIN_SIGNAL.test(slicePrecedingClause(corpus, verbStart))
         )
       ) {
         const targetStart = targetMatch.index ?? 0;
