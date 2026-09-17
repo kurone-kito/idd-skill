@@ -533,9 +533,12 @@ Before any mutating action in F3, apply the
    blockers: none`, `Next action: none`, and `Authoritative by`
    pointing to the merge commit — mirroring F3's own PR-digest upsert
    but targeting the issue instead, so a closed/merged issue never
-   stays stuck at a stale digest phase (`#3079`). Re-validate again;
-   if it still uses your `{claim-id}`, post `unclaimed-by` for your
-   own `{agent-id}` / `{claim-id}` (see
+   stays stuck at a stale digest phase (`#3079`). Proceed only when
+   the upsert reports `create`, `update`, or `noop`; on `duplicate` or
+   any other failure, keep the claim, post a hold comment with the
+   helper output, and stop for repair. Re-validate again; if it still
+   uses your `{claim-id}`, post `unclaimed-by` for your own
+   `{agent-id}` / `{claim-id}` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))
    to release the claim now that cleanup is complete (`#2220`). If
    either re-validation finds a different `{claim-id}`, stop that
