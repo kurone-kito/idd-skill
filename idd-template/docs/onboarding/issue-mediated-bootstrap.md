@@ -8,7 +8,7 @@ tags: [onboarding, bootstrap]
 # Onboarding Reference — Issue-Mediated Bootstrap
 
 Use this reference alongside
-[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.11.0/idd-template/ONBOARDING.md)
+[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.12.0/idd-template/ONBOARDING.md)
 when the operator wants an audited bootstrap trail instead of the
 distributed default direct-import ("theirs-flow") path. This page is
 the detailed companion for the pointer subsection between Step 1C and
@@ -497,7 +497,7 @@ examples ("start issue authoring to implement {inferred gap}", "run the
 IDD loop"). Derive `{inferred gap}` and the other prompt content using
 the same repository-evidence-read method the optional Dry-run readiness
 report already performs
-([Dry-run — Readiness assessment](https://github.com/kurone-kito/idd-skill/blob/v0.11.0/idd-template/ONBOARDING.md#dry-run--readiness-assessment))
+([Dry-run — Readiness assessment](https://github.com/kurone-kito/idd-skill/blob/v0.12.0/idd-template/ONBOARDING.md#dry-run--readiness-assessment))
 — detected package manager, missing prerequisites, and so on — rather
 than inventing a new inference mechanism. Run that read **fresh, after
 this merge**, not reused from the pre-import dry-run's stored output:
