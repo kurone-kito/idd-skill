@@ -111,19 +111,19 @@ Before starting IDD work, open
 phase file manually when the current step changes.
 ```
 
-### AGENTS.md (for Codex CLI, OpenCode, and Grok Build)
+### AGENTS.md (for Codex CLI, OpenCode, Grok Build, and Cursor CLI)
 
 `AGENTS.md` is the shared agents.md-standard entry file for Codex CLI,
-OpenCode, and Grok Build: each auto-loads `AGENTS.md` from the
-repository root natively, so this single file covers those runtimes
-and neither OpenCode nor Grok Build needs a dedicated root file of its
-own. Do not create `GROK.md`. `idd-doctor` still checks only
-`AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` — do not add a `GROK.md`
-check.
+OpenCode, Grok Build, and Cursor CLI: each auto-loads `AGENTS.md` from
+the repository root natively, so this single file covers those
+runtimes and neither OpenCode, Grok Build, nor Cursor CLI needs a
+dedicated root file of its own. Do not create `GROK.md` or `CURSOR.md`.
+`idd-doctor` still checks only `AGENTS.md`, `CLAUDE.md`, and
+`GEMINI.md` — do not add a `GROK.md` or `CURSOR.md` check.
 
 If `AGENTS.md` already exists, add the shared IDD workflow section and
-keep the wording explicit that Codex CLI, OpenCode, and Grok Build
-agents should manually open
+keep the wording explicit that Codex CLI, OpenCode, Grok Build, and
+Cursor CLI agents should manually open
 `.github/instructions/idd-overview-core.instructions.md`
 and the routed phase file before starting IDD work.
 
@@ -208,6 +208,31 @@ login to `trustedMarkerActors` (and the advisory-bot lists if it also
 reviews) in `.github/idd/config.json` — a config-values edit only;
 `schemas/policy.schema.json` stays agent-agnostic.
 
+#### Cursor CLI: no extra root file
+
+Cursor CLI auto-loads `AGENTS.md` and always applies `CLAUDE.md` when
+present. Operators follow the Cursor CLI `AGENTS.md` row in
+[IDD workflow](../idd-workflow.md): automatically available IDD
+context is `AGENTS.md` and `CLAUDE.md` when both exist; nothing from
+`.github/instructions/`; open
+`.github/instructions/idd-overview-core.instructions.md` and the
+routed phase file manually. Do not treat Claude-only adapter bullets
+(for example `--vendor claude`) as Cursor policy — those stay
+Claude-scoped in `CLAUDE.md`. Do not create `CURSOR.md`.
+
+It discovers the optional `issue-authoring` / `idd-spec-audit`
+companions under `.claude/skills/` via Claude compatibility, the same
+way OpenCode and Grok Build do — do not add a `.cursor/skills/` or
+`.agents/skills/` install root merely to support Cursor (preventive;
+no observed incident yet). Cursor does not merge
+`.claude/settings.json`.
+
+If a target repository runs Cursor CLI as an autonomous worker under
+its own GitHub identity (not just an interactive assistant), add that
+login to `trustedMarkerActors` (and the advisory-bot lists if it also
+reviews) in `.github/idd/config.json` — a config-values edit only;
+`schemas/policy.schema.json` stays agent-agnostic.
+
 ### Issue-authoring companion verification
 
 When the optional companion is installed, verify the source-versus-
@@ -221,10 +246,11 @@ destination contract separately from the entry-file checks:
 - The `gh api`, `curl`, and local-copy examples write every source file under
   that selected destination and do not fall back to target
   `skills/issue-authoring/`.
-- A default onboarding import adds no checked-in `.agents/skills/` or
-  `.opencode/skills/` mirror. A mixed-runtime target uses one native copy
-  plus an explicit manual route unless the operator deliberately accepts
-  identical duplicates (preventive; no observed incident yet).
+- A default onboarding import adds no checked-in `.agents/skills/`,
+  `.opencode/skills/`, or `.cursor/skills/` mirror. A mixed-runtime
+  target uses one native copy plus an explicit manual route unless the
+  operator deliberately accepts identical duplicates (preventive; no
+  observed incident yet).
 
 ### GEMINI.md
 
@@ -359,7 +385,8 @@ those shorter checks, confirm the detailed items below.
       the operator explicitly opted out of creating it.
 - [ ] `AGENTS.md` exists and references `docs/idd-workflow.md`, unless
       the operator explicitly opted out of creating it; this single
-      file covers Codex CLI, OpenCode, and Grok Build.
+      file covers Codex CLI, OpenCode, Grok Build, and Cursor CLI.
+      Operators must not create `CURSOR.md`.
 - [ ] `GEMINI.md` exists and references `docs/idd-workflow.md`, unless
       the operator explicitly opted out of creating it.
 - [ ] Among the entry files the operator did not opt out of creating,

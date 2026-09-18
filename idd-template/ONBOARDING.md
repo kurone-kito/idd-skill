@@ -704,8 +704,9 @@ the canonical source bundle, not the target repository's discovery path.
 When you install it in a target repository, choose one agent-specific native
 skill directory that the selected runtime reads, such as `.agents/skills/`
 for Codex CLI or OpenCode, `.claude/skills/` for Claude Code, OpenCode,
-and Grok Build, or `.opencode/skills/` for OpenCode. Do not add a
-`.grok/skills/` install root. The examples below use the Codex destination
+Grok Build, and Cursor CLI, or `.opencode/skills/` for OpenCode. Do not add a
+`.grok/skills/` or `.cursor/skills/` install root. The examples below use
+the Codex destination
 `.agents/skills/issue-authoring/`; change `SKILL_DEST` to the one selected
 destination before running any example. Do not install the same skill ID in
 multiple roots unless the operator explicitly accepts identical duplicates
@@ -1010,9 +1011,10 @@ default.
 By default, leave the repository with root entry files for every
 manually-routed non-Copilot agent named in `docs/idd-workflow.md`:
 `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`. `AGENTS.md` is the shared
-agents.md-standard entry for Codex CLI, OpenCode, and Grok Build —
-each auto-loads it natively, so no dedicated root file is needed for
-OpenCode or Grok Build. Operators must not create `GROK.md`.
+agents.md-standard entry for Codex CLI, OpenCode, Grok Build, and
+Cursor CLI — each auto-loads it natively, so no dedicated root file is
+needed for OpenCode, Grok Build, or Cursor CLI. Operators must not
+create `GROK.md` or `CURSOR.md`.
 
 - If the file already exists, append or adapt an IDD section without
   replacing unrelated repository guidance.
