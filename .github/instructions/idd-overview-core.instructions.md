@@ -269,9 +269,9 @@ enabled and default approval actors to
 <!-- dprint-ignore-start -->
 | Name | Commands |
 | --- | --- |
-| **fix-validate** | `npx biome check --write && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"` |
-| **pre-push-validate** | `npx biome check && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && node --test tests/*.test.mts && pnpm run build:check && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |
-| **post-fix-validate** | `npx biome check --write && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs` |
+| **fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"` |
+| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && node --test tests/*.test.mts && pnpm run build:check && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |
+| **post-fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs` |
 | **install-deps** | `node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command "pnpm install --frozen-lockfile"` |
 | **issue-scope** | `roadmap-first` |
 | **orphan-first-policy** | `none` |
