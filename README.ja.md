@@ -1,4 +1,4 @@
-# IDD Skill — Issue-Driven Development ワークフロー
+# ![IDD Skill — Issue駆動開発ベースのループエンジニアリングキット](./banner.webp)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Linting](https://github.com/kurone-kito/idd-skill/actions/workflows/lint.yml/badge.svg)](https://github.com/kurone-kito/idd-skill/actions/workflows/lint.yml)
@@ -55,9 +55,9 @@ IDD は、これらの動きをひとつの監査可能な GitHub ネイティ�
 IDD はデモではありません。このリポジトリ自体が 2026-05 から IDD で
 作られています:
 
-- private な業務リポジトリ群で、延べ **2,700 件以上の issue** を
+- private な業務リポジトリ群で、延べ **3,000 件以上の issue** を
   プルリクエスト化してマージ。
-- この公開リポジトリ単体でも **1,000 件以上の PR** をマージ。x4-6 並列の
+- この公開リポジトリ単体でも **1,400 件以上の PR** をマージ。x4-6 並列の
   multi-agent セッション(原型を運用した private 環境では x8-10)で
   dogfooding を継続中。
 - 2026-08 上旬には、private な業務リポジトリ群とこの公開リポジトリの
