@@ -1816,8 +1816,7 @@ export function parseAuthoringPublicationComment(
     'authoring-publication',
   );
   if (
-    !fields ||
-    !fields.target ||
+    !fields?.target ||
     !fields.anchor ||
     !fields.set ||
     !fields.session ||

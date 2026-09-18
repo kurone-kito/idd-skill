@@ -153,7 +153,7 @@ function isGovernedByBackwardCue(
     if (
       CUE_HARD_BREAK_PATTERN.test(linkText) ||
       CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText) ||
-      (cancelPattern && cancelPattern.test(linkText)) ||
+      cancelPattern?.test(linkText) ||
       (cueMatch[0].toLowerCase() === 'not' &&
         NOT_ONLY_IDIOM_PATTERN.test(linkText))
     ) {

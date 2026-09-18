@@ -9,7 +9,6 @@ import {
   buildAdvisoryConvergenceWaiverPrecondition,
   buildSecondaryQuietWindowStatus,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
-  DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
@@ -9048,8 +9047,6 @@ export function buildPreMergeReadinessSummary(
     });
   const advisoryConvergenceWaiverPrecondition =
     advisoryConvergencePreconditionResult.precondition;
-  const advisoryConvergenceDeadlinePassed =
-    advisoryConvergenceWaiverPrecondition.deadlinePassed;
   const advisoryConvergencePreconditionOpen =
     advisoryConvergenceWaiverPrecondition.open;
   const advisoryConvergenceDeadlineOpensAt =
