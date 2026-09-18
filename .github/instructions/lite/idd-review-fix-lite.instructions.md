@@ -54,6 +54,8 @@ those are E4-E8 judgment calls, excluded from every lite profile.
 - E10's critique loop repeats the same Accepted findings for more than
   `critiqueLoop.e10NoProgressHoldAfter` (default 3) passes without
   meaningful progress.
+- E10's `critiqueLoop.delegate` under `on-success` or `never` left no
+  readable findings list (vacuous verdict, not a clean zero-issue round).
 - E11 merge conflicts cannot be resolved cleanly, or the PR has
   unresolved review threads, unreplied comments, or a
   `CHANGES_REQUESTED` reviewer and no explicit operator confirmation
@@ -119,38 +121,53 @@ other GitHub side effect, confirm all of the following:
 
 ## E10 — Validate fixes with critique pass
 
-1. Run a critique pass to verify the E9 fixes address the root causes
-   and are correct. Also apply these lenses when they fit, composing
-   when both do: **Mutation / write-side** (the diff implements a
-   helper that mutates GitHub state, mutates git state, or performs a
-   merge) — Fail-closed inputs; Validate/execute scope parity;
-   Unsafe-output suppression; Schema strictness parity.
+1. Resolve `critiqueLoop.delegate` the same way
+   `idd-work-lite.instructions.md` C1 does: helper-first
+   `critique-delegate` (`node scripts/idd-critique-delegate.mjs`;
+   `usable`/`command`/`mode`), then run the delegate and/or per-agent
+   pass per `mode` (`fallback` default, `combined`, `on-success`,
+   `never`) and union findings when both ran. Never assume delegate
+   findings are stacked on the per-agent pass. Stop and ask if that
+   helper is missing, fails, or disagrees.
+   `critiqueLoop.telemetryHook` remains C1-only and is never consulted
+   here. Then run the critique pass to verify the E9 fixes address the
+   root causes and are correct. Apply these lenses only within a
+   per-agent pass, composing when both fit: **Mutation / write-side**
+   (the diff implements a helper that mutates GitHub state, mutates git
+   state, or performs a merge) — Fail-closed inputs; Validate/execute
+   scope parity; Unsafe-output suppression; Schema strictness parity.
    **Gate-mirroring** (the diff implements a helper that predicts,
    mirrors, or pre-checks another gate's decision) — Validation-path
    parity; Input completeness; Whole-identity comparison; Snapshot
    identity; Point-in-time parity.
-2. If the critique pass reports zero issues, continue to E11.
-3. If it reports additional issues, fix them, commit atomically, and
+2. If no mechanism produced a readable findings list — a
+   `critiqueLoop.delegate` `mode` of `on-success` or `never` whose
+   delegate failed without emitting one — post a hold comment and
+   stop; do not treat it as zero issues and do not continue to E11. A
+   successful empty list, or a failed delegate that still emitted a
+   readable list, is a genuine result.
+3. If the critique pass reports zero issues, continue to E11.
+4. If it reports additional issues, fix them, commit atomically, and
    run E10 again.
-4. Count "meaningful progress" as removing at least one Accepted
+5. Count "meaningful progress" as removing at least one Accepted
    finding, narrowing a remaining finding's root cause or scope, or
    producing a materially new fix direction. A reworded duplicate
    finding does not count.
-5. If the same Accepted findings recur for more than
+6. If the same Accepted findings recur for more than
    `critiqueLoop.e10NoProgressHoldAfter` (default 3) consecutive E10
    passes without meaningful progress, stop the loop, post a hold
    comment summarizing the repeated findings and attempted fixes, and
    wait for a maintainer decision.
-6. Do not use step 5 to bypass a serious issue: unresolved High or
+7. Do not use step 6 to bypass a serious issue: unresolved High or
    Medium findings stay blockers until fixed or explicitly redirected
    by a maintainer.
-7. Heuristic: several new, non-repeated same-area findings across
+8. Heuristic: several new, non-repeated same-area findings across
    rounds (3-4) may mean one structural fix converges faster than
    another patch. If that fix keeps drawing new findings, prefer
    simplifying/removing the mechanism over a second redesign -- only
    once confirmed non-required by the issue's acceptance criteria or
    contract; if required, stop for a maintainer decision.
-8. Third tier: when each new finding is instead a genuine, distinct gap
+9. Third tier: when each new finding is instead a genuine, distinct gap
    against an open-ended external correctness domain (a grammar,
    protocol, or wire format) rather than a symptom of one mechanism,
    tiers 1-2 do not apply -- there is no mechanism to simplify, since
