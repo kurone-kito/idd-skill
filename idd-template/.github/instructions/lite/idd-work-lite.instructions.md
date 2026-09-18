@@ -111,6 +111,9 @@ worktree removal) behind the
     --claim-id <id> --nonce <nonce>` (same nonce value as the A5 write;
     omitting `--nonce` drops it, since the helper overwrites rather than
     merges) for this worktree's own copy, before it installs anything.
+    After the hook succeeds, `cd` into the new sibling (`-x <noop>` never
+    changes the caller's directory; resolve the path from
+    `git worktree list`) before steps 28-30.
 20. If the hook cannot acquire the lock or record tokens, create the
     worktree without the hook.
 21. If WorkTrunk is unavailable, use
