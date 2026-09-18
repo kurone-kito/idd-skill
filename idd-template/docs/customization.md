@@ -587,6 +587,46 @@ applies unconditionally, unchanged. It is clamped to never exceed
 base window has no effect — this is a shortening mechanism only.
 `advisoryWait.recoveryCycleCap` is never affected by this override.
 
+### ciGate F2 bootstrap
+
+`pre-merge-readiness` (F2) reads `.github/idd/config.json` from the
+PR's trusted **base** ref, not the PR head. A pull request that both
+introduces a new `ciGate.*` key and needs that key for its own F2
+evaluation can never become ready: the gate still sees the old base
+config. Do not invent a waiver helper, a schema field, a workflow job,
+or a generalization of the
+`idd-advisory-convergence` self-referential-bootstrap-auto path
+(kurone-kito/idd-skill#2657) to cover an arbitrary `ciGate.*` key.
+
+Observed 2026-09-16 on
+[kurone-kito/kurone-kito#33](https://github.com/kurone-kito/kurone-kito/pull/33)
+(`ciGate.trustEmptyProtectionReads: true`) and
+[kurone-kito/kurone-kito#37](https://github.com/kurone-kito/kurone-kito/pull/37)
+(`ciGate.trustSourcePinnedRequiredChecks: true`; that PR also restored
+`trustEmptyProtectionReads: false` once classic protection existed, so
+it is not the same-shape add as the first).
+
+**Default (C) — preload-first.** Land the intended `ciGate.*` value as
+a config-only change on the trusted base **before** a later PR (or a
+GitHub-side required-check pin) needs F2 to honor it. The landing PR
+must still be F2-satisfiable against the old base: it must not itself
+depend on the new key. Copilot's review on
+kurone-kito/kurone-kito#37 asked to apply the config on the base
+before enabling the pinned required check.
+
+**Rare off-ramp (B) — named one-off merge.** Use this only when F2 is
+already structurally unsatisfiable for **every** PR (the
+kurone-kito/kurone-kito#33 case: a 404 on protection reads fail-closed
+so no autonomous merge could proceed). A repository owner or a
+Maintain/Admin collaborator may merge that bootstrap PR outside the
+autonomous F2 path after CI, commit signing, and the advisory-wait
+protocol still pass, with the PR body naming the bootstrapped flag.
+F2 itself stays fail-closed. Autonomous F2/F3 never takes this
+off-ramp. The off-ramp is not F3's solo-CODEOWNER
+`gh pr merge --admin` retry, not a ruleset bypass, and not the
+self-referential-bootstrap-auto waiver in
+kurone-kito/idd-skill#2657.
+
 ## Phase ID Compatibility Contract
 
 Treat phase IDs as a compatibility surface, not as presentation text.
