@@ -38,11 +38,11 @@ already been copied, start from the local `ONBOARDING.md` file instead.
 
 The onboarding guide is a thin orchestrator: it copies the portable
 instruction files, asks for project-specific command values, and
-updates agent entry files such as `AGENTS.md` (Codex CLI, OpenCode, and
-Grok Build), `CLAUDE.md`, `GEMINI.md`, or Copilot instructions. When a
-capable helper runtime is available, it points the session at
-`idd-onboard --hear` instead of walking through the policy and
-placeholder companion docs by hand.
+updates agent entry files such as `AGENTS.md` (Codex CLI, OpenCode,
+Grok Build, and Cursor CLI), `CLAUDE.md`, `GEMINI.md`, or Copilot
+instructions. When a capable helper runtime is available, it points
+the session at `idd-onboard --hear` instead of walking through the
+policy and placeholder companion docs by hand.
 
 ### Validate the import with IDD doctor (optional)
 
