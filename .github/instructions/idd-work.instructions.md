@@ -209,7 +209,9 @@ are installed:
 - **WorkTrunk with a pre-start install hook** (e.g.,
   `[pre-start].install` in `.config/wt.toml`): The hook must acquire the
   lock before installing, as described above; after the hook succeeds,
-  skip this step.
+  skip this step. `-x <noop>` never changes the caller's directory —
+  `cd` into the new sibling (from `git worktree list`) before later
+  steps.
 - **Manual `git worktree add`, WorkTrunk without a hook, or a
   compliant pinned harness-native tool**: `cd` into the newly created
   worktree, then run **install-deps**.
