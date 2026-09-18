@@ -1136,6 +1136,37 @@ export function isAlreadyRunningRerunError(message) {
   return text.includes('cannot be rerun') && text.includes('already running');
 }
 /**
+ * Decide whether the pre-rerun GET already shows a live workflow run
+ * (wait for that current attempt, even when `run_attempt` is missing)
+ * or whether it is safe to issue `gh run rerun` (needs a numeric
+ * `run_attempt` so {@link waitForNewAttempt} can observe the new one).
+ */
+export function planProductionRerunFromLiveRun(input) {
+  const liveStatus = input.status
+    ? String(input.status).trim().toLowerCase()
+    : null;
+  if (liveStatus !== null && PENDING_STATUSES.has(liveStatus)) {
+    return { action: 'wait-current-attempt' };
+  }
+  if (typeof input.runAttempt !== 'number') {
+    return {
+      action: 'throw',
+      message: `cannot verify a new rerun attempt for run ${input.runId} (${input.owner}/${input.repo}): the current run_attempt is missing or non-numeric`,
+    };
+  }
+  return { action: 'issue-rerun', priorAttempt: input.runAttempt };
+}
+/**
+ * Decide whether a failed `gh run rerun` is GitHub's already-running
+ * TOCTOU (wait for the current attempt) or a genuine failure that must
+ * still throw.
+ */
+export function planProductionRerunFromRerunError(message) {
+  return isAlreadyRunningRerunError(message)
+    ? { action: 'wait-current-attempt' }
+    : { action: 'throw' };
+}
+/**
  * `true` when `reason` is an advisory-convergence Clause 1
  * uncovered-HEAD reason (see {@link UNCOVERED_HEAD_REASON_MARKER}).
  */
@@ -2573,25 +2604,19 @@ function buildProductionApplyDeps(args) {
           GH_TEXT_LOOP_TIMEOUT_OPTIONS,
         ),
       );
-      // Fail closed BEFORE issuing the rerun (Copilot review, #1772):
-      // waitForNewAttempt's whole race-avoidance guarantee rests on
-      // comparing this pre-rerun run_attempt against the post-rerun
-      // value, so a missing/non-numeric run_attempt here means that
-      // guarantee cannot be verified at all -- proceeding anyway (e.g.
-      // treating "unknown" as automatically "new") would silently
-      // reopen the exact stale-read race this function exists to close.
-      if (typeof priorPayload.run_attempt !== 'number') {
-        throw new Error(
-          `cannot verify a new rerun attempt for run ${command.runId} (${owner}/${repo}): the current run_attempt is missing or non-numeric`,
-        );
-      }
-      const priorAttempt = priorPayload.run_attempt;
-      const liveStatus = priorPayload.status
-        ? String(priorPayload.status).trim().toLowerCase()
-        : null;
-      if (liveStatus !== null && PENDING_STATUSES.has(liveStatus)) {
+      const livePlan = planProductionRerunFromLiveRun({
+        status: priorPayload.status,
+        runAttempt: priorPayload.run_attempt,
+        runId: command.runId,
+        owner,
+        repo,
+      });
+      if (livePlan.action === 'wait-current-attempt') {
         waitForRunCompletion(owner, repo, command.runId);
         return;
+      }
+      if (livePlan.action === 'throw') {
+        throw new Error(livePlan.message);
       }
       try {
         ghText(
@@ -2600,13 +2625,16 @@ function buildProductionApplyDeps(args) {
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (isAlreadyRunningRerunError(message)) {
+        if (
+          planProductionRerunFromRerunError(message).action ===
+          'wait-current-attempt'
+        ) {
           waitForRunCompletion(owner, repo, command.runId);
           return;
         }
         throw error;
       }
-      waitForNewAttempt(owner, repo, command.runId, priorAttempt);
+      waitForNewAttempt(owner, repo, command.runId, livePlan.priorAttempt);
     },
     recomputePlan: () => {
       const { input, options } = collectFromGitHub(args);

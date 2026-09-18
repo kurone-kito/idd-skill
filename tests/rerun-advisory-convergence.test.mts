@@ -22,6 +22,8 @@ import {
   NEVER_REVIEWED_REASON_MARKER,
   parseArgs,
   parseRunIdFromUrl,
+  planProductionRerunFromLiveRun,
+  planProductionRerunFromRerunError,
   RERUN_PLAN_CHECK_NAME,
   type RerunPlanInput,
   type RerunPlanOptions,
@@ -3957,6 +3959,61 @@ test('#3117: isAlreadyRunningRerunError matches only the already-running clause'
     false,
   );
   assert.equal(isAlreadyRunningRerunError('network timeout'), false);
+});
+
+test('#3118 Copilot: a live pending GET waits for the current attempt even when run_attempt is missing', () => {
+  assert.deepEqual(
+    planProductionRerunFromLiveRun({
+      status: 'in_progress',
+      runAttempt: null,
+      runId: '5002',
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+    }),
+    { action: 'wait-current-attempt' },
+  );
+});
+
+test('#3118 Copilot: a terminal GET with a numeric run_attempt issues gh run rerun', () => {
+  assert.deepEqual(
+    planProductionRerunFromLiveRun({
+      status: 'completed',
+      runAttempt: 1,
+      runId: '5002',
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+    }),
+    { action: 'issue-rerun', priorAttempt: 1 },
+  );
+});
+
+test('#3118 Copilot: a terminal GET without run_attempt still fails closed before issuing a rerun', () => {
+  const plan = planProductionRerunFromLiveRun({
+    status: 'completed',
+    runAttempt: null,
+    runId: '5002',
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+  });
+  assert.equal(plan.action, 'throw');
+  if (plan.action === 'throw') {
+    assert.match(plan.message, /run_attempt is missing or non-numeric/);
+  }
+});
+
+test('#3118 Copilot: already-running rerun error waits; any other rerun error still throws', () => {
+  assert.deepEqual(
+    planProductionRerunFromRerunError(
+      'run 35309144605 cannot be rerun; This workflow is already running',
+    ),
+    { action: 'wait-current-attempt' },
+  );
+  assert.deepEqual(
+    planProductionRerunFromRerunError(
+      'run 35309144605 cannot be rerun; the run is too old',
+    ),
+    { action: 'throw' },
+  );
 });
 
 // --- formatApplySummary ----------------------------------------------------
