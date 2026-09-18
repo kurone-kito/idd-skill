@@ -9,8 +9,8 @@ tags: [workflow, phase-routing]
 
 This document is the neutral entry point for the repository's
 Issue-Driven Development (IDD) workflow across GitHub Copilot, Codex
-CLI, OpenCode, Grok Build, Claude Code, and Antigravity CLI (formerly
-Gemini CLI).
+CLI, OpenCode, Grok Build, Cursor CLI, Claude Code, and Antigravity CLI
+(formerly Gemini CLI).
 
 Use it when you need to answer three questions quickly:
 
@@ -46,20 +46,25 @@ you are reading this guide first, start at step 1.
 | Codex CLI               | `AGENTS.md`                       | None from `.github/instructions/`                                                                                                                                                                                                                                                                                                                              | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file                                                                                                                                                  |
 | OpenCode                | `AGENTS.md`                       | `AGENTS.md` itself — OpenCode's native rules mechanism auto-loads it; none from `.github/instructions/`                                                                                                                                                                                                                                                        | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file                                                                                                                                                  |
 | Grok Build              | `AGENTS.md`                       | `AGENTS.md` and `CLAUDE.md` when both exist (same contract; Grok Build loads every matching filename, unlike OpenCode's first-match — `CLAUDE.md`'s own `@AGENTS.md` line is harmless either way: at worst Grok reads it as plain text rather than an import, and at most it re-loads `AGENTS.md`'s already-loaded content); none from `.github/instructions/` | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file; see [B1's harness-native worktree tool caveat](../.github/instructions/idd-work.instructions.md#worktree-creation)                              |
+| Cursor CLI              | `AGENTS.md`                       | `AGENTS.md` and `CLAUDE.md` when both exist (Cursor always applies `CLAUDE.md`; treat the shared contract as `AGENTS.md`, and do not follow Claude-only adapter bullets such as `--vendor claude` outside Claude Code — those stay Claude-scoped in `CLAUDE.md` already); none from `.github/instructions/`                                                    | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file                                                                                                                                                  |
 | Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                                                                                                                                                                                                                   | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file; see [B1's harness-native worktree tool caveat](../.github/instructions/idd-work.instructions.md#worktree-creation) before using `EnterWorktree` |
 | Antigravity CLI         | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                                                                                                                                                                                                              | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file                                                                                                                                                  |
 
-OpenCode and Grok Build also discover the `issue-authoring` and
-`idd-spec-audit` skill bundles in this repository through
-`.claude/skills/` compatibility, since `.claude/skills/issue-authoring/`
-and `.claude/skills/idd-spec-audit/` are generated, byte-identical
-copies of the canonical bundles at `skills/issue-authoring/` and
-`skills/idd-spec-audit/` respectively.
+OpenCode, Grok Build, and Cursor CLI also discover the
+`issue-authoring` and `idd-spec-audit` skill bundles in this repository
+through `.claude/skills/` compatibility, since
+`.claude/skills/issue-authoring/` and `.claude/skills/idd-spec-audit/`
+are generated, byte-identical copies of the canonical bundles at
+`skills/issue-authoring/` and `skills/idd-spec-audit/` respectively. Do
+not add checked-in `.cursor/skills/` or `.agents/skills/` mirrors for
+those companions (preventive; no observed incident yet).
 
 During IDD, do not call Grok Build's `enter_plan_mode` (it blocks
-non-plan-file edits). Do not let the bundled `review`, `pr-babysit`, or
-`execute-plan` skills replace IDD E/F phases or spawn extra worktrees.
-(Preventive; no observed incident yet.)
+non-plan-file edits). Do not switch into Cursor Plan mode / `/plan`
+(or SwitchMode Plan) in a way that blocks non-plan-file edits. Do not
+let the bundled `review`, `pr-babysit`, or `execute-plan` skills
+replace IDD E/F phases or spawn extra worktrees. (Preventive; no
+observed incident yet.)
 
 During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
 `GEMINI.md` so each non-Copilot agent listed above has a stable first
@@ -1247,14 +1252,15 @@ produces a list of issues with severity, correctness, and coverage
 assessment. The goal and expected output are the same regardless of
 agent; only the mechanism differs.
 
-| Agent           | How to run a critique pass                                                                                                                                                                                                                                                                                                                       |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                                                                                                                                                                                                                        |
-| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                                                                                                                                                                                                                             |
-| Codex CLI       | Use one bounded read-only native subagent review when supported and suitable; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, disabled, unsuitable, or fails.                                                                                                                       |
-| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism                                                                                                                                                                                                       |
-| Grok Build      | Independent `spawn_subagent` with the calling phase's critique checklist. Fallback: structured self-critique when delegation is unavailable, unsuitable, or fails (unsuitable: the subagent returns no findings list, or its search beyond the named scope is open-ended rather than a targeted trace of code the change depends on or affects). |
-| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                                                                                                                                                 |
+| Agent           | How to run a critique pass                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                                                                                                                                                                                                                                                                              |
+| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                                                                                                                                                                                                                                                                                   |
+| Codex CLI       | Use one bounded read-only native subagent review when supported and suitable; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, disabled, unsuitable, or fails.                                                                                                                                                                             |
+| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism                                                                                                                                                                                                                                                             |
+| Grok Build      | Independent `spawn_subagent` with the calling phase's critique checklist. Fallback: structured self-critique when delegation is unavailable, unsuitable, or fails (unsuitable: the subagent returns no findings list, or its search beyond the named scope is open-ended rather than a targeted trace of code the change depends on or affects).                                                       |
+| Cursor CLI      | Launch an independent Cursor `Task` tool subagent with `subagent_type="generalPurpose"` (or the nearest equivalent general-purpose subagent) using the calling phase's critique checklist; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, unsuitable, or fails. Do not substitute Cursor product review skills for IDD E-phase critique. |
+| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                                                                                                                                                                                                       |
 
 For Codex delegation, the parent collects the reviewer result before
 continuing; if delegation fails, use the structured fallback.

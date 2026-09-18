@@ -8,8 +8,8 @@ project.
 This file is the canonical, tool-neutral instruction source for AI
 coding agents in this repository, following the
 [AGENTS.md](https://agents.md) open standard that Codex CLI, OpenCode,
-Grok Build, and GitHub Copilot (CLI, coding agent, and Chat) all
-discover automatically at the repository root. `CLAUDE.md` and
+Grok Build, Cursor CLI, and GitHub Copilot (CLI, coding agent, and Chat)
+all discover automatically at the repository root. `CLAUDE.md` and
 `GEMINI.md` are thin adapters that import this file for Claude Code and
 Antigravity CLI (formerly Gemini CLI), the two tools in this
 repository's harness mix that read their own dedicated entry file
@@ -458,11 +458,11 @@ recorded on the event itself. Also include `--claim-id <claim-id>` —
 the active IDD `{claim-id}` — on every call from `claim` onward: it is
 the positive-evidence signal a later harvest uses to merge a genuine
 cross-session handoff/resume of the same claim lineage instead of
-undercounting it (#2432). OpenCode has no matching `vendor` value
-in `schemas/token-cost-event.schema.json` yet — skip this call rather
-than pass a mismatched vendor. Stage ids: `discover`, `claim`, `work`,
-`submit-pr`, `review`, `merge`, `cleanup`. Ignore any failure from this
-command — it must never block or slow the IDD loop.
+undercounting it (#2432). OpenCode and Cursor CLI have no matching
+`vendor` value in `schemas/token-cost-event.schema.json` yet — skip
+this call rather than pass a mismatched vendor. Stage ids: `discover`,
+`claim`, `work`, `submit-pr`, `review`, `merge`, `cleanup`. Ignore any
+failure from this command — it must never block or slow the IDD loop.
 
 ## Issue-authoring skill (dogfooded)
 
@@ -480,8 +480,9 @@ For Codex CLI, read the canonical issue-authoring bundle explicitly from
 `skills/issue-authoring/`, or install one selected copy under
 `.agents/skills/issue-authoring/` when the target runtime supports native
 skill discovery there. The existing `.claude/skills/issue-authoring/` copy is
-the dogfood route for Claude Code, OpenCode, and Grok Build
+the dogfood route for Claude Code, OpenCode, Grok Build, and Cursor CLI
 compatibility; it is not the
-canonical source. Do not add checked-in `.agents/skills/` or
-`.opencode/skills/` mirrors by default (preventive; no observed incident yet),
+canonical source. Do not add checked-in `.agents/skills/`,
+`.cursor/skills/`, or `.opencode/skills/` mirrors by default
+(preventive; no observed incident yet),
 and do not assume the source path is automatically discovered by Codex.
