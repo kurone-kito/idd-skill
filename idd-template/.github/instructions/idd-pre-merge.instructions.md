@@ -427,13 +427,13 @@ turns an operator-visible failure into a silent stall.
   closed: an unusable check makes this condition unmet.
 - **Closing-set and impact-checklist re-verification** (D3.5/D3.7
   re-run against current HEAD, #2749): confirm the local worktree is
-  checked out at the PR's current HEAD exactly (`git fetch`, then, if
-  a resumed or external-push session left it stale, `git switch
-  {branch-name}` — never a detaching `git checkout <SHA>` — then
-  `git reset --hard` to the current PR HEAD SHA (`$PR_HEAD_SHA`)
-  only when `git status --porcelain` is empty and
-  `git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"` holds; if dirty
-  or not an ancestor, stop and hold)
+  checked out at the PR's current HEAD exactly (`git fetch`; then on
+  current `HEAD` require `git status --porcelain` empty and
+  `git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"` — if dirty or
+  not an ancestor, stop and hold; then `git switch {branch-name}`
+  when not already on it — never a detaching `git checkout <SHA>` —
+  and re-check; then `git reset --hard` to `$PR_HEAD_SHA` only when
+  they still hold)
   — D3.5 step 7's `git log` and D3.7's inherited `git diff` both read
   local git state, not the remote PR directly. Then re-run
   `idd-pr-submit.instructions.md`'s D3.5 steps
