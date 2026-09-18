@@ -16,6 +16,7 @@ import {
   formatApplySummary,
   hasNeverReviewedVerdictReason,
   hasUncoveredHeadVerdictReason,
+  isAlreadyRunningRerunError,
   isNeverReviewedVerdictReason,
   isUncoveredHeadVerdictReason,
   NEVER_REVIEWED_REASON_MARKER,
@@ -138,6 +139,121 @@ test('classifies a queued instance as pending', () => {
     baseOptions(),
   );
   assert.equal(plan.instances[0]?.classification, 'pending');
+});
+
+// Issue #3117: classifyInstance (the default --apply path) must honor
+// live runStatus the same way computeRefreshLatestPlan already does, so
+// a stale completed check-run row cannot become rerun-eligible -- or
+// pass -- while the workflow run is still in flight.
+test('#3117: a stale completed/failure row with live runStatus in_progress classifies pending, not rerun-eligible', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          status: 'completed',
+          conclusion: 'failure',
+          runStatus: 'in_progress',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'pending');
+  assert.equal(plan.plan.length, 0);
+});
+
+test('#3117: a stale cancelled or timed_out row with live runStatus still classifies pending', () => {
+  for (const conclusion of ['cancelled', 'timed_out'] as const) {
+    const plan = computeRerunPlan(
+      baseInput({
+        instances: [
+          baseInstance({
+            status: 'completed',
+            conclusion,
+            runStatus: 'queued',
+          }),
+        ],
+      }),
+      baseOptions(),
+    );
+    assert.equal(
+      plan.instances[0]?.classification,
+      'pending',
+      `expected pending for stale ${conclusion}`,
+    );
+    assert.equal(plan.plan.length, 0);
+  }
+});
+
+test('#3117: live runStatus pending wins over a pass-equivalent check-run conclusion', () => {
+  for (const conclusion of ['success', 'neutral', 'skipped'] as const) {
+    const plan = computeRerunPlan(
+      baseInput({
+        instances: [
+          baseInstance({
+            status: 'completed',
+            conclusion,
+            runStatus: 'in_progress',
+          }),
+        ],
+      }),
+      baseOptions(),
+    );
+    assert.equal(
+      plan.instances[0]?.classification,
+      'pending',
+      `expected pending for stale ${conclusion}`,
+    );
+    assert.equal(plan.counts.pass, 0);
+  }
+});
+
+test('#3117: runStatus null keeps conclusion-only classification', () => {
+  const failurePlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          status: 'completed',
+          conclusion: 'failure',
+          runStatus: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(failurePlan.instances[0]?.classification, 'rerun-eligible');
+  assert.equal(failurePlan.plan.length, 1);
+
+  const successPlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          status: 'completed',
+          conclusion: 'success',
+          runStatus: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(successPlan.instances[0]?.classification, 'pass');
+});
+
+test('#3117: action_required plus live runStatus stays bot-gated-skip, never rerun-eligible', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          status: 'completed',
+          conclusion: 'action_required',
+          runStatus: 'in_progress',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+  assert.equal(plan.plan.length, 0);
 });
 
 // Issue #2994 records a wait-loop failure shape where a consumer's own
@@ -3757,6 +3873,90 @@ test('applyRerunPlan stops after its safety bound instead of looping forever whe
   assert.equal(result.resolved, false);
   assert.ok(calls >= 1);
   assert.equal(result.executed.length, calls);
+});
+
+test('#3117: applyRerunPlan does not call rerunAndWait for a sibling that recomputes as pending via live runStatus', () => {
+  const first = baseInstance({
+    checkRunId: '1001',
+    runId: '5001',
+    htmlUrl:
+      'https://github.com/kurone-kito/idd-skill/actions/runs/5001/job/9001',
+    startedAt: '2026-07-16T10:00:00Z',
+    conclusion: 'failure',
+  });
+  const siblingStale = baseInstance({
+    checkRunId: '1002',
+    runId: '5002',
+    htmlUrl:
+      'https://github.com/kurone-kito/idd-skill/actions/runs/5002/job/9002',
+    startedAt: '2026-07-16T10:05:00Z',
+    conclusion: 'failure',
+  });
+  const siblingLive = baseInstance({
+    checkRunId: '1002',
+    runId: '5002',
+    htmlUrl:
+      'https://github.com/kurone-kito/idd-skill/actions/runs/5002/job/9002',
+    startedAt: '2026-07-16T10:05:00Z',
+    status: 'completed',
+    conclusion: 'failure',
+    runStatus: 'in_progress',
+  });
+  const initialPlan = computeRerunPlan(
+    baseInput({ instances: [first, siblingStale] }),
+    baseOptions(),
+  );
+  assert.deepEqual(
+    initialPlan.plan.map((entry) => entry.runId),
+    ['5001', '5002'],
+  );
+
+  const afterFirst = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'success',
+        }),
+        siblingLive,
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(afterFirst.plan.length, 0);
+  assert.equal(
+    afterFirst.instances.find((row) => row.runId === '5002')?.classification,
+    'pending',
+  );
+
+  const rerunCalls: string[] = [];
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: (command) => {
+      rerunCalls.push(command.runId);
+    },
+    recomputePlan: () => afterFirst,
+  });
+
+  assert.deepEqual(rerunCalls, ['5001']);
+  assert.equal(result.executed.length, 1);
+  assert.equal(result.resolved, true);
+});
+
+test('#3117: isAlreadyRunningRerunError matches only the already-running clause', () => {
+  assert.equal(
+    isAlreadyRunningRerunError(
+      'Command failed: gh run rerun 35309144605 -R kurone-kito/idd-skill\nrun 35309144605 cannot be rerun; This workflow is already running',
+    ),
+    true,
+  );
+  assert.equal(
+    isAlreadyRunningRerunError(
+      'run 35309144605 cannot be rerun; the run is too old',
+    ),
+    false,
+  );
+  assert.equal(isAlreadyRunningRerunError('network timeout'), false);
 });
 
 // --- formatApplySummary ----------------------------------------------------
