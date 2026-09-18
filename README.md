@@ -1,4 +1,4 @@
-# IDD Skill — Issue-Driven Development workflow
+# ![IDD Skill — Issue-Driven Development Loop Engineering Kit](./banner.webp)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Linting](https://github.com/kurone-kito/idd-skill/actions/workflows/lint.yml/badge.svg)](https://github.com/kurone-kito/idd-skill/actions/workflows/lint.yml)
