@@ -54,9 +54,9 @@ cleanup markers — so any agent can resume any work without guessing.
 IDD is not a demo. It is the workflow this repository has been built
 with since May 2026:
 
-- **2,700+ issues** turned into merged pull requests across private
+- **3,000+ issues** turned into merged pull requests across private
   work repositories running IDD.
-- **1,000+ pull requests** merged in this public repository alone,
+- **1,400+ pull requests** merged in this public repository alone,
   through multi-agent bursts of x4-6 parallel sessions (x8-10 in the
   originating private deployment).
 - Early August 2026 peaked at **600+ commits** and **150+ pull
