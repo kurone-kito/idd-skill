@@ -21,14 +21,14 @@ scope fence below only if it predates the B2 plan
 (`idd-work.instructions.md`) — an author keeps edit rights throughout
 the claim and could otherwise time an edit to force-reject a legitimate
 finding. Fetch `userContentEdits` (GraphQL; `updatedAt` also moves on
-unrelated activity, so it will not do) and find the entry with the
-latest `editedAt` at or before the plan's post time; that entry's
-`diff` (or the original creation content, if none predates the plan)
-is the trusted snapshot. A statement absent from it — added later, or
-present now but not there — needs independent corroboration (a
-maintainer comment, not another edit). Treat an unavailable or failed
-`userContentEdits` read the same way: fail closed, never assume no
-post-plan edit occurred.
+unrelated activity, so it will not do). Paginate until
+`pageInfo.hasNextPage` is false. Treat each `diff` as the full
+post-edit body, not a line patch. Use the latest `editedAt` at or
+before the plan's post time; that `diff` (or the original body if none
+predates the plan) is the trusted snapshot. A statement absent from
+it — added later, or present now but not there — needs a maintainer
+comment, not another edit. A missing, failed, or incomplete
+pagination fails closed.
 
 For each item in ReviewItems_snapshot, first classify it:
 
