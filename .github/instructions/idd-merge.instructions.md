@@ -183,10 +183,10 @@ Before any mutating action in F3, apply the
      left it stale, `git switch {branch-name}` — never a detaching
      `git checkout <SHA>` — then `git reset --hard "${PR_HEAD_SHA_F3}"`
      only when `git status --porcelain` is empty and
-     `git merge-base --is-ancestor` holds for local `HEAD`; if dirty or
-     not an ancestor, stop and hold) — D3.5 step 7's `git log` and
-     D3.7's inherited `git diff` both read local git state, not the
-     remote PR directly. Skip D3.5 steps 6-7 under the
+     `git merge-base --is-ancestor HEAD "${PR_HEAD_SHA_F3}"` holds;
+     if dirty or not an ancestor, stop and hold) — D3.5 step 7's
+     `git log` and D3.7's inherited `git diff` both read local git
+     state, not the remote PR directly. Skip D3.5 steps 6-7 under the
      same non-default-`{development-branch}` exemption D3.5 itself
      carries. On a mismatch, fix it per D3.5/D3.7's own documented
      handling. Any fix here — whether or not it changes HEAD, since a
