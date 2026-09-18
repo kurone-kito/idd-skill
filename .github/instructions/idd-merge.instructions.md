@@ -434,8 +434,8 @@ Before any mutating action in F3, apply the
      `docs/idd-comment-minimization.md` for the exact formats:
 
      If the apply `status` is `applied` or `clean`: run the fresh
-     re-check above **now**; on `POST`, send the evidence comment.
-     Proceed to step 4.
+     re-check above **now** and act on `RECHECK_RESULT`. Proceed
+     to step 4.
 
      The helper internally retries a whole scan-and-minimize pass, bounded,
      when a fresh rescan still reports candidates after applying (a
@@ -473,7 +473,7 @@ Before any mutating action in F3, apply the
    `viewerCanMinimize` and `isMinimized` before minimizing; skip
    already-minimized comments and ones the viewer cannot minimize.
    Re-validate the active claim before each mutation. Afterward, run
-   the fresh re-check above; on `POST`, post an evidence comment. If
+   the fresh re-check above and act on `RECHECK_RESULT`. If
    the viewer cannot minimize any detected
    candidates, post a cleanup-permission-blocked comment instead of
    exiting silently.
