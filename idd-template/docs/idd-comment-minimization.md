@@ -267,7 +267,8 @@ never suppress this run's own non-success evidence), and the agent F4
 step skips its own post under that same both-converged rule —
 including when the workflow itself posted the prior success record. A
 trusted comment recording any other status (`failed`, `incomplete`,
-`permission-blocked`, `rescan-failed`) does not suppress either side,
+`permission-blocked`, `rescan-failed`, `recheck-failed`) does not
+suppress either side,
 so a `workflow_dispatch` rerun after a `rescan-failed` post still
 posts fresh evidence (preventive; no observed incident yet — issue
 `#2043`). The workflow's PR-keyed `concurrency` group only serializes
@@ -617,11 +618,12 @@ successful outcome (`applied` / `clean`) and this run's own outcome is
 also `applied`/`clean`** (issue `#2213`'s both-converged rule) —
 narrowing, not fully preventing, duplicate success records; a prior
 success record alone must never suppress this run's own
-`failed`/`incomplete`/`rescan-failed` evidence, even when this run's
-own apply returned `applied` for residual markers the other side
-already minimized first; still post when no prior success record
-exists, or to correct an existing `failed` / `incomplete` /
-`permission-blocked` / `rescan-failed` record — a `rescan-failed`
+`failed`/`incomplete`/`rescan-failed`/`recheck-failed` evidence, even
+when this run's own apply returned `applied` for residual markers the
+other side already minimized first; still post when no prior success
+record exists, or to correct an existing `failed` / `incomplete` /
+`permission-blocked` / `rescan-failed` / `recheck-failed` record — a
+`rescan-failed`
 record in particular invites a retry, so a later `workflow_dispatch`
 rerun (or agent F4 re-run) must post fresh evidence for its own
 outcome rather than leave stale non-success evidence as the PR's only
