@@ -119,11 +119,11 @@ other GitHub side effect, confirm all of the following:
 1. Resolve `critiqueLoop.delegate` the same way
    `idd-work-lite.instructions.md` C1 does: helper-first
    `critique-delegate` (`node scripts/idd-critique-delegate.mjs` or
-   `idd:critique-delegate`; `usable`/`command`/`mode`), then run the
-   delegate and/or per-agent pass per `mode` (`fallback` default,
-   `combined`, `on-success`, `never`) and union findings when both
-   ran. Never assume delegate findings are stacked on the per-agent
-   pass. Stop and ask if that helper is missing, fails, or disagrees.
+   `idd:critique-delegate`). `usable: false` → per-agent only; only
+   `usable: true` uses `command`/`mode`. Then run delegate and/or
+   per-agent per `mode` (`fallback` default, `combined`, `on-success`,
+   `never`) and union when both ran. Never assume they stack. Stop
+   and ask if that helper is missing, fails, or disagrees.
    `critiqueLoop.telemetryHook` remains C1-only and is never consulted
    here. That resolve-and-run is the critique pass verifying E9
    fixes; not a second pass. Apply these lenses only within a
