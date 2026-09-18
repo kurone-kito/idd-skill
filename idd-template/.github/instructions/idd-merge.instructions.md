@@ -362,21 +362,56 @@ Before any mutating action in F3, apply the
    unchanged: it reads whatever that run may have posted and decides
    ownership from the marker's own recorded status.
 
-   **Duplicate-success-record skip rule**: before posting any evidence
-   comment below, skip it if the PR already carries a
-   `<!-- idd-cleanup-evidence:` comment recording a successful outcome
-   (`applied` or `clean`) **whose author is a trusted marker actor**
-   (`github-actions[bot]`, the identity `post-merge-cleanup.yml` posts
-   under, or a configured `trustedMarkerActors` login) — for example one
-   the `post-merge-cleanup` workflow posted within seconds of the merge —
-   to avoid a duplicate success record. An untrusted commenter's
-   marker-prefixed comment never counts as evidence and must not suppress
-   this post — the same trust-scoping every other IDD operational marker
-   already applies (see the shared
-   [Trusted marker actors](idd-overview-core.instructions.md#trusted-marker-actors)
-   rule). Otherwise post (a fresh success record, or a correction of an
-   existing `failed` / `incomplete` / `permission-blocked` record, or a
-   correction of an untrusted-author record).
+   **Duplicate-success-record skip rule**: do not treat an earlier
+   dry-run or apply-time read as the skip. Immediately before the
+   actual POST — no other GitHub-mutating call in between — run this
+   fresh re-check (mirrors `post-merge-cleanup.yml` including issue
+   `#2213`; `bash`):
+
+   ```sh
+   TRUSTED_LOGINS=$(
+     {
+       jq -r '(.trustedMarkerActors // [])[]' .github/idd/config.json 2>/dev/null || true
+       echo 'github-actions[bot]'
+     } | tr '[:upper:]' '[:lower:]'
+   )
+   COMMENTS_FETCH_FAILED=0
+   if ! COMMENTS_TSV=$(gh api --paginate \
+     "repos/{owner}/{repo}/issues/<pr-number>/comments" \
+     --jq '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | [.id, .user.login, (.body | split("\n")[0])] | @tsv'); then
+     COMMENTS_FETCH_FAILED=1
+   fi
+   EXISTING_STATUS=""
+   while IFS=$'\t' read -r candidate_id candidate_login candidate_marker_line; do
+     [ -z "$candidate_id" ] && continue
+     lower_login=$(printf '%s' "$candidate_login" | tr '[:upper:]' '[:lower:]')
+     if printf '%s\n' "$TRUSTED_LOGINS" | grep -Fxq "$lower_login"; then
+       EXISTING_STATUS=$(printf '%s' "$candidate_marker_line" \
+         | sed -n 's/^<!-- idd-cleanup-evidence: \([^ ]*\) .*/\1/p')
+     fi
+   done <<< "$COMMENTS_TSV"
+   THIS_RUN_STATUS="<this-run-status>"
+   if [ "$COMMENTS_FETCH_FAILED" = "1" ]; then
+     echo "RECHECK_RESULT=FETCH_FAILED"
+   elif { [ "$EXISTING_STATUS" = "applied" ] || [ "$EXISTING_STATUS" = "clean" ]; } \
+     && { [ "$THIS_RUN_STATUS" = "applied" ] || [ "$THIS_RUN_STATUS" = "clean" ]; }; then
+     echo "RECHECK_RESULT=SKIP"
+   else
+     echo "RECHECK_RESULT=POST"
+   fi
+   ```
+
+   Substitute `<pr-number>` and `<this-run-status>`. Guard the `gh api`
+   assignment (`if ! …`) or a failed fetch reads as "no prior record".
+   Do not POST from this print. Re-run at each evidence POST below and
+   act on `RECHECK_RESULT`: `FETCH_FAILED` → post `recheck-failed`
+   (never relabel the apply) per
+   [docs/idd-comment-minimization.md](../../docs/idd-comment-minimization.md#re-check-fetch-failure-comment);
+   `SKIP` → do not post; `POST` → that branch's evidence. Residual REST
+   TOCTOU is accepted — see that same doc's server-side fallback
+   section. SKIP requires the latest record **whose author is a
+   trusted marker actor**. An untrusted commenter's marker-prefixed
+   comment never counts as evidence.
 
    Evaluate the dry-run `status` field (this is a dry-run status; apply
    mode emits different values and is never invoked unless dry-run
@@ -397,33 +432,21 @@ Before any mutating action in F3, apply the
      After apply, record the outcome by the apply `status`. See
      `docs/idd-comment-minimization.md` for the exact formats:
 
-     If the apply `status` is `applied` (residual candidates minimized)
-     or `clean` (no-op, nothing left to minimize): apply the
-     duplicate-success-record skip rule above; otherwise post the
-     evidence comment (`status`, `applied`, `failed`, `skipped`,
-     `viewer-cannot-minimize` counts for `applied`, or a converged
-     `clean` record) so this run's work is recorded. Proceed to step 4.
+     If the apply `status` is `applied` or `clean`: run the fresh
+     re-check above **now** and act on `RECHECK_RESULT`. Proceed
+     to step 4.
 
-     The helper internally retries a whole scan-and-minimize pass, bounded,
-     when a fresh rescan still reports candidates after applying (a
-     candidate that only became eligible after the previous pass, e.g.
-     GraphQL read-after-write lag) — the common case still converges to
-     `applied`/`clean` within this one invocation. If the output also
-     reports `retryBoundExhausted: true` (visible as
-     `retryBoundExhausted=true` in table format), the retry bound was
-     reached while a rescan still found candidates. Route by the apply
-     `status` exactly as above, even then: if `status` is still
-     `applied`/`clean`, follow that evidence-comment path and note the
-     `retryAttempts` count as an informational, non-blocking
-     residual-lag signal rather than a defect; if `status` came back
-     `incomplete` (the fresh rescan found a genuine permission-blocked
-     remainder) or `failed`, follow the `failed`/`incomplete`
-     cleanup-failure path below instead — `retryBoundExhausted: true`
-     never overrides a non-success `status`.
+     The helper may retry a scan-and-minimize pass, bounded, when a
+     rescan still reports candidates (read-after-write lag). Route by
+     apply `status` even when `retryBoundExhausted: true`:
+     `applied`/`clean` still post evidence (`retryAttempts` is
+     informational); `incomplete`/`failed` still take the
+     cleanup-failure path below.
 
      If the apply `status` is `failed`, `incomplete`, or
-     `rescan-failed`: post the cleanup-failure comment format instead,
-     including the `viewer-cannot-minimize` count when non-zero.
+     `rescan-failed`: re-check, then post cleanup-failure (or
+     `recheck-failed`) as above, including the
+     `viewer-cannot-minimize` count when non-zero.
      `rescan-failed` means the confirming rescan itself errored after a
      mutation (already-applied work is preserved in the report but
      convergence was never confirmed) — note that distinction in the
@@ -433,16 +456,16 @@ Before any mutating action in F3, apply the
 
    - **`permission-blocked`**: skipped items exist with
      `viewerCanMinimize: false` and no apply-eligible candidates found.
-     Post a cleanup-permission-blocked comment listing the blocked
-     candidates and the count, then proceed to step 4.
+     Re-check, then post cleanup-permission-blocked (or
+     `recheck-failed`) listing the blocked candidates and the count,
+     then proceed to step 4.
 
    For the GraphQL fallback (helper unavailable): check
    `viewerCanMinimize` and `isMinimized` before minimizing; skip
    already-minimized comments and ones the viewer cannot minimize.
-   Re-validate the active claim before each mutation. Afterward, apply
-   the duplicate-success-record skip rule above; otherwise post an
-   evidence comment summarizing the outcome (status, applied/skipped
-   counts with reasons). If the viewer cannot minimize any detected
+   Re-validate the active claim before each mutation. Before every
+   evidence POST (success or permission-blocked), re-check and act on
+   `RECHECK_RESULT`. If the viewer cannot minimize any detected
    candidates, post a cleanup-permission-blocked comment instead of
    exiting silently.
 
