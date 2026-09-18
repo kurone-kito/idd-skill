@@ -331,8 +331,11 @@ pass asks, never a separate pass to run on top of the one that ran.
    Neither a delegate that succeeded and returned a readable list with no issues
    in it, nor one that failed but still emitted a readable list, is this case:
    both are genuine results, so continue to step 3.
-3. Otherwise, if the critique pass reports zero issues, check the `fix-validate`
-   floor.
+3. Otherwise, if the critique pass reports zero issues, invoke
+   `critiqueLoop.telemetryHook` (C1) with zero findings/accepted/rejected
+   counts — fire-and-forget — then check the `fix-validate` floor. A round
+   that continues to C5 for the floor only is still a zero-finding round
+   and must not lose its record.
 4. If the floor has not passed, continue to C5 to repair validation.
 5. If the floor has passed, open and follow `idd-pr-submit-lite.instructions.md`
    now.
@@ -352,6 +355,12 @@ pass asks, never a separate pass to run on top of the one that ran.
 4. Otherwise, if only low accepted issues remain after more than 3 loops and
    the floor has passed, open and follow `idd-pr-submit-lite.instructions.md` now.
 5. Otherwise continue to C5.
+
+Once the exit above is chosen (before C5, PR submission, or a C4 hold),
+invoke `critiqueLoop.telemetryHook` (C1) with this round's findings,
+severity, accepted/rejected counts, and delegate usage — fire-and-forget.
+A delegate's own fail-closed hold (C2 step 2) stops before C2 and has no
+telemetry record.
 
 ### C5 — Fix accepted issues
 

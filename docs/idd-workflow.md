@@ -1477,15 +1477,12 @@ above, this hook never supplies critique findings and never gates
 C-phase control flow — it is a pure observability side channel.
 
 The hook is invoked at two points in the C-phase loop, documented in
-`.github/instructions/idd-work.instructions.md`'s C2 and C4: at the end
-of C4, once the round's Accept/Reject decision is final (before C5,
-`idd-pr-submit.instructions.md`, or a hold); and at C2's zero-issue
-exit, so a clean round that skips C3/C4 entirely still emits a record
-(with zero findings/accepted/rejected counts).
-
-The lite work profile (`lite/idd-work-lite.instructions.md`) does not
-invoke this hook -- per-round telemetry is a full-profile-only feature
-for now.
+both the full-profile work file (C2 and C4) and the lite work file
+(`lite/idd-work-lite.instructions.md`, matching steps): at the end of
+C4, once the round's Accept/Reject decision is final (before C5, PR
+submission, or a hold); and at C2's zero-issue exit, so a clean round
+that skips C3/C4 entirely still emits a record (with zero
+findings/accepted/rejected counts).
 
 The JSON payload written to the hook command's stdin:
 
