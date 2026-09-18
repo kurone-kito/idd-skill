@@ -306,20 +306,24 @@ export interface RerunPlanRawInstance {
   /**
    * The underlying workflow run's own live `status` (from
    * `GET .../actions/runs/{run_id}`), independent of this check-run row's
-   * own (possibly stale) `status`/`conclusion` pair. Consulted only by
-   * {@link computeRefreshLatestPlan} (Codex P1, PR #2855 review): when a
-   * review arrives while an already-issued rerun for this same `runId` is
-   * still spinning up, the check-runs-for-ref endpoint can keep exposing
-   * the PRIOR attempt's completed row for a short window before the new
-   * attempt's own row/status propagates -- the same kind of
-   * stale-row-vs-fresh-row lag this file's own #1381 precedent already
-   * documents across TWO rows sharing a runId, but here there is only one
-   * row and its `status`/`conclusion` are themselves what's stale. Without
-   * this field, that stale conclusion alone would classify the instance as
-   * immediately rerun-eligible and fire another `gh run rerun` against a
-   * run that is, per the authoritative workflow-run endpoint, already
-   * live -- cancelling it instead of waiting for it. `null` when unset
-   * (tests) or when the per-run lookup failed (`runLookupFailed`).
+   * own (possibly stale) `status`/`conclusion` pair. Consulted by
+   * {@link classifyInstance} (the default `--apply` / `computeRerunPlan`
+   * path, #3117) and {@link computeRefreshLatestPlan} (Codex P1, PR
+   * `#2855` review): when a review arrives while an already-issued
+   * rerun for this same `runId` is still spinning up, the
+   * check-runs-for-ref endpoint can keep exposing the PRIOR attempt's
+   * completed row for a short window before the new attempt's own
+   * row/status propagates -- the same kind of stale-row-vs-fresh-row
+   * lag this file's own #1381 precedent already documents across TWO
+   * rows sharing a runId, but here there is only one row and its
+   * `status`/`conclusion` are themselves what's stale. Without this
+   * field, that stale conclusion alone would classify the instance as
+   * immediately rerun-eligible (or pass, if the stale row is green)
+   * and fire another `gh run rerun` against a run that is, per the
+   * authoritative workflow-run endpoint, already live -- cancelling it
+   * instead of waiting for it. Observed 2026-09-18 on PR `#3116` for
+   * the `--apply` path. `null` when unset (tests) or when the per-run
+   * lookup failed (`runLookupFailed`).
    */
   runStatus?: string | null;
 }
@@ -1143,7 +1147,7 @@ export function computeRefreshLatestPlan(
     const conclusion = instance.conclusion
       ? String(instance.conclusion).trim().toLowerCase()
       : null;
-    // Mirrors classifyInstance step 3's `bot-gated-skip` (Codex P1, PR
+    // Mirrors classifyInstance step 1's `bot-gated-skip` (Codex P1, PR
     // #2855 review): `idd-ci.instructions.md` §Rerun mechanics documents
     // that rerunning an `action_required`-conclusion instance preserves
     // the original bot actor's privileges and simply re-enters
@@ -1441,35 +1445,26 @@ function classifyInstance(
   const conclusion = instance.conclusion
     ? String(instance.conclusion).trim().toLowerCase()
     : null;
+  // Same formula as {@link computeRefreshLatestPlan}: a present
+  // (possibly stale) check-run conclusion must not beat the
+  // authoritative workflow-run status.
+  const runStatus = instance.runStatus
+    ? String(instance.runStatus).trim().toLowerCase()
+    : null;
 
-  // 1. Pass-equivalent -- no action needed.
-  if (conclusion && PASS_CONCLUSIONS.has(conclusion)) {
-    return {
-      ...instance,
-      classification: 'pass',
-      reason: `conclusion "${conclusion}" is pass-equivalent`,
-    };
-  }
-
-  // 2. Still running -- rerunning a live run cancels it, never helps.
-  if (!conclusion && PENDING_STATUSES.has(status)) {
-    return {
-      ...instance,
-      classification: 'pending',
-      reason: `status "${status}" has not concluded yet; rerunning a live run would cancel it instead of recovering it`,
-    };
-  }
-
-  // 3. Bot-gated: `action_required` conclusion ONLY (#1745 narrowed this
+  // 1. Bot-gated: `action_required` conclusion ONLY (#1745 narrowed this
   // from the prior "action_required OR bot-triggered actor" rule -- #1424
   // established just the action_required case; a bot-triggered instance
   // with any other conclusion, e.g. CANCELLED, reruns and completes
-  // normally, per #1745's direct experiment on PR #1741). `botTriggered` is
-  // still computed here (and reused at step 7 below) purely to annotate the
-  // reason text and to feed `selectRecoveryRefreshCandidates`, which still
-  // must exclude a bot-triggered PASS instance from the refresh
-  // suggestion -- it no longer decides this instance's classification by
-  // itself.
+  // normally, per #1745's direct experiment on PR #1741). Kept ahead of
+  // the `runStatus` pending-win so a live attempt cannot reclassify this
+  // as `rerun-eligible` (#3117); `bot-gated-skip` matches
+  // `computeRefreshLatestPlan`'s skip-then-pending order. `botTriggered`
+  // is still computed here (and reused at step 7 below) purely to
+  // annotate the reason text and to feed
+  // `selectRecoveryRefreshCandidates`, which still must exclude a
+  // bot-triggered PASS instance from the refresh suggestion -- it no
+  // longer decides this instance's classification by itself.
   const botTriggered = isBotTriggered(instance, options);
   const actorDescription =
     instance.triggeringActorLogin ?? instance.actorLogin ?? 'unknown actor';
@@ -1478,6 +1473,35 @@ function classifyInstance(
       ? `conclusion is "action_required" and the triggering actor (${actorDescription}) is a bot; rerunning re-enters action_required (#1424) -- needs a non-bot trigger or maintainer approval`
       : 'conclusion is "action_required"; rerunning without a non-bot trigger or maintainer approval re-enters action_required (#1424)';
     return { ...instance, classification: 'bot-gated-skip', reason };
+  }
+
+  // 2. Still running -- rerunning a live run cancels it, never helps.
+  // `runStatus` wins even over a present terminal conclusion, including
+  // pass-equivalent: a stale completed/failure (or completed/success)
+  // row after an already-issued sibling rerun would otherwise classify
+  // `rerun-eligible` or `pass` and `--apply` would fire `gh run rerun`
+  // against a live run or report all-clear (observed 2026-09-18, PR
+  // `#3116`). `null`/absent `runStatus` keeps the conclusion-only path.
+  if (
+    (!conclusion && PENDING_STATUSES.has(status)) ||
+    (runStatus !== null && PENDING_STATUSES.has(runStatus))
+  ) {
+    const reason =
+      runStatus !== null && PENDING_STATUSES.has(runStatus)
+        ? `live workflow run status "${runStatus}" has not concluded yet; rerunning a live run would cancel it instead of recovering it`
+        : `status "${status}" has not concluded yet; rerunning a live run would cancel it instead of recovering it`;
+    return { ...instance, classification: 'pending', reason };
+  }
+
+  // 3. Pass-equivalent -- no action needed. Evaluated only after the
+  // live-run pending-win so a stale green row cannot mask an in-flight
+  // attempt.
+  if (conclusion && PASS_CONCLUSIONS.has(conclusion)) {
+    return {
+      ...instance,
+      classification: 'pass',
+      reason: `conclusion "${conclusion}" is pass-equivalent`,
+    };
   }
 
   // 4. Fail closed on an unresolvable run identity -- never guess.
@@ -1575,7 +1599,7 @@ function classifyInstance(
   // 8. Non-pass, terminal, resolved, pull_request-family -- safe to rerun.
   // A bot-triggered actor does not withhold this instance by itself
   // (#1745) -- only a genuinely `action_required` conclusion does, handled
-  // in step 3 above -- so the reason notes bot-triggering when present
+  // in step 1 above -- so the reason notes bot-triggering when present
   // instead of asserting "non-bot" for an instance that may well be one.
   const botNote = botTriggered
     ? ` (triggering actor ${actorDescription} is a bot, but conclusion "${conclusion}" is not action_required-gated)`
@@ -1585,6 +1609,76 @@ function classifyInstance(
     classification: 'rerun-eligible',
     reason: `conclusion "${conclusion}" is non-passing and resolved (event "${runEvent}")${botNote}; safe to rerun`,
   };
+}
+
+/**
+ * `true` when `gh run rerun` failed because GitHub refused to start a
+ * new attempt on a workflow run that is already live -- the TOCTOU
+ * window between the pre-rerun GET and the rerun POST (observed
+ * 2026-09-18 on PR `#3116`: `run N cannot be rerun; This workflow is
+ * already running`). Other `cannot be rerun` 422s (a run GitHub will
+ * not rerun at all) must still throw -- match the already-running
+ * clause, not every `cannot be rerun` string.
+ */
+export function isAlreadyRunningRerunError(message: string): boolean {
+  const text = String(message ?? '').toLowerCase();
+  return text.includes('cannot be rerun') && text.includes('already running');
+}
+
+/** Pure production `--apply` wait/rerun decision after the pre-rerun
+ * workflow-run GET (Copilot review on PR `#3118`). Waiting for a live
+ * current attempt does not need `run_attempt`; only the path that
+ * still issues `gh run rerun` does. */
+export type ProductionLiveRunPlan =
+  | { action: 'wait-current-attempt' }
+  | { action: 'issue-rerun'; priorAttempt: number }
+  | { action: 'throw'; message: string };
+
+/** Pure production `--apply` wait/rerun decision after `gh run rerun`
+ * throws. */
+export type ProductionRerunErrorPlan =
+  | { action: 'wait-current-attempt' }
+  | { action: 'throw' };
+
+/**
+ * Decide whether the pre-rerun GET already shows a live workflow run
+ * (wait for that current attempt, even when `run_attempt` is missing)
+ * or whether it is safe to issue `gh run rerun` (needs a numeric
+ * `run_attempt` so {@link waitForNewAttempt} can observe the new one).
+ */
+export function planProductionRerunFromLiveRun(input: {
+  status: string | null | undefined;
+  runAttempt: number | null | undefined;
+  runId: string;
+  owner: string;
+  repo: string;
+}): ProductionLiveRunPlan {
+  const liveStatus = input.status
+    ? String(input.status).trim().toLowerCase()
+    : null;
+  if (liveStatus !== null && PENDING_STATUSES.has(liveStatus)) {
+    return { action: 'wait-current-attempt' };
+  }
+  if (typeof input.runAttempt !== 'number') {
+    return {
+      action: 'throw',
+      message: `cannot verify a new rerun attempt for run ${input.runId} (${input.owner}/${input.repo}): the current run_attempt is missing or non-numeric`,
+    };
+  }
+  return { action: 'issue-rerun', priorAttempt: input.runAttempt };
+}
+
+/**
+ * Decide whether a failed `gh run rerun` is GitHub's already-running
+ * TOCTOU (wait for the current attempt) or a genuine failure that must
+ * still throw.
+ */
+export function planProductionRerunFromRerunError(
+  message: string,
+): ProductionRerunErrorPlan {
+  return isAlreadyRunningRerunError(message)
+    ? { action: 'wait-current-attempt' }
+    : { action: 'throw' };
 }
 
 /**
@@ -2520,13 +2614,14 @@ interface RawWorkflowRunPayload {
    * rerun` -- see {@link RerunPlanRawInstance.runAttempt}. */
   run_attempt?: number | null;
   /** Consulted by {@link waitForNewAttempt} (the `--apply` polling loop)
-   * and, via {@link RerunPlanRawInstance.runStatus}, by
-   * {@link computeRefreshLatestPlan}'s pending classification (Codex P1,
-   * PR #2855 review): this is the authoritative live status of the
-   * workflow run itself, whereas a check-run row's own `status` can lag
-   * behind a rerun this function already knows was issued for the same
-   * `runId` -- see `runStatus`'s own doc comment for the race this
-   * closes. */
+   * and, via {@link RerunPlanRawInstance.runStatus}, by both
+   * {@link classifyInstance} (default `--apply` / `computeRerunPlan`,
+   * #3117) and {@link computeRefreshLatestPlan}'s pending classification
+   * (Codex P1, PR #2855 review): this is the authoritative live status
+   * of the workflow run itself, whereas a check-run row's own `status`
+   * can lag behind a rerun this function already knows was issued for
+   * the same `runId` -- see `runStatus`'s own doc comment for the race
+   * this closes. */
   status?: string | null;
 }
 
@@ -3327,16 +3422,24 @@ function resolveOwnerRepo(args: RerunPlanArgs): {
 
 /** Production {@link RerunApplyDeps}: a real `gh run rerun` plus {@link
  * waitForNewAttempt} polling, and a fresh {@link collectFromGitHub} +
- * {@link computeRerunPlan} for `recomputePlan`. `rerunAndWait` never
- * swallows a failure -- unlike this file's many read-only lookups, a
- * mutating `gh run rerun` (or a poll that never observes a new completed
- * attempt) genuinely failing is worth surfacing to the operator, not
+ * {@link computeRerunPlan} for `recomputePlan`. `rerunAndWait` still
+ * throws on a genuine rerun or poll failure -- unlike this file's many
+ * read-only lookups, a mutating `gh run rerun` (or a poll that never
+ * observes completion) failing is worth surfacing to the operator, not
  * silently treating as "no change" (matching `ghText`'s own
- * throw-by-default contract). `owner`/`repo` are resolved once, up
- * front, and reused for every rerun in the loop -- `recomputePlan` still
- * re-resolves them itself on each call (via its own fresh
- * `collectFromGitHub`), which is redundant but harmless (two cheap `gh
- * repo view` calls) and keeps `recomputePlan` a self-contained unit. */
+ * throw-by-default contract). Two wait-not-crash exceptions (#3117,
+ * observed 2026-09-18 on PR `#3116`): if the pre-rerun GET already
+ * reports a pending workflow-run `status`, skip `gh run rerun` and
+ * {@link waitForRunCompletion} of the *current* attempt (never
+ * {@link waitForNewAttempt}, which would wait for a later attempt that
+ * will not be issued); if `gh run rerun` still 422s with GitHub's
+ * already-running clause in the TOCTOU window after that GET, wait the
+ * same way rather than throwing. Other `cannot be rerun` 422s still
+ * throw. `owner`/`repo` are resolved once, up front, and reused for
+ * every rerun in the loop -- `recomputePlan` still re-resolves them
+ * itself on each call (via its own fresh `collectFromGitHub`), which
+ * is redundant but harmless (two cheap `gh repo view` calls) and keeps
+ * `recomputePlan` a self-contained unit. */
 function buildProductionApplyDeps(args: RerunPlanArgs): RerunApplyDeps {
   const { owner, repo } = resolveOwnerRepo(args);
   return {
@@ -3347,24 +3450,37 @@ function buildProductionApplyDeps(args: RerunPlanArgs): RerunApplyDeps {
           GH_TEXT_LOOP_TIMEOUT_OPTIONS,
         ),
       ) as RawWorkflowRunPayload;
-      // Fail closed BEFORE issuing the rerun (Copilot review, #1772):
-      // waitForNewAttempt's whole race-avoidance guarantee rests on
-      // comparing this pre-rerun run_attempt against the post-rerun
-      // value, so a missing/non-numeric run_attempt here means that
-      // guarantee cannot be verified at all -- proceeding anyway (e.g.
-      // treating "unknown" as automatically "new") would silently
-      // reopen the exact stale-read race this function exists to close.
-      if (typeof priorPayload.run_attempt !== 'number') {
-        throw new Error(
-          `cannot verify a new rerun attempt for run ${command.runId} (${owner}/${repo}): the current run_attempt is missing or non-numeric`,
-        );
+      const livePlan = planProductionRerunFromLiveRun({
+        status: priorPayload.status,
+        runAttempt: priorPayload.run_attempt,
+        runId: command.runId,
+        owner,
+        repo,
+      });
+      if (livePlan.action === 'wait-current-attempt') {
+        waitForRunCompletion(owner, repo, command.runId);
+        return;
       }
-      const priorAttempt = priorPayload.run_attempt;
-      ghText(
-        ['run', 'rerun', command.runId, '-R', `${owner}/${repo}`],
-        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      );
-      waitForNewAttempt(owner, repo, command.runId, priorAttempt);
+      if (livePlan.action === 'throw') {
+        throw new Error(livePlan.message);
+      }
+      try {
+        ghText(
+          ['run', 'rerun', command.runId, '-R', `${owner}/${repo}`],
+          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (
+          planProductionRerunFromRerunError(message).action ===
+          'wait-current-attempt'
+        ) {
+          waitForRunCompletion(owner, repo, command.runId);
+          return;
+        }
+        throw error;
+      }
+      waitForNewAttempt(owner, repo, command.runId, livePlan.priorAttempt);
     },
     recomputePlan: () => {
       const { input, options } = collectFromGitHub(args);
