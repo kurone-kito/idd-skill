@@ -287,6 +287,13 @@ turns an operator-visible failure into a silent stall.
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
   `ciWait.rerunPolicy` values; on-success → re-evaluate F2).
 
+  `pre-merge-readiness` reads `.github/idd/config.json` from the PR's
+  trusted **base** ref, not the PR head. When this PR introduces a
+  `ciGate.*` key its own F2 evaluation needs, follow
+  [ciGate F2 bootstrap](../../docs/customization.md#cigate-f2-bootstrap).
+  F2 stays fail-closed here; the human off-ramp in that section is not
+  an F2/F3 action.
+
   **No required checks configured**: When `pre-merge-readiness` reports
   `ci.noRequiredChecksConfigured: true` (unprotected branch, or no
   required status checks), the CI gate is **not** satisfied vacuously.

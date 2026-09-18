@@ -133,6 +133,13 @@ layered on top of the distributed IDD defaults:
   See
   [docs/idd-helper-scripts.md](docs/idd-helper-scripts.md#automated-self-referential-bootstrap-auto-waiver-kurone-kitoidd-skill2657)
   for the full trust model.
+- **ciGate F2 bootstrap**: This source repository follows the
+  distributed preload-first procedure in
+  [ciGate F2 bootstrap](docs/customization.md#cigate-f2-bootstrap)
+  when a new `ciGate.*` key must land before F2 can honor it (observed
+  on `kurone-kito/kurone-kito#33` and `kurone-kito/kurone-kito#37`).
+  Do not generalize issue `#2657`'s self-referential-bootstrap-auto
+  waiver to an arbitrary `ciGate.*` key.
 - **Advisory-convergence deadline**: This source repository also
   records `advisoryWait.convergenceDeadline: "PT9H"` as a local IDD
   dogfooding policy (applies only to `kurone-kito/idd-skill`),
