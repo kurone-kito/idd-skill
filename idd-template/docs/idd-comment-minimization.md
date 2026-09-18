@@ -595,8 +595,9 @@ corresponding path:
 |                      | step 3.                                                      |
 
 After apply, if `status` is `failed`, `incomplete`, or `rescan-failed`,
-run the same pre-POST re-check and, unless it prints `SKIP`, post a
-cleanup-failure comment. A cleanup failure after a successful F3
+run the same pre-POST re-check and act on `RECHECK_RESULT`:
+`FETCH_FAILED` → post `recheck-failed`, `POST` → post a cleanup-failure
+comment, `SKIP` → do not post. A cleanup failure after a successful F3
 merge does not re-block the merge; it is an explicit record only.
 
 ### Cleanup evidence comment
@@ -705,7 +706,7 @@ whole step under the workflow's own `bash -eo pipefail` before any
 comment is attempted, rather than reaching a posting decision at all:
 
 ```markdown
-<!-- idd-cleanup-evidence: recheck-failed apply-status:{applied|clean|failed|incomplete} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
+<!-- idd-cleanup-evidence: recheck-failed apply-status:{applied|clean|failed|incomplete|rescan-failed} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
 
 **F4 Re-check Fetch Failure**
 
@@ -715,7 +716,7 @@ posting; the apply outcome below may still be fully converged.
 | Field                 | Value                                                                |
 | --------------------- | -------------------------------------------------------------------- |
 | Status                | recheck-failed                                                       |
-| Apply status (actual) | applied / clean / failed / incomplete                                |
+| Apply status (actual) | applied / clean / failed / incomplete / rescan-failed                |
 | Applied               | N                                                                    |
 | Failed                | N                                                                    |
 | Skipped               | N                                                                    |
