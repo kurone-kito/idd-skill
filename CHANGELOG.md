@@ -14,6 +14,79 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-18
+
+Discover A0-O human-input stop, critique-loop configuration and
+telemetry harvest, onboarding policy recording, and claim-scope
+hardening release.
+
+### Added
+
+- Discover A0-O trigger (d): an A1.5 human-input stop can now promote
+  a named orphan into the Discover set without waiting for a later
+  A0-T prompt (#3096).
+- `claim-lock`'s cwd-vs-claim gate widens from C-phase-only to B2 and
+  C5, so a worktree already on a different issue's branch is refused
+  before work or PR-submit proceeds (#2950).
+- `critiqueLoop.deferAfterRounds` becomes first-class configuration
+  rather than a hardcoded recalibration, so a repository can set the
+  Low-severity defer cutoff without a helper edit (#3046).
+- `idd-onboard` records issue-mediated policy choices and warns when
+  a remote helper profile omits `packageSpec` (#3021, #3052).
+- Critique-loop telemetry harvest/report/aggregation pipeline, so an
+  operator can collect C1 effectiveness data instead of only invoking
+  the fire-and-forget hook (#3005).
+- `audit-docs` extends the near-ceiling ratchet to per-file
+  instruction-byte budgets, not only the global bundle (#3042).
+
+### Changed
+
+- Cursor CLI is registered on the `AGENTS.md` operator entry and the
+  adopter onboarding path, without adding a `CURSOR.md` or Cursor-only
+  skill mirrors (#3114, #3115).
+- F2 `ciGate` bootstrap is documented as preload-first plus a one-off
+  owner/maintainer merge, rather than generalizing the
+  self-referential-bootstrap-auto waiver (#3116).
+- Lite instruction files gain the ephemeral-npx form and close
+  remaining lite/standard mirroring gaps (wake-up timeout, outage
+  park, cold-start reconstruction) (#3054, #3058, #3068, #3083).
+- pnpm configuration is tightened and `engines.pnpm` no longer leaks
+  to package-manager consumers (#2974, #3053).
+- This source repository dogfoods `critiqueLoop.telemetryHook`
+  (#3003).
+- Documentation precision across onboarding, helpers, policy
+  constants, issue-authoring, discover, merge, CI, and APM lockfile
+  re-import signals.
+
+### Fixed
+
+- Advisory-convergence: grant the self-waiver job the token scopes it
+  needs, treat an active self-referential-bootstrap-auto waiver as
+  fresh-review evidence, skip Copilot error reviews as evidence, and
+  wait instead of crashing when a rerun is already running (issues
+  `#2954`, `#3040`, `#3007`, `#3045`, `#3117`).
+- Claim/lock/merge: correct the stale cwd-vs-claim phase-list
+  comment, refuse claim-less F3 continuation, and finalize the
+  claimed issue's own digest at F4 (#2953, #3051, #3088).
+- `branch-conflict-state`: bound `git fetch`, disable credential
+  prompts, keep tests off the live network, and run them on Windows
+  CI (#2998, #2997, #3019).
+- `gh-exec`: stop leaking `gh` stderr on handled failures, and honor
+  `GH_HOST` for GHES in `ghText` (#3092, #3108).
+- Review and submit: make D2's first publication push literal, carve
+  AMD regular comments out of E1 Step 3, persist the
+  zero-accepted-PATH-A gate, and verify E13 commit citations touch
+  the cited files (#3091, #3095, #3098, #3097).
+- Doctor, schemas, and CI: narrow the placeholder scanner, extend the
+  branch-protection-unreadable remedy, canonicalize phase-graph node
+  IDs, close `workflow_dispatch` trust gaps in post-merge-cleanup,
+  and stop githooks branch-pattern glob expansion (issues `#3093`,
+  `#3089`, `#3038`, `#3037`, `#3020`).
+- Authoring, audit, and resume: gate auto-release on single-target
+  scope, resolve spec-audit contract-authority overclaims, stop
+  suitability Check 3 from incorrectly flagging validation prose, and
+  close lite resume routing gaps (#3049, #3034, #3087, #3018).
+
 ## [0.11.0] - 2026-09-12
 
 CI-check-identity spoofing closures, claim generated-token integrity,
