@@ -255,21 +255,63 @@ post comments under a writeable `GITHUB_TOKEN`.
 The agent F4 step in `idd-merge.instructions.md` remains the
 canonical, mandatory contract. The server-side workflow is a
 backstop, not a replacement: same helper, same candidate rules,
-same evidence comment shape, non-blocking on errors. Double-posting is
-prevented by the cleanup-evidence record itself, not by Actions
-concurrency: the workflow skips when the latest trusted-author
-`<!-- idd-cleanup-evidence:` comment already records a successful
-outcome (`applied` or `clean`; posted by `github-actions[bot]` or a
-configured `trustedMarkerActors` login — an untrusted commenter's
-marker-prefixed comment never counts), and the agent F4 step skips its
-own post under the same success-record rule — including a success
-record the workflow itself posted. A trusted comment recording any
-other status (`failed`, `incomplete`, `permission-blocked`,
-`rescan-failed`) does not suppress either side, so a
-`workflow_dispatch` rerun after a `rescan-failed` post still posts
-fresh evidence (preventive; no observed incident yet — #2043). The
-workflow's PR-keyed `concurrency` group only serializes workflow runs
-against each other; it does not gate the agent's local F4.
+same evidence comment shape, non-blocking on errors. Each side keys
+off the same trusted-author `<!-- idd-cleanup-evidence:` record: the
+workflow skips only when **both** the **latest** trusted-author
+comment already records a successful outcome (`applied` or `clean`;
+posted by `github-actions[bot]` or a configured `trustedMarkerActors`
+login — an untrusted commenter's marker-prefixed comment never
+counts) **and this run's own outcome is also `applied`/`clean`**
+(issue `#2213`'s both-converged rule — a prior success alone must
+never suppress this run's own non-success evidence), and the agent F4
+step skips its own post under that same both-converged rule —
+including when the workflow itself posted the prior success record. A
+trusted comment recording any other status (`failed`, `incomplete`,
+`permission-blocked`, `rescan-failed`) does not suppress either side,
+so a `workflow_dispatch` rerun after a `rescan-failed` post still
+posts fresh evidence (preventive; no observed incident yet — issue
+`#2043`). The workflow's PR-keyed `concurrency` group only serializes
+workflow runs against each other; it does not gate the agent's local
+F4.
+
+That first read-then-post is not itself atomic. Observed 2026-09-09 on
+`kurone-kito/dotfiles#396`: a CodeRabbit review caught duplicate
+`idd-cleanup-evidence` comments because each side's check ran once
+early in the pass, with enough wall-clock in between for both to
+observe "no success record" and both post. Double-posting is therefore
+narrowed by **double-checked locking**, not prevented outright: each
+side still starts from the record above, but must additionally run a
+**second, freshly-fetched re-check immediately before its own POST
+call** — with no other GitHub-mutating call in between, and never
+reusing a comment list gathered earlier in the same run — and skip
+only when that fresh read's latest trusted record **and** this run's
+own outcome are both in `applied`/`clean`. This shrinks the race
+window from "an entire workflow/agent run" to the gap between that
+final re-check and the POST call actually landing on GitHub, for each
+side independently. It does not close the window: **GitHub's REST API
+for issue/PR comments has no atomic create-if-absent / compare-and-swap
+primitive**, so two independent processes can still both observe "no
+success record" if their fresh reads interleave inside that narrowed
+gap. A GitHub Data API ref-creation lock (`POST .../git/refs`, which
+does reject a duplicate atomically) was considered and rejected: it
+would need `contents: write` on `post-merge-cleanup.yml`, a
+`pull_request_target`-triggered workflow whose own header comment
+declares the current least-privilege permission set a trust invariant
+future edits must preserve, for a comment-deduplication fix that does
+not warrant widening it. This is the same accepted, bounded limitation
+already recorded for the claim protocol
+(`.github/instructions/idd-claim.instructions.md`,
+`.github/instructions/idd-resume.instructions.md`) — narrow the window
+via re-check, then live with the remainder — and, in the same
+underlying "no compare-and-swap" limitation but a different,
+post-hoc-reconciliation mechanism, for the external-check-waiver
+helper. See the
+[waiver helper](idd-helper-scripts.md#external-check-waiver-helper),
+which tolerates a duplicate write and reconciles by re-reading after
+the fact rather than narrowing the pre-write window. See
+[idd-merge.instructions.md's F4](../.github/instructions/idd-merge.instructions.md#f4--cleanup)
+for the literal re-check command both the agent F4 step and
+`post-merge-cleanup.yml` run.
 
 **In-flight cleanup-run wait (#2846).** Before the agent's F4 step
 decides whether to post its own evidence comment (the
@@ -567,18 +609,23 @@ run finishes (or the wait bound elapses) — this marker-based rule is
 what actually adjudicates ownership once that run, if any, has had its
 chance to post. Both
 the **agent-side** F4 step and the `post-merge-cleanup` workflow then
-key on the prior **success** record: **skip the post when the latest
-trusted
-`<!-- idd-cleanup-evidence:` comment records a successful outcome
-(`applied` / `clean`)**, so neither side stacks a duplicate success
-record — even when this run's own apply returned `applied` for residual
-markers the other side already minimized first; still post when no
-prior success record exists, or to correct an existing `failed` /
-`incomplete` / `permission-blocked` / `rescan-failed` record — a
-`rescan-failed` record in particular invites a retry, so a later
-`workflow_dispatch` rerun (or agent F4 re-run) must post fresh evidence
-for its own outcome rather than leave stale non-success evidence as the
-PR's only record (preventive; no observed incident yet — #2043):
+key on the prior **success** record. **Skip the post only when both a
+fresh, immediate re-check (see [the double-checked-locking re-check
+under Server-side fallback](#server-side-fallback-optional)) finds the
+latest trusted `<!-- idd-cleanup-evidence:` comment recording a
+successful outcome (`applied` / `clean`) and this run's own outcome is
+also `applied`/`clean`** (issue `#2213`'s both-converged rule) —
+narrowing, not fully preventing, duplicate success records; a prior
+success record alone must never suppress this run's own
+`failed`/`incomplete`/`rescan-failed` evidence, even when this run's
+own apply returned `applied` for residual markers the other side
+already minimized first; still post when no prior success record
+exists, or to correct an existing `failed` / `incomplete` /
+`permission-blocked` / `rescan-failed` record — a `rescan-failed`
+record in particular invites a retry, so a later `workflow_dispatch`
+rerun (or agent F4 re-run) must post fresh evidence for its own
+outcome rather than leave stale non-success evidence as the PR's only
+record (preventive; no observed incident yet — issue `#2043`):
 
 ```markdown
 <!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} retry-attempts:{N} retry-bound-exhausted:{true|false} -->
@@ -632,6 +679,53 @@ Cleanup candidates were detected but not all could be applied.
 This does not re-block the merge. A maintainer may run cleanup
 manually: `node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check`
 ```
+
+### Re-check-fetch-failure comment
+
+Agent-side F4 only: post this comment when the
+[re-check](#server-side-fallback-optional) immediately before posting
+prints `RECHECK_RESULT=FETCH_FAILED` — the apply itself may have fully
+converged, but the pre-post duplicate-record fetch (`gh api`) failed
+(auth, rate limit, transient network error), so this run cannot safely
+know whether a prior success record already exists. **Never relabel
+this as `failed`/`incomplete`/`rescan-failed`**: those are established
+apply-level outcomes with their own meaning elsewhere in this
+contract — notably, they never suppress a later run's own success
+post, unlike `applied`/`clean` — so reusing one here would misrepresent
+a possibly-fully-converged apply as broken to any later reader of this
+PR's evidence trail, and could skew a later run's own both-converged
+decision. `recheck-failed` is its own status value instead, carrying
+the real apply outcome (`apply-status`) alongside it so nothing is
+lost. The server-side `post-merge-cleanup.yml` workflow has no
+equivalent failure mode — a failed `gh api` fetch there aborts the
+whole step under the workflow's own `bash -eo pipefail` before any
+comment is attempted, rather than reaching a posting decision at all:
+
+```markdown
+<!-- idd-cleanup-evidence: recheck-failed apply-status:{applied|clean|failed|incomplete} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
+
+**F4 Re-check Fetch Failure**
+
+The duplicate-record re-check itself failed immediately before
+posting; the apply outcome below may still be fully converged.
+
+| Field                 | Value                                                                |
+| --------------------- | -------------------------------------------------------------------- |
+| Status                | recheck-failed                                                       |
+| Apply status (actual) | applied / clean / failed / incomplete                                |
+| Applied               | N                                                                    |
+| Failed                | N                                                                    |
+| Skipped               | N                                                                    |
+| Permission-blocked    | N                                                                    |
+| Notes                 | re-check `gh api` fetch failure reason (auth / rate-limit / network) |
+
+This does not re-block the merge. A maintainer or a later F4/workflow
+pass may re-run the re-check to confirm convergence.
+```
+
+A `recheck-failed` record does not suppress a later run's own success
+post, the same non-suppression behavior `failed`/`incomplete`/
+`rescan-failed` already have.
 
 ### Cleanup-permission-blocked comment
 
