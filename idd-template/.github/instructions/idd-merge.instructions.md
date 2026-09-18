@@ -403,10 +403,11 @@ Before any mutating action in F3, apply the
 
    Substitute `<pr-number>` and `<this-run-status>`. Guard the `gh api`
    assignment (`if ! …`) or a failed fetch reads as "no prior record".
-   Act on printed `RECHECK_RESULT` next: `FETCH_FAILED` → post
-   `recheck-failed` (never relabel the apply) per
+   Do not POST from this print. Re-run at each evidence POST below and
+   act on `RECHECK_RESULT`: `FETCH_FAILED` → post `recheck-failed`
+   (never relabel the apply) per
    [docs/idd-comment-minimization.md](../../docs/idd-comment-minimization.md#re-check-fetch-failure-comment);
-   `SKIP` → do not post; `POST` → send evidence now. Residual REST
+   `SKIP` → do not post; `POST` → that branch's evidence. Residual REST
    TOCTOU is accepted — see that same doc's server-side fallback
    section. SKIP requires the latest record **whose author is a
    trusted marker actor**. An untrusted commenter's marker-prefixed
@@ -435,26 +436,17 @@ Before any mutating action in F3, apply the
      re-check above **now** and act on `RECHECK_RESULT`. Proceed
      to step 4.
 
-     The helper internally retries a whole scan-and-minimize pass, bounded,
-     when a fresh rescan still reports candidates after applying (a
-     candidate that only became eligible after the previous pass, e.g.
-     GraphQL read-after-write lag) — the common case still converges to
-     `applied`/`clean` within this one invocation. If the output also
-     reports `retryBoundExhausted: true` (visible as
-     `retryBoundExhausted=true` in table format), the retry bound was
-     reached while a rescan still found candidates. Route by the apply
-     `status` exactly as above, even then: if `status` is still
-     `applied`/`clean`, follow that evidence-comment path and note the
-     `retryAttempts` count as an informational, non-blocking
-     residual-lag signal rather than a defect; if `status` came back
-     `incomplete` (the fresh rescan found a genuine permission-blocked
-     remainder) or `failed`, follow the `failed`/`incomplete`
-     cleanup-failure path below instead — `retryBoundExhausted: true`
-     never overrides a non-success `status`.
+     The helper may retry a scan-and-minimize pass, bounded, when a
+     rescan still reports candidates (read-after-write lag). Route by
+     apply `status` even when `retryBoundExhausted: true`:
+     `applied`/`clean` still post evidence (`retryAttempts` is
+     informational); `incomplete`/`failed` still take the
+     cleanup-failure path below.
 
      If the apply `status` is `failed`, `incomplete`, or
-     `rescan-failed`: post the cleanup-failure comment format instead,
-     including the `viewer-cannot-minimize` count when non-zero.
+     `rescan-failed`: re-check, then post cleanup-failure (or
+     `recheck-failed`) as above, including the
+     `viewer-cannot-minimize` count when non-zero.
      `rescan-failed` means the confirming rescan itself errored after a
      mutation (already-applied work is preserved in the report but
      convergence was never confirmed) — note that distinction in the
@@ -464,15 +456,16 @@ Before any mutating action in F3, apply the
 
    - **`permission-blocked`**: skipped items exist with
      `viewerCanMinimize: false` and no apply-eligible candidates found.
-     Post a cleanup-permission-blocked comment listing the blocked
-     candidates and the count, then proceed to step 4.
+     Re-check, then post cleanup-permission-blocked (or
+     `recheck-failed`) listing the blocked candidates and the count,
+     then proceed to step 4.
 
    For the GraphQL fallback (helper unavailable): check
    `viewerCanMinimize` and `isMinimized` before minimizing; skip
    already-minimized comments and ones the viewer cannot minimize.
-   Re-validate the active claim before each mutation. Afterward, run
-   the fresh re-check above and act on `RECHECK_RESULT`. If
-   the viewer cannot minimize any detected
+   Re-validate the active claim before each mutation. Before every
+   evidence POST (success or permission-blocked), re-check and act on
+   `RECHECK_RESULT`. If the viewer cannot minimize any detected
    candidates, post a cleanup-permission-blocked comment instead of
    exiting silently.
 

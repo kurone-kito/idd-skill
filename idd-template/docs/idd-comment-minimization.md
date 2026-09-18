@@ -586,16 +586,17 @@ cleanup candidates are detected.
 After the dry-run, evaluate the `status` field and follow the
 corresponding path:
 
-| Dry-run `status`     | Action                                                        |
-| -------------------- | ------------------------------------------------------------- |
-| `clean`              | No candidates and no permission-blocked items. Proceed to F4  |
-|                      | step 3.                                                       |
-| `needs-apply`        | Run apply (mandatory). Post a cleanup evidence comment.       |
-| `permission-blocked` | Post a cleanup-permission-blocked comment, then proceed to F4 |
-|                      | step 3.                                                       |
+| Dry-run `status`     | Action                                                       |
+| -------------------- | ------------------------------------------------------------ |
+| `clean`              | No candidates and no permission-blocked items. Proceed to F4 |
+|                      | step 3.                                                      |
+| `needs-apply`        | Run apply (mandatory). Re-check, then post cleanup evidence. |
+| `permission-blocked` | Re-check, then post cleanup-permission-blocked, then F4      |
+|                      | step 3.                                                      |
 
 After apply, if `status` is `failed`, `incomplete`, or `rescan-failed`,
-post a cleanup-failure comment. A cleanup failure after a successful F3
+run the same pre-POST re-check and, unless it prints `SKIP`, post a
+cleanup-failure comment. A cleanup failure after a successful F3
 merge does not re-block the merge; it is an explicit record only.
 
 ### Cleanup evidence comment
