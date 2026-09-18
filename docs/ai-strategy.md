@@ -8,17 +8,17 @@ tags: [ai-strategy, agents-md]
 # AI tooling strategy
 
 This repository's day-to-day AI work spans GitHub Copilot, Claude Code,
-Codex CLI, OpenCode, Grok Build, and Antigravity CLI (formerly Gemini
-CLI). The AI-instruction layout follows that multi-agent harness mix
-rather than any one tool.
+Codex CLI, OpenCode, Grok Build, Cursor CLI, and Antigravity CLI
+(formerly Gemini CLI). The AI-instruction layout follows that
+multi-agent harness mix rather than any one tool.
 
 ## Canonical guidance
 
 - [AGENTS.md](../AGENTS.md) is the canonical, fully detailed AI guide.
   It follows the [AGENTS.md](https://agents.md) convention that Codex
-  CLI, OpenCode, Grok Build, and GitHub Copilot (CLI, coding agent, and
-  Chat) all discover automatically at the repository root. Keep new
-  guidance here first.
+  CLI, OpenCode, Grok Build, Cursor CLI, and GitHub Copilot (CLI, coding
+  agent, and Chat) all discover automatically at the repository root.
+  Keep new guidance here first.
 - [CLAUDE.md](../CLAUDE.md) and [GEMINI.md](../GEMINI.md) are thin
   adapters for the two tools that do not read `AGENTS.md` by default in
   this repository's harness mix (Claude Code and Antigravity CLI). Each

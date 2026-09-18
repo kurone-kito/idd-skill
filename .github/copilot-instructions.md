@@ -6,9 +6,9 @@ automatically, and this repository's own
 [docs/idd-workflow.md](../docs/idd-workflow.md) entry-point table names
 it as the file to read first for Copilot execution surfaces. Copilot's
 tooling also already discovers [`AGENTS.md`](../AGENTS.md) directly,
-which is the canonical, tool-neutral guide for the rest of this
-repository's AI-agent guidance — read it for everything except the
-Copilot-specific notes below.
+which is the canonical, tool-neutral guide for Cursor CLI as well as
+the rest of this repository's AI-agent guidance — read it for
+everything except the Copilot-specific notes below.
 
 ## Copilot-specific notes
 
