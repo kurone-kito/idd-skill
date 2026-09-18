@@ -367,10 +367,11 @@ Before any mutating action in F3, apply the
    unchanged: it reads whatever that run may have posted and decides
    ownership from the marker's own recorded status.
 
-   **Duplicate-success-record skip**: do not treat an earlier dry-run
-   or apply-time read as the skip. Immediately before the actual POST —
-   no other GitHub-mutating call in between — run this fresh re-check
-   (mirrors `post-merge-cleanup.yml` including issue `#2213`; `bash`):
+   **Duplicate-success-record skip rule**: do not treat an earlier
+   dry-run or apply-time read as the skip. Immediately before the
+   actual POST — no other GitHub-mutating call in between — run this
+   fresh re-check (mirrors `post-merge-cleanup.yml` including issue
+   `#2213`; `bash`):
 
    ```sh
    TRUSTED_LOGINS=$(
@@ -412,7 +413,9 @@ Before any mutating action in F3, apply the
    [docs/idd-comment-minimization.md](../../docs/idd-comment-minimization.md#re-check-fetch-failure-comment);
    `SKIP` → do not post; `POST` → send evidence now. Residual REST
    TOCTOU is accepted — see that same doc's server-side fallback
-   section. Untrusted authors never suppress a post.
+   section. SKIP requires the latest record **whose author is a
+   trusted marker actor**. An untrusted commenter's marker-prefixed
+   comment never counts as evidence.
 
    Evaluate the dry-run `status` field (this is a dry-run status; apply
    mode emits different values and is never invoked unless dry-run
