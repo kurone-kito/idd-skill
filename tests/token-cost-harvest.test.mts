@@ -3497,6 +3497,133 @@ test('readEventLog: keeps a session-less enter open when the exit claimId differ
   }
 });
 
+test('readEventLog: keeps an identified enter open when the exit is not later', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:20:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-one',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-one',
+    ),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:20:00Z'),
+        vendorSessionId: 'sess-A',
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: keeps a session-less enter open when the exit is earlier', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:20:00Z'),
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: compares a session-less exit with the retained earliest enter', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-two',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-two',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    const window = parsed.windows.get('7:claude:work');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:15:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:10:00Z'),
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('readEventWindows: legacy fallback still admits a genuinely identity-less pair (no claimId on either side) (#2654)', () => {
   // Contrast with the claim-mismatch case above: when NEITHER side
   // carries a claimId, there is nothing to disagree about --

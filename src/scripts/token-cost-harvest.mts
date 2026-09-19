@@ -1356,20 +1356,30 @@ export function readEventLog(path: string): EventLogReadResult {
         const enterClaimId = enterClaimIdByAttempt
           .get(key)
           ?.get(vendorSessionId);
+        const enterAtMs = enterAtByAttempt.get(key)?.get(vendorSessionId);
         const claimIdsCompatible =
           enterClaimId === undefined ||
           claimId === undefined ||
           enterClaimId === claimId;
-        if (claimIdsCompatible) {
+        if (claimIdsCompatible && enterAtMs !== undefined && atMs > enterAtMs) {
           openEnterByAttempt.get(key)?.delete(vendorSessionId);
         }
       } else {
-        const enterClaimId = enterClaimIdOwner.get(key);
+        // The legacy owner map tracks the latest enter, but
+        // openUnidentifiedEnter intentionally retains the earliest still-open
+        // enter. Compare against that retained record so a later duplicate
+        // enter cannot make an exit clear the earlier diagnostic.
+        const openEnter = openUnidentifiedEnter.get(key);
+        const enterClaimId = openEnter?.claimId;
         const claimIdsCompatible =
           enterClaimId === undefined ||
           claimId === undefined ||
           enterClaimId === claimId;
-        if (claimIdsCompatible) {
+        if (
+          claimIdsCompatible &&
+          openEnter !== undefined &&
+          atMs > openEnter.atMs
+        ) {
           openUnidentifiedEnter.delete(key);
         }
       }
