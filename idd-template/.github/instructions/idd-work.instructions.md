@@ -380,9 +380,9 @@ the [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit
 instead.
 
 **Validate.** Run it without a pipe; if shortening output, rerun
-through `tail`/`head`. A filter cannot prove it passed (see
-kurone-kito/idd-skill#3139). In Bash, check
-`status=${PIPESTATUS[0]}` or enable `set -o pipefail`.
+through `tail`/`head`. A filter cannot prove success (see
+kurone-kito/idd-skill#3139). In Bash, use
+`status=${PIPESTATUS[0]}; ((status == 0))` or `set -o pipefail`.
 
 **Verify a commit actually landed before trusting a subsequent push.**
 A `commit-msg` hook (e.g. commitlint's body-max-line-length) can

@@ -185,9 +185,9 @@ unpushed E9 fixes.
 Run **post-fix-validate**.
 
 **Validate.** Run it without a pipe; if shortening output, rerun
-through `tail`/`head`. A filter cannot prove it passed (see
-kurone-kito/idd-skill#3139). In Bash, check
-`status=${PIPESTATUS[0]}` or enable `set -o pipefail`.
+through `tail`/`head`. A filter cannot prove success (see
+kurone-kito/idd-skill#3139). In Bash, use
+`status=${PIPESTATUS[0]}; ((status == 0))` or `set -o pipefail`.
 
 Then push the feature branch normally (E11 uses merge commits, not
 rebase, so no force push is required).
