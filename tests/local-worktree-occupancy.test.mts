@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -163,6 +164,31 @@ test('inspects occupied, absent, and present-prunable worktree results', () => {
     });
   } finally {
     rmSync(prunablePath, { recursive: true, force: true });
+  }
+});
+
+test('fails closed for a dangling symlink at a prunable worktree path', {
+  skip: process.platform === 'win32',
+}, () => {
+  const parent = mkdtempSync(`${tmpdir()}/idd-local-worktree-dangling-`);
+  const worktree = join(parent, 'dangling-worktree');
+  try {
+    symlinkSync(join(parent, 'missing-target'), worktree);
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      stubWorktreeList(
+        `worktree ${worktree}\0HEAD abc\0branch refs/heads/issue/42-task\0prunable gitdir file\0\0`,
+      ),
+    );
+    assert.deepEqual(result, {
+      status: 'unreadable',
+      paths: [worktree],
+      reason: 'cannot inspect matching local worktree metadata',
+    });
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
   }
 });
 

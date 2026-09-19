@@ -5,7 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 
 function malformedWorktreeList(reason) {
   throw new Error(`malformed git worktree list: ${reason}`);
@@ -288,8 +288,8 @@ function resolveDetachedBranch(worktreePath, env, execute) {
 }
 function inspectWorktreePath(worktreePath) {
   try {
-    statSync(worktreePath);
-    return 'present';
+    const entry = lstatSync(worktreePath);
+    return entry.isSymbolicLink() ? 'unreadable' : 'present';
   } catch (error) {
     const code = error.code;
     return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unreadable';

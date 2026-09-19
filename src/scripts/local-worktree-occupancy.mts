@@ -7,7 +7,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 
 /** The local occupancy result used by claim and Discover gates. */
 export interface LocalWorktreeInspection {
@@ -343,8 +343,8 @@ function inspectWorktreePath(
   worktreePath: string,
 ): 'present' | 'absent' | 'unreadable' {
   try {
-    statSync(worktreePath);
-    return 'present';
+    const entry = lstatSync(worktreePath);
+    return entry.isSymbolicLink() ? 'unreadable' : 'present';
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unreadable';

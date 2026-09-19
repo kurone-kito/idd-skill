@@ -216,14 +216,11 @@ failure, the active claim is unchanged; treat it under the rules above.
 
 ### (d) Open PR
 
-No helper. Re-check live GitHub state: no open PR may close or
-reference this issue unless its head branch matches the `branch` field
-of an inheritable claim — the already-verified active claim, the stale
-claim being taken over, the last voluntarily released claim, verified
-forced-handoff evidence (only when its branch and linked-PR fields
-match this live GitHub state), or a legacy migration source. Check
-both linked issues and PR-body closing keywords. A non-inheritable
-matching PR → **STOP**.
+No helper. Re-check live GitHub state: an open PR may close or reference
+this issue only when its head branch matches an inheritable claim — the
+verified active, stale, released, forced-handoff (matching branch and
+linked PR), or legacy migration source. Check linked issues and PR
+closing keywords. A non-inheritable match → **STOP**.
 
 ### (e) Branch collision
 
@@ -242,17 +239,17 @@ before 40 if the cut lands mid-token **and** a `-` exists there;
 otherwise keep the hard 40-char cut); strip trailing `-`; empty result
 → `task`.
 
-Then scan for collisions:
-
 ```sh
 git worktree list --porcelain -z
 gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<N>-" \
 --jq '.[].ref | sub("^refs/heads/"; "")'
 ```
 
-Blocks takeover; verify owner/handoff (#3141 Round 21).
-Parse NUL records; detached: compare rebase head-name/`BISECT_START`;
-invalid/target → STOP; unrelated → absent; prunable frees if unrelated.
+Parse NUL records; detached: before metadata, require
+`git -C <worktree> rev-parse --show-toplevel` to match the canonical
+recorded root; failure/mismatch → STOP as occupied/unreadable; then compare
+`head-name`/`BISECT_START`: invalid/target → STOP; unrelated → absent;
+prunable frees if unrelated (PR #3154 review).
 
 <!-- dprint-ignore-start -->
 | Match found? | Action |
