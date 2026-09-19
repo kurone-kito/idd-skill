@@ -112,6 +112,14 @@ function branchNameFromRef(ref: string): string | null {
   }
   const fullBranchRef = value.startsWith('refs/heads/');
   const branch = fullBranchRef ? value.slice('refs/heads/'.length) : value;
+  const hasForbiddenCharacter = [...branch].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return (
+      (codePoint !== undefined && codePoint <= 0x20) ||
+      codePoint === 0x7f ||
+      '~^:?*[\\'.includes(character)
+    );
+  });
   if (
     !branch ||
     (!fullBranchRef && (branch === '@' || branch.startsWith('-'))) ||
@@ -120,7 +128,7 @@ function branchNameFromRef(ref: string): string | null {
     branch.endsWith('.') ||
     branch.includes('..') ||
     branch.includes('@{') ||
-    /[\p{Cc}\s~^:?*\x5b\\]/u.test(branch) ||
+    hasForbiddenCharacter ||
     branch
       .split('/')
       .some(
@@ -130,6 +138,35 @@ function branchNameFromRef(ref: string): string | null {
     return null;
   }
   return branch;
+}
+
+function hasLocalBranchRef(
+  worktreePath: string,
+  branchName: string,
+  env: NodeJS.ProcessEnv,
+  execute: typeof execFileSync,
+): boolean {
+  try {
+    const resolved = execute(
+      'git',
+      [
+        '-C',
+        worktreePath,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        `refs/heads/${branchName}`,
+      ],
+      {
+        encoding: 'utf8',
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    return Boolean(String(resolved).trim());
+  } catch {
+    return false;
+  }
 }
 
 function isAbsoluteGitPath(value: string): boolean {
@@ -260,11 +297,17 @@ function resolveDetachedBranch(
     }
     try {
       const bisectBranch = readFileSync(bisectStartPath, 'utf8').trim();
-      if (!bisectBranch || /^[0-9a-f]{4,64}$/i.test(bisectBranch)) {
+      if (!bisectBranch) {
         return { branchName: null, unreadable: true };
       }
       const branchName = branchNameFromRef(bisectBranch);
       if (!branchName) {
+        return { branchName: null, unreadable: true };
+      }
+      if (
+        /^[0-9a-f]{4,64}$/i.test(branchName) &&
+        !hasLocalBranchRef(worktreePath, branchName, env, execute)
+      ) {
         return { branchName: null, unreadable: true };
       }
       return {

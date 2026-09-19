@@ -198,6 +198,22 @@ test('accepts valid dotted refs for unrelated worktrees', () => {
   });
 });
 
+test('accepts Git-valid Unicode whitespace in unrelated full refs', () => {
+  const result = inspectLocalWorktreeBranch(
+    'issue/42-task',
+    process.cwd(),
+    process.env,
+    stubWorktreeList(
+      'worktree /tmp/unrelated\0HEAD abc\0branch refs/heads/release/v1 2\0\0',
+    ),
+  );
+  assert.deepEqual(result, {
+    status: 'absent',
+    paths: [],
+    reason: null,
+  });
+});
+
 test('accepts full refs with shorthand-special names for unrelated worktrees', () => {
   for (const branchRef of ['refs/heads/-maintenance', 'refs/heads/@']) {
     const result = inspectLocalWorktreeBranch(
@@ -320,6 +336,43 @@ test('fails closed for an active bisect in a detached worktree', () => {
       status: 'absent',
       paths: [],
       reason: null,
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
+test('resolves an all-hex bisect branch against refs/heads', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-bisect-ref-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    writeFileSync(join(gitDirectory, 'BISECT_START'), 'deadbeef\n');
+    const execute = ((file: string, args: string[]) => {
+      if (args[0] === 'worktree') {
+        return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+      }
+      if (
+        args.slice(3).join('\0') === '--verify\0--quiet\0refs/heads/deadbeef'
+      ) {
+        return 'deadbeef\n';
+      }
+      return stubGitCommands(worktree, {
+        'rebase-merge': join(gitDirectory, 'rebase-merge'),
+        'rebase-apply': join(gitDirectory, 'rebase-apply'),
+        BISECT_START: join(gitDirectory, 'BISECT_START'),
+      })(file, args);
+    }) as typeof execFileSync;
+    const result = inspectLocalWorktreeBranch(
+      'deadbeef',
+      process.cwd(),
+      process.env,
+      execute,
+    );
+    assert.deepEqual(result, {
+      status: 'occupied',
+      paths: [worktree],
+      reason: 'matching local worktree for deadbeef',
     });
   } finally {
     rmSync(worktree, { recursive: true, force: true });
