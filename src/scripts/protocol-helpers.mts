@@ -1556,10 +1556,14 @@ export function classifyRegularBotComment(
   }
 
   if (body.startsWith(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)) {
-    const hasDisposition = hasExplicitDispositionAfter(comment, comments, {
-      isDispositionAuthor: options.isDispositionAuthor,
-    });
-    if (isCodeRabbitAlreadyReviewedAcknowledgement(body) && hasDisposition) {
+    if (
+      isCodeRabbitAlreadyReviewedAcknowledgement(body) &&
+      hasExplicitDispositionAfter(comment, comments, {
+        isDispositionAuthor: options.isDispositionAuthor,
+        isDisposition: (candidate) =>
+          isNonReviewNoticeDisposition({ body: candidate.body }),
+      })
+    ) {
       return {
         classifier: 'OUTDATED',
         reason:
@@ -1568,7 +1572,9 @@ export function classifyRegularBotComment(
     }
     if (
       /\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body) &&
-      hasDisposition
+      hasExplicitDispositionAfter(comment, comments, {
+        isDispositionAuthor: options.isDispositionAuthor,
+      })
     ) {
       return {
         classifier: 'OUTDATED',
@@ -10467,7 +10473,10 @@ export function classifyResumeRoutingCase(
 function hasExplicitDispositionAfter(
   targetComment: CommentLike,
   comments: CommentLike[],
-  options: { isDispositionAuthor?: (login: string) => boolean } = {},
+  options: {
+    isDispositionAuthor?: (login: string) => boolean;
+    isDisposition?: (comment: CommentLike) => boolean;
+  } = {},
 ): boolean {
   // Default accepts any non-bot human; an IDD-scoped predicate (when supplied)
   // restricts the disposition author so a reviewer-authored marker does not
@@ -10476,6 +10485,9 @@ function hasExplicitDispositionAfter(
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login: string) => !isKnownReviewBot(login);
+  const isDisposition =
+    options.isDisposition ??
+    ((comment: CommentLike) => isDispositionComment(comment));
   const targetTime = Date.parse(targetComment.createdAt ?? '');
   // The disposition must attribute itself to this sticky's advisory bot. Accept
   // either the product word (`CodeRabbit`) or the bot **login**
@@ -10489,7 +10501,7 @@ function hasExplicitDispositionAfter(
     const author = String(comment.author?.login ?? '')
       .trim()
       .toLowerCase();
-    if (!isDispositionAuthor(author) || !isDispositionComment(comment)) {
+    if (!isDispositionAuthor(author) || !isDisposition(comment)) {
       return false;
     }
     if (

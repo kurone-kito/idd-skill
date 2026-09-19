@@ -350,6 +350,29 @@ test('#3146: classifies a dispositioned already-reviewed refusal as stale', () =
   );
 });
 
+test('#3146: keeps an already-reviewed refusal pending after an unrelated summary acceptance', () => {
+  const refusal: CommentLike = {
+    author: { login: 'coderabbitai[bot]' },
+    body: coderabbitAlreadyReviewedAck,
+    createdAt: '2026-05-12T00:00:00Z',
+  };
+  const unrelatedSummaryAcceptance: CommentLike = {
+    author: { login: 'idd-bot' },
+    body: '**Accepted** — coderabbitai[bot] summary walkthrough; no action required',
+    createdAt: '2026-05-12T00:01:00Z',
+  };
+
+  assert.equal(
+    classifyRegularBotComment(
+      refusal,
+      [refusal, unrelatedSummaryAcceptance],
+      [],
+      { isDispositionAuthor: (login) => login === 'idd-bot' },
+    ),
+    null,
+  );
+});
+
 test('builds activity snapshot metrics with trusted marker filtering', () => {
   const summary = buildActivitySnapshotSummary(
     {
