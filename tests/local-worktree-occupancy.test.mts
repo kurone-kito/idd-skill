@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -336,7 +336,7 @@ test('ignores ambient git repository overrides while checking occupancy', () => 
     );
 
     assert.equal(result.status, 'occupied');
-    assert.deepEqual(result.paths, [worktree]);
+    assert.deepEqual(result.paths, [worktree.split(sep).join('/')]);
   } finally {
     try {
       git(primary, ['worktree', 'remove', '--force', worktree]);

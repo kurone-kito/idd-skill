@@ -1539,7 +1539,8 @@ created_at is at or past claimTiming.heartbeatInterval with no later trusted
 heartbeat; false otherwise, including whenever present is false. It is
 PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate.
 --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
-each activeClaim (true when the active claim's claimId equals <id>).
+each activeClaim (true only when the active claim's claimId equals <id> and
+the current worktree's claim lock confirms that claim).
 NOTE: claimEligible is a best-effort SOFT discovery hint (same limitation
 as discover-roadmap-graph's annotation): it does not reproduce authoritative
 forced-handoff authorization or legacy active-claim takeover rules. Trusted

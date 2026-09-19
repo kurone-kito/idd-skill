@@ -11,6 +11,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
+import { checkClaimLock } from './claim-lock.mts';
 import { stripLeadingArgumentSeparator } from './cli-args.mts';
 import {
   buildRoadmapMarkerResolver,
@@ -23,6 +24,7 @@ import {
   type LocalWorktreeInspection,
 } from './local-worktree-occupancy.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
+import { resolveLegacyClaimState } from './marker-helpers.mts';
 import {
   normalizePolicyConfig,
   POLICY_DEFAULTS,
@@ -32,7 +34,6 @@ import {
   isStaleAt,
   parseClaimComment,
   resolveActiveClaimWithForcedHandoffTrace,
-  resolveLegacyClaimState,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 import {
@@ -192,9 +193,10 @@ export interface RoadmapIssueClassification {
  * is takeover-eligible only when no same-clone worktree occupancy blocks it;
  * `localWorktree` records that probe when it runs. The whole annotation is
  * absent (key omitted) on the default flag-absent path. `ownedByCurrentSession`
- * is present whenever the caller passed `--current-claim-id` (`true` when the
- * active claim's `claimId` equals it, `false` otherwise — including the
- * no-claim `present: false` case), and absent only when
+ * is present whenever the caller passed `--current-claim-id` (`true` only
+ * when the active claim's `claimId` equals it and the current worktree's
+ * claim lock independently confirms that claim, `false` otherwise —
+ * including the no-claim `present: false` case), and absent only when
  * `--current-claim-id` was not supplied.
  *
  * `heartbeatOverdue` (#1433) is a **purely diagnostic** sibling to `stale`:
@@ -536,6 +538,8 @@ export interface ClaimStateResolution {
   nowIso: string;
   /** `--current-claim-id`, or '' when not supplied. */
   currentClaimId: string;
+  /** True only when the current worktree lock confirms `currentClaimId`. */
+  currentSessionOwnsClaimLock: boolean;
   /** Same-clone occupancy probe used to gate stale takeover hints. */
   inspectLocalWorktree?: (branchName: string) => LocalWorktreeInspection;
 }
@@ -1741,7 +1745,8 @@ export async function annotateLeafClaimState(
     // when the released claim id matches, so its occupancy must not suppress
     // this session's discovery candidate.
     const releasedOwnerByCurrentSession = Boolean(
-      claimState.currentClaimId &&
+      claimState.currentSessionOwnsClaimLock &&
+        claimState.currentClaimId &&
         claimTrace.releasedClaim?.claimId === claimState.currentClaimId,
     );
     const localWorktreeBlocks =
@@ -1809,9 +1814,11 @@ export async function annotateLeafClaimState(
     claimState.heartbeatIntervalMs,
   );
 
-  const ownedByCurrentSession = claimState.currentClaimId
+  const claimIdMatchesCurrentSession = claimState.currentClaimId
     ? active.claimId === claimState.currentClaimId
     : false;
+  const ownedByCurrentSession =
+    claimState.currentSessionOwnsClaimLock && claimIdMatchesCurrentSession;
   const localWorktree =
     stale && claimState.inspectLocalWorktree
       ? claimState.inspectLocalWorktree(active.branch)
@@ -1934,6 +1941,20 @@ export function isClaimHeartbeatOverdue(
 }
 
 /**
+ * Confirm the caller's current worktree carries the requested claim lock.
+ * Remote claim-id text is not enough to prove that this session owns a
+ * retained released worktree, so failures and malformed locks fail closed.
+ */
+function hasCurrentSessionClaimLock(claimId: string): boolean {
+  try {
+    const lock = checkClaimLock(process.cwd());
+    return lock.present && !lock.malformed && lock.holder?.claimId === claimId;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Build the CLI-side claim-state resolution: the live comment loader plus the
  * resolved trusted-actor predicate, configured stale age, and "now". Only
  * invoked when `--with-claim-state` is passed, so the live comment fetch is
@@ -1958,13 +1979,17 @@ export function buildClaimStateResolution(
   const heartbeatIntervalMs =
     parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
     DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
+  const currentClaimIdValue = String(currentClaimId ?? '').trim();
   return {
     loadComments: buildCommentLoader(port),
     isTrustedAuthor: buildTrustedAuthorPredicate(policy),
     staleAgeMs,
     heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
-    currentClaimId: String(currentClaimId ?? '').trim(),
+    currentClaimId: currentClaimIdValue,
+    currentSessionOwnsClaimLock:
+      currentClaimIdValue.length > 0 &&
+      hasCurrentSessionClaimLock(currentClaimIdValue),
     inspectLocalWorktree: (branchName: string) =>
       inspectLocalWorktreeBranch(branchName),
   };
@@ -2630,7 +2655,8 @@ function printHelp() {
   It is PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate — a
   heartbeat-overdue claim can still be well inside the 24h stale window.
   --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
-  each activeClaim (true when the active claim's claimId equals <id>).
+  each activeClaim (true only when the active claim's claimId equals <id> and
+  the current worktree's claim lock confirms that claim).
   NOTE: claimEligible is a best-effort SOFT discovery hint. It does not
   reproduce authoritative forced-handoff authorization or legacy active-claim
   takeover rules. Trusted legacy claim/release evidence is used only for

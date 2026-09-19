@@ -2549,12 +2549,14 @@ function buildClaimState(
   commentsByIssue: Map<number, unknown[]>,
   {
     currentClaimId = '',
+    currentSessionOwnsClaimLock = false,
     trustedActors = ['kurone-kito'],
     staleAgeMs = CLAIM_STALE_AGE_MS,
     heartbeatIntervalMs = CLAIM_HEARTBEAT_INTERVAL_MS,
     inspectLocalWorktree,
   }: {
     currentClaimId?: string;
+    currentSessionOwnsClaimLock?: boolean;
     trustedActors?: string[];
     staleAgeMs?: number;
     heartbeatIntervalMs?: number;
@@ -2576,6 +2578,7 @@ function buildClaimState(
       heartbeatIntervalMs,
       nowIso: CLAIM_NOW,
       currentClaimId,
+      currentSessionOwnsClaimLock,
       inspectLocalWorktree,
     },
   };
@@ -2837,6 +2840,7 @@ test('the current session may resume its released new-format worktree', async ()
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
+    currentSessionOwnsClaimLock: true,
     inspectLocalWorktree: (branchName) => ({
       status: 'occupied',
       paths: [`/tmp/${branchName}`],
@@ -2856,6 +2860,42 @@ test('the current session may resume its released new-format worktree', async ()
   assert.equal(leaf701?.activeClaim?.ownedByCurrentSession, false);
   assert.equal(leaf701?.activeClaim?.localWorktree?.status, 'occupied');
   assert.equal(leaf701?.claimEligible, true);
+});
+
+test('a matching released claim id without local ownership stays blocked', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT),
+        {
+          body: '<!-- unclaimed-by: agent-a claim-701 2026-06-25T07:00:00Z -->',
+          createdAt: '2026-06-25T07:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    currentClaimId: 'claim-701',
+    inspectLocalWorktree: () => ({
+      status: 'occupied',
+      paths: ['/tmp/issue/700-task'],
+      reason: 'matching local worktree for issue/700-task',
+    }),
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.ownedByCurrentSession, false);
+  assert.equal(leaf701?.claimEligible, false);
 });
 
 test('a released legacy claim with a live local worktree is not eligible', async () => {
@@ -2948,6 +2988,7 @@ test('the current session may resume its occupied stale worktree', async () => {
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
+    currentSessionOwnsClaimLock: true,
     inspectLocalWorktree: () => ({
       status: 'occupied',
       paths: ['/tmp/issue-700-task'],
@@ -3067,6 +3108,7 @@ test('--current-claim-id sets ownedByCurrentSession on the matching claim', asyn
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
+    currentSessionOwnsClaimLock: true,
   });
 
   const graph = await enumerateRoadmapGraph(700, {

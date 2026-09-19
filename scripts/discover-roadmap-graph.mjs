@@ -10,6 +10,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
+import { checkClaimLock } from './claim-lock.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
 import {
   buildRoadmapMarkerResolver,
@@ -19,6 +20,7 @@ import { effortOrdinal, parseEffort } from './effort.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+import { resolveLegacyClaimState } from './marker-helpers.mjs';
 import {
   normalizePolicyConfig,
   POLICY_DEFAULTS,
@@ -28,7 +30,6 @@ import {
   isStaleAt,
   parseClaimComment,
   resolveActiveClaimWithForcedHandoffTrace,
-  resolveLegacyClaimState,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 import {
@@ -1141,7 +1142,8 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     // when the released claim id matches, so its occupancy must not suppress
     // this session's discovery candidate.
     const releasedOwnerByCurrentSession = Boolean(
-      claimState.currentClaimId &&
+      claimState.currentSessionOwnsClaimLock &&
+        claimState.currentClaimId &&
         claimTrace.releasedClaim?.claimId === claimState.currentClaimId,
     );
     const localWorktreeBlocks =
@@ -1204,9 +1206,11 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     claimState.nowIso,
     claimState.heartbeatIntervalMs,
   );
-  const ownedByCurrentSession = claimState.currentClaimId
+  const claimIdMatchesCurrentSession = claimState.currentClaimId
     ? active.claimId === claimState.currentClaimId
     : false;
+  const ownedByCurrentSession =
+    claimState.currentSessionOwnsClaimLock && claimIdMatchesCurrentSession;
   const localWorktree =
     stale && claimState.inspectLocalWorktree
       ? claimState.inspectLocalWorktree(active.branch)
@@ -1303,6 +1307,19 @@ export function isClaimHeartbeatOverdue(
   return isClaimStaleByAge(activeCreatedAt, nowIso, heartbeatIntervalMs);
 }
 /**
+ * Confirm the caller's current worktree carries the requested claim lock.
+ * Remote claim-id text is not enough to prove that this session owns a
+ * retained released worktree, so failures and malformed locks fail closed.
+ */
+function hasCurrentSessionClaimLock(claimId) {
+  try {
+    const lock = checkClaimLock(process.cwd());
+    return lock.present && !lock.malformed && lock.holder?.claimId === claimId;
+  } catch {
+    return false;
+  }
+}
+/**
  * Build the CLI-side claim-state resolution: the live comment loader plus the
  * resolved trusted-actor predicate, configured stale age, and "now". Only
  * invoked when `--with-claim-state` is passed, so the live comment fetch is
@@ -1320,13 +1337,17 @@ export function buildClaimStateResolution(port, policy, currentClaimId) {
   const heartbeatIntervalMs =
     parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
     DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
+  const currentClaimIdValue = String(currentClaimId ?? '').trim();
   return {
     loadComments: buildCommentLoader(port),
     isTrustedAuthor: buildTrustedAuthorPredicate(policy),
     staleAgeMs,
     heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
-    currentClaimId: String(currentClaimId ?? '').trim(),
+    currentClaimId: currentClaimIdValue,
+    currentSessionOwnsClaimLock:
+      currentClaimIdValue.length > 0 &&
+      hasCurrentSessionClaimLock(currentClaimIdValue),
     inspectLocalWorktree: (branchName) =>
       inspectLocalWorktreeBranch(branchName),
   };
@@ -1942,7 +1963,8 @@ function printHelp() {
   It is PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate — a
   heartbeat-overdue claim can still be well inside the 24h stale window.
   --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
-  each activeClaim (true when the active claim's claimId equals <id>).
+  each activeClaim (true only when the active claim's claimId equals <id> and
+  the current worktree's claim lock confirms that claim).
   NOTE: claimEligible is a best-effort SOFT discovery hint. It does not
   reproduce authoritative forced-handoff authorization or legacy active-claim
   takeover rules. Trusted legacy claim/release evidence is used only for
