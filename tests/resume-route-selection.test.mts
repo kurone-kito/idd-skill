@@ -229,6 +229,65 @@ test('routes E15 when PR exists, required checks are not generated, and reviews 
   assert.equal(result.route, 'E15');
 });
 
+test('routes F2 when no required checks are configured and the present run passes', () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: false,
+    noRequiredChecksConfigured: true,
+    ciSuccess: true,
+    reviewExists: false,
+    reviewPending: false,
+    branchState: 'clean',
+  });
+  assert.equal(result.route, 'F2');
+  assert.equal(result.reason, 'pr-ci-success-no-review-pending');
+});
+
+test('routes E1 when no required checks are configured and the present run passes with pending review', () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: false,
+    noRequiredChecksConfigured: true,
+    ciSuccess: true,
+    reviewExists: true,
+    reviewPending: true,
+  });
+  assert.equal(result.route, 'E1');
+  assert.equal(result.reason, 'pr-ci-success-review-pending');
+});
+
+test('routes D4 when no required checks are configured but the present run is empty or unknown', () => {
+  for (const input of [
+    { ciSuccess: false },
+    { ciSuccess: false, ciRunning: false, ciFailed: false },
+  ]) {
+    const result = selectResumeRoute({
+      prExists: true,
+      requiredChecksGenerated: false,
+      noRequiredChecksConfigured: true,
+      reviewExists: false,
+      reviewPending: false,
+      ...input,
+    });
+    assert.equal(result.route, 'D4');
+    assert.equal(result.reason, 'pr-present-run-not-generated');
+  }
+});
+
+test('routes E15 when the no-required-checks present run is pending or failing and reviews exist', () => {
+  for (const input of [{ ciRunning: true }, { ciFailed: true }]) {
+    const result = selectResumeRoute({
+      prExists: true,
+      requiredChecksGenerated: false,
+      noRequiredChecksConfigured: true,
+      reviewExists: true,
+      reviewPending: true,
+      ...input,
+    });
+    assert.equal(result.route, 'E15');
+  }
+});
+
 test('classifyBranchState returns clean for CLEAN mergeStateStatus', () => {
   assert.equal(
     classifyBranchState({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }),

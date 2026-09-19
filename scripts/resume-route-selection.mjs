@@ -81,10 +81,27 @@ export function selectResumeRoute(input) {
     }
     return result('stop', 'no-pr-no-unpushed-clean-path', state, reasonParts);
   }
-  if (!state.requiredChecksGenerated) {
+  if (!state.requiredChecksGenerated && !state.noRequiredChecksConfigured) {
     return result(
       state.reviewExists ? 'E15' : 'D4',
       'pr-required-checks-not-generated',
+      state,
+      reasonParts,
+    );
+  }
+  // A repository can have no required checks while its PR still has an
+  // ordinary present-run check set. An empty or unknown present-run set is
+  // not a vacuous pass: keep the existing D4/E15 fail-closed routing until a
+  // concrete check result is available.
+  if (
+    state.noRequiredChecksConfigured &&
+    !state.ciRunning &&
+    !state.ciFailed &&
+    !state.ciSuccess
+  ) {
+    return result(
+      state.reviewExists ? 'E15' : 'D4',
+      'pr-present-run-not-generated',
       state,
       reasonParts,
     );
@@ -194,6 +211,7 @@ function collectRoutingInput({ port, issueNumber }) {
       prAmbiguous: prs.length > 1,
       prExists: false,
       requiredChecksGenerated: false,
+      noRequiredChecksConfigured: false,
       hasUnpushedCommits: gitState.hasUnpushedCommits,
       worktreeDirty: gitState.worktreeDirty,
       ciChecks: [],
@@ -211,15 +229,18 @@ function collectRoutingInput({ port, issueNumber }) {
       prUrl: null,
     };
   }
-  const checks = port.listRequiredChecks(issuePr.number);
+  const requiredChecks = port.listRequiredChecks(issuePr.number);
+  const noRequiredChecksConfigured = requiredChecks.length === 0;
+  const checks = noRequiredChecksConfigured
+    ? port.listChangeRequestChecks(issuePr.number)
+    : requiredChecks;
   const normalizedStates = checks.map((check) =>
     String(check.state ?? '').toLowerCase(),
   );
-  const requiredChecksGenerated = checks.length > 0;
   const ciRunning = normalizedStates.some((state) => RUNNING_STATES.has(state));
   const ciFailed = normalizedStates.some((state) => FAILURE_STATES.has(state));
   const ciSuccess =
-    requiredChecksGenerated &&
+    checks.length > 0 &&
     !ciRunning &&
     !ciFailed &&
     normalizedStates.every((state) => PASS_EQUIVALENT_STATES.has(state));
@@ -256,7 +277,8 @@ function collectRoutingInput({ port, issueNumber }) {
   return {
     prAmbiguous: false,
     prExists: true,
-    requiredChecksGenerated,
+    requiredChecksGenerated: requiredChecks.length > 0,
+    noRequiredChecksConfigured,
     hasUnpushedCommits: gitState.hasUnpushedCommits,
     worktreeDirty: gitState.worktreeDirty,
     ciChecks: checks,
@@ -371,6 +393,7 @@ function normalizeState(input) {
     prAmbiguous: input.prAmbiguous === true,
     prExists: input.prExists === true,
     requiredChecksGenerated: input.requiredChecksGenerated === true,
+    noRequiredChecksConfigured: input.noRequiredChecksConfigured === true,
     hasUnpushedCommits: input.hasUnpushedCommits === true,
     worktreeDirty: input.worktreeDirty === true,
     ciRunning: input.ciRunning === true,
@@ -400,8 +423,26 @@ function decisionTable() {
     { condition: 'multiple open PRs match issue', route: 'stop' },
     { condition: 'no PR + required checks not generated', route: 'D4' },
     { condition: 'no PR + clean worktree + unpushed commits', route: 'D1' },
-    { condition: 'PR + checks not generated + no reviews', route: 'D4' },
-    { condition: 'PR + checks not generated + reviews exist', route: 'E15' },
+    {
+      condition:
+        'PR + required checks not generated + no no-required fallback + no reviews',
+      route: 'D4',
+    },
+    {
+      condition:
+        'PR + required checks not generated + no no-required fallback + reviews exist',
+      route: 'E15',
+    },
+    {
+      condition:
+        'PR + no required checks + present run empty or unknown + no reviews',
+      route: 'D4',
+    },
+    {
+      condition:
+        'PR + no required checks + present run empty or unknown + reviews exist',
+      route: 'E15',
+    },
     { condition: 'PR + CI running/failing + no reviews', route: 'D4' },
     { condition: 'PR + CI running/failing + reviews exist', route: 'E15' },
     { condition: 'PR + CI success + review pending', route: 'E1' },
