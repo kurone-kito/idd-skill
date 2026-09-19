@@ -6,6 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { join as joinPath } from 'node:path';
 
 function malformedWorktreeList(reason) {
   throw new Error(`malformed git worktree list: ${reason}`);
@@ -126,6 +127,10 @@ function removeTrailingLineEnding(value) {
   const withoutLf = value.slice(0, -1);
   return withoutLf.endsWith('\r') ? withoutLf.slice(0, -1) : withoutLf;
 }
+/** Strip Git's LF terminator without removing a valid POSIX path character. */
+function removeTrailingGitLineFeed(value) {
+  return value.endsWith('\n') ? value.slice(0, -1) : value;
+}
 function hasLocalBranchRef(worktreePath, branchName, env, execute) {
   try {
     const resolved = execute(
@@ -156,7 +161,7 @@ function joinGitPath(worktreePath, relative) {
   if (isAbsoluteGitPath(relative)) {
     return relative;
   }
-  return `${worktreePath.replace(/[\\/]+$/, '')}/${relative}`;
+  return joinPath(worktreePath, relative);
 }
 function sanitizedGitEnvironment(environment = process.env) {
   const env = { ...environment };
@@ -174,7 +179,7 @@ function sanitizedGitEnvironment(environment = process.env) {
 }
 function readGitPath(worktreePath, name, env, execute) {
   try {
-    return removeTrailingLineEnding(
+    return removeTrailingGitLineFeed(
       execute('git', ['-C', worktreePath, 'rev-parse', '--git-path', name], {
         encoding: 'utf8',
         env,
@@ -193,7 +198,7 @@ function isCanonicalWorktreeRoot(worktreePath, env, execute) {
     return false;
   }
   try {
-    const discoveredRoot = removeTrailingLineEnding(
+    const discoveredRoot = removeTrailingGitLineFeed(
       execute('git', ['-C', worktreePath, 'rev-parse', '--show-toplevel'], {
         encoding: 'utf8',
         env,
@@ -287,7 +292,9 @@ function resolveDetachedBranch(worktreePath, env, execute) {
       return { branchName: null, unreadable: true };
     }
   }
-  return { branchName: null, unreadable: false };
+  // A detached worktree with no recoverable branch metadata is unknown, not
+  // proven unrelated. Fail closed so stale-claim takeover cannot proceed.
+  return { branchName: null, unreadable: true };
 }
 function inspectWorktreePath(worktreePath) {
   try {

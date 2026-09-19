@@ -315,6 +315,95 @@ test('preserves trailing Git-valid Unicode whitespace in detached metadata paths
   }
 });
 
+test('preserves a trailing POSIX backslash when joining detached metadata paths', {
+  skip: process.platform === 'win32',
+}, () => {
+  const worktreeBase = mkdtempSync(
+    `${tmpdir()}/idd-local-worktree-root-backslash-`,
+  );
+  const worktree = `${worktreeBase}\\`;
+  mkdirSync(worktree);
+  mkdirSync(join(worktree, 'rebase-merge'));
+  writeFileSync(
+    join(worktree, 'rebase-merge', 'head-name'),
+    'refs/heads/issue/42-task\n',
+  );
+  try {
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        assert.equal(file, 'git');
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        assert.deepEqual(args.slice(0, 3), ['-C', worktree, 'rev-parse']);
+        if (args[3] === '--show-toplevel') {
+          return `${worktree}\n`;
+        }
+        assert.equal(args[3], '--git-path');
+        return `${args[4]}\n`;
+      }) as typeof execFileSync,
+    );
+    assert.deepEqual(result, {
+      status: 'occupied',
+      paths: [worktree],
+      reason: 'matching local worktree for issue/42-task',
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(worktreeBase, { recursive: true, force: true });
+  }
+});
+
+test('preserves a trailing carriage return in POSIX detached metadata paths', {
+  skip: process.platform === 'win32',
+}, () => {
+  const worktreeBase = mkdtempSync(
+    `${tmpdir()}/idd-local-worktree-root-carriage-return-`,
+  );
+  const worktree = `${worktreeBase}\r`;
+  const gitDirectoryBase = mkdtempSync(
+    `${tmpdir()}/idd-local-git-dir-carriage-return-`,
+  );
+  const gitDirectory = `${gitDirectoryBase}\r`;
+  mkdirSync(worktree);
+  mkdirSync(gitDirectory);
+  mkdirSync(join(gitDirectory, 'rebase-merge'));
+  writeFileSync(
+    join(gitDirectory, 'rebase-merge', 'head-name'),
+    'refs/heads/issue/42-task\n',
+  );
+  try {
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        return stubGitCommands(worktree, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.deepEqual(result, {
+      status: 'occupied',
+      paths: [worktree],
+      reason: 'matching local worktree for issue/42-task',
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(worktreeBase, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+    rmSync(gitDirectoryBase, { recursive: true, force: true });
+  }
+});
+
 test('accepts full refs with shorthand-special names for unrelated worktrees', () => {
   for (const branchRef of ['refs/heads/-maintenance', 'refs/heads/@']) {
     const result = inspectLocalWorktreeBranch(
@@ -346,6 +435,38 @@ test('fails closed for a malformed porcelain worktree record', () => {
     result.reason,
     'malformed git worktree list: record has no unique branch state',
   );
+});
+
+test('fails closed for a present prunable detached worktree with no branch metadata', () => {
+  const worktree = mkdtempSync(
+    `${tmpdir()}/idd-local-worktree-unknown-detached-`,
+  );
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-empty-`);
+  try {
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0prunable gitdir file\0\0`;
+        }
+        return stubGitCommands(worktree, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.deepEqual(result, {
+      status: 'unreadable',
+      paths: [worktree],
+      reason: 'cannot inspect matching local worktree metadata',
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
 });
 
 test('ignores ambient git repository overrides while checking occupancy', () => {

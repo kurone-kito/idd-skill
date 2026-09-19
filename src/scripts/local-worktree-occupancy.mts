@@ -8,6 +8,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { join as joinPath } from 'node:path';
 
 /** The local occupancy result used by claim and Discover gates. */
 export interface LocalWorktreeInspection {
@@ -148,6 +149,11 @@ function removeTrailingLineEnding(value: string): string {
   return withoutLf.endsWith('\r') ? withoutLf.slice(0, -1) : withoutLf;
 }
 
+/** Strip Git's LF terminator without removing a valid POSIX path character. */
+function removeTrailingGitLineFeed(value: string): string {
+  return value.endsWith('\n') ? value.slice(0, -1) : value;
+}
+
 function hasLocalBranchRef(
   worktreePath: string,
   branchName: string,
@@ -185,7 +191,7 @@ function joinGitPath(worktreePath: string, relative: string): string {
   if (isAbsoluteGitPath(relative)) {
     return relative;
   }
-  return `${worktreePath.replace(/[\\/]+$/, '')}/${relative}`;
+  return joinPath(worktreePath, relative);
 }
 
 function sanitizedGitEnvironment(
@@ -212,7 +218,7 @@ function readGitPath(
   execute: typeof execFileSync,
 ): string | null {
   try {
-    return removeTrailingLineEnding(
+    return removeTrailingGitLineFeed(
       execute('git', ['-C', worktreePath, 'rev-parse', '--git-path', name], {
         encoding: 'utf8',
         env,
@@ -236,7 +242,7 @@ function isCanonicalWorktreeRoot(
     return false;
   }
   try {
-    const discoveredRoot = removeTrailingLineEnding(
+    const discoveredRoot = removeTrailingGitLineFeed(
       execute('git', ['-C', worktreePath, 'rev-parse', '--show-toplevel'], {
         encoding: 'utf8',
         env,
@@ -340,7 +346,9 @@ function resolveDetachedBranch(
       return { branchName: null, unreadable: true };
     }
   }
-  return { branchName: null, unreadable: false };
+  // A detached worktree with no recoverable branch metadata is unknown, not
+  // proven unrelated. Fail closed so stale-claim takeover cannot proceed.
+  return { branchName: null, unreadable: true };
 }
 
 function inspectWorktreePath(
