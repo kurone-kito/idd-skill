@@ -90,9 +90,9 @@ already-claimed | stale-reclaimable` with the winning `{claim-id}`:
 
 - `claimable` → proceed to the claim write below.
 - `stale-reclaimable` → proceed with takeover (the stale path below).
-- `already-claimed` → the issue is held by a live competitor, or a later
-  competing / same-second claim raced in: do not post a claim. Apply the
-  **already-claimed routing** defined here for the rest of this file:
+- `already-claimed` → a live competitor, raced claim, or occupied stale/
+  released branch: use lock takeover only if `winning_claim_id` matches
+  this session's verified claim; otherwise apply the routing below:
   return to Discover using the same selection mode that produced this
   target (orphan-first: continue the A0-O capable path; roadmap mode:
   continue the A3-ready path) and select the next eligible issue; for an
@@ -206,8 +206,9 @@ issue (different slug variants).
    ```
 
    Match `branch refs/heads/issue/<number>-…`; for `detached`, resolve
-   `head-name` under `git -C <worktree> rev-parse --git-path
-   rebase-merge`/`rebase-apply` first.
+   `head-name`/`BISECT_START` via `git -C <worktree> rev-parse --git-path
+   rebase-merge`/`rebase-apply`: invalid/target → occupied; unrelated →
+   absent.
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query the Refs API with the issue-number prefix only, to stay within
@@ -225,28 +226,25 @@ issue (different slug variants).
 
 3. **Collision action tree**:
 
-   - **If no local worktree or remote branch matches `issue/<number>-*`**:
-     Proceed to claim posting (the safe, single-session path).
-
-   - **If a match is found and corresponds to an inheritable claim or
-     trusted forced-handoff evidence** (its `branch` matches one of the
-     branches allowed in (d) above): proceed to claim posting — the
+   - **No local worktree or remote branch matches `issue/<number>-*`**:
+     proceed to claim posting.
+   - **A matching live local worktree exists for a stale/inheritable
+     claim**: stop unless this session proves owner resume or an authorized
+     forced handoff. With helpers, `resume-claim-routing.mjs
+     --fresh-claim-gate` reports `local_worktree_occupied` (including an
+     `evidence.local_worktree.status` of `unreadable`); route to operator
+     recovery unless the documented forced-handoff path is authorized
+     (#3141, Round 21 report).
+   - **A matching branch corresponds to an inheritable claim or trusted
+     forced-handoff evidence, with no live local worktree**: proceed — the
      branch is expected.
-
-   - **If a match is found, does NOT correspond to an inheritable claim,
-     AND an active non-stale claim on this issue references that branch**:
-     Treat as **claimed by a concurrent session** running in parallel —
-     apply the **already-claimed routing** above. This is the scale-out
-     path that lets multiple sessions work different issues when one has
-     concurrent claims.
-
-   - **If a match is found, does NOT correspond to an inheritable claim,
-     AND no active claim references that branch**:
-     Document the branch name and post a **hold note** to the issue: "_A5
+   - **A non-corresponding match has an active non-stale claim**: apply
+     already-claimed routing for a concurrent session.
+   - **Otherwise**: document the branch and post a hold note: "_A5
      pre-check (e) detected an unexpected branch `issue/<number>-*`
      without an active claim. Possible orphaned branch from a crashed or
-     stale session. Stopping for operator review._" Stop and wait for
-     operator input. Do not post a claim or continue the workflow.
+     stale session. Stopping for operator review._" Stop and await operator
+     input; do not post a claim.
 
 ## Claim execution
 

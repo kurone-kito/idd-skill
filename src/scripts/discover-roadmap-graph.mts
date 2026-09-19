@@ -18,6 +18,10 @@ import {
 } from './discover-readiness-check.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
 import { loadPolicyConfig } from './idd-config.mts';
+import {
+  inspectLocalWorktreeBranch,
+  type LocalWorktreeInspection,
+} from './local-worktree-occupancy.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import {
   normalizePolicyConfig,
@@ -26,7 +30,8 @@ import {
 } from './policy-helpers.mts';
 import {
   isStaleAt,
-  resolveActiveClaim,
+  parseClaimComment,
+  resolveActiveClaimWithForcedHandoffTrace,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 import {
@@ -36,6 +41,10 @@ import {
 import type { ProviderPort } from './provider-port.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+const LEGACY_CLAIM_MARKER_PATTERN =
+  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+const LEGACY_RELEASE_MARKER_PATTERN =
+  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 // GitHub's search API returns at most 1000 results for a single query. The
 // open-roadmap-roots loader pins each search at this cap and warns when a
 // single search returns the full cap (a possible silent truncation).
@@ -182,12 +191,14 @@ export interface RoadmapIssueClassification {
  * leaf carries this object (Design O). `present: false` (with `claimId: null`,
  * `agentId: null`) means no trusted claim is present at all; `present: true`
  * means a trusted claim exists, with `stale` reporting whether it is older
- * than the configured `claimTiming.staleAge` relative to now (a stale claim is
- * takeover-eligible). The whole annotation is absent (key omitted) on the
- * default flag-absent path. `ownedByCurrentSession` is present whenever the
- * caller passed `--current-claim-id` (`true` when the active claim's `claimId`
- * equals it, `false` otherwise — including the no-claim `present: false` case),
- * and absent only when `--current-claim-id` was not supplied.
+ * than the configured `claimTiming.staleAge` relative to now. A stale claim
+ * is takeover-eligible only when no same-clone worktree occupancy blocks it;
+ * `localWorktree` records that probe when it runs. The whole annotation is
+ * absent (key omitted) on the default flag-absent path. `ownedByCurrentSession`
+ * is present whenever the caller passed `--current-claim-id` (`true` when the
+ * active claim's `claimId` equals it, `false` otherwise — including the
+ * no-claim `present: false` case), and absent only when
+ * `--current-claim-id` was not supplied.
  *
  * `heartbeatOverdue` (#1433) is a **purely diagnostic** sibling to `stale`:
  * `true` when the latest valid `claimed-by`/heartbeat `created_at` is at or
@@ -207,6 +218,11 @@ export interface LeafActiveClaim {
   agentId: string | null;
   heartbeatOverdue: boolean;
   ownedByCurrentSession?: boolean;
+  /**
+   * Same-clone occupancy evidence for a stale or released claim branch. An
+   * occupied or unreadable result blocks the soft discovery eligibility hint.
+   */
+  localWorktree?: LocalWorktreeInspection;
 }
 
 /**
@@ -523,6 +539,8 @@ export interface ClaimStateResolution {
   nowIso: string;
   /** `--current-claim-id`, or '' when not supplied. */
   currentClaimId: string;
+  /** Same-clone occupancy probe used to gate stale takeover hints. */
+  inspectLocalWorktree?: (branchName: string) => LocalWorktreeInspection;
 }
 
 interface ClaimStateOptions {
@@ -1653,26 +1671,24 @@ interface LeafClaimAnnotation {
  * Resolve one execution leaf's active-claim eligibility (#1008).
  *
  * Fetches the leaf issue's comments via the injected `loadComments` loader,
- * resolves the ACTIVE claim with the SHARED `resolveActiveClaim` from
- * protocol-helpers (trusted-author gated, stale-age aware), then derives
- * present/stale/eligibility. `activeClaim` is ALWAYS returned as an object
+ * resolves the ACTIVE claim with the SHARED
+ * `resolveActiveClaimWithForcedHandoffTrace` from protocol-helpers
+ * (trusted-author gated, stale-age aware), then derives
+ * present/stale/eligibility. The trace also preserves a just-released claim
+ * branch so a live local worktree remains a discovery blocker after remote
+ * ownership is cleared. `activeClaim` is ALWAYS returned as an object
  * (Design O): `present: false` (with `claimId: null`, `agentId: null`) when no
  * trusted claim is present, `present: true` otherwise. A leaf is eligible when
- * there is NO present, non-stale, trusted-actor claim. The shared
- * `parseClaimComment` / `resolveActiveClaim` parsing is reused read-only and
- * never re-implemented here.
+ * there is NO present, non-stale, trusted-actor claim and no occupied or
+ * unreadable worktree for a stale/released branch. The shared claim parsing is
+ * reused read-only and never re-implemented here.
  *
- * Intentional limitation: this annotation resolves only NEW-format
- * `claimed-by` markers via the shared `resolveActiveClaim`. It deliberately
- * does NOT factor in legacy claim-id-less markers nor forced-handoff
- * transfers, both of which the authoritative resume/claim path handles
- * (resume-claim-routing's `resolveLegacyClaimState` and forced-handoff
- * authorization). Replicating that here would require duplicating that
- * machinery plus per-candidate permission API calls, which is out of scope
- * for this read-only discovery hint. `claimEligible` is therefore a
- * best-effort SOFT signal only; the authoritative A5 claim gate
- * (`idd-claim.instructions.md`), which DOES account for legacy markers and
- * forced handoffs, remains the real protection.
+ * Intentional limitation: this annotation remains a best-effort SOFT signal.
+ * It does not reproduce the authoritative forced-handoff authorization or
+ * legacy active-claim takeover rules. It only retains the legacy
+ * claim-id-less release branch for the same local-worktree collision check;
+ * the authoritative A5 claim gate (`idd-claim.instructions.md`) remains the
+ * real protection.
  */
 export async function annotateLeafClaimState(
   issueNumber: number,
@@ -1681,7 +1697,7 @@ export async function annotateLeafClaimState(
   const comments = normalizeClaimComments(
     await claimState.loadComments(issueNumber),
   );
-  const active = resolveActiveClaim(comments, {
+  const claimTrace = resolveActiveClaimWithForcedHandoffTrace(comments, {
     isTrustedAuthor: claimState.isTrustedAuthor,
     // The 24h math is not re-derived: when the configured stale age equals the
     // PT24H default, the shared `isStaleAt` is reused as-is;
@@ -1689,13 +1705,26 @@ export async function annotateLeafClaimState(
     isStale: (activeCreatedAt, nextCreatedAt) =>
       isClaimStaleByAge(activeCreatedAt, nextCreatedAt, claimState.staleAgeMs),
   });
+  const active = claimTrace.activeClaim;
+  const releasedClaim =
+    claimTrace.releasedClaim ??
+    (hasNewFormatClaim(comments, claimState.isTrustedAuthor)
+      ? null
+      : resolveLegacyReleasedClaim(comments, claimState.isTrustedAuthor));
 
   if (!active) {
-    // No present trusted claim → eligible. When `--current-claim-id` is
-    // supplied, `ownedByCurrentSession` is still emitted (as `false`) because
-    // there is no claim id to match it; it is omitted only when no
-    // `--current-claim-id` was passed. `heartbeatOverdue` is always `false`
-    // here (#1433): with no present claim there is nothing to be overdue.
+    // A release clears remote ownership, not a live same-clone worktree. Keep
+    // probing the released branch before advertising it as a fresh candidate.
+    const localWorktree =
+      releasedClaim && claimState.inspectLocalWorktree
+        ? claimState.inspectLocalWorktree(releasedClaim.branch)
+        : undefined;
+    const localWorktreeBlocks =
+      localWorktree !== undefined && localWorktree.status !== 'absent';
+
+    // When `--current-claim-id` is supplied, `ownedByCurrentSession` is still
+    // emitted (as `false`) because there is no active claim id to match it; it
+    // is omitted only when `--current-claim-id` was not passed.
     return {
       activeClaim: {
         present: false,
@@ -1704,8 +1733,9 @@ export async function annotateLeafClaimState(
         agentId: null,
         heartbeatOverdue: false,
         ...(claimState.currentClaimId ? { ownedByCurrentSession: false } : {}),
+        ...(localWorktree ? { localWorktree } : {}),
       },
-      claimEligible: true,
+      claimEligible: !localWorktreeBlocks,
     };
   }
 
@@ -1730,23 +1760,136 @@ export async function annotateLeafClaimState(
     claimState.heartbeatIntervalMs,
   );
 
+  const ownedByCurrentSession = claimState.currentClaimId
+    ? active.claimId === claimState.currentClaimId
+    : false;
+  const localWorktree =
+    stale && claimState.inspectLocalWorktree
+      ? claimState.inspectLocalWorktree(active.branch)
+      : undefined;
+  const localWorktreeBlocks =
+    stale &&
+    !ownedByCurrentSession &&
+    localWorktree !== undefined &&
+    localWorktree.status !== 'absent';
+
   const annotation: LeafActiveClaim = {
     present: true,
     stale,
     claimId: active.claimId,
     agentId: active.agentId,
     heartbeatOverdue,
+    ...(localWorktree ? { localWorktree } : {}),
   };
   if (claimState.currentClaimId) {
-    annotation.ownedByCurrentSession =
-      active.claimId === claimState.currentClaimId;
+    annotation.ownedByCurrentSession = ownedByCurrentSession;
   }
 
-  // Eligible only when there is no present, NON-stale, trusted claim. A stale
-  // claim is takeover-eligible, so it does not block. `heartbeatOverdue` NEVER
-  // factors into this: it is purely diagnostic (#1433) and must not change
-  // who is claim-eligible.
-  return { activeClaim: annotation, claimEligible: stale };
+  // A stale claim is normally takeover-eligible, but a live same-clone
+  // worktree is an independent occupancy signal. Only a verified owner resume
+  // may reuse it; an unreadable occupancy probe also blocks fail-closed.
+  // `heartbeatOverdue` NEVER factors into this (#1433).
+  return {
+    activeClaim: annotation,
+    claimEligible: stale && !localWorktreeBlocks,
+  };
+}
+
+interface LegacyReleasedClaim {
+  agentId: string;
+  branch: string;
+  createdAt: string;
+}
+
+function hasNewFormatClaim(
+  comments: readonly {
+    body: string;
+    createdAt: string;
+    author: { login: string };
+  }[],
+  isTrustedAuthor: (login: string) => boolean,
+): boolean {
+  return comments.some(
+    (comment) =>
+      isTrustedAuthor(comment.author.login) &&
+      parseClaimComment(comment.body, comment.createdAt) !== null,
+  );
+}
+
+/**
+ * Resolve the branch most recently released by a trusted legacy claim.
+ * Discovery deliberately uses this only for the local-worktree collision
+ * check; resume-claim-routing remains authoritative for legacy claim routing.
+ */
+function resolveLegacyReleasedClaim(
+  comments: readonly {
+    body: string;
+    createdAt: string;
+    author: { login: string };
+  }[],
+  isTrustedAuthor: (login: string) => boolean,
+): LegacyReleasedClaim | null {
+  let latestClaim: LegacyReleasedClaim | null = null;
+  let released = false;
+
+  const orderedComments = comments
+    .map((comment, index) => ({ comment, index }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.comment.createdAt);
+      const rightTime = Date.parse(right.comment.createdAt);
+      if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
+        return leftTime - rightTime || left.index - right.index;
+      }
+      if (Number.isFinite(leftTime)) {
+        return -1;
+      }
+      if (Number.isFinite(rightTime)) {
+        return 1;
+      }
+      return left.index - right.index;
+    });
+
+  for (const { comment } of orderedComments) {
+    if (!isTrustedAuthor(comment.author.login)) {
+      continue;
+    }
+    const claimMatch = comment.body
+      .trimEnd()
+      .match(LEGACY_CLAIM_MARKER_PATTERN);
+    if (claimMatch) {
+      latestClaim = {
+        agentId: claimMatch[1],
+        branch: claimMatch[3],
+        createdAt: claimMatch[2],
+      };
+      released = false;
+      continue;
+    }
+
+    const releaseMatch = comment.body
+      .trimEnd()
+      .match(LEGACY_RELEASE_MARKER_PATTERN);
+    if (
+      releaseMatch &&
+      latestClaim &&
+      releaseMatch[1] === latestClaim.agentId &&
+      isLaterIso(releaseMatch[2], latestClaim.createdAt)
+    ) {
+      released = true;
+    }
+  }
+
+  return released ? latestClaim : null;
+}
+
+function isLaterIso(left: string, right: string): boolean {
+  const leftTime = Date.parse(left);
+  const rightTime = Date.parse(right);
+  return (
+    Number.isFinite(leftTime) &&
+    Number.isFinite(rightTime) &&
+    leftTime > rightTime
+  );
 }
 
 /** Coerce a loaded comment payload into the `resolveActiveClaim` event shape. */
@@ -1855,6 +1998,8 @@ export function buildClaimStateResolution(
     heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
     currentClaimId: String(currentClaimId ?? '').trim(),
+    inspectLocalWorktree: (branchName: string) =>
+      inspectLocalWorktreeBranch(branchName),
   };
 }
 
@@ -2507,9 +2652,9 @@ function printHelp() {
   claim using the configured trustedMarkerActors, claimTiming.staleAge
   (default PT24H), and claimTiming.heartbeatInterval (default PT12H). Each
   annotated leaf gains (activeClaim is always an object):
-    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool }
+    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool, "localWorktree"?: object }
                    (present:false with claimId/agentId null = no trusted claim)
-    "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
+    "claimEligible": bool   (eligible = no present, non-stale, trusted claim and no unverified stale-claim worktree)
   Absent the flag, NO comment API calls are made and no claim fields are
   emitted (the output shape is byte-stable).
   heartbeatOverdue is true when the latest valid claimed-by/heartbeat

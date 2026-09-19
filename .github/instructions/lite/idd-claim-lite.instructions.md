@@ -246,22 +246,24 @@ otherwise keep the hard 40-char cut); strip trailing `-`; empty result
 Then scan for collisions:
 
 ```sh
-git worktree list | grep "issue/<N>-"
+git worktree list --porcelain -z
 gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<N>-" \
-  --jq '.[].ref | sub("^refs/heads/"; "")'
+--jq '.[].ref | sub("^refs/heads/"; "")'
 ```
+
+Blocks takeover; verify owner/handoff (#3141 Round 21).
+Parse NUL records; detached: compare rebase head-name/`BISECT_START`;
+invalid/target → STOP; unrelated → absent; prunable frees if unrelated.
 
 <!-- dprint-ignore-start -->
 | Match found? | Action |
 | --- | --- |
-| No local or remote match | Proceed to claim posting |
-| Match corresponds to an inheritable claim (per (d) above) | Proceed — expected branch |
-| Match does not correspond, but an active non-stale claim references it | **STOP** — concurrent session |
-| Match does not correspond, and no active claim references it | **STOP** — hold note, possible orphaned branch; operator review |
+| No local/remote match | Proceed |
+| Stale/released + live/unknown | **STOP** — owner/FH + id |
+| Inheritable match, no live local worktree | Proceed — expected |
+| Non-corresponding match + active claim | **STOP** — concurrent |
+| Non-corresponding match + no active claim | **STOP** — hold/orphan review |
 <!-- dprint-ignore-end -->
-
-No remote branch with the computed name may already exist unless it is
-inheritable per the table above.
 
 Before activation, re-fetch the authoring label and paginated owner
 log. A current/incomplete hold blocks; only exact

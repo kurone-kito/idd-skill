@@ -10038,6 +10038,13 @@ function sortClaimEvents(events: CommentLike[]): CommentLike[] {
 export interface ActiveClaimResolution {
   activeClaim: ParsedClaimMarker | null;
   /**
+   * The claim that was most recently released when no claim is active.
+   * Callers use this only to keep a released branch subject to the local
+   * worktree collision check; a release clears remote ownership, not the
+   * filesystem lock represented by a live worktree.
+   */
+  releasedClaim: ParsedClaimMarker | null;
+  /**
    * The specific trusted, rule-7-valid `forced-handoff` marker whose
    * application produced `activeClaim`'s current identity, or `null` when
    * the latest claim-identity change was not a forced handoff (fresh
@@ -10090,6 +10097,7 @@ export function resolveActiveClaimWithForcedHandoffTrace(
   const orderedEvents = sortClaimEvents(events);
 
   let active: ParsedClaimMarker | null = null;
+  let releasedClaim: ParsedClaimMarker | null = null;
   let appliedForcedHandoff: ParsedForcedHandoffMarker | null = null;
   let activeSince = '';
   for (const event of orderedEvents) {
@@ -10099,6 +10107,11 @@ export function resolveActiveClaimWithForcedHandoffTrace(
       (next?.claimId ?? null) !== (previous?.claimId ?? null) ||
       (next?.agentId ?? null) !== (previous?.agentId ?? null);
     if (identityChanged) {
+      if (previous && !next) {
+        releasedClaim = previous;
+      } else if (next) {
+        releasedClaim = null;
+      }
       const candidate = previous
         ? parseForcedHandoffComment(event.body ?? '', event.createdAt ?? '')
         : null;
@@ -10122,7 +10135,12 @@ export function resolveActiveClaimWithForcedHandoffTrace(
     }
     active = next;
   }
-  return { activeClaim: active, appliedForcedHandoff, activeSince };
+  return {
+    activeClaim: active,
+    releasedClaim,
+    appliedForcedHandoff,
+    activeSince,
+  };
 }
 
 export function resolveActiveClaim(

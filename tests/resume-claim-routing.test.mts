@@ -280,6 +280,123 @@ test('returns stale for stale active claim from another session', () => {
   assert.equal(result.reason, 'active-claim-stale');
 });
 
+test('stale takeover is blocked by a live local worktree', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-3-task'],
+        reason: 'matching local worktree for issue/3-task',
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'local_worktree_occupied');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'stale-claim-local-worktree-occupied');
+  assert.deepEqual(result.evidence.local_worktree, {
+    status: 'occupied',
+    paths: ['/tmp/repo.issue-3-task'],
+    reason: 'matching local worktree for issue/3-task',
+  });
+
+  const gate = evaluateFreshClaimGate(
+    {
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-3-task'],
+        reason: 'matching local worktree for issue/3-task',
+      }),
+    },
+  );
+  assert.equal(gate.verdict, 'already-claimed');
+  assert.equal(gate.winningClaimId, 'claim-old');
+  assert.equal(gate.reason, 'stale-claim-local-worktree-occupied');
+});
+
+test('unreadable local worktree blocks stale takeover fail closed', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'unreadable',
+        paths: [],
+        reason: 'git worktree list failed',
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'local_worktree_occupied');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'stale-claim-local-worktree-unreadable');
+  assert.deepEqual(result.evidence.local_worktree, {
+    status: 'unreadable',
+    paths: [],
+    reason: 'git worktree list failed',
+  });
+});
+
+test('verified owner resume may keep an occupied worktree', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-old',
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-3-task'],
+        reason: 'matching local worktree for issue/3-task',
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal(result.reason, 'claim-id-match');
+  assert.equal(result.evidence.local_worktree, undefined);
+});
+
 test('evaluateFreshClaimGate: no markers → claimable', () => {
   const gate = evaluateFreshClaimGate(
     { events: [], now: '2026-05-12T10:00:00Z' },
@@ -530,6 +647,55 @@ test('authorized forced-handoff marker promotes successor claim before routing',
 
   assert.equal(result.state, 'already_owned');
   assert.equal(result.active_claim?.claim_id, 'claim-new');
+});
+
+test('verified forced-handoff successor may resume occupied stale worktree', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-new',
+      now: '2026-05-13T11:00:00Z',
+      events: FORCED_HANDOFF_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-11-task'],
+        reason: 'matching local worktree for issue/11-task',
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal(result.reason, 'claim-id-match');
+  assert.equal(result.evidence.local_worktree, undefined);
+  assert.equal(result.evidence.forced_handoff?.new_claim_id, 'claim-new');
+});
+
+test('fresh caller cannot bypass occupied worktree with forced-handoff evidence', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-13T11:00:00Z',
+      events: FORCED_HANDOFF_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-11-task'],
+        reason: 'matching local worktree for issue/11-task',
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'local_worktree_occupied');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'stale-claim-local-worktree-occupied');
 });
 
 test('evidence.forced_handoff is populated on a bare --issue call (no --claim-id) against a valid forced-handoff successor (#2178)', () => {
@@ -1243,6 +1409,76 @@ test('evaluateFreshClaimGate: released competing claim is claimable, not already
   assert.equal(gate.verdict, 'claimable');
   assert.equal(gate.reason, 'no-active-claim');
   assert.equal(gate.winningClaimId, null);
+});
+
+test('fresh claim gate blocks a released claim with a live local worktree', () => {
+  let inspectedBranch = '';
+  const gate = evaluateFreshClaimGate(
+    {
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-released supersedes: none 2026-05-12T10:00:00Z branch: issue/24-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: copilot claim-released 2026-05-12T10:05:00Z -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: (branchName) => {
+        inspectedBranch = branchName;
+        return {
+          status: 'occupied',
+          paths: ['/tmp/repo.issue-24-task'],
+          reason: 'matching local worktree for issue/24-task',
+        };
+      },
+    },
+  );
+
+  assert.equal(inspectedBranch, 'issue/24-task');
+  assert.equal(gate.verdict, 'already-claimed');
+  assert.equal(gate.winningClaimId, 'claim-released');
+  assert.equal(gate.reason, 'released-claim-local-worktree-occupied');
+});
+
+test('released legacy claim stays out of active_claim when its worktree is occupied', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: old-agent 2026-05-12T10:00:00Z branch: issue/24-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: old-agent 2026-05-12T10:05:00Z -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-24-task'],
+        reason: 'matching local worktree for issue/24-task',
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'local_worktree_occupied');
+  assert.equal(result.reason, 'released-claim-local-worktree-occupied');
+  assert.equal(result.active_claim, null);
+  assert.equal(result.evidence.released_claim?.branch, 'issue/24-task');
 });
 
 test('runCli sources currentLogin from resolveViewerLogin (#2148)', () => {

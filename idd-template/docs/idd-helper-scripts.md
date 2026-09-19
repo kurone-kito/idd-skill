@@ -562,7 +562,9 @@ default below is unchanged.
     byte-stable and make no extra API call). `--with-claim-state` adds
     `activeClaim` (always an object: `{ present, stale, claimId, agentId,`
     `heartbeatOverdue }`, plus `ownedByCurrentSession` when
-    `--current-claim-id` is passed) and `claimEligible: boolean` on each
+    `--current-claim-id` is passed; stale or released claims may also carry
+    `localWorktree: {status, paths, reason}`) and `claimEligible: boolean` on
+    each
     open leaf. Both `discover-roadmap-graph.mjs` and
     `discover-orphan-filter.mjs` emit this exact shape under
     `--with-claim-state`. `heartbeatOverdue` (#1433) is `true` when the
@@ -585,8 +587,10 @@ default below is unchanged.
     reports label **presence** only — `--with-readiness` does not compute the
     stale-authoring warning (it would cost a discarded per-leaf timeline fetch
     and does not change startability). `--with-claim-state` itself is not
-    forced-handoff-aware — it intentionally excludes forced-handoff and
-    legacy markers as a best-effort **soft signal**; a discovery-time survey
+    fully forced-handoff-aware — it intentionally excludes forced-handoff and
+    legacy active-claim takeover rules as a best-effort **soft signal**, but
+    retains a branch released by either new-format or legacy markers for
+    local-worktree collision protection; a discovery-time survey
     across many candidates must either loop the single-issue
     `resume-claim-routing.mjs --fresh-claim-gate` resolver per candidate or
     apply `idd-claim.instructions.md`'s full parsing rules manually to catch
@@ -2119,6 +2123,9 @@ close.
   `claimable` verdict, a `stale-reclaimable` verdict, or an
   `already-claimed` verdict whose `winning_claim_id` matches a
   `claim-id` the caller has already independently verified as its own).
+  A released new-format claim with a matching local worktree retains
+  `winning_claim_id` for owner release-then-fresh; unrelated sessions cannot
+  take over. Legacy releases have no claim id and require operator recovery.
   A `holder`
   snapshot of the previous occupant is reported on **both** a plain
   `collision` and an authorized takeover, not only on takeover.
@@ -2769,8 +2776,13 @@ close.
   `warnings`, and `evidence`
 - Stable enums:
   - `state`:
-    `unclaimed|already_owned|stale|non_inheritable|disputed`
+    `unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|disputed`
   - `action`: `re_claim|takeover|keep|stop`
+- When a stale or released claim is inspected against the current clone, the
+  helper adds `evidence.local_worktree` with `{status, paths, reason}`.
+  `occupied` and `unreadable` are fail-closed stop states; an owner resume or
+  authorized forced handoff must be verified before reusing the worktree
+  (#3141).
 - Optional `--nonce <token>` (kurone-kito/idd-skill#1522): when `--claim-id`
   matches the active claim, also requires it to equal the winning trusted
   `activation-nonce` marker for that claim-id (`evidence.activation_nonce_winner`);

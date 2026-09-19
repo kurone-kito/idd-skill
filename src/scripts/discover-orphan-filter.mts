@@ -386,13 +386,15 @@ interface OrphanCandidate {
    * mirroring `discover-roadmap-graph`'s `RoadmapGraphNode.activeClaim` shape
    * exactly (Design O): `present: false` (with `claimId: null`,
    * `agentId: null`) means no trusted claim is present, `present: true` means
-   * one exists (possibly stale). Absent in the default (flag-absent) path so
-   * the byte-stable output shape is unchanged.
+   * one exists (possibly stale). A stale claim may carry `localWorktree` when
+   * same-clone occupancy was probed. Absent in the default (flag-absent) path
+   * so the byte-stable output shape is unchanged.
    */
   activeClaim?: LeafActiveClaim;
   /**
    * Derived eligibility: `true` when no present, non-stale, trusted-actor
-   * claim blocks this candidate. Present only under `--with-claim-state`.
+   * claim or unverified stale-claim worktree blocks this candidate. Present
+   * only under `--with-claim-state`.
    */
   claimEligible?: boolean;
 }
@@ -1527,9 +1529,9 @@ comments and resolves the active claim using the configured
 trustedMarkerActors, claimTiming.staleAge (default PT24H), and
 claimTiming.heartbeatInterval (default PT12H). Each annotated candidate
 gains (activeClaim is always an object):
-  "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool }
+  "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool, "localWorktree"?: object }
                  (present:false with claimId/agentId null = no trusted claim)
-  "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
+  "claimEligible": bool   (eligible = no present, non-stale, trusted claim and no unverified stale-claim worktree)
 Absent the flag, NO comment API calls are made and no claim fields are
 emitted (the output shape is byte-stable).
 heartbeatOverdue is true when the latest valid claimed-by/heartbeat

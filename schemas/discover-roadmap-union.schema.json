@@ -139,7 +139,7 @@
             }
           },
           "activeClaim": {
-            "description": "Active-claim annotation, present only under --with-claim-state, where it is always an object (Design O): present:false (with claimId:null, agentId:null) means no trusted claim is present, present:true means one exists (possibly stale). The object is constrained by `type: object` + `required` + `properties` + `additionalProperties: false`; the runtime contract is { present, stale, claimId, agentId, heartbeatOverdue, ownedByCurrentSession? }. ownedByCurrentSession is intentionally absent from `required`: it is emitted only with --current-claim-id. heartbeatOverdue (#1433) is a purely diagnostic sibling to stale (true when the latest valid claimed-by/heartbeat created_at is at or past the configured claimTiming.heartbeatInterval, with no later trusted heartbeat; false otherwise, including whenever present is false) and never feeds claimEligible or any other gate.",
+"description": "Active-claim annotation, present only under --with-claim-state, where it is always an object (Design O): present:false (with claimId:null, agentId:null) means no trusted claim is present, present:true means one exists (possibly stale). The object is constrained by `type: object` + `required` + `properties` + `additionalProperties: false`; the runtime contract is { present, stale, claimId, agentId, heartbeatOverdue, ownedByCurrentSession?, localWorktree? }. ownedByCurrentSession is intentionally absent from `required`: it is emitted only with --current-claim-id. localWorktree is emitted for stale or released claims when the same-clone worktree probe runs, including a released claim whose branch remains occupied. heartbeatOverdue (#1433) is a purely diagnostic sibling to stale (true when the latest valid claimed-by/heartbeat created_at is at or past the configured claimTiming.heartbeatInterval, with no later trusted heartbeat; false otherwise, including whenever present is false) and never feeds claimEligible or any other gate.",
             "type": "object",
             "required": [
               "present",
@@ -171,11 +171,46 @@
               "ownedByCurrentSession": {
                 "description": "Present only when --current-claim-id is supplied: true when the active claim's claimId equals it.",
                 "type": "boolean"
+              },
+              "localWorktree": {
+                "description": "Present when a stale claim was checked against same-clone worktree occupancy. occupied blocks takeover; unreadable fails closed; absent means no matching live worktree.",
+                "type": "object",
+                "required": [
+                  "status",
+                  "paths",
+                  "reason"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "description": "Occupancy result for the matching branch probe.",
+                    "type": "string",
+                    "enum": [
+                      "absent",
+                      "occupied",
+                      "unreadable"
+                    ]
+                  },
+                  "paths": {
+                    "description": "Local worktree paths found while probing the branch; unreadable probes may report paths that could not be inspected.",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "reason": {
+                    "description": "Diagnostic reason, or null when no matching worktree exists. The in-repo validator cannot express the string|null union.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
               }
             }
           },
           "claimEligible": {
-            "description": "Derived eligibility, present only under --with-claim-state: true when no present, non-stale, trusted-actor claim blocks this leaf.",
+            "description": "Derived eligibility, present only under --with-claim-state: true when no present, non-stale, trusted-actor claim or unverified stale-claim local worktree blocks this leaf.",
             "type": "boolean"
           }
         }
