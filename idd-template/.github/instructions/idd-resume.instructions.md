@@ -158,6 +158,8 @@ Evaluate in order; take the first matching row.
 
 Absent or disagreeing helper evidence requires the porcelain occupancy scan;
 this table is the instructions-only fallback.
+If that scan fails, is malformed, or is unreadable, treat it as unknown and
+stop before re-claim or takeover; never treat failure as no match.
 
 | Claim state                                                                                     | Route                                                                                                                         |
 | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
