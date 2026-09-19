@@ -136,12 +136,18 @@ function normalizeStatusCheckRollupNode(node) {
       !Array.isArray(raw.checkSuite)
         ? raw.checkSuite
         : {};
-    const workflowRun =
-      checkSuite.workflowRun &&
-      typeof checkSuite.workflowRun === 'object' &&
-      !Array.isArray(checkSuite.workflowRun)
-        ? checkSuite.workflowRun
+    const app =
+      checkSuite.app &&
+      typeof checkSuite.app === 'object' &&
+      !Array.isArray(checkSuite.app)
+        ? checkSuite.app
         : {};
+    const rawWorkflowRun = checkSuite.workflowRun;
+    const workflowRunPresent =
+      rawWorkflowRun !== null &&
+      typeof rawWorkflowRun === 'object' &&
+      !Array.isArray(rawWorkflowRun);
+    const workflowRun = workflowRunPresent ? rawWorkflowRun : {};
     const file =
       workflowRun.file &&
       typeof workflowRun.file === 'object' &&
@@ -162,6 +168,8 @@ function normalizeStatusCheckRollupNode(node) {
       detailsUrl: raw.detailsUrl,
       startedAt: raw.startedAt,
       completedAt: raw.completedAt,
+      appSlug: app.slug == null ? null : String(app.slug).trim() || null,
+      workflowRunPresent,
       // GitHub's GraphQL statusCheckRollup does not expose workflowName or
       // workflowPath directly; derive both from the check suite's associated
       // workflow run, whose identity is provider-owned rather than inferred
@@ -202,6 +210,7 @@ function fetchChangeRequestBranchAndChecks(deps, owner, repo, number) {
             ... on CheckRun{
               name status conclusion detailsUrl startedAt completedAt
               checkSuite{
+                app{slug}
                 workflowRun{
                   file{path}
                   workflow{name}
@@ -240,9 +249,15 @@ function fetchChangeRequestBranchAndChecks(deps, owner, repo, number) {
         `getChangeRequestBranchAndChecks failed: pull request #${number} was not found`,
       );
     }
+    const pageHeadSha = String(pullRequest.headRefOid ?? '');
+    const pageBaseRefName = String(pullRequest.baseRefName ?? '');
     if (page === 0) {
-      headSha = String(pullRequest.headRefOid ?? '');
-      baseRefName = String(pullRequest.baseRefName ?? '');
+      headSha = pageHeadSha;
+      baseRefName = pageBaseRefName;
+    } else if (pageHeadSha !== headSha || pageBaseRefName !== baseRefName) {
+      throw new Error(
+        'getChangeRequestBranchAndChecks: PR head or base ref changed during status-check pagination',
+      );
     }
     const contexts = pullRequest.statusCheckRollup?.contexts;
     for (const node of Array.isArray(contexts?.nodes) ? contexts.nodes : []) {

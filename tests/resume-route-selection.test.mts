@@ -633,6 +633,26 @@ test('collector fails closed when a present check run lacks workflow identity', 
   assert.equal(selectResumeRoute(input).route, 'D4');
 });
 
+test('collector accepts a passing external app check run without a workflow path', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      {
+        ...checkRun('external-ci', '', 'COMPLETED', 'SUCCESS', null),
+        appSlug: 'external-ci-app',
+        workflowRunPresent: false,
+      },
+    ],
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.ciSuccess, true);
+  assert.equal(selectResumeRoute(input).route, 'F2');
+});
+
 test('collector retains same-named check runs and status contexts', () => {
   const port = createResumeCollectorPort({
     statusCheckRollup: [

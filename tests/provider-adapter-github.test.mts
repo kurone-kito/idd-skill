@@ -1678,6 +1678,7 @@ test('getChangeRequestBranchAndChecks paginates the rollup and preserves workflo
                         startedAt: '2026-09-19T00:00:00Z',
                         completedAt: secondPage ? null : '2026-09-19T00:01:00Z',
                         checkSuite: {
+                          app: { slug: 'github-actions' },
                           workflowRun: {
                             file: {
                               path: `.github/workflows/ci-${secondPage ? 'b' : 'a'}.yml`,
@@ -1713,6 +1714,8 @@ test('getChangeRequestBranchAndChecks paginates the rollup and preserves workflo
         detailsUrl: 'https://example.test/a',
         startedAt: '2026-09-19T00:00:00Z',
         completedAt: '2026-09-19T00:01:00Z',
+        appSlug: 'github-actions',
+        workflowRunPresent: true,
         workflowName: 'shared-workflow',
         workflowPath: '.github/workflows/ci-a.yml',
       },
@@ -1724,6 +1727,8 @@ test('getChangeRequestBranchAndChecks paginates the rollup and preserves workflo
         detailsUrl: 'https://example.test/b',
         startedAt: '2026-09-19T00:00:00Z',
         completedAt: null,
+        appSlug: 'github-actions',
+        workflowRunPresent: true,
         workflowName: 'shared-workflow',
         workflowPath: '.github/workflows/ci-b.yml',
       },
@@ -1732,6 +1737,100 @@ test('getChangeRequestBranchAndChecks paginates the rollup and preserves workflo
   assert.equal(calls.length, 2);
   assert.ok(calls[0]?.some((arg) => arg.includes('contexts(first:100')));
   assert.ok(calls[1]?.includes('after=cursor-1'));
+});
+
+test('getChangeRequestBranchAndChecks preserves external app identity without a workflow run', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: 'head-sha',
+                baseRefName: 'main',
+                statusCheckRollup: {
+                  contexts: {
+                    nodes: [
+                      {
+                        __typename: 'CheckRun',
+                        name: 'external-ci',
+                        status: 'COMPLETED',
+                        conclusion: 'SUCCESS',
+                        detailsUrl: 'https://example.test/external-ci',
+                        checkSuite: {
+                          app: { slug: 'external-ci-app' },
+                          workflowRun: null,
+                        },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+
+  assert.deepEqual(port.getChangeRequestBranchAndChecks(7), {
+    headSha: 'head-sha',
+    baseRefName: 'main',
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: 'external-ci',
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        detailsUrl: 'https://example.test/external-ci',
+        startedAt: undefined,
+        completedAt: undefined,
+        appSlug: 'external-ci-app',
+        workflowRunPresent: false,
+        workflowName: '',
+        workflowPath: null,
+      },
+    ],
+  });
+});
+
+test('getChangeRequestBranchAndChecks rejects head drift during rollup pagination', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        const secondPage = args.includes('after=cursor-1');
+        return JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: secondPage ? 'changed-head' : 'head-sha',
+                baseRefName: 'main',
+                statusCheckRollup: {
+                  contexts: {
+                    nodes: [],
+                    pageInfo: {
+                      hasNextPage: !secondPage,
+                      endCursor: secondPage ? null : 'cursor-1',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+
+  assert.throws(
+    () => port.getChangeRequestBranchAndChecks(7),
+    /changed during status-check pagination/,
+  );
 });
 
 test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches headCommittedAt once', () => {

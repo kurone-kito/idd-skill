@@ -320,7 +320,10 @@ export function collectRoutingInput({
   const requiredChecks = ciWaitState.checks.filter((check) => check.required);
   const presentChecks = selectLatestPresentRunChecks(ciWaitState.checks);
   const presentRunIdentityUnresolved = ciWaitState.checks.some(
-    (check) => check.type === 'check-run' && check.workflowPath == null,
+    (check) =>
+      check.type === 'check-run' &&
+      check.workflowPath == null &&
+      (check.workflowRunPresent !== false || check.appSlug == null),
   );
   const checks = noRequiredChecksConfigured ? presentChecks : requiredChecks;
   const ciChecks = checks.map((check) => ({
@@ -414,7 +417,7 @@ function readResumeGovernanceOutcome(read) {
 function selectLatestPresentRunChecks(checks) {
   const groups = new Map();
   for (const check of checks) {
-    const key = `${check.type}\u0000${check.checkName}\u0000${check.workflowName}\u0000${check.workflowPath ?? '<unresolved>'}`;
+    const key = `${check.type}\u0000${check.checkName}\u0000${check.workflowName}\u0000${check.workflowPath ?? '<unresolved>'}\u0000${check.appSlug ?? '<unresolved>'}\u0000${check.workflowRunPresent === false ? '<external-app>' : '<workflow>'}`;
     const group = groups.get(key);
     if (group) {
       group.push(check);
