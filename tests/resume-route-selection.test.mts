@@ -332,11 +332,15 @@ function checkRun(
   workflowName: string,
   status: string,
   conclusion: string | null,
+  workflowPath:
+    | string
+    | null = `.github/workflows/${workflowName || 'workflow'}.yml`,
 ) {
   return {
     __typename: 'CheckRun',
     name,
     workflowName,
+    workflowPath,
     status,
     conclusion,
     completedAt: conclusion ? '2026-09-19T12:00:00Z' : null,
@@ -545,6 +549,52 @@ test('collector retains same-named present runs from different workflows', () =>
   });
   assert.equal(input.noRequiredChecksConfigured, true);
   assert.equal(input.ciRunning, true);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector retains same-named runs from different workflow paths', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      checkRun(
+        'ci',
+        'shared-workflow',
+        'COMPLETED',
+        'SUCCESS',
+        '.github/workflows/ci-a.yml',
+      ),
+      checkRun(
+        'ci',
+        'shared-workflow',
+        'IN_PROGRESS',
+        null,
+        '.github/workflows/ci-b.yml',
+      ),
+    ],
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.ciRunning, true);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector fails closed when a present check run lacks workflow identity', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS', null),
+    ],
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
   assert.equal(input.ciSuccess, false);
   assert.equal(selectResumeRoute(input).route, 'D4');
 });

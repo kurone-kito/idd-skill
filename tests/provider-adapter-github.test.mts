@@ -1651,6 +1651,89 @@ test('getChangeRequestReadinessSnapshot maps all nine fields from a single pr vi
   );
 });
 
+test('getChangeRequestBranchAndChecks paginates the rollup and preserves workflow identity', () => {
+  const calls: string[][] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        calls.push(args);
+        const secondPage = args.includes('after=cursor-1');
+        return JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: 'head-sha',
+                baseRefName: 'main',
+                statusCheckRollup: {
+                  contexts: {
+                    nodes: [
+                      {
+                        __typename: 'CheckRun',
+                        name: 'ci',
+                        status: secondPage ? 'IN_PROGRESS' : 'COMPLETED',
+                        conclusion: secondPage ? null : 'SUCCESS',
+                        detailsUrl: `https://example.test/${secondPage ? 'b' : 'a'}`,
+                        startedAt: '2026-09-19T00:00:00Z',
+                        completedAt: secondPage ? null : '2026-09-19T00:01:00Z',
+                        checkSuite: {
+                          workflowRun: {
+                            file: {
+                              path: `.github/workflows/ci-${secondPage ? 'b' : 'a'}.yml`,
+                            },
+                            workflow: { name: 'shared-workflow' },
+                          },
+                        },
+                      },
+                    ],
+                    pageInfo: {
+                      hasNextPage: !secondPage,
+                      endCursor: secondPage ? null : 'cursor-1',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+
+  assert.deepEqual(port.getChangeRequestBranchAndChecks(7), {
+    headSha: 'head-sha',
+    baseRefName: 'main',
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: 'ci',
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        detailsUrl: 'https://example.test/a',
+        startedAt: '2026-09-19T00:00:00Z',
+        completedAt: '2026-09-19T00:01:00Z',
+        workflowName: 'shared-workflow',
+        workflowPath: '.github/workflows/ci-a.yml',
+      },
+      {
+        __typename: 'CheckRun',
+        name: 'ci',
+        status: 'IN_PROGRESS',
+        conclusion: null,
+        detailsUrl: 'https://example.test/b',
+        startedAt: '2026-09-19T00:00:00Z',
+        completedAt: null,
+        workflowName: 'shared-workflow',
+        workflowPath: '.github/workflows/ci-b.yml',
+      },
+    ],
+  });
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0]?.some((arg) => arg.includes('contexts(first:100')));
+  assert.ok(calls[1]?.includes('after=cursor-1'));
+});
+
 test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches headCommittedAt once', () => {
   const pages = [
     JSON.stringify({

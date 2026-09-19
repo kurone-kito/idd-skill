@@ -92,6 +92,7 @@ interface StatusCheckRollupEntry {
   name?: string | null;
   detailsUrl?: string | null;
   workflowName?: string | null;
+  workflowPath?: string | null;
   startedAt?: string | null;
   completedAt?: string | null;
 }
@@ -100,6 +101,8 @@ interface StatusCheckRollupEntry {
 export interface CiWaitCheckEntry {
   checkName: string;
   workflowName: string;
+  /** GitHub-owned workflow file path; null means producer identity is unresolved. */
+  workflowPath?: string | null;
   type: 'check-run' | 'status-context';
   state: string;
   status: 'success' | 'pending' | 'failure' | 'unknown';
@@ -386,6 +389,10 @@ function normalizeCheckEntry(
     .toUpperCase();
   const state =
     status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN';
+  const workflowPath =
+    entry?.workflowPath === undefined
+      ? undefined
+      : String(entry.workflowPath ?? '').trim() || null;
   return {
     checkName,
     // Trimmed like checkName: workflowName is part of the
@@ -393,6 +400,7 @@ function normalizeCheckEntry(
     // whitespace-only differences could otherwise produce unstable keys
     // or spuriously "distinct" workflow entries.
     workflowName: String(entry?.workflowName ?? '').trim(),
+    ...(workflowPath !== undefined ? { workflowPath } : {}),
     type: 'check-run',
     state,
     status: bucketState(state),

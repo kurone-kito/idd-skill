@@ -422,6 +422,9 @@ export function collectRoutingInput({
     ciWaitState.requiredChecks.allRequiredPresent;
   const requiredChecks = ciWaitState.checks.filter((check) => check.required);
   const presentChecks = selectLatestPresentRunChecks(ciWaitState.checks);
+  const presentRunIdentityUnresolved = ciWaitState.checks.some(
+    (check) => check.type === 'check-run' && check.workflowPath == null,
+  );
   const checks = noRequiredChecksConfigured ? presentChecks : requiredChecks;
   const ciChecks = checks.map((check) => ({
     name: check.checkName,
@@ -436,6 +439,7 @@ export function collectRoutingInput({
     : ciWaitState.requiredChecks.anyRequiredFailing;
   const ciSuccess = noRequiredChecksConfigured
     ? presentChecks.length > 0 &&
+      !presentRunIdentityUnresolved &&
       presentChecks.every((check) => check.status === 'success')
     : !protectionReadsUnreadable &&
       !requiredCheckSourcesDisagree &&
@@ -505,7 +509,7 @@ function selectLatestPresentRunChecks(
 ): CiWaitCheckEntry[] {
   const groups = new Map<string, CiWaitCheckEntry[]>();
   for (const check of checks) {
-    const key = `${check.type}\u0000${check.checkName}\u0000${check.workflowName}`;
+    const key = `${check.type}\u0000${check.checkName}\u0000${check.workflowName}\u0000${check.workflowPath ?? '<unresolved>'}`;
     const group = groups.get(key);
     if (group) {
       group.push(check);
