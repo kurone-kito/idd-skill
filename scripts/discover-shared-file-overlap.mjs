@@ -591,7 +591,9 @@ function runCli() {
     process.exit(0);
   }
   if (args.candidates.length === 0) {
-    throw new Error('at least one --candidate <number> is required');
+    throw new Error(
+      'at least one --issue <number> or --issues <n1,n2> is required (legacy aliases: --candidate/--candidates)',
+    );
   }
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
