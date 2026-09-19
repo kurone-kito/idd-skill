@@ -7,10 +7,10 @@ claim. After A4 selects a viable candidate, run suitability triage via
 `idd-suitability.instructions.md` (A4.5), then proceed to
 `idd-claim.instructions.md` to claim it.
 
-When helper support is enabled, use helper scripts from
-`docs/idd-helper-scripts.md` first for A0-O/A3/A3.5/A4/A4.5 evidence.
-Written decision tables remain authoritative when helper output is
-missing or disagrees.
+Use `docs/idd-helper-scripts.md` for Discover evidence; written decisions
+win. `discover-viability-gate` and `discover-shared-file-overlap` use
+repeatable `--issue` or comma-separated `--issues`; overlap accepts
+`--candidate`/`--candidates`.
 
 **Abort conditions**: A0-T, A1 (`orphan-first`/`roadmap` scope only —
 see A0), A3 (default; see decision tree).

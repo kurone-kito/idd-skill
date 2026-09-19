@@ -35,6 +35,18 @@ test('parseArgs: --candidate is repeatable and --candidates is comma-split', () 
   assert.equal(args.bundles, null);
 });
 
+test('parseArgs: canonical --issue aliases accept all ordered input forms', () => {
+  const args = parseArgs([
+    '--issue',
+    '5',
+    '--candidates=9,11',
+    '--issues',
+    '13,15',
+    '--candidate=17',
+  ]);
+  assert.deepEqual(args.candidates, [5, 9, 11, 13, 15, 17]);
+});
+
 test('parseArgs: repeated --candidates occurrences all accumulate (not just the last)', () => {
   // Regression coverage for a Codex review finding on #1450: a
   // non-multiple parseArgs string flag keeps only the LAST occurrence
@@ -66,6 +78,17 @@ test('parseArgs: --candidate keeps its existing throw-on-invalid contract', () =
   assert.throws(
     () => parseArgs(['--candidates', '5,abc']),
     /invalid --candidates value: abc/,
+  );
+});
+
+test('parseArgs: canonical aliases keep their flag-specific validation errors', () => {
+  assert.throws(
+    () => parseArgs(['--issue', 'abc']),
+    /invalid --issue value: abc/,
+  );
+  assert.throws(
+    () => parseArgs(['--issues', '5,abc']),
+    /invalid --issues value: abc/,
   );
 });
 
