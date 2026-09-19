@@ -1541,10 +1541,11 @@ PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate.
 --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
 each activeClaim (true when the active claim's claimId equals <id>).
 NOTE: claimEligible is a best-effort SOFT discovery hint (same limitation
-as discover-roadmap-graph's annotation): it resolves only new-format
-claimed-by markers and intentionally does NOT account for legacy
-claim-id-less markers or forced-handoff transfers; the authoritative A5
-claim gate (idd-claim.instructions.md) remains the real protection.
+as discover-roadmap-graph's annotation): it traces forced-handoff transfers
+and uses trusted legacy claim/release evidence for stale/released occupancy,
+but does not reproduce authoritative forced-handoff authorization or legacy
+active-claim takeover rules; the authoritative A5 claim gate
+(idd-claim.instructions.md) remains the real protection.
 `);
 }
 

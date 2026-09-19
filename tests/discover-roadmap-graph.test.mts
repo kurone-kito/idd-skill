@@ -2735,6 +2735,51 @@ test('a stale claim with an unreadable local worktree is not claim-eligible', as
   assert.equal(leaf701?.claimEligible, false);
 });
 
+test('a stale legacy claim with a live local worktree is not claim-eligible', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        {
+          body: `<!-- claimed-by: legacy-agent ${STALE_CLAIM_AT} branch: issue/700-task -->`,
+          createdAt: STALE_CLAIM_AT,
+          author: { login: 'kurone-kito' },
+        },
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    inspectLocalWorktree: (branchName) => ({
+      status: 'occupied',
+      paths: [`/tmp/${branchName}`],
+      reason: `matching local worktree for ${branchName}`,
+    }),
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.deepEqual(leaf701?.activeClaim, {
+    present: true,
+    stale: true,
+    claimId: null,
+    agentId: 'legacy-agent',
+    heartbeatOverdue: true,
+    localWorktree: {
+      status: 'occupied',
+      paths: ['/tmp/issue/700-task'],
+      reason: 'matching local worktree for issue/700-task',
+    },
+  });
+  assert.equal(leaf701?.claimEligible, false);
+});
+
 test('a released new-format claim with a live local worktree is not eligible', async () => {
   const issues = claimGraphIssues();
   const commentsByIssue = new Map<number, unknown[]>([

@@ -32,6 +32,7 @@ import {
   isStaleAt,
   parseClaimComment,
   resolveActiveClaimWithForcedHandoffTrace,
+  resolveLegacyClaimState,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 import {
@@ -41,10 +42,6 @@ import {
 import type { ProviderPort } from './provider-port.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
-const LEGACY_CLAIM_MARKER_PATTERN =
-  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
-const LEGACY_RELEASE_MARKER_PATTERN =
-  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 // GitHub's search API returns at most 1000 results for a single query. The
 // open-roadmap-roots loader pins each search at this cap and warns when a
 // single search returns the full cap (a possible silent truncation).
@@ -1684,11 +1681,11 @@ interface LeafClaimAnnotation {
  * reused read-only and never re-implemented here.
  *
  * Intentional limitation: this annotation remains a best-effort SOFT signal.
- * It does not reproduce the authoritative forced-handoff authorization or
- * legacy active-claim takeover rules. It only retains the legacy
- * claim-id-less release branch for the same local-worktree collision check;
- * the authoritative A5 claim gate (`idd-claim.instructions.md`) remains the
- * real protection.
+ * It traces forced-handoff transfers and uses trusted legacy claim/release
+ * evidence to annotate stale/released occupancy, but does not reproduce the
+ * authoritative forced-handoff authorization or legacy active-claim takeover
+ * rules. The authoritative A5 claim gate (`idd-claim.instructions.md`)
+ * remains the real protection.
  */
 export async function annotateLeafClaimState(
   issueNumber: number,
@@ -1706,21 +1703,63 @@ export async function annotateLeafClaimState(
       isClaimStaleByAge(activeCreatedAt, nextCreatedAt, claimState.staleAgeMs),
   });
   const active = claimTrace.activeClaim;
+  const trustedLegacyComments = comments.filter((comment) =>
+    claimState.isTrustedAuthor(comment.author.login),
+  );
+  const hasTrustedNewFormatClaim = hasNewFormatClaim(
+    comments,
+    claimState.isTrustedAuthor,
+  );
+  const legacyState = hasTrustedNewFormatClaim
+    ? null
+    : resolveLegacyClaimState(trustedLegacyComments);
+  const legacyClaim =
+    !active && legacyState && !legacyState.released ? legacyState.claim : null;
   const releasedClaim =
     claimTrace.releasedClaim ??
-    (hasNewFormatClaim(comments, claimState.isTrustedAuthor)
-      ? null
-      : resolveLegacyReleasedClaim(comments, claimState.isTrustedAuthor));
+    (hasTrustedNewFormatClaim ? null : (legacyState?.releasedClaim ?? null));
 
   if (!active) {
-    // A release clears remote ownership, not a live same-clone worktree. Keep
-    // probing the released branch before advertising it as a fresh candidate.
+    const legacyStale =
+      legacyClaim !== null &&
+      isClaimStaleByAge(
+        legacyClaim.createdAt,
+        claimState.nowIso,
+        claimState.staleAgeMs,
+      );
+    // A stale legacy claim or release clears no same-clone worktree. Keep
+    // probing that branch before advertising it as a fresh candidate.
     const localWorktree =
-      releasedClaim && claimState.inspectLocalWorktree
-        ? claimState.inspectLocalWorktree(releasedClaim.branch)
+      (legacyStale ? legacyClaim : releasedClaim) &&
+      claimState.inspectLocalWorktree
+        ? claimState.inspectLocalWorktree(
+            (legacyStale ? legacyClaim : releasedClaim)?.branch ?? '',
+          )
         : undefined;
     const localWorktreeBlocks =
       localWorktree !== undefined && localWorktree.status !== 'absent';
+
+    if (legacyClaim) {
+      const annotation: LeafActiveClaim = {
+        present: true,
+        stale: legacyStale,
+        claimId: null,
+        agentId: legacyClaim.agentId,
+        heartbeatOverdue: isClaimHeartbeatOverdue(
+          legacyClaim.createdAt,
+          claimState.nowIso,
+          claimState.heartbeatIntervalMs,
+        ),
+        ...(localWorktree ? { localWorktree } : {}),
+      };
+      if (claimState.currentClaimId) {
+        annotation.ownedByCurrentSession = false;
+      }
+      return {
+        activeClaim: annotation,
+        claimEligible: legacyStale && !localWorktreeBlocks,
+      };
+    }
 
     // When `--current-claim-id` is supplied, `ownedByCurrentSession` is still
     // emitted (as `false`) because there is no active claim id to match it; it
@@ -1795,12 +1834,6 @@ export async function annotateLeafClaimState(
   };
 }
 
-interface LegacyReleasedClaim {
-  agentId: string;
-  branch: string;
-  createdAt: string;
-}
-
 function hasNewFormatClaim(
   comments: readonly {
     body: string;
@@ -1821,77 +1854,6 @@ function hasNewFormatClaim(
  * Discovery deliberately uses this only for the local-worktree collision
  * check; resume-claim-routing remains authoritative for legacy claim routing.
  */
-function resolveLegacyReleasedClaim(
-  comments: readonly {
-    body: string;
-    createdAt: string;
-    author: { login: string };
-  }[],
-  isTrustedAuthor: (login: string) => boolean,
-): LegacyReleasedClaim | null {
-  let latestClaim: LegacyReleasedClaim | null = null;
-  let released = false;
-
-  const orderedComments = comments
-    .map((comment, index) => ({ comment, index }))
-    .sort((left, right) => {
-      const leftTime = Date.parse(left.comment.createdAt);
-      const rightTime = Date.parse(right.comment.createdAt);
-      if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
-        return leftTime - rightTime || left.index - right.index;
-      }
-      if (Number.isFinite(leftTime)) {
-        return -1;
-      }
-      if (Number.isFinite(rightTime)) {
-        return 1;
-      }
-      return left.index - right.index;
-    });
-
-  for (const { comment } of orderedComments) {
-    if (!isTrustedAuthor(comment.author.login)) {
-      continue;
-    }
-    const claimMatch = comment.body
-      .trimEnd()
-      .match(LEGACY_CLAIM_MARKER_PATTERN);
-    if (claimMatch) {
-      latestClaim = {
-        agentId: claimMatch[1],
-        branch: claimMatch[3],
-        createdAt: claimMatch[2],
-      };
-      released = false;
-      continue;
-    }
-
-    const releaseMatch = comment.body
-      .trimEnd()
-      .match(LEGACY_RELEASE_MARKER_PATTERN);
-    if (
-      releaseMatch &&
-      latestClaim &&
-      releaseMatch[1] === latestClaim.agentId &&
-      isLaterIso(releaseMatch[2], latestClaim.createdAt)
-    ) {
-      released = true;
-    }
-  }
-
-  return released ? latestClaim : null;
-}
-
-function isLaterIso(left: string, right: string): boolean {
-  const leftTime = Date.parse(left);
-  const rightTime = Date.parse(right);
-  return (
-    Number.isFinite(leftTime) &&
-    Number.isFinite(rightTime) &&
-    leftTime > rightTime
-  );
-}
-
 /** Coerce a loaded comment payload into the `resolveActiveClaim` event shape. */
 function normalizeClaimComments(
   raw: unknown,

@@ -559,9 +559,10 @@ ascending issue-number order:
   `resume-claim-routing.mjs --fresh-claim-gate` resolver, or apply those
   rules manually. A candidate is **ineligible** when the latest valid
   `claimed-by` is non-stale (`created_at > now - claim-stale-age`; see
-  `docs/policy-constants.md`), or when a stale claim's same-clone worktree
-  probe finds a live match or is unreadable without verified owner resume or
-  authorized handoff (#3141, Round 21 report). Otherwise it **remains eligible**.
+  `docs/policy-constants.md`), or when a stale or released claim's same-clone
+  worktree probe finds a live match or is unreadable without verified owner
+  resume or authorized handoff (#3141, Round 21 report). Otherwise it
+  **remains eligible**.
 
 After scanning the current batch:
 

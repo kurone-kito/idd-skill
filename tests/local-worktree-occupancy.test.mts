@@ -60,21 +60,38 @@ test('parses branch, detached, and prunable worktree records', () => {
       path: '/repo/main',
       branchRef: 'refs/heads/main',
       detached: false,
+      bare: false,
       prunable: false,
     },
     {
       path: '/repo/rebase',
       branchRef: null,
       detached: true,
+      bare: false,
       prunable: false,
     },
     {
       path: '/repo/old',
       branchRef: 'refs/heads/issue/42-task',
       detached: false,
+      bare: false,
       prunable: true,
     },
   ]);
+});
+
+test('accepts bare worktree records without a HEAD field', () => {
+  const result = inspectLocalWorktreeBranch(
+    'issue/42-task',
+    process.cwd(),
+    process.env,
+    stubWorktreeList('worktree /repo/bare\0bare\0\0'),
+  );
+  assert.deepEqual(result, {
+    status: 'absent',
+    paths: [],
+    reason: null,
+  });
 });
 
 test('fails closed when the current directory cannot list worktrees', () => {
@@ -415,5 +432,42 @@ test('fails closed when detached metadata resolves an enclosing repository', () 
     });
   } finally {
     rmSync(enclosing, { recursive: true, force: true });
+  }
+});
+
+test('fails closed when detached operation metadata is ambiguous', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-dual-rebase-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    for (const operation of ['rebase-merge', 'rebase-apply']) {
+      mkdirSync(join(gitDirectory, operation));
+      writeFileSync(
+        join(gitDirectory, operation, 'head-name'),
+        'refs/heads/issue/42-task\n',
+      );
+    }
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        return stubGitCommands(worktree, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.deepEqual(result, {
+      status: 'unreadable',
+      paths: [worktree],
+      reason: 'cannot inspect matching local worktree metadata',
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
   }
 });

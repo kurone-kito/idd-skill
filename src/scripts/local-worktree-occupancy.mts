@@ -21,6 +21,7 @@ export interface LocalWorktreeRecord {
   path: string;
   branchRef: string | null;
   detached: boolean;
+  bare: boolean;
   prunable: boolean;
 }
 
@@ -44,10 +45,14 @@ export function parseLocalWorktreeList(output: string): LocalWorktreeRecord[] {
     const branchLines = lines.filter((line) => line.startsWith('branch '));
     const detachedCount = lines.filter((line) => line === 'detached').length;
     const bareCount = lines.filter((line) => line === 'bare').length;
+    const bare = bareCount === 1;
     if (worktreeLines.length !== 1 || !worktreeLines[0].slice(9)) {
       malformedWorktreeList('record has no unique worktree path');
     }
-    if (headLines.length !== 1 || !headLines[0].slice(5).trim()) {
+    if (headLines.length > 1) {
+      malformedWorktreeList('record repeats HEAD');
+    }
+    if (!bare && (headLines.length !== 1 || !headLines[0].slice(5).trim())) {
       malformedWorktreeList('record has no unique HEAD');
     }
     if (branchLines.length > 1 || detachedCount > 1 || bareCount > 1) {
@@ -90,6 +95,7 @@ export function parseLocalWorktreeList(output: string): LocalWorktreeRecord[] {
       path: worktreeLine.slice('worktree '.length),
       branchRef,
       detached,
+      bare,
       prunable,
     });
   }
@@ -222,19 +228,26 @@ function resolveDetachedBranch(
   if (!isCanonicalWorktreeRoot(worktreePath, env, execute)) {
     return { branchName: null, unreadable: true };
   }
+  let sequencerPath: string | null = null;
   for (const name of ['rebase-merge', 'rebase-apply']) {
     const gitPath = readGitPath(worktreePath, name, env, execute);
     if (!gitPath) {
       return { branchName: null, unreadable: true };
     }
-    const sequencerPath = joinGitPath(worktreePath, gitPath);
-    const sequencerStatus = inspectWorktreePath(sequencerPath);
+    const candidatePath = joinGitPath(worktreePath, gitPath);
+    const sequencerStatus = inspectWorktreePath(candidatePath);
     if (sequencerStatus === 'absent') {
       continue;
     }
     if (sequencerStatus === 'unreadable') {
       return { branchName: null, unreadable: true };
     }
+    if (sequencerPath !== null) {
+      return { branchName: null, unreadable: true };
+    }
+    sequencerPath = candidatePath;
+  }
+  if (sequencerPath !== null) {
     try {
       const headName = readFileSync(
         `${sequencerPath}/head-name`,
@@ -347,6 +360,12 @@ export function inspectLocalWorktreeBranch(
   const matches: LocalWorktreeRecord[] = [];
   const unreadablePaths: string[] = [];
   for (const record of records) {
+    if (record.bare) {
+      if (record.prunable) {
+        unreadablePaths.push(record.path);
+      }
+      continue;
+    }
     if (record.prunable) {
       const pathStatus = inspectWorktreePath(record.path);
       if (pathStatus === 'absent') {

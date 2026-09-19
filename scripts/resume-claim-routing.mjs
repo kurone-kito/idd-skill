@@ -8,7 +8,11 @@ import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
-import { listActivationNonces } from './marker-helpers.mjs';
+import {
+  listActivationNonces,
+  parseLegacyClaimComment,
+  resolveLegacyClaimState,
+} from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   buildForcedHandoffEnableGate,
@@ -24,10 +28,6 @@ import {
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
 
-const LEGACY_CLAIM_PATTERN =
-  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
-const LEGACY_RELEASE_PATTERN =
-  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -99,7 +99,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const events = normalizeEvents(input.events).filter((event) =>
     trustedAuthor(event.author?.login ?? ''),
   );
-  const state = resolveClaimState(events, nowIso, staleAgeMs, {
+  const state = resolveClaimState(events, staleAgeMs, {
     isForcedHandoffEnabled,
     isAuthorizedForcedHandoff,
   });
@@ -481,7 +481,7 @@ function runCli() {
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
+function resolveClaimState(events, staleAgeMs, options = {}) {
   const isForcedHandoffEnabled =
     typeof options.isForcedHandoffEnabled === 'function'
       ? options.isForcedHandoffEnabled
@@ -565,7 +565,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     };
   }
   const orderedEvents = [...events].sort(compareEvents);
-  const legacy = resolveLegacyClaimState(orderedEvents, nowIso, staleAgeMs);
+  const legacy = resolveLegacyClaimState(orderedEvents);
   return {
     mode: 'legacy-only',
     activeClaim: null,
@@ -575,36 +575,6 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,
     hasLegacyClaimMarker,
-  };
-}
-function resolveLegacyClaimState(orderedEvents, _nowIso, _staleAgeMs) {
-  let latestClaim = null;
-  let latestMatchingRelease = null;
-  for (const event of orderedEvents) {
-    const claim = parseLegacyClaimComment(event.body, event.createdAt);
-    if (claim) {
-      latestClaim = claim;
-      latestMatchingRelease = null;
-      continue;
-    }
-    const release = parseLegacyReleaseComment(event.body, event.createdAt);
-    if (
-      release &&
-      latestClaim &&
-      release.agentId === latestClaim.agentId &&
-      compareIso(release.createdAt, latestClaim.createdAt) > 0
-    ) {
-      latestMatchingRelease = release;
-    }
-  }
-  if (!latestClaim) {
-    return { claim: null, released: false, releasedClaim: null };
-  }
-  const released = Boolean(latestMatchingRelease);
-  return {
-    claim: latestClaim,
-    released,
-    releasedClaim: released ? latestClaim : null,
   };
 }
 function findSameSecondContenders(events, activeClaim) {
@@ -705,31 +675,6 @@ function isClaimReleased(events, claim) {
 // F2/F3 merge-time write-gate (`summarizeClaimValidation` in
 // protocol-helpers.mts) can share the identical primitive instead of
 // forking its own copy. Imported above from './protocol-helpers.mts'.
-function parseLegacyClaimComment(body, createdAt) {
-  const match = String(body ?? '')
-    .trimEnd()
-    .match(LEGACY_CLAIM_PATTERN);
-  if (!match) {
-    return null;
-  }
-  return {
-    agentId: match[1],
-    createdAt: normalizeIso(match[2]) ?? normalizeIso(createdAt) ?? createdAt,
-    branch: match[3],
-  };
-}
-function parseLegacyReleaseComment(body, createdAt) {
-  const match = String(body ?? '')
-    .trimEnd()
-    .match(LEGACY_RELEASE_PATTERN);
-  if (!match) {
-    return null;
-  }
-  return {
-    agentId: match[1],
-    createdAt: normalizeIso(match[2]) ?? normalizeIso(createdAt) ?? createdAt,
-  };
-}
 function normalizeEvents(events) {
   if (!Array.isArray(events)) {
     return [];

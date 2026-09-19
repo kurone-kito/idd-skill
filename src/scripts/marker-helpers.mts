@@ -105,6 +105,26 @@ export interface ParsedReleaseMarker {
   claimId: string;
 }
 
+/** Parsed claim-id-less marker retained for legacy routing compatibility. */
+export interface ParsedLegacyClaimMarker {
+  agentId: string;
+  createdAt: string;
+  branch: string;
+}
+
+/** Minimal event shape consumed by the legacy claim-state resolver. */
+export interface LegacyClaimEventLike {
+  body?: string | null;
+  createdAt?: string | null;
+}
+
+/** Resolved legacy claim/release pair from normalized comment events. */
+export interface LegacyClaimState {
+  claim: ParsedLegacyClaimMarker | null;
+  released: boolean;
+  releasedClaim: ParsedLegacyClaimMarker | null;
+}
+
 /** Parsed `<!-- forced-handoff: {...} -->` marker payload. */
 export interface ParsedForcedHandoffMarker {
   oldAgentId: string;
@@ -286,6 +306,10 @@ export interface ParsedCopilotUnavailableMarker {
 
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
+const LEGACY_CLAIM_PATTERN =
+  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+const LEGACY_RELEASE_PATTERN =
+  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 
 const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
   {
@@ -976,6 +1000,115 @@ export function parseReleaseComment(body: string): ParsedReleaseMarker | null {
   return {
     agentId: match[1],
     claimId: match[2],
+  };
+}
+
+function normalizeLegacyTimestamp(value: unknown): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+export function parseLegacyClaimComment(
+  body: string,
+  createdAt: string,
+): ParsedLegacyClaimMarker | null {
+  const match = String(body ?? '')
+    .trimEnd()
+    .match(LEGACY_CLAIM_PATTERN);
+  if (!match) {
+    return null;
+  }
+  return {
+    agentId: match[1],
+    createdAt:
+      normalizeLegacyTimestamp(match[2]) ??
+      normalizeLegacyTimestamp(createdAt) ??
+      createdAt,
+    branch: match[3],
+  };
+}
+
+export function parseLegacyReleaseComment(
+  body: string,
+  createdAt: string,
+): { agentId: string; createdAt: string } | null {
+  const match = String(body ?? '')
+    .trimEnd()
+    .match(LEGACY_RELEASE_PATTERN);
+  if (!match) {
+    return null;
+  }
+  return {
+    agentId: match[1],
+    createdAt:
+      normalizeLegacyTimestamp(match[2]) ??
+      normalizeLegacyTimestamp(createdAt) ??
+      createdAt,
+  };
+}
+
+/** Resolve the latest legacy claim and its matching later release. */
+export function resolveLegacyClaimState(
+  events: readonly LegacyClaimEventLike[],
+): LegacyClaimState {
+  let latestClaim: ParsedLegacyClaimMarker | null = null;
+  let latestMatchingRelease: { agentId: string; createdAt: string } | null =
+    null;
+  const orderedEvents = events
+    .map((event, index) => ({ event, index }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.event.createdAt ?? '');
+      const rightTime = Date.parse(right.event.createdAt ?? '');
+      if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
+        return leftTime - rightTime || left.index - right.index;
+      }
+      if (Number.isFinite(leftTime)) {
+        return -1;
+      }
+      if (Number.isFinite(rightTime)) {
+        return 1;
+      }
+      return left.index - right.index;
+    });
+  for (const { event } of orderedEvents) {
+    const claim = parseLegacyClaimComment(
+      event.body ?? '',
+      event.createdAt ?? '',
+    );
+    if (claim) {
+      latestClaim = claim;
+      latestMatchingRelease = null;
+      continue;
+    }
+    const release = parseLegacyReleaseComment(
+      event.body ?? '',
+      event.createdAt ?? '',
+    );
+    if (
+      release &&
+      latestClaim &&
+      release.agentId === latestClaim.agentId &&
+      Number.isFinite(Date.parse(release.createdAt)) &&
+      Number.isFinite(Date.parse(latestClaim.createdAt)) &&
+      Date.parse(release.createdAt) > Date.parse(latestClaim.createdAt)
+    ) {
+      latestMatchingRelease = release;
+    }
+  }
+  if (!latestClaim) {
+    return { claim: null, released: false, releasedClaim: null };
+  }
+  const released = Boolean(latestMatchingRelease);
+  return {
+    claim: latestClaim,
+    released,
+    releasedClaim: released ? latestClaim : null,
   };
 }
 
