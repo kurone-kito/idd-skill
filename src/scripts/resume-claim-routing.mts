@@ -475,11 +475,14 @@ export interface FreshClaimGateResult {
  * A fresh claim owns no prior claim-id, so any `claimId` on `input` is ignored
  * (the resolver's already-owned / same-second-loss branches need a checked id
  * and would otherwise mask pure contention). `winningClaimId` is the active
- * claim's `{claim-id}`, or `null` when there is no active claim or the active
- * claim is a legacy (claim-id-less) marker. GitHub issue comments have no
+ * claim's `{claim-id}`, or the retained released claim's id when its matching
+ * local worktree blocks a fresh claim; it is `null` for legacy releases or
+ * when no active/released claim id exists. GitHub issue comments have no
  * compare-and-swap, so this **narrows** the A5(c) TOCTOU window rather than
  * closing it; the 24 h stale-takeover and same-second tie-break remain the
- * race-recovery backstop.
+ * race-recovery backstop. A verified owner may use a retained released id
+ * with the worktree-local lock takeover protocol; legacy releases remain
+ * claim-id-less and require operator recovery before reuse.
  */
 export function evaluateFreshClaimGate(
   input: ResumeClaimRoutingInput,
@@ -497,7 +500,11 @@ export function evaluateFreshClaimGate(
         : 'already-claimed';
   return {
     verdict,
-    winningClaimId: routing.active_claim?.claim_id ?? null,
+    winningClaimId:
+      routing.active_claim?.claim_id ??
+      (routing.state === 'local_worktree_occupied'
+        ? (routing.evidence.released_claim?.claim_id ?? null)
+        : null),
     reason: routing.reason,
   };
 }

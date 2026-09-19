@@ -1109,7 +1109,7 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
   const active = claimTrace.activeClaim;
   const releasedClaim =
     claimTrace.releasedClaim ??
-    (hasNewFormatClaim(comments)
+    (hasNewFormatClaim(comments, claimState.isTrustedAuthor)
       ? null
       : resolveLegacyReleasedClaim(comments, claimState.isTrustedAuthor));
   if (!active) {
@@ -1188,9 +1188,11 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     claimEligible: stale && !localWorktreeBlocks,
   };
 }
-function hasNewFormatClaim(comments) {
+function hasNewFormatClaim(comments, isTrustedAuthor) {
   return comments.some(
-    (comment) => parseClaimComment(comment.body, comment.createdAt) !== null,
+    (comment) =>
+      isTrustedAuthor(comment.author.login) &&
+      parseClaimComment(comment.body, comment.createdAt) !== null,
   );
 }
 /**

@@ -1444,7 +1444,7 @@ test('fresh claim gate blocks a released claim with a live local worktree', () =
 
   assert.equal(inspectedBranch, 'issue/24-task');
   assert.equal(gate.verdict, 'already-claimed');
-  assert.equal(gate.winningClaimId, null);
+  assert.equal(gate.winningClaimId, 'claim-released');
   assert.equal(gate.reason, 'released-claim-local-worktree-occupied');
 });
 

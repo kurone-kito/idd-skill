@@ -54,7 +54,7 @@ function branchNameFromRef(ref) {
     branch.endsWith('.') ||
     branch.includes('..') ||
     branch.includes('@{') ||
-    /[\s~^:?*\\[\\]\\\\]/.test(branch) ||
+    /[\s~^:?*\x5b\\]/.test(branch) ||
     branch
       .split('/')
       .some(

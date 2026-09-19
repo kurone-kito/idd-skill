@@ -1708,7 +1708,7 @@ export async function annotateLeafClaimState(
   const active = claimTrace.activeClaim;
   const releasedClaim =
     claimTrace.releasedClaim ??
-    (hasNewFormatClaim(comments)
+    (hasNewFormatClaim(comments, claimState.isTrustedAuthor)
       ? null
       : resolveLegacyReleasedClaim(comments, claimState.isTrustedAuthor));
 
@@ -1802,10 +1802,17 @@ interface LegacyReleasedClaim {
 }
 
 function hasNewFormatClaim(
-  comments: readonly { body: string; createdAt: string }[],
+  comments: readonly {
+    body: string;
+    createdAt: string;
+    author: { login: string };
+  }[],
+  isTrustedAuthor: (login: string) => boolean,
 ): boolean {
   return comments.some(
-    (comment) => parseClaimComment(comment.body, comment.createdAt) !== null,
+    (comment) =>
+      isTrustedAuthor(comment.author.login) &&
+      parseClaimComment(comment.body, comment.createdAt) !== null,
   );
 }
 

@@ -2786,6 +2786,49 @@ test('a released legacy claim with a live local worktree is not eligible', async
   assert.equal(leaf701?.claimEligible, false);
 });
 
+test('an untrusted new-format marker does not hide a trusted released legacy claim', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        claimComment('untrusted-agent', 'claim-untrusted', FRESH_CLAIM_AT, {
+          author: 'untrusted',
+        }),
+        {
+          body: '<!-- claimed-by: legacy-agent 2026-06-25T06:00:00Z branch: issue/700-task -->',
+          createdAt: '2026-06-25T06:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+        {
+          body: '<!-- unclaimed-by: legacy-agent 2026-06-25T07:00:00Z -->',
+          createdAt: '2026-06-25T07:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    inspectLocalWorktree: (branchName) => ({
+      status: 'occupied',
+      paths: [`/tmp/${branchName}`],
+      reason: `matching local worktree for ${branchName}`,
+    }),
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.present, false);
+  assert.equal(leaf701?.activeClaim?.localWorktree?.status, 'occupied');
+  assert.equal(leaf701?.claimEligible, false);
+});
+
 test('the current session may resume its occupied stale worktree', async () => {
   const issues = claimGraphIssues();
   const commentsByIssue = new Map<number, unknown[]>([

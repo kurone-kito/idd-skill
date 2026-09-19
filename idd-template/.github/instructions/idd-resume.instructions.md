@@ -156,6 +156,9 @@ it as authoritative.
 
 Evaluate in order; take the first matching row.
 
+Absent or disagreeing helper evidence requires the porcelain occupancy scan;
+this table is the instructions-only fallback.
+
 | Claim state                                                                                     | Route                                                                                                                         |
 | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | Issue closed or PR merged                                                                       | Clean up local worktree and branch; STOP                                                                                      |

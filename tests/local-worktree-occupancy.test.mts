@@ -306,6 +306,38 @@ test('fails closed when detached sequencer head-name is malformed', () => {
   }
 });
 
+test('fails closed when detached sequencer head-name is Git metadata text', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-detached-head-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    mkdirSync(join(gitDirectory, 'rebase-merge'));
+    writeFileSync(
+      join(gitDirectory, 'rebase-merge', 'head-name'),
+      'detached HEAD\n',
+    );
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        return stubGitCommands(worktree, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.equal(result.status, 'unreadable');
+    assert.deepEqual(result.paths, [worktree]);
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
 test('fails closed when detached metadata resolves an enclosing repository', () => {
   const enclosing = mkdtempSync(`${tmpdir()}/idd-local-worktree-enclosing-`);
   const worktree = join(enclosing, 'nested-worktree');

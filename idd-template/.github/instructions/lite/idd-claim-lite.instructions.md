@@ -254,7 +254,7 @@ invalid/target → STOP; unrelated → absent; prunable frees if unrelated.
 | Match found? | Action |
 | --- | --- |
 | No local/remote match | Proceed |
-| Stale/released + live/unknown | **STOP** — recover |
+| Stale/released + live/unknown | **STOP** — owner/FH + id |
 | Inheritable match, no live local worktree | Proceed — expected |
 | Non-corresponding match + active claim | **STOP** — concurrent |
 | Non-corresponding match + no active claim | **STOP** — hold/orphan review |

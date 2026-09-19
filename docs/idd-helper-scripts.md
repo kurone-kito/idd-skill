@@ -2123,6 +2123,9 @@ close.
   `claimable` verdict, a `stale-reclaimable` verdict, or an
   `already-claimed` verdict whose `winning_claim_id` matches a
   `claim-id` the caller has already independently verified as its own).
+  A released new-format claim with a matching local worktree retains
+  `winning_claim_id` for owner release-then-fresh; unrelated sessions cannot
+  take over. Legacy releases have no claim id and require operator recovery.
   A `holder`
   snapshot of the previous occupant is reported on **both** a plain
   `collision` and an authorized takeover, not only on takeover.

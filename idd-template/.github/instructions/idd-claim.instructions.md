@@ -85,9 +85,9 @@ already-claimed | stale-reclaimable` with the winning `{claim-id}`:
 
 - `claimable` → proceed to the claim write below.
 - `stale-reclaimable` → proceed with takeover (the stale path below).
-- `already-claimed` → the issue is held by a live competitor, or a later
-  competing / same-second claim raced in: do not post a claim. Apply the
-  **already-claimed routing** defined here for the rest of this file:
+- `already-claimed` → a live competitor, raced claim, or occupied stale/
+  released branch: use lock takeover only if `winning_claim_id` matches
+  this session's verified claim; otherwise apply the routing below:
   return to Discover using the same selection mode that produced this
   target (orphan-first: continue the A0-O capable path; roadmap mode:
   continue the A3-ready path) and select the next eligible issue; for an
