@@ -949,12 +949,14 @@ function buildClaimState(
   commentsByIssue: Map<number, unknown[]>,
   {
     currentClaimId = '',
+    currentSessionAgentId = null,
     currentSessionOwnsClaimEvidence = false,
     trustedActors = ['kurone-kito'],
     staleAgeMs = CLAIM_STALE_AGE_MS,
     heartbeatIntervalMs = CLAIM_HEARTBEAT_INTERVAL_MS,
   }: {
     currentClaimId?: string;
+    currentSessionAgentId?: string | null;
     currentSessionOwnsClaimEvidence?: boolean;
     trustedActors?: string[];
     staleAgeMs?: number;
@@ -976,6 +978,7 @@ function buildClaimState(
       heartbeatIntervalMs,
       nowIso: CLAIM_NOW,
       currentClaimId,
+      currentSessionAgentId,
       currentSessionOwnsClaimEvidence,
     },
   };
@@ -1124,6 +1127,7 @@ test('--current-claim-id sets ownedByCurrentSession on the matching claim', asyn
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
+    currentSessionAgentId: 'agent-a',
     currentSessionOwnsClaimEvidence: true,
   });
 

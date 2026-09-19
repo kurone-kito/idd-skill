@@ -1143,8 +1143,10 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     // this session's discovery candidate.
     const releasedOwnerByCurrentSession = Boolean(
       claimState.currentSessionOwnsClaimEvidence &&
+        claimState.currentSessionAgentId !== null &&
         claimState.currentClaimId &&
-        claimTrace.releasedClaim?.claimId === claimState.currentClaimId,
+        claimTrace.releasedClaim?.claimId === claimState.currentClaimId &&
+        claimTrace.releasedClaim.agentId === claimState.currentSessionAgentId,
     );
     const localWorktreeBlocks =
       localWorktree !== undefined &&
@@ -1209,8 +1211,13 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
   const claimIdMatchesCurrentSession = claimState.currentClaimId
     ? active.claimId === claimState.currentClaimId
     : false;
+  const claimAgentMatchesCurrentSession =
+    claimState.currentSessionAgentId !== null &&
+    active.agentId === claimState.currentSessionAgentId;
   const ownedByCurrentSession =
-    claimState.currentSessionOwnsClaimEvidence && claimIdMatchesCurrentSession;
+    claimState.currentSessionOwnsClaimEvidence &&
+    claimIdMatchesCurrentSession &&
+    claimAgentMatchesCurrentSession;
   const localWorktree =
     stale && claimState.inspectLocalWorktree
       ? claimState.inspectLocalWorktree(active.branch)
@@ -1313,7 +1320,7 @@ export function isClaimHeartbeatOverdue(
  * same claim and lock agent identity. Failures and malformed evidence fail
  * closed.
  */
-function hasCurrentSessionClaimEvidence(claimId) {
+function resolveCurrentSessionAgentId(claimId) {
   try {
     const lock = checkClaimLock(process.cwd());
     const holder = lock.holder;
@@ -1324,16 +1331,16 @@ function hasCurrentSessionClaimEvidence(claimId) {
       holder.claimId !== claimId ||
       !holder.agentId
     ) {
-      return false;
+      return null;
     }
     const tokens = readGeneratedClaimTokens(process.cwd(), claimId);
-    return (
-      tokens.status === 'present' &&
+    return tokens.status === 'present' &&
       tokens.record.claimId === claimId &&
       tokens.record.agentId === holder.agentId
-    );
+      ? holder.agentId
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 /**
@@ -1355,6 +1362,10 @@ export function buildClaimStateResolution(port, policy, currentClaimId) {
     parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
     DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
   const currentClaimIdValue = String(currentClaimId ?? '').trim();
+  const currentSessionAgentId =
+    currentClaimIdValue.length > 0
+      ? resolveCurrentSessionAgentId(currentClaimIdValue)
+      : null;
   return {
     loadComments: buildCommentLoader(port),
     isTrustedAuthor: buildTrustedAuthorPredicate(policy),
@@ -1362,9 +1373,8 @@ export function buildClaimStateResolution(port, policy, currentClaimId) {
     heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
     currentClaimId: currentClaimIdValue,
-    currentSessionOwnsClaimEvidence:
-      currentClaimIdValue.length > 0 &&
-      hasCurrentSessionClaimEvidence(currentClaimIdValue),
+    currentSessionAgentId,
+    currentSessionOwnsClaimEvidence: currentSessionAgentId !== null,
     inspectLocalWorktree: (branchName) =>
       inspectLocalWorktreeBranch(branchName),
   };

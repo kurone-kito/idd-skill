@@ -539,9 +539,12 @@ export interface ClaimStateResolution {
   nowIso: string;
   /** `--current-claim-id`, or '' when not supplied. */
   currentClaimId: string;
+  /** Agent identity independently confirmed by the local lock and tokens. */
+  currentSessionAgentId: string | null;
   /**
    * True only when the current worktree's claim lock and generated-tokens
-   * record confirm `currentClaimId` and the lock's agent identity.
+   * record confirm `currentClaimId` and the lock's agent identity. The
+   * annotation also requires this agent identity to match the remote claim.
    */
   currentSessionOwnsClaimEvidence: boolean;
   /** Same-clone occupancy probe used to gate stale takeover hints. */
@@ -1750,8 +1753,10 @@ export async function annotateLeafClaimState(
     // this session's discovery candidate.
     const releasedOwnerByCurrentSession = Boolean(
       claimState.currentSessionOwnsClaimEvidence &&
+        claimState.currentSessionAgentId !== null &&
         claimState.currentClaimId &&
-        claimTrace.releasedClaim?.claimId === claimState.currentClaimId,
+        claimTrace.releasedClaim?.claimId === claimState.currentClaimId &&
+        claimTrace.releasedClaim.agentId === claimState.currentSessionAgentId,
     );
     const localWorktreeBlocks =
       localWorktree !== undefined &&
@@ -1821,8 +1826,13 @@ export async function annotateLeafClaimState(
   const claimIdMatchesCurrentSession = claimState.currentClaimId
     ? active.claimId === claimState.currentClaimId
     : false;
+  const claimAgentMatchesCurrentSession =
+    claimState.currentSessionAgentId !== null &&
+    active.agentId === claimState.currentSessionAgentId;
   const ownedByCurrentSession =
-    claimState.currentSessionOwnsClaimEvidence && claimIdMatchesCurrentSession;
+    claimState.currentSessionOwnsClaimEvidence &&
+    claimIdMatchesCurrentSession &&
+    claimAgentMatchesCurrentSession;
   const localWorktree =
     stale && claimState.inspectLocalWorktree
       ? claimState.inspectLocalWorktree(active.branch)
@@ -1951,7 +1961,7 @@ export function isClaimHeartbeatOverdue(
  * same claim and lock agent identity. Failures and malformed evidence fail
  * closed.
  */
-function hasCurrentSessionClaimEvidence(claimId: string): boolean {
+function resolveCurrentSessionAgentId(claimId: string): string | null {
   try {
     const lock = checkClaimLock(process.cwd());
     const holder = lock.holder;
@@ -1962,16 +1972,16 @@ function hasCurrentSessionClaimEvidence(claimId: string): boolean {
       holder.claimId !== claimId ||
       !holder.agentId
     ) {
-      return false;
+      return null;
     }
     const tokens = readGeneratedClaimTokens(process.cwd(), claimId);
-    return (
-      tokens.status === 'present' &&
+    return tokens.status === 'present' &&
       tokens.record.claimId === claimId &&
       tokens.record.agentId === holder.agentId
-    );
+      ? holder.agentId
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -2001,6 +2011,10 @@ export function buildClaimStateResolution(
     parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
     DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
   const currentClaimIdValue = String(currentClaimId ?? '').trim();
+  const currentSessionAgentId =
+    currentClaimIdValue.length > 0
+      ? resolveCurrentSessionAgentId(currentClaimIdValue)
+      : null;
   return {
     loadComments: buildCommentLoader(port),
     isTrustedAuthor: buildTrustedAuthorPredicate(policy),
@@ -2008,9 +2022,8 @@ export function buildClaimStateResolution(
     heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
     currentClaimId: currentClaimIdValue,
-    currentSessionOwnsClaimEvidence:
-      currentClaimIdValue.length > 0 &&
-      hasCurrentSessionClaimEvidence(currentClaimIdValue),
+    currentSessionAgentId,
+    currentSessionOwnsClaimEvidence: currentSessionAgentId !== null,
     inspectLocalWorktree: (branchName: string) =>
       inspectLocalWorktreeBranch(branchName),
   };

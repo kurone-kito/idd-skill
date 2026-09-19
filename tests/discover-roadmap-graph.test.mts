@@ -2561,6 +2561,10 @@ test('owner evidence requires a generated-tokens record alongside the lock (#314
         .currentSessionOwnsClaimEvidence,
       true,
     );
+    assert.equal(
+      buildClaimStateResolution(port, {}, claimId).currentSessionAgentId,
+      'agent-owner',
+    );
 
     recordGeneratedClaimTokens(worktree, {
       agentId: 'agent-other',
@@ -2572,12 +2576,20 @@ test('owner evidence requires a generated-tokens record alongside the lock (#314
         .currentSessionOwnsClaimEvidence,
       false,
     );
+    assert.equal(
+      buildClaimStateResolution(port, {}, claimId).currentSessionAgentId,
+      null,
+    );
 
     rmSync(resolveGeneratedTokensPath(worktree, claimId));
     assert.equal(
       buildClaimStateResolution(port, {}, claimId)
         .currentSessionOwnsClaimEvidence,
       false,
+    );
+    assert.equal(
+      buildClaimStateResolution(port, {}, claimId).currentSessionAgentId,
+      null,
     );
   } finally {
     process.chdir(originalCwd);
@@ -2602,6 +2614,7 @@ function buildClaimState(
   commentsByIssue: Map<number, unknown[]>,
   {
     currentClaimId = '',
+    currentSessionAgentId = null,
     currentSessionOwnsClaimEvidence = false,
     trustedActors = ['kurone-kito'],
     staleAgeMs = CLAIM_STALE_AGE_MS,
@@ -2609,6 +2622,7 @@ function buildClaimState(
     inspectLocalWorktree,
   }: {
     currentClaimId?: string;
+    currentSessionAgentId?: string | null;
     currentSessionOwnsClaimEvidence?: boolean;
     trustedActors?: string[];
     staleAgeMs?: number;
@@ -2631,6 +2645,7 @@ function buildClaimState(
       heartbeatIntervalMs,
       nowIso: CLAIM_NOW,
       currentClaimId,
+      currentSessionAgentId,
       currentSessionOwnsClaimEvidence,
       inspectLocalWorktree,
     },
@@ -2893,6 +2908,7 @@ test('the current session may resume its released new-format worktree', async ()
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
+    currentSessionAgentId: 'agent-a',
     currentSessionOwnsClaimEvidence: true,
     inspectLocalWorktree: (branchName) => ({
       status: 'occupied',
@@ -3041,6 +3057,7 @@ test('the current session may resume its occupied stale worktree', async () => {
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
+    currentSessionAgentId: 'agent-a',
     currentSessionOwnsClaimEvidence: true,
     inspectLocalWorktree: () => ({
       status: 'occupied',
@@ -3161,6 +3178,7 @@ test('--current-claim-id sets ownedByCurrentSession on the matching claim', asyn
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
+    currentSessionAgentId: 'agent-a',
     currentSessionOwnsClaimEvidence: true,
   });
 
@@ -3174,6 +3192,34 @@ test('--current-claim-id sets ownedByCurrentSession on the matching claim', asyn
   assert.equal(byNumber.get(701)?.activeClaim?.ownedByCurrentSession, true);
   // Non-matching claim id → not owned, but the flag is still emitted.
   assert.equal(byNumber.get(702)?.activeClaim?.ownedByCurrentSession, false);
+});
+
+test('a matching claim id with a different remote agent cannot bypass occupancy', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', STALE_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    currentClaimId: 'claim-701',
+    currentSessionAgentId: 'agent-b',
+    currentSessionOwnsClaimEvidence: true,
+    inspectLocalWorktree: () => ({
+      status: 'occupied',
+      paths: ['/tmp/issue-700-task'],
+      reason: 'matching local worktree for issue/700-task',
+    }),
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.ownedByCurrentSession, false);
+  assert.equal(leaf701?.claimEligible, false);
 });
 
 test('--current-claim-id emits ownedByCurrentSession:false on an unclaimed leaf', async () => {
