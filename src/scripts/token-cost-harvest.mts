@@ -1389,8 +1389,8 @@ export function readEventLog(path: string): EventLogReadResult {
           const openEnter =
             exactClaimOpen ??
             (claimId === undefined
-              ? openEnters.reduce((earliest, open) =>
-                  open.atMs < earliest.atMs ? open : earliest,
+              ? openEnters.reduce((latest, open) =>
+                  open.atMs > latest.atMs ? open : latest,
                 )
               : claimlessOpen);
           if (openEnter && atMs > openEnter.atMs) {
