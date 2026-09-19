@@ -20,10 +20,12 @@ import {
   extractCodexCountTimeline,
   extractCodexUsageTimeline,
   fetchIssueLoopGithubContext,
+  formatOpenEventDiagnostics,
   type HarvestedSample,
   type IssueLoopGithubContext,
   markAmbiguousOverlaps,
   parseRepoFlag,
+  readEventLog,
   readEventWindows,
   readExistingVendorSessionKeys,
   resolveIssueLoopContext,
@@ -2979,6 +2981,146 @@ test('readEventWindows: pairs a trusted enter/exit for the same (issueNumber, st
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('readEventLog: reports an identified enter left open at EOF without synthesizing a window', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:30:00Z',
+      3155,
+      'codex-session',
+      'codex',
+      'claim-3155',
+    ),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 3155,
+        vendor: 'codex',
+        stageId: 'review',
+        atMs: ms('2026-01-01T00:30:00Z'),
+        vendorSessionId: 'codex-session',
+        claimId: 'claim-3155',
+      },
+    ]);
+    assert.match(
+      formatOpenEventDiagnostics(parsed.openEvents),
+      /issue #3155 vendor=codex stage=review at=2026-01-01T00:30:00\.000Z vendorSessionId=codex-session claimId=claim-3155/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: deduplicates an identified open enter at the earliest timestamp', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:10:00Z',
+      3155,
+      'codex-session',
+      'codex',
+      'claim-3155',
+    ),
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:40:00Z',
+      3155,
+      'codex-session',
+      'codex',
+      'claim-3155',
+    ),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.openEvents.length, 1);
+    assert.equal(parsed.openEvents[0].atMs, ms('2026-01-01T00:10:00Z'));
+    assert.equal(parsed.windows.has('3155:codex:review'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: emits no open diagnostic after a completed pair and reports a later open cycle', () => {
+  const completed = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:10:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+  ]);
+  const openAgain = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:10:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:40:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+  ]);
+  try {
+    assert.deepEqual(readEventLog(completed.path).openEvents, []);
+    const parsed = readEventLog(openAgain.path);
+    assert.equal(parsed.openEvents.length, 1);
+    assert.equal(parsed.openEvents[0].atMs, ms('2026-01-01T00:40:00Z'));
+    assert.equal(parsed.windows.has('3155:codex:work'), false);
+  } finally {
+    rmSync(completed.dir, { recursive: true, force: true });
+    rmSync(openAgain.dir, { recursive: true, force: true });
+  }
+});
+
+test('formatOpenEventDiagnostics: renders a stable count and identifying fields', () => {
+  const text = formatOpenEventDiagnostics([
+    {
+      issueNumber: 3155,
+      vendor: 'codex',
+      stageId: 'review',
+      atMs: ms('2026-01-01T00:30:00Z'),
+      vendorSessionId: 'codex-session',
+      claimId: 'claim-3155',
+    },
+  ]);
+  assert.equal(
+    text,
+    'token-cost-harvest: 1 unmatched phase-event enter(s) remain open at EOF; no synthetic stage windows were created\n' +
+      'token-cost-harvest: open issue #3155 vendor=codex stage=review at=2026-01-01T00:30:00.000Z vendorSessionId=codex-session claimId=claim-3155\n',
+  );
 });
 
 test('readEventWindows: does not pair an enter/exit across two different vendors for the same issue/stage', () => {

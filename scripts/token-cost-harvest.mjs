@@ -836,10 +836,22 @@ function eventKey(issueNumber, vendor, stageId) {
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.length > 0;
 }
+function compareOpenEventDiagnostics(a, b) {
+  const compareStrings = (left, right) =>
+    left === right ? 0 : left < right ? -1 : 1;
+  return (
+    a.issueNumber - b.issueNumber ||
+    compareStrings(a.vendor, b.vendor) ||
+    compareStrings(a.stageId, b.stageId) ||
+    a.atMs - b.atMs ||
+    compareStrings(a.vendorSessionId ?? '', b.vendorSessionId ?? '') ||
+    compareStrings(a.claimId ?? '', b.claimId ?? '')
+  );
+}
 /**
  * Reads a --events JSONL file into per-(issueNumber, vendor, stageId)
- * enter/exit window overrides. A missing file is not an error -- returns
- * an empty map.
+ * enter/exit window overrides plus EOF-open enter diagnostics. A missing
+ * file is not an error -- returns empty windows and diagnostics.
  *
  * #2424: `TokenCostEvent.vendorSessionId`, when present on BOTH the enter
  * and the exit an event carries, scopes pairing to that one attempt --
@@ -885,10 +897,10 @@ function isNonEmptyString(value) {
  * a documented limitation, not a regression, since neither pre-#2424 nor
  * pre-#2432 behavior could recover it either.
  */
-export function readEventWindows(path) {
+export function readEventLog(path) {
   const result = new Map();
   if (!existsSync(path)) {
-    return result;
+    return { windows: result, openEvents: [] };
   }
   const enterAt = new Map();
   const exitAt = new Map();
@@ -933,6 +945,11 @@ export function readEventWindows(path) {
   // `attemptCandidates` correctly rejected for a claimId mismatch as an
   // untagged window.
   const openEnterByAttempt = new Map();
+  // A session-less event has no attempt identity, so retain one earliest
+  // still-open enter per bare key. This is diagnostic-only; the existing
+  // legacy pairing maps below remain unchanged.
+  const openUnidentifiedEnter = new Map();
+  const eventMetadata = new Map();
   // bareKey -> vendorSessionId -> claimId of whichever event set that
   // attempt's CURRENT latest timestamp above (#2432). Only meaningful
   // alongside an identified (vendorSessionId-bearing) attempt -- an
@@ -971,6 +988,11 @@ export function readEventWindows(path) {
       continue;
     }
     const key = eventKey(event.issueNumber, event.vendor, event.stageId);
+    eventMetadata.set(key, {
+      issueNumber: event.issueNumber,
+      vendor: event.vendor,
+      stageId: event.stageId,
+    });
     const vendorSessionId = isNonEmptyString(event.vendorSessionId)
       ? event.vendorSessionId
       : undefined;
@@ -1012,6 +1034,12 @@ export function readEventWindows(path) {
         enterAt.set(key, atMs);
         enterAtOwner.set(key, vendorSessionId);
         enterClaimIdOwner.set(key, claimId);
+        if (!openUnidentifiedEnter.has(key)) {
+          openUnidentifiedEnter.set(key, {
+            atMs,
+            ...(claimId !== undefined ? { claimId } : {}),
+          });
+        }
       }
     } else {
       exitAt.set(key, atMs);
@@ -1025,6 +1053,8 @@ export function readEventWindows(path) {
         const claimIdByAttempt = exitClaimIdByAttempt.get(key) ?? new Map();
         claimIdByAttempt.set(vendorSessionId, claimId);
         exitClaimIdByAttempt.set(key, claimIdByAttempt);
+      } else {
+        openUnidentifiedEnter.delete(key);
       }
     }
   }
@@ -1229,7 +1259,49 @@ export function readEventWindows(path) {
       }
     }
   }
-  return result;
+  const openEvents = [];
+  for (const [key, sessionIds] of openEnterByAttempt) {
+    const metadata = eventMetadata.get(key);
+    const enters = enterAtByAttempt.get(key);
+    const claimIds = enterClaimIdByAttempt.get(key);
+    if (!metadata || !enters) {
+      continue;
+    }
+    for (const vendorSessionId of sessionIds) {
+      const atMs = enters.get(vendorSessionId);
+      if (atMs === undefined) {
+        continue;
+      }
+      const claimId = claimIds?.get(vendorSessionId);
+      openEvents.push({
+        ...metadata,
+        atMs,
+        vendorSessionId,
+        ...(claimId !== undefined ? { claimId } : {}),
+      });
+    }
+  }
+  for (const [key, open] of openUnidentifiedEnter) {
+    const metadata = eventMetadata.get(key);
+    if (!metadata) {
+      continue;
+    }
+    openEvents.push({
+      ...metadata,
+      atMs: open.atMs,
+      ...(open.claimId !== undefined ? { claimId: open.claimId } : {}),
+    });
+  }
+  return {
+    windows: result,
+    openEvents: openEvents.sort(compareOpenEventDiagnostics),
+  };
+}
+export function readEventWindows(path) {
+  return readEventLog(path).windows;
+}
+export function readOpenEventDiagnostics(path) {
+  return readEventLog(path).openEvents;
 }
 function eventWindowsForIssue(all, issueNumber, vendor) {
   const out = new Map();
@@ -2371,6 +2443,35 @@ function defaultStateDir() {
     process.env.XDG_STATE_HOME?.trim() || join(homedir(), '.local', 'state');
   return join(base, 'idd-skill', 'token-cost');
 }
+/**
+ * Renders EOF-open phase-event diagnostics for the harvest CLI. This is
+ * deliberately separate from sample rendering: an open enter is evidence
+ * about incomplete coverage, never a stage window or sample mutation.
+ */
+export function formatOpenEventDiagnostics(openEvents) {
+  if (openEvents.length === 0) {
+    return '';
+  }
+  const lines = [
+    `token-cost-harvest: ${openEvents.length} unmatched phase-event enter(s) remain open at EOF; no synthetic stage windows were created`,
+  ];
+  for (const event of openEvents) {
+    const fields = [
+      `issue #${event.issueNumber}`,
+      `vendor=${event.vendor}`,
+      `stage=${event.stageId}`,
+      `at=${new Date(event.atMs).toISOString()}`,
+    ];
+    if (event.vendorSessionId !== undefined) {
+      fields.push(`vendorSessionId=${event.vendorSessionId}`);
+    }
+    if (event.claimId !== undefined) {
+      fields.push(`claimId=${event.claimId}`);
+    }
+    lines.push(`token-cost-harvest: open ${fields.join(' ')}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
 // Flag-spec keys stay the dashed literal on purpose -- see cli-args.mts's
 // module header for the full invariant.
 const TOKEN_COST_HARVEST_FLAG_SPEC = {
@@ -2492,7 +2593,17 @@ function runCli(argv) {
   const trustedLogins = resolveTrustedMarkerLogins(
     values['trusted-marker-logins'],
   );
-  const eventWindows = readEventWindows(eventsPath);
+  const eventLog = readEventLog(eventsPath);
+  const eventWindows = eventLog.windows;
+  try {
+    const diagnostics = formatOpenEventDiagnostics(eventLog.openEvents);
+    if (diagnostics !== '') {
+      process.stderr.write(diagnostics);
+    }
+  } catch {
+    // Diagnostics are observability only. A formatting failure must never
+    // change the harvest's existing fail-open behavior or exit status.
+  }
   const sessions = [
     ...scanClaudeVendorSessions(defaultClaudeProjectDir(), eventWindows),
     ...scanCodexVendorSessions(defaultCodexSessionsDir()),

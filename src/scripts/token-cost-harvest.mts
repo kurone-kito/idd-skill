@@ -397,6 +397,22 @@ export interface StageEventWindow {
   claimId?: string;
 }
 
+/** One phase enter that is still open when the --events file reaches EOF. */
+export interface OpenEventDiagnostic {
+  issueNumber: number;
+  vendor: TokenCostVendor;
+  stageId: TokenCostStageId;
+  /** The earliest enter timestamp for this still-open attempt. */
+  atMs: number;
+  vendorSessionId?: string;
+  claimId?: string;
+}
+
+export interface EventLogReadResult {
+  windows: Map<string, StageEventWindow>;
+  openEvents: OpenEventDiagnostic[];
+}
+
 const CLAIM_STAGE_CAP_MS = 15 * 60 * 1000;
 /** Thin cap for the merge stage when no cleanup marker activity is resolvable. */
 const MERGE_STAGE_THIN_CAP_MS = 15 * 60 * 1000;
@@ -1085,10 +1101,26 @@ interface AttemptCandidate {
   claimId?: string;
 }
 
+function compareOpenEventDiagnostics(
+  a: OpenEventDiagnostic,
+  b: OpenEventDiagnostic,
+): number {
+  const compareStrings = (left: string, right: string): number =>
+    left === right ? 0 : left < right ? -1 : 1;
+  return (
+    a.issueNumber - b.issueNumber ||
+    compareStrings(a.vendor, b.vendor) ||
+    compareStrings(a.stageId, b.stageId) ||
+    a.atMs - b.atMs ||
+    compareStrings(a.vendorSessionId ?? '', b.vendorSessionId ?? '') ||
+    compareStrings(a.claimId ?? '', b.claimId ?? '')
+  );
+}
+
 /**
  * Reads a --events JSONL file into per-(issueNumber, vendor, stageId)
- * enter/exit window overrides. A missing file is not an error -- returns
- * an empty map.
+ * enter/exit window overrides plus EOF-open enter diagnostics. A missing
+ * file is not an error -- returns empty windows and diagnostics.
  *
  * #2424: `TokenCostEvent.vendorSessionId`, when present on BOTH the enter
  * and the exit an event carries, scopes pairing to that one attempt --
@@ -1134,10 +1166,10 @@ interface AttemptCandidate {
  * a documented limitation, not a regression, since neither pre-#2424 nor
  * pre-#2432 behavior could recover it either.
  */
-export function readEventWindows(path: string): Map<string, StageEventWindow> {
+export function readEventLog(path: string): EventLogReadResult {
   const result = new Map<string, StageEventWindow>();
   if (!existsSync(path)) {
-    return result;
+    return { windows: result, openEvents: [] };
   }
   const enterAt = new Map<string, number>();
   const exitAt = new Map<string, number>();
@@ -1182,6 +1214,21 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
   // `attemptCandidates` correctly rejected for a claimId mismatch as an
   // untagged window.
   const openEnterByAttempt = new Map<string, Set<string>>();
+  // A session-less event has no attempt identity, so retain one earliest
+  // still-open enter per bare key. This is diagnostic-only; the existing
+  // legacy pairing maps below remain unchanged.
+  const openUnidentifiedEnter = new Map<
+    string,
+    { atMs: number; claimId?: string }
+  >();
+  const eventMetadata = new Map<
+    string,
+    {
+      issueNumber: number;
+      vendor: TokenCostVendor;
+      stageId: TokenCostStageId;
+    }
+  >();
   // bareKey -> vendorSessionId -> claimId of whichever event set that
   // attempt's CURRENT latest timestamp above (#2432). Only meaningful
   // alongside an identified (vendorSessionId-bearing) attempt -- an
@@ -1230,6 +1277,11 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
       event.vendor,
       event.stageId as TokenCostStageId,
     );
+    eventMetadata.set(key, {
+      issueNumber: event.issueNumber,
+      vendor: event.vendor,
+      stageId: event.stageId as TokenCostStageId,
+    });
     const vendorSessionId = isNonEmptyString(event.vendorSessionId)
       ? event.vendorSessionId
       : undefined;
@@ -1274,6 +1326,12 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
         enterAt.set(key, atMs);
         enterAtOwner.set(key, vendorSessionId);
         enterClaimIdOwner.set(key, claimId);
+        if (!openUnidentifiedEnter.has(key)) {
+          openUnidentifiedEnter.set(key, {
+            atMs,
+            ...(claimId !== undefined ? { claimId } : {}),
+          });
+        }
       }
     } else {
       exitAt.set(key, atMs);
@@ -1289,6 +1347,8 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
           new Map<string, string | undefined>();
         claimIdByAttempt.set(vendorSessionId, claimId);
         exitClaimIdByAttempt.set(key, claimIdByAttempt);
+      } else {
+        openUnidentifiedEnter.delete(key);
       }
     }
   }
@@ -1501,7 +1561,53 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
       }
     }
   }
-  return result;
+
+  const openEvents: OpenEventDiagnostic[] = [];
+  for (const [key, sessionIds] of openEnterByAttempt) {
+    const metadata = eventMetadata.get(key);
+    const enters = enterAtByAttempt.get(key);
+    const claimIds = enterClaimIdByAttempt.get(key);
+    if (!metadata || !enters) {
+      continue;
+    }
+    for (const vendorSessionId of sessionIds) {
+      const atMs = enters.get(vendorSessionId);
+      if (atMs === undefined) {
+        continue;
+      }
+      const claimId = claimIds?.get(vendorSessionId);
+      openEvents.push({
+        ...metadata,
+        atMs,
+        vendorSessionId,
+        ...(claimId !== undefined ? { claimId } : {}),
+      });
+    }
+  }
+  for (const [key, open] of openUnidentifiedEnter) {
+    const metadata = eventMetadata.get(key);
+    if (!metadata) {
+      continue;
+    }
+    openEvents.push({
+      ...metadata,
+      atMs: open.atMs,
+      ...(open.claimId !== undefined ? { claimId: open.claimId } : {}),
+    });
+  }
+
+  return {
+    windows: result,
+    openEvents: openEvents.sort(compareOpenEventDiagnostics),
+  };
+}
+
+export function readEventWindows(path: string): Map<string, StageEventWindow> {
+  return readEventLog(path).windows;
+}
+
+export function readOpenEventDiagnostics(path: string): OpenEventDiagnostic[] {
+  return readEventLog(path).openEvents;
 }
 
 function eventWindowsForIssue(
@@ -2775,6 +2881,38 @@ function defaultStateDir(): string {
   return join(base, 'idd-skill', 'token-cost');
 }
 
+/**
+ * Renders EOF-open phase-event diagnostics for the harvest CLI. This is
+ * deliberately separate from sample rendering: an open enter is evidence
+ * about incomplete coverage, never a stage window or sample mutation.
+ */
+export function formatOpenEventDiagnostics(
+  openEvents: readonly OpenEventDiagnostic[],
+): string {
+  if (openEvents.length === 0) {
+    return '';
+  }
+  const lines = [
+    `token-cost-harvest: ${openEvents.length} unmatched phase-event enter(s) remain open at EOF; no synthetic stage windows were created`,
+  ];
+  for (const event of openEvents) {
+    const fields = [
+      `issue #${event.issueNumber}`,
+      `vendor=${event.vendor}`,
+      `stage=${event.stageId}`,
+      `at=${new Date(event.atMs).toISOString()}`,
+    ];
+    if (event.vendorSessionId !== undefined) {
+      fields.push(`vendorSessionId=${event.vendorSessionId}`);
+    }
+    if (event.claimId !== undefined) {
+      fields.push(`claimId=${event.claimId}`);
+    }
+    lines.push(`token-cost-harvest: open ${fields.join(' ')}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 // Flag-spec keys stay the dashed literal on purpose -- see cli-args.mts's
 // module header for the full invariant.
 const TOKEN_COST_HARVEST_FLAG_SPEC = {
@@ -2912,7 +3050,17 @@ function runCli(argv: string[]): void {
     values['trusted-marker-logins'] as string,
   );
 
-  const eventWindows = readEventWindows(eventsPath);
+  const eventLog = readEventLog(eventsPath);
+  const eventWindows = eventLog.windows;
+  try {
+    const diagnostics = formatOpenEventDiagnostics(eventLog.openEvents);
+    if (diagnostics !== '') {
+      process.stderr.write(diagnostics);
+    }
+  } catch {
+    // Diagnostics are observability only. A formatting failure must never
+    // change the harvest's existing fail-open behavior or exit status.
+  }
 
   const sessions: VendorSession[] = [
     ...scanClaudeVendorSessions(defaultClaudeProjectDir(), eventWindows),
