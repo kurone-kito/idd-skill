@@ -174,10 +174,17 @@ Before any mutating action in F3, apply the
      that landed between F2 and this final gate, for example a
      required `{development-branch}` sync. Before running them,
      confirm the local worktree is checked out at `${PR_HEAD_SHA_F3}`
-     exactly (`git fetch` plus `git checkout`/`git reset --hard` if a
-     resumed or external-push session left it stale) — D3.5 step 7's
-     `git log` and D3.7's inherited `git diff` both read local git
-     state, not the remote PR directly. Skip D3.5 steps 6-7 under the
+     exactly (after fetch, the claim gate must confirm
+     `git branch --show-current` is `{branch-name}`; else hold).
+     Require empty `git status --porcelain` and
+     `git merge-base --is-ancestor HEAD "${PR_HEAD_SHA_F3}"`;
+     else hold. For paths in
+     `git ls-tree --full-tree -r --name-only "${PR_HEAD_SHA_F3}"`, run
+     `git ls-files -o --exclude-standard -- ":(top)$path"` and the same with
+     `-i`; either output holds. Use `git switch {branch-name}` (not
+     detached), recheck; reset on pass) — D3.5/D3.7 read local state, not
+     the remote PR. Skip
+     D3.5 steps 6-7 under the
      same non-default-`{development-branch}` exemption D3.5 itself
      carries. On a mismatch, fix it per D3.5/D3.7's own documented
      handling. Any fix here — whether or not it changes HEAD, since a

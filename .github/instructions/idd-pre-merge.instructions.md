@@ -430,13 +430,17 @@ turns an operator-visible failure into a silent stall.
   rollup. The signal never changes `route` itself; any other blocking
   cause makes it `false`, and the gate still routes to E1/E4. Fails
   closed: an unusable check makes this condition unmet.
-- **Closing-set and impact-checklist re-verification** (D3.5/D3.7
-  re-run against current HEAD, #2749): confirm the local worktree is
-  checked out at the PR's current HEAD exactly (`git fetch` plus
-  `git checkout`/`git reset --hard` if a resumed or external-push
-  session left it stale) — D3.5 step 7's `git log` and D3.7's
-  inherited `git diff` both read local git state, not the remote PR
-  directly. Then re-run `idd-pr-submit.instructions.md`'s D3.5 steps
+- **Closing-set and impact-checklist re-verification**:
+  after fetch, the claim gate must confirm
+  `git branch --show-current` is `{branch-name}`; else hold.
+  Require empty `git status --porcelain` and
+  `git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`; else hold. For
+  paths in `git ls-tree --full-tree -r --name-only "$PR_HEAD_SHA"`, run
+  `git ls-files -o --exclude-standard -- ":(top)$path"` and the same with
+  `-i`; either output holds. Use `git switch {branch-name}` (not
+  detached), recheck; reset on pass)
+  — D3.5/D3.7 read local state, not the remote PR. Then re-run
+  `idd-pr-submit.instructions.md`'s D3.5 steps
   6-7 (the `closingIssuesReferences` set comparison and the
   commit-message closing-keyword scan) and D3.7 (the
   IDD-impact-checklist re-derivation) against that HEAD. Skip D3.5
