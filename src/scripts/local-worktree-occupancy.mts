@@ -23,6 +23,7 @@ export interface LocalWorktreeRecord {
   branchRef: string | null;
   detached: boolean;
   bare: boolean;
+  locked: boolean;
   prunable: boolean;
 }
 
@@ -46,6 +47,9 @@ export function parseLocalWorktreeList(output: string): LocalWorktreeRecord[] {
     const branchLines = lines.filter((line) => line.startsWith('branch '));
     const detachedCount = lines.filter((line) => line === 'detached').length;
     const bareCount = lines.filter((line) => line === 'bare').length;
+    const lockedLines = lines.filter(
+      (line) => line === 'locked' || line.startsWith('locked '),
+    );
     const bare = bareCount === 1;
     if (worktreeLines.length !== 1 || !worktreeLines[0].slice(9)) {
       malformedWorktreeList('record has no unique worktree path');
@@ -56,7 +60,12 @@ export function parseLocalWorktreeList(output: string): LocalWorktreeRecord[] {
     if (!bare && (headLines.length !== 1 || !headLines[0].slice(5).trim())) {
       malformedWorktreeList('record has no unique HEAD');
     }
-    if (branchLines.length > 1 || detachedCount > 1 || bareCount > 1) {
+    if (
+      branchLines.length > 1 ||
+      detachedCount > 1 ||
+      bareCount > 1 ||
+      lockedLines.length > 1
+    ) {
       malformedWorktreeList('record repeats branch state');
     }
     const stateCount = branchLines.length + detachedCount + bareCount;
@@ -79,6 +88,7 @@ export function parseLocalWorktreeList(output: string): LocalWorktreeRecord[] {
     const worktreeLine = worktreeLines[0];
     let branchRef: string | null = null;
     let detached = false;
+    let locked = false;
     let prunable = false;
     for (const line of lines) {
       if (line.startsWith('branch ')) {
@@ -88,6 +98,8 @@ export function parseLocalWorktreeList(output: string): LocalWorktreeRecord[] {
         }
       } else if (line === 'detached') {
         detached = true;
+      } else if (line === 'locked' || line.startsWith('locked ')) {
+        locked = true;
       } else if (line === 'prunable' || line.startsWith('prunable ')) {
         prunable = true;
       }
@@ -97,6 +109,7 @@ export function parseLocalWorktreeList(output: string): LocalWorktreeRecord[] {
       branchRef,
       detached,
       bare,
+      locked,
       prunable,
     });
   }
@@ -365,10 +378,12 @@ function inspectWorktreePath(
 
 /**
  * Inspect one branch in the current clone. A prunable record is stale git
- * metadata only when its path is absent; a present or unreadable path fails
- * closed. Every other matching record blocks a stale claim takeover,
- * including a clean worktree. Listing failures are unreadable and therefore
- * fail closed at the claim/discover callers.
+ * metadata only when its path is absent, its branch metadata is valid and
+ * proven unrelated, and it is not locked; a target, malformed, unknown,
+ * locked, present, or unreadable record fails closed. Every other matching
+ * record blocks a stale claim takeover, including a clean worktree. Listing
+ * failures are unreadable and therefore fail closed at the claim/discover
+ * callers.
  */
 export function inspectLocalWorktreeBranch(
   branchName: string,
@@ -423,10 +438,6 @@ export function inspectLocalWorktreeBranch(
       continue;
     }
     if (record.prunable) {
-      const pathStatus = inspectWorktreePath(record.path);
-      if (pathStatus === 'absent') {
-        continue;
-      }
       const parsedBranchRef = record.branchRef
         ? branchNameFromRef(record.branchRef)
         : null;
@@ -435,6 +446,11 @@ export function inspectLocalWorktreeBranch(
         continue;
       }
       let prunableBranch = parsedBranchRef;
+      const pathStatus = inspectWorktreePath(record.path);
+      if (!prunableBranch && record.detached && pathStatus !== 'present') {
+        unreadablePaths.push(record.path);
+        continue;
+      }
       if (!prunableBranch && record.detached) {
         const detached = resolveDetachedBranch(record.path, env, execute);
         if (detached.unreadable) {
@@ -442,6 +458,16 @@ export function inspectLocalWorktreeBranch(
           continue;
         }
         prunableBranch = detached.branchName;
+      }
+      if (pathStatus === 'absent') {
+        if (
+          record.locked ||
+          prunableBranch === null ||
+          prunableBranch === requestedBranch
+        ) {
+          unreadablePaths.push(record.path);
+        }
+        continue;
       }
       if (prunableBranch !== requestedBranch) {
         continue;

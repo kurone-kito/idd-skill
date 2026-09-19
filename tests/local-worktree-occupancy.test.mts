@@ -53,6 +53,7 @@ test('parses branch, detached, and prunable worktree records', () => {
       'worktree /repo/main\0HEAD abc\0branch refs/heads/main\0\0',
       'worktree /repo/rebase\0HEAD def\0detached\0\0',
       'worktree /repo/old\0HEAD ghi\0branch refs/heads/issue/42-task\0prunable gitdir file\0\0',
+      'worktree /repo/locked\0HEAD jkl\0branch refs/heads/issue/7-task\0locked operator hold\0\0',
     ].join(''),
   );
 
@@ -62,6 +63,7 @@ test('parses branch, detached, and prunable worktree records', () => {
       branchRef: 'refs/heads/main',
       detached: false,
       bare: false,
+      locked: false,
       prunable: false,
     },
     {
@@ -69,6 +71,7 @@ test('parses branch, detached, and prunable worktree records', () => {
       branchRef: null,
       detached: true,
       bare: false,
+      locked: false,
       prunable: false,
     },
     {
@@ -76,7 +79,16 @@ test('parses branch, detached, and prunable worktree records', () => {
       branchRef: 'refs/heads/issue/42-task',
       detached: false,
       bare: false,
+      locked: false,
       prunable: true,
+    },
+    {
+      path: '/repo/locked',
+      branchRef: 'refs/heads/issue/7-task',
+      detached: false,
+      bare: false,
+      locked: true,
+      prunable: false,
     },
   ]);
 });
@@ -164,6 +176,70 @@ test('inspects occupied, absent, and present-prunable worktree results', () => {
     });
   } finally {
     rmSync(prunablePath, { recursive: true, force: true });
+  }
+});
+
+test('fails closed for absent prunable target, malformed, or locked records', () => {
+  const parent = mkdtempSync(`${tmpdir()}/idd-local-worktree-absent-prunable-`);
+  const absent = (name: string) => join(parent, name);
+  try {
+    const target = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      stubWorktreeList(
+        `worktree ${absent('target')}\0HEAD abc\0branch refs/heads/issue/42-task\0prunable gitdir file\0\0`,
+      ),
+    );
+    assert.deepEqual(target, {
+      status: 'unreadable',
+      paths: [absent('target')],
+      reason: 'cannot inspect matching local worktree metadata',
+    });
+
+    const malformed = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      stubWorktreeList(
+        `worktree ${absent('malformed')}\0HEAD def\0branch refs/heads/issue/42-?bad\0prunable gitdir file\0\0`,
+      ),
+    );
+    assert.deepEqual(malformed, {
+      status: 'unreadable',
+      paths: [absent('malformed')],
+      reason: 'cannot inspect matching local worktree metadata',
+    });
+
+    const unrelated = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      stubWorktreeList(
+        `worktree ${absent('unrelated')}\0HEAD ghi\0branch refs/heads/issue/7-old\0prunable gitdir file\0\0`,
+      ),
+    );
+    assert.deepEqual(unrelated, {
+      status: 'absent',
+      paths: [],
+      reason: null,
+    });
+
+    const locked = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      stubWorktreeList(
+        `worktree ${absent('locked')}\0HEAD jkl\0branch refs/heads/issue/7-old\0locked operator hold\0prunable gitdir file\0\0`,
+      ),
+    );
+    assert.deepEqual(locked, {
+      status: 'unreadable',
+      paths: [absent('locked')],
+      reason: 'cannot inspect matching local worktree metadata',
+    });
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
   }
 });
 
