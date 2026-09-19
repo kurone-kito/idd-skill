@@ -379,6 +379,14 @@ Implement the plan, running **fix-validate** before each atomic commit
 the [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
 instead.
 
+**Preserve validation exit status when shortening output.** When the
+validation result is authoritative, run the command unpiped. If a shorter
+transcript is useful, run the same command again and pipe only that second
+invocation to `tail` or `head`; a successful output filter does not prove
+that the authoritative command passed. If a Bash pipeline is unavoidable,
+preserve the upstream status explicitly, for example by inspecting
+`${PIPESTATUS[0]}` or using an appropriate local `pipefail` arrangement.
+
 **Verify a commit actually landed before trusting a subsequent push.**
 A `commit-msg` hook (e.g. commitlint's body-max-line-length) can
 silently reject a long single-line body, so no commit is created but

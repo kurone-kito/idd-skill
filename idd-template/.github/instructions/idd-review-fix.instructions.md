@@ -184,6 +184,14 @@ unpushed E9 fixes.
 
 Run **post-fix-validate**.
 
+**Preserve validation exit status when shortening output.** When the
+validation result is authoritative, run the command unpiped. If a shorter
+transcript is useful, run the same command again and pipe only that second
+invocation to `tail` or `head`; a successful output filter does not prove
+that the authoritative command passed. If a Bash pipeline is unavoidable,
+preserve the upstream status explicitly, for example by inspecting
+`${PIPESTATUS[0]}` or using an appropriate local `pipefail` arrangement.
+
 Then push the feature branch normally (E11 uses merge commits, not
 rebase, so no force push is required).
 
