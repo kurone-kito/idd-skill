@@ -138,10 +138,11 @@ authoritative replacement:
   `{claim-id}` route.
 - `state: unclaimed` + `action: re_claim` → no-active-claim route.
 - `state: stale` + `action: takeover` → stale-claim takeover route.
-- `state: local_worktree_occupied` + `action: stop` → a stale claim's
-  matching local worktree is occupied, unreadable, or unknown; stop for
-  operator recovery. Verify owner resume with the exact claim-id, or retry
-  a valid forced-handoff successor with its new claim-id, before proceeding.
+- `state: local_worktree_occupied` + `action: stop` → a stale or released
+  claim's matching local worktree is occupied, unreadable, or unknown; stop
+  for operator recovery. Verify owner resume with the exact claim-id, or
+  retry a valid forced-handoff successor with its new claim-id, before
+  proceeding.
 - `state: non_inheritable` + `action: stop` → active non-stale claim
   stop route.
 - `state: disputed` + `action: stop` → contested-claim stop route
@@ -167,6 +168,7 @@ Evaluate in order; take the first matching row.
 | Active claim = this session's verified `{claim-id}`                                             | Continue with same `{claim-id}`; ignore stale FH evidence citing a different displaced `{claim-id}`; → Step 2                 |
 | FH evidence names this session's already-verified `{claim-id}`                                  | STOP — current session is displaced; do not push, comment, resolve, request reviewers, or merge                               |
 | Forced-handoff recovery confirmed (§FH)                                                         | Re-claim via A5 after GitHub reflects handoff; cite evidence in digest `Authoritative by`; → Step 2                           |
+| No active claim after release + matching local worktree is occupied or unreadable               | STOP — recover the local worktree or verify owner-resume / forced-handoff successor claim-id                                  |
 | No new-format claims + legacy `claimed-by` + later trusted `unclaimed-by` (same agent)          | Treat as unclaimed → fresh A5 claim → Step 2                                                                                  |
 | No new-format claims + legacy `claimed-by`, age < 24 h                                          | STOP — not inheritable even if agent-id matches                                                                               |
 | No new-format claims + legacy `claimed-by`, age ≥ 24 h                                          | Migrate via A5 with `supersedes: none`; → Step 2                                                                              |

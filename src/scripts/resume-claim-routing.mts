@@ -348,21 +348,33 @@ export function evaluateResumeClaimRouting(
   }
 
   let localWorktree: LocalWorktreeInspection | null = null;
-  if (routeState === 'stale' && options.inspectLocalWorktree) {
-    const branch = state.activeClaim?.branch ?? state.legacyClaim?.branch ?? '';
+  const worktreeSource =
+    routeState === 'stale'
+      ? 'stale'
+      : routeState === 'unclaimed' && state.releasedClaim
+        ? 'released'
+        : null;
+  if (worktreeSource && options.inspectLocalWorktree) {
+    const branch =
+      state.activeClaim?.branch ??
+      state.legacyClaim?.branch ??
+      state.releasedClaim?.branch ??
+      '';
     if (branch) {
       localWorktree = options.inspectLocalWorktree(branch);
       if (localWorktree.status !== 'absent') {
         routeState = 'local_worktree_occupied';
         action = 'stop';
+        const reasonPrefix =
+          worktreeSource === 'released' ? 'released-claim' : 'stale-claim';
         reason =
           localWorktree.status === 'unreadable'
-            ? 'stale-claim-local-worktree-unreadable'
-            : 'stale-claim-local-worktree-occupied';
+            ? `${reasonPrefix}-local-worktree-unreadable`
+            : `${reasonPrefix}-local-worktree-occupied`;
         warnings.push(
           localWorktree.status === 'unreadable'
-            ? `cannot verify local worktree occupancy for stale branch ${branch}: ${localWorktree.reason ?? 'unknown error'}`
-            : `stale branch ${branch} has a live local worktree: ${localWorktree.paths.join(', ')}`,
+            ? `cannot verify local worktree occupancy for ${worktreeSource} branch ${branch}: ${localWorktree.reason ?? 'unknown error'}`
+            : `${worktreeSource} branch ${branch} has a live local worktree: ${localWorktree.paths.join(', ')}`,
         );
       }
     }
@@ -403,6 +415,19 @@ export function evaluateResumeClaimRouting(
       activation_nonce_winner: activationNonceWinner,
       activation_nonce_count: activationNonces.length,
       forced_handoff: toForcedHandoffEvidence(state.appliedForcedHandoff),
+      ...(state.releasedClaim
+        ? {
+            released_claim: {
+              agent_id: state.releasedClaim.agentId,
+              claim_id:
+                'claimId' in state.releasedClaim
+                  ? state.releasedClaim.claimId
+                  : null,
+              created_at: state.releasedClaim.createdAt,
+              branch: state.releasedClaim.branch,
+            },
+          }
+        : {}),
       ...(localWorktree ? { local_worktree: localWorktree } : {}),
     },
   };
@@ -721,6 +746,7 @@ function resolveClaimState(
     return {
       mode: 'new-format',
       activeClaim: claimTrace?.activeClaim ?? null,
+      releasedClaim: claimTrace?.releasedClaim ?? null,
       appliedForcedHandoff: claimTrace?.appliedForcedHandoff ?? null,
       warnings,
       legacyClaim: null,
@@ -734,6 +760,7 @@ function resolveClaimState(
   return {
     mode: 'legacy-only',
     activeClaim: null,
+    releasedClaim: legacy.releasedClaim,
     appliedForcedHandoff: null,
     warnings,
     legacyClaim: legacy.claim,
@@ -768,10 +795,14 @@ function resolveLegacyClaimState(
     }
   }
   if (!latestClaim) {
-    return { claim: null, released: false };
+    return { claim: null, released: false, releasedClaim: null };
   }
   const released = Boolean(latestMatchingRelease);
-  return { claim: latestClaim, released };
+  return {
+    claim: latestClaim,
+    released,
+    releasedClaim: released ? latestClaim : null,
+  };
 }
 
 function findSameSecondContenders(

@@ -1411,6 +1411,43 @@ test('evaluateFreshClaimGate: released competing claim is claimable, not already
   assert.equal(gate.winningClaimId, null);
 });
 
+test('fresh claim gate blocks a released claim with a live local worktree', () => {
+  let inspectedBranch = '';
+  const gate = evaluateFreshClaimGate(
+    {
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-released supersedes: none 2026-05-12T10:00:00Z branch: issue/24-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: copilot claim-released 2026-05-12T10:05:00Z -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: (branchName) => {
+        inspectedBranch = branchName;
+        return {
+          status: 'occupied',
+          paths: ['/tmp/repo.issue-24-task'],
+          reason: 'matching local worktree for issue/24-task',
+        };
+      },
+    },
+  );
+
+  assert.equal(inspectedBranch, 'issue/24-task');
+  assert.equal(gate.verdict, 'already-claimed');
+  assert.equal(gate.winningClaimId, null);
+  assert.equal(gate.reason, 'released-claim-local-worktree-occupied');
+});
+
 test('runCli sources currentLogin from resolveViewerLogin (#2148)', () => {
   // #2266: currentLogin now sources from the provider port's
   // resolveViewerLogin() instead of the bare gh-exec.mts call this regex

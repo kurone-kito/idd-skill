@@ -55,8 +55,38 @@ export function parseLocalWorktreeList(output: string): LocalWorktreeRecord[] {
   return records;
 }
 
-function branchNameFromRef(ref: string): string {
-  return ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
+function branchNameFromRef(ref: string): string | null {
+  const value = ref.trim();
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith('refs/') && !value.startsWith('refs/heads/')) {
+    return null;
+  }
+  const branch = value.startsWith('refs/heads/')
+    ? value.slice('refs/heads/'.length)
+    : value;
+  if (
+    !branch ||
+    branch.startsWith('/') ||
+    branch.endsWith('/') ||
+    branch.endsWith('.') ||
+    branch.includes('..') ||
+    branch.includes('@{') ||
+    /[\s~^:?*\\[\\]\\\\]/.test(branch) ||
+    branch
+      .split('/')
+      .some(
+        (part) =>
+          part === '' ||
+          part === '.' ||
+          part === '..' ||
+          part.endsWith('.lock'),
+      )
+  ) {
+    return null;
+  }
+  return branch;
 }
 
 function isAbsoluteGitPath(value: string): boolean {
@@ -136,11 +166,12 @@ function resolveDetachedBranch(
         `${sequencerPath}/head-name`,
         'utf8',
       ).trim();
-      if (!headName) {
+      const branchName = branchNameFromRef(headName);
+      if (!branchName) {
         return { branchName: null, unreadable: true };
       }
       return {
-        branchName: branchNameFromRef(headName),
+        branchName,
         unreadable: false,
       };
     } catch {
@@ -164,8 +195,12 @@ function resolveDetachedBranch(
     if (!bisectBranch || /^[0-9a-f]{4,64}$/i.test(bisectBranch)) {
       return { branchName: null, unreadable: true };
     }
+    const branchName = branchNameFromRef(bisectBranch);
+    if (!branchName) {
+      return { branchName: null, unreadable: true };
+    }
     return {
-      branchName: branchNameFromRef(bisectBranch),
+      branchName,
       unreadable: false,
     };
   } catch {
@@ -229,9 +264,14 @@ export function inspectLocalWorktreeBranch(
       if (pathStatus === 'absent') {
         continue;
       }
-      let prunableBranch = record.branchRef
+      const parsedBranchRef = record.branchRef
         ? branchNameFromRef(record.branchRef)
         : null;
+      if (record.branchRef && !parsedBranchRef) {
+        unreadablePaths.push(record.path);
+        continue;
+      }
+      let prunableBranch = parsedBranchRef;
       if (!prunableBranch && record.detached) {
         const detached = resolveDetachedBranch(record.path, env, execute);
         if (detached.unreadable) {
@@ -246,9 +286,14 @@ export function inspectLocalWorktreeBranch(
       unreadablePaths.push(record.path);
       continue;
     }
-    let resolvedBranch = record.branchRef
+    const parsedBranchRef = record.branchRef
       ? branchNameFromRef(record.branchRef)
       : null;
+    if (record.branchRef && !parsedBranchRef) {
+      unreadablePaths.push(record.path);
+      continue;
+    }
+    let resolvedBranch = parsedBranchRef;
     if (!resolvedBranch && record.detached) {
       const detached = resolveDetachedBranch(record.path, env, execute);
       if (detached.unreadable) {

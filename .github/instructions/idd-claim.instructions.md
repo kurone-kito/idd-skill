@@ -206,9 +206,9 @@ issue (different slug variants).
    ```
 
    Match `branch refs/heads/issue/<number>-…`; for `detached`, resolve
-   `head-name` under `git -C <worktree> rev-parse --git-path
-   rebase-merge`/`rebase-apply` first; treat a present `BISECT_START`
-   marker as unreadable occupancy too.
+   `head-name`/`BISECT_START` via `git -C <worktree> rev-parse --git-path
+   rebase-merge`/`rebase-apply`: invalid/target → occupied; unrelated →
+   absent.
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query the Refs API with the issue-number prefix only, to stay within

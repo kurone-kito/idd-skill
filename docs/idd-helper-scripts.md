@@ -2773,10 +2773,11 @@ close.
   - `state`:
     `unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|disputed`
   - `action`: `re_claim|takeover|keep|stop`
-- When a stale takeover is inspected against the current clone, the helper
-  adds `evidence.local_worktree` with `{status, paths, reason}`. `occupied`
-  and `unreadable` are fail-closed stop states; an owner resume or authorized
-  forced handoff must be verified before reusing the worktree (#3141).
+- When a stale or released claim is inspected against the current clone, the
+  helper adds `evidence.local_worktree` with `{status, paths, reason}`.
+  `occupied` and `unreadable` are fail-closed stop states; an owner resume or
+  authorized forced handoff must be verified before reusing the worktree
+  (#3141).
 - Optional `--nonce <token>` (kurone-kito/idd-skill#1522): when `--claim-id`
   matches the active claim, also requires it to equal the winning trusted
   `activation-nonce` marker for that claim-id (`evidence.activation_nonce_winner`);

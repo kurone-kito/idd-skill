@@ -8085,6 +8085,7 @@ export function resolveActiveClaimWithForcedHandoffTrace(
   const options = normalizeClaimResolutionOptions(isTrustedAuthor);
   const orderedEvents = sortClaimEvents(events);
   let active = null;
+  let releasedClaim = null;
   let appliedForcedHandoff = null;
   let activeSince = '';
   for (const event of orderedEvents) {
@@ -8094,6 +8095,11 @@ export function resolveActiveClaimWithForcedHandoffTrace(
       (next?.claimId ?? null) !== (previous?.claimId ?? null) ||
       (next?.agentId ?? null) !== (previous?.agentId ?? null);
     if (identityChanged) {
+      if (previous && !next) {
+        releasedClaim = previous;
+      } else if (next) {
+        releasedClaim = null;
+      }
       const candidate = previous
         ? parseForcedHandoffComment(event.body ?? '', event.createdAt ?? '')
         : null;
@@ -8117,7 +8123,12 @@ export function resolveActiveClaimWithForcedHandoffTrace(
     }
     active = next;
   }
-  return { activeClaim: active, appliedForcedHandoff, activeSince };
+  return {
+    activeClaim: active,
+    releasedClaim,
+    appliedForcedHandoff,
+    activeSince,
+  };
 }
 export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
   return resolveActiveClaimWithForcedHandoffTrace(events, isTrustedAuthor)

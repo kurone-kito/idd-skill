@@ -91,8 +91,8 @@ against occupied, unreadable, or unknown local worktree state
 (#3141, Round 21 report).
 
 Forced-handoff: pass `new_claim_id` into Step 1. On
-`non_inheritable`/`stop` or `stale`/`takeover` with
-`evidence.forced_handoff`, retry
+`non_inheritable`/`stop`, `stale`/`takeover`, or
+`local_worktree_occupied`/`stop` with `evidence.forced_handoff`, retry
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
 Retry `already_owned`: STOP if `new_agent_id` is not this
 session or `old_claim_id` is this session's claim (displaced).
