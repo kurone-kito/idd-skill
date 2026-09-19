@@ -380,7 +380,7 @@ the [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit
 instead.
 
 **Preserve validation exit status when shortening output.** When the
-validation result is authoritative, run the command unpiped. If a shorter
+validation result is authoritative, run the command without a pipe. If a shorter
 transcript is useful, run the same command again and pipe only that second
 invocation to `tail` or `head`; a successful output filter does not prove
 that the authoritative command passed. If a Bash pipeline is unavoidable,
