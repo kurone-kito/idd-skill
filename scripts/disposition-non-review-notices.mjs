@@ -46,6 +46,7 @@ import {
   dispositionNamesAdvisoryBot,
   effectiveRegularCommentActivityAt,
   isAdvisoryNonReviewNotice,
+  isCodeRabbitAlreadyReviewedAcknowledgement,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   isReviewSummaryDisposition,
@@ -66,6 +67,9 @@ function resolveConfiguredMarkerPrefix() {
  */
 export function noticeReason(body) {
   const text = String(body ?? '');
+  if (isCodeRabbitAlreadyReviewedAcknowledgement(text)) {
+    return 'already reviewed last commit; full review required';
+  }
   if (/rate limited by coderabbit\.ai|Review limit reached/i.test(text)) {
     return 'review limit reached / rate limited';
   }

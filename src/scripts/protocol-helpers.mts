@@ -1316,6 +1316,35 @@ const REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY: ReadonlyMap<string, string> =
 export const CODERABBIT_AUTO_GENERATED_REPLY_MARKER =
   '<!-- This is an auto-generated reply by CodeRabbit -->';
 
+// #3146: CodeRabbit's incremental-review refusal is a regular top-level
+// comment, not a review. Require the complete observed structure so ordinary
+// review prose that mentions the same phrases cannot become a sticky notice:
+// the reply marker, invocation marker, warning summary, exact already-reviewed
+// statement, full-review remedy, and the explanatory note that no incremental
+// review is run. Keep this anchored to the whole comment; under-matching a
+// vendor wording change is safer than carrying a disposition onto a real
+// review.
+const CODERABBIT_ALREADY_REVIEWED_ACK_RE = new RegExp(
+  `^${escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)}\\s*` +
+    '<!--\\s*CodeRabbit review command invocation:\\s*[^>\\r\\n]+-->\\s*' +
+    '<details>\\s*<summary>\\s*⚠️\\s*Action not completed\\s*</summary>\\s*' +
+    'Already reviewed the last commit\\.\\s*Use\\s+`@coderabbitai\\s+full\\s+review`' +
+    '\\s+to rerun a\\s+review of the entire changeset\\.\\s*' +
+    '>\\s*Note:\\s*CodeRabbit is an incremental review system and does not ' +
+    're-review already reviewed commits\\.\\s*' +
+    'This command is applicable only when automatic reviews are paused\\.\\s*' +
+    '</details>\\s*$',
+  'i',
+);
+
+export function isCodeRabbitAlreadyReviewedAcknowledgement(
+  body: unknown,
+): boolean {
+  return CODERABBIT_ALREADY_REVIEWED_ACK_RE.test(
+    String(body ?? '').trimStart(),
+  );
+}
+
 /**
  * One finding embedded in a CodeRabbit review body's older "🧹 Nitpick
  * comments" / "⚠️ Outside diff range comments" collapsible-section format
@@ -1527,11 +1556,19 @@ export function classifyRegularBotComment(
   }
 
   if (body.startsWith(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)) {
+    const hasDisposition = hasExplicitDispositionAfter(comment, comments, {
+      isDispositionAuthor: options.isDispositionAuthor,
+    });
+    if (isCodeRabbitAlreadyReviewedAcknowledgement(body) && hasDisposition) {
+      return {
+        classifier: 'OUTDATED',
+        reason:
+          'stale CodeRabbit already-reviewed acknowledgement after completed review',
+      };
+    }
     if (
       /\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body) &&
-      hasExplicitDispositionAfter(comment, comments, {
-        isDispositionAuthor: options.isDispositionAuthor,
-      })
+      hasDisposition
     ) {
       return {
         classifier: 'OUTDATED',
@@ -3146,6 +3183,7 @@ export function isAdvisoryNonReviewNotice(body: unknown): boolean {
     return false;
   }
   return (
+    isCodeRabbitAlreadyReviewedAcknowledgement(text) ||
     ADVISORY_NON_REVIEW_NOTICE_PATTERNS.some((pattern) => pattern.test(text)) ||
     isCodexUsageLimitNotice(text)
   );

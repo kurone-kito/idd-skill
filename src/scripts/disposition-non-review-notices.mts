@@ -48,6 +48,7 @@ import {
   dispositionNamesAdvisoryBot,
   effectiveRegularCommentActivityAt,
   isAdvisoryNonReviewNotice,
+  isCodeRabbitAlreadyReviewedAcknowledgement,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   isReviewSummaryDisposition,
@@ -125,6 +126,9 @@ export interface DispositionReport {
  */
 export function noticeReason(body: unknown): string {
   const text = String(body ?? '');
+  if (isCodeRabbitAlreadyReviewedAcknowledgement(text)) {
+    return 'already reviewed last commit; full review required';
+  }
   if (/rate limited by coderabbit\.ai|Review limit reached/i.test(text)) {
     return 'review limit reached / rate limited';
   }

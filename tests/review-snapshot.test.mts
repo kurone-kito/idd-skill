@@ -38,6 +38,17 @@ const newCommentAfterF2 = readJson(
   'fixtures/review-snapshots/new-comment-after-f2.json',
 ) as SnapshotFixture;
 
+const coderabbitAlreadyReviewedAck =
+  '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
+  '<!-- CodeRabbit review command invocation: v2:abc123 -->\n' +
+  '<details>\n' +
+  '<summary>⚠️ Action not completed</summary>\n\n' +
+  'Already reviewed the last commit. Use `@coderabbitai full review` to rerun a\n' +
+  'review of the entire changeset.\n\n' +
+  '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits.\n' +
+  'This command is applicable only when automatic reviews are paused.\n\n' +
+  '</details>';
+
 test('indexes the latest gating review per author', () => {
   const index = indexLatestGatingReviewsByAuthor(acceptedAll.reviews);
   assert.equal(index.size, 0);
@@ -313,6 +324,29 @@ test('classifies bot comments against review state and later activity', () => {
       newCommentAfterF2.threads,
     ),
     null,
+  );
+});
+
+test('#3146: classifies a dispositioned already-reviewed refusal as stale', () => {
+  const refusal: CommentLike = {
+    author: { login: 'coderabbitai[bot]' },
+    body: coderabbitAlreadyReviewedAck,
+    createdAt: '2026-05-12T00:00:00Z',
+  };
+  const disposition: CommentLike = {
+    author: { login: 'idd-bot' },
+    body: '**Rejected** — coderabbitai[bot] did not review HEAD abc1234 (already reviewed last commit; full review required); this is not a completed review',
+    createdAt: '2026-05-12T00:01:00Z',
+  };
+
+  assert.equal(classifyRegularBotComment(refusal, [refusal], []), null);
+  assert.deepEqual(
+    classifyRegularBotComment(refusal, [refusal, disposition], []),
+    {
+      classifier: 'OUTDATED',
+      reason:
+        'stale CodeRabbit already-reviewed acknowledgement after completed review',
+    },
   );
 });
 
