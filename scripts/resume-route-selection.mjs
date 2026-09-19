@@ -10,6 +10,7 @@ import {
   selectLatestCheckEntry,
 } from './ci-wait-state.mjs';
 import { parseCliArgs } from './cli-args.mjs';
+import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mjs';
@@ -242,17 +243,19 @@ export function collectRoutingInput({
   );
   const trustEmptyProtectionReads =
     policyConfig.ciGate.trustEmptyProtectionReads === true;
-  const branchRulesOutcome = port.listBranchRules(
-    repository.owner,
-    repository.name,
-    trustedConfigRef,
+  const branchRulesOutcome = readResumeGovernanceOutcome(() =>
+    port.listBranchRules(repository.owner, repository.name, trustedConfigRef),
   );
-  const branchProtectionOutcome = port.getBranchProtection(
-    repository.owner,
-    repository.name,
-    trustedConfigRef,
+  const branchProtectionOutcome = readResumeGovernanceOutcome(() =>
+    port.getBranchProtection(
+      repository.owner,
+      repository.name,
+      trustedConfigRef,
+    ),
   );
   const protectionReadsUnreadable =
+    branchRulesOutcome.outcome === 'unreadable' ||
+    branchProtectionOutcome.outcome === 'unreadable' ||
     (!trustEmptyProtectionReads &&
       branchRulesOutcome.outcome === 'not-found') ||
     (!trustEmptyProtectionReads &&
@@ -391,6 +394,22 @@ export function collectRoutingInput({
     prNumber: issuePr.number,
     prUrl: issuePr.url,
   };
+}
+/**
+ * Resume routing must turn an explicit governance 403 into a hold signal.
+ * The provider adapter preserves other non-404 failures as thrown errors for
+ * callers whose failure contract is different, so catch only this permission
+ * outcome at the D4 boundary (Codex review, PR #3150).
+ */
+function readResumeGovernanceOutcome(read) {
+  try {
+    return read();
+  } catch (error) {
+    if (deriveGhHttpStatus(error) === 403) {
+      return { outcome: 'unreadable' };
+    }
+    throw error;
+  }
 }
 function selectLatestPresentRunChecks(checks) {
   const groups = new Map();

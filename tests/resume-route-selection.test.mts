@@ -444,6 +444,40 @@ test('collector uses the default branch for empty base-ref governance reads', ()
   assert.equal(selectResumeRoute(input).route, 'F2');
 });
 
+test('collector fails closed when governance reads return permission denied', () => {
+  for (const unreadableRead of ['branchRules', 'branchProtection'] as const) {
+    const port = createResumeCollectorPort({
+      statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+    });
+    if (unreadableRead === 'branchRules') {
+      port.listBranchRules = () => {
+        const error = new Error('Forbidden (HTTP 403)') as Error & {
+          status?: number;
+        };
+        error.status = 403;
+        throw error;
+      };
+    } else {
+      port.getBranchProtection = () => {
+        const error = new Error('Forbidden (HTTP 403)') as Error & {
+          status?: number;
+        };
+        error.status = 403;
+        throw error;
+      };
+    }
+
+    const input = collectRoutingInput({
+      port,
+      issueNumber: 3145,
+      loadTrustedConfig: () => null,
+    });
+    assert.equal(input.noRequiredChecksConfigured, false);
+    assert.equal(input.ciSuccess, false);
+    assert.equal(selectResumeRoute(input).route, 'D4');
+  }
+});
+
 test('collector discovers no required checks from protection and routes present-run success', () => {
   const port = createFakeProviderAdapter({
     locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
