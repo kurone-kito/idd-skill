@@ -3080,6 +3080,45 @@ test('readEventLog: reports issue-less discover enters without creating windows'
   }
 });
 
+test('readEventLog: preserves concurrent fully unidentified discover enters', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'discover',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'codex',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'discover',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'codex',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'discover',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'codex',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        vendor: 'codex',
+        stageId: 'discover',
+        atMs: ms('2026-01-01T00:10:00Z'),
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('readEventLog: emits no open diagnostic after a completed pair and reports a later open cycle', () => {
   const completed = writeEventsFile([
     tokenCostEvent(
@@ -3699,6 +3738,55 @@ test('readEventLog: matches a claimless exit with the latest session-less lineag
       at: '2026-01-01T00:20:00Z',
       vendor: 'claude',
       issueNumber: 7,
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    const window = parsed.windows.get('7:claude:work');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:15:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:10:00Z'),
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: closes the latest claimless lineage for a claimed exit (Codex review finding, PR #3156)', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
     }),
   ]);
   try {

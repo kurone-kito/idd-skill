@@ -1046,9 +1046,15 @@ export function readEventLog(path) {
         enterAtOwner.set(key, vendorSessionId);
         enterClaimIdOwner.set(key, claimId);
         const openEnters = openUnidentifiedEnter.get(key) ?? [];
-        const existingOpen = openEnters.find(
-          (open) => open.claimId === claimId,
-        );
+        // A completely unidentified discover event has no stable lineage
+        // token at all. Preserve each such enter so concurrent discover
+        // sessions cannot collapse into one diagnostic (#3155, Codex review
+        // finding, PR #3156). Claim-bearing historical events still
+        // deduplicate by claimId, which is their available lineage token.
+        const existingOpen =
+          issueNumber === undefined && claimId === undefined
+            ? undefined
+            : openEnters.find((open) => open.claimId === claimId);
         if (existingOpen) {
           existingOpen.atMs = Math.min(existingOpen.atMs, atMs);
         } else {
@@ -1084,8 +1090,11 @@ export function readEventLog(path) {
       } else {
         // The legacy owner map tracks the latest enter, but
         // openUnidentifiedEnter intentionally retains the earliest still-open
-        // enter. Compare against that retained record so a later duplicate
-        // enter cannot make an exit clear the earlier diagnostic.
+        // enter. When the latest legacy enter is compatible with this exit,
+        // close that lineage first so the diagnostic state agrees with the
+        // window that the legacy resolver will emit. Otherwise compare
+        // against the retained record so a later duplicate enter cannot make
+        // an exit clear the earlier diagnostic.
         const openEnters = openUnidentifiedEnter.get(key);
         if (openEnters && openEnters.length > 0) {
           const exactClaimOpen =
@@ -1095,7 +1104,26 @@ export function readEventLog(path) {
           const claimlessOpen = openEnters.find(
             (open) => open.claimId === undefined,
           );
+          const latestEnterAtMs = enterAt.get(key);
+          const latestEnterClaimId = enterClaimIdOwner.get(key);
+          const legacyPairUsesLatestOpen =
+            enterAtOwner.get(key) === undefined &&
+            latestEnterAtMs !== undefined &&
+            atMs > latestEnterAtMs &&
+            (latestEnterClaimId === undefined ||
+              claimId === undefined ||
+              latestEnterClaimId === claimId);
+          const legacyOpenCandidates = legacyPairUsesLatestOpen
+            ? openEnters.filter((open) => open.claimId === latestEnterClaimId)
+            : [];
+          const legacyOpen =
+            legacyOpenCandidates.length > 0
+              ? legacyOpenCandidates.reduce((latest, open) =>
+                  open.atMs > latest.atMs ? open : latest,
+                )
+              : undefined;
           const openEnter =
+            legacyOpen ??
             exactClaimOpen ??
             (claimId === undefined
               ? openEnters.reduce((latest, open) =>
