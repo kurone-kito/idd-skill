@@ -40,10 +40,10 @@ approval as missing.
 
 ## Context-pressure stop
 
-Before A5 checks, a context-pressure exit before B-F4 must report this
-fresh candidate for handoff; record no token-cost events, claim-state
-markers, branch/worktree, or issue state. Observed 2026-09-19, #3144;
-recovery unchanged.
+Fresh candidate: pre-claim context-pressure exit before B-F4: report for
+handoff; post no claim. Recovery unchanged. Record no
+token-cost events, claim-state markers, branch/worktree; issue state
+(#3144; preventive; no incident)
 
 ## Pre-checks (all five must pass)
 

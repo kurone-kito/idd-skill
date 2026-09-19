@@ -12,9 +12,10 @@ forced-handoff. Prefer helpers.
 
 **Scope**: one selected issue; no open-ended Discover. Standard
 "Return to Discover" branches mean **STOP and report; do not claim**.
-Fresh context-pressure exit before B-F4: report this candidate; record no
-token-cost events, claim-state markers, branch/worktree, or issue state
-(2026-09-19, #3144; preventive; no observed incident yet).
+Fresh candidate: pre-claim context-pressure exit before B-F4: report for
+handoff; post no claim. Recovery unchanged. Record no
+token-cost events, claim-state markers, branch/worktree; issue state
+(#3144; preventive; no incident)
 
 ## Helper runtime contract
 
