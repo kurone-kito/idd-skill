@@ -192,7 +192,7 @@ Run **post-fix-validate**.
 **Validation.** Run the command without a pipe; use a second
 invocation with `tail` or `head` to shorten output. Success does not prove
 the first command passed. In Bash, preserve it with
-`${PIPESTATUS[0]}` or local `pipefail`.
+`${PIPESTATUS[0]}` or enable `set -o pipefail`.
 
 Then push the feature branch normally (E11 uses merge commits, not
 rebase, so no force push is required).
