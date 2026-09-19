@@ -270,6 +270,51 @@ test('preserves trailing Git-valid Unicode whitespace in branch refs', () => {
   });
 });
 
+test('preserves trailing Git-valid Unicode whitespace in detached metadata paths', () => {
+  const worktreeBase = mkdtempSync(
+    `${tmpdir()}/idd-local-worktree-root-whitespace-`,
+  );
+  const worktree = `${worktreeBase}\u00a0`;
+  const gitDirectoryBase = mkdtempSync(
+    `${tmpdir()}/idd-local-git-dir-whitespace-`,
+  );
+  const gitDirectory = `${gitDirectoryBase}\u00a0`;
+  mkdirSync(worktree);
+  mkdirSync(gitDirectory);
+  mkdirSync(join(gitDirectory, 'rebase-merge'));
+  writeFileSync(
+    join(gitDirectory, 'rebase-merge', 'head-name'),
+    'refs/heads/issue/42-task\n',
+  );
+  try {
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        return stubGitCommands(worktree, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.deepEqual(result, {
+      status: 'occupied',
+      paths: [worktree],
+      reason: 'matching local worktree for issue/42-task',
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(worktreeBase, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+    rmSync(gitDirectoryBase, { recursive: true, force: true });
+  }
+});
+
 test('accepts full refs with shorthand-special names for unrelated worktrees', () => {
   for (const branchRef of ['refs/heads/-maintenance', 'refs/heads/@']) {
     const result = inspectLocalWorktreeBranch(

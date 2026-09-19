@@ -212,15 +212,13 @@ function readGitPath(
   execute: typeof execFileSync,
 ): string | null {
   try {
-    return execute(
-      'git',
-      ['-C', worktreePath, 'rev-parse', '--git-path', name],
-      {
+    return removeTrailingLineEnding(
+      execute('git', ['-C', worktreePath, 'rev-parse', '--git-path', name], {
         encoding: 'utf8',
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    ).trim();
+      }),
+    );
   } catch {
     return null;
   }
@@ -238,15 +236,13 @@ function isCanonicalWorktreeRoot(
     return false;
   }
   try {
-    const discoveredRoot = execute(
-      'git',
-      ['-C', worktreePath, 'rev-parse', '--show-toplevel'],
-      {
+    const discoveredRoot = removeTrailingLineEnding(
+      execute('git', ['-C', worktreePath, 'rev-parse', '--show-toplevel'], {
         encoding: 'utf8',
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    ).trim();
+      }),
+    );
     return (
       Boolean(discoveredRoot) && realpathSync(discoveredRoot) === expectedRoot
     );

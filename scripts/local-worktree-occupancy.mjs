@@ -174,15 +174,13 @@ function sanitizedGitEnvironment(environment = process.env) {
 }
 function readGitPath(worktreePath, name, env, execute) {
   try {
-    return execute(
-      'git',
-      ['-C', worktreePath, 'rev-parse', '--git-path', name],
-      {
+    return removeTrailingLineEnding(
+      execute('git', ['-C', worktreePath, 'rev-parse', '--git-path', name], {
         encoding: 'utf8',
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    ).trim();
+      }),
+    );
   } catch {
     return null;
   }
@@ -195,15 +193,13 @@ function isCanonicalWorktreeRoot(worktreePath, env, execute) {
     return false;
   }
   try {
-    const discoveredRoot = execute(
-      'git',
-      ['-C', worktreePath, 'rev-parse', '--show-toplevel'],
-      {
+    const discoveredRoot = removeTrailingLineEnding(
+      execute('git', ['-C', worktreePath, 'rev-parse', '--show-toplevel'], {
         encoding: 'utf8',
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    ).trim();
+      }),
+    );
     return (
       Boolean(discoveredRoot) && realpathSync(discoveredRoot) === expectedRoot
     );
