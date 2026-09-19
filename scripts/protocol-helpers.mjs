@@ -557,6 +557,31 @@ const REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY = new Map([
 // recognize byte-for-byte the same marker and cannot drift.
 export const CODERABBIT_AUTO_GENERATED_REPLY_MARKER =
   '<!-- This is an auto-generated reply by CodeRabbit -->';
+// #3146: CodeRabbit's incremental-review refusal is a regular top-level
+// comment, not a review. Require the complete observed structure so ordinary
+// review prose that mentions the same phrases cannot become a sticky notice:
+// the reply marker, invocation marker, warning summary, exact already-reviewed
+// statement, full-review remedy, and the explanatory note that no incremental
+// review is run. Keep this anchored to the whole comment; under-matching a
+// vendor wording change is safer than carrying a disposition onto a real
+// review.
+const CODERABBIT_ALREADY_REVIEWED_ACK_RE = new RegExp(
+  `^${escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)}\\s*` +
+    '<!--\\s*CodeRabbit review command invocation:\\s*[^>\\r\\n]+-->\\s*' +
+    '<details>\\s*<summary>\\s*⚠️\\s*Action not completed\\s*</summary>\\s*' +
+    'Already reviewed the last commit\\.\\s*Use\\s+`@coderabbitai\\s+full\\s+review`' +
+    '\\s+to rerun a\\s+review of the entire changeset\\.\\s*' +
+    '>\\s*Note:\\s*CodeRabbit is an incremental review system and does not ' +
+    're-review already reviewed commits\\.\\s*' +
+    'This command is applicable only when automatic reviews are paused\\.\\s*' +
+    '</details>\\s*$',
+  'i',
+);
+export function isCodeRabbitAlreadyReviewedAcknowledgement(body) {
+  return CODERABBIT_ALREADY_REVIEWED_ACK_RE.test(
+    String(body ?? '').trimStart(),
+  );
+}
 // Matches the two section headings this older CodeRabbit format nests
 // per-file findings under (kurone-kito/idd-skill#2197, kurone-kito/idd-skill#2559): a review whose finding has no
 // threaded comment of its own. A newer-format review ("Actionable comments
@@ -739,12 +764,18 @@ export function classifyRegularBotComment(
     return null;
   }
   if (body.startsWith(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)) {
-    if (
-      /\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body) &&
-      hasExplicitDispositionAfter(comment, comments, {
+    // Keep the retryable already-reviewed acknowledgement in the outstanding
+    // pool. `summarizeDispositionEvidenceForGate` consumes its
+    // notice-specific dispositions one-to-one; classifying it here from the
+    // mere existence of a later disposition would let one reply clear repeated
+    // acknowledgements (#3153, Copilot review on PR #3153).
+    if (/\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body)) {
+      const hasDisposition = hasExplicitDispositionAfter(comment, comments, {
         isDispositionAuthor: options.isDispositionAuthor,
-      })
-    ) {
+      });
+      if (!hasDisposition) {
+        return null;
+      }
       return {
         classifier: 'OUTDATED',
         reason:
@@ -2210,7 +2241,13 @@ function isCodexUsageLimitNotice(text) {
     CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN.test(remainder)
   );
 }
-export function isAdvisoryNonReviewNotice(body) {
+/**
+ * Classify notices that conclusively mean the secondary advisory bot will not
+ * review this HEAD. The already-reviewed acknowledgement is intentionally
+ * excluded: it is dispositionable non-review activity, but it offers a
+ * retryable full-review path (#3146, Copilot/Codex review on PR #3153).
+ */
+export function isTerminalAdvisoryNonReviewNotice(body) {
   const text = String(body ?? '');
   if (!text) {
     return false;
@@ -2218,6 +2255,13 @@ export function isAdvisoryNonReviewNotice(body) {
   return (
     ADVISORY_NON_REVIEW_NOTICE_PATTERNS.some((pattern) => pattern.test(text)) ||
     isCodexUsageLimitNotice(text)
+  );
+}
+export function isAdvisoryNonReviewNotice(body) {
+  const text = String(body ?? '');
+  return (
+    isCodeRabbitAlreadyReviewedAcknowledgement(text) ||
+    isTerminalAdvisoryNonReviewNotice(text)
   );
 }
 // A trusted IDD disposition of a non-review notice: the canonical
@@ -2484,8 +2528,14 @@ export function computeSecondaryAdvisoryReviewSettlement(
   if (!latest) {
     return { settled: false, settledAt: null, declined: false };
   }
-  if (isAdvisoryNonReviewNotice(latest.body)) {
+  if (isTerminalAdvisoryNonReviewNotice(latest.body)) {
     return { settled: false, settledAt: null, declined: true };
+  }
+  if (isCodeRabbitAlreadyReviewedAcknowledgement(latest.body)) {
+    // This is a retryable non-review notice, not a completed review. Keep the
+    // secondary bot in the ordinary pending path so a later full review or
+    // finding cannot arrive after a short settled buffer (#3146).
+    return { settled: false, settledAt: null, declined: false };
   }
   return { settled: true, settledAt: latest.at, declined: false };
 }

@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildActivitySnapshotSummary,
+  CODERABBIT_AUTO_GENERATED_REPLY_MARKER,
   classifyRegularBotComment,
   indexLatestGatingReviewsByAuthor,
   indexThreadsByReview,
@@ -37,6 +38,17 @@ const truncatedThread = readJson(
 const newCommentAfterF2 = readJson(
   'fixtures/review-snapshots/new-comment-after-f2.json',
 ) as SnapshotFixture;
+
+const coderabbitAlreadyReviewedAck =
+  '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
+  '<!-- CodeRabbit review command invocation: v2:abc123 -->\n' +
+  '<details>\n' +
+  '<summary>⚠️ Action not completed</summary>\n\n' +
+  'Already reviewed the last commit. Use `@coderabbitai full review` to rerun a\n' +
+  'review of the entire changeset.\n\n' +
+  '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits.\n' +
+  'This command is applicable only when automatic reviews are paused.\n\n' +
+  '</details>';
 
 test('indexes the latest gating review per author', () => {
   const index = indexLatestGatingReviewsByAuthor(acceptedAll.reviews);
@@ -314,6 +326,66 @@ test('classifies bot comments against review state and later activity', () => {
     ),
     null,
   );
+});
+
+test('#3146: leaves already-reviewed refusal matching to the one-to-one notice gate', () => {
+  const refusal: CommentLike = {
+    author: { login: 'coderabbitai[bot]' },
+    body: coderabbitAlreadyReviewedAck,
+    createdAt: '2026-05-12T00:00:00Z',
+  };
+  const disposition: CommentLike = {
+    author: { login: 'idd-bot' },
+    body: '**Rejected** — coderabbitai[bot] did not review HEAD abc1234 (already reviewed last commit; full review required); this is not a completed review',
+    createdAt: '2026-05-12T00:01:00Z',
+  };
+
+  assert.equal(classifyRegularBotComment(refusal, [refusal], []), null);
+  assert.equal(
+    classifyRegularBotComment(refusal, [refusal, disposition], []),
+    null,
+  );
+});
+
+test('#3146: keeps an already-reviewed refusal pending after an unrelated summary acceptance', () => {
+  const refusal: CommentLike = {
+    author: { login: 'coderabbitai[bot]' },
+    body: coderabbitAlreadyReviewedAck,
+    createdAt: '2026-05-12T00:00:00Z',
+  };
+  const unrelatedSummaryAcceptance: CommentLike = {
+    author: { login: 'idd-bot' },
+    body: '**Accepted** — coderabbitai[bot] summary walkthrough; no action required',
+    createdAt: '2026-05-12T00:01:00Z',
+  };
+
+  assert.equal(
+    classifyRegularBotComment(
+      refusal,
+      [refusal, unrelatedSummaryAcceptance],
+      [],
+      { isDispositionAuthor: (login) => login === 'idd-bot' },
+    ),
+    null,
+  );
+});
+
+test('#3153: skips disposition scans for unrelated CodeRabbit replies', () => {
+  const reply: CommentLike = {
+    author: { login: 'coderabbitai[bot]' },
+    body: `${CODERABBIT_AUTO_GENERATED_REPLY_MARKER}\nThanks for the update.`,
+    createdAt: '2026-05-12T00:00:00Z',
+  };
+  const comments = new Proxy<CommentLike[]>([reply], {
+    get(target, property, receiver) {
+      if (property === 'some') {
+        throw new Error('unrelated replies must not scan dispositions');
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+  assert.equal(classifyRegularBotComment(reply, comments, []), null);
 });
 
 test('builds activity snapshot metrics with trusted marker filtering', () => {

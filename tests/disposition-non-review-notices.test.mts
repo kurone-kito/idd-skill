@@ -38,6 +38,19 @@ const CODEX_NOTICE_CURRENT_WORDING =
   'with the admins of this repo to increase the limits by adding credits.';
 const CODERABBIT_NOTICE =
   '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
+// #3146: the incremental-review refusal is a regular comment, but it contains
+// no walkthrough or review result. Keep the fetched marker and details shape
+// intact so the classifier test exercises the observed vendor payload.
+const CODERABBIT_ALREADY_REVIEWED_ACK =
+  '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
+  '<!-- CodeRabbit review command invocation: v2:abc123 -->\n' +
+  '<details>\n' +
+  '<summary>⚠️ Action not completed</summary>\n\n' +
+  'Already reviewed the last commit. Use `@coderabbitai full review` to rerun a\n' +
+  'review of the entire changeset.\n\n' +
+  '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits.\n' +
+  'This command is applicable only when automatic reviews are paused.\n\n' +
+  '</details>';
 const CODERABBIT_SUMMARY =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough\nSome walkthrough text.';
 // #2161: CodeRabbit wraps a content-free skip-review notice (billing failure,
@@ -337,6 +350,117 @@ test('noticeReason derives the category-specific reason', () => {
     noticeReason(CODERABBIT_SKIP_REVIEW),
     'review skipped (billing failure or below the manual-trigger star-count gate)',
   );
+  assert.equal(
+    noticeReason(CODERABBIT_ALREADY_REVIEWED_ACK),
+    'already reviewed last commit; full review required',
+  );
+});
+
+test('#3146: recognizes and disposition-plans the already-reviewed refusal', () => {
+  assert.equal(
+    isAdvisoryNonReviewNotice(CODERABBIT_ALREADY_REVIEWED_ACK),
+    true,
+  );
+
+  const firstPlan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(3146, CODERABBIT, CODERABBIT_ALREADY_REVIEWED_ACK)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(firstPlan.planned.length, 1);
+  assert.equal(firstPlan.planned[0]?.botLogin, CODERABBIT);
+  assert.equal(
+    firstPlan.planned[0]?.reason,
+    'already reviewed last commit; full review required',
+  );
+  assert.match(
+    firstPlan.planned[0]?.body ?? '',
+    /did not review HEAD abc1234 \(already reviewed last commit; full review required\)/,
+  );
+
+  const disposition = notice(
+    3147,
+    'kurone-kito',
+    firstPlan.planned[0]?.body ?? '',
+    '2026-05-12T00:01:00Z',
+  );
+  const secondPlan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(
+          3146,
+          CODERABBIT,
+          CODERABBIT_ALREADY_REVIEWED_ACK,
+          '2026-05-12T00:00:00Z',
+        ),
+        disposition,
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(secondPlan.planned.length, 0);
+  assert.deepEqual(
+    secondPlan.skipped.map((entry) => entry.noticeId),
+    [3146],
+  );
+});
+
+test('#3146: consumes repeated already-reviewed refusals one-to-one', () => {
+  const refusal = (id: number, createdAt: string) => ({
+    id,
+    createdAt,
+    body: CODERABBIT_ALREADY_REVIEWED_ACK,
+    author: { login: CODERABBIT },
+  });
+  const disposition = {
+    id: 3148,
+    createdAt: '2026-05-12T00:02:00Z',
+    body: buildDispositionBody(
+      CODERABBIT,
+      'abc1234',
+      'already reviewed last commit; full review required',
+      3146,
+    ),
+    author: { login: 'idd-bot' },
+  };
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        refusal(3146, '2026-05-12T00:00:00Z'),
+        refusal(3147, '2026-05-12T00:01:00Z'),
+        disposition,
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: [CODERABBIT],
+      prAuthorLogin: 'pr-author',
+    },
+  );
+
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.deepEqual(
+    summary.missingRegularComments.map((item) => item.id),
+    ['3147'],
+  );
+});
+
+test('#3146: does not classify similar review prose as the refusal notice', () => {
+  const reviewBody =
+    '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
+    '<!-- CodeRabbit review command invocation: v2:abc123 -->\n' +
+    '<details>\n' +
+    '<summary>⚠️ Action not completed</summary>\n\n' +
+    'Already reviewed the last commit, and the walkthrough found one issue. ' +
+    'Use `@coderabbitai full review` to rerun a review of the entire changeset.\n\n' +
+    '### Walkthrough\n\nThe review identified a real concern.\n\n' +
+    '</details>';
+  assert.equal(isAdvisoryNonReviewNotice(reviewBody), false);
+  assert.equal(isReviewSummaryComment(reviewBody), false);
 });
 
 test('buildDispositionPlan plans one disposition per undispositioned notice', () => {
