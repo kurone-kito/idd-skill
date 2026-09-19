@@ -185,6 +185,38 @@ test('listRequiredChecks recovers an empty set when gh reports no required check
   assert.deepEqual(port.listRequiredChecks(42), []);
 });
 
+test('listRequiredChecksSummary preserves the explicit no-required-checks signal', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('gh failed') as Error & {
+          stderr?: string;
+        };
+        error.stderr = "no required checks reported on the 'main' branch";
+        throw error;
+      },
+    }),
+  );
+  assert.deepEqual(port.listRequiredChecksSummary(42), {
+    checks: [],
+    noRequiredChecksConfigured: true,
+  });
+});
+
+test('listRequiredChecksSummary keeps a valid empty JSON result fail-closed', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({ ghText: () => '[]' }),
+  );
+  assert.deepEqual(port.listRequiredChecksSummary(42), {
+    checks: [],
+    noRequiredChecksConfigured: false,
+  });
+});
+
 test('listRequiredChecks recovers from a non-zero exit that still emitted JSON on stdout', () => {
   const port = createGithubProviderAdapter(
     'kurone-kito',
@@ -1546,6 +1578,25 @@ test('listChangeRequestChecks omits --required, unlike listRequiredChecks', () =
   assert.ok(!capturedArgs?.includes('--required'));
 });
 
+test('listChangeRequestChecks recovers a genuine no-present-checks response as an empty set', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('gh failed') as Error & {
+          status?: number;
+          stderr?: string;
+        };
+        error.status = 1;
+        error.stderr = "no checks reported on the 'main' branch";
+        throw error;
+      },
+    }),
+  );
+  assert.deepEqual(port.listChangeRequestChecks(7), []);
+});
+
 test('getChangeRequestRequestedReviewerLoginsGraphql never throws, returning null on any failure', () => {
   const port = createGithubProviderAdapter(
     'o',
@@ -1597,6 +1648,188 @@ test('getChangeRequestReadinessSnapshot maps all nine fields from a single pr vi
     capturedArgs?.includes(
       'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences',
     ),
+  );
+});
+
+test('getChangeRequestBranchAndChecks paginates the rollup and preserves workflow identity', () => {
+  const calls: string[][] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        calls.push(args);
+        const secondPage = args.includes('after=cursor-1');
+        return JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: 'head-sha',
+                baseRefName: 'main',
+                statusCheckRollup: {
+                  contexts: {
+                    nodes: [
+                      {
+                        __typename: 'CheckRun',
+                        name: 'ci',
+                        status: secondPage ? 'IN_PROGRESS' : 'COMPLETED',
+                        conclusion: secondPage ? null : 'SUCCESS',
+                        detailsUrl: `https://example.test/${secondPage ? 'b' : 'a'}`,
+                        startedAt: '2026-09-19T00:00:00Z',
+                        completedAt: secondPage ? null : '2026-09-19T00:01:00Z',
+                        checkSuite: {
+                          app: { slug: 'github-actions' },
+                          workflowRun: {
+                            file: {
+                              path: `.github/workflows/ci-${secondPage ? 'b' : 'a'}.yml`,
+                            },
+                            workflow: { name: 'shared-workflow' },
+                          },
+                        },
+                      },
+                    ],
+                    pageInfo: {
+                      hasNextPage: !secondPage,
+                      endCursor: secondPage ? null : 'cursor-1',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+
+  assert.deepEqual(port.getChangeRequestBranchAndChecks(7), {
+    headSha: 'head-sha',
+    baseRefName: 'main',
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: 'ci',
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        detailsUrl: 'https://example.test/a',
+        startedAt: '2026-09-19T00:00:00Z',
+        completedAt: '2026-09-19T00:01:00Z',
+        appSlug: 'github-actions',
+        workflowRunPresent: true,
+        workflowName: 'shared-workflow',
+        workflowPath: '.github/workflows/ci-a.yml',
+      },
+      {
+        __typename: 'CheckRun',
+        name: 'ci',
+        status: 'IN_PROGRESS',
+        conclusion: null,
+        detailsUrl: 'https://example.test/b',
+        startedAt: '2026-09-19T00:00:00Z',
+        completedAt: null,
+        appSlug: 'github-actions',
+        workflowRunPresent: true,
+        workflowName: 'shared-workflow',
+        workflowPath: '.github/workflows/ci-b.yml',
+      },
+    ],
+  });
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0]?.some((arg) => arg.includes('contexts(first:100')));
+  assert.ok(calls[1]?.includes('after=cursor-1'));
+});
+
+test('getChangeRequestBranchAndChecks preserves external app identity without a workflow run', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: 'head-sha',
+                baseRefName: 'main',
+                statusCheckRollup: {
+                  contexts: {
+                    nodes: [
+                      {
+                        __typename: 'CheckRun',
+                        name: 'external-ci',
+                        status: 'COMPLETED',
+                        conclusion: 'SUCCESS',
+                        detailsUrl: 'https://example.test/external-ci',
+                        checkSuite: {
+                          app: { slug: 'external-ci-app' },
+                          workflowRun: null,
+                        },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+
+  assert.deepEqual(port.getChangeRequestBranchAndChecks(7), {
+    headSha: 'head-sha',
+    baseRefName: 'main',
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: 'external-ci',
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        detailsUrl: 'https://example.test/external-ci',
+        startedAt: undefined,
+        completedAt: undefined,
+        appSlug: 'external-ci-app',
+        workflowRunPresent: false,
+        workflowName: '',
+        workflowPath: null,
+      },
+    ],
+  });
+});
+
+test('getChangeRequestBranchAndChecks rejects head drift during rollup pagination', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        const secondPage = args.includes('after=cursor-1');
+        return JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: secondPage ? 'changed-head' : 'head-sha',
+                baseRefName: 'main',
+                statusCheckRollup: {
+                  contexts: {
+                    nodes: [],
+                    pageInfo: {
+                      hasNextPage: !secondPage,
+                      endCursor: secondPage ? null : 'cursor-1',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+
+  assert.throws(
+    () => port.getChangeRequestBranchAndChecks(7),
+    /changed during status-check pagination/,
   );
 });
 

@@ -38,6 +38,7 @@ import type {
   ProviderPort,
   ProviderPostedComment,
   ProviderRequiredCheck,
+  ProviderRequiredChecksSummary,
   ProviderReviewsWithHeadCommitDate,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
@@ -113,6 +114,8 @@ export interface FakeProviderFixture {
    * throws (matches the adapter's own no-catch, throw-on-failure contract). */
   changeRequestHeadShas?: Record<number, string>;
   requiredChecks?: Record<number, ProviderRequiredCheck[]>;
+  /** Backs {@link ProviderPort.listRequiredChecksSummary}. */
+  requiredChecksSummary?: Record<number, ProviderRequiredChecksSummary>;
   reviews?: Record<number, unknown[]>;
   openChangeRequests?: ProviderChangeRequestSummary[];
   /** Backs {@link ProviderPort.listChangeRequestReviewThreads}. */
@@ -510,6 +513,15 @@ export function createFakeProviderAdapter(
 
     listRequiredChecks(number: number): ProviderRequiredCheck[] {
       return fixture.requiredChecks?.[number] ?? [];
+    },
+
+    listRequiredChecksSummary(number: number): ProviderRequiredChecksSummary {
+      return (
+        fixture.requiredChecksSummary?.[number] ?? {
+          checks: fixture.requiredChecks?.[number] ?? [],
+          noRequiredChecksConfigured: false,
+        }
+      );
     },
 
     listReviews(number: number): unknown[] {

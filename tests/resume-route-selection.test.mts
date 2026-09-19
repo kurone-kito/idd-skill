@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import {
   classifyBranchState,
+  collectRoutingInput,
   countLatestChangesRequestedByReviewer,
   selectResumeRoute,
 } from '../src/scripts/resume-route-selection.mts';
@@ -227,6 +228,571 @@ test('routes E15 when PR exists, required checks are not generated, and reviews 
     reviewExists: true,
   });
   assert.equal(result.route, 'E15');
+});
+
+test('routes F2 when no required checks are configured and the present run passes', () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: false,
+    noRequiredChecksConfigured: true,
+    ciSuccess: true,
+    reviewExists: false,
+    reviewPending: false,
+    branchState: 'clean',
+  });
+  assert.equal(result.route, 'F2');
+  assert.equal(result.reason, 'pr-ci-success-no-review-pending');
+});
+
+test('routes E1 when no required checks are configured and the present run passes with pending review', () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: false,
+    noRequiredChecksConfigured: true,
+    ciSuccess: true,
+    reviewExists: true,
+    reviewPending: true,
+  });
+  assert.equal(result.route, 'E1');
+  assert.equal(result.reason, 'pr-ci-success-review-pending');
+});
+
+test('routes D4 when no required checks are configured but the present run is empty or unknown', () => {
+  for (const input of [
+    { ciSuccess: false },
+    { ciSuccess: false, ciRunning: false, ciFailed: false },
+  ]) {
+    const result = selectResumeRoute({
+      prExists: true,
+      requiredChecksGenerated: false,
+      noRequiredChecksConfigured: true,
+      reviewExists: false,
+      reviewPending: false,
+      ...input,
+    });
+    assert.equal(result.route, 'D4');
+    assert.equal(result.reason, 'pr-present-run-not-generated');
+  }
+});
+
+test('routes E15 when the no-required-checks present run is pending or failing and reviews exist', () => {
+  for (const input of [{ ciRunning: true }, { ciFailed: true }]) {
+    const result = selectResumeRoute({
+      prExists: true,
+      requiredChecksGenerated: false,
+      noRequiredChecksConfigured: true,
+      reviewExists: true,
+      reviewPending: true,
+      ...input,
+    });
+    assert.equal(result.route, 'E15');
+  }
+});
+
+function createResumeCollectorPort({
+  statusCheckRollup,
+  branchRules = [],
+  noRequiredChecksConfigured = true,
+}: {
+  statusCheckRollup: unknown[];
+  branchRules?: unknown[];
+  noRequiredChecksConfigured?: boolean;
+}) {
+  return createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    openChangeRequests: [
+      {
+        number: 3150,
+        title: 'test PR',
+        body: 'Closes #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    changeRequestBranchAndChecks: {
+      3150: {
+        headSha: 'head-sha',
+        baseRefName: 'main',
+        statusCheckRollup,
+      },
+    },
+    requiredChecksSummary: {
+      3150: { checks: [], noRequiredChecksConfigured },
+    },
+    branchRules: { 'fake-owner/fake-repo/main': branchRules },
+    branchProtection: { 'fake-owner/fake-repo/main': {} },
+    changeRequests: {
+      3150: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+    },
+  });
+}
+
+function checkRun(
+  name: string,
+  workflowName: string,
+  status: string,
+  conclusion: string | null,
+  workflowPath:
+    | string
+    | null = `.github/workflows/${workflowName || 'workflow'}.yml`,
+) {
+  return {
+    __typename: 'CheckRun',
+    name,
+    workflowName,
+    workflowPath,
+    status,
+    conclusion,
+    completedAt: conclusion ? '2026-09-19T12:00:00Z' : null,
+    detailsUrl: `https://example.test/${workflowName}/${name}`,
+  };
+}
+
+test('collector resolves protection-read policy from the PR base ref', () => {
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    openChangeRequests: [
+      {
+        number: 3150,
+        title: 'test PR',
+        body: 'Closes #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    changeRequestBranchAndChecks: {
+      3150: {
+        headSha: 'head-sha',
+        baseRefName: 'main',
+        statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+      },
+    },
+    requiredChecksSummary: {
+      3150: { checks: [], noRequiredChecksConfigured: true },
+    },
+    changeRequests: {
+      3150: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+    },
+  });
+  const seenRefs: string[] = [];
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: (owner, repo, ref) => {
+      assert.deepEqual(
+        { owner, repo },
+        {
+          owner: 'fake-owner',
+          repo: 'fake-repo',
+        },
+      );
+      seenRefs.push(ref);
+      return null;
+    },
+  });
+
+  assert.deepEqual(seenRefs, ['main']);
+  assert.equal(input.noRequiredChecksConfigured, false);
+  assert.equal(input.requiredChecksGenerated, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector uses the default branch for empty base-ref governance reads', () => {
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    openChangeRequests: [
+      {
+        number: 3150,
+        title: 'test PR',
+        body: 'Closes #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    changeRequestBranchAndChecks: {
+      3150: {
+        headSha: 'head-sha',
+        baseRefName: '',
+        statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+      },
+    },
+    requiredChecksSummary: {
+      3150: { checks: [], noRequiredChecksConfigured: true },
+    },
+    branchRules: { 'fake-owner/fake-repo/trunk': [] },
+    branchProtection: { 'fake-owner/fake-repo/trunk': {} },
+    repositoryDefaultBranch: 'trunk',
+    changeRequests: {
+      3150: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+    },
+  });
+  const seenRefs: string[] = [];
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: (_owner, _repo, ref) => {
+      seenRefs.push(ref);
+      return null;
+    },
+  });
+
+  assert.deepEqual(seenRefs, ['trunk']);
+  assert.equal(input.noRequiredChecksConfigured, true);
+  assert.equal(input.ciSuccess, true);
+  assert.equal(selectResumeRoute(input).route, 'F2');
+});
+
+test('collector fails closed when governance reads return permission denied', () => {
+  for (const unreadableRead of ['branchRules', 'branchProtection'] as const) {
+    const port = createResumeCollectorPort({
+      statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+    });
+    if (unreadableRead === 'branchRules') {
+      port.listBranchRules = () => {
+        const error = new Error('Forbidden (HTTP 403)') as Error & {
+          status?: number;
+        };
+        error.status = 403;
+        throw error;
+      };
+    } else {
+      port.getBranchProtection = () => {
+        const error = new Error('Forbidden (HTTP 403)') as Error & {
+          status?: number;
+        };
+        error.status = 403;
+        throw error;
+      };
+    }
+
+    const input = collectRoutingInput({
+      port,
+      issueNumber: 3145,
+      loadTrustedConfig: () => null,
+    });
+    assert.equal(input.noRequiredChecksConfigured, false);
+    assert.equal(input.ciSuccess, false);
+    assert.equal(selectResumeRoute(input).route, 'D4');
+  }
+});
+
+test('collector discovers no required checks from protection and routes present-run success', () => {
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    openChangeRequests: [
+      {
+        number: 3150,
+        title: 'test PR',
+        body: 'Closes #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    changeRequestBranchAndChecks: {
+      3150: {
+        headSha: 'head-sha',
+        baseRefName: 'main',
+        statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+      },
+    },
+    requiredChecksSummary: {
+      3150: { checks: [], noRequiredChecksConfigured: true },
+    },
+    branchRules: { 'fake-owner/fake-repo/main': [] },
+    branchProtection: { 'fake-owner/fake-repo/main': {} },
+    changeRequests: {
+      3150: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+    },
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.noRequiredChecksConfigured, true);
+  assert.equal(input.requiredChecksGenerated, false);
+  assert.equal(input.ciSuccess, true);
+  assert.deepEqual(input.ciChecks, [
+    {
+      name: 'ci',
+      state: 'SUCCESS',
+      completedAt: '2026-09-19T12:00:00Z',
+    },
+  ]);
+  assert.equal(selectResumeRoute(input).route, 'F2');
+});
+
+test('collector keeps empty and pending no-required present runs fail-closed', () => {
+  for (const statusCheckRollup of [
+    [],
+    [checkRun('ci', 'workflow', 'IN_PROGRESS', null)],
+  ]) {
+    const port = createResumeCollectorPort({ statusCheckRollup });
+
+    const input = collectRoutingInput({
+      port,
+      issueNumber: 3145,
+      loadTrustedConfig: () => null,
+    });
+    assert.equal(selectResumeRoute(input).route, 'D4');
+  }
+});
+
+test('collector keeps configured required checks fail-closed when no required run exists', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      checkRun('optional-ci', 'workflow', 'COMPLETED', 'SUCCESS'),
+    ],
+    branchRules: [
+      {
+        type: 'required_status_checks',
+        parameters: { required_status_checks: [{ context: 'required-ci' }] },
+      },
+    ],
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.noRequiredChecksConfigured, false);
+  assert.equal(input.requiredChecksGenerated, false);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(
+    selectResumeRoute(input).reason,
+    'pr-required-checks-not-generated',
+  );
+});
+
+test('collector retains same-named present runs from different workflows', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      checkRun('ci', 'workflow-a', 'COMPLETED', 'SUCCESS'),
+      checkRun('ci', 'workflow-b', 'IN_PROGRESS', null),
+    ],
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.noRequiredChecksConfigured, true);
+  assert.equal(input.ciRunning, true);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector retains same-named runs from different workflow paths', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      checkRun(
+        'ci',
+        'shared-workflow',
+        'COMPLETED',
+        'SUCCESS',
+        '.github/workflows/ci-a.yml',
+      ),
+      checkRun(
+        'ci',
+        'shared-workflow',
+        'IN_PROGRESS',
+        null,
+        '.github/workflows/ci-b.yml',
+      ),
+    ],
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.ciRunning, true);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector fails closed when a present check run lacks workflow identity', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS', null),
+    ],
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector accepts a passing external app check run without a workflow path', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      {
+        ...checkRun('external-ci', '', 'COMPLETED', 'SUCCESS', null),
+        appSlug: 'external-ci-app',
+        workflowRunPresent: false,
+      },
+    ],
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.ciSuccess, true);
+  assert.equal(selectResumeRoute(input).route, 'F2');
+});
+
+test('collector retains same-named check runs and status contexts', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      checkRun('ci', '', 'COMPLETED', 'SUCCESS'),
+      {
+        __typename: 'StatusContext',
+        context: 'ci',
+        state: 'PENDING',
+        targetUrl: 'https://example.test/status/ci',
+      },
+    ],
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.noRequiredChecksConfigured, true);
+  assert.equal(input.ciRunning, true);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector keeps an ambiguous empty required-check summary fail-closed', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+    noRequiredChecksConfigured: false,
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.noRequiredChecksConfigured, false);
+  assert.equal(input.requiredChecksGenerated, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector keeps disagreement between summary and governance fail-closed', () => {
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    openChangeRequests: [
+      {
+        number: 3150,
+        title: 'test PR',
+        body: 'Closes #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    changeRequestBranchAndChecks: {
+      3150: {
+        headSha: 'head-sha',
+        baseRefName: 'main',
+        statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+      },
+    },
+    requiredChecksSummary: {
+      3150: {
+        checks: [
+          { name: 'ci', state: 'SUCCESS', completedAt: '2026-09-19T12:00:00Z' },
+        ],
+        noRequiredChecksConfigured: false,
+      },
+    },
+    branchRules: { 'fake-owner/fake-repo/main': [] },
+    branchProtection: { 'fake-owner/fake-repo/main': {} },
+    changeRequests: {
+      3150: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+    },
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.noRequiredChecksConfigured, false);
+  assert.equal(input.requiredChecksGenerated, false);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector keeps mismatched required-check names fail-closed', () => {
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    openChangeRequests: [
+      {
+        number: 3150,
+        title: 'test PR',
+        body: 'Closes #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    changeRequestBranchAndChecks: {
+      3150: {
+        headSha: 'head-sha',
+        baseRefName: 'main',
+        statusCheckRollup: [
+          checkRun('required-ci', 'workflow', 'COMPLETED', 'SUCCESS'),
+        ],
+      },
+    },
+    requiredChecksSummary: {
+      3150: {
+        checks: [
+          {
+            name: 'required-ci',
+            state: 'SUCCESS',
+            completedAt: '2026-09-19T12:00:00Z',
+          },
+        ],
+        noRequiredChecksConfigured: false,
+      },
+    },
+    branchRules: {
+      'fake-owner/fake-repo/main': [
+        {
+          type: 'required_status_checks',
+          parameters: { required_status_checks: [{ context: 'other-ci' }] },
+        },
+      ],
+    },
+    branchProtection: { 'fake-owner/fake-repo/main': {} },
+    changeRequests: {
+      3150: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+    },
+  });
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+  assert.equal(input.requiredChecksGenerated, false);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
 });
 
 test('classifyBranchState returns clean for CLEAN mergeStateStatus', () => {

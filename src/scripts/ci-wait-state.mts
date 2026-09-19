@@ -92,6 +92,9 @@ interface StatusCheckRollupEntry {
   name?: string | null;
   detailsUrl?: string | null;
   workflowName?: string | null;
+  workflowPath?: string | null;
+  appSlug?: string | null;
+  workflowRunPresent?: boolean;
   startedAt?: string | null;
   completedAt?: string | null;
 }
@@ -100,6 +103,12 @@ interface StatusCheckRollupEntry {
 export interface CiWaitCheckEntry {
   checkName: string;
   workflowName: string;
+  /** GitHub-owned workflow file path; null means producer identity is unresolved. */
+  workflowPath?: string | null;
+  /** GitHub App slug for a non-Actions check run. */
+  appSlug?: string | null;
+  /** Whether GitHub associated this check run with an Actions workflow run. */
+  workflowRunPresent?: boolean;
   type: 'check-run' | 'status-context';
   state: string;
   status: 'success' | 'pending' | 'failure' | 'unknown';
@@ -386,6 +395,18 @@ function normalizeCheckEntry(
     .toUpperCase();
   const state =
     status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN';
+  const workflowPath =
+    entry?.workflowPath === undefined
+      ? undefined
+      : String(entry.workflowPath ?? '').trim() || null;
+  const appSlug =
+    entry?.appSlug === undefined
+      ? undefined
+      : String(entry.appSlug ?? '').trim() || null;
+  const workflowRunPresent =
+    entry?.workflowRunPresent === undefined
+      ? undefined
+      : entry.workflowRunPresent === true;
   return {
     checkName,
     // Trimmed like checkName: workflowName is part of the
@@ -393,6 +414,9 @@ function normalizeCheckEntry(
     // whitespace-only differences could otherwise produce unstable keys
     // or spuriously "distinct" workflow entries.
     workflowName: String(entry?.workflowName ?? '').trim(),
+    ...(workflowPath !== undefined ? { workflowPath } : {}),
+    ...(appSlug !== undefined ? { appSlug } : {}),
+    ...(workflowRunPresent !== undefined ? { workflowRunPresent } : {}),
     type: 'check-run',
     state,
     status: bucketState(state),

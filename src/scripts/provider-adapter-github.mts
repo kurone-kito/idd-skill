@@ -51,6 +51,7 @@ import type {
   ProviderPort,
   ProviderPostedComment,
   ProviderRequiredCheck,
+  ProviderRequiredChecksSummary,
   ProviderReviewsWithHeadCommitDate,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
@@ -184,6 +185,196 @@ const USER_CONTENT_EDITS_MAX_PAGES = 10;
  * (throw) past this rather than silently truncating the coverage the
  * un-paginated `first:100` query originally claimed but did not enforce. */
 const CHECK_RUN_WORKFLOW_PATH_MAX_PAGES = 20;
+
+/** Bounds the forward-pagination loop for a PR's status-check rollup. */
+const STATUS_CHECK_ROLLUP_MAX_PAGES = 20;
+
+function normalizeStatusCheckRollupNode(
+  node: unknown,
+): Record<string, unknown> | null {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) {
+    return null;
+  }
+  const raw = node as Record<string, unknown>;
+  const type = String(raw.__typename ?? '');
+  if (type === 'CheckRun') {
+    const checkSuite =
+      raw.checkSuite &&
+      typeof raw.checkSuite === 'object' &&
+      !Array.isArray(raw.checkSuite)
+        ? (raw.checkSuite as Record<string, unknown>)
+        : {};
+    const app =
+      checkSuite.app &&
+      typeof checkSuite.app === 'object' &&
+      !Array.isArray(checkSuite.app)
+        ? (checkSuite.app as Record<string, unknown>)
+        : {};
+    const rawWorkflowRun = checkSuite.workflowRun;
+    const workflowRunPresent =
+      rawWorkflowRun !== null &&
+      typeof rawWorkflowRun === 'object' &&
+      !Array.isArray(rawWorkflowRun);
+    const workflowRun = workflowRunPresent
+      ? (rawWorkflowRun as Record<string, unknown>)
+      : {};
+    const file =
+      workflowRun.file &&
+      typeof workflowRun.file === 'object' &&
+      !Array.isArray(workflowRun.file)
+        ? (workflowRun.file as Record<string, unknown>)
+        : {};
+    const workflow =
+      workflowRun.workflow &&
+      typeof workflowRun.workflow === 'object' &&
+      !Array.isArray(workflowRun.workflow)
+        ? (workflowRun.workflow as Record<string, unknown>)
+        : {};
+    return {
+      __typename: 'CheckRun',
+      name: raw.name,
+      status: raw.status,
+      conclusion: raw.conclusion,
+      detailsUrl: raw.detailsUrl,
+      startedAt: raw.startedAt,
+      completedAt: raw.completedAt,
+      appSlug: app.slug == null ? null : String(app.slug).trim() || null,
+      workflowRunPresent,
+      // GitHub's GraphQL statusCheckRollup does not expose workflowName or
+      // workflowPath directly; derive both from the check suite's associated
+      // workflow run, whose identity is provider-owned rather than inferred
+      // from a check-run display name.
+      workflowName: String(workflow.name ?? ''),
+      workflowPath: file.path == null ? null : String(file.path),
+    };
+  }
+  if (type === 'StatusContext') {
+    return {
+      __typename: 'StatusContext',
+      context: raw.context,
+      state: raw.state,
+      targetUrl: raw.targetUrl,
+      // StatusContext has no startedAt field in GraphQL. Its creation time is
+      // the closest equivalent and preserves the ordering signal gh exposes.
+      startedAt: raw.createdAt,
+    };
+  }
+  return raw;
+}
+
+/** Fetch the complete, workflow-identity-enriched status rollup for a PR. */
+function fetchChangeRequestBranchAndChecks(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  number: number,
+): ProviderChangeRequestBranchAndChecks {
+  let after: string | null = null;
+  let headSha = '';
+  let baseRefName = '';
+  const statusCheckRollup: Record<string, unknown>[] = [];
+
+  for (let page = 0; page < STATUS_CHECK_ROLLUP_MAX_PAGES; page += 1) {
+    const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      headRefOid
+      baseRefName
+      statusCheckRollup{
+        contexts(first:100,after:$after){
+          nodes{
+            __typename
+            ... on CheckRun{
+              name status conclusion detailsUrl startedAt completedAt
+              checkSuite{
+                app{slug}
+                workflowRun{
+                  file{path}
+                  workflow{name}
+                }
+              }
+            }
+            ... on StatusContext{context state targetUrl createdAt}
+          }
+          pageInfo{hasNextPage endCursor}
+        }
+      }
+    }
+  }
+}`;
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...graphqlHostnameArgs(),
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-F',
+      `number=${number}`,
+    ];
+    if (after) {
+      apiArgs.push('-f', `after=${after}`);
+    }
+    const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(raw, 'getChangeRequestBranchAndChecks');
+    const pullRequest = raw?.data?.repository?.pullRequest as
+      | {
+          headRefOid?: unknown;
+          baseRefName?: unknown;
+          statusCheckRollup?: {
+            contexts?: {
+              nodes?: unknown;
+              pageInfo?: {
+                hasNextPage?: unknown;
+                endCursor?: unknown;
+              };
+            } | null;
+          } | null;
+        }
+      | null
+      | undefined;
+    if (!pullRequest) {
+      throw new Error(
+        `getChangeRequestBranchAndChecks failed: pull request #${number} was not found`,
+      );
+    }
+    const pageHeadSha = String(pullRequest.headRefOid ?? '');
+    const pageBaseRefName = String(pullRequest.baseRefName ?? '');
+    if (page === 0) {
+      headSha = pageHeadSha;
+      baseRefName = pageBaseRefName;
+    } else if (pageHeadSha !== headSha || pageBaseRefName !== baseRefName) {
+      throw new Error(
+        'getChangeRequestBranchAndChecks: PR head or base ref changed during status-check pagination',
+      );
+    }
+    const contexts = pullRequest.statusCheckRollup?.contexts;
+    for (const node of Array.isArray(contexts?.nodes) ? contexts.nodes : []) {
+      const normalized = normalizeStatusCheckRollupNode(node);
+      if (normalized) {
+        statusCheckRollup.push(normalized);
+      }
+    }
+    const hasNextPage = contexts?.pageInfo?.hasNextPage === true;
+    if (!hasNextPage) {
+      return { headSha, baseRefName, statusCheckRollup };
+    }
+    const nextCursor = String(contexts?.pageInfo?.endCursor ?? '');
+    if (!nextCursor) {
+      throw new Error(
+        'getChangeRequestBranchAndChecks: page reported hasNextPage without endCursor',
+      );
+    }
+    after = nextCursor;
+  }
+
+  throw new Error(
+    `getChangeRequestBranchAndChecks: exceeded ${STATUS_CHECK_ROLLUP_MAX_PAGES} status-check pages`,
+  );
+}
 
 /**
  * One page of {@link listCheckRunWorkflowPaths}'s check-suite connection,
@@ -1572,7 +1763,7 @@ export function createGithubProviderAdapter(
       );
     },
 
-    listRequiredChecks(number: number): ProviderRequiredCheck[] {
+    listRequiredChecksSummary(number: number): ProviderRequiredChecksSummary {
       const args = [
         'pr',
         'checks',
@@ -1584,6 +1775,7 @@ export function createGithubProviderAdapter(
         'name,state,completedAt',
       ];
       let raw: string;
+      let noRequiredChecksConfigured = false;
       try {
         raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS);
       } catch (error) {
@@ -1591,26 +1783,35 @@ export function createGithubProviderAdapter(
           (error as { stderr?: unknown } | null)?.stderr ?? '',
         );
         if (/no required checks reported/i.test(stderr)) {
-          return [];
+          raw = '[]';
+          noRequiredChecksConfigured = true;
+        } else {
+          const stdout = String(
+            (error as { stdout?: unknown } | null)?.stdout ?? '',
+          ).trim();
+          if (!stdout) {
+            throw error;
+          }
+          raw = stdout;
         }
-        const stdout = String(
-          (error as { stdout?: unknown } | null)?.stdout ?? '',
-        ).trim();
-        if (!stdout) {
-          throw error;
-        }
-        raw = stdout;
       }
       const rows = JSON.parse(raw || '[]') as {
         name?: unknown;
         state?: unknown;
         completedAt?: unknown;
       }[];
-      return rows.map((row) => ({
-        name: String(row.name ?? ''),
-        state: String(row.state ?? ''),
-        completedAt: row.completedAt ? String(row.completedAt) : null,
-      }));
+      return {
+        checks: rows.map((row) => ({
+          name: String(row.name ?? ''),
+          state: String(row.state ?? ''),
+          completedAt: row.completedAt ? String(row.completedAt) : null,
+        })),
+        noRequiredChecksConfigured,
+      };
+    },
+
+    listRequiredChecks(number: number): ProviderRequiredCheck[] {
+      return this.listRequiredChecksSummary(number).checks;
     },
 
     listReviews(number: number): unknown[] {
@@ -2113,25 +2314,7 @@ export function createGithubProviderAdapter(
     getChangeRequestBranchAndChecks(
       number: number,
     ): ProviderChangeRequestBranchAndChecks {
-      const raw = deps.ghText([
-        'pr',
-        'view',
-        String(number),
-        '-R',
-        `${owner}/${repo}`,
-        '--json',
-        'headRefOid,baseRefName,statusCheckRollup',
-      ]);
-      const parsed = JSON.parse(raw) as {
-        headRefOid?: unknown;
-        baseRefName?: unknown;
-        statusCheckRollup?: unknown;
-      };
-      return {
-        headSha: String(parsed.headRefOid ?? ''),
-        baseRefName: String(parsed.baseRefName ?? ''),
-        statusCheckRollup: parsed.statusCheckRollup,
-      };
+      return fetchChangeRequestBranchAndChecks(deps, owner, repo, number);
     },
 
     getChangeRequestHeadRef(number: number): string {
@@ -2252,9 +2435,17 @@ export function createGithubProviderAdapter(
           (error as { stdout?: unknown } | null)?.stdout ?? '',
         );
         if (![1, 8].includes(status) || !/^\s*[[{]/.test(stdout)) {
-          throw error;
+          const stderr = String(
+            (error as { stderr?: unknown } | null)?.stderr ?? '',
+          );
+          if (status === 1 && /no checks reported/i.test(stderr)) {
+            raw = '[]';
+          } else {
+            throw error;
+          }
+        } else {
+          raw = stdout;
         }
-        raw = stdout;
       }
       const rows = JSON.parse(raw || '[]') as {
         name?: unknown;

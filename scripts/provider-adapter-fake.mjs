@@ -188,6 +188,14 @@ export function createFakeProviderAdapter(fixture) {
     listRequiredChecks(number) {
       return fixture.requiredChecks?.[number] ?? [];
     },
+    listRequiredChecksSummary(number) {
+      return (
+        fixture.requiredChecksSummary?.[number] ?? {
+          checks: fixture.requiredChecks?.[number] ?? [],
+          noRequiredChecksConfigured: false,
+        }
+      );
+    },
     listReviews(number) {
       return fixture.reviews?.[number] ?? [];
     },

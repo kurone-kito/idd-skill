@@ -5,26 +5,20 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
+import {
+  buildCiWaitStateSummary,
+  selectLatestCheckEntry,
+} from './ci-wait-state.mjs';
 import { parseCliArgs } from './cli-args.mjs';
+import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { loadTrustedIddConfig } from './idd-config.mjs';
+import { normalizePolicyConfig } from './policy-helpers.mjs';
+import { summarizeBranchReviewRequirements } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
 
-const RUNNING_STATES = new Set([
-  'queued',
-  'in_progress',
-  'pending',
-  'waiting',
-  'requested',
-]);
-const FAILURE_STATES = new Set(['failure', 'cancelled', 'timed_out']);
-const PASS_EQUIVALENT_STATES = new Set([
-  'success',
-  'skipped',
-  'neutral',
-  'not_applicable',
-]);
 /**
  * The documented branch-state taxonomy: every value {@link classifyBranchState}
  * can return and that {@link selectResumeRoute} routes on. A caller-supplied
@@ -81,10 +75,27 @@ export function selectResumeRoute(input) {
     }
     return result('stop', 'no-pr-no-unpushed-clean-path', state, reasonParts);
   }
-  if (!state.requiredChecksGenerated) {
+  if (!state.requiredChecksGenerated && !state.noRequiredChecksConfigured) {
     return result(
       state.reviewExists ? 'E15' : 'D4',
       'pr-required-checks-not-generated',
+      state,
+      reasonParts,
+    );
+  }
+  // A repository can have no required checks while its PR still has an
+  // ordinary present-run check set. An empty or unknown present-run set is
+  // not a vacuous pass: keep the existing D4/E15 fail-closed routing until a
+  // concrete check result is available.
+  if (
+    state.noRequiredChecksConfigured &&
+    !state.ciRunning &&
+    !state.ciFailed &&
+    !state.ciSuccess
+  ) {
+    return result(
+      state.reviewExists ? 'E15' : 'D4',
+      'pr-present-run-not-generated',
       state,
       reasonParts,
     );
@@ -179,7 +190,11 @@ function runCli() {
   }
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function collectRoutingInput({ port, issueNumber }) {
+export function collectRoutingInput({
+  port,
+  issueNumber,
+  loadTrustedConfig = loadTrustedIddConfig,
+}) {
   const prs = findIssueRelatedOpenPrs({ port, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
   // resolveViewerLogin's REST leg is the exact gh api user --jq .login call
@@ -194,6 +209,7 @@ function collectRoutingInput({ port, issueNumber }) {
       prAmbiguous: prs.length > 1,
       prExists: false,
       requiredChecksGenerated: false,
+      noRequiredChecksConfigured: false,
       hasUnpushedCommits: gitState.hasUnpushedCommits,
       worktreeDirty: gitState.worktreeDirty,
       ciChecks: [],
@@ -211,18 +227,125 @@ function collectRoutingInput({ port, issueNumber }) {
       prUrl: null,
     };
   }
-  const checks = port.listRequiredChecks(issuePr.number);
-  const normalizedStates = checks.map((check) =>
-    String(check.state ?? '').toLowerCase(),
+  const branchAndChecks = port.getChangeRequestBranchAndChecks(issuePr.number);
+  const requiredChecksSummary = port.listRequiredChecksSummary(issuePr.number);
+  const repository = port.resolveRepositoryLocator();
+  const trustedConfigRef =
+    branchAndChecks.baseRefName ||
+    port.getRepositoryDefaultBranch(repository.owner, repository.name);
+  if (!trustedConfigRef) {
+    throw new Error(
+      `cannot resolve a trusted ref for .github/idd/config.json: PR #${issuePr.number} has no baseRefName and the repository's live default branch could not be determined`,
+    );
+  }
+  const policyConfig = normalizePolicyConfig(
+    loadTrustedConfig(repository.owner, repository.name, trustedConfigRef),
   );
-  const requiredChecksGenerated = checks.length > 0;
-  const ciRunning = normalizedStates.some((state) => RUNNING_STATES.has(state));
-  const ciFailed = normalizedStates.some((state) => FAILURE_STATES.has(state));
-  const ciSuccess =
-    requiredChecksGenerated &&
-    !ciRunning &&
-    !ciFailed &&
-    normalizedStates.every((state) => PASS_EQUIVALENT_STATES.has(state));
+  const trustEmptyProtectionReads =
+    policyConfig.ciGate.trustEmptyProtectionReads === true;
+  const branchRulesOutcome = readResumeGovernanceOutcome(() =>
+    port.listBranchRules(repository.owner, repository.name, trustedConfigRef),
+  );
+  const branchProtectionOutcome = readResumeGovernanceOutcome(() =>
+    port.getBranchProtection(
+      repository.owner,
+      repository.name,
+      trustedConfigRef,
+    ),
+  );
+  const protectionReadsUnreadable =
+    branchRulesOutcome.outcome === 'unreadable' ||
+    branchProtectionOutcome.outcome === 'unreadable' ||
+    (!trustEmptyProtectionReads &&
+      branchRulesOutcome.outcome === 'not-found') ||
+    (!trustEmptyProtectionReads &&
+      branchProtectionOutcome.outcome === 'not-found');
+  const branchRules =
+    branchRulesOutcome.outcome === 'ok' ? branchRulesOutcome.value : [];
+  const branchProtection =
+    branchProtectionOutcome.outcome === 'ok'
+      ? branchProtectionOutcome.value
+      : {};
+  const branchReviewRequirements = summarizeBranchReviewRequirements(
+    branchRules,
+    branchProtection,
+  );
+  const requiredChecksConfigurationPresent =
+    branchReviewRequirements.requiredCheckSourcePinned ||
+    branchReviewRequirements.requiredCheckNames.length > 0;
+  const configuredRequiredCheckNames = new Set(
+    branchReviewRequirements.requiredCheckNames,
+  );
+  const summarizedRequiredCheckNames = new Set(
+    requiredChecksSummary.checks
+      .map((check) => String(check.name ?? '').trim())
+      .filter(Boolean),
+  );
+  const requiredCheckSourcesDisagree =
+    (requiredChecksSummary.checks.length > 0 &&
+      !requiredChecksConfigurationPresent) ||
+    (configuredRequiredCheckNames.size > 0 &&
+      summarizedRequiredCheckNames.size !==
+        configuredRequiredCheckNames.size) ||
+    [...summarizedRequiredCheckNames].some(
+      (name) => !configuredRequiredCheckNames.has(name),
+    );
+  const ciWaitState = buildCiWaitStateSummary(
+    {
+      headRefOid: branchAndChecks.headSha,
+      statusCheckRollup: branchAndChecks.statusCheckRollup,
+    },
+    {
+      requiredCheckNames: branchReviewRequirements.requiredCheckNames,
+      requiredCheckSourcePinned:
+        branchReviewRequirements.requiredCheckSourcePinned,
+      requiredCheckSourcePinnedUnresolved:
+        branchReviewRequirements.requiredCheckSourcePinnedUnresolved,
+      trustSourcePinnedRequiredChecks:
+        policyConfig.ciGate.trustSourcePinnedRequiredChecks === true,
+    },
+  );
+  const noRequiredChecksConfigured =
+    !protectionReadsUnreadable &&
+    requiredChecksSummary.noRequiredChecksConfigured &&
+    requiredChecksSummary.checks.length === 0 &&
+    !requiredChecksConfigurationPresent;
+  const requiredChecksGenerated =
+    !noRequiredChecksConfigured &&
+    !protectionReadsUnreadable &&
+    !requiredCheckSourcesDisagree &&
+    requiredChecksConfigurationPresent &&
+    requiredChecksSummary.checks.length > 0 &&
+    ciWaitState.requiredChecks.allRequiredPresent;
+  const requiredChecks = ciWaitState.checks.filter((check) => check.required);
+  const presentChecks = selectLatestPresentRunChecks(ciWaitState.checks);
+  const presentRunIdentityUnresolved = ciWaitState.checks.some(
+    (check) =>
+      check.type === 'check-run' &&
+      check.workflowPath == null &&
+      (check.workflowRunPresent !== false || check.appSlug == null),
+  );
+  const checks = noRequiredChecksConfigured ? presentChecks : requiredChecks;
+  const ciChecks = checks.map((check) => ({
+    name: check.checkName,
+    state: check.state,
+    completedAt: check.completedAt || null,
+  }));
+  const ciRunning = noRequiredChecksConfigured
+    ? presentChecks.some((check) => check.status === 'pending')
+    : ciWaitState.requiredChecks.anyRequiredPending;
+  const ciFailed = noRequiredChecksConfigured
+    ? presentChecks.some((check) => check.status === 'failure')
+    : ciWaitState.requiredChecks.anyRequiredFailing;
+  const ciSuccess = noRequiredChecksConfigured
+    ? presentChecks.length > 0 &&
+      !presentRunIdentityUnresolved &&
+      presentChecks.every((check) => check.status === 'success')
+    : !protectionReadsUnreadable &&
+      !requiredCheckSourcesDisagree &&
+      requiredChecksConfigurationPresent &&
+      requiredChecksSummary.checks.length > 0 &&
+      ciWaitState.requiredChecks.status === 'success';
   const reviewThreads = port.listChangeRequestReviewThreads(issuePr.number);
   const unresolvedThreadCount = reviewThreads.filter(
     (thread) => thread.isResolved === false,
@@ -257,9 +380,10 @@ function collectRoutingInput({ port, issueNumber }) {
     prAmbiguous: false,
     prExists: true,
     requiredChecksGenerated,
+    noRequiredChecksConfigured,
     hasUnpushedCommits: gitState.hasUnpushedCommits,
     worktreeDirty: gitState.worktreeDirty,
-    ciChecks: checks,
+    ciChecks,
     ciRunning,
     ciFailed,
     ciSuccess,
@@ -273,6 +397,35 @@ function collectRoutingInput({ port, issueNumber }) {
     prNumber: issuePr.number,
     prUrl: issuePr.url,
   };
+}
+/**
+ * Resume routing must turn an explicit governance 403 into a hold signal.
+ * The provider adapter preserves other non-404 failures as thrown errors for
+ * callers whose failure contract is different, so catch only this permission
+ * outcome at the D4 boundary (Codex review, PR #3150).
+ */
+function readResumeGovernanceOutcome(read) {
+  try {
+    return read();
+  } catch (error) {
+    if (deriveGhHttpStatus(error) === 403) {
+      return { outcome: 'unreadable' };
+    }
+    throw error;
+  }
+}
+function selectLatestPresentRunChecks(checks) {
+  const groups = new Map();
+  for (const check of checks) {
+    const key = `${check.type}\u0000${check.checkName}\u0000${check.workflowName}\u0000${check.workflowPath ?? '<unresolved>'}\u0000${check.appSlug ?? '<unresolved>'}\u0000${check.workflowRunPresent === false ? '<external-app>' : '<workflow>'}`;
+    const group = groups.get(key);
+    if (group) {
+      group.push(check);
+    } else {
+      groups.set(key, [check]);
+    }
+  }
+  return [...groups.values()].map((group) => selectLatestCheckEntry(group));
 }
 function collectLocalGitState() {
   const worktreeDirty = runGit(['status', '--porcelain']).trim().length > 0;
@@ -371,6 +524,7 @@ function normalizeState(input) {
     prAmbiguous: input.prAmbiguous === true,
     prExists: input.prExists === true,
     requiredChecksGenerated: input.requiredChecksGenerated === true,
+    noRequiredChecksConfigured: input.noRequiredChecksConfigured === true,
     hasUnpushedCommits: input.hasUnpushedCommits === true,
     worktreeDirty: input.worktreeDirty === true,
     ciRunning: input.ciRunning === true,
@@ -400,8 +554,26 @@ function decisionTable() {
     { condition: 'multiple open PRs match issue', route: 'stop' },
     { condition: 'no PR + required checks not generated', route: 'D4' },
     { condition: 'no PR + clean worktree + unpushed commits', route: 'D1' },
-    { condition: 'PR + checks not generated + no reviews', route: 'D4' },
-    { condition: 'PR + checks not generated + reviews exist', route: 'E15' },
+    {
+      condition:
+        'PR + required checks not generated + no no-required fallback + no reviews',
+      route: 'D4',
+    },
+    {
+      condition:
+        'PR + required checks not generated + no no-required fallback + reviews exist',
+      route: 'E15',
+    },
+    {
+      condition:
+        'PR + no required checks + present run empty or unknown + no reviews',
+      route: 'D4',
+    },
+    {
+      condition:
+        'PR + no required checks + present run empty or unknown + reviews exist',
+      route: 'E15',
+    },
     { condition: 'PR + CI running/failing + no reviews', route: 'D4' },
     { condition: 'PR + CI running/failing + reviews exist', route: 'E15' },
     { condition: 'PR + CI success + review pending', route: 'E1' },

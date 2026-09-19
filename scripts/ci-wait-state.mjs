@@ -212,6 +212,18 @@ function normalizeCheckEntry(entry, requiredCheckNameSet) {
     .toUpperCase();
   const state =
     status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN';
+  const workflowPath =
+    entry?.workflowPath === undefined
+      ? undefined
+      : String(entry.workflowPath ?? '').trim() || null;
+  const appSlug =
+    entry?.appSlug === undefined
+      ? undefined
+      : String(entry.appSlug ?? '').trim() || null;
+  const workflowRunPresent =
+    entry?.workflowRunPresent === undefined
+      ? undefined
+      : entry.workflowRunPresent === true;
   return {
     checkName,
     // Trimmed like checkName: workflowName is part of the
@@ -219,6 +231,9 @@ function normalizeCheckEntry(entry, requiredCheckNameSet) {
     // whitespace-only differences could otherwise produce unstable keys
     // or spuriously "distinct" workflow entries.
     workflowName: String(entry?.workflowName ?? '').trim(),
+    ...(workflowPath !== undefined ? { workflowPath } : {}),
+    ...(appSlug !== undefined ? { appSlug } : {}),
+    ...(workflowRunPresent !== undefined ? { workflowRunPresent } : {}),
     type: 'check-run',
     state,
     status: bucketState(state),
