@@ -1046,13 +1046,13 @@ export function readEventLog(path) {
         enterAtOwner.set(key, vendorSessionId);
         enterClaimIdOwner.set(key, claimId);
         const openEnters = openUnidentifiedEnter.get(key) ?? [];
-        // A completely unidentified discover event has no stable lineage
-        // token at all. Preserve each such enter so concurrent discover
-        // sessions cannot collapse into one diagnostic (#3155, Codex review
-        // finding, PR #3156). Claim-bearing historical events still
-        // deduplicate by claimId, which is their available lineage token.
+        // A completely unidentified event has no stable lineage token at
+        // all. Preserve each such enter so concurrent sessions cannot
+        // collapse into one diagnostic (#3155, Codex review finding, PR
+        // #3156). Claim-bearing historical events still deduplicate by
+        // claimId, which is their available lineage token.
         const existingOpen =
-          issueNumber === undefined && claimId === undefined
+          claimId === undefined
             ? undefined
             : openEnters.find((open) => open.claimId === claimId);
         if (existingOpen) {

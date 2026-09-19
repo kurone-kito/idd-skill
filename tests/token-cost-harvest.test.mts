@@ -3119,6 +3119,52 @@ test('readEventLog: preserves concurrent fully unidentified discover enters', ()
   }
 });
 
+test('readEventLog: preserves concurrent issue-scoped session-less enters', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    const window = parsed.windows.get('7:claude:work');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:15:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:10:00Z'),
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('readEventLog: emits no open diagnostic after a completed pair and reports a later open cycle', () => {
   const completed = writeEventsFile([
     tokenCostEvent(
