@@ -205,10 +205,10 @@ issue (different slug variants).
    git worktree list --porcelain -z
    ```
 
-   Match `branch refs/heads/issue/<number>-…`; for `detached`, resolve
-   `head-name`/`BISECT_START` via `git -C <worktree> rev-parse --git-path
-   rebase-merge`/`rebase-apply`: invalid/target → occupied; unrelated →
-   absent.
+   Match `branch refs/heads/issue/<number>-…`; for `detached`, inspect
+   `head-name` and `BISECT_START` via `git -C <worktree>
+   rev-parse --git-path`: missing or unrelated → absent;
+   malformed, unreadable, or target state → occupied.
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query the Refs API with the issue-number prefix only, to stay within

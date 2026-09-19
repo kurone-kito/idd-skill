@@ -6,21 +6,62 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
+
+function malformedWorktreeList(reason) {
+  throw new Error(`malformed git worktree list: ${reason}`);
+}
 /** Parse the NUL-delimited porcelain worktree listing without name greps. */
 export function parseLocalWorktreeList(output) {
+  if (output.length > 0 && !output.endsWith('\0\0')) {
+    malformedWorktreeList('listing is not record-terminated');
+  }
   const records = [];
   for (const stanza of output.split('\0\0')) {
-    const lines = stanza.split('\0').filter((line) => line.length > 0);
-    const worktreeLine = lines.find((line) => line.startsWith('worktree '));
-    if (!worktreeLine) {
+    if (!stanza) {
       continue;
     }
+    const lines = stanza.split('\0').filter((line) => line.length > 0);
+    const worktreeLines = lines.filter((line) => line.startsWith('worktree '));
+    const headLines = lines.filter((line) => line.startsWith('HEAD '));
+    const branchLines = lines.filter((line) => line.startsWith('branch '));
+    const detachedCount = lines.filter((line) => line === 'detached').length;
+    const bareCount = lines.filter((line) => line === 'bare').length;
+    if (worktreeLines.length !== 1 || !worktreeLines[0].slice(9)) {
+      malformedWorktreeList('record has no unique worktree path');
+    }
+    if (headLines.length !== 1 || !headLines[0].slice(5).trim()) {
+      malformedWorktreeList('record has no unique HEAD');
+    }
+    if (branchLines.length > 1 || detachedCount > 1 || bareCount > 1) {
+      malformedWorktreeList('record repeats branch state');
+    }
+    const stateCount = branchLines.length + detachedCount + bareCount;
+    if (stateCount !== 1) {
+      malformedWorktreeList('record has no unique branch state');
+    }
+    const knownLine = (line) =>
+      line.startsWith('worktree ') ||
+      line.startsWith('HEAD ') ||
+      line.startsWith('branch ') ||
+      line === 'detached' ||
+      line === 'bare' ||
+      line === 'locked' ||
+      line.startsWith('locked ') ||
+      line === 'prunable' ||
+      line.startsWith('prunable ');
+    if (lines.some((line) => !knownLine(line))) {
+      malformedWorktreeList('record contains an unknown field');
+    }
+    const worktreeLine = worktreeLines[0];
     let branchRef = null;
     let detached = false;
     let prunable = false;
     for (const line of lines) {
       if (line.startsWith('branch ')) {
         branchRef = line.slice('branch '.length).trim();
+        if (!branchRef) {
+          malformedWorktreeList('record has an empty branch ref');
+        }
       } else if (line === 'detached') {
         detached = true;
       } else if (line === 'prunable' || line.startsWith('prunable ')) {
@@ -56,9 +97,6 @@ function branchNameFromRef(ref) {
     branch.endsWith('.') ||
     branch.includes('..') ||
     branch.includes('@{') ||
-    // IDD claim branches use the canonical alphanumeric-hyphen slug. Treat
-    // dotted components as untrusted metadata so they cannot look absent.
-    branch.includes('.') ||
     /[\p{Cc}\s~^:?*\x5b\\]/u.test(branch) ||
     branch
       .split('/')
@@ -241,7 +279,13 @@ export function inspectLocalWorktreeBranch(
     const detail = error instanceof Error ? error.message : String(error);
     return { status: 'unreadable', paths: [], reason: detail };
   }
-  const records = parseLocalWorktreeList(output);
+  let records;
+  try {
+    records = parseLocalWorktreeList(output);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { status: 'unreadable', paths: [], reason: detail };
+  }
   if (records.length === 0) {
     return {
       status: 'unreadable',

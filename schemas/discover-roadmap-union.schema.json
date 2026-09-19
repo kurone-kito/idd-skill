@@ -173,7 +173,7 @@
                 "type": "boolean"
               },
               "localWorktree": {
-                "description": "Present when a stale claim was checked against same-clone worktree occupancy. occupied blocks takeover; unreadable fails closed; absent means no matching live worktree.",
+                "description": "Present when a stale or released claim was checked against same-clone worktree occupancy. occupied blocks takeover; unreadable fails closed; absent means no matching live worktree.",
                 "type": "object",
                 "required": [
                   "status",
@@ -210,7 +210,7 @@
             }
           },
           "claimEligible": {
-            "description": "Derived eligibility, present only under --with-claim-state: true when no present, non-stale, trusted-actor claim or unverified stale-claim local worktree blocks this leaf.",
+            "description": "Derived eligibility, present only under --with-claim-state: true when no present, non-stale, trusted-actor claim or unverified stale/released-claim local worktree blocks this leaf.",
             "type": "boolean"
           }
         }

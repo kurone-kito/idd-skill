@@ -150,7 +150,7 @@ test('inspects occupied, absent, and present-prunable worktree results', () => {
 });
 
 test('fails closed for invalid requested branch refs', () => {
-  for (const branch of ['issue/1-.bad', 'issue/.hidden', '@']) {
+  for (const branch of ['issue/1-?bad', 'issue/.hidden', '@']) {
     const result = inspectLocalWorktreeBranch(
       branch,
       process.cwd(),
@@ -163,6 +163,37 @@ test('fails closed for invalid requested branch refs', () => {
     assert.deepEqual(result.paths, []);
     assert.equal(result.reason, `invalid branch name: ${branch}`);
   }
+});
+
+test('accepts valid dotted refs for unrelated worktrees', () => {
+  const result = inspectLocalWorktreeBranch(
+    'issue/42-task',
+    process.cwd(),
+    process.env,
+    stubWorktreeList(
+      'worktree /tmp/release\0HEAD abc\0branch refs/heads/release/v1.2\0\0',
+    ),
+  );
+  assert.deepEqual(result, {
+    status: 'absent',
+    paths: [],
+    reason: null,
+  });
+});
+
+test('fails closed for a malformed porcelain worktree record', () => {
+  const result = inspectLocalWorktreeBranch(
+    'issue/42-task',
+    process.cwd(),
+    process.env,
+    stubWorktreeList('worktree /tmp/truncated\0HEAD abc\0\0'),
+  );
+  assert.equal(result.status, 'unreadable');
+  assert.deepEqual(result.paths, []);
+  assert.equal(
+    result.reason,
+    'malformed git worktree list: record has no unique branch state',
+  );
 });
 
 test('ignores ambient git repository overrides while checking occupancy', () => {
