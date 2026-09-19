@@ -185,6 +185,38 @@ test('listRequiredChecks recovers an empty set when gh reports no required check
   assert.deepEqual(port.listRequiredChecks(42), []);
 });
 
+test('listRequiredChecksSummary preserves the explicit no-required-checks signal', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('gh failed') as Error & {
+          stderr?: string;
+        };
+        error.stderr = "no required checks reported on the 'main' branch";
+        throw error;
+      },
+    }),
+  );
+  assert.deepEqual(port.listRequiredChecksSummary(42), {
+    checks: [],
+    noRequiredChecksConfigured: true,
+  });
+});
+
+test('listRequiredChecksSummary keeps a valid empty JSON result fail-closed', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({ ghText: () => '[]' }),
+  );
+  assert.deepEqual(port.listRequiredChecksSummary(42), {
+    checks: [],
+    noRequiredChecksConfigured: false,
+  });
+});
+
 test('listRequiredChecks recovers from a non-zero exit that still emitted JSON on stdout', () => {
   const port = createGithubProviderAdapter(
     'kurone-kito',
@@ -1544,6 +1576,25 @@ test('listChangeRequestChecks omits --required, unlike listRequiredChecks', () =
   port.listChangeRequestChecks(7);
   assert.ok(capturedArgs);
   assert.ok(!capturedArgs?.includes('--required'));
+});
+
+test('listChangeRequestChecks recovers a genuine no-present-checks response as an empty set', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('gh failed') as Error & {
+          status?: number;
+          stderr?: string;
+        };
+        error.status = 1;
+        error.stderr = "no checks reported on the 'main' branch";
+        throw error;
+      },
+    }),
+  );
+  assert.deepEqual(port.listChangeRequestChecks(7), []);
 });
 
 test('getChangeRequestRequestedReviewerLoginsGraphql never throws, returning null on any failure', () => {

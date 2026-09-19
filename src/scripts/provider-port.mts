@@ -170,6 +170,12 @@ export interface ProviderRequiredCheck {
   completedAt: string | null;
 }
 
+/** Required-check rows plus the provider's explicit no-required-checks signal. */
+export interface ProviderRequiredChecksSummary {
+  checks: ProviderRequiredCheck[];
+  noRequiredChecksConfigured: boolean;
+}
+
 // --- #2267: change-request/review/check/merge extension. -----------------
 //
 // The types and methods below extend this same surface for the broader
@@ -647,8 +653,8 @@ export interface ProviderPort {
    * `recoverJsonFromGhFailure` wrapper this replaces, both load-bearing, not
    * generic hygiene: `gh pr checks --required` exits non-zero on a repo/PR
    * with no required checks configured -- a routine state this method must
-   * report as `[]` (letting the caller derive `requiredChecksGenerated:
-   * false`), not throw on -- and `gh pr checks` is documented to exit
+   * report as `[]` (letting the caller preserve the explicit state through
+   * `listRequiredChecksSummary`), not throw on -- and `gh pr checks` is documented to exit
    * non-zero while checks are still failing/pending even with `--json`,
    * the very state this method exists to classify, so the
    * stdout-on-failure fallback is not speculative hardening. An earlier
@@ -656,6 +662,15 @@ export interface ProviderPort {
    * neither recovery and would have thrown on both of those routine cases.
    */
   listRequiredChecks(number: number): ProviderRequiredCheck[];
+
+  /**
+   * change-requests. The same required-check query as
+   * {@link ProviderPort.listRequiredChecks}, while preserving whether an
+   * explicit no-required-checks response was recovered. A valid empty JSON
+   * result stays `noRequiredChecksConfigured: false` so callers can fail
+   * closed when the required set is unavailable or not yet generated.
+   */
+  listRequiredChecksSummary(number: number): ProviderRequiredChecksSummary;
 
   /** change-requests (minimal surface for resume-route-selection.mts). */
   listReviews(number: number): unknown[];

@@ -1222,7 +1222,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {},
       );
     },
-    listRequiredChecks(number) {
+    listRequiredChecksSummary(number) {
       const args = [
         'pr',
         'checks',
@@ -1234,25 +1234,34 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         'name,state,completedAt',
       ];
       let raw;
+      let noRequiredChecksConfigured = false;
       try {
         raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS);
       } catch (error) {
         const stderr = String(error?.stderr ?? '');
         if (/no required checks reported/i.test(stderr)) {
-          return [];
+          raw = '[]';
+          noRequiredChecksConfigured = true;
+        } else {
+          const stdout = String(error?.stdout ?? '').trim();
+          if (!stdout) {
+            throw error;
+          }
+          raw = stdout;
         }
-        const stdout = String(error?.stdout ?? '').trim();
-        if (!stdout) {
-          throw error;
-        }
-        raw = stdout;
       }
       const rows = JSON.parse(raw || '[]');
-      return rows.map((row) => ({
-        name: String(row.name ?? ''),
-        state: String(row.state ?? ''),
-        completedAt: row.completedAt ? String(row.completedAt) : null,
-      }));
+      return {
+        checks: rows.map((row) => ({
+          name: String(row.name ?? ''),
+          state: String(row.state ?? ''),
+          completedAt: row.completedAt ? String(row.completedAt) : null,
+        })),
+        noRequiredChecksConfigured,
+      };
+    },
+    listRequiredChecks(number) {
+      return this.listRequiredChecksSummary(number).checks;
     },
     listReviews(number) {
       return deps.ghApiJson(`${repoPath}/pulls/${number}/reviews`, {
@@ -1752,9 +1761,15 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         const status = Number(error?.status ?? -1);
         const stdout = String(error?.stdout ?? '');
         if (![1, 8].includes(status) || !/^\s*[[{]/.test(stdout)) {
-          throw error;
+          const stderr = String(error?.stderr ?? '');
+          if (status === 1 && /no checks reported/i.test(stderr)) {
+            raw = '[]';
+          } else {
+            throw error;
+          }
+        } else {
+          raw = stdout;
         }
-        raw = stdout;
       }
       const rows = JSON.parse(raw || '[]');
       return rows.map((row) => ({

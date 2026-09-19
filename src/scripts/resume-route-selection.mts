@@ -290,7 +290,7 @@ function runCli(): void {
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 
-function collectRoutingInput({
+export function collectRoutingInput({
   port,
   issueNumber,
 }: {
@@ -331,8 +331,10 @@ function collectRoutingInput({
     };
   }
 
-  const requiredChecks = port.listRequiredChecks(issuePr.number);
-  const noRequiredChecksConfigured = requiredChecks.length === 0;
+  const requiredChecksSummary = port.listRequiredChecksSummary(issuePr.number);
+  const requiredChecks = requiredChecksSummary.checks;
+  const noRequiredChecksConfigured =
+    requiredChecksSummary.noRequiredChecksConfigured;
   const checks = noRequiredChecksConfigured
     ? port.listChangeRequestChecks(issuePr.number)
     : requiredChecks;

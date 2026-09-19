@@ -196,7 +196,7 @@ function runCli() {
   }
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function collectRoutingInput({ port, issueNumber }) {
+export function collectRoutingInput({ port, issueNumber }) {
   const prs = findIssueRelatedOpenPrs({ port, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
   // resolveViewerLogin's REST leg is the exact gh api user --jq .login call
@@ -229,8 +229,10 @@ function collectRoutingInput({ port, issueNumber }) {
       prUrl: null,
     };
   }
-  const requiredChecks = port.listRequiredChecks(issuePr.number);
-  const noRequiredChecksConfigured = requiredChecks.length === 0;
+  const requiredChecksSummary = port.listRequiredChecksSummary(issuePr.number);
+  const requiredChecks = requiredChecksSummary.checks;
+  const noRequiredChecksConfigured =
+    requiredChecksSummary.noRequiredChecksConfigured;
   const checks = noRequiredChecksConfigured
     ? port.listChangeRequestChecks(issuePr.number)
     : requiredChecks;

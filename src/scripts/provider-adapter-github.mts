@@ -51,6 +51,7 @@ import type {
   ProviderPort,
   ProviderPostedComment,
   ProviderRequiredCheck,
+  ProviderRequiredChecksSummary,
   ProviderReviewsWithHeadCommitDate,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
@@ -1572,7 +1573,7 @@ export function createGithubProviderAdapter(
       );
     },
 
-    listRequiredChecks(number: number): ProviderRequiredCheck[] {
+    listRequiredChecksSummary(number: number): ProviderRequiredChecksSummary {
       const args = [
         'pr',
         'checks',
@@ -1584,6 +1585,7 @@ export function createGithubProviderAdapter(
         'name,state,completedAt',
       ];
       let raw: string;
+      let noRequiredChecksConfigured = false;
       try {
         raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS);
       } catch (error) {
@@ -1591,26 +1593,35 @@ export function createGithubProviderAdapter(
           (error as { stderr?: unknown } | null)?.stderr ?? '',
         );
         if (/no required checks reported/i.test(stderr)) {
-          return [];
+          raw = '[]';
+          noRequiredChecksConfigured = true;
+        } else {
+          const stdout = String(
+            (error as { stdout?: unknown } | null)?.stdout ?? '',
+          ).trim();
+          if (!stdout) {
+            throw error;
+          }
+          raw = stdout;
         }
-        const stdout = String(
-          (error as { stdout?: unknown } | null)?.stdout ?? '',
-        ).trim();
-        if (!stdout) {
-          throw error;
-        }
-        raw = stdout;
       }
       const rows = JSON.parse(raw || '[]') as {
         name?: unknown;
         state?: unknown;
         completedAt?: unknown;
       }[];
-      return rows.map((row) => ({
-        name: String(row.name ?? ''),
-        state: String(row.state ?? ''),
-        completedAt: row.completedAt ? String(row.completedAt) : null,
-      }));
+      return {
+        checks: rows.map((row) => ({
+          name: String(row.name ?? ''),
+          state: String(row.state ?? ''),
+          completedAt: row.completedAt ? String(row.completedAt) : null,
+        })),
+        noRequiredChecksConfigured,
+      };
+    },
+
+    listRequiredChecks(number: number): ProviderRequiredCheck[] {
+      return this.listRequiredChecksSummary(number).checks;
     },
 
     listReviews(number: number): unknown[] {
@@ -2252,9 +2263,17 @@ export function createGithubProviderAdapter(
           (error as { stdout?: unknown } | null)?.stdout ?? '',
         );
         if (![1, 8].includes(status) || !/^\s*[[{]/.test(stdout)) {
-          throw error;
+          const stderr = String(
+            (error as { stderr?: unknown } | null)?.stderr ?? '',
+          );
+          if (status === 1 && /no checks reported/i.test(stderr)) {
+            raw = '[]';
+          } else {
+            throw error;
+          }
+        } else {
+          raw = stdout;
         }
-        raw = stdout;
       }
       const rows = JSON.parse(raw || '[]') as {
         name?: unknown;
