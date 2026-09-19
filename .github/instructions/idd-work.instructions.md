@@ -384,10 +384,10 @@ Implement the plan, running **fix-validate** before each atomic commit
 the [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
 instead.
 
-**Validation.** Run the command without a pipe; use a second
-invocation with `tail` or `head` to shorten output. It does not prove
-the first command passed. In Bash, preserve it with
-`${PIPESTATUS[0]}` or enable `set -o pipefail`.
+**Validate.** Run validation without a pipe; use a second
+`tail`/`head` call to shorten output. Filter success cannot prove validation
+passed (issue #3139). In Bash, check `status=${PIPESTATUS[0]}` or enable
+`set -o pipefail`.
 
 **Verify a commit actually landed before trusting a subsequent push.**
 A `commit-msg` hook (e.g. commitlint's body-max-line-length) can
