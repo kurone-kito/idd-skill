@@ -344,6 +344,56 @@ function checkRun(
   };
 }
 
+test('collector resolves protection-read policy from the PR base ref', () => {
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    openChangeRequests: [
+      {
+        number: 3150,
+        title: 'test PR',
+        body: 'Closes #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    changeRequestBranchAndChecks: {
+      3150: {
+        headSha: 'head-sha',
+        baseRefName: 'main',
+        statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+      },
+    },
+    requiredChecksSummary: {
+      3150: { checks: [], noRequiredChecksConfigured: true },
+    },
+    changeRequests: {
+      3150: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+    },
+  });
+  const seenRefs: string[] = [];
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: (owner, repo, ref) => {
+      assert.deepEqual(
+        { owner, repo },
+        {
+          owner: 'fake-owner',
+          repo: 'fake-repo',
+        },
+      );
+      seenRefs.push(ref);
+      return null;
+    },
+  });
+
+  assert.deepEqual(seenRefs, ['main']);
+  assert.equal(input.noRequiredChecksConfigured, false);
+  assert.equal(input.requiredChecksGenerated, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
 test('collector discovers no required checks from protection and routes present-run success', () => {
   const port = createFakeProviderAdapter({
     locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
@@ -373,7 +423,11 @@ test('collector discovers no required checks from protection and routes present-
     },
   });
 
-  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
   assert.equal(input.noRequiredChecksConfigured, true);
   assert.equal(input.requiredChecksGenerated, false);
   assert.equal(input.ciSuccess, true);
@@ -394,7 +448,11 @@ test('collector keeps empty and pending no-required present runs fail-closed', (
   ]) {
     const port = createResumeCollectorPort({ statusCheckRollup });
 
-    const input = collectRoutingInput({ port, issueNumber: 3145 });
+    const input = collectRoutingInput({
+      port,
+      issueNumber: 3145,
+      loadTrustedConfig: () => null,
+    });
     assert.equal(selectResumeRoute(input).route, 'D4');
   }
 });
@@ -412,7 +470,11 @@ test('collector keeps configured required checks fail-closed when no required ru
     ],
   });
 
-  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
   assert.equal(input.noRequiredChecksConfigured, false);
   assert.equal(input.requiredChecksGenerated, false);
   assert.equal(input.ciSuccess, false);
@@ -430,7 +492,11 @@ test('collector retains same-named present runs from different workflows', () =>
     ],
   });
 
-  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
   assert.equal(input.noRequiredChecksConfigured, true);
   assert.equal(input.ciRunning, true);
   assert.equal(input.ciSuccess, false);
@@ -450,7 +516,11 @@ test('collector retains same-named check runs and status contexts', () => {
     ],
   });
 
-  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
   assert.equal(input.noRequiredChecksConfigured, true);
   assert.equal(input.ciRunning, true);
   assert.equal(input.ciSuccess, false);
@@ -463,7 +533,11 @@ test('collector keeps an ambiguous empty required-check summary fail-closed', ()
     noRequiredChecksConfigured: false,
   });
 
-  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
   assert.equal(input.noRequiredChecksConfigured, false);
   assert.equal(input.requiredChecksGenerated, false);
   assert.equal(selectResumeRoute(input).route, 'D4');
@@ -503,7 +577,11 @@ test('collector keeps disagreement between summary and governance fail-closed', 
     },
   });
 
-  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
   assert.equal(input.noRequiredChecksConfigured, false);
   assert.equal(input.requiredChecksGenerated, false);
   assert.equal(input.ciSuccess, false);
@@ -557,7 +635,11 @@ test('collector keeps mismatched required-check names fail-closed', () => {
     },
   });
 
-  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
   assert.equal(input.requiredChecksGenerated, false);
   assert.equal(input.ciSuccess, false);
   assert.equal(selectResumeRoute(input).route, 'D4');

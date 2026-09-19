@@ -10,7 +10,7 @@ import {
   selectLatestCheckEntry,
 } from './ci-wait-state.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { loadIddConfig } from './idd-config.mjs';
+import { loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mjs';
 import {
@@ -189,7 +189,11 @@ function runCli() {
   }
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-export function collectRoutingInput({ port, issueNumber }) {
+export function collectRoutingInput({
+  port,
+  issueNumber,
+  loadTrustedConfig = loadTrustedIddConfig,
+}) {
   const prs = findIssueRelatedOpenPrs({ port, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
   // resolveViewerLogin's REST leg is the exact gh api user --jq .login call
@@ -225,7 +229,17 @@ export function collectRoutingInput({ port, issueNumber }) {
   const branchAndChecks = port.getChangeRequestBranchAndChecks(issuePr.number);
   const requiredChecksSummary = port.listRequiredChecksSummary(issuePr.number);
   const repository = port.resolveRepositoryLocator();
-  const policyConfig = normalizePolicyConfig(loadIddConfig());
+  const trustedConfigRef =
+    branchAndChecks.baseRefName ||
+    port.getRepositoryDefaultBranch(repository.owner, repository.name);
+  if (!trustedConfigRef) {
+    throw new Error(
+      `cannot resolve a trusted ref for .github/idd/config.json: PR #${issuePr.number} has no baseRefName and the repository's live default branch could not be determined`,
+    );
+  }
+  const policyConfig = normalizePolicyConfig(
+    loadTrustedConfig(repository.owner, repository.name, trustedConfigRef),
+  );
   const trustEmptyProtectionReads =
     policyConfig.ciGate.trustEmptyProtectionReads === true;
   const branchRulesOutcome = port.listBranchRules(

@@ -12,7 +12,7 @@ import {
   selectLatestCheckEntry,
 } from './ci-wait-state.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { loadIddConfig } from './idd-config.mts';
+import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
 import {
@@ -285,9 +285,16 @@ function runCli(): void {
 export function collectRoutingInput({
   port,
   issueNumber,
+  loadTrustedConfig = loadTrustedIddConfig,
 }: {
   port: ProviderPort;
   issueNumber: number | null;
+  /** Resolve policy from a ref the PR under evaluation cannot edit. */
+  loadTrustedConfig?: (
+    owner: string,
+    repo: string,
+    ref: string,
+  ) => IddConfig | null;
 }) {
   const prs = findIssueRelatedOpenPrs({ port, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
@@ -326,7 +333,17 @@ export function collectRoutingInput({
   const branchAndChecks = port.getChangeRequestBranchAndChecks(issuePr.number);
   const requiredChecksSummary = port.listRequiredChecksSummary(issuePr.number);
   const repository = port.resolveRepositoryLocator();
-  const policyConfig = normalizePolicyConfig(loadIddConfig());
+  const trustedConfigRef =
+    branchAndChecks.baseRefName ||
+    port.getRepositoryDefaultBranch(repository.owner, repository.name);
+  if (!trustedConfigRef) {
+    throw new Error(
+      `cannot resolve a trusted ref for .github/idd/config.json: PR #${issuePr.number} has no baseRefName and the repository's live default branch could not be determined`,
+    );
+  }
+  const policyConfig = normalizePolicyConfig(
+    loadTrustedConfig(repository.owner, repository.name, trustedConfigRef),
+  );
   const trustEmptyProtectionReads =
     policyConfig.ciGate.trustEmptyProtectionReads === true;
   const branchRulesOutcome = port.listBranchRules(
