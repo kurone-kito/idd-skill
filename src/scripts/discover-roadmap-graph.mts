@@ -1736,8 +1736,18 @@ export async function annotateLeafClaimState(
             (legacyStale ? legacyClaim : releasedClaim)?.branch ?? '',
           )
         : undefined;
+    // A verified owner may release and then re-enter the fresh-claim gate
+    // while retaining the same-clone worktree. The gate accepts that retry
+    // when the released claim id matches, so its occupancy must not suppress
+    // this session's discovery candidate.
+    const releasedOwnerByCurrentSession = Boolean(
+      claimState.currentClaimId &&
+        claimTrace.releasedClaim?.claimId === claimState.currentClaimId,
+    );
     const localWorktreeBlocks =
-      localWorktree !== undefined && localWorktree.status !== 'absent';
+      localWorktree !== undefined &&
+      localWorktree.status !== 'absent' &&
+      !releasedOwnerByCurrentSession;
 
     if (legacyClaim) {
       const annotation: LeafActiveClaim = {
