@@ -36,6 +36,10 @@ import {
 } from './provider-adapter-github.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+const LEGACY_CLAIM_MARKER_PATTERN =
+  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+const LEGACY_RELEASE_MARKER_PATTERN =
+  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 // GitHub's search API returns at most 1000 results for a single query. The
 // open-roadmap-roots loader pins each search at this cap and warns when a
 // single search returns the full cap (a possible silent truncation).
@@ -1184,10 +1188,6 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     claimEligible: stale && !localWorktreeBlocks,
   };
 }
-const LEGACY_CLAIM_MARKER_PATTERN =
-  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
-const LEGACY_RELEASE_MARKER_PATTERN =
-  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 function hasNewFormatClaim(comments) {
   return comments.some(
     (comment) => parseClaimComment(comment.body, comment.createdAt) !== null,

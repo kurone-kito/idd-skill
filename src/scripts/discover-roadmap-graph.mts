@@ -41,6 +41,10 @@ import {
 import type { ProviderPort } from './provider-port.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+const LEGACY_CLAIM_MARKER_PATTERN =
+  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+const LEGACY_RELEASE_MARKER_PATTERN =
+  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 // GitHub's search API returns at most 1000 results for a single query. The
 // open-roadmap-roots loader pins each search at this cap and warns when a
 // single search returns the full cap (a possible silent truncation).
@@ -1796,11 +1800,6 @@ interface LegacyReleasedClaim {
   branch: string;
   createdAt: string;
 }
-
-const LEGACY_CLAIM_MARKER_PATTERN =
-  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
-const LEGACY_RELEASE_MARKER_PATTERN =
-  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 
 function hasNewFormatClaim(
   comments: readonly { body: string; createdAt: string }[],
