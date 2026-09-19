@@ -531,20 +531,22 @@ Before any mutating action in F3, apply the
      --porcelain --ignored --untracked-files=normal; git stash list;
      git rev-list --all --not --remotes --count'`
 
-   Generated output is disposable only if a configured project
-   command can reproduce it. Preserve anything else first. Copy
-   secrets (e.g. `.env`) out only — never commit or push them.
-   Non-secret work may go to a **different** ref or be copied out —
-   not to `<branch-name>` itself, which this step deletes next.
-   Immediately before each `worktree remove`, re-validate this
-   session's claim and worktree lock (`idd-claim.instructions.md`);
-   stop if either is no longer ours.
-   Then delete the worktree, then the branch:
+   Generated output is disposable only when a configured command
+   reproduces it; preserve anything else. Copy secrets (e.g. `.env`)
+   out — never commit or push them. Copy other work to a different
+   ref or path; delete `<branch-name>` next.
+   Before each `git worktree remove`, `cd` to the surviving primary
+   worktree; keep that cwd for every removal and remaining F4 work
+   (branch/remote deletion, digest, revalidation, unclaim, and
+   `gh`/helper calls). Before each removal, revalidate the claim and
+   worktree lock (`idd-claim.instructions.md`); stop if either is not
+   ours. If it fails with `fatal: working trees containing submodules
+   cannot be moved or removed`, retry
+   `git worktree remove --force <path>` from that cwd only after
+   preserving anything worth keeping. Then remove the worktree, then
+   its branch:
 
-   - `git worktree remove <path>`. If it fails with `fatal: working
-     trees containing submodules cannot be moved or removed`, retry
-     with `git worktree remove --force <path>`. Use `--force` only
-     after that review finds nothing worth preserving.
+   - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (the baseline permission profile
      denies `-D`; see `docs/permissions.md`). Local `{development-branch}`
      was already fast-forwarded to the merge commit by the previous
