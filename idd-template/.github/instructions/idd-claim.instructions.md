@@ -33,6 +33,13 @@ conflicts with live approval state, ignore it and use the written A5(a)
 path below. If fallback still cannot prove safe approval, treat
 approval as missing.
 
+## Context-pressure stop
+
+Before A5 pre-checks, exit unable to finish B-F4 stops new selection
+without inheritable recovery: report it for handoff; record no tokens,
+markers, branch/worktree, or issue state. Observed 2026-09-19, #3144;
+recovery unchanged.
+
 ## Pre-checks (all five must pass)
 
 Re-fetch the issue before checks. A5 is target-local except child release:
@@ -235,13 +242,6 @@ issue (different slug variants).
      without an active claim. Possible orphaned branch from a crashed or
      stale session. Stopping for operator review._" Stop and wait for
      operator input. Do not post a claim or continue the workflow.
-
-### Context-pressure stop
-
-If a planned context exit means B-F4 cannot finish, report the issue and
-stop before Claim execution. Do not record tokens, post claim/nonce
-markers, create a branch/worktree, or mutate state. A5/recovery remain
-unchanged.
 
 ## Claim execution
 
