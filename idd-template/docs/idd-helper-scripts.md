@@ -564,7 +564,12 @@ default below is unchanged.
     `heartbeatOverdue }`, plus `ownedByCurrentSession` when
     `--current-claim-id` is passed; it is true only when that id matches and
     the current worktree's claim lock plus generated-tokens record confirm the
-    same claim and agent identity; stale or released claims may also carry
+    same claim and agent identity. A trusted legacy marker is represented as
+    `present: true` with `claimId: null` and its non-null legacy `agentId`, so
+    consumers must check `claimId` when they need a reusable new-format id.
+    A stale-claim occupancy bypass additionally requires the canonical current
+    worktree path and symbolic branch to match the occupied path and active
+    branch; stale or released claims may also carry
     `localWorktree: {status, paths, reason}`) and
     `claimEligible: boolean` on
     each

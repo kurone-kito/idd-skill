@@ -950,6 +950,8 @@ function buildClaimState(
   {
     currentClaimId = '',
     currentSessionAgentId = null,
+    currentSessionWorktreePath = null,
+    currentSessionBranch = null,
     currentSessionOwnsClaimEvidence = false,
     trustedActors = ['kurone-kito'],
     staleAgeMs = CLAIM_STALE_AGE_MS,
@@ -957,6 +959,8 @@ function buildClaimState(
   }: {
     currentClaimId?: string;
     currentSessionAgentId?: string | null;
+    currentSessionWorktreePath?: string | null;
+    currentSessionBranch?: string | null;
     currentSessionOwnsClaimEvidence?: boolean;
     trustedActors?: string[];
     staleAgeMs?: number;
@@ -979,6 +983,8 @@ function buildClaimState(
       nowIso: CLAIM_NOW,
       currentClaimId,
       currentSessionAgentId,
+      currentSessionWorktreePath,
+      currentSessionBranch,
       currentSessionOwnsClaimEvidence,
     },
   };

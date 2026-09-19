@@ -5,6 +5,8 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
+import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mts';
 import {
   isAutopilotSuitabilityScore,
@@ -189,16 +191,19 @@ export interface RoadmapIssueClassification {
  * leaf carries this object (Design O). `present: false` (with `claimId: null`,
  * `agentId: null`) means no trusted claim is present at all; `present: true`
  * means a trusted claim exists, with `stale` reporting whether it is older
- * than the configured `claimTiming.staleAge` relative to now. A stale claim
- * is takeover-eligible only when no same-clone worktree occupancy blocks it;
- * `localWorktree` records that probe when it runs. The whole annotation is
- * absent (key omitted) on the default flag-absent path. `ownedByCurrentSession`
- * is present whenever the caller passed `--current-claim-id` (`true` only
- * when the active claim's `claimId` equals it and the current worktree's
- * claim lock plus generated-tokens record independently confirm the same
- * claim and agent identity, `false` otherwise —
- * including the no-claim `present: false` case), and absent only when
- * `--current-claim-id` was not supplied.
+ * than the configured `claimTiming.staleAge` relative to now. A legacy claim
+ * marker is trusted occupancy too, but has no claim id, so it is represented
+ * as `present: true` with `claimId: null` and its legacy `agentId`; consumers
+ * must check `claimId` when they need a reusable new-format claim id. A stale
+ * claim is takeover-eligible only when no same-clone worktree occupancy blocks
+ * it; `localWorktree` records that probe when it runs. The whole annotation
+ * is absent (key omitted) on the default flag-absent path.
+ * `ownedByCurrentSession` is present whenever the caller passed
+ * `--current-claim-id` (`true` only when the active claim's `claimId` equals
+ * it and the current worktree's claim lock plus generated-tokens record
+ * independently confirm the same claim and agent identity, `false` otherwise
+ * — including the no-claim and legacy `claimId: null` cases), and absent only
+ * when `--current-claim-id` was not supplied.
  *
  * `heartbeatOverdue` (#1433) is a **purely diagnostic** sibling to `stale`:
  * `true` when the latest valid `claimed-by`/heartbeat `created_at` is at or
@@ -541,6 +546,18 @@ export interface ClaimStateResolution {
   currentClaimId: string;
   /** Agent identity independently confirmed by the local lock and tokens. */
   currentSessionAgentId: string | null;
+  /**
+   * Canonical root path of the current Git worktree, independently resolved
+   * alongside the local lock/tokens evidence; null when that identity could
+   * not be proven.
+   */
+  currentSessionWorktreePath: string | null;
+  /**
+   * Symbolic branch checked out in the current worktree; null for a detached
+   * or otherwise unreadable HEAD. Owner-resume occupancy bypasses require this
+   * branch to match the remotely claimed branch.
+   */
+  currentSessionBranch: string | null;
   /**
    * True only when the current worktree's claim lock and generated-tokens
    * record confirm `currentClaimId` and the lock's agent identity. The
@@ -1749,14 +1766,21 @@ export async function annotateLeafClaimState(
         : undefined;
     // A verified owner may release and then re-enter the fresh-claim gate
     // while retaining the same-clone worktree. The gate accepts that retry
-    // when the released claim id matches, so its occupancy must not suppress
-    // this session's discovery candidate.
+    // when the released claim id matches and the current canonical worktree
+    // is the occupied worktree for the released branch; stale local evidence
+    // in another worktree must not suppress the collision guard (#3141).
     const releasedOwnerByCurrentSession = Boolean(
       claimState.currentSessionOwnsClaimEvidence &&
         claimState.currentSessionAgentId !== null &&
         claimState.currentClaimId &&
-        claimTrace.releasedClaim?.claimId === claimState.currentClaimId &&
-        claimTrace.releasedClaim.agentId === claimState.currentSessionAgentId,
+        claimTrace.releasedClaim !== null &&
+        claimTrace.releasedClaim.claimId === claimState.currentClaimId &&
+        claimTrace.releasedClaim.agentId === claimState.currentSessionAgentId &&
+        currentSessionOwnsOccupiedWorktree(
+          claimState,
+          claimTrace.releasedClaim.branch,
+          localWorktree,
+        ),
     );
     const localWorktreeBlocks =
       localWorktree !== undefined &&
@@ -1837,9 +1861,16 @@ export async function annotateLeafClaimState(
     stale && claimState.inspectLocalWorktree
       ? claimState.inspectLocalWorktree(active.branch)
       : undefined;
+  const ownerResumeOwnsOccupiedWorktree =
+    ownedByCurrentSession &&
+    currentSessionOwnsOccupiedWorktree(
+      claimState,
+      active.branch,
+      localWorktree,
+    );
   const localWorktreeBlocks =
     stale &&
-    !ownedByCurrentSession &&
+    !ownerResumeOwnsOccupiedWorktree &&
     localWorktree !== undefined &&
     localWorktree.status !== 'absent';
 
@@ -1958,11 +1989,78 @@ export function isClaimHeartbeatOverdue(
  * Confirm the caller's current worktree carries independent local ownership
  * evidence for the requested claim. Remote claim-id text and the lock's own
  * claim-id are not enough: the generated-tokens record must also confirm the
- * same claim and lock agent identity. Failures and malformed evidence fail
- * closed.
+ * same claim and lock agent identity, and Git must identify the current
+ * canonical worktree root and symbolic branch. Failures and malformed
+ * evidence fail closed.
  */
-function resolveCurrentSessionAgentId(claimId: string): string | null {
+interface CurrentSessionClaimEvidence {
+  agentId: string;
+  worktreePath: string;
+  branchName: string;
+}
+
+function removeTrailingGitLineFeed(value: string): string {
+  return value.endsWith('\n') ? value.slice(0, -1) : value;
+}
+
+function sanitizedGitEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  return env;
+}
+
+function resolveCurrentSessionWorktreeIdentity(): {
+  worktreePath: string;
+  branchName: string;
+} | null {
   try {
+    const cwd = process.cwd();
+    const env = sanitizedGitEnvironment();
+    const discoveredRoot = removeTrailingGitLineFeed(
+      execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
+        encoding: 'utf8',
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    );
+    const worktreePath = realpathSync(discoveredRoot);
+    const branchName = removeTrailingGitLineFeed(
+      execFileSync(
+        'git',
+        ['-C', cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+        {
+          encoding: 'utf8',
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+    );
+    if (!worktreePath || !branchName) {
+      return null;
+    }
+    return { worktreePath, branchName };
+  } catch {
+    return null;
+  }
+}
+
+function resolveCurrentSessionClaimEvidence(
+  claimId: string,
+): CurrentSessionClaimEvidence | null {
+  try {
+    const worktree = resolveCurrentSessionWorktreeIdentity();
+    if (worktree === null) {
+      return null;
+    }
     const lock = checkClaimLock(process.cwd());
     const holder = lock.holder;
     if (
@@ -1978,11 +2076,43 @@ function resolveCurrentSessionAgentId(claimId: string): string | null {
     return tokens.status === 'present' &&
       tokens.record.claimId === claimId &&
       tokens.record.agentId === holder.agentId
-      ? holder.agentId
+      ? { ...worktree, agentId: holder.agentId }
       : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Prove that the owner-resume exception refers to this session's own
+ * worktree, not merely to matching stale lock/token artifacts in another
+ * worktree. The occupancy probe must be an occupied, readable result and must
+ * list the canonical current worktree path for the exact claimed branch;
+ * unreadable and absent results never qualify for the bypass.
+ */
+function currentSessionOwnsOccupiedWorktree(
+  claimState: ClaimStateResolution,
+  branchName: string,
+  localWorktree: LocalWorktreeInspection | undefined,
+): boolean {
+  const currentPath = claimState.currentSessionWorktreePath;
+  if (
+    currentPath === null ||
+    claimState.currentSessionBranch !== branchName ||
+    localWorktree?.status !== 'occupied'
+  ) {
+    return false;
+  }
+  return localWorktree.paths.some((path) => {
+    if (path === currentPath) {
+      return true;
+    }
+    try {
+      return realpathSync(path) === currentPath;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
@@ -2011,9 +2141,9 @@ export function buildClaimStateResolution(
     parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
     DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
   const currentClaimIdValue = String(currentClaimId ?? '').trim();
-  const currentSessionAgentId =
+  const currentSessionEvidence =
     currentClaimIdValue.length > 0
-      ? resolveCurrentSessionAgentId(currentClaimIdValue)
+      ? resolveCurrentSessionClaimEvidence(currentClaimIdValue)
       : null;
   return {
     loadComments: buildCommentLoader(port),
@@ -2022,8 +2152,10 @@ export function buildClaimStateResolution(
     heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
     currentClaimId: currentClaimIdValue,
-    currentSessionAgentId,
-    currentSessionOwnsClaimEvidence: currentSessionAgentId !== null,
+    currentSessionAgentId: currentSessionEvidence?.agentId ?? null,
+    currentSessionWorktreePath: currentSessionEvidence?.worktreePath ?? null,
+    currentSessionBranch: currentSessionEvidence?.branchName ?? null,
+    currentSessionOwnsClaimEvidence: currentSessionEvidence !== null,
     inspectLocalWorktree: (branchName: string) =>
       inspectLocalWorktreeBranch(branchName),
   };
@@ -2679,7 +2811,9 @@ function printHelp() {
   (default PT24H), and claimTiming.heartbeatInterval (default PT12H). Each
   annotated leaf gains (activeClaim is always an object):
     "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool, "localWorktree"?: object }
-                   (present:false with claimId/agentId null = no trusted claim)
+                   (present:false with claimId/agentId null = no trusted claim;
+                    a trusted legacy marker is present:true with claimId:null
+                    and its non-null agentId)
     "claimEligible": bool   (eligible = no present, non-stale, trusted claim and no unverified stale/released-claim worktree)
   Absent the flag, NO comment API calls are made and no claim fields are
   emitted (the output shape is byte-stable).
@@ -2691,7 +2825,9 @@ function printHelp() {
   --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
   each activeClaim (true only when the active claim's claimId equals <id> and
   the current worktree's claim lock plus generated-tokens record confirm the
-  same claim and agent identity).
+  same claim and agent identity). A stale-claim occupancy bypass additionally
+  requires the canonical current worktree path and symbolic branch to match
+  the occupied path and active branch.
   NOTE: claimEligible is a best-effort SOFT discovery hint. It does not
   reproduce authoritative forced-handoff authorization or legacy active-claim
   takeover rules. Trusted legacy claim/release evidence is used only for

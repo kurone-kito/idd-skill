@@ -2971,3 +2971,21 @@ test('discover-roadmap-union schema rejects a non-object activeClaim', () => {
     );
   }
 });
+
+test('discover-roadmap-union schema accepts a legacy activeClaim without an id', () => {
+  const schema = loadJson('schemas/discover-roadmap-union.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(
+      loadJson('fixtures/schemas/discover-roadmap-union.valid.json'),
+    ),
+  );
+  instance.leaves[0].activeClaim = {
+    present: true,
+    stale: true,
+    claimId: null,
+    agentId: 'legacy-agent',
+    heartbeatOverdue: true,
+  };
+
+  assert.deepEqual(validate(instance, schema), []);
+});
