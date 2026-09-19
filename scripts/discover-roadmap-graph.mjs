@@ -17,6 +17,7 @@ import {
 } from './discover-readiness-check.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
+import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import {
   normalizePolicyConfig,
@@ -1139,22 +1140,37 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     claimState.nowIso,
     claimState.heartbeatIntervalMs,
   );
+  const ownedByCurrentSession = claimState.currentClaimId
+    ? active.claimId === claimState.currentClaimId
+    : false;
+  const localWorktree =
+    stale && claimState.inspectLocalWorktree
+      ? claimState.inspectLocalWorktree(active.branch)
+      : undefined;
+  const localWorktreeBlocks =
+    stale &&
+    !ownedByCurrentSession &&
+    localWorktree !== undefined &&
+    localWorktree.status !== 'absent';
   const annotation = {
     present: true,
     stale,
     claimId: active.claimId,
     agentId: active.agentId,
     heartbeatOverdue,
+    ...(localWorktree ? { localWorktree } : {}),
   };
   if (claimState.currentClaimId) {
-    annotation.ownedByCurrentSession =
-      active.claimId === claimState.currentClaimId;
+    annotation.ownedByCurrentSession = ownedByCurrentSession;
   }
-  // Eligible only when there is no present, NON-stale, trusted claim. A stale
-  // claim is takeover-eligible, so it does not block. `heartbeatOverdue` NEVER
-  // factors into this: it is purely diagnostic (#1433) and must not change
-  // who is claim-eligible.
-  return { activeClaim: annotation, claimEligible: stale };
+  // A stale claim is normally takeover-eligible, but a live same-clone
+  // worktree is an independent occupancy signal. Only a verified owner resume
+  // may reuse it; an unreadable occupancy probe also blocks fail-closed.
+  // `heartbeatOverdue` NEVER factors into this (#1433).
+  return {
+    activeClaim: annotation,
+    claimEligible: stale && !localWorktreeBlocks,
+  };
 }
 /** Coerce a loaded comment payload into the `resolveActiveClaim` event shape. */
 function normalizeClaimComments(raw) {
@@ -1240,6 +1256,8 @@ export function buildClaimStateResolution(port, policy, currentClaimId) {
     heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
     currentClaimId: String(currentClaimId ?? '').trim(),
+    inspectLocalWorktree: (branchName) =>
+      inspectLocalWorktreeBranch(branchName),
   };
 }
 /**
@@ -1842,9 +1860,9 @@ function printHelp() {
   claim using the configured trustedMarkerActors, claimTiming.staleAge
   (default PT24H), and claimTiming.heartbeatInterval (default PT12H). Each
   annotated leaf gains (activeClaim is always an object):
-    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool }
+    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool, "localWorktree"?: object }
                    (present:false with claimId/agentId null = no trusted claim)
-    "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
+    "claimEligible": bool   (eligible = no present, non-stale, trusted claim and no unverified stale-claim worktree)
   Absent the flag, NO comment API calls are made and no claim fields are
   emitted (the output shape is byte-stable).
   heartbeatOverdue is true when the latest valid claimed-by/heartbeat

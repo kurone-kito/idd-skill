@@ -562,7 +562,9 @@ default below is unchanged.
     byte-stable and make no extra API call). `--with-claim-state` adds
     `activeClaim` (always an object: `{ present, stale, claimId, agentId,`
     `heartbeatOverdue }`, plus `ownedByCurrentSession` when
-    `--current-claim-id` is passed) and `claimEligible: boolean` on each
+    `--current-claim-id` is passed; stale claims may also carry
+    `localWorktree: {status, paths, reason}`) and `claimEligible: boolean` on
+    each
     open leaf. Both `discover-roadmap-graph.mjs` and
     `discover-orphan-filter.mjs` emit this exact shape under
     `--with-claim-state`. `heartbeatOverdue` (#1433) is `true` when the
@@ -2769,8 +2771,12 @@ close.
   `warnings`, and `evidence`
 - Stable enums:
   - `state`:
-    `unclaimed|already_owned|stale|non_inheritable|disputed`
+    `unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|disputed`
   - `action`: `re_claim|takeover|keep|stop`
+- When a stale takeover is inspected against the current clone, the helper
+  adds `evidence.local_worktree` with `{status, paths, reason}`. `occupied`
+  and `unreadable` are fail-closed stop states; an owner resume or authorized
+  forced handoff must be verified before reusing the worktree (#3141).
 - Optional `--nonce <token>` (kurone-kito/idd-skill#1522): when `--claim-id`
   matches the active claim, also requires it to equal the winning trusted
   `activation-nonce` marker for that claim-id (`evidence.activation_nonce_winner`);

@@ -7,6 +7,7 @@
 import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
+import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
 import { listActivationNonces } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
@@ -214,6 +215,32 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     action = 'stop';
     reason = 'active-claim-non-stale';
   }
+  let localWorktree = null;
+  if (routeState === 'stale' && options.inspectLocalWorktree) {
+    const branch = state.activeClaim?.branch ?? state.legacyClaim?.branch ?? '';
+    if (branch) {
+      localWorktree = options.inspectLocalWorktree(branch);
+      // An applied forced-handoff is the documented operator-authorized
+      // exception to local occupancy. Keep the probe in evidence, but allow
+      // that verified handoff to supersede the stale-worktree stop.
+      if (
+        localWorktree.status !== 'absent' &&
+        state.appliedForcedHandoff === null
+      ) {
+        routeState = 'local_worktree_occupied';
+        action = 'stop';
+        reason =
+          localWorktree.status === 'unreadable'
+            ? 'stale-claim-local-worktree-unreadable'
+            : 'stale-claim-local-worktree-occupied';
+        warnings.push(
+          localWorktree.status === 'unreadable'
+            ? `cannot verify local worktree occupancy for stale branch ${branch}: ${localWorktree.reason ?? 'unknown error'}`
+            : `stale branch ${branch} has a live local worktree: ${localWorktree.paths.join(', ')}`,
+        );
+      }
+    }
+  }
   return {
     state: routeState,
     action,
@@ -249,6 +276,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       activation_nonce_winner: activationNonceWinner,
       activation_nonce_count: activationNonces.length,
       forced_handoff: toForcedHandoffEvidence(state.appliedForcedHandoff),
+      ...(localWorktree ? { local_worktree: localWorktree } : {}),
     },
   };
 }
@@ -381,6 +409,8 @@ function runCli() {
         forcedHandoffAuthorityPolicy,
         permissionCache,
       ),
+    inspectLocalWorktree: (branchName) =>
+      inspectLocalWorktreeBranch(branchName),
   };
   const result = evaluateResumeClaimRouting(
     {
@@ -820,7 +850,7 @@ function printHelp() {
 Output (selected fields; the JSON also carries repository / issue / policy /
 warnings / evidence):
 {
-  "state": "unclaimed|already_owned|stale|non_inheritable|disputed",
+  "state": "unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|disputed",
   "action": "re_claim|takeover|keep|stop",
   "reason": "...",
   "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,

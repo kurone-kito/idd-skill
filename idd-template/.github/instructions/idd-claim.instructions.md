@@ -220,28 +220,25 @@ issue (different slug variants).
 
 3. **Collision action tree**:
 
-   - **If no local worktree or remote branch matches `issue/<number>-*`**:
-     Proceed to claim posting (the safe, single-session path).
-
-   - **If a match is found and corresponds to an inheritable claim or
-     trusted forced-handoff evidence** (its `branch` matches one of the
-     branches allowed in (d) above): proceed to claim posting — the
+   - **No local worktree or remote branch matches `issue/<number>-*`**:
+     proceed to claim posting.
+   - **A matching live local worktree exists for a stale/inheritable
+     claim**: stop unless this session proves owner resume or an authorized
+     forced handoff. With helpers, `resume-claim-routing.mjs
+     --fresh-claim-gate` reports `local_worktree_occupied` (including an
+     `evidence.local_worktree.status` of `unreadable`); route to operator
+     recovery unless the documented forced-handoff path is authorized
+     (#3141; preventive).
+   - **A matching branch corresponds to an inheritable claim or trusted
+     forced-handoff evidence, with no live local worktree**: proceed — the
      branch is expected.
-
-   - **If a match is found, does NOT correspond to an inheritable claim,
-     AND an active non-stale claim on this issue references that branch**:
-     Treat as **claimed by a concurrent session** running in parallel —
-     apply the **already-claimed routing** above. This is the scale-out
-     path that lets multiple sessions work different issues when one has
-     concurrent claims.
-
-   - **If a match is found, does NOT correspond to an inheritable claim,
-     AND no active claim references that branch**:
-     Document the branch name and post a **hold note** to the issue: "_A5
+   - **A non-corresponding match has an active non-stale claim**: apply
+     already-claimed routing for a concurrent session.
+   - **Otherwise**: document the branch and post a hold note: "_A5
      pre-check (e) detected an unexpected branch `issue/<number>-*`
      without an active claim. Possible orphaned branch from a crashed or
-     stale session. Stopping for operator review._" Stop and wait for
-     operator input. Do not post a claim or continue the workflow.
+     stale session. Stopping for operator review._" Stop and await operator
+     input; do not post a claim.
 
 ## Claim execution
 

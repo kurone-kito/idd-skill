@@ -542,24 +542,21 @@ If **no issue** survives the gate:
 ### Step 1.5 — Active-claim pre-scan
 
 Before selecting from the surviving viable issues, eliminate candidates
-carrying a concurrent active non-stale claim, in ascending issue-number
-order:
+with a concurrent active non-stale claim or an unsafe stale takeover, in
+ascending issue-number order:
 
 - Scan the **top N** survivors (ordered by ascending issue number),
   where `N` is `.github/idd/config.json`
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
-- For each candidate, fetch the issue and parse comments per the
-  shared claim-state rules in `idd-claim.instructions.md`, including
-  forced-handoff and legacy markers, not just
-  `claimed-by`/`unclaimed-by`. No current bulk helper's
-  `--with-claim-state` flag is forced-handoff-aware, so loop the
-  single-issue `resume-claim-routing.mjs --fresh-claim-gate` resolver
-  per candidate, or apply the full parsing rules manually. A candidate
-  is **ineligible** when parsing yields an active claim whose latest
-  valid `claimed-by` comment has GitHub `created_at` within
-  `claim-stale-age` of now (equivalently, `created_at > now -
-  claim-stale-age`; `docs/policy-constants.md`; distributed default:
-  `24 h`); otherwise it **remains eligible**.
+- For each candidate, fetch the issue and parse comments per the shared
+  claim-state rules in `idd-claim.instructions.md`, including
+  forced-handoff and legacy markers. Loop the single-issue
+  `resume-claim-routing.mjs --fresh-claim-gate` resolver, or apply those
+  rules manually. A candidate is **ineligible** when the latest valid
+  `claimed-by` is non-stale (`created_at > now - claim-stale-age`; see
+  `docs/policy-constants.md`), or when a stale claim's same-clone worktree
+  probe finds a live match or is unreadable without verified owner resume or
+  authorized handoff (#3141; preventive). Otherwise it **remains eligible**.
 
 After scanning the current batch:
 
