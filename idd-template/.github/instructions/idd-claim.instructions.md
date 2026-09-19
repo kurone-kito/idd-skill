@@ -33,6 +33,13 @@ conflicts with live approval state, ignore it and use the written A5(a)
 path below. If fallback still cannot prove safe approval, treat
 approval as missing.
 
+## Context-pressure stop
+
+Fresh candidate: before claim, if context pressure prevents completing Claim
+through F4, report for handoff; stop; do not claim. Recovery unchanged.
+Make no claim-stage event/marker, branch/worktree, or issue-state change.
+(#3144; preventive)
+
 ## Pre-checks (all five must pass)
 
 Re-fetch the issue before checks. A5 is target-local except child release:
@@ -238,11 +245,8 @@ issue (different slug variants).
 
 ## Claim execution
 
-Skip the claim-posting steps below if pre-check (c) classified the
-issue as already claimed by this current session: keep the previously
-recorded `{claim-id}` and branch, and post no new claim. The Heartbeat
-posting rules below still apply whenever you extend the active claim's
-stale clock; then proceed to Claim verification.
+If (c) found this session's claim, post none; keep its token/branch,
+heartbeat as needed; verify.
 
 Determine `{branch-name}`:
 

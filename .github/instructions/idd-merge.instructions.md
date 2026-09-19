@@ -585,8 +585,8 @@ Before any mutating action in F3, apply the
 
 ## F5 — Loop
 
-Return to `idd-discover.instructions.md` and pick the next issue.
+Return to `idd-discover.instructions.md` only when continuing in-process.
 F4-complete/F5 is the **safe session-exit boundary**: under context
-pressure, exit here for a fresh Discover session rather than looping
-in-process — see the autopilot operating model in
+pressure, exit directly here; a fresh session re-enters Discover — see
+the autopilot operating model in
 [`docs/idd-workflow.md`](../../docs/idd-workflow.md).

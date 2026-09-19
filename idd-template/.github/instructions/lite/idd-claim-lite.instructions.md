@@ -1,16 +1,16 @@
 # IDD — Claim Phase (Lite) A5
 
-Lite profile for weak / local models. Same semantics as
-`idd-claim.instructions.md`, except the forced-handoff bind below.
-Prefer helpers over prose.
+Lite profile; same semantics as `idd-claim.instructions.md`, except
+forced-handoff. Prefer helpers.
 
-**Load this file alone** for the claim phase. Do not open the standard
-claim file in the same turn.
+**Load alone** for Claim; do not open standard.
 
-**Scope note**: this file always covers a single, already-selected
-issue (the lite profile excludes open-ended Discover). Every "return
-to Discover and pick the next candidate" branch in the standard file
-collapses to a single outcome here: **STOP and report; do not claim**.
+**Scope**: one selected issue; no open-ended Discover. Standard
+"Return to Discover" branches mean **STOP and report; do not claim**.
+Fresh candidate: before claim, if context pressure prevents completing Claim
+through F4, report for handoff; stop; do not claim. Recovery unchanged.
+Make no claim-stage event/marker, branch/worktree, or issue-state change.
+(#3144; preventive)
 
 ## Helper runtime contract
 

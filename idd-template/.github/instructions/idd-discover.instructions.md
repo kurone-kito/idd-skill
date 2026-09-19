@@ -1,10 +1,8 @@
 # IDD — Discover Phase (A0-T–A4)
 
-Read this file when starting a new task: finding and selecting the next
-issue to work on, including an operator-provided exact issue target,
-roadmap-audit handoff, candidate selection, and handoff to A4.5 and
-claim. After A4 selects a viable candidate, run suitability triage via
-`idd-suitability.instructions.md` (A4.5), then proceed to
+Read this file to select the next issue, including explicit targets,
+roadmap-audit handoff, and A4.5/Claim routing. After A4 selects a viable
+candidate, run `idd-suitability.instructions.md` (A4.5), then
 `idd-claim.instructions.md` to claim it.
 
 With helpers, run first from `docs/idd-helper-scripts.md` for
@@ -130,10 +128,11 @@ above).
 
 If all checks pass, the target is selected. Continue to
 [`idd-suitability.instructions.md`](idd-suitability.instructions.md)
-for suitability triage. A4.5 follows the same standards as roadmap
-paths. If A4.5 passes, proceed to `idd-claim.instructions.md` A5.
-A5 claim-state, open-PR, takeover, branch-collision, and
-claim-verification rules remain unchanged.
+for A4.5, then `idd-claim.instructions.md` A5. Before Claim, a
+context-pressure exit after fresh selection must report the candidate for
+handoff and not claim it (issue #3144; preventive). A5's claim-state,
+open-PR, takeover, branch-collision, and verification rules remain
+unchanged.
 
 ## A0 — Check issue-scope setting
 
