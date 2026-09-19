@@ -3186,6 +3186,7 @@ test('token-cost-harvest CLI: reports issue-less open events during dry-run', ()
         XDG_STATE_HOME: join(home, 'state'),
       },
       encoding: 'utf8',
+      timeout: 60_000,
     },
   );
   try {
@@ -3617,6 +3618,53 @@ test('readEventLog: compares a session-less exit with the retained earliest ente
         stageId: 'work',
         atMs: ms('2026-01-01T00:10:00Z'),
         claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: retains a later session-less claim after an earlier claim exits (Codex review finding, PR #3156)', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-two',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:15:00Z'),
+        claimId: 'claim-two',
       },
     ]);
   } finally {

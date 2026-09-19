@@ -945,9 +945,10 @@ export function readEventLog(path) {
   // `attemptCandidates` correctly rejected for a claimId mismatch as an
   // untagged window.
   const openEnterByAttempt = new Map();
-  // A session-less event has no attempt identity, so retain one earliest
-  // still-open enter per bare key. This is diagnostic-only; the existing
-  // legacy pairing maps below remain unchanged.
+  // A session-less event has no attempt identity, so retain the earliest
+  // still-open enter for each claim lineage under a bare key. A claimless
+  // entry is its own lineage. This is diagnostic-only; the existing legacy
+  // pairing maps below remain unchanged.
   const openUnidentifiedEnter = new Map();
   const eventMetadata = new Map();
   // bareKey -> vendorSessionId -> claimId of whichever event set that
@@ -1044,12 +1045,19 @@ export function readEventLog(path) {
         enterAt.set(key, atMs);
         enterAtOwner.set(key, vendorSessionId);
         enterClaimIdOwner.set(key, claimId);
-        if (!openUnidentifiedEnter.has(key)) {
-          openUnidentifiedEnter.set(key, {
+        const openEnters = openUnidentifiedEnter.get(key) ?? [];
+        const existingOpen = openEnters.find(
+          (open) => open.claimId === claimId,
+        );
+        if (existingOpen) {
+          existingOpen.atMs = Math.min(existingOpen.atMs, atMs);
+        } else {
+          openEnters.push({
             atMs,
             ...(claimId !== undefined ? { claimId } : {}),
           });
         }
+        openUnidentifiedEnter.set(key, openEnters);
       }
     } else {
       exitAt.set(key, atMs);
@@ -1078,18 +1086,29 @@ export function readEventLog(path) {
         // openUnidentifiedEnter intentionally retains the earliest still-open
         // enter. Compare against that retained record so a later duplicate
         // enter cannot make an exit clear the earlier diagnostic.
-        const openEnter = openUnidentifiedEnter.get(key);
-        const enterClaimId = openEnter?.claimId;
-        const claimIdsCompatible =
-          enterClaimId === undefined ||
-          claimId === undefined ||
-          enterClaimId === claimId;
-        if (
-          claimIdsCompatible &&
-          openEnter !== undefined &&
-          atMs > openEnter.atMs
-        ) {
-          openUnidentifiedEnter.delete(key);
+        const openEnters = openUnidentifiedEnter.get(key);
+        if (openEnters && openEnters.length > 0) {
+          const exactClaimOpen =
+            claimId === undefined
+              ? undefined
+              : openEnters.find((open) => open.claimId === claimId);
+          const claimlessOpen = openEnters.find(
+            (open) => open.claimId === undefined,
+          );
+          const openEnter =
+            exactClaimOpen ??
+            (claimId === undefined
+              ? openEnters.reduce((earliest, open) =>
+                  open.atMs < earliest.atMs ? open : earliest,
+                )
+              : claimlessOpen);
+          if (openEnter && atMs > openEnter.atMs) {
+            const openIndex = openEnters.indexOf(openEnter);
+            openEnters.splice(openIndex, 1);
+            if (openEnters.length === 0) {
+              openUnidentifiedEnter.delete(key);
+            }
+          }
         }
       }
     }
@@ -1321,16 +1340,18 @@ export function readEventLog(path) {
       });
     }
   }
-  for (const [key, open] of openUnidentifiedEnter) {
+  for (const [key, openEnters] of openUnidentifiedEnter) {
     const metadata = eventMetadata.get(key);
     if (!metadata) {
       continue;
     }
-    openEvents.push({
-      ...metadata,
-      atMs: open.atMs,
-      ...(open.claimId !== undefined ? { claimId: open.claimId } : {}),
-    });
+    for (const open of openEnters) {
+      openEvents.push({
+        ...metadata,
+        atMs: open.atMs,
+        ...(open.claimId !== undefined ? { claimId: open.claimId } : {}),
+      });
+    }
   }
   return {
     windows: result,
