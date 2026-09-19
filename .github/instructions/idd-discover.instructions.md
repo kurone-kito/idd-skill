@@ -134,10 +134,10 @@ above).
 If all checks pass, the target is selected. Continue to
 [`idd-suitability.instructions.md`](idd-suitability.instructions.md)
 for A4.5, then `idd-claim.instructions.md` A5. Before Claim, a
-context-pressure exit after fresh selection must close its Discover event,
-report the candidate for handoff, and not claim it (issue #3144;
-preventive). A5's claim-state, open-PR, takeover, branch-collision, and
-verification rules remain unchanged.
+context-pressure exit after fresh selection must report the candidate for
+handoff and not claim it (issue #3144; preventive). A5's claim-state,
+open-PR, takeover, branch-collision, and verification rules remain
+unchanged.
 
 ## A0 — Check issue-scope setting
 
