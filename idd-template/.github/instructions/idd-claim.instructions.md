@@ -35,10 +35,10 @@ approval as missing.
 
 ## Context-pressure stop
 
-Fresh candidate: pre-claim context-pressure exit before B-F4: report for
-handoff; post no claim. Recovery unchanged. Record no
-token-cost events, claim-state markers, branch/worktree; issue state
-(#3144; preventive; no incident)
+Fresh candidate: before claim, if context pressure prevents completing Claim
+through F4, report for handoff; post no claim. Recovery unchanged. Make no
+claim-stage event/marker, branch/worktree; issue-state change. (#3144;
+preventive; no incident)
 
 ## Pre-checks (all five must pass)
 
@@ -245,8 +245,8 @@ issue (different slug variants).
 
 ## Claim execution
 
-If pre-check (c) found this claim, skip posting; keep its token/branch,
-apply heartbeat rules as needed, then verify.
+If (c) found this session's claim, post none; keep its token/branch,
+heartbeat as needed; verify.
 
 Determine `{branch-name}`:
 
