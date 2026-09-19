@@ -40,6 +40,14 @@ gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}" \
   | jq --arg expected "${PR_HEAD_SHA}" '.head.sha == $expected'
 ```
 
+Observed 2026-09-19 in issue [#3142][jq-incident], round 21 of the
+[field-feedback gist][jq-feedback-gist]: an agent copied standalone
+`jq --arg` syntax into `gh api --jq`, causing the command to fail before
+the intended check. This is an observed failure, not preventive guidance.
+
+[jq-incident]: https://github.com/kurone-kito/idd-skill/issues/3142
+[jq-feedback-gist]: https://gist.github.com/kurone-kito/9f2d7871542cb2f7a255f92a7c1232d0
+
 Do not pass standalone jq options to `gh api`; keep the API call and jq
 process as separate commands.
 
