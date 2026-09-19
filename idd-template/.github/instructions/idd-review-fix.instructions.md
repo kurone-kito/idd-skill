@@ -184,8 +184,8 @@ unpushed E9 fixes.
 
 Run **post-fix-validate**.
 
-**Validate.** Run validation without a pipe; rerun it through
-`tail`/`head`. Filter success cannot prove the first run passed (see
+**Validate.** Run it without a pipe; if shortening output, rerun
+through `tail`/`head`. A filter cannot prove it passed (see
 kurone-kito/idd-skill#3139). In Bash, check
 `status=${PIPESTATUS[0]}` or enable `set -o pipefail`.
 
