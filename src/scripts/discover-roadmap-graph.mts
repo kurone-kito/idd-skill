@@ -1668,12 +1668,12 @@ interface LeafClaimAnnotation {
  * Resolve one execution leaf's active-claim eligibility (#1008).
  *
  * Fetches the leaf issue's comments via the injected `loadComments` loader,
- * resolves the ACTIVE claim with the SHARED
- * `resolveActiveClaimWithForcedHandoffTrace` from protocol-helpers
- * (trusted-author gated, stale-age aware), then derives
- * present/stale/eligibility. The trace also preserves a just-released claim
- * branch so a live local worktree remains a discovery blocker after remote
- * ownership is cleared. `activeClaim` is ALWAYS returned as an object
+ * resolves the ACTIVE claim with the SHARED claim resolver from
+ * protocol-helpers (trusted-author gated, stale-age aware), then derives
+ * present/stale/eligibility. The shared resolver also preserves a
+ * just-released claim branch so a live local worktree remains a discovery
+ * blocker after remote ownership is cleared. `activeClaim` is ALWAYS returned
+ * as an object
  * (Design O): `present: false` (with `claimId: null`, `agentId: null`) when no
  * trusted claim is present, `present: true` otherwise. A leaf is eligible when
  * there is NO present, non-stale, trusted-actor claim and no occupied or
@@ -1681,11 +1681,11 @@ interface LeafClaimAnnotation {
  * reused read-only and never re-implemented here.
  *
  * Intentional limitation: this annotation remains a best-effort SOFT signal.
- * It traces forced-handoff transfers and uses trusted legacy claim/release
- * evidence to annotate stale/released occupancy, but does not reproduce the
- * authoritative forced-handoff authorization or legacy active-claim takeover
- * rules. The authoritative A5 claim gate (`idd-claim.instructions.md`)
- * remains the real protection.
+ * It does not reproduce the authoritative forced-handoff authorization or
+ * legacy active-claim takeover rules. It uses trusted legacy claim/release
+ * evidence only for stale/released local-worktree occupancy checks. The
+ * authoritative A5 claim gate (`idd-claim.instructions.md`) remains the real
+ * protection.
  */
 export async function annotateLeafClaimState(
   issueNumber: number,
@@ -2626,10 +2626,11 @@ function printHelp() {
   heartbeat-overdue claim can still be well inside the 24h stale window.
   --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
   each activeClaim (true when the active claim's claimId equals <id>).
-  NOTE: claimEligible is a best-effort SOFT discovery hint. It resolves only
-  new-format claimed-by markers and intentionally does NOT account for legacy
-  claim-id-less markers or forced-handoff transfers; the authoritative A5
-  claim gate (idd-claim.instructions.md) remains the real protection.
+  NOTE: claimEligible is a best-effort SOFT discovery hint. It does not
+  reproduce authoritative forced-handoff authorization or legacy active-claim
+  takeover rules. Trusted legacy claim/release evidence is used only for
+  stale/released local-worktree occupancy checks; the authoritative A5 claim
+  gate (idd-claim.instructions.md) remains the real protection.
 
   --with-readiness (opt-in) annotates each OPEN execution leaf with its A3
   startability by composing the discover-readiness-check helper (dependency

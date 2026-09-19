@@ -199,7 +199,7 @@
                     }
                   },
                   "reason": {
-                    "description": "Diagnostic reason, or null when no matching worktree exists. The in-repo validator cannot express the string|null union.",
+                    "description": "Diagnostic reason, or null when no matching worktree exists; the JSON Schema type array expresses this string|null union.",
                     "type": [
                       "string",
                       "null"

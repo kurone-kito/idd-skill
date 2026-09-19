@@ -110,13 +110,11 @@ function branchNameFromRef(ref: string): string | null {
   if (value.startsWith('refs/') && !value.startsWith('refs/heads/')) {
     return null;
   }
-  const branch = value.startsWith('refs/heads/')
-    ? value.slice('refs/heads/'.length)
-    : value;
+  const fullBranchRef = value.startsWith('refs/heads/');
+  const branch = fullBranchRef ? value.slice('refs/heads/'.length) : value;
   if (
     !branch ||
-    branch === '@' ||
-    branch.startsWith('-') ||
+    (!fullBranchRef && (branch === '@' || branch.startsWith('-'))) ||
     branch.startsWith('/') ||
     branch.endsWith('/') ||
     branch.endsWith('.') ||
@@ -247,6 +245,36 @@ function resolveDetachedBranch(
     }
     sequencerPath = candidatePath;
   }
+  const bisectPath = readGitPath(worktreePath, 'BISECT_START', env, execute);
+  if (!bisectPath) {
+    return { branchName: null, unreadable: true };
+  }
+  const bisectStartPath = joinGitPath(worktreePath, bisectPath);
+  const bisectStatus = inspectWorktreePath(bisectStartPath);
+  if (bisectStatus === 'unreadable') {
+    return { branchName: null, unreadable: true };
+  }
+  if (bisectStatus === 'present') {
+    if (sequencerPath !== null) {
+      return { branchName: null, unreadable: true };
+    }
+    try {
+      const bisectBranch = readFileSync(bisectStartPath, 'utf8').trim();
+      if (!bisectBranch || /^[0-9a-f]{4,64}$/i.test(bisectBranch)) {
+        return { branchName: null, unreadable: true };
+      }
+      const branchName = branchNameFromRef(bisectBranch);
+      if (!branchName) {
+        return { branchName: null, unreadable: true };
+      }
+      return {
+        branchName,
+        unreadable: false,
+      };
+    } catch {
+      return { branchName: null, unreadable: true };
+    }
+  }
   if (sequencerPath !== null) {
     try {
       const headName = readFileSync(
@@ -265,34 +293,7 @@ function resolveDetachedBranch(
       return { branchName: null, unreadable: true };
     }
   }
-  const bisectPath = readGitPath(worktreePath, 'BISECT_START', env, execute);
-  if (!bisectPath) {
-    return { branchName: null, unreadable: true };
-  }
-  const bisectStartPath = joinGitPath(worktreePath, bisectPath);
-  const bisectStatus = inspectWorktreePath(bisectStartPath);
-  if (bisectStatus === 'absent') {
-    return { branchName: null, unreadable: false };
-  }
-  if (bisectStatus === 'unreadable') {
-    return { branchName: null, unreadable: true };
-  }
-  try {
-    const bisectBranch = readFileSync(bisectStartPath, 'utf8').trim();
-    if (!bisectBranch || /^[0-9a-f]{4,64}$/i.test(bisectBranch)) {
-      return { branchName: null, unreadable: true };
-    }
-    const branchName = branchNameFromRef(bisectBranch);
-    if (!branchName) {
-      return { branchName: null, unreadable: true };
-    }
-    return {
-      branchName,
-      unreadable: false,
-    };
-  } catch {
-    return { branchName: null, unreadable: true };
-  }
+  return { branchName: null, unreadable: false };
 }
 
 function inspectWorktreePath(
