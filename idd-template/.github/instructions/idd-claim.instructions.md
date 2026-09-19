@@ -236,13 +236,17 @@ issue (different slug variants).
      stale session. Stopping for operator review._" Stop and wait for
      operator input. Do not post a claim or continue the workflow.
 
+### Context-pressure stop
+
+If a planned context exit means B-F4 cannot finish, report the issue and
+stop before Claim execution. Do not record tokens, post claim/nonce
+markers, create a branch/worktree, or mutate state. A5/recovery remain
+unchanged.
+
 ## Claim execution
 
-Skip the claim-posting steps below if pre-check (c) classified the
-issue as already claimed by this current session: keep the previously
-recorded `{claim-id}` and branch, and post no new claim. The Heartbeat
-posting rules below still apply whenever you extend the active claim's
-stale clock; then proceed to Claim verification.
+If pre-check (c) found this claim, skip posting; keep its token/branch,
+apply heartbeat rules as needed, then verify.
 
 Determine `{branch-name}`:
 
