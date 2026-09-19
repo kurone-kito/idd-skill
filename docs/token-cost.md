@@ -63,6 +63,22 @@ and appends `kind: "issue-loop"` / `kind: "session"` records to
 sibling `events.jsonl` path (`--events` to override), those timestamps
 win over the marker-join reconstruction for the stages they cover.
 
+An `enter` without a matching `exit` at the end of the event log is reported
+as an EOF-open diagnostic by the harvest command. This missing-`exit` failure
+mode was observed and tracked in issue `#3155`. Both `--dry-run` and normal
+harvest print a deterministic warning with the issue when present (or `#none`
+for issue-less phases such as `discover`), vendor, stage, original timestamp,
+and any available session or claim identity. The diagnostic is
+observability only: the enter is not turned into a completed stage window, no
+synthetic end timestamp is invented, and harvesting remains fail-open. An
+open-at-EOF event therefore differs from a completed window even when the
+active loop is still progressing.
+
+When the phase really ends, post the missing `exit` event with the same issue,
+stage, and available identity, then re-run the harvest. The next run can use
+the completed pair for attribution; an old warning in a prior terminal output
+does not alter the append-only event log or an already-written sample.
+
 `node scripts/token-cost-harvest.mjs` must be run from the **primary
 worktree**, not an issue worktree, for its Claude-vendor scan to see
 real data: Claude Code stores each project's session logs under

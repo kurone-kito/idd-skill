@@ -836,10 +836,22 @@ function eventKey(issueNumber, vendor, stageId) {
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.length > 0;
 }
+function compareOpenEventDiagnostics(a, b) {
+  const compareStrings = (left, right) =>
+    left === right ? 0 : left < right ? -1 : 1;
+  return (
+    (a.issueNumber ?? -1) - (b.issueNumber ?? -1) ||
+    compareStrings(a.vendor, b.vendor) ||
+    compareStrings(a.stageId, b.stageId) ||
+    a.atMs - b.atMs ||
+    compareStrings(a.vendorSessionId ?? '', b.vendorSessionId ?? '') ||
+    compareStrings(a.claimId ?? '', b.claimId ?? '')
+  );
+}
 /**
  * Reads a --events JSONL file into per-(issueNumber, vendor, stageId)
- * enter/exit window overrides. A missing file is not an error -- returns
- * an empty map.
+ * enter/exit window overrides plus EOF-open enter diagnostics. A missing
+ * file is not an error -- returns empty windows and diagnostics.
  *
  * #2424: `TokenCostEvent.vendorSessionId`, when present on BOTH the enter
  * and the exit an event carries, scopes pairing to that one attempt --
@@ -885,10 +897,10 @@ function isNonEmptyString(value) {
  * a documented limitation, not a regression, since neither pre-#2424 nor
  * pre-#2432 behavior could recover it either.
  */
-export function readEventWindows(path) {
+export function readEventLog(path) {
   const result = new Map();
   if (!existsSync(path)) {
-    return result;
+    return { windows: result, openEvents: [] };
   }
   const enterAt = new Map();
   const exitAt = new Map();
@@ -933,6 +945,12 @@ export function readEventWindows(path) {
   // `attemptCandidates` correctly rejected for a claimId mismatch as an
   // untagged window.
   const openEnterByAttempt = new Map();
+  // A session-less event has no attempt identity, so retain the earliest
+  // still-open enter for each claim lineage under a bare key. A claimless
+  // entry is its own lineage. This is diagnostic-only; the existing legacy
+  // pairing maps below remain unchanged.
+  const openUnidentifiedEnter = new Map();
+  const eventMetadata = new Map();
   // bareKey -> vendorSessionId -> claimId of whichever event set that
   // attempt's CURRENT latest timestamp above (#2432). Only meaningful
   // alongside an identified (vendorSessionId-bearing) attempt -- an
@@ -958,7 +976,9 @@ export function readEventWindows(path) {
     }
     const event = parsed;
     if (
-      typeof event.issueNumber !== 'number' ||
+      (event.issueNumber !== undefined &&
+        event.issueNumber !== null &&
+        typeof event.issueNumber !== 'number') ||
       typeof event.stageId !== 'string' ||
       !TOKEN_COST_STAGE_IDS.includes(event.stageId) ||
       !isTokenCostVendor(event.vendor) ||
@@ -970,7 +990,20 @@ export function readEventWindows(path) {
     if (atMs === undefined) {
       continue;
     }
-    const key = eventKey(event.issueNumber, event.vendor, event.stageId);
+    const issueNumber =
+      typeof event.issueNumber === 'number' ? event.issueNumber : undefined;
+    const stageId = event.stageId;
+    // Issue-less events are still useful for EOF diagnostics (notably the
+    // discover phase), but they must never become stage-window overrides.
+    const key =
+      issueNumber === undefined
+        ? `unscoped:${event.vendor}:${stageId}`
+        : eventKey(issueNumber, event.vendor, stageId);
+    eventMetadata.set(key, {
+      ...(issueNumber !== undefined ? { issueNumber } : {}),
+      vendor: event.vendor,
+      stageId,
+    });
     const vendorSessionId = isNonEmptyString(event.vendorSessionId)
       ? event.vendorSessionId
       : undefined;
@@ -1012,19 +1045,99 @@ export function readEventWindows(path) {
         enterAt.set(key, atMs);
         enterAtOwner.set(key, vendorSessionId);
         enterClaimIdOwner.set(key, claimId);
+        const openEnters = openUnidentifiedEnter.get(key) ?? [];
+        // A completely unidentified event has no stable lineage token at
+        // all. Preserve each such enter so concurrent sessions cannot
+        // collapse into one diagnostic (#3155, Codex review finding, PR
+        // #3156). Claim-bearing historical events still deduplicate by
+        // claimId, which is their available lineage token.
+        const existingOpen =
+          claimId === undefined
+            ? undefined
+            : openEnters.find((open) => open.claimId === claimId);
+        if (existingOpen) {
+          existingOpen.atMs = Math.min(existingOpen.atMs, atMs);
+        } else {
+          openEnters.push({
+            atMs,
+            ...(claimId !== undefined ? { claimId } : {}),
+          });
+        }
+        openUnidentifiedEnter.set(key, openEnters);
       }
     } else {
       exitAt.set(key, atMs);
       exitAtOwner.set(key, vendorSessionId);
       exitClaimIdOwner.set(key, claimId);
       if (vendorSessionId !== undefined) {
-        openEnterByAttempt.get(key)?.delete(vendorSessionId);
         const byAttempt = exitAtByAttempt.get(key) ?? new Map();
         byAttempt.set(vendorSessionId, atMs);
         exitAtByAttempt.set(key, byAttempt);
         const claimIdByAttempt = exitClaimIdByAttempt.get(key) ?? new Map();
         claimIdByAttempt.set(vendorSessionId, claimId);
         exitClaimIdByAttempt.set(key, claimIdByAttempt);
+        const enterClaimId = enterClaimIdByAttempt
+          .get(key)
+          ?.get(vendorSessionId);
+        const enterAtMs = enterAtByAttempt.get(key)?.get(vendorSessionId);
+        const claimIdsCompatible =
+          enterClaimId === undefined ||
+          claimId === undefined ||
+          enterClaimId === claimId;
+        if (claimIdsCompatible && enterAtMs !== undefined && atMs > enterAtMs) {
+          openEnterByAttempt.get(key)?.delete(vendorSessionId);
+        }
+      } else {
+        // The legacy owner map tracks the latest enter, but
+        // openUnidentifiedEnter intentionally retains the earliest still-open
+        // enter. When the latest legacy enter is compatible with this exit,
+        // close that lineage first so the diagnostic state agrees with the
+        // window that the legacy resolver will emit. Otherwise compare
+        // against the retained record so a later duplicate enter cannot make
+        // an exit clear the earlier diagnostic.
+        const openEnters = openUnidentifiedEnter.get(key);
+        if (openEnters && openEnters.length > 0) {
+          const exactClaimOpen =
+            claimId === undefined
+              ? undefined
+              : openEnters.find((open) => open.claimId === claimId);
+          const claimlessOpen = openEnters.find(
+            (open) => open.claimId === undefined,
+          );
+          const latestEnterAtMs = enterAt.get(key);
+          const latestEnterClaimId = enterClaimIdOwner.get(key);
+          const legacyPairUsesLatestOpen =
+            enterAtOwner.get(key) === undefined &&
+            latestEnterAtMs !== undefined &&
+            atMs > latestEnterAtMs &&
+            (latestEnterClaimId === undefined ||
+              claimId === undefined ||
+              latestEnterClaimId === claimId);
+          const legacyOpenCandidates = legacyPairUsesLatestOpen
+            ? openEnters.filter((open) => open.claimId === latestEnterClaimId)
+            : [];
+          const legacyOpen =
+            legacyOpenCandidates.length > 0
+              ? legacyOpenCandidates.reduce((latest, open) =>
+                  open.atMs > latest.atMs ? open : latest,
+                )
+              : undefined;
+          const openEnter =
+            legacyOpen ??
+            exactClaimOpen ??
+            (claimId === undefined
+              ? openEnters.reduce((latest, open) =>
+                  open.atMs > latest.atMs ? open : latest,
+                )
+              : claimlessOpen);
+          if (openEnter && atMs > openEnter.atMs) {
+            const openIndex = openEnters.indexOf(openEnter);
+            openEnters.splice(openIndex, 1);
+            if (openEnters.length === 0) {
+              openUnidentifiedEnter.delete(key);
+            }
+          }
+        }
       }
     }
   }
@@ -1203,10 +1316,14 @@ export function readEventWindows(path) {
   };
   const issueVendorPrefixes = new Set();
   for (const key of enterAt.keys()) {
-    issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    if (!key.startsWith('unscoped:')) {
+      issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    }
   }
   for (const key of exitAt.keys()) {
-    issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    if (!key.startsWith('unscoped:')) {
+      issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    }
   }
   for (const prefix of issueVendorPrefixes) {
     const cleanupKey = `${prefix}:cleanup`;
@@ -1229,7 +1346,51 @@ export function readEventWindows(path) {
       }
     }
   }
-  return result;
+  const openEvents = [];
+  for (const [key, sessionIds] of openEnterByAttempt) {
+    const metadata = eventMetadata.get(key);
+    const enters = enterAtByAttempt.get(key);
+    const claimIds = enterClaimIdByAttempt.get(key);
+    if (!metadata || !enters) {
+      continue;
+    }
+    for (const vendorSessionId of sessionIds) {
+      const atMs = enters.get(vendorSessionId);
+      if (atMs === undefined) {
+        continue;
+      }
+      const claimId = claimIds?.get(vendorSessionId);
+      openEvents.push({
+        ...metadata,
+        atMs,
+        vendorSessionId,
+        ...(claimId !== undefined ? { claimId } : {}),
+      });
+    }
+  }
+  for (const [key, openEnters] of openUnidentifiedEnter) {
+    const metadata = eventMetadata.get(key);
+    if (!metadata) {
+      continue;
+    }
+    for (const open of openEnters) {
+      openEvents.push({
+        ...metadata,
+        atMs: open.atMs,
+        ...(open.claimId !== undefined ? { claimId: open.claimId } : {}),
+      });
+    }
+  }
+  return {
+    windows: result,
+    openEvents: openEvents.sort(compareOpenEventDiagnostics),
+  };
+}
+export function readEventWindows(path) {
+  return readEventLog(path).windows;
+}
+export function readOpenEventDiagnostics(path) {
+  return readEventLog(path).openEvents;
 }
 function eventWindowsForIssue(all, issueNumber, vendor) {
   const out = new Map();
@@ -2371,6 +2532,35 @@ function defaultStateDir() {
     process.env.XDG_STATE_HOME?.trim() || join(homedir(), '.local', 'state');
   return join(base, 'idd-skill', 'token-cost');
 }
+/**
+ * Renders EOF-open phase-event diagnostics for the harvest CLI. This is
+ * deliberately separate from sample rendering: an open enter is evidence
+ * about incomplete coverage, never a stage window or sample mutation.
+ */
+export function formatOpenEventDiagnostics(openEvents) {
+  if (openEvents.length === 0) {
+    return '';
+  }
+  const lines = [
+    `token-cost-harvest: ${openEvents.length} unmatched phase-event enter(s) remain open at EOF; no synthetic stage windows were created`,
+  ];
+  for (const event of openEvents) {
+    const fields = [
+      `issue #${event.issueNumber ?? 'none'}`,
+      `vendor=${event.vendor}`,
+      `stage=${event.stageId}`,
+      `at=${new Date(event.atMs).toISOString()}`,
+    ];
+    if (event.vendorSessionId !== undefined) {
+      fields.push(`vendorSessionId=${event.vendorSessionId}`);
+    }
+    if (event.claimId !== undefined) {
+      fields.push(`claimId=${event.claimId}`);
+    }
+    lines.push(`token-cost-harvest: open ${fields.join(' ')}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
 // Flag-spec keys stay the dashed literal on purpose -- see cli-args.mts's
 // module header for the full invariant.
 const TOKEN_COST_HARVEST_FLAG_SPEC = {
@@ -2492,7 +2682,17 @@ function runCli(argv) {
   const trustedLogins = resolveTrustedMarkerLogins(
     values['trusted-marker-logins'],
   );
-  const eventWindows = readEventWindows(eventsPath);
+  const eventLog = readEventLog(eventsPath);
+  const eventWindows = eventLog.windows;
+  try {
+    const diagnostics = formatOpenEventDiagnostics(eventLog.openEvents);
+    if (diagnostics !== '') {
+      process.stderr.write(diagnostics);
+    }
+  } catch {
+    // Diagnostics are observability only. A formatting failure must never
+    // change the harvest's existing fail-open behavior or exit status.
+  }
   const sessions = [
     ...scanClaudeVendorSessions(defaultClaudeProjectDir(), eventWindows),
     ...scanCodexVendorSessions(defaultCodexSessionsDir()),

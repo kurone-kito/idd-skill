@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import type {
   TokenCostIssueLoopSample,
   TokenCostStageId,
@@ -20,10 +22,12 @@ import {
   extractCodexCountTimeline,
   extractCodexUsageTimeline,
   fetchIssueLoopGithubContext,
+  formatOpenEventDiagnostics,
   type HarvestedSample,
   type IssueLoopGithubContext,
   markAmbiguousOverlaps,
   parseRepoFlag,
+  readEventLog,
   readEventWindows,
   readExistingVendorSessionKeys,
   resolveIssueLoopContext,
@@ -37,6 +41,7 @@ import {
 import { readJson, stubExecutable } from './test-utils.mts';
 
 const ms = (iso: string) => Date.parse(iso);
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 const ZERO: TokenCostUsage = {
   inputUncached: 0,
@@ -2981,6 +2986,306 @@ test('readEventWindows: pairs a trusted enter/exit for the same (issueNumber, st
   }
 });
 
+test('readEventLog: reports an identified enter left open at EOF without synthesizing a window', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:30:00Z',
+      3155,
+      'codex-session',
+      'codex',
+      'claim-3155',
+    ),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 3155,
+        vendor: 'codex',
+        stageId: 'review',
+        atMs: ms('2026-01-01T00:30:00Z'),
+        vendorSessionId: 'codex-session',
+        claimId: 'claim-3155',
+      },
+    ]);
+    assert.match(
+      formatOpenEventDiagnostics(parsed.openEvents),
+      /issue #3155 vendor=codex stage=review at=2026-01-01T00:30:00\.000Z vendorSessionId=codex-session claimId=claim-3155/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: deduplicates an identified open enter at the earliest timestamp', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:10:00Z',
+      3155,
+      'codex-session',
+      'codex',
+      'claim-3155',
+    ),
+    tokenCostEvent(
+      'enter',
+      'review',
+      '2026-01-01T00:40:00Z',
+      3155,
+      'codex-session',
+      'codex',
+      'claim-3155',
+    ),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.openEvents.length, 1);
+    assert.equal(parsed.openEvents[0].atMs, ms('2026-01-01T00:10:00Z'));
+    assert.equal(parsed.windows.has('3155:codex:review'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: reports issue-less discover enters without creating windows', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'discover',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'codex',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        vendor: 'codex',
+        stageId: 'discover',
+        atMs: ms('2026-01-01T00:10:00Z'),
+      },
+    ]);
+    assert.match(
+      formatOpenEventDiagnostics(parsed.openEvents),
+      /issue #none vendor=codex stage=discover/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: preserves concurrent fully unidentified discover enters', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'discover',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'codex',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'discover',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'codex',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'discover',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'codex',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        vendor: 'codex',
+        stageId: 'discover',
+        atMs: ms('2026-01-01T00:10:00Z'),
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: preserves concurrent issue-scoped session-less enters', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    const window = parsed.windows.get('7:claude:work');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:15:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:10:00Z'),
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: emits no open diagnostic after a completed pair and reports a later open cycle', () => {
+  const completed = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:10:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+  ]);
+  const openAgain = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:10:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:40:00Z',
+      3155,
+      'codex-session',
+      'codex',
+    ),
+  ]);
+  try {
+    assert.deepEqual(readEventLog(completed.path).openEvents, []);
+    const parsed = readEventLog(openAgain.path);
+    assert.equal(parsed.openEvents.length, 1);
+    assert.equal(parsed.openEvents[0].atMs, ms('2026-01-01T00:40:00Z'));
+    assert.equal(parsed.windows.has('3155:codex:work'), false);
+  } finally {
+    rmSync(completed.dir, { recursive: true, force: true });
+    rmSync(openAgain.dir, { recursive: true, force: true });
+  }
+});
+
+test('formatOpenEventDiagnostics: renders a stable count and identifying fields', () => {
+  const text = formatOpenEventDiagnostics([
+    {
+      issueNumber: 3155,
+      vendor: 'codex',
+      stageId: 'review',
+      atMs: ms('2026-01-01T00:30:00Z'),
+      vendorSessionId: 'codex-session',
+      claimId: 'claim-3155',
+    },
+  ]);
+  assert.equal(
+    text,
+    'token-cost-harvest: 1 unmatched phase-event enter(s) remain open at EOF; no synthetic stage windows were created\n' +
+      'token-cost-harvest: open issue #3155 vendor=codex stage=review at=2026-01-01T00:30:00.000Z vendorSessionId=codex-session claimId=claim-3155\n',
+  );
+});
+
+test('token-cost-harvest CLI: reports issue-less open events during dry-run', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'discover',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'codex',
+    }),
+  ]);
+  const home = mkdtempSync(join(dir, 'home-'));
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/token-cost-harvest.mjs'),
+      '--repo',
+      'kurone-kito/idd-skill',
+      '--events',
+      path,
+      '--out',
+      join(dir, 'samples.jsonl'),
+      '--dry-run',
+    ],
+    {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        HOME: home,
+        XDG_STATE_HOME: join(home, 'state'),
+      },
+      encoding: 'utf8',
+      timeout: 60_000,
+    },
+  );
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stderr,
+      /token-cost-harvest: open issue #none vendor=codex stage=discover/,
+    );
+    assert.match(result.stderr, /0 sample\(s\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('readEventWindows: does not pair an enter/exit across two different vendors for the same issue/stage', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-token-cost-events-'));
   const path = join(dir, 'events.jsonl');
@@ -3196,6 +3501,355 @@ test('readEventWindows: excludes the whole candidate (not just its claimId) when
   try {
     const windows = readEventWindows(path);
     assert.equal(windows.get('7:claude:work'), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: keeps an identified enter open when the exit claimId differs', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:10:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-one',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-two',
+    ),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:10:00Z'),
+        vendorSessionId: 'sess-A',
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: keeps a session-less enter open when the exit claimId differs', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-two',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:10:00Z'),
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: keeps an identified enter open when the exit is not later', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent(
+      'enter',
+      'work',
+      '2026-01-01T00:20:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-one',
+    ),
+    tokenCostEvent(
+      'exit',
+      'work',
+      '2026-01-01T00:20:00Z',
+      7,
+      'sess-A',
+      'claude',
+      'claim-one',
+    ),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:20:00Z'),
+        vendorSessionId: 'sess-A',
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: keeps a session-less enter open when the exit is earlier', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:20:00Z'),
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: compares a session-less exit with the retained earliest enter', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-two',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-two',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    const window = parsed.windows.get('7:claude:work');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:15:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:10:00Z'),
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: retains a later session-less claim after an earlier claim exits (Codex review finding, PR #3156)', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-two',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    assert.equal(parsed.windows.size, 0);
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:15:00Z'),
+        claimId: 'claim-two',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: matches a claimless exit with the latest session-less lineage (Copilot and Codex review findings, PR #3156)', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-two',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    const window = parsed.windows.get('7:claude:work');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:15:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:10:00Z'),
+        claimId: 'claim-one',
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventLog: closes the latest claimless lineage for a claimed exit (Codex review finding, PR #3156)', () => {
+  const { dir, path } = writeEventsFile([
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:10:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'enter',
+      stageId: 'work',
+      at: '2026-01-01T00:15:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      event: 'exit',
+      stageId: 'work',
+      at: '2026-01-01T00:20:00Z',
+      vendor: 'claude',
+      issueNumber: 7,
+      claimId: 'claim-one',
+    }),
+  ]);
+  try {
+    const parsed = readEventLog(path);
+    const window = parsed.windows.get('7:claude:work');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:15:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+    assert.deepEqual(parsed.openEvents, [
+      {
+        issueNumber: 7,
+        vendor: 'claude',
+        stageId: 'work',
+        atMs: ms('2026-01-01T00:10:00Z'),
+        claimId: 'claim-one',
+      },
+    ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
