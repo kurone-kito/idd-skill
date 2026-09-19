@@ -1692,11 +1692,11 @@ interface LeafClaimAnnotation {
  * reused read-only and never re-implemented here.
  *
  * Intentional limitation: this annotation remains a best-effort SOFT signal.
- * It does not reproduce the authoritative forced-handoff authorization or
- * legacy active-claim takeover rules. It uses trusted legacy claim/release
- * evidence only for stale/released local-worktree occupancy checks. The
- * authoritative A5 claim gate (`idd-claim.instructions.md`) remains the real
- * protection.
+ * It traces forced-handoff transfers but does not reproduce authoritative
+ * forced-handoff authorization or legacy active-claim takeover rules. Trusted
+ * legacy claim/release evidence is used only for stale/released local-worktree
+ * collision checks. The authoritative A5 claim gate
+ * (`idd-claim.instructions.md`) remains the real protection.
  */
 export async function annotateLeafClaimState(
   issueNumber: number,
