@@ -245,12 +245,12 @@ export function collectRoutingInput({
   const branchRulesOutcome = port.listBranchRules(
     repository.owner,
     repository.name,
-    branchAndChecks.baseRefName,
+    trustedConfigRef,
   );
   const branchProtectionOutcome = port.getBranchProtection(
     repository.owner,
     repository.name,
-    branchAndChecks.baseRefName,
+    trustedConfigRef,
   );
   const protectionReadsUnreadable =
     (!trustEmptyProtectionReads &&

@@ -394,6 +394,52 @@ test('collector resolves protection-read policy from the PR base ref', () => {
   assert.equal(selectResumeRoute(input).route, 'D4');
 });
 
+test('collector uses the default branch for empty base-ref governance reads', () => {
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    openChangeRequests: [
+      {
+        number: 3150,
+        title: 'test PR',
+        body: 'Closes #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    changeRequestBranchAndChecks: {
+      3150: {
+        headSha: 'head-sha',
+        baseRefName: '',
+        statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+      },
+    },
+    requiredChecksSummary: {
+      3150: { checks: [], noRequiredChecksConfigured: true },
+    },
+    branchRules: { 'fake-owner/fake-repo/trunk': [] },
+    branchProtection: { 'fake-owner/fake-repo/trunk': {} },
+    repositoryDefaultBranch: 'trunk',
+    changeRequests: {
+      3150: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+    },
+  });
+  const seenRefs: string[] = [];
+
+  const input = collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: (_owner, _repo, ref) => {
+      seenRefs.push(ref);
+      return null;
+    },
+  });
+
+  assert.deepEqual(seenRefs, ['trunk']);
+  assert.equal(input.noRequiredChecksConfigured, true);
+  assert.equal(input.ciSuccess, true);
+  assert.equal(selectResumeRoute(input).route, 'F2');
+});
+
 test('collector discovers no required checks from protection and routes present-run success', () => {
   const port = createFakeProviderAdapter({
     locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
