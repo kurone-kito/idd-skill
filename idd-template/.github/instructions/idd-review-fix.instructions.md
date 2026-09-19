@@ -184,10 +184,10 @@ unpushed E9 fixes.
 
 Run **post-fix-validate**.
 
-**Validate.** Run validation without a pipe; use a second
-`tail`/`head` call to shorten output. Filter success cannot prove validation
-passed (issue #3139). In Bash, check `status=${PIPESTATUS[0]}` or enable
-`set -o pipefail`.
+**Validate.** Run validation without a pipe; rerun it through
+`tail`/`head`. Filter success cannot prove the first run passed (see
+kurone-kito/idd-skill#3139). In Bash, check
+`status=${PIPESTATUS[0]}` or enable `set -o pipefail`.
 
 Then push the feature branch normally (E11 uses merge commits, not
 rebase, so no force push is required).
