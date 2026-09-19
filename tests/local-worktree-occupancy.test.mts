@@ -15,6 +15,14 @@ function git(cwd: string, args: string[]): void {
   execFileSync('git', args, { cwd, env: fixtureEnv(), stdio: 'pipe' });
 }
 
+function stubWorktreeList(output: string): typeof execFileSync {
+  return ((file: string, args: string[]) => {
+    assert.equal(file, 'git');
+    assert.deepEqual(args, ['worktree', 'list', '--porcelain', '-z']);
+    return output;
+  }) as typeof execFileSync;
+}
+
 test('parses branch, detached, and prunable worktree records', () => {
   const records = parseLocalWorktreeList(
     [
@@ -55,6 +63,52 @@ test('fails closed when the current directory cannot list worktrees', () => {
     assert.equal(typeof result.reason, 'string');
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('inspects occupied, absent, and present-prunable worktree results', () => {
+  const prunablePath = mkdtempSync(`${tmpdir()}/idd-local-worktree-prunable-`);
+  try {
+    const occupied = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      stubWorktreeList(
+        'worktree /tmp/occupied\0HEAD abc\0branch refs/heads/issue/42-task\0\0',
+      ),
+    );
+    assert.deepEqual(occupied, {
+      status: 'occupied',
+      paths: ['/tmp/occupied'],
+      reason: 'matching local worktree for issue/42-task',
+    });
+
+    const absent = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      stubWorktreeList(
+        'worktree /tmp/main\0HEAD def\0branch refs/heads/main\0\0',
+      ),
+    );
+    assert.deepEqual(absent, {
+      status: 'absent',
+      paths: [],
+      reason: null,
+    });
+
+    const presentPrunable = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      stubWorktreeList(
+        `worktree ${prunablePath}\0HEAD ghi\0branch refs/heads/issue/42-task\0prunable gitdir file\0\0`,
+      ),
+    );
+    assert.equal(presentPrunable.status, 'unreadable');
+    assert.deepEqual(presentPrunable.paths, [prunablePath]);
+  } finally {
+    rmSync(prunablePath, { recursive: true, force: true });
   }
 });
 

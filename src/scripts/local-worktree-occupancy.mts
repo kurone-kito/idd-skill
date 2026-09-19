@@ -91,9 +91,10 @@ function readGitPath(
   worktreePath: string,
   name: string,
   env: NodeJS.ProcessEnv,
+  execute: typeof execFileSync,
 ): string | null {
   try {
-    return execFileSync(
+    return execute(
       'git',
       ['-C', worktreePath, 'rev-parse', '--git-path', name],
       {
@@ -115,9 +116,10 @@ interface DetachedBranchResolution {
 function resolveDetachedBranch(
   worktreePath: string,
   env: NodeJS.ProcessEnv,
+  execute: typeof execFileSync,
 ): DetachedBranchResolution {
   for (const name of ['rebase-merge', 'rebase-apply']) {
-    const gitPath = readGitPath(worktreePath, name, env);
+    const gitPath = readGitPath(worktreePath, name, env, execute);
     if (!gitPath) {
       return { branchName: null, unreadable: true };
     }
@@ -166,11 +168,12 @@ export function inspectLocalWorktreeBranch(
   branchName: string,
   cwd = process.cwd(),
   environment: NodeJS.ProcessEnv = process.env,
+  execute: typeof execFileSync = execFileSync,
 ): LocalWorktreeInspection {
   const env = sanitizedGitEnvironment(environment);
   let output: string;
   try {
-    output = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'], {
+    output = execute('git', ['worktree', 'list', '--porcelain', '-z'], {
       cwd,
       encoding: 'utf8',
       env,
@@ -203,7 +206,7 @@ export function inspectLocalWorktreeBranch(
       ? branchNameFromRef(record.branchRef)
       : null;
     if (!resolvedBranch && record.detached) {
-      const detached = resolveDetachedBranch(record.path, env);
+      const detached = resolveDetachedBranch(record.path, env, execute);
       if (detached.unreadable) {
         unreadablePaths.push(record.path);
         continue;
