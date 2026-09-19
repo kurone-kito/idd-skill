@@ -11,6 +11,16 @@ const CODERABBIT_NOTICE =
   '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
 const CODERABBIT_SUMMARY =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough\nSome walkthrough text.';
+const CODERABBIT_ALREADY_REVIEWED_ACK =
+  '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
+  '<!-- CodeRabbit review command invocation: v2:abc123 -->\n' +
+  '<details>\n' +
+  '<summary>⚠️ Action not completed</summary>\n\n' +
+  'Already reviewed the last commit. Use `@coderabbitai full review` to rerun a\n' +
+  'review of the entire changeset.\n\n' +
+  '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits.\n' +
+  'This command is applicable only when automatic reviews are paused.\n\n' +
+  '</details>';
 const HEAD_COMMITTED_AT = '2026-09-02T12:00:00Z';
 
 function comment(login: string, body: string, createdAt: string) {
@@ -232,6 +242,27 @@ test('computeSecondaryAdvisoryReviewSettlement: notice BEFORE a later genuine re
   assert.deepEqual(result, {
     settled: true,
     settledAt: '2026-09-02T12:10:00Z',
+    declined: false,
+  });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: already-reviewed acknowledgement remains pending because it is retryable (#3146)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'coderabbitai[bot]',
+        CODERABBIT_ALREADY_REVIEWED_ACK,
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
     declined: false,
   });
 });

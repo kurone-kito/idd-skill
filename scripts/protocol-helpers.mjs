@@ -2243,15 +2243,27 @@ function isCodexUsageLimitNotice(text) {
     CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN.test(remainder)
   );
 }
-export function isAdvisoryNonReviewNotice(body) {
+/**
+ * Classify notices that conclusively mean the secondary advisory bot will not
+ * review this HEAD. The already-reviewed acknowledgement is intentionally
+ * excluded: it is dispositionable non-review activity, but it offers a
+ * retryable full-review path (#3146, Copilot/Codex review on PR #3153).
+ */
+export function isTerminalAdvisoryNonReviewNotice(body) {
   const text = String(body ?? '');
   if (!text) {
     return false;
   }
   return (
-    isCodeRabbitAlreadyReviewedAcknowledgement(text) ||
     ADVISORY_NON_REVIEW_NOTICE_PATTERNS.some((pattern) => pattern.test(text)) ||
     isCodexUsageLimitNotice(text)
+  );
+}
+export function isAdvisoryNonReviewNotice(body) {
+  const text = String(body ?? '');
+  return (
+    isCodeRabbitAlreadyReviewedAcknowledgement(text) ||
+    isTerminalAdvisoryNonReviewNotice(text)
   );
 }
 // A trusted IDD disposition of a non-review notice: the canonical
@@ -2518,8 +2530,14 @@ export function computeSecondaryAdvisoryReviewSettlement(
   if (!latest) {
     return { settled: false, settledAt: null, declined: false };
   }
-  if (isAdvisoryNonReviewNotice(latest.body)) {
+  if (isTerminalAdvisoryNonReviewNotice(latest.body)) {
     return { settled: false, settledAt: null, declined: true };
+  }
+  if (isCodeRabbitAlreadyReviewedAcknowledgement(latest.body)) {
+    // This is a retryable non-review notice, not a completed review. Keep the
+    // secondary bot in the ordinary pending path so a later full review or
+    // finding cannot arrive after a short settled buffer (#3146).
+    return { settled: false, settledAt: null, declined: false };
   }
   return { settled: true, settledAt: latest.at, declined: false };
 }
