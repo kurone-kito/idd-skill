@@ -190,7 +190,7 @@ unpushed E9 fixes.
 Run **post-fix-validate**.
 
 **Validation.** Run the command without a pipe; use a second
-invocation with `tail` or `head` to shorten output. Success does not prove
+invocation with `tail` or `head` to shorten output. It does not prove
 the first command passed. In Bash, preserve it with
 `${PIPESTATUS[0]}` or enable `set -o pipefail`.
 
