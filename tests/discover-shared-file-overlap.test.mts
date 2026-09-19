@@ -35,16 +35,18 @@ test('parseArgs: --candidate is repeatable and --candidates is comma-split', () 
   assert.equal(args.bundles, null);
 });
 
-test('parseArgs: canonical --issue aliases accept all ordered input forms', () => {
+test('parseArgs: canonical aliases cover repeated and equals forms in order', () => {
   const args = parseArgs([
     '--issue',
     '5',
-    '--candidates=9,11',
+    '--issue=7',
+    '--issues=9,11',
     '--issues',
     '13,15',
-    '--candidate=17',
+    '--candidates=17,19',
+    '--candidate=21',
   ]);
-  assert.deepEqual(args.candidates, [5, 9, 11, 13, 15, 17]);
+  assert.deepEqual(args.candidates, [5, 7, 9, 11, 13, 15, 17, 19, 21]);
 });
 
 test('parseArgs: repeated --candidates occurrences all accumulate (not just the last)', () => {
