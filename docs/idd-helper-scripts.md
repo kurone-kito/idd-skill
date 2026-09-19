@@ -21,7 +21,10 @@ functioning flag on several other helpers -- required outright on
 required as one of a small set of mutually exclusive input flags on
 `discover-viability-gate.mjs` (or `--issues`) and
 `suitability-triage.mjs` (or `--body-file` / `--stdin`) -- which primes
-the instinct to reach for it elsewhere. `audit-authored-issue.mjs` also
+the instinct to reach for it elsewhere. `discover-shared-file-overlap.mjs`
+now accepts the same canonical `--issue` / `--issues` vocabulary while
+retaining its legacy `--candidate` / `--candidates` aliases.
+`audit-authored-issue.mjs` also
 accepts a genuine, functioning `--issue`: normally optional (it only
 sharpens the `authoring-owner-marker-trail` check's target match), but
 required once `--new-issue` and `--journal-comments-file` are both
@@ -744,8 +747,10 @@ files each would touch (parsed from its `## Candidate files` section) and
 whether any overlap an actively-claimed or open-PR issue, and it emits the soft
 A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
 
-- **Inputs**: `--candidate <number>` (repeatable) or `--candidates <n1,n2>`,
-  with optional `--owner <owner>`, `--repo <repo>`, `--policy <path>`,
+- **Inputs**: canonical `--issue <number>` (repeatable) or `--issues
+  <n1,n2>`. Compatibility aliases `--candidate <number>` (repeatable) and
+  `--candidates <n1,n2>` remain accepted. Optional flags are
+  `--owner <owner>`, `--repo <repo>`, `--policy <path>`,
   `--manifest <path>` (default `audit/sync-manifest.json`), `--bundles
   <id1,id2,...>` (default
   `bundle-core,bundle-review-triage-phase,bundle-review-fix-phase,bundle-merge-phase`),

@@ -205,6 +205,8 @@ function findSetextContentRunStart(
 // declared after that point is still in the temporal dead zone when the
 // trigger fires (see ci-wait-policy.mts's identical note).
 const DISCOVER_SHARED_FILE_OVERLAP_FLAG_SPEC = {
+  '--issue': { type: 'string', multiple: true },
+  '--issues': { type: 'string', multiple: true },
   '--candidate': { type: 'string', multiple: true },
   '--candidates': { type: 'string', multiple: true },
   '--owner': { type: 'string', default: '' },
@@ -724,7 +726,9 @@ function runCli(): void {
     process.exit(0);
   }
   if (args.candidates.length === 0) {
-    throw new Error('at least one --candidate <number> is required');
+    throw new Error(
+      'at least one --issue <number> or --issues <n1,n2> is required (legacy aliases: --candidate/--candidates)',
+    );
   }
 
   const currentRepo =
@@ -1050,20 +1054,22 @@ export function parseArgs(argv: string[]): ParsedArgs {
   // parsePositiveInt keeps its existing throw-on-invalid contract and
   // message shape unchanged; only the flag-syntax parsing around it (a
   // missing/flag-shaped value, an unknown flag) is now strict. Every
-  // --candidate/--candidates occurrence is now accumulated in argv order
+  // canonical or compatibility occurrence is accumulated in argv order
   // (not just the last, and not grouped by flag name).
   const candidates: number[] = collectOrderedOccurrences(argv, [
+    '--issue',
+    '--issues',
     '--candidate',
     '--candidates',
   ]).flatMap((occurrence) => {
-    if (occurrence.flag === '--candidate') {
-      return [parsePositiveInt(occurrence.value, '--candidate')];
+    if (occurrence.flag === '--issue' || occurrence.flag === '--candidate') {
+      return [parsePositiveInt(occurrence.value, occurrence.flag)];
     }
     return occurrence.value
       .split(',')
       .map((part) => part.trim())
       .filter(Boolean)
-      .map((trimmed) => parsePositiveInt(trimmed, '--candidates'));
+      .map((trimmed) => parsePositiveInt(trimmed, occurrence.flag));
   });
   return {
     candidates,
@@ -1094,7 +1100,11 @@ function parsePositiveInt(value: string | undefined, flag: string): number {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/discover-shared-file-overlap.mjs --candidate <number> [--candidate <number> ...] [--candidates <n1,n2>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2,...>] [--check-overlap] [--now <ISO8601>] [--help]
+  node scripts/discover-shared-file-overlap.mjs --issue <number> [--issue <number> ...]
+  node scripts/discover-shared-file-overlap.mjs --issues <n1,n2,...>
+  (compatibility aliases: --candidate <number> and --candidates <n1,n2>)
+    [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>]
+    [--bundles <id1,id2,...>] [--check-overlap] [--now <ISO8601>] [--help]
 
 Reports, per candidate, the high-contention shared files it would touch (from
 its '## Candidate files' section) and — with --check-overlap — whether any
