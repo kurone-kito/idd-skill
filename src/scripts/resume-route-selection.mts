@@ -474,7 +474,7 @@ function selectLatestPresentRunChecks(
 ): CiWaitCheckEntry[] {
   const groups = new Map<string, CiWaitCheckEntry[]>();
   for (const check of checks) {
-    const key = `${check.checkName}\u0000${check.workflowName}`;
+    const key = `${check.type}\u0000${check.checkName}\u0000${check.workflowName}`;
     const group = groups.get(key);
     if (group) {
       group.push(check);

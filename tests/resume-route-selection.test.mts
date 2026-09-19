@@ -437,6 +437,26 @@ test('collector retains same-named present runs from different workflows', () =>
   assert.equal(selectResumeRoute(input).route, 'D4');
 });
 
+test('collector retains same-named check runs and status contexts', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [
+      checkRun('ci', '', 'COMPLETED', 'SUCCESS'),
+      {
+        __typename: 'StatusContext',
+        context: 'ci',
+        state: 'PENDING',
+        targetUrl: 'https://example.test/status/ci',
+      },
+    ],
+  });
+
+  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  assert.equal(input.noRequiredChecksConfigured, true);
+  assert.equal(input.ciRunning, true);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
 test('collector keeps an ambiguous empty required-check summary fail-closed', () => {
   const port = createResumeCollectorPort({
     statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
