@@ -327,7 +327,7 @@ test('classifies bot comments against review state and later activity', () => {
   );
 });
 
-test('#3146: classifies a dispositioned already-reviewed refusal as stale', () => {
+test('#3146: leaves already-reviewed refusal matching to the one-to-one notice gate', () => {
   const refusal: CommentLike = {
     author: { login: 'coderabbitai[bot]' },
     body: coderabbitAlreadyReviewedAck,
@@ -340,13 +340,9 @@ test('#3146: classifies a dispositioned already-reviewed refusal as stale', () =
   };
 
   assert.equal(classifyRegularBotComment(refusal, [refusal], []), null);
-  assert.deepEqual(
+  assert.equal(
     classifyRegularBotComment(refusal, [refusal, disposition], []),
-    {
-      classifier: 'OUTDATED',
-      reason:
-        'stale CodeRabbit already-reviewed acknowledgement after completed review',
-    },
+    null,
   );
 });
 

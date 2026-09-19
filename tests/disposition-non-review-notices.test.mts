@@ -408,6 +408,47 @@ test('#3146: recognizes and disposition-plans the already-reviewed refusal', () 
   );
 });
 
+test('#3146: consumes repeated already-reviewed refusals one-to-one', () => {
+  const refusal = (id: number, createdAt: string) => ({
+    id,
+    createdAt,
+    body: CODERABBIT_ALREADY_REVIEWED_ACK,
+    author: { login: CODERABBIT },
+  });
+  const disposition = {
+    id: 3148,
+    createdAt: '2026-05-12T00:02:00Z',
+    body: buildDispositionBody(
+      CODERABBIT,
+      'abc1234',
+      'already reviewed last commit; full review required',
+      3146,
+    ),
+    author: { login: 'idd-bot' },
+  };
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        refusal(3146, '2026-05-12T00:00:00Z'),
+        refusal(3147, '2026-05-12T00:01:00Z'),
+        disposition,
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: [CODERABBIT],
+      prAuthorLogin: 'pr-author',
+    },
+  );
+
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.deepEqual(
+    summary.missingRegularComments.map((item) => item.id),
+    ['3147'],
+  );
+});
+
 test('#3146: does not classify similar review prose as the refusal notice', () => {
   const reviewBody =
     '<!-- This is an auto-generated reply by CodeRabbit -->\n' +

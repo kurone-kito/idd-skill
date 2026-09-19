@@ -764,25 +764,17 @@ export function classifyRegularBotComment(
     return null;
   }
   if (body.startsWith(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)) {
-    if (
-      isCodeRabbitAlreadyReviewedAcknowledgement(body) &&
-      hasExplicitDispositionAfter(comment, comments, {
-        isDispositionAuthor: options.isDispositionAuthor,
-        isDisposition: (candidate) =>
-          isNonReviewNoticeDisposition({ body: candidate.body }),
-      })
-    ) {
-      return {
-        classifier: 'OUTDATED',
-        reason:
-          'stale CodeRabbit already-reviewed acknowledgement after completed review',
-      };
-    }
+    // Keep the retryable already-reviewed acknowledgement in the outstanding
+    // pool. `summarizeDispositionEvidenceForGate` consumes its
+    // notice-specific dispositions one-to-one; classifying it here from the
+    // mere existence of a later disposition would let one reply clear repeated
+    // acknowledgements (#3153, Copilot review on PR #3153).
+    const hasDisposition = hasExplicitDispositionAfter(comment, comments, {
+      isDispositionAuthor: options.isDispositionAuthor,
+    });
     if (
       /\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body) &&
-      hasExplicitDispositionAfter(comment, comments, {
-        isDispositionAuthor: options.isDispositionAuthor,
-      })
+      hasDisposition
     ) {
       return {
         classifier: 'OUTDATED',
@@ -8467,8 +8459,6 @@ function hasExplicitDispositionAfter(targetComment, comments, options = {}) {
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login) => !isKnownReviewBot(login);
-  const isDisposition =
-    options.isDisposition ?? ((comment) => isDispositionComment(comment));
   const targetTime = Date.parse(targetComment.createdAt ?? '');
   // The disposition must attribute itself to this sticky's advisory bot. Accept
   // either the product word (`CodeRabbit`) or the bot **login**
@@ -8482,7 +8472,7 @@ function hasExplicitDispositionAfter(targetComment, comments, options = {}) {
     const author = String(comment.author?.login ?? '')
       .trim()
       .toLowerCase();
-    if (!isDispositionAuthor(author) || !isDisposition(comment)) {
+    if (!isDispositionAuthor(author) || !isDispositionComment(comment)) {
       return false;
     }
     if (
