@@ -25,6 +25,24 @@ into `jq -r`/`jq -s` need the real binary, which neither `gh` nor Git
 for Windows installs (see ONBOARDING.md's Step 0 execution-environment
 prerequisites).
 
+The two filter interfaces are separate. `gh api --jq` accepts one jq
+filter string as its option value:
+
+```sh
+gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha'
+```
+
+When a filter needs shell variables, pipe the JSON to standalone `jq`,
+where `--arg` binds a value for the filter:
+
+```sh
+gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}" \
+  | jq --arg expected "${PR_HEAD_SHA}" '.head.sha == $expected'
+```
+
+Do not pass standalone jq options to `gh api`; keep the API call and jq
+process as separate commands.
+
 The instruction file owns the contract (decision rules, ordering,
 fail-closed handling, and what each step must produce); this document
 is the command reference. If the contract and these commands diverge,
