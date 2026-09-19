@@ -256,9 +256,23 @@ export function collectRoutingInput({ port, issueNumber }) {
   const requiredChecksConfigurationPresent =
     branchReviewRequirements.requiredCheckSourcePinned ||
     branchReviewRequirements.requiredCheckNames.length > 0;
+  const configuredRequiredCheckNames = new Set(
+    branchReviewRequirements.requiredCheckNames,
+  );
+  const summarizedRequiredCheckNames = new Set(
+    requiredChecksSummary.checks
+      .map((check) => String(check.name ?? '').trim())
+      .filter(Boolean),
+  );
   const requiredCheckSourcesDisagree =
-    requiredChecksSummary.checks.length > 0 &&
-    !requiredChecksConfigurationPresent;
+    (requiredChecksSummary.checks.length > 0 &&
+      !requiredChecksConfigurationPresent) ||
+    (configuredRequiredCheckNames.size > 0 &&
+      summarizedRequiredCheckNames.size !==
+        configuredRequiredCheckNames.size) ||
+    [...summarizedRequiredCheckNames].some(
+      (name) => !configuredRequiredCheckNames.has(name),
+    );
   const ciWaitState = buildCiWaitStateSummary(
     {
       headRefOid: branchAndChecks.headSha,
