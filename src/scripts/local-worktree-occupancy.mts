@@ -68,20 +68,21 @@ function branchNameFromRef(ref: string): string | null {
     : value;
   if (
     !branch ||
+    branch === '@' ||
+    branch.startsWith('-') ||
     branch.startsWith('/') ||
     branch.endsWith('/') ||
     branch.endsWith('.') ||
     branch.includes('..') ||
     branch.includes('@{') ||
-    /[\s~^:?*\x5b\\]/.test(branch) ||
+    // IDD claim branches use the canonical alphanumeric-hyphen slug. Treat
+    // dotted components as untrusted metadata so they cannot look absent.
+    branch.includes('.') ||
+    /[\p{Cc}\s~^:?*\x5b\\]/u.test(branch) ||
     branch
       .split('/')
       .some(
-        (part) =>
-          part === '' ||
-          part === '.' ||
-          part === '..' ||
-          part.endsWith('.lock'),
+        (part) => part === '' || part.startsWith('.') || part.endsWith('.lock'),
       )
   ) {
     return null;

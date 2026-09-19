@@ -1948,7 +1948,7 @@ function printHelp() {
   annotated leaf gains (activeClaim is always an object):
     "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool, "localWorktree"?: object }
                    (present:false with claimId/agentId null = no trusted claim)
-    "claimEligible": bool   (eligible = no present, non-stale, trusted claim and no unverified stale-claim worktree)
+    "claimEligible": bool   (eligible = no present, non-stale, trusted claim and no unverified stale/released-claim worktree)
   Absent the flag, NO comment API calls are made and no claim fields are
   emitted (the output shape is byte-stable).
   heartbeatOverdue is true when the latest valid claimed-by/heartbeat

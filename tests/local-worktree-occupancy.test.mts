@@ -149,6 +149,22 @@ test('inspects occupied, absent, and present-prunable worktree results', () => {
   }
 });
 
+test('fails closed for invalid requested branch refs', () => {
+  for (const branch of ['issue/1-.bad', 'issue/.hidden', '@']) {
+    const result = inspectLocalWorktreeBranch(
+      branch,
+      process.cwd(),
+      process.env,
+      (() => {
+        throw new Error('invalid branch must not list worktrees');
+      }) as typeof execFileSync,
+    );
+    assert.equal(result.status, 'unreadable');
+    assert.deepEqual(result.paths, []);
+    assert.equal(result.reason, `invalid branch name: ${branch}`);
+  }
+});
+
 test('ignores ambient git repository overrides while checking occupancy', () => {
   const primary = realpathSync(
     mkdtempSync(`${tmpdir()}/idd-local-worktree-primary-`),

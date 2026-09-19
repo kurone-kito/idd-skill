@@ -187,10 +187,11 @@ All re-claims, migrations, and takeovers must use A5 race-safe verification
 from `idd-claim.instructions.md`. Forced-handoff recovery never waives the
 normal A5 branch-collision and open-PR safety checks.
 
-A branch left by a stale or released claim is inheritable. An open PR or
-remote branch may be reused when it matches the branch in the stale active
-claim, the latest released claim, or trusted forced-handoff evidence whose
-branch and linked PR fields still match live GitHub state.
+A branch left by a stale or released claim is inheritable only when no
+matching local worktree is occupied, unreadable, or unknown. An open PR or
+remote branch may then be reused when it matches the branch in the stale
+active claim, the latest released claim, or trusted forced-handoff evidence
+whose branch and linked PR fields still match live GitHub state.
 
 After routing, repair a missing or stale digest from the parsed claim state,
 PR state, CI state, and review activity when safe under the claim
