@@ -540,16 +540,15 @@ Before any mutating action in F3, apply the
    reproduces it; preserve anything else. Copy secrets (e.g. `.env`)
    out only — never commit or push them. Copy other work to a different
    ref or path, not `<branch-name>`, which is deleted next.
-   Before each `git worktree remove`, `cd` to a surviving primary or
-   repository path; repeat before every removal and keep that cwd for
+   Before each `git worktree remove`, `cd` to the surviving primary
+   worktree; repeat before every removal and keep that cwd for
    post-removal F4 operations (branch/remote deletion, digest,
    revalidation, unclaim, and `gh`/helper calls). Immediately before
    each removal, revalidate the claim and worktree lock; stop if either
    is not ours. On `fatal: working trees containing submodules cannot be
    moved or removed`, retry `git worktree remove --force <path>` from
-   surviving cwd only after preserving anything worth keeping. Then
-   delete worktree,
-   then the branch:
+   that cwd only after preserving anything worth keeping. Then remove
+   the worktree, then its branch:
 
    - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (the baseline permission profile
