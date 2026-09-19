@@ -34,7 +34,10 @@ Collect once: active `{claim-id}`/agent/branch from trusted markers (or
 unclaimed); trusted `forced-handoff: human-gated` proof (actor, displaced
 claim, branch, PR, URL; mismatches are Step 0 STOP); open PR+HEAD or
 `none`; latest issue/PR activity; PR-HEAD CI; and local worktree/branch/
-status/HEAD. Never invent or post forced-handoff markers.
+status/HEAD. When an open PR backs the claim, the proof must also have
+`contextScope: issue-plus-pr` with `linkedPr` naming that live PR; an
+issue-only handoff is insufficient. Never invent or post forced-handoff
+markers.
 
 Use GitHub **server** timestamps only. Stale age default: **24 h**
 (`claim-stale-age` / `claimTiming.staleAge`).
