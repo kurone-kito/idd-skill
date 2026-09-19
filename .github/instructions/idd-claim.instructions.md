@@ -40,8 +40,8 @@ approval as missing.
 
 ## Context-pressure stop
 
-Before A5 pre-checks, exit unable to finish B-F4 stops new selection
-without inheritable recovery: report it for handoff; record no tokens,
+Before A5 checks, a context-pressure exit before B-F4 must report this
+fresh candidate for handoff; record no token-cost events, claim-state
 markers, branch/worktree, or issue state. Observed 2026-09-19, #3144;
 recovery unchanged.
 
