@@ -1561,13 +1561,13 @@ export function classifyRegularBotComment(
     // notice-specific dispositions one-to-one; classifying it here from the
     // mere existence of a later disposition would let one reply clear repeated
     // acknowledgements (#3153, Copilot review on PR #3153).
-    const hasDisposition = hasExplicitDispositionAfter(comment, comments, {
-      isDispositionAuthor: options.isDispositionAuthor,
-    });
-    if (
-      /\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body) &&
-      hasDisposition
-    ) {
+    if (/\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body)) {
+      const hasDisposition = hasExplicitDispositionAfter(comment, comments, {
+        isDispositionAuthor: options.isDispositionAuthor,
+      });
+      if (!hasDisposition) {
+        return null;
+      }
       return {
         classifier: 'OUTDATED',
         reason:

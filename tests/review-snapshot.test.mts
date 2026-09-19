@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildActivitySnapshotSummary,
+  CODERABBIT_AUTO_GENERATED_REPLY_MARKER,
   classifyRegularBotComment,
   indexLatestGatingReviewsByAuthor,
   indexThreadsByReview,
@@ -367,6 +368,24 @@ test('#3146: keeps an already-reviewed refusal pending after an unrelated summar
     ),
     null,
   );
+});
+
+test('#3153: skips disposition scans for unrelated CodeRabbit replies', () => {
+  const reply: CommentLike = {
+    author: { login: 'coderabbitai[bot]' },
+    body: `${CODERABBIT_AUTO_GENERATED_REPLY_MARKER}\nThanks for the update.`,
+    createdAt: '2026-05-12T00:00:00Z',
+  };
+  const comments = new Proxy<CommentLike[]>([reply], {
+    get(target, property, receiver) {
+      if (property === 'some') {
+        throw new Error('unrelated replies must not scan dispositions');
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+  assert.equal(classifyRegularBotComment(reply, comments, []), null);
 });
 
 test('builds activity snapshot metrics with trusted marker filtering', () => {
