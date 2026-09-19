@@ -41,9 +41,9 @@ approval as missing.
 ## Context-pressure stop
 
 Fresh candidate: before claim, if context pressure prevents completing Claim
-through F4, report for handoff; post no claim. Recovery unchanged. Make no
-claim-stage event/marker, branch/worktree; issue-state change. (#3144;
-preventive; no incident)
+through F4, report for handoff; stop; do not claim. Recovery unchanged.
+Make no claim-stage event/marker, branch/worktree, or issue-state change.
+(#3144; preventive)
 
 ## Pre-checks (all five must pass)
 
