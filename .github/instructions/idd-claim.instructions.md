@@ -207,7 +207,8 @@ issue (different slug variants).
 
    Match `branch refs/heads/issue/<number>-…`; for `detached`, resolve
    `head-name` under `git -C <worktree> rev-parse --git-path
-   rebase-merge`/`rebase-apply` first.
+   rebase-merge`/`rebase-apply` first; treat a present `BISECT_START`
+   marker as unreadable occupancy too.
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query the Refs API with the issue-number prefix only, to stay within
@@ -233,7 +234,7 @@ issue (different slug variants).
      --fresh-claim-gate` reports `local_worktree_occupied` (including an
      `evidence.local_worktree.status` of `unreadable`); route to operator
      recovery unless the documented forced-handoff path is authorized
-     (#3141; preventive).
+     (#3141, Round 21 report).
    - **A matching branch corresponds to an inheritable claim or trusted
      forced-handoff evidence, with no live local worktree**: proceed — the
      branch is expected.

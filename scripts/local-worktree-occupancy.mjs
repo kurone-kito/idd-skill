@@ -102,6 +102,13 @@ function resolveDetachedBranch(worktreePath, env, execute) {
       return { branchName: null, unreadable: true };
     }
   }
+  const bisectPath = readGitPath(worktreePath, 'BISECT_START', env, execute);
+  if (!bisectPath) {
+    return { branchName: null, unreadable: true };
+  }
+  if (existsSync(joinGitPath(worktreePath, bisectPath))) {
+    return { branchName: null, unreadable: true };
+  }
   return { branchName: null, unreadable: false };
 }
 function inspectWorktreePath(worktreePath) {
@@ -151,9 +158,17 @@ export function inspectLocalWorktreeBranch(
   const unreadablePaths = [];
   for (const record of records) {
     if (record.prunable) {
-      if (inspectWorktreePath(record.path) !== 'absent') {
-        unreadablePaths.push(record.path);
+      const pathStatus = inspectWorktreePath(record.path);
+      if (pathStatus === 'absent') {
+        continue;
       }
+      const prunableBranch = record.branchRef
+        ? branchNameFromRef(record.branchRef)
+        : null;
+      if (prunableBranch && prunableBranch !== branchName) {
+        continue;
+      }
+      unreadablePaths.push(record.path);
       continue;
     }
     let resolvedBranch = record.branchRef
@@ -175,7 +190,7 @@ export function inspectLocalWorktreeBranch(
     return {
       status: 'unreadable',
       paths: unreadablePaths,
-      reason: 'cannot inspect detached worktree rebase metadata',
+      reason: 'cannot inspect matching local worktree metadata',
     };
   }
   if (matches.length === 0) {

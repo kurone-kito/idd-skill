@@ -134,9 +134,9 @@ authoritative replacement:
 - `state: unclaimed` + `action: re_claim` → no-active-claim route.
 - `state: stale` + `action: takeover` → stale-claim takeover route.
 - `state: local_worktree_occupied` + `action: stop` → a stale claim's
-  matching local worktree is occupied or unreadable; stop for operator
-  recovery. Verify owner resume with the exact claim-id, or retry a valid
-  forced-handoff successor with its new claim-id, before proceeding.
+  matching local worktree is occupied, unreadable, or unknown; stop for
+  operator recovery. Verify owner resume with the exact claim-id, or retry
+  a valid forced-handoff successor with its new claim-id, before proceeding.
 - `state: non_inheritable` + `action: stop` → active non-stale claim
   stop route.
 - `state: disputed` + `action: stop` → contested-claim stop route

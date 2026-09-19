@@ -86,7 +86,9 @@ On helper-enabled profiles, run `resume-claim-routing.mjs --issue <N>`
 | `non_inheritable` / `stop` | Forced-handoff: retry below; else STOP — live competitor claim                         |
 | `disputed` / `stop`        | STOP — contested claim                                                                 |
 
-`local_worktree_occupied` / `stop` → STOP — recover; verify claim-id.
+`local_worktree_occupied` / `stop` → STOP — recover; verify claim-id
+against occupied, unreadable, or unknown local worktree state
+(#3141, Round 21 report).
 
 Forced-handoff: pass `new_claim_id` into Step 1. On
 `non_inheritable`/`stop` or `stale`/`takeover` with

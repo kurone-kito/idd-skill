@@ -561,7 +561,7 @@ ascending issue-number order:
   `claimed-by` is non-stale (`created_at > now - claim-stale-age`; see
   `docs/policy-constants.md`), or when a stale claim's same-clone worktree
   probe finds a live match or is unreadable without verified owner resume or
-  authorized handoff (#3141; preventive). Otherwise it **remains eligible**.
+  authorized handoff (#3141, Round 21 report). Otherwise it **remains eligible**.
 
 After scanning the current batch:
 

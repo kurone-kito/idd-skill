@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
@@ -20,6 +20,24 @@ function stubWorktreeList(output: string): typeof execFileSync {
     assert.equal(file, 'git');
     assert.deepEqual(args, ['worktree', 'list', '--porcelain', '-z']);
     return output;
+  }) as typeof execFileSync;
+}
+
+function stubGitCommands(
+  worktreePath: string,
+  gitPaths: Record<string, string>,
+): typeof execFileSync {
+  return ((file: string, args: string[]) => {
+    assert.equal(file, 'git');
+    assert.deepEqual(args.slice(0, 4), [
+      '-C',
+      worktreePath,
+      'rev-parse',
+      '--git-path',
+    ]);
+    const path = gitPaths[args[4] ?? ''];
+    assert.ok(path, `missing git path for ${args[4] ?? '<empty>'}`);
+    return path;
   }) as typeof execFileSync;
 }
 
@@ -107,13 +125,29 @@ test('inspects occupied, absent, and present-prunable worktree results', () => {
     );
     assert.equal(presentPrunable.status, 'unreadable');
     assert.deepEqual(presentPrunable.paths, [prunablePath]);
+
+    const unrelatedPresentPrunable = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      stubWorktreeList(
+        `worktree ${prunablePath}\0HEAD ghi\0branch refs/heads/issue/7-old\0prunable gitdir file\0\0`,
+      ),
+    );
+    assert.deepEqual(unrelatedPresentPrunable, {
+      status: 'absent',
+      paths: [],
+      reason: null,
+    });
   } finally {
     rmSync(prunablePath, { recursive: true, force: true });
   }
 });
 
 test('ignores ambient git repository overrides while checking occupancy', () => {
-  const primary = mkdtempSync(`${tmpdir()}/idd-local-worktree-primary-`);
+  const primary = realpathSync(
+    mkdtempSync(`${tmpdir()}/idd-local-worktree-primary-`),
+  );
   const sentinel = mkdtempSync(`${tmpdir()}/idd-local-worktree-sentinel-`);
   const worktree = join(primary, '..', `${basename(primary)}-issue-42-task`);
   const branch = 'issue/42-task';
@@ -153,5 +187,33 @@ test('ignores ambient git repository overrides while checking occupancy', () => 
     rmSync(worktree, { recursive: true, force: true });
     rmSync(primary, { recursive: true, force: true });
     rmSync(sentinel, { recursive: true, force: true });
+  }
+});
+
+test('fails closed for an active bisect in a detached worktree', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-bisect-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    writeFileSync(join(gitDirectory, 'BISECT_START'), 'abc123\n');
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        return stubGitCommands(worktree, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.equal(result.status, 'unreadable');
+    assert.deepEqual(result.paths, [worktree]);
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
   }
 });
