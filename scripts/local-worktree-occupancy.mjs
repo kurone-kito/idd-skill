@@ -62,7 +62,7 @@ export function parseLocalWorktreeList(output) {
     let prunable = false;
     for (const line of lines) {
       if (line.startsWith('branch ')) {
-        branchRef = line.slice('branch '.length).trim();
+        branchRef = line.slice('branch '.length);
         if (!branchRef) {
           malformedWorktreeList('record has an empty branch ref');
         }
@@ -83,7 +83,7 @@ export function parseLocalWorktreeList(output) {
   return records;
 }
 function branchNameFromRef(ref) {
-  const value = ref.trim();
+  const value = ref;
   if (!value) {
     return null;
   }
@@ -118,6 +118,13 @@ function branchNameFromRef(ref) {
     return null;
   }
   return branch;
+}
+function removeTrailingLineEnding(value) {
+  if (!value.endsWith('\n')) {
+    return value;
+  }
+  const withoutLf = value.slice(0, -1);
+  return withoutLf.endsWith('\r') ? withoutLf.slice(0, -1) : withoutLf;
 }
 function hasLocalBranchRef(worktreePath, branchName, env, execute) {
   try {
@@ -244,7 +251,9 @@ function resolveDetachedBranch(worktreePath, env, execute) {
       return { branchName: null, unreadable: true };
     }
     try {
-      const bisectBranch = readFileSync(bisectStartPath, 'utf8').trim();
+      const bisectBranch = removeTrailingLineEnding(
+        readFileSync(bisectStartPath, 'utf8'),
+      );
       if (!bisectBranch) {
         return { branchName: null, unreadable: true };
       }
@@ -268,11 +277,9 @@ function resolveDetachedBranch(worktreePath, env, execute) {
   }
   if (sequencerPath !== null) {
     try {
-      const headName = readFileSync(
-        `${sequencerPath}/head-name`,
-        'utf8',
-      ).trim();
-      const branchName = branchNameFromRef(headName);
+      const headName = readFileSync(`${sequencerPath}/head-name`, 'utf8');
+      const normalizedHeadName = removeTrailingLineEnding(headName);
+      const branchName = branchNameFromRef(normalizedHeadName);
       if (!branchName) {
         return { branchName: null, unreadable: true };
       }

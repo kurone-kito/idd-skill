@@ -240,6 +240,36 @@ test('accepts Git-valid Unicode whitespace in unrelated full refs', () => {
   });
 });
 
+test('preserves trailing Git-valid Unicode whitespace in branch refs', () => {
+  const branch = 'issue/42\u00a0';
+  const worktreeList = stubWorktreeList(
+    `worktree /tmp/unrelated\0HEAD abc\0branch refs/heads/${branch}\0\0`,
+  );
+  const unrelated = inspectLocalWorktreeBranch(
+    'issue/42',
+    process.cwd(),
+    process.env,
+    worktreeList,
+  );
+  assert.deepEqual(unrelated, {
+    status: 'absent',
+    paths: [],
+    reason: null,
+  });
+
+  const matching = inspectLocalWorktreeBranch(
+    branch,
+    process.cwd(),
+    process.env,
+    worktreeList,
+  );
+  assert.deepEqual(matching, {
+    status: 'occupied',
+    paths: ['/tmp/unrelated'],
+    reason: `matching local worktree for ${branch}`,
+  });
+});
+
 test('accepts full refs with shorthand-special names for unrelated worktrees', () => {
   for (const branchRef of ['refs/heads/-maintenance', 'refs/heads/@']) {
     const result = inspectLocalWorktreeBranch(
