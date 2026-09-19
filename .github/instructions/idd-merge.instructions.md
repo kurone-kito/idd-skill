@@ -183,10 +183,11 @@ Before any mutating action in F3, apply the
      `git branch --show-current` is `{branch-name}`; else hold).
      Require empty `git status --porcelain` and
      `git merge-base --is-ancestor HEAD "${PR_HEAD_SHA_F3}"`;
-     else hold. For each target-tree path, hold if
-     `git ls-files -o --exclude-standard -- "$path"` (or the same with
-     `-i`) outputs it. Use `git switch {branch-name}` (never detached), recheck,
-     then reset only if all pass) — D3.5 step 7's
+     else hold. For paths in
+     `git ls-tree -r --name-only "${PR_HEAD_SHA_F3}"`, run
+     `git ls-files -o --exclude-standard -- "$path"` and the same with
+     `-i`; either output holds. Use `git switch {branch-name}` (not
+     detached), recheck; reset on pass) — D3.5 step 7's
      `git log` and D3.7's inherited `git diff`
      both read local git state, not the remote PR directly. Skip
      D3.5 steps 6-7 under the
