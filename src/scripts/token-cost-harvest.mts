@@ -399,7 +399,8 @@ export interface StageEventWindow {
 
 /** One phase enter that is still open when the --events file reaches EOF. */
 export interface OpenEventDiagnostic {
-  issueNumber: number;
+  /** Undefined for issue-less phase events, such as discover. */
+  issueNumber?: number;
   vendor: TokenCostVendor;
   stageId: TokenCostStageId;
   /** The earliest enter timestamp for this still-open attempt. */
@@ -1108,7 +1109,7 @@ function compareOpenEventDiagnostics(
   const compareStrings = (left: string, right: string): number =>
     left === right ? 0 : left < right ? -1 : 1;
   return (
-    a.issueNumber - b.issueNumber ||
+    (a.issueNumber ?? -1) - (b.issueNumber ?? -1) ||
     compareStrings(a.vendor, b.vendor) ||
     compareStrings(a.stageId, b.stageId) ||
     a.atMs - b.atMs ||
@@ -1224,7 +1225,7 @@ export function readEventLog(path: string): EventLogReadResult {
   const eventMetadata = new Map<
     string,
     {
-      issueNumber: number;
+      issueNumber?: number;
       vendor: TokenCostVendor;
       stageId: TokenCostStageId;
     }
@@ -1260,7 +1261,9 @@ export function readEventLog(path: string): EventLogReadResult {
     }
     const event = parsed as Partial<TokenCostEvent>;
     if (
-      typeof event.issueNumber !== 'number' ||
+      (event.issueNumber !== undefined &&
+        event.issueNumber !== null &&
+        typeof event.issueNumber !== 'number') ||
       typeof event.stageId !== 'string' ||
       !(TOKEN_COST_STAGE_IDS as readonly string[]).includes(event.stageId) ||
       !isTokenCostVendor(event.vendor) ||
@@ -1272,15 +1275,19 @@ export function readEventLog(path: string): EventLogReadResult {
     if (atMs === undefined) {
       continue;
     }
-    const key = eventKey(
-      event.issueNumber,
-      event.vendor,
-      event.stageId as TokenCostStageId,
-    );
+    const issueNumber =
+      typeof event.issueNumber === 'number' ? event.issueNumber : undefined;
+    const stageId = event.stageId as TokenCostStageId;
+    // Issue-less events are still useful for EOF diagnostics (notably the
+    // discover phase), but they must never become stage-window overrides.
+    const key =
+      issueNumber === undefined
+        ? `unscoped:${event.vendor}:${stageId}`
+        : eventKey(issueNumber, event.vendor, stageId);
     eventMetadata.set(key, {
-      issueNumber: event.issueNumber,
+      ...(issueNumber !== undefined ? { issueNumber } : {}),
       vendor: event.vendor,
-      stageId: event.stageId as TokenCostStageId,
+      stageId,
     });
     const vendorSessionId = isNonEmptyString(event.vendorSessionId)
       ? event.vendorSessionId
@@ -1338,7 +1345,6 @@ export function readEventLog(path: string): EventLogReadResult {
       exitAtOwner.set(key, vendorSessionId);
       exitClaimIdOwner.set(key, claimId);
       if (vendorSessionId !== undefined) {
-        openEnterByAttempt.get(key)?.delete(vendorSessionId);
         const byAttempt = exitAtByAttempt.get(key) ?? new Map<string, number>();
         byAttempt.set(vendorSessionId, atMs);
         exitAtByAttempt.set(key, byAttempt);
@@ -1347,8 +1353,25 @@ export function readEventLog(path: string): EventLogReadResult {
           new Map<string, string | undefined>();
         claimIdByAttempt.set(vendorSessionId, claimId);
         exitClaimIdByAttempt.set(key, claimIdByAttempt);
+        const enterClaimId = enterClaimIdByAttempt
+          .get(key)
+          ?.get(vendorSessionId);
+        const claimIdsCompatible =
+          enterClaimId === undefined ||
+          claimId === undefined ||
+          enterClaimId === claimId;
+        if (claimIdsCompatible) {
+          openEnterByAttempt.get(key)?.delete(vendorSessionId);
+        }
       } else {
-        openUnidentifiedEnter.delete(key);
+        const enterClaimId = enterClaimIdOwner.get(key);
+        const claimIdsCompatible =
+          enterClaimId === undefined ||
+          claimId === undefined ||
+          enterClaimId === claimId;
+        if (claimIdsCompatible) {
+          openUnidentifiedEnter.delete(key);
+        }
       }
     }
   }
@@ -1534,10 +1557,14 @@ export function readEventLog(path: string): EventLogReadResult {
 
   const issueVendorPrefixes = new Set<string>();
   for (const key of enterAt.keys()) {
-    issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    if (!key.startsWith('unscoped:')) {
+      issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    }
   }
   for (const key of exitAt.keys()) {
-    issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    if (!key.startsWith('unscoped:')) {
+      issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    }
   }
 
   for (const prefix of issueVendorPrefixes) {
@@ -2897,7 +2924,7 @@ export function formatOpenEventDiagnostics(
   ];
   for (const event of openEvents) {
     const fields = [
-      `issue #${event.issueNumber}`,
+      `issue #${event.issueNumber ?? 'none'}`,
       `vendor=${event.vendor}`,
       `stage=${event.stageId}`,
       `at=${new Date(event.atMs).toISOString()}`,

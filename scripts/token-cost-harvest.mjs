@@ -840,7 +840,7 @@ function compareOpenEventDiagnostics(a, b) {
   const compareStrings = (left, right) =>
     left === right ? 0 : left < right ? -1 : 1;
   return (
-    a.issueNumber - b.issueNumber ||
+    (a.issueNumber ?? -1) - (b.issueNumber ?? -1) ||
     compareStrings(a.vendor, b.vendor) ||
     compareStrings(a.stageId, b.stageId) ||
     a.atMs - b.atMs ||
@@ -975,7 +975,9 @@ export function readEventLog(path) {
     }
     const event = parsed;
     if (
-      typeof event.issueNumber !== 'number' ||
+      (event.issueNumber !== undefined &&
+        event.issueNumber !== null &&
+        typeof event.issueNumber !== 'number') ||
       typeof event.stageId !== 'string' ||
       !TOKEN_COST_STAGE_IDS.includes(event.stageId) ||
       !isTokenCostVendor(event.vendor) ||
@@ -987,11 +989,19 @@ export function readEventLog(path) {
     if (atMs === undefined) {
       continue;
     }
-    const key = eventKey(event.issueNumber, event.vendor, event.stageId);
+    const issueNumber =
+      typeof event.issueNumber === 'number' ? event.issueNumber : undefined;
+    const stageId = event.stageId;
+    // Issue-less events are still useful for EOF diagnostics (notably the
+    // discover phase), but they must never become stage-window overrides.
+    const key =
+      issueNumber === undefined
+        ? `unscoped:${event.vendor}:${stageId}`
+        : eventKey(issueNumber, event.vendor, stageId);
     eventMetadata.set(key, {
-      issueNumber: event.issueNumber,
+      ...(issueNumber !== undefined ? { issueNumber } : {}),
       vendor: event.vendor,
-      stageId: event.stageId,
+      stageId,
     });
     const vendorSessionId = isNonEmptyString(event.vendorSessionId)
       ? event.vendorSessionId
@@ -1046,15 +1056,31 @@ export function readEventLog(path) {
       exitAtOwner.set(key, vendorSessionId);
       exitClaimIdOwner.set(key, claimId);
       if (vendorSessionId !== undefined) {
-        openEnterByAttempt.get(key)?.delete(vendorSessionId);
         const byAttempt = exitAtByAttempt.get(key) ?? new Map();
         byAttempt.set(vendorSessionId, atMs);
         exitAtByAttempt.set(key, byAttempt);
         const claimIdByAttempt = exitClaimIdByAttempt.get(key) ?? new Map();
         claimIdByAttempt.set(vendorSessionId, claimId);
         exitClaimIdByAttempt.set(key, claimIdByAttempt);
+        const enterClaimId = enterClaimIdByAttempt
+          .get(key)
+          ?.get(vendorSessionId);
+        const claimIdsCompatible =
+          enterClaimId === undefined ||
+          claimId === undefined ||
+          enterClaimId === claimId;
+        if (claimIdsCompatible) {
+          openEnterByAttempt.get(key)?.delete(vendorSessionId);
+        }
       } else {
-        openUnidentifiedEnter.delete(key);
+        const enterClaimId = enterClaimIdOwner.get(key);
+        const claimIdsCompatible =
+          enterClaimId === undefined ||
+          claimId === undefined ||
+          enterClaimId === claimId;
+        if (claimIdsCompatible) {
+          openUnidentifiedEnter.delete(key);
+        }
       }
     }
   }
@@ -1233,10 +1259,14 @@ export function readEventLog(path) {
   };
   const issueVendorPrefixes = new Set();
   for (const key of enterAt.keys()) {
-    issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    if (!key.startsWith('unscoped:')) {
+      issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    }
   }
   for (const key of exitAt.keys()) {
-    issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    if (!key.startsWith('unscoped:')) {
+      issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+    }
   }
   for (const prefix of issueVendorPrefixes) {
     const cleanupKey = `${prefix}:cleanup`;
@@ -2457,7 +2487,7 @@ export function formatOpenEventDiagnostics(openEvents) {
   ];
   for (const event of openEvents) {
     const fields = [
-      `issue #${event.issueNumber}`,
+      `issue #${event.issueNumber ?? 'none'}`,
       `vendor=${event.vendor}`,
       `stage=${event.stageId}`,
       `at=${new Date(event.atMs).toISOString()}`,
