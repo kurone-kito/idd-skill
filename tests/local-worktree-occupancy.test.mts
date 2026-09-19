@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
@@ -194,7 +200,58 @@ test('fails closed for an active bisect in a detached worktree', () => {
   const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-bisect-`);
   const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
   try {
-    writeFileSync(join(gitDirectory, 'BISECT_START'), 'abc123\n');
+    writeFileSync(join(gitDirectory, 'BISECT_START'), 'issue/42-task\n');
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        return stubGitCommands(worktree, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.equal(result.status, 'occupied');
+    assert.deepEqual(result.paths, [worktree]);
+
+    writeFileSync(join(gitDirectory, 'BISECT_START'), 'issue/7-old\n');
+    const unrelated = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        return stubGitCommands(worktree, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.deepEqual(unrelated, {
+      status: 'absent',
+      paths: [],
+      reason: null,
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
+test('fails closed when detached sequencer head-name is empty', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-empty-head-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    mkdirSync(join(gitDirectory, 'rebase-merge'));
+    writeFileSync(join(gitDirectory, 'rebase-merge', 'head-name'), '\n');
     const result = inspectLocalWorktreeBranch(
       'issue/42-task',
       process.cwd(),

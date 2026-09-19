@@ -251,15 +251,15 @@ gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<N>-" \
 --jq '.[].ref | sub("^refs/heads/"; "")'
 ```
 
-Blocks stale takeover; verify owner/handoff (#3141 Round 21).
-Parse NUL branch records; detached: rebase `head-name`/`BISECT_START`;
+Blocks takeover; verify owner/handoff (#3141 Round 21).
+Parse NUL branch records; detached: rebase head-name/`BISECT_START`;
 unknown/unreadable → STOP; present prunable frees if unrelated.
 
 <!-- dprint-ignore-start -->
 | Match found? | Action |
 | --- | --- |
 | No local/remote match | Proceed |
-| Stale + live/unreadable/unknown worktree | **STOP** — recover |
+| Stale + live/unreadable/unknown without owner/handoff | **STOP** — recover |
 | Inheritable match, no live local worktree | Proceed — expected |
 | Non-corresponding match + active claim | **STOP** — concurrent |
 | Non-corresponding match + no active claim | **STOP** — hold/orphan review |

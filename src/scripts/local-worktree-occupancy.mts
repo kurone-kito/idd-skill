@@ -7,7 +7,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 
 /** The local occupancy result used by claim and Discover gates. */
 export interface LocalWorktreeInspection {
@@ -124,20 +124,25 @@ function resolveDetachedBranch(
       return { branchName: null, unreadable: true };
     }
     const sequencerPath = joinGitPath(worktreePath, gitPath);
-    if (!existsSync(sequencerPath)) {
+    const sequencerStatus = inspectWorktreePath(sequencerPath);
+    if (sequencerStatus === 'absent') {
       continue;
+    }
+    if (sequencerStatus === 'unreadable') {
+      return { branchName: null, unreadable: true };
     }
     try {
       const headName = readFileSync(
         `${sequencerPath}/head-name`,
         'utf8',
       ).trim();
-      if (headName) {
-        return {
-          branchName: branchNameFromRef(headName),
-          unreadable: false,
-        };
+      if (!headName) {
+        return { branchName: null, unreadable: true };
       }
+      return {
+        branchName: branchNameFromRef(headName),
+        unreadable: false,
+      };
     } catch {
       return { branchName: null, unreadable: true };
     }
@@ -146,10 +151,26 @@ function resolveDetachedBranch(
   if (!bisectPath) {
     return { branchName: null, unreadable: true };
   }
-  if (existsSync(joinGitPath(worktreePath, bisectPath))) {
+  const bisectStartPath = joinGitPath(worktreePath, bisectPath);
+  const bisectStatus = inspectWorktreePath(bisectStartPath);
+  if (bisectStatus === 'absent') {
+    return { branchName: null, unreadable: false };
+  }
+  if (bisectStatus === 'unreadable') {
     return { branchName: null, unreadable: true };
   }
-  return { branchName: null, unreadable: false };
+  try {
+    const bisectBranch = readFileSync(bisectStartPath, 'utf8').trim();
+    if (!bisectBranch || /^[0-9a-f]{4,64}$/i.test(bisectBranch)) {
+      return { branchName: null, unreadable: true };
+    }
+    return {
+      branchName: branchNameFromRef(bisectBranch),
+      unreadable: false,
+    };
+  } catch {
+    return { branchName: null, unreadable: true };
+  }
 }
 
 function inspectWorktreePath(
@@ -208,10 +229,18 @@ export function inspectLocalWorktreeBranch(
       if (pathStatus === 'absent') {
         continue;
       }
-      const prunableBranch = record.branchRef
+      let prunableBranch = record.branchRef
         ? branchNameFromRef(record.branchRef)
         : null;
-      if (prunableBranch && prunableBranch !== branchName) {
+      if (!prunableBranch && record.detached) {
+        const detached = resolveDetachedBranch(record.path, env, execute);
+        if (detached.unreadable) {
+          unreadablePaths.push(record.path);
+          continue;
+        }
+        prunableBranch = detached.branchName;
+      }
+      if (prunableBranch !== branchName) {
         continue;
       }
       unreadablePaths.push(record.path);
