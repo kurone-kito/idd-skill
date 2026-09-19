@@ -47,8 +47,8 @@ Stop and ask the operator when:
 - an expected helper is missing, fails, or disagrees with live state;
 - pre-check (a)-(e) fails for any reason (see below) — no fallback
   candidate exists in lite scope;
-- the claim-state helper (`--fresh-claim-gate`) returns `already-claimed`,
-  or the written claim-state rules find a live non-stale competitor;
+- the fresh-claim gate returns `already-claimed` for a non-owner, or the
+  written rules find a non-stale competitor;
 - forced-handoff evidence exists but mismatches live claim/branch/PR
   state, or `forcedHandoff.mode` is not `human-gated`;
 - claim verification (below) fails any race-safe check;
@@ -152,7 +152,7 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 | --- | --- |
 | `claimable` | Proceed to Claim execution (fresh) |
 | `stale-reclaimable` | Proceed to Claim execution (takeover) |
-| `already-claimed` | **STOP** — live competitor or race |
+| `already-claimed` | **STOP** unless `winning_claim_id` matches your verified released id |
 <!-- dprint-ignore-end -->
 
 Written fallback (`instructions-only` profile only — per the Helper
