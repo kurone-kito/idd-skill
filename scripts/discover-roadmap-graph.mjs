@@ -1233,11 +1233,6 @@ function hasNewFormatClaim(comments, isTrustedAuthor) {
       parseClaimComment(comment.body, comment.createdAt) !== null,
   );
 }
-/**
- * Resolve the branch most recently released by a trusted legacy claim.
- * Discovery deliberately uses this only for the local-worktree collision
- * check; resume-claim-routing remains authoritative for legacy claim routing.
- */
 /** Coerce a loaded comment payload into the `resolveActiveClaim` event shape. */
 function normalizeClaimComments(raw) {
   if (!Array.isArray(raw)) {

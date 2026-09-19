@@ -139,9 +139,8 @@ activation-nonce for `newClaimId`) first, then Claim verification's
 **Forced-handoff adopt-verbatim** case (step 5's settle-delay + nonce
 recompute only).
 
-**Otherwise** (no recorded `{claim-id}` and no matching forced-handoff
-evidence), run the write-gate helper immediately before the claim
-write:
+**Otherwise** (no recorded `{claim-id}`, no forced-handoff evidence, or
+verified released-owner retry), run write-gate before claim write:
 
 ```sh
 node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
