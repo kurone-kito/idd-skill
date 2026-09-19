@@ -563,8 +563,9 @@ default below is unchanged.
     `activeClaim` (always an object: `{ present, stale, claimId, agentId,`
     `heartbeatOverdue }`, plus `ownedByCurrentSession` when
     `--current-claim-id` is passed; it is true only when that id matches and
-    the current worktree's claim lock confirms ownership; stale or released
-    claims may also carry `localWorktree: {status, paths, reason}`) and
+    the current worktree's claim lock plus generated-tokens record confirm the
+    same claim and agent identity; stale or released claims may also carry
+    `localWorktree: {status, paths, reason}`) and
     `claimEligible: boolean` on
     each
     open leaf. Both `discover-roadmap-graph.mjs` and

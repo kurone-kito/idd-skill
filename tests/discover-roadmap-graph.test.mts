@@ -7,6 +7,12 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  acquireClaimLock,
+  recordGeneratedClaimTokens,
+  resolveGeneratedTokensPath,
+} from '../src/scripts/claim-lock.mts';
+import {
+  buildClaimStateResolution,
   buildCommentLoader,
   buildIssueLoader,
   buildOpenRoadmapRootsLoader,
@@ -2532,6 +2538,53 @@ const CLAIM_NOW = '2026-06-25T12:00:00Z';
 const FRESH_CLAIM_AT = '2026-06-25T06:00:00Z';
 const STALE_CLAIM_AT = '2026-06-20T06:00:00Z';
 
+test('owner evidence requires a generated-tokens record alongside the lock (#3141)', () => {
+  const worktree = mkdtempSync(join(tmpdir(), 'idd-discover-owner-evidence-'));
+  const claimId = 'claim-owner-evidence';
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      cwd: worktree,
+      stdio: 'ignore',
+    });
+    acquireClaimLock(worktree, 'agent-owner', claimId, false);
+    recordGeneratedClaimTokens(worktree, {
+      agentId: 'agent-owner',
+      claimId,
+      nonce: 'nonce-owner',
+    });
+    process.chdir(worktree);
+
+    const port = createFakeProviderAdapter({});
+    assert.equal(
+      buildClaimStateResolution(port, {}, claimId)
+        .currentSessionOwnsClaimEvidence,
+      true,
+    );
+
+    recordGeneratedClaimTokens(worktree, {
+      agentId: 'agent-other',
+      claimId,
+      nonce: 'nonce-other',
+    });
+    assert.equal(
+      buildClaimStateResolution(port, {}, claimId)
+        .currentSessionOwnsClaimEvidence,
+      false,
+    );
+
+    rmSync(resolveGeneratedTokensPath(worktree, claimId));
+    assert.equal(
+      buildClaimStateResolution(port, {}, claimId)
+        .currentSessionOwnsClaimEvidence,
+      false,
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
 function claimComment(
   agentId: string,
   claimId: string,
@@ -2549,14 +2602,14 @@ function buildClaimState(
   commentsByIssue: Map<number, unknown[]>,
   {
     currentClaimId = '',
-    currentSessionOwnsClaimLock = false,
+    currentSessionOwnsClaimEvidence = false,
     trustedActors = ['kurone-kito'],
     staleAgeMs = CLAIM_STALE_AGE_MS,
     heartbeatIntervalMs = CLAIM_HEARTBEAT_INTERVAL_MS,
     inspectLocalWorktree,
   }: {
     currentClaimId?: string;
-    currentSessionOwnsClaimLock?: boolean;
+    currentSessionOwnsClaimEvidence?: boolean;
     trustedActors?: string[];
     staleAgeMs?: number;
     heartbeatIntervalMs?: number;
@@ -2578,7 +2631,7 @@ function buildClaimState(
       heartbeatIntervalMs,
       nowIso: CLAIM_NOW,
       currentClaimId,
-      currentSessionOwnsClaimLock,
+      currentSessionOwnsClaimEvidence,
       inspectLocalWorktree,
     },
   };
@@ -2840,7 +2893,7 @@ test('the current session may resume its released new-format worktree', async ()
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
-    currentSessionOwnsClaimLock: true,
+    currentSessionOwnsClaimEvidence: true,
     inspectLocalWorktree: (branchName) => ({
       status: 'occupied',
       paths: [`/tmp/${branchName}`],
@@ -2988,7 +3041,7 @@ test('the current session may resume its occupied stale worktree', async () => {
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
-    currentSessionOwnsClaimLock: true,
+    currentSessionOwnsClaimEvidence: true,
     inspectLocalWorktree: () => ({
       status: 'occupied',
       paths: ['/tmp/issue-700-task'],
@@ -3108,7 +3161,7 @@ test('--current-claim-id sets ownedByCurrentSession on the matching claim', asyn
   ]);
   const { resolution } = buildClaimState(commentsByIssue, {
     currentClaimId: 'claim-701',
-    currentSessionOwnsClaimLock: true,
+    currentSessionOwnsClaimEvidence: true,
   });
 
   const graph = await enumerateRoadmapGraph(700, {

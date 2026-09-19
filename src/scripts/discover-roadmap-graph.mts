@@ -11,7 +11,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
-import { checkClaimLock } from './claim-lock.mts';
+import { checkClaimLock, readGeneratedClaimTokens } from './claim-lock.mts';
 import { stripLeadingArgumentSeparator } from './cli-args.mts';
 import {
   buildRoadmapMarkerResolver,
@@ -195,7 +195,8 @@ export interface RoadmapIssueClassification {
  * absent (key omitted) on the default flag-absent path. `ownedByCurrentSession`
  * is present whenever the caller passed `--current-claim-id` (`true` only
  * when the active claim's `claimId` equals it and the current worktree's
- * claim lock independently confirms that claim, `false` otherwise —
+ * claim lock plus generated-tokens record independently confirm the same
+ * claim and agent identity, `false` otherwise —
  * including the no-claim `present: false` case), and absent only when
  * `--current-claim-id` was not supplied.
  *
@@ -538,8 +539,11 @@ export interface ClaimStateResolution {
   nowIso: string;
   /** `--current-claim-id`, or '' when not supplied. */
   currentClaimId: string;
-  /** True only when the current worktree lock confirms `currentClaimId`. */
-  currentSessionOwnsClaimLock: boolean;
+  /**
+   * True only when the current worktree's claim lock and generated-tokens
+   * record confirm `currentClaimId` and the lock's agent identity.
+   */
+  currentSessionOwnsClaimEvidence: boolean;
   /** Same-clone occupancy probe used to gate stale takeover hints. */
   inspectLocalWorktree?: (branchName: string) => LocalWorktreeInspection;
 }
@@ -1745,7 +1749,7 @@ export async function annotateLeafClaimState(
     // when the released claim id matches, so its occupancy must not suppress
     // this session's discovery candidate.
     const releasedOwnerByCurrentSession = Boolean(
-      claimState.currentSessionOwnsClaimLock &&
+      claimState.currentSessionOwnsClaimEvidence &&
         claimState.currentClaimId &&
         claimTrace.releasedClaim?.claimId === claimState.currentClaimId,
     );
@@ -1818,7 +1822,7 @@ export async function annotateLeafClaimState(
     ? active.claimId === claimState.currentClaimId
     : false;
   const ownedByCurrentSession =
-    claimState.currentSessionOwnsClaimLock && claimIdMatchesCurrentSession;
+    claimState.currentSessionOwnsClaimEvidence && claimIdMatchesCurrentSession;
   const localWorktree =
     stale && claimState.inspectLocalWorktree
       ? claimState.inspectLocalWorktree(active.branch)
@@ -1941,14 +1945,31 @@ export function isClaimHeartbeatOverdue(
 }
 
 /**
- * Confirm the caller's current worktree carries the requested claim lock.
- * Remote claim-id text is not enough to prove that this session owns a
- * retained released worktree, so failures and malformed locks fail closed.
+ * Confirm the caller's current worktree carries independent local ownership
+ * evidence for the requested claim. Remote claim-id text and the lock's own
+ * claim-id are not enough: the generated-tokens record must also confirm the
+ * same claim and lock agent identity. Failures and malformed evidence fail
+ * closed.
  */
-function hasCurrentSessionClaimLock(claimId: string): boolean {
+function hasCurrentSessionClaimEvidence(claimId: string): boolean {
   try {
     const lock = checkClaimLock(process.cwd());
-    return lock.present && !lock.malformed && lock.holder?.claimId === claimId;
+    const holder = lock.holder;
+    if (
+      !lock.present ||
+      lock.malformed ||
+      holder === undefined ||
+      holder.claimId !== claimId ||
+      !holder.agentId
+    ) {
+      return false;
+    }
+    const tokens = readGeneratedClaimTokens(process.cwd(), claimId);
+    return (
+      tokens.status === 'present' &&
+      tokens.record.claimId === claimId &&
+      tokens.record.agentId === holder.agentId
+    );
   } catch {
     return false;
   }
@@ -1987,9 +2008,9 @@ export function buildClaimStateResolution(
     heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
     currentClaimId: currentClaimIdValue,
-    currentSessionOwnsClaimLock:
+    currentSessionOwnsClaimEvidence:
       currentClaimIdValue.length > 0 &&
-      hasCurrentSessionClaimLock(currentClaimIdValue),
+      hasCurrentSessionClaimEvidence(currentClaimIdValue),
     inspectLocalWorktree: (branchName: string) =>
       inspectLocalWorktreeBranch(branchName),
   };
@@ -2656,7 +2677,8 @@ function printHelp() {
   heartbeat-overdue claim can still be well inside the 24h stale window.
   --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
   each activeClaim (true only when the active claim's claimId equals <id> and
-  the current worktree's claim lock confirms that claim).
+  the current worktree's claim lock plus generated-tokens record confirm the
+  same claim and agent identity).
   NOTE: claimEligible is a best-effort SOFT discovery hint. It does not
   reproduce authoritative forced-handoff authorization or legacy active-claim
   takeover rules. Trusted legacy claim/release evidence is used only for

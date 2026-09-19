@@ -169,7 +169,7 @@
                 "type": "boolean"
               },
               "ownedByCurrentSession": {
-                "description": "Present only when --current-claim-id is supplied: true when the active claim's claimId equals it.",
+                "description": "Present only when --current-claim-id is supplied: true only when the active claim's claimId equals it and the current worktree's claim lock plus generated-tokens record independently confirm the same claim and agent identity.",
                 "type": "boolean"
               },
               "localWorktree": {
