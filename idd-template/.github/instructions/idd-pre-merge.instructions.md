@@ -430,12 +430,11 @@ turns an operator-visible failure into a silent stall.
   `git branch --show-current` is `{branch-name}`; else hold.
   Require empty `git status --porcelain` and
   `git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`; else hold. For
-  paths in `git ls-tree -r --name-only "$PR_HEAD_SHA"`, run
-  `git ls-files -o --exclude-standard -- "$path"` and the same with
+  paths in `git ls-tree --full-tree -r --name-only "$PR_HEAD_SHA"`, run
+  `git ls-files -o --exclude-standard -- ":(top)$path"` and the same with
   `-i`; either output holds. Use `git switch {branch-name}` (not
   detached), recheck; reset on pass)
-  — D3.5 step 7's `git log` and D3.7's inherited `git diff` both read
-  local git state, not the remote PR directly. Then re-run
+  — D3.5/D3.7 read local state, not the remote PR. Then re-run
   `idd-pr-submit.instructions.md`'s D3.5 steps
   6-7 (the `closingIssuesReferences` set comparison and the
   commit-message closing-keyword scan) and D3.7 (the
