@@ -541,15 +541,15 @@ Before any mutating action in F3, apply the
    out — never commit or push them. Copy other work to a different
    ref or path; delete `<branch-name>` next.
    Before each `git worktree remove`, `cd` to the surviving primary
-   worktree; repeat before every removal and keep that cwd for
-   post-removal operations (branch/remote deletion, digest,
-   revalidation, unclaim, and `gh`/helper calls). Immediately before
-   each removal, revalidate the claim and worktree lock
-   (`idd-claim.instructions.md`); stop if either is not ours. On `fatal:
-   working trees containing submodules cannot be
-   moved or removed`, retry `git worktree remove --force <path>` from
-   that cwd only after preserving anything worth keeping. Then remove
-   the worktree, then its branch:
+   worktree; keep that cwd for every removal and remaining F4 work
+   (branch/remote deletion, digest, revalidation, unclaim, and
+   `gh`/helper calls). Before each removal, revalidate the claim and
+   worktree lock (`idd-claim.instructions.md`); stop if either is not
+   ours. If it fails with `fatal: working trees containing submodules
+   cannot be moved or removed`, retry
+   `git worktree remove --force <path>` from that cwd only after
+   preserving anything worth keeping. Then remove the worktree, then
+   its branch:
 
    - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (the baseline permission profile
