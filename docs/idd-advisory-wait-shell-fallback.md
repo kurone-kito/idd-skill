@@ -29,14 +29,14 @@ The two filter interfaces are separate. `gh api --jq` accepts one jq
 filter string as its option value:
 
 ```sh
-gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha'
+gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}" --jq '.head.sha'
 ```
 
 When a filter needs shell variables, pipe the JSON to standalone `jq`,
 where `--arg` binds a value for the filter:
 
 ```sh
-gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}" \
+gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}" \
   | jq --arg expected "${PR_HEAD_SHA}" '.head.sha == $expected'
 ```
 
