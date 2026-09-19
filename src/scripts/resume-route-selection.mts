@@ -354,6 +354,12 @@ export function collectRoutingInput({
     branchRules as Parameters<typeof summarizeBranchReviewRequirements>[0],
     branchProtection as Parameters<typeof summarizeBranchReviewRequirements>[1],
   );
+  const requiredChecksConfigurationPresent =
+    branchReviewRequirements.requiredCheckSourcePinned ||
+    branchReviewRequirements.requiredCheckNames.length > 0;
+  const requiredCheckSourcesDisagree =
+    requiredChecksSummary.checks.length > 0 &&
+    !requiredChecksConfigurationPresent;
   const ciWaitState = buildCiWaitStateSummary(
     {
       headRefOid: branchAndChecks.headSha,
@@ -375,11 +381,12 @@ export function collectRoutingInput({
     !protectionReadsUnreadable &&
     requiredChecksSummary.noRequiredChecksConfigured &&
     requiredChecksSummary.checks.length === 0 &&
-    !branchReviewRequirements.requiredCheckSourcePinned &&
-    branchReviewRequirements.requiredCheckNames.length === 0;
+    !requiredChecksConfigurationPresent;
   const requiredChecksGenerated =
     !noRequiredChecksConfigured &&
     !protectionReadsUnreadable &&
+    !requiredCheckSourcesDisagree &&
+    requiredChecksConfigurationPresent &&
     requiredChecksSummary.checks.length > 0 &&
     ciWaitState.requiredChecks.allRequiredPresent;
   const requiredChecks = ciWaitState.checks.filter((check) => check.required);
@@ -400,6 +407,9 @@ export function collectRoutingInput({
     ? presentChecks.length > 0 &&
       presentChecks.every((check) => check.status === 'success')
     : !protectionReadsUnreadable &&
+      !requiredCheckSourcesDisagree &&
+      requiredChecksConfigurationPresent &&
+      requiredChecksSummary.checks.length > 0 &&
       ciWaitState.requiredChecks.status === 'success';
 
   const reviewThreads = port.listChangeRequestReviewThreads(issuePr.number);

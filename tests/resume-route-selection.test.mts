@@ -449,6 +449,47 @@ test('collector keeps an ambiguous empty required-check summary fail-closed', ()
   assert.equal(selectResumeRoute(input).route, 'D4');
 });
 
+test('collector keeps disagreement between summary and governance fail-closed', () => {
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    openChangeRequests: [
+      {
+        number: 3150,
+        title: 'test PR',
+        body: 'Closes #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    changeRequestBranchAndChecks: {
+      3150: {
+        headSha: 'head-sha',
+        baseRefName: 'main',
+        statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+      },
+    },
+    requiredChecksSummary: {
+      3150: {
+        checks: [
+          { name: 'ci', state: 'SUCCESS', completedAt: '2026-09-19T12:00:00Z' },
+        ],
+        noRequiredChecksConfigured: false,
+      },
+    },
+    branchRules: { 'fake-owner/fake-repo/main': [] },
+    branchProtection: { 'fake-owner/fake-repo/main': {} },
+    changeRequests: {
+      3150: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+    },
+  });
+
+  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  assert.equal(input.noRequiredChecksConfigured, false);
+  assert.equal(input.requiredChecksGenerated, false);
+  assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
 test('classifyBranchState returns clean for CLEAN mergeStateStatus', () => {
   assert.equal(
     classifyBranchState({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }),
