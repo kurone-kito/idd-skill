@@ -253,7 +253,7 @@ owner resume or forced handoff is verified; route recovery (#3141).
 | Match found? | Action |
 | --- | --- |
 | No local/remote match | Proceed |
-| Stale inheritable match + live local worktree | **STOP** — recover |
+| Stale inheritable match + live/unreadable local worktree | **STOP** — recover |
 | Inheritable match, no live local worktree | Proceed — expected |
 | Non-corresponding match + active claim | **STOP** — concurrent |
 | Non-corresponding match + no active claim | **STOP** — hold/orphan review |
