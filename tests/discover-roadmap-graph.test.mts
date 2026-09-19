@@ -2706,6 +2706,35 @@ test('a stale claim with a live local worktree is not claim-eligible', async () 
   assert.equal(byNumber.get(701)?.claimEligible, false);
 });
 
+test('a stale claim with an unreadable local worktree is not claim-eligible', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', STALE_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    inspectLocalWorktree: (branchName) => ({
+      status: 'unreadable',
+      paths: [`/tmp/${branchName}`],
+      reason: 'cannot inspect matching local worktree metadata',
+    }),
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.deepEqual(leaf701?.activeClaim?.localWorktree, {
+    status: 'unreadable',
+    paths: ['/tmp/issue/700-task'],
+    reason: 'cannot inspect matching local worktree metadata',
+  });
+  assert.equal(leaf701?.claimEligible, false);
+});
+
 test('a released new-format claim with a live local worktree is not eligible', async () => {
   const issues = claimGraphIssues();
   const commentsByIssue = new Map<number, unknown[]>([
