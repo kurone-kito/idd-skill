@@ -6,8 +6,15 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-
+import {
+  buildCiWaitStateSummary,
+  type CiWaitCheckEntry,
+  selectLatestCheckEntry,
+} from './ci-wait-state.mts';
 import { parseCliArgs } from './cli-args.mts';
+import { loadIddConfig } from './idd-config.mts';
+import { normalizePolicyConfig } from './policy-helpers.mts';
+import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
@@ -77,21 +84,6 @@ interface ResumeRouteSelectionArgs {
   tableDump: boolean;
   help: boolean;
 }
-
-const RUNNING_STATES = new Set([
-  'queued',
-  'in_progress',
-  'pending',
-  'waiting',
-  'requested',
-]);
-const FAILURE_STATES = new Set(['failure', 'cancelled', 'timed_out']);
-const PASS_EQUIVALENT_STATES = new Set([
-  'success',
-  'skipped',
-  'neutral',
-  'not_applicable',
-]);
 
 /**
  * The documented branch-state taxonomy: every value {@link classifyBranchState}
@@ -331,23 +323,79 @@ export function collectRoutingInput({
     };
   }
 
-  const requiredChecksSummary = port.listRequiredChecksSummary(issuePr.number);
-  const requiredChecks = requiredChecksSummary.checks;
-  const noRequiredChecksConfigured =
-    requiredChecksSummary.noRequiredChecksConfigured;
-  const checks = noRequiredChecksConfigured
-    ? port.listChangeRequestChecks(issuePr.number)
-    : requiredChecks;
-  const normalizedStates = checks.map((check) =>
-    String(check.state ?? '').toLowerCase(),
+  const branchAndChecks = port.getChangeRequestBranchAndChecks(issuePr.number);
+  const repository = port.resolveRepositoryLocator();
+  const trustEmptyProtectionReads =
+    normalizePolicyConfig(loadIddConfig()).ciGate.trustEmptyProtectionReads ===
+    true;
+  const branchRulesOutcome = port.listBranchRules(
+    repository.owner,
+    repository.name,
+    branchAndChecks.baseRefName,
   );
-  const ciRunning = normalizedStates.some((state) => RUNNING_STATES.has(state));
-  const ciFailed = normalizedStates.some((state) => FAILURE_STATES.has(state));
-  const ciSuccess =
-    checks.length > 0 &&
-    !ciRunning &&
-    !ciFailed &&
-    normalizedStates.every((state) => PASS_EQUIVALENT_STATES.has(state));
+  const branchProtectionOutcome = port.getBranchProtection(
+    repository.owner,
+    repository.name,
+    branchAndChecks.baseRefName,
+  );
+  const protectionReadsUnreadable =
+    (!trustEmptyProtectionReads &&
+      branchRulesOutcome.outcome === 'not-found') ||
+    (!trustEmptyProtectionReads &&
+      branchProtectionOutcome.outcome === 'not-found');
+  const branchRules =
+    branchRulesOutcome.outcome === 'ok' ? branchRulesOutcome.value : [];
+  const branchProtection =
+    branchProtectionOutcome.outcome === 'ok'
+      ? branchProtectionOutcome.value
+      : {};
+  const branchReviewRequirements = summarizeBranchReviewRequirements(
+    branchRules as Parameters<typeof summarizeBranchReviewRequirements>[0],
+    branchProtection as Parameters<typeof summarizeBranchReviewRequirements>[1],
+  );
+  const ciWaitState = buildCiWaitStateSummary(
+    {
+      headRefOid: branchAndChecks.headSha,
+      statusCheckRollup: branchAndChecks.statusCheckRollup as Parameters<
+        typeof buildCiWaitStateSummary
+      >[0]['statusCheckRollup'],
+    },
+    {
+      requiredCheckNames: branchReviewRequirements.requiredCheckNames,
+      requiredCheckSourcePinned:
+        branchReviewRequirements.requiredCheckSourcePinned,
+      requiredCheckSourcePinnedUnresolved:
+        branchReviewRequirements.requiredCheckSourcePinnedUnresolved,
+      trustSourcePinnedRequiredChecks:
+        normalizePolicyConfig(loadIddConfig()).ciGate
+          .trustSourcePinnedRequiredChecks === true,
+    },
+  );
+  const noRequiredChecksConfigured =
+    !protectionReadsUnreadable &&
+    !branchReviewRequirements.requiredCheckSourcePinned &&
+    branchReviewRequirements.requiredCheckNames.length === 0;
+  const requiredChecksGenerated =
+    !noRequiredChecksConfigured &&
+    ciWaitState.requiredChecks.allRequiredPresent;
+  const requiredChecks = ciWaitState.checks.filter((check) => check.required);
+  const presentChecks = selectLatestPresentRunChecks(ciWaitState.checks);
+  const checks = noRequiredChecksConfigured ? presentChecks : requiredChecks;
+  const ciChecks = checks.map((check) => ({
+    name: check.checkName,
+    state: check.state,
+    completedAt: check.completedAt || null,
+  }));
+  const ciRunning = noRequiredChecksConfigured
+    ? presentChecks.some((check) => check.status === 'pending')
+    : ciWaitState.requiredChecks.anyRequiredPending;
+  const ciFailed = noRequiredChecksConfigured
+    ? presentChecks.some((check) => check.status === 'failure')
+    : ciWaitState.requiredChecks.anyRequiredFailing;
+  const ciSuccess = noRequiredChecksConfigured
+    ? presentChecks.length > 0 &&
+      presentChecks.every((check) => check.status === 'success')
+    : ciWaitState.requiredChecks.status === 'success';
 
   const reviewThreads = port.listChangeRequestReviewThreads(issuePr.number);
   const unresolvedThreadCount = reviewThreads.filter(
@@ -386,11 +434,11 @@ export function collectRoutingInput({
   return {
     prAmbiguous: false,
     prExists: true,
-    requiredChecksGenerated: requiredChecks.length > 0,
+    requiredChecksGenerated,
     noRequiredChecksConfigured,
     hasUnpushedCommits: gitState.hasUnpushedCommits,
     worktreeDirty: gitState.worktreeDirty,
-    ciChecks: checks,
+    ciChecks,
     ciRunning,
     ciFailed,
     ciSuccess,
@@ -404,6 +452,22 @@ export function collectRoutingInput({
     prNumber: issuePr.number,
     prUrl: issuePr.url,
   };
+}
+
+function selectLatestPresentRunChecks(
+  checks: CiWaitCheckEntry[],
+): CiWaitCheckEntry[] {
+  const groups = new Map<string, CiWaitCheckEntry[]>();
+  for (const check of checks) {
+    const key = `${check.checkName}\u0000${check.workflowName}`;
+    const group = groups.get(key);
+    if (group) {
+      group.push(check);
+    } else {
+      groups.set(key, [check]);
+    }
+  }
+  return [...groups.values()].map((group) => selectLatestCheckEntry(group));
 }
 
 function collectLocalGitState() {
