@@ -1,5 +1,11 @@
+#!/usr/bin/env node
+// idd-generated-from: src/scripts/local-worktree-occupancy.mts
+//
+// The scripts/local-worktree-occupancy.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 /** Parse the NUL-delimited porcelain worktree listing without name greps. */
 export function parseLocalWorktreeList(output) {
   const records = [];
@@ -42,20 +48,38 @@ function joinGitPath(worktreePath, relative) {
   }
   return `${worktreePath.replace(/[\\/]+$/, '')}/${relative}`;
 }
-function readGitPath(worktreePath, name) {
+function sanitizedGitEnvironment(environment = process.env) {
+  const env = { ...environment };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  return env;
+}
+function readGitPath(worktreePath, name, env) {
   try {
     return execFileSync(
       'git',
       ['-C', worktreePath, 'rev-parse', '--git-path', name],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        encoding: 'utf8',
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     ).trim();
   } catch {
     return null;
   }
 }
-function resolveDetachedBranch(worktreePath) {
+function resolveDetachedBranch(worktreePath, env) {
   for (const name of ['rebase-merge', 'rebase-apply']) {
-    const gitPath = readGitPath(worktreePath, name);
+    const gitPath = readGitPath(worktreePath, name, env);
     if (!gitPath) {
       return { branchName: null, unreadable: true };
     }
@@ -80,18 +104,34 @@ function resolveDetachedBranch(worktreePath) {
   }
   return { branchName: null, unreadable: false };
 }
+function inspectWorktreePath(worktreePath) {
+  try {
+    statSync(worktreePath);
+    return 'present';
+  } catch (error) {
+    const code = error.code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unreadable';
+  }
+}
 /**
  * Inspect one branch in the current clone. A prunable record is stale git
- * metadata rather than a live worktree; every other matching record blocks a
- * stale claim takeover, including a clean worktree. Listing failures are
- * unreadable and therefore fail closed at the claim/discover callers.
+ * metadata only when its path is absent; a present or unreadable path fails
+ * closed. Every other matching record blocks a stale claim takeover,
+ * including a clean worktree. Listing failures are unreadable and therefore
+ * fail closed at the claim/discover callers.
  */
-export function inspectLocalWorktreeBranch(branchName, cwd = process.cwd()) {
+export function inspectLocalWorktreeBranch(
+  branchName,
+  cwd = process.cwd(),
+  environment = process.env,
+) {
+  const env = sanitizedGitEnvironment(environment);
   let output;
   try {
     output = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'], {
       cwd,
       encoding: 'utf8',
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
@@ -110,13 +150,16 @@ export function inspectLocalWorktreeBranch(branchName, cwd = process.cwd()) {
   const unreadablePaths = [];
   for (const record of records) {
     if (record.prunable) {
+      if (inspectWorktreePath(record.path) !== 'absent') {
+        unreadablePaths.push(record.path);
+      }
       continue;
     }
     let resolvedBranch = record.branchRef
       ? branchNameFromRef(record.branchRef)
       : null;
     if (!resolvedBranch && record.detached) {
-      const detached = resolveDetachedBranch(record.path);
+      const detached = resolveDetachedBranch(record.path, env);
       if (detached.unreadable) {
         unreadablePaths.push(record.path);
         continue;

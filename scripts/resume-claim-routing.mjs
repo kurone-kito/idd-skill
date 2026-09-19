@@ -220,13 +220,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     const branch = state.activeClaim?.branch ?? state.legacyClaim?.branch ?? '';
     if (branch) {
       localWorktree = options.inspectLocalWorktree(branch);
-      // An applied forced-handoff is the documented operator-authorized
-      // exception to local occupancy. Keep the probe in evidence, but allow
-      // that verified handoff to supersede the stale-worktree stop.
-      if (
-        localWorktree.status !== 'absent' &&
-        state.appliedForcedHandoff === null
-      ) {
+      if (localWorktree.status !== 'absent') {
         routeState = 'local_worktree_occupied';
         action = 'stop';
         reason =

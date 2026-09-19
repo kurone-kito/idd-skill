@@ -649,7 +649,33 @@ test('authorized forced-handoff marker promotes successor claim before routing',
   assert.equal(result.active_claim?.claim_id, 'claim-new');
 });
 
-test('authorized forced handoff may supersede stale local occupancy', () => {
+test('verified forced-handoff successor may resume occupied stale worktree', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-new',
+      now: '2026-05-13T11:00:00Z',
+      events: FORCED_HANDOFF_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-11-task'],
+        reason: 'matching local worktree for issue/11-task',
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal(result.reason, 'claim-id-match');
+  assert.equal(result.evidence.local_worktree, undefined);
+  assert.equal(result.evidence.forced_handoff?.new_claim_id, 'claim-new');
+});
+
+test('fresh caller cannot bypass occupied worktree with forced-handoff evidence', () => {
   const result = evaluateResumeClaimRouting(
     {
       now: '2026-05-13T11:00:00Z',
@@ -667,15 +693,9 @@ test('authorized forced handoff may supersede stale local occupancy', () => {
     },
   );
 
-  assert.equal(result.state, 'stale');
-  assert.equal(result.action, 'takeover');
-  assert.equal(result.reason, 'active-claim-stale');
-  assert.deepEqual(result.evidence.local_worktree, {
-    status: 'occupied',
-    paths: ['/tmp/repo.issue-11-task'],
-    reason: 'matching local worktree for issue/11-task',
-  });
-  assert.equal(result.evidence.forced_handoff?.new_claim_id, 'claim-new');
+  assert.equal(result.state, 'local_worktree_occupied');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'stale-claim-local-worktree-occupied');
 });
 
 test('evidence.forced_handoff is populated on a bare --issue call (no --claim-id) against a valid forced-handoff successor (#2178)', () => {
