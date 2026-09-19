@@ -385,24 +385,21 @@ export function evaluateResumeClaimRouting(
     action,
     reason,
     claim_id_checked: claimIdChecked || null,
-    active_claim:
-      routeState === 'unclaimed'
-        ? null
-        : state.activeClaim
-          ? {
-              agent_id: state.activeClaim.agentId,
-              claim_id: state.activeClaim.claimId,
-              created_at: state.activeClaim.createdAt,
-              branch: state.activeClaim.branch,
-            }
-          : state.legacyClaim
-            ? {
-                agent_id: state.legacyClaim.agentId,
-                claim_id: null,
-                created_at: state.legacyClaim.createdAt,
-                branch: state.legacyClaim.branch,
-              }
-            : null,
+    active_claim: state.activeClaim
+      ? {
+          agent_id: state.activeClaim.agentId,
+          claim_id: state.activeClaim.claimId,
+          created_at: state.activeClaim.createdAt,
+          branch: state.activeClaim.branch,
+        }
+      : state.legacyClaim && !state.legacyReleased
+        ? {
+            agent_id: state.legacyClaim.agentId,
+            claim_id: null,
+            created_at: state.legacyClaim.createdAt,
+            branch: state.legacyClaim.branch,
+          }
+        : null,
     stale_age_ms: staleAgeMs,
     now: nowIso,
     warnings,

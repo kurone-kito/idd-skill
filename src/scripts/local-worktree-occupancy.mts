@@ -7,7 +7,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 
 /** The local occupancy result used by claim and Discover gates. */
 export interface LocalWorktreeInspection {
@@ -138,6 +138,35 @@ function readGitPath(
   }
 }
 
+function isCanonicalWorktreeRoot(
+  worktreePath: string,
+  env: NodeJS.ProcessEnv,
+  execute: typeof execFileSync,
+): boolean {
+  let expectedRoot: string;
+  try {
+    expectedRoot = realpathSync(worktreePath);
+  } catch {
+    return false;
+  }
+  try {
+    const discoveredRoot = execute(
+      'git',
+      ['-C', worktreePath, 'rev-parse', '--show-toplevel'],
+      {
+        encoding: 'utf8',
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    ).trim();
+    return (
+      Boolean(discoveredRoot) && realpathSync(discoveredRoot) === expectedRoot
+    );
+  } catch {
+    return false;
+  }
+}
+
 interface DetachedBranchResolution {
   branchName: string | null;
   unreadable: boolean;
@@ -148,6 +177,12 @@ function resolveDetachedBranch(
   env: NodeJS.ProcessEnv,
   execute: typeof execFileSync,
 ): DetachedBranchResolution {
+  // `git -C` may discover an enclosing repository when the recorded
+  // worktree's own metadata is missing or malformed. Refuse to read rebase or
+  // bisect state until Git proves that the discovered root is this worktree.
+  if (!isCanonicalWorktreeRoot(worktreePath, env, execute)) {
+    return { branchName: null, unreadable: true };
+  }
   for (const name of ['rebase-merge', 'rebase-apply']) {
     const gitPath = readGitPath(worktreePath, name, env, execute);
     if (!gitPath) {
@@ -233,6 +268,14 @@ export function inspectLocalWorktreeBranch(
   environment: NodeJS.ProcessEnv = process.env,
   execute: typeof execFileSync = execFileSync,
 ): LocalWorktreeInspection {
+  const requestedBranch = branchNameFromRef(branchName);
+  if (!requestedBranch) {
+    return {
+      status: 'unreadable',
+      paths: [],
+      reason: `invalid branch name: ${branchName}`,
+    };
+  }
   const env = sanitizedGitEnvironment(environment);
   let output: string;
   try {
@@ -280,7 +323,7 @@ export function inspectLocalWorktreeBranch(
         }
         prunableBranch = detached.branchName;
       }
-      if (prunableBranch !== branchName) {
+      if (prunableBranch !== requestedBranch) {
         continue;
       }
       unreadablePaths.push(record.path);
@@ -302,7 +345,7 @@ export function inspectLocalWorktreeBranch(
       }
       resolvedBranch = detached.branchName;
     }
-    if (resolvedBranch === branchName) {
+    if (resolvedBranch === requestedBranch) {
       matches.push(record);
     }
   }
@@ -319,6 +362,6 @@ export function inspectLocalWorktreeBranch(
   return {
     status: 'occupied',
     paths: matches.map((record) => record.path),
-    reason: `matching local worktree for ${branchName}`,
+    reason: `matching local worktree for ${requestedBranch}`,
   };
 }

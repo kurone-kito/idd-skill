@@ -1448,6 +1448,39 @@ test('fresh claim gate blocks a released claim with a live local worktree', () =
   assert.equal(gate.reason, 'released-claim-local-worktree-occupied');
 });
 
+test('released legacy claim stays out of active_claim when its worktree is occupied', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: old-agent 2026-05-12T10:00:00Z branch: issue/24-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: old-agent 2026-05-12T10:05:00Z -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-24-task'],
+        reason: 'matching local worktree for issue/24-task',
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'local_worktree_occupied');
+  assert.equal(result.reason, 'released-claim-local-worktree-occupied');
+  assert.equal(result.active_claim, null);
+  assert.equal(result.evidence.released_claim?.branch, 'issue/24-task');
+});
+
 test('runCli sources currentLogin from resolveViewerLogin (#2148)', () => {
   // #2266: currentLogin now sources from the provider port's
   // resolveViewerLogin() instead of the bare gh-exec.mts call this regex

@@ -35,12 +35,11 @@ function stubGitCommands(
 ): typeof execFileSync {
   return ((file: string, args: string[]) => {
     assert.equal(file, 'git');
-    assert.deepEqual(args.slice(0, 4), [
-      '-C',
-      worktreePath,
-      'rev-parse',
-      '--git-path',
-    ]);
+    assert.deepEqual(args.slice(0, 3), ['-C', worktreePath, 'rev-parse']);
+    if (args[3] === '--show-toplevel') {
+      return `${worktreePath}\n`;
+    }
+    assert.equal(args[3], '--git-path');
     const path = gitPaths[args[4] ?? ''];
     assert.ok(path, `missing git path for ${args[4] ?? '<empty>'}`);
     return path;
@@ -94,7 +93,7 @@ test('inspects occupied, absent, and present-prunable worktree results', () => {
   const prunablePath = mkdtempSync(`${tmpdir()}/idd-local-worktree-prunable-`);
   try {
     const occupied = inspectLocalWorktreeBranch(
-      'issue/42-task',
+      'refs/heads/issue/42-task',
       process.cwd(),
       process.env,
       stubWorktreeList(
@@ -304,5 +303,38 @@ test('fails closed when detached sequencer head-name is malformed', () => {
   } finally {
     rmSync(worktree, { recursive: true, force: true });
     rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
+test('fails closed when detached metadata resolves an enclosing repository', () => {
+  const enclosing = mkdtempSync(`${tmpdir()}/idd-local-worktree-enclosing-`);
+  const worktree = join(enclosing, 'nested-worktree');
+  mkdirSync(worktree);
+  try {
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        assert.equal(file, 'git');
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        assert.deepEqual(args, [
+          '-C',
+          worktree,
+          'rev-parse',
+          '--show-toplevel',
+        ]);
+        return `${enclosing}\n`;
+      }) as typeof execFileSync,
+    );
+    assert.deepEqual(result, {
+      status: 'unreadable',
+      paths: [worktree],
+      reason: 'cannot inspect matching local worktree metadata',
+    });
+  } finally {
+    rmSync(enclosing, { recursive: true, force: true });
   }
 });
