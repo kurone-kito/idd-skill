@@ -562,7 +562,7 @@ default below is unchanged.
     byte-stable and make no extra API call). `--with-claim-state` adds
     `activeClaim` (always an object: `{ present, stale, claimId, agentId,`
     `heartbeatOverdue }`, plus `ownedByCurrentSession` when
-    `--current-claim-id` is passed; stale claims may also carry
+    `--current-claim-id` is passed; stale or released claims may also carry
     `localWorktree: {status, paths, reason}`) and `claimEligible: boolean` on
     each
     open leaf. Both `discover-roadmap-graph.mjs` and
@@ -587,8 +587,10 @@ default below is unchanged.
     reports label **presence** only — `--with-readiness` does not compute the
     stale-authoring warning (it would cost a discarded per-leaf timeline fetch
     and does not change startability). `--with-claim-state` itself is not
-    forced-handoff-aware — it intentionally excludes forced-handoff and
-    legacy markers as a best-effort **soft signal**; a discovery-time survey
+    fully forced-handoff-aware — it intentionally excludes forced-handoff and
+    legacy active-claim takeover rules as a best-effort **soft signal**, but
+    retains a branch released by either new-format or legacy markers for
+    local-worktree collision protection; a discovery-time survey
     across many candidates must either loop the single-issue
     `resume-claim-routing.mjs --fresh-claim-gate` resolver per candidate or
     apply `idd-claim.instructions.md`'s full parsing rules manually to catch

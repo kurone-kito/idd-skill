@@ -104,7 +104,7 @@ worktree; child issues are not locked).
 
 Written table (`instructions-only` profile only): first matching row.
 
-A stale claim with a local worktree is STOP — verify claim-id before takeover.
+A stale or released claim with a local worktree is STOP — verify claim-id.
 
 | Claim state                                                                                 | Action                                                        |
 | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -113,6 +113,7 @@ A stale claim with a local worktree is STOP — verify claim-id before takeover.
 | Active claim = this session's verified `{claim-id}`                                         | → Step 2                                                      |
 | Forced-handoff names this session's verified `{claim-id}` as displaced                      | STOP — displaced; no push/comment/resolve/merge               |
 | Forced-handoff recovery confirmed for this session                                          | A5 re-claim after GitHub shows handoff → Step 2               |
+| Stale/released + local worktree occupied or unreadable                                      | STOP — recover; verify owner                                  |
 | No active claim                                                                             | A5 re-claim → Step 2                                          |
 | Active non-stale claim (other session, < 24 h)                                              | STOP                                                          |
 | Active stale claim (other session, ≥ 24 h) and branch starts with `roadmap-audit/`          | A5 takeover `supersedes: <prior-id>`; re-run A1.5 only → STOP |

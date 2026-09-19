@@ -2706,6 +2706,86 @@ test('a stale claim with a live local worktree is not claim-eligible', async () 
   assert.equal(byNumber.get(701)?.claimEligible, false);
 });
 
+test('a released new-format claim with a live local worktree is not eligible', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT),
+        {
+          body: '<!-- unclaimed-by: agent-a claim-701 2026-06-25T07:00:00Z -->',
+          createdAt: '2026-06-25T07:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    inspectLocalWorktree: (branchName) => ({
+      status: 'occupied',
+      paths: [`/tmp/${branchName}`],
+      reason: `matching local worktree for ${branchName}`,
+    }),
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.present, false);
+  assert.deepEqual(leaf701?.activeClaim?.localWorktree, {
+    status: 'occupied',
+    paths: ['/tmp/issue/700-task'],
+    reason: 'matching local worktree for issue/700-task',
+  });
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('a released legacy claim with a live local worktree is not eligible', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        {
+          body: '<!-- claimed-by: legacy-agent 2026-06-25T06:00:00Z branch: issue/700-task -->',
+          createdAt: '2026-06-25T06:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+        {
+          body: '<!-- unclaimed-by: legacy-agent 2026-06-25T07:00:00Z -->',
+          createdAt: '2026-06-25T07:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    inspectLocalWorktree: (branchName) => ({
+      status: 'occupied',
+      paths: [`/tmp/${branchName}`],
+      reason: `matching local worktree for ${branchName}`,
+    }),
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.present, false);
+  assert.equal(leaf701?.activeClaim?.localWorktree?.status, 'occupied');
+  assert.equal(leaf701?.claimEligible, false);
+});
+
 test('the current session may resume its occupied stale worktree', async () => {
   const issues = claimGraphIssues();
   const commentsByIssue = new Map<number, unknown[]>([
