@@ -292,9 +292,11 @@ test('routes E15 when the no-required-checks present run is pending or failing a
 function createResumeCollectorPort({
   statusCheckRollup,
   branchRules = [],
+  noRequiredChecksConfigured = true,
 }: {
   statusCheckRollup: unknown[];
   branchRules?: unknown[];
+  noRequiredChecksConfigured?: boolean;
 }) {
   return createFakeProviderAdapter({
     locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
@@ -313,6 +315,9 @@ function createResumeCollectorPort({
         baseRefName: 'main',
         statusCheckRollup,
       },
+    },
+    requiredChecksSummary: {
+      3150: { checks: [], noRequiredChecksConfigured },
     },
     branchRules: { 'fake-owner/fake-repo/main': branchRules },
     branchProtection: { 'fake-owner/fake-repo/main': {} },
@@ -357,6 +362,9 @@ test('collector discovers no required checks from protection and routes present-
         baseRefName: 'main',
         statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
       },
+    },
+    requiredChecksSummary: {
+      3150: { checks: [], noRequiredChecksConfigured: true },
     },
     branchRules: { 'fake-owner/fake-repo/main': [] },
     branchProtection: { 'fake-owner/fake-repo/main': {} },
@@ -426,6 +434,18 @@ test('collector retains same-named present runs from different workflows', () =>
   assert.equal(input.noRequiredChecksConfigured, true);
   assert.equal(input.ciRunning, true);
   assert.equal(input.ciSuccess, false);
+  assert.equal(selectResumeRoute(input).route, 'D4');
+});
+
+test('collector keeps an ambiguous empty required-check summary fail-closed', () => {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [checkRun('ci', 'workflow', 'COMPLETED', 'SUCCESS')],
+    noRequiredChecksConfigured: false,
+  });
+
+  const input = collectRoutingInput({ port, issueNumber: 3145 });
+  assert.equal(input.noRequiredChecksConfigured, false);
+  assert.equal(input.requiredChecksGenerated, false);
   assert.equal(selectResumeRoute(input).route, 'D4');
 });
 

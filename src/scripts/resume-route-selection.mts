@@ -324,10 +324,11 @@ export function collectRoutingInput({
   }
 
   const branchAndChecks = port.getChangeRequestBranchAndChecks(issuePr.number);
+  const requiredChecksSummary = port.listRequiredChecksSummary(issuePr.number);
   const repository = port.resolveRepositoryLocator();
+  const policyConfig = normalizePolicyConfig(loadIddConfig());
   const trustEmptyProtectionReads =
-    normalizePolicyConfig(loadIddConfig()).ciGate.trustEmptyProtectionReads ===
-    true;
+    policyConfig.ciGate.trustEmptyProtectionReads === true;
   const branchRulesOutcome = port.listBranchRules(
     repository.owner,
     repository.name,
@@ -367,16 +368,19 @@ export function collectRoutingInput({
       requiredCheckSourcePinnedUnresolved:
         branchReviewRequirements.requiredCheckSourcePinnedUnresolved,
       trustSourcePinnedRequiredChecks:
-        normalizePolicyConfig(loadIddConfig()).ciGate
-          .trustSourcePinnedRequiredChecks === true,
+        policyConfig.ciGate.trustSourcePinnedRequiredChecks === true,
     },
   );
   const noRequiredChecksConfigured =
     !protectionReadsUnreadable &&
+    requiredChecksSummary.noRequiredChecksConfigured &&
+    requiredChecksSummary.checks.length === 0 &&
     !branchReviewRequirements.requiredCheckSourcePinned &&
     branchReviewRequirements.requiredCheckNames.length === 0;
   const requiredChecksGenerated =
     !noRequiredChecksConfigured &&
+    !protectionReadsUnreadable &&
+    requiredChecksSummary.checks.length > 0 &&
     ciWaitState.requiredChecks.allRequiredPresent;
   const requiredChecks = ciWaitState.checks.filter((check) => check.required);
   const presentChecks = selectLatestPresentRunChecks(ciWaitState.checks);
@@ -395,7 +399,8 @@ export function collectRoutingInput({
   const ciSuccess = noRequiredChecksConfigured
     ? presentChecks.length > 0 &&
       presentChecks.every((check) => check.status === 'success')
-    : ciWaitState.requiredChecks.status === 'success';
+    : !protectionReadsUnreadable &&
+      ciWaitState.requiredChecks.status === 'success';
 
   const reviewThreads = port.listChangeRequestReviewThreads(issuePr.number);
   const unresolvedThreadCount = reviewThreads.filter(
