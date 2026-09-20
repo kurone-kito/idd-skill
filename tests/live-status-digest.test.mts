@@ -316,7 +316,7 @@ test('duplicate repair CLI keeps dry-run read-only and applies the selected snap
       comments: initialComments,
       mutations: 0,
       evidence: 0,
-      conditionalUpdates: 0,
+      patches: 0,
       failAfterMutation: false,
       invalidTargetState: false,
       viewer: 'maintainer',
@@ -337,7 +337,6 @@ const bodyArgument = apiArgs.find((value) => value.startsWith('body='));
 const requestBody = apiArgs.includes('--input')
   ? JSON.parse(fs.readFileSync(0, 'utf8')).body
   : bodyArgument?.slice('body='.length);
-const ifMatch = apiArgs.find((value) => value.startsWith('If-Match:'));
 const path = apiArgs.find((value) => value.startsWith('repos/')) ?? apiArgs[0];
 if (apiArgs[0] === 'user') {
   process.stdout.write(state.viewer);
@@ -350,26 +349,53 @@ if (apiArgs[0] === 'user') {
   const comment = state.comments.find((item) => String(item.id) === id);
   if (!comment) process.exit(1);
   process.stdout.write('HTTP/2.0 200 OK\\nEtag: "etag-' + id + '"\\n\\n' + JSON.stringify(comment));
+} else if (method === 'GET' && path.includes('/issues/comments/')) {
+  const id = path.split('/').at(-1);
+  const comment = state.comments.find((item) => String(item.id) === id);
+  if (!comment) process.exit(1);
+  process.stdout.write(JSON.stringify(comment));
 } else if (method === 'PATCH' && path.includes('/issues/comments/')) {
   const id = path.split('/').at(-1);
   const comment = state.comments.find((item) => String(item.id) === id);
-  if (!comment || requestBody === undefined || !ifMatch) process.exit(1);
+  if (!comment || requestBody === undefined) process.exit(1);
   comment.body = requestBody;
   state.mutations += 1;
-  state.conditionalUpdates += 1;
+  state.patches += 1;
   fs.writeFileSync(statePath, JSON.stringify(state));
   if (state.patchResponseLost) process.exit(1);
-  process.stdout.write(JSON.stringify(comment));
+  process.stdout.write(
+    JSON.stringify(
+      state.patchResponseMismatch
+        ? {
+            ...comment,
+            body: comment.body + '\\nserver-different-body',
+          }
+        : comment,
+    ),
+  );
 } else if (method === 'POST' && path.endsWith('/comments')) {
   const evidenceId = 900 + state.evidence + 1;
   state.evidence += 1;
-  state.comments.push({ id: evidenceId, body: requestBody });
+  state.comments.push({
+    id: evidenceId,
+    body: requestBody,
+    user: { login: state.evidenceAuthor ?? state.viewer },
+  });
   fs.writeFileSync(statePath, JSON.stringify(state));
   if (state.evidenceResponseLost) process.exit(1);
   process.stdout.write(JSON.stringify({ id: evidenceId }));
 } else if (apiArgs.includes('--paginate')) {
   if (state.failAfterMutation && state.mutations > 0) process.exit(1);
-  for (const comment of state.comments) process.stdout.write(JSON.stringify(comment) + '\\n');
+  const issueNumber = path.match(/\\/issues\\/(\\d+)\\/comments$/)?.[1];
+  const claimComments = state.claimComments ?? [
+    {
+      id: 999,
+      body: '<!-- claimed-by: repair-agent repair-claim supersedes: none 2026-09-20T00:00:00Z branch: issue/3158-repair -->',
+      user: { login: 'maintainer' },
+    },
+  ];
+  const comments = issueNumber === '321' ? claimComments : state.comments;
+  for (const comment of comments) process.stdout.write(JSON.stringify(comment) + '\\n');
 } else if (path.endsWith('/issues/123')) {
   process.stdout.write(
     state.invalidTargetState
@@ -409,14 +435,23 @@ if (apiArgs[0] === 'user') {
       comments: { id: number; body: string }[];
       mutations: number;
       evidence: number;
-      conditionalUpdates: number;
+      patches: number;
     };
     assert.equal(afterDryRun.mutations, 0);
     assert.equal(afterDryRun.evidence, 0);
     assert.equal(afterDryRun.comments.length, 2);
 
+    const repairClaimArgs = [
+      '--claim-issue',
+      '321',
+      '--claim-id',
+      'repair-claim',
+      '--agent-id',
+      'repair-agent',
+    ];
     const applyArgs = [
       '--apply',
+      ...repairClaimArgs,
       '--expected-current-digest-ids',
       dryRun.repair.preflight.entries.map((entry) => entry.id).join(','),
       '--expected-current-digest-sha256',
@@ -427,7 +462,7 @@ if (apiArgs[0] === 'user') {
       comments: { id: number; body: string }[];
       mutations: number;
       evidence: number;
-      conditionalUpdates: number;
+      patches: number;
       failAfterMutation: boolean;
       invalidTargetState: boolean;
       viewer: string;
@@ -452,11 +487,11 @@ if (apiArgs[0] === 'user') {
     const afterDrift = JSON.parse(readFileSync(statePath, 'utf8')) as {
       mutations: number;
       evidence: number;
-      conditionalUpdates: number;
+      patches: number;
     };
     assert.equal(afterDrift.mutations, 0);
     assert.equal(afterDrift.evidence, 0);
-    assert.equal(afterDrift.conditionalUpdates, 0);
+    assert.equal(afterDrift.patches, 0);
 
     writeFileSync(
       statePath,
@@ -464,7 +499,7 @@ if (apiArgs[0] === 'user') {
         comments: initialComments,
         mutations: 0,
         evidence: 0,
-        conditionalUpdates: 0,
+        patches: 0,
         failAfterMutation: false,
         invalidTargetState: true,
         viewer: 'maintainer',
@@ -491,11 +526,11 @@ if (apiArgs[0] === 'user') {
     const afterInvalidTarget = JSON.parse(readFileSync(statePath, 'utf8')) as {
       mutations: number;
       evidence: number;
-      conditionalUpdates: number;
+      patches: number;
     };
     assert.equal(afterInvalidTarget.mutations, 0);
     assert.equal(afterInvalidTarget.evidence, 0);
-    assert.equal(afterInvalidTarget.conditionalUpdates, 0);
+    assert.equal(afterInvalidTarget.patches, 0);
 
     writeFileSync(
       statePath,
@@ -503,7 +538,7 @@ if (apiArgs[0] === 'user') {
         comments: initialComments,
         mutations: 0,
         evidence: 0,
-        conditionalUpdates: 0,
+        patches: 0,
         failAfterMutation: false,
         invalidTargetState: false,
         viewer: 'contributor',
@@ -527,11 +562,48 @@ if (apiArgs[0] === 'user') {
     const afterUnauthorized = JSON.parse(readFileSync(statePath, 'utf8')) as {
       mutations: number;
       evidence: number;
-      conditionalUpdates: number;
+      patches: number;
     };
     assert.equal(afterUnauthorized.mutations, 0);
     assert.equal(afterUnauthorized.evidence, 0);
-    assert.equal(afterUnauthorized.conditionalUpdates, 0);
+    assert.equal(afterUnauthorized.patches, 0);
+
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        comments: initialComments,
+        claimComments: [],
+        mutations: 0,
+        evidence: 0,
+        patches: 0,
+        failAfterMutation: false,
+        invalidTargetState: false,
+        viewer: 'maintainer',
+      }),
+    );
+    assert.throws(
+      () =>
+        execFileSync(process.execPath, [...baseArgs, ...applyArgs], {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+        }),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as { action: string; repair: { recoveryHold: string } };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.match(report.repair.recoveryHold, /claim check failed/);
+        return true;
+      },
+    );
+    const afterClaimLoss = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      mutations: number;
+      evidence: number;
+      patches: number;
+    };
+    assert.equal(afterClaimLoss.mutations, 0);
+    assert.equal(afterClaimLoss.evidence, 0);
+    assert.equal(afterClaimLoss.patches, 0);
 
     writeFileSync(
       statePath,
@@ -539,7 +611,7 @@ if (apiArgs[0] === 'user') {
         comments: initialComments,
         mutations: 0,
         evidence: 0,
-        conditionalUpdates: 0,
+        patches: 0,
         failAfterMutation: false,
         invalidTargetState: false,
         viewer: 'maintainer',
@@ -563,11 +635,11 @@ if (apiArgs[0] === 'user') {
       comments: { id: number; body: string }[];
       mutations: number;
       evidence: number;
-      conditionalUpdates: number;
+      patches: number;
     };
     assert.equal(afterApply.mutations, 1);
     assert.equal(afterApply.evidence, 1);
-    assert.equal(afterApply.conditionalUpdates, 1);
+    assert.equal(afterApply.patches, 1);
     assert.match(afterApply.comments[1].body, /idd-live-status: historical/);
     const calls = readFileSync(logPath, 'utf8')
       .trim()
@@ -580,6 +652,10 @@ if (apiArgs[0] === 'user') {
       ),
       true,
     );
+    assert.equal(
+      calls.some((args) => args.some((arg) => arg.startsWith('If-Match:'))),
+      false,
+    );
 
     writeFileSync(
       statePath,
@@ -587,7 +663,61 @@ if (apiArgs[0] === 'user') {
         comments: initialComments,
         mutations: 0,
         evidence: 0,
-        conditionalUpdates: 0,
+        patches: 0,
+        failAfterMutation: false,
+        patchResponseMismatch: true,
+        evidenceResponseLost: false,
+        invalidTargetState: false,
+        viewer: 'maintainer',
+      }),
+    );
+    const mismatchedPatchDryRun = JSON.parse(
+      execFileSync(process.execPath, [...baseArgs, '--dry-run'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    ) as {
+      repair: { preflight: { entries: { id: string }[]; sha256: string } };
+    };
+    const mismatchedPatchArgs = [
+      '--apply',
+      ...repairClaimArgs,
+      '--expected-current-digest-ids',
+      mismatchedPatchDryRun.repair.preflight.entries
+        .map((entry) => entry.id)
+        .join(','),
+      '--expected-current-digest-sha256',
+      mismatchedPatchDryRun.repair.preflight.sha256,
+    ];
+    assert.throws(
+      () =>
+        execFileSync(process.execPath, [...baseArgs, ...mismatchedPatchArgs], {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+        }),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as { action: string; repair: { recoveryHold: string } };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.match(report.repair.recoveryHold, /different body/);
+        return true;
+      },
+    );
+    const afterMismatchedPatch = JSON.parse(
+      readFileSync(statePath, 'utf8'),
+    ) as { mutations: number; evidence: number; patches: number };
+    assert.equal(afterMismatchedPatch.mutations, 1);
+    assert.equal(afterMismatchedPatch.evidence, 1);
+    assert.equal(afterMismatchedPatch.patches, 1);
+
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        comments: initialComments,
+        mutations: 0,
+        evidence: 0,
+        patches: 0,
         failAfterMutation: false,
         patchResponseLost: true,
         evidenceResponseLost: false,
@@ -605,6 +735,7 @@ if (apiArgs[0] === 'user') {
     };
     const ambiguousPatchArgs = [
       '--apply',
+      ...repairClaimArgs,
       '--expected-current-digest-ids',
       ambiguousPatchDryRun.repair.preflight.entries
         .map((entry) => entry.id)
@@ -642,6 +773,11 @@ if (apiArgs[0] === 'user') {
       afterAmbiguousPatch.comments[1].body,
       /idd-live-status: historical/,
     );
+    assert.match(
+      afterAmbiguousPatch.comments.find((comment) => comment.id === 901)
+        ?.body ?? '',
+      /\| Post-repair current digest comments \| 101 \|/,
+    );
 
     writeFileSync(
       statePath,
@@ -649,10 +785,11 @@ if (apiArgs[0] === 'user') {
         comments: initialComments,
         mutations: 0,
         evidence: 0,
-        conditionalUpdates: 0,
+        patches: 0,
         failAfterMutation: false,
         patchResponseLost: false,
         evidenceResponseLost: true,
+        evidenceAuthor: 'maintainer',
         invalidTargetState: false,
         viewer: 'maintainer',
       }),
@@ -667,6 +804,7 @@ if (apiArgs[0] === 'user') {
     };
     const ambiguousEvidenceArgs = [
       '--apply',
+      ...repairClaimArgs,
       '--expected-current-digest-ids',
       ambiguousEvidenceDryRun.repair.preflight.entries
         .map((entry) => entry.id)
@@ -688,6 +826,48 @@ if (apiArgs[0] === 'user') {
     assert.equal(afterAmbiguousEvidence.evidence, 1);
     assert.equal(afterAmbiguousEvidence.comments.length, 3);
 
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        comments: initialComments,
+        mutations: 0,
+        evidence: 0,
+        patches: 0,
+        failAfterMutation: false,
+        patchResponseLost: false,
+        evidenceResponseLost: true,
+        evidenceAuthor: 'contributor',
+        invalidTargetState: false,
+        viewer: 'maintainer',
+      }),
+    );
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [...baseArgs, ...ambiguousEvidenceArgs],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+          },
+        ),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as {
+          action: string;
+          repair: { evidenceCommentId: number | null };
+        };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.equal(report.repair.evidenceCommentId, null);
+        return true;
+      },
+    );
+    const afterForgedEvidence = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      evidence: number;
+    };
+    assert.equal(afterForgedEvidence.evidence, 1);
+
     const partialComments = [
       currentDigestComment(101),
       currentDigestComment(102),
@@ -699,7 +879,7 @@ if (apiArgs[0] === 'user') {
         comments: partialComments,
         mutations: 0,
         evidence: 0,
-        conditionalUpdates: 0,
+        patches: 0,
         failAfterMutation: true,
         invalidTargetState: false,
         viewer: 'maintainer',
@@ -715,6 +895,7 @@ if (apiArgs[0] === 'user') {
     };
     const partialArgs = [
       '--apply',
+      ...repairClaimArgs,
       '--expected-current-digest-ids',
       partialDryRun.repair.preflight.entries.map((entry) => entry.id).join(','),
       '--expected-current-digest-sha256',
@@ -742,11 +923,11 @@ if (apiArgs[0] === 'user') {
     const afterPartial = JSON.parse(readFileSync(statePath, 'utf8')) as {
       mutations: number;
       evidence: number;
-      conditionalUpdates: number;
+      patches: number;
     };
     assert.equal(afterPartial.mutations, 1);
     assert.equal(afterPartial.evidence, 1);
-    assert.equal(afterPartial.conditionalUpdates, 1);
+    assert.equal(afterPartial.patches, 1);
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });

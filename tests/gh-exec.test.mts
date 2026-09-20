@@ -475,6 +475,30 @@ process.stdout.write('HTTP/2.0 200 OK\\nEtag: W/"test-etag"\\nContent-Type: appl
   }
 });
 
+test('ghApiJsonWithHeaders forwards JSON input to gh api --input -', () => {
+  const restore = stubGh(`
+const chunks = [];
+process.stdin.on('data', (chunk) => chunks.push(chunk));
+process.stdin.on('end', () => {
+  process.stdout.write('HTTP/2.0 200 OK\\nEtag: "input-etag"\\n\\n' + Buffer.concat(chunks).toString('utf8'));
+});
+`);
+  try {
+    assert.deepEqual(
+      ghApiJsonWithHeaders('repos/o/r/issues/comments/42', {
+        extraArgs: ['--input', '-'],
+        input: JSON.stringify({ body: '<!-- marker -->\\nbody' }),
+      }),
+      {
+        data: { body: '<!-- marker -->\\nbody' },
+        headers: { etag: '"input-etag"' },
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('ghApiJson forwards extraArgs after the API path', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
   const argsFile = join(tempRoot, 'args.json');

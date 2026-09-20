@@ -16,7 +16,6 @@ import {
   combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   ghApiJson,
-  ghApiJsonWithHeaders,
   ghText,
 } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
@@ -130,6 +129,11 @@ function main() {
     args.issue ?? args.pr,
     `--${targetType}`,
   );
+  if (args.claimIssue) {
+    args.claimIssue = String(
+      parsePositiveInteger(args.claimIssue, '--claim-issue'),
+    );
+  }
   if (args.repairDuplicate) {
     runDuplicateDigestRepair({
       args,
@@ -159,11 +163,6 @@ function main() {
           ),
         }
       : {};
-  if (args.claimIssue) {
-    args.claimIssue = String(
-      parsePositiveInteger(args.claimIssue, '--claim-issue'),
-    );
-  }
   const fields = {
     phase: args.phase,
     claim: args.claim,
@@ -253,9 +252,14 @@ function main() {
 }
 function runDuplicateDigestRepair(input) {
   const { args, owner, repo, targetType, targetNumber } = input;
-  if (args.claimIssue || args.claimId || args.skipClaimCheck) {
+  if (args.skipClaimCheck) {
     fail(
-      '--repair-duplicate uses maintainer authorization and cannot be combined with claim-check flags',
+      '--repair-duplicate never accepts --skip-claim-check; apply mode requires an active claim',
+    );
+  }
+  if (args.apply && (!args.claimIssue || !args.claimId || !args.agentId)) {
+    fail(
+      '--apply --repair-duplicate requires --claim-issue, --claim-id, and --agent-id for writer coordination',
     );
   }
   if (!args.retainCommentId) {
@@ -386,6 +390,27 @@ function runDuplicateDigestRepair(input) {
     );
     return;
   }
+  const assertRepairClaim = () => {
+    if (!args.apply) return;
+    assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+  };
+  try {
+    assertRepairClaim();
+  } catch (error) {
+    finishRepairHold(
+      report,
+      args.format,
+      `repair claim check failed before mutation: ${error.message}`,
+      plan.snapshot,
+      [],
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      false,
+    );
+    return;
+  }
   let expectedSnapshot = plan.snapshot;
   const retiredCommentIds = [];
   for (const retirement of plan.retirements) {
@@ -458,11 +483,7 @@ function runDuplicateDigestRepair(input) {
     const currentBody = String(current?.body ?? '');
     let conditionalComment;
     try {
-      conditionalComment = fetchRepairCommentWithEtag(
-        owner,
-        repo,
-        retirement.id,
-      );
+      conditionalComment = fetchRepairComment(owner, repo, retirement.id);
     } catch (error) {
       finishRepairHold(
         report,
@@ -514,13 +535,24 @@ function runDuplicateDigestRepair(input) {
       return;
     }
     try {
-      patchRepairComment(
+      assertRepairClaim();
+    } catch (error) {
+      finishRepairHold(
+        report,
+        args.format,
+        `repair claim check failed before retiring comment ${retirement.id}: ${error.message}`,
+        comparison.snapshot,
+        retiredCommentIds,
         owner,
         repo,
-        retirement.id,
-        retiredBody,
-        conditionalComment.etag,
+        targetNumber,
+        targetType,
+        retiredCommentIds.length > 0,
       );
+      return;
+    }
+    try {
+      patchRepairComment(owner, repo, retirement.id, retiredBody);
     } catch (error) {
       const reconciliation = reconcileRepairRetirementMutation(
         owner,
@@ -537,7 +569,7 @@ function runDuplicateDigestRepair(input) {
         report,
         args.format,
         `retirement mutation failed for comment ${retirement.id}: ${error.message}; ${reconciliation.detail}`,
-        comparison.snapshot,
+        reconciliation.postflight,
         retiredCommentIds,
         owner,
         repo,
@@ -648,6 +680,23 @@ function runDuplicateDigestRepair(input) {
     preflight: plan.snapshot,
     postflight,
   });
+  try {
+    assertRepairClaim();
+  } catch (error) {
+    finishRepairHold(
+      report,
+      args.format,
+      `repair claim check failed before evidence write: ${error.message}`,
+      postflight,
+      retiredCommentIds,
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      false,
+    );
+    return;
+  }
   let evidenceResult;
   try {
     evidenceResult = postRepairEvidenceWithReconciliation(
@@ -655,6 +704,10 @@ function runDuplicateDigestRepair(input) {
       repo,
       targetNumber,
       evidence,
+      authorization.actor,
+      new Set(
+        postflightComments.map((comment) => String(comment.id ?? '').trim()),
+      ),
     );
   } catch (error) {
     finishRepairHold(
@@ -775,19 +828,14 @@ function fetchRepairTargetState(owner, repo, targetType, number) {
       targetType === 'issue' ? String(payload.state_reason ?? 'none') : 'none',
   });
 }
-function fetchRepairCommentWithEtag(owner, repo, commentId) {
-  const response = ghApiJsonWithHeaders(
+function fetchRepairComment(owner, repo, commentId) {
+  const payload = ghApiJson(
     `repos/${owner}/${repo}/issues/comments/${commentId}`,
   );
-  const payload = response.data;
   if (String(payload.id ?? '').trim() !== commentId) {
     throw new Error(`GitHub returned an unexpected comment for ${commentId}`);
   }
-  const etag = String(response.headers.etag ?? '').trim();
-  if (!etag) {
-    throw new Error(`GitHub returned no ETag for comment ${commentId}`);
-  }
-  return { body: String(payload.body ?? ''), etag };
+  return { body: String(payload.body ?? '') };
 }
 function reconcileRepairRetirementMutation(
   owner,
@@ -800,7 +848,7 @@ function reconcileRepairRetirementMutation(
   let observedBody = null;
   let commentDetail = 'comment reread unavailable';
   try {
-    observedBody = fetchRepairCommentWithEtag(owner, repo, commentId).body;
+    observedBody = fetchRepairComment(owner, repo, commentId).body;
     commentDetail = `comment body is ${
       observedBody === retiredBody &&
       isHistoricalLiveStatusDigestBody(observedBody)
@@ -810,17 +858,29 @@ function reconcileRepairRetirementMutation(
   } catch (error) {
     commentDetail = `comment reread failed: ${error.message}`;
   }
-  let targetDetail = 'target-state reread unavailable';
+  let postflight = null;
+  let postflightDetail = 'postflight snapshot reread unavailable';
   try {
-    targetDetail = `target state reread: ${fetchRepairTargetState(owner, repo, targetType, targetNumber)}`;
+    const targetState = fetchRepairTargetState(
+      owner,
+      repo,
+      targetType,
+      targetNumber,
+    );
+    postflight = createLiveStatusDigestSnapshot(
+      fetchIssueComments(owner, repo, targetNumber),
+      targetState,
+    );
+    postflightDetail = `postflight snapshot reread: ${postflight.sha256}`;
   } catch (error) {
-    targetDetail = `target-state reread failed: ${error.message}`;
+    postflightDetail = `postflight snapshot reread failed: ${error.message}`;
   }
   return {
     retired:
       observedBody === retiredBody &&
       isHistoricalLiveStatusDigestBody(observedBody),
-    detail: `ambiguous mutation reconciliation: ${commentDetail}; ${targetDetail}`,
+    detail: `ambiguous mutation reconciliation: ${commentDetail}; ${postflightDetail}`,
+    postflight,
   };
 }
 function resolveDuplicateRepairActor(owner, repo) {
@@ -847,14 +907,23 @@ function resolveDuplicateRepairActor(owner, repo) {
       : 'authenticated viewer is not an owner or maintainer, or permission lookup was unavailable',
   };
 }
-function patchRepairComment(owner, repo, commentId, body, etag) {
-  if (!etag.trim()) {
-    throw new Error(`cannot patch comment ${commentId} without an ETag`);
+function patchRepairComment(owner, repo, commentId, body) {
+  const payload = ghApiJson(
+    `repos/${owner}/${repo}/issues/comments/${commentId}`,
+    {
+      extraArgs: ['-X', 'PATCH', '--input', '-'],
+      input: JSON.stringify({ body }),
+    },
+  );
+  if (String(payload.id ?? '').trim() !== commentId) {
+    throw new Error(`GitHub returned an unexpected comment for ${commentId}`);
   }
-  return ghApiJson(`repos/${owner}/${repo}/issues/comments/${commentId}`, {
-    extraArgs: ['-X', 'PATCH', '-H', `If-Match: ${etag}`, '--input', '-'],
-    input: JSON.stringify({ body }),
-  });
+  if (String(payload.body ?? '') !== body) {
+    throw new Error(
+      `GitHub returned a different body for comment ${commentId} after PATCH`,
+    );
+  }
+  return payload;
 }
 function createRepairEvidenceComment(owner, repo, number, body) {
   return ghApiJson(`repos/${owner}/${repo}/issues/${number}/comments`, {
@@ -862,13 +931,34 @@ function createRepairEvidenceComment(owner, repo, number, body) {
     input: JSON.stringify({ body }),
   });
 }
-function findRepairEvidenceComment(owner, repo, number, body) {
+function findRepairEvidenceComment(
+  owner,
+  repo,
+  number,
+  body,
+  actor,
+  existingCommentIds,
+) {
+  const normalizedActor = actor.trim().toLowerCase();
   const comment = fetchIssueComments(owner, repo, number).find(
-    (candidate) => candidate.body === body && candidate.id != null,
+    (candidate) =>
+      candidate.body === body &&
+      candidate.id != null &&
+      !existingCommentIds.has(String(candidate.id).trim()) &&
+      String(candidate.author?.login ?? '')
+        .trim()
+        .toLowerCase() === normalizedActor,
   );
   return comment?.id == null ? null : { id: comment.id };
 }
-function postRepairEvidenceWithReconciliation(owner, repo, number, body) {
+function postRepairEvidenceWithReconciliation(
+  owner,
+  repo,
+  number,
+  body,
+  actor,
+  existingCommentIds,
+) {
   let writeError = null;
   try {
     const result = createRepairEvidenceComment(owner, repo, number, body);
@@ -882,7 +972,14 @@ function postRepairEvidenceWithReconciliation(owner, repo, number, body) {
     writeError = error;
   }
   try {
-    const existing = findRepairEvidenceComment(owner, repo, number, body);
+    const existing = findRepairEvidenceComment(
+      owner,
+      repo,
+      number,
+      body,
+      actor,
+      existingCommentIds,
+    );
     if (existing) return existing;
   } catch (error) {
     throw new Error(
@@ -1400,6 +1497,7 @@ Options:
   --claim-id <id>                   active claim id required for apply mode
   --agent-id <id>                   optionally require this claim agent id
   --skip-claim-check                explicit maintainer override for apply mode
+                                     (not accepted with --repair-duplicate)
   --repo <owner/name>               repository override, combined form
   --owner <owner>                   repository override, split form (use
                                      with --repo <name>, the bare

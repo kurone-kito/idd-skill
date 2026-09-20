@@ -87,7 +87,10 @@ fresh output:
 node scripts/live-status-digest.mjs --issue <issue-number> \
   --repair-duplicate --retain-comment-id <comment-id> --apply \
   --expected-current-digest-ids "<id>,<id>" \
-  --expected-current-digest-sha256 "<snapshot-sha256>"
+  --expected-current-digest-sha256 "<snapshot-sha256>" \
+  --claim-issue <repair-claim-issue> \
+  --claim-id <active-claim-id> \
+  --agent-id <claim-agent-id>
 ```
 
 The authenticated `gh` viewer must be an owner or maintainer, verified through
@@ -96,8 +99,11 @@ permission data fails closed; configured trusted marker actors and issue
 authors do not authorize this repair. Before every mutation the helper
 re-fetches the complete comment set and target state and compares the exact
 current-digest IDs, target state, and per-comment body hashes with the latest
-expected snapshot. Any drift, selected-comment change, or inconclusive read
-stops the operation without claiming success.
+expected snapshot. Apply also requires the active IDD claim named by
+`--claim-issue`, `--claim-id`, and `--agent-id`; that claim is revalidated
+immediately before each retirement and evidence write so compliant repair
+writers are serialized. Any drift, selected-comment change, lost claim, or
+inconclusive read stops the operation without claiming success.
 
 Every non-retained current digest is retired by changing only its first-line
 marker to `<!-- idd-live-status: historical -->`. The full table and any
@@ -107,16 +113,20 @@ and that every selected duplicate has the planned historical body. Retirement
 and evidence bodies are sent as JSON through stdin so an HTML-comment-first
 body cannot be truncated by `gh api -f body=...`. If a mutation response is
 ambiguous, the helper re-reads the affected comment and target before
-recording whether the planned retirement landed; if an evidence response is
-ambiguous, it reconciles the exact marker/body and never blindly retries the
-POST. The helper then posts structured evidence with marker
+recording whether the planned retirement landed and uses that fresh
+postflight snapshot in recovery evidence; if an evidence response is
+ambiguous, it reconciles only a newly observed exact marker/body authored by
+the authenticated repair actor and never blindly retries the POST. The helper
+then posts structured evidence with marker
 `<!-- idd-live-status-repair: v1 -->`, naming the actor, retained and retired
 comment IDs, pre/post entry hashes, target state, and snapshot hashes. A
 partial mutation, failed postcondition, or failed evidence write is reported
-as `repair-recovery-hold` and requires manual recovery. GitHub exposes
-resource-level conditional writes rather than a transaction across the full
-comment set and target state, so any later concurrent drift is surfaced by the
-postcondition and recovery-hold path rather than claimed as success.
+as `repair-recovery-hold` and requires manual recovery. GitHub does not
+generally guarantee conditional requests for unsafe methods such as PATCH, so
+the helper does not treat an ETag or `If-Match` header as a compare-and-swap
+authority. The active IDD claim coordinates compliant writers; fresh reads,
+the verified PATCH response, and the postcondition still surface any
+out-of-band drift through the recovery-hold path rather than claiming success.
 
 This preventive maintainer path is grounded in the observed duplicate-digest
 incident recorded by issue #3158: dantalion issue #216 closed after its

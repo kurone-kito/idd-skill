@@ -413,7 +413,8 @@ export function ghApiJsonWithHeaders(
   const raw = execFileSync('gh', args, {
     encoding: 'utf8',
     timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    ...(options.input !== undefined ? { input: options.input } : {}),
   });
   return parseIncludedGhApiResponse(raw);
 }
