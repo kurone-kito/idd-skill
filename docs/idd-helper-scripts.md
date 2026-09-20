@@ -1110,6 +1110,22 @@ The adopted helper boundaries are intentionally narrow:
 - it creates or updates only the single current digest comment and
   refuses duplicate marked digests with repair URLs instead of choosing
   one, deleting, or minimizing audit history
+- `--repair-duplicate --retain-comment-id <id>` is a separate maintainer
+  repair mode for an already-duplicate current-digest set; it requires an
+  authenticated owner/maintainer permission check and never accepts routine
+  claim flags or implicit selection
+- repair dry-run output includes the complete current-digest ID/body-hash
+  snapshot; apply additionally requires the exact
+  `--expected-current-digest-ids` and
+  `--expected-current-digest-sha256` values from that fresh dry-run
+- repair re-fetches the target state and complete paginated comments before
+  every retirement, changes only non-retained first-line markers to the
+  historical marker, preserves the rest of each body, and verifies exactly
+  one current digest afterward
+- successful or recovery-hold repair evidence is posted with
+  `<!-- idd-live-status-repair: v1 -->`; inconclusive reads, drift, partial
+  mutation, failed postconditions, or failed evidence writes produce a
+  `repair-recovery-hold` report rather than claiming success
 - digest text remains non-authoritative UI state; phase decisions still
   come from trusted markers and GitHub state
 

@@ -7,7 +7,7 @@ tags: [comment-minimization, cleanup]
 
 # IDD Comment Minimization
 
-<!-- cspell:words AAAAB Unminimize Wpaqs unminimized -->
+<!-- cspell:words AAAAB Unminimize Wpaqs unminimized upserts -->
 
 This note defines the safe path for hiding completed IDD review feedback
 and stale operational marker comments after a pull request has merged.
@@ -64,6 +64,51 @@ comments exist, do not delete, minimize, or guess which one is
 authoritative during an unattended run; preserve the audit history,
 report the duplicate URLs, and use trusted markers and GitHub state for
 all workflow decisions until a repair path selects one current digest.
+
+### Maintainer-gated duplicate repair
+
+The ordinary digest helper remains fail-closed when it finds multiple current
+digest markers. A maintainer may repair that state only through the separate
+explicit repair mode; routine claim ownership and normal `--apply` upserts
+never select a digest implicitly.
+
+Start with a fresh dry-run and choose the exact current comment to retain:
+
+```sh
+node scripts/live-status-digest.mjs --issue <issue-number> \
+  --repair-duplicate --retain-comment-id <comment-id> --dry-run
+```
+
+The dry-run reports the complete paginated current-digest set and a
+SHA-256 snapshot. Apply only with the exact IDs and snapshot hash from that
+fresh output:
+
+```sh
+node scripts/live-status-digest.mjs --issue <issue-number> \
+  --repair-duplicate --retain-comment-id <comment-id> --apply \
+  --expected-current-digest-ids "<id>,<id>" \
+  --expected-current-digest-sha256 "<snapshot-sha256>"
+```
+
+The authenticated `gh` viewer must be an owner or maintainer, verified through
+the repository collaborator-permission endpoint. Missing or inconclusive
+permission data fails closed; configured trusted marker actors and issue
+authors do not authorize this repair. Before every mutation the helper
+re-fetches the complete comment set and target state and compares the exact
+current-digest IDs, target state, and per-comment body hashes with the latest
+expected snapshot. Any drift, selected-comment change, or inconclusive read
+stops the operation without claiming success.
+
+Every non-retained current digest is retired by changing only its first-line
+marker to `<!-- idd-live-status: historical -->`. The full table and any
+suffix content remain recoverable; comments are never deleted or minimized.
+A fresh postcondition read must prove that exactly one current digest remains
+and that every selected duplicate has the planned historical body. The helper
+then posts structured evidence with marker
+`<!-- idd-live-status-repair: v1 -->`, naming the actor, retained and retired
+comment IDs, pre/post entry hashes, target state, and snapshot hashes. A
+partial mutation, failed postcondition, or failed evidence write is reported
+as `repair-recovery-hold` and requires manual recovery.
 
 ## Live Status Digest Helper
 

@@ -21,15 +21,28 @@ import {
   ghText,
 } from './gh-exec.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
-import type { PrCommitPayload } from './protocol-helpers.mts';
+import type {
+  LiveStatusDigestRepairPlan,
+  LiveStatusDigestSnapshot,
+  PrCommitPayload,
+} from './protocol-helpers.mts';
 import {
   applyDigestUpsert,
+  compareLiveStatusDigestSnapshot,
+  createLiveStatusDigestSnapshot,
+  createLiveStatusDigestSnapshotFromEntries,
   type DigestUpsertOutcome,
+  findLiveStatusDigestComments,
+  LIVE_STATUS_DIGEST_HISTORICAL_MARKER,
+  normalizeLiveStatusDigestIds,
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
+  planLiveStatusDigestRepair,
   planLiveStatusDigestUpsert,
+  renderLiveStatusDigestRepairEvidence,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
+  retireLiveStatusDigestBody,
   summarizeClaimValidation,
 } from './protocol-helpers.mts';
 
@@ -71,6 +84,10 @@ interface LiveStatusDigestArgs {
   agentId?: string;
   skipClaimCheck?: boolean;
   includeBody?: boolean;
+  repairDuplicate?: boolean;
+  retainCommentId?: string;
+  expectedCurrentDigestIds?: string;
+  expectedCurrentDigestSha256?: string;
 }
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -97,6 +114,10 @@ const LIVE_STATUS_DIGEST_FLAG_SPEC = {
   '--agent-id': { type: 'string' },
   '--skip-claim-check': { type: 'boolean', default: false },
   '--include-body': { type: 'boolean', default: false },
+  '--repair-duplicate': { type: 'boolean', default: false },
+  '--retain-comment-id': { type: 'string' },
+  '--expected-current-digest-ids': { type: 'string' },
+  '--expected-current-digest-sha256': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
 } as const;
 
@@ -119,6 +140,19 @@ interface LiveStatusDigestPlan {
   repairPath?: string;
 }
 
+interface LiveStatusDigestRepairReport {
+  action: string;
+  canApply: boolean;
+  applied: boolean;
+  actor: string | null;
+  retainedCommentId: string | null;
+  retiredCommentIds: string[];
+  preflight: LiveStatusDigestSnapshot | null;
+  postflight: LiveStatusDigestSnapshot | null;
+  evidenceCommentId: string | number | null;
+  recoveryHold: string | null;
+}
+
 /**
  * JSON state document printed by this CLI: the live-status digest
  * upsert plan/apply outcome for one issue or pull request.
@@ -135,6 +169,7 @@ export interface LiveStatusDigestReport {
   repairPath: string | null;
   applied: boolean;
   body?: string | null;
+  repair?: LiveStatusDigestRepairReport;
 }
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
@@ -170,12 +205,18 @@ function main(): void {
   if (!args.apply) {
     args.dryRun = true;
   }
-  if (args.apply && args.skipClaimCheck && (args.claimIssue || args.claimId)) {
+  if (
+    !args.repairDuplicate &&
+    args.apply &&
+    args.skipClaimCheck &&
+    (args.claimIssue || args.claimId)
+  ) {
     fail(
       '--skip-claim-check cannot be combined with --claim-issue or --claim-id',
     );
   }
   if (
+    !args.repairDuplicate &&
     args.apply &&
     !args.skipClaimCheck &&
     (!args.claimIssue || !args.claimId)
@@ -197,6 +238,17 @@ function main(): void {
     args.issue ?? args.pr,
     `--${targetType}`,
   );
+
+  if (args.repairDuplicate) {
+    runDuplicateDigestRepair({
+      args,
+      owner,
+      repo,
+      targetType,
+      targetNumber,
+    });
+    return;
+  }
   // `expectedLinkedPrs` is a pure, local computation, so building it
   // eagerly is free. `prFirstCommitAt` is not: resolving it makes a
   // paginated `gh api pulls/{pr}/commits` call. `claimContext` is only
@@ -314,6 +366,628 @@ function main(): void {
   }
 
   writeReport(report, args.format);
+}
+
+interface DuplicateDigestRepairInput {
+  args: LiveStatusDigestArgs;
+  owner: string;
+  repo: string;
+  targetType: 'issue' | 'pr';
+  targetNumber: number;
+}
+
+function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
+  const { args, owner, repo, targetType, targetNumber } = input;
+  if (args.claimIssue || args.claimId || args.skipClaimCheck) {
+    fail(
+      '--repair-duplicate uses maintainer authorization and cannot be combined with claim-check flags',
+    );
+  }
+  if (!args.retainCommentId) {
+    fail('--repair-duplicate requires --retain-comment-id');
+  }
+  const retainedCommentId = parseCommentId(
+    args.retainCommentId,
+    '--retain-comment-id',
+  );
+  const expectedIds =
+    args.expectedCurrentDigestIds === undefined
+      ? undefined
+      : parseDigestIdList(
+          args.expectedCurrentDigestIds,
+          '--expected-current-digest-ids',
+        );
+  if (args.apply && expectedIds === undefined) {
+    fail(
+      '--apply --repair-duplicate requires --expected-current-digest-ids from a fresh dry-run',
+    );
+  }
+  if (args.apply && args.expectedCurrentDigestSha256 === undefined) {
+    fail(
+      '--apply --repair-duplicate requires --expected-current-digest-sha256 from a fresh dry-run',
+    );
+  }
+
+  let targetState: string;
+  let comments: ReturnType<typeof fetchIssueComments>;
+  try {
+    targetState = fetchRepairTargetState(owner, repo, targetType, targetNumber);
+    comments = fetchIssueComments(owner, repo, targetNumber);
+  } catch (error) {
+    const report = createRepairReport({
+      owner,
+      repo,
+      targetType,
+      targetNumber,
+      mode: args.apply ? 'apply' : 'dry-run',
+      retainedCommentId,
+      recoveryHold: `repair preflight read failed: ${(error as Error).message}`,
+    });
+    finishRepairHold(
+      report,
+      args.format,
+      report.repair?.recoveryHold ?? 'repair preflight read failed',
+      null,
+      [],
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      false,
+    );
+    return;
+  }
+  let plan: LiveStatusDigestRepairPlan;
+  try {
+    plan = planLiveStatusDigestRepair({
+      comments,
+      targetState,
+      retainedCommentId,
+      expectedCurrentDigestIds: expectedIds,
+      expectedCurrentDigestSha256: args.expectedCurrentDigestSha256,
+    });
+  } catch (error) {
+    const report = createRepairReport({
+      owner,
+      repo,
+      targetType,
+      targetNumber,
+      mode: args.apply ? 'apply' : 'dry-run',
+      retainedCommentId,
+      recoveryHold: `repair preflight could not be planned: ${(error as Error).message}`,
+    });
+    finishRepairHold(
+      report,
+      args.format,
+      report.repair?.recoveryHold ?? 'repair preflight could not be planned',
+      null,
+      [],
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      false,
+    );
+    return;
+  }
+
+  const report = createRepairReport({
+    owner,
+    repo,
+    targetType,
+    targetNumber,
+    mode: args.apply ? 'apply' : 'dry-run',
+    retainedCommentId,
+    plan,
+  });
+  const repairReport = report.repair;
+  if (!repairReport) {
+    fail(
+      'internal error: duplicate repair report is missing its repair section',
+    );
+  }
+
+  if (plan.action !== 'ready') {
+    writeRepairReportAndStop(report, args.format);
+    return;
+  }
+  if (!args.apply) {
+    report.action = 'repair-ready';
+    repairReport.action = 'repair-ready';
+    writeRepairReportAndStop(report, args.format, false);
+    return;
+  }
+
+  const authorization = resolveDuplicateRepairActor(owner, repo);
+  repairReport.actor = authorization.actor;
+  if (!authorization.authorized) {
+    finishRepairHold(
+      report,
+      args.format,
+      `maintainer authorization failed: ${authorization.reason}`,
+      plan.snapshot,
+      [],
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      false,
+    );
+    return;
+  }
+
+  let expectedSnapshot = plan.snapshot;
+  const retiredCommentIds: string[] = [];
+  for (const retirement of plan.retirements) {
+    let currentState: string;
+    let currentComments: ReturnType<typeof fetchIssueComments>;
+    try {
+      currentState = fetchRepairTargetState(
+        owner,
+        repo,
+        targetType,
+        targetNumber,
+      );
+      currentComments = fetchIssueComments(owner, repo, targetNumber);
+    } catch (error) {
+      finishRepairHold(
+        report,
+        args.format,
+        `repair pre-mutation read failed: ${(error as Error).message}`,
+        null,
+        retiredCommentIds,
+        owner,
+        repo,
+        targetNumber,
+        targetType,
+        true,
+      );
+      return;
+    }
+    let comparison: ReturnType<typeof compareLiveStatusDigestSnapshot>;
+    try {
+      comparison = compareLiveStatusDigestSnapshot(
+        currentComments,
+        currentState,
+        expectedSnapshot.entries.map((entry) => entry.id),
+        expectedSnapshot.sha256,
+      );
+    } catch (error) {
+      finishRepairHold(
+        report,
+        args.format,
+        `repair pre-mutation snapshot failed: ${(error as Error).message}`,
+        null,
+        retiredCommentIds,
+        owner,
+        repo,
+        targetNumber,
+        targetType,
+        true,
+      );
+      return;
+    }
+    if (!comparison.matches) {
+      finishRepairHold(
+        report,
+        args.format,
+        `duplicate set changed before retiring comment ${retirement.id}: ${comparison.reason}`,
+        comparison.snapshot,
+        retiredCommentIds,
+        owner,
+        repo,
+        targetNumber,
+        targetType,
+        true,
+      );
+      return;
+    }
+    const current = findLiveStatusDigestComments(currentComments).find(
+      (comment) => String(comment.id ?? '').trim() === retirement.id,
+    );
+    const currentBody = String(current?.body ?? '');
+    if (!current || currentBody !== retirement.originalBody) {
+      finishRepairHold(
+        report,
+        args.format,
+        `selected retirement comment ${retirement.id} changed after preflight`,
+        comparison.snapshot,
+        retiredCommentIds,
+        owner,
+        repo,
+        targetNumber,
+        targetType,
+        true,
+      );
+      return;
+    }
+    const retiredBody = retireLiveStatusDigestBody(currentBody);
+    if (retiredBody !== retirement.retiredBody) {
+      finishRepairHold(
+        report,
+        args.format,
+        `historical body plan changed for comment ${retirement.id}`,
+        comparison.snapshot,
+        retiredCommentIds,
+        owner,
+        repo,
+        targetNumber,
+        targetType,
+        true,
+      );
+      return;
+    }
+    try {
+      patchRepairComment(owner, repo, retirement.id, retiredBody);
+    } catch (error) {
+      finishRepairHold(
+        report,
+        args.format,
+        `retirement mutation failed for comment ${retirement.id}: ${(error as Error).message}`,
+        comparison.snapshot,
+        retiredCommentIds,
+        owner,
+        repo,
+        targetNumber,
+        targetType,
+        true,
+      );
+      return;
+    }
+    retiredCommentIds.push(retirement.id);
+    expectedSnapshot = createLiveStatusDigestSnapshotFromEntries(
+      currentState,
+      expectedSnapshot.entries.filter((entry) => entry.id !== retirement.id),
+    );
+  }
+
+  let postflightComments: ReturnType<typeof fetchIssueComments>;
+  let postflightState: string;
+  try {
+    postflightState = fetchRepairTargetState(
+      owner,
+      repo,
+      targetType,
+      targetNumber,
+    );
+    postflightComments = fetchIssueComments(owner, repo, targetNumber);
+  } catch (error) {
+    finishRepairHold(
+      report,
+      args.format,
+      `post-repair read failed: ${(error as Error).message}`,
+      null,
+      retiredCommentIds,
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      true,
+    );
+    return;
+  }
+  let postflight: LiveStatusDigestSnapshot;
+  try {
+    postflight = createLiveStatusDigestSnapshot(
+      postflightComments,
+      postflightState,
+    );
+  } catch (error) {
+    finishRepairHold(
+      report,
+      args.format,
+      `post-repair snapshot failed: ${(error as Error).message}`,
+      null,
+      retiredCommentIds,
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      true,
+    );
+    return;
+  }
+  const currentPostflight = findLiveStatusDigestComments(postflightComments);
+  const retainedPostflight = currentPostflight.find(
+    (comment) => String(comment.id ?? '').trim() === plan.retainedCommentId,
+  );
+  const postconditionOk =
+    postflightState === plan.snapshot.targetState &&
+    currentPostflight.length === 1 &&
+    Boolean(retainedPostflight) &&
+    String(retainedPostflight?.body ?? '') ===
+      String(
+        findLiveStatusDigestComments(comments).find(
+          (comment) =>
+            String(comment.id ?? '').trim() === plan.retainedCommentId,
+        )?.body ?? '',
+      ) &&
+    plan.retirements.every((retirement) => {
+      const comment = postflightComments.find(
+        (candidate) => String(candidate.id ?? '').trim() === retirement.id,
+      );
+      const body = String(comment?.body ?? '');
+      return (
+        body.startsWith(LIVE_STATUS_DIGEST_HISTORICAL_MARKER) &&
+        body === retirement.retiredBody
+      );
+    });
+  if (!postconditionOk) {
+    finishRepairHold(
+      report,
+      args.format,
+      'post-repair verification did not prove exactly one retained current digest and unchanged retired content',
+      postflight,
+      retiredCommentIds,
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      true,
+    );
+    return;
+  }
+
+  const evidence = renderLiveStatusDigestRepairEvidence({
+    target: `${targetType} #${targetNumber}`,
+    status: 'complete',
+    actor: authorization.actor,
+    retainedCommentId: plan.retainedCommentId,
+    retiredCommentIds,
+    preflight: plan.snapshot,
+    postflight,
+  });
+  let evidenceResult: { id?: string | number | null };
+  try {
+    evidenceResult = createRepairEvidenceComment(
+      owner,
+      repo,
+      targetNumber,
+      evidence,
+    );
+  } catch (error) {
+    finishRepairHold(
+      report,
+      args.format,
+      `durable repair evidence write failed: ${(error as Error).message}`,
+      postflight,
+      retiredCommentIds,
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      true,
+    );
+    return;
+  }
+  if (evidenceResult.id === undefined || evidenceResult.id === null) {
+    finishRepairHold(
+      report,
+      args.format,
+      'durable repair evidence write returned no comment id',
+      postflight,
+      retiredCommentIds,
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      true,
+    );
+    return;
+  }
+  report.action = 'repair-complete';
+  report.canApply = true;
+  report.applied = true;
+  report.repair = {
+    action: 'repair-complete',
+    canApply: true,
+    applied: true,
+    actor: authorization.actor,
+    retainedCommentId: plan.retainedCommentId,
+    retiredCommentIds,
+    preflight: plan.snapshot,
+    postflight,
+    evidenceCommentId: evidenceResult.id,
+    recoveryHold: null,
+  };
+  writeReport(report, args.format);
+}
+
+function createRepairReport(input: {
+  owner: string;
+  repo: string;
+  targetType: 'issue' | 'pr';
+  targetNumber: number;
+  mode: 'apply' | 'dry-run';
+  retainedCommentId: string;
+  plan?: LiveStatusDigestRepairPlan;
+  recoveryHold?: string;
+}): LiveStatusDigestReport {
+  const { plan } = input;
+  const action = plan ? `repair-${plan.action}` : 'repair-recovery-hold';
+  return {
+    repository: `${input.owner}/${input.repo}`,
+    target: { type: input.targetType, number: input.targetNumber },
+    mode: input.mode,
+    action,
+    canApply: plan?.canApply ?? false,
+    commentId: null,
+    url: null,
+    duplicates: [],
+    repairPath: null,
+    applied: false,
+    repair: {
+      action,
+      canApply: plan?.canApply ?? false,
+      applied: false,
+      actor: null,
+      retainedCommentId: plan?.retainedCommentId || input.retainedCommentId,
+      retiredCommentIds: [],
+      preflight: plan?.snapshot ?? null,
+      postflight: null,
+      evidenceCommentId: null,
+      recoveryHold:
+        input.recoveryHold ??
+        (plan?.action === 'ready' ? null : (plan?.reason ?? null)),
+    },
+  };
+}
+
+function parseCommentId(value: string, flag: string): string {
+  const normalized = value.trim();
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    fail(`${flag} must be a positive integer`);
+  }
+  return normalized;
+}
+
+function parseDigestIdList(value: string, flag: string): string[] {
+  const values = value.split(',').map((item) => item.trim());
+  if (values.some((item) => item.length === 0)) {
+    fail(`${flag} must be a comma-separated list of comment ids`);
+  }
+  try {
+    return normalizeLiveStatusDigestIds(values);
+  } catch (error) {
+    fail(`${flag} is invalid: ${(error as Error).message}`);
+  }
+}
+
+function fetchRepairTargetState(
+  owner: string,
+  repo: string,
+  targetType: 'issue' | 'pr',
+  number: number,
+): string {
+  const path =
+    targetType === 'pr'
+      ? `repos/${owner}/${repo}/pulls/${number}`
+      : `repos/${owner}/${repo}/issues/${number}`;
+  const payload = ghApiJson(path) as {
+    state?: unknown;
+    state_reason?: unknown;
+    merged_at?: unknown;
+  };
+  return JSON.stringify({
+    mergedAt:
+      targetType === 'pr' ? String(payload.merged_at ?? 'none') : 'none',
+    state: String(payload.state ?? 'unknown'),
+    stateReason:
+      targetType === 'issue' ? String(payload.state_reason ?? 'none') : 'none',
+  });
+}
+
+function resolveDuplicateRepairActor(
+  owner: string,
+  repo: string,
+): { actor: string; authorized: boolean; reason: string } {
+  const actor = currentViewerLogin().trim();
+  if (!actor) {
+    return {
+      actor: '',
+      authorized: false,
+      reason: 'authenticated viewer login is unavailable',
+    };
+  }
+  const authorized = isAuthorizedForcedHandoffActor(
+    owner,
+    repo,
+    actor,
+    'owners-and-maintainers-only',
+    collaboratorPermissionCache,
+  );
+  return {
+    actor,
+    authorized,
+    reason: authorized
+      ? 'authenticated viewer is an owner or maintainer'
+      : 'authenticated viewer is not an owner or maintainer, or permission lookup was unavailable',
+  };
+}
+
+function patchRepairComment(
+  owner: string,
+  repo: string,
+  commentId: string,
+  body: string,
+): unknown {
+  return ghApiJson(`repos/${owner}/${repo}/issues/comments/${commentId}`, {
+    extraArgs: ['-X', 'PATCH', '-f', `body=${body}`],
+  });
+}
+
+function createRepairEvidenceComment(
+  owner: string,
+  repo: string,
+  number: number,
+  body: string,
+): { id?: string | number | null } {
+  return ghApiJson(`repos/${owner}/${repo}/issues/${number}/comments`, {
+    extraArgs: ['-X', 'POST', '-f', `body=${body}`],
+  }) as { id?: string | number | null };
+}
+
+function finishRepairHold(
+  report: LiveStatusDigestReport,
+  format: string,
+  reason: string,
+  postflight: LiveStatusDigestSnapshot | null,
+  retiredCommentIds: string[],
+  owner: string,
+  repo: string,
+  targetNumber: number,
+  targetType: 'issue' | 'pr',
+  postEvidence: boolean,
+): void {
+  const repair = report.repair;
+  if (!repair) {
+    fail(reason);
+  }
+  repair.action = 'repair-recovery-hold';
+  repair.canApply = false;
+  repair.applied = false;
+  repair.retiredCommentIds = [...retiredCommentIds];
+  repair.postflight = postflight;
+  repair.recoveryHold = reason;
+  report.action = 'repair-recovery-hold';
+  report.canApply = false;
+  report.applied = false;
+  if (postEvidence) {
+    try {
+      const evidenceId = createRepairEvidenceComment(
+        owner,
+        repo,
+        targetNumber,
+        renderLiveStatusDigestRepairEvidence({
+          target: `${targetType} #${targetNumber}`,
+          status: 'recovery-hold',
+          actor: repair.actor ?? '',
+          retainedCommentId: repair.retainedCommentId ?? '',
+          retiredCommentIds,
+          preflight:
+            repair.preflight ?? createLiveStatusDigestSnapshot([], 'unknown'),
+          postflight,
+          reason,
+        }),
+      );
+      repair.evidenceCommentId = evidenceId.id ?? null;
+    } catch {
+      // The JSON report remains the recovery record when GitHub cannot accept
+      // the compensating evidence comment.
+    }
+  }
+  writeRepairReportAndStop(report, format);
+}
+
+function writeRepairReportAndStop(
+  report: LiveStatusDigestReport,
+  format: string,
+  failed = true,
+): void {
+  writeReport(report, format);
+  if (failed) {
+    process.exitCode = 1;
+  }
 }
 
 function updateReportFromPlan(
@@ -717,6 +1391,22 @@ function writeReport(report: LiveStatusDigestReport, format: string): void {
   if (report.repairPath) {
     console.log(`repairPath:\t${report.repairPath}`);
   }
+  if (report.repair) {
+    console.log('repair:');
+    console.log('field\tvalue');
+    for (const [field, value] of Object.entries(report.repair)) {
+      if (field === 'preflight' || field === 'postflight') {
+        const snapshot = value as LiveStatusDigestSnapshot | null;
+        console.log(
+          `${field}\t${snapshot ? JSON.stringify(snapshot) : 'none'}`,
+        );
+        continue;
+      }
+      console.log(
+        `${field}\t${Array.isArray(value) ? value.join(', ') : (value ?? '')}`,
+      );
+    }
+  }
 }
 
 function parseArgs(argv: string[]): LiveStatusDigestArgs {
@@ -799,19 +1489,34 @@ function parseArgs(argv: string[]): LiveStatusDigestArgs {
     ),
     skipClaimCheck: values['skip-claim-check'] as boolean,
     includeBody: values['include-body'] as boolean,
+    repairDuplicate: values['repair-duplicate'] as boolean,
+    retainCommentId: requireNonEmpty(
+      values['retain-comment-id'] as string | undefined,
+      '--retain-comment-id',
+    ),
+    expectedCurrentDigestIds: requireNonEmpty(
+      values['expected-current-digest-ids'] as string | undefined,
+      '--expected-current-digest-ids',
+    ),
+    expectedCurrentDigestSha256: requireNonEmpty(
+      values['expected-current-digest-sha256'] as string | undefined,
+      '--expected-current-digest-sha256',
+    ),
   };
 
-  for (const flag of [
-    ['phase', '--phase'],
-    ['claim', '--claim'],
-    ['branch', '--branch'],
-    ['openBlockers', '--open-blockers'],
-    ['nextAction', '--next-action'],
-    ['authoritativeBy', '--authoritative-by'],
-  ] as const) {
-    if (!parsedArgs[flag[0]]) {
-      if (!parsedArgs.help) {
-        fail(`${flag[1]} is required`);
+  if (!parsedArgs.repairDuplicate) {
+    for (const flag of [
+      ['phase', '--phase'],
+      ['claim', '--claim'],
+      ['branch', '--branch'],
+      ['openBlockers', '--open-blockers'],
+      ['nextAction', '--next-action'],
+      ['authoritativeBy', '--authoritative-by'],
+    ] as const) {
+      if (!parsedArgs[flag[0]]) {
+        if (!parsedArgs.help) {
+          fail(`${flag[1]} is required`);
+        }
       }
     }
   }
@@ -836,6 +1541,12 @@ function printUsage(): void {
 Options:
   --dry-run                         compute the create/update/noop action (default)
   --apply                           create or update the single current digest
+  --repair-duplicate                explicitly repair duplicate current digests
+  --retain-comment-id <id>           current digest comment to retain for repair
+  --expected-current-digest-ids <ids>
+                                     comma-separated dry-run digest IDs required for apply repair
+  --expected-current-digest-sha256 <sha256>
+                                     dry-run snapshot SHA-256 required for apply repair
   --phase <text>                    digest Phase field (required)
   --claim <text>                    digest Claim field (required)
   --branch <text>                   digest Branch field (required)

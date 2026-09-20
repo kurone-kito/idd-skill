@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import {
+  type CollaboratorPermissionCache,
+  isAuthorizedForcedHandoffActor,
+} from '../src/scripts/collaborator-permission.mts';
 // Importing the CLI module directly is only possible now that its top-level
 // statements are guarded behind `import.meta.main`; previously the import
 // parsed process.argv and called process.exit, aborting the test process.
@@ -14,14 +20,21 @@ import {
 } from '../src/scripts/live-status-digest.mts';
 import {
   applyDigestUpsert,
+  compareLiveStatusDigestSnapshot,
+  createLiveStatusDigestSnapshot,
   findLiveStatusDigestComments,
+  LIVE_STATUS_DIGEST_HISTORICAL_MARKER,
   LIVE_STATUS_DIGEST_MARKER,
+  planLiveStatusDigestRepair,
   planLiveStatusDigestUpsert,
   renderLiveStatusDigest,
+  renderLiveStatusDigestRepairEvidence,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
+  retireLiveStatusDigestBody,
   summarizeClaimValidation,
 } from '../src/scripts/protocol-helpers.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const fields = {
   phase: 'B2 planned',
@@ -32,6 +45,13 @@ const fields = {
   nextAction: 'B3 implement',
   authoritativeBy: 'verified claim claim-1',
 };
+
+function currentDigestComment(id: number, phase = fields.phase) {
+  return {
+    id,
+    body: renderLiveStatusDigest({ ...fields, phase }),
+  };
+}
 
 test('discovers only current live status digest comments', () => {
   const comments = [
@@ -108,6 +128,298 @@ test('refuses duplicate current digests and reports repair context', () => {
     ],
   );
   assert.match(plan.repairPath, /Do not delete or minimize/);
+});
+
+test('duplicate repair rejects zero or one current digest', () => {
+  const noDigest = planLiveStatusDigestRepair({
+    comments: [],
+    targetState: 'open',
+    retainedCommentId: '101',
+  });
+  assert.equal(noDigest.action, 'invalid');
+  assert.equal(noDigest.reason, 'duplicate-set-too-small');
+
+  const oneDigest = planLiveStatusDigestRepair({
+    comments: [currentDigestComment(101)],
+    targetState: 'open',
+    retainedCommentId: '101',
+  });
+  assert.equal(oneDigest.action, 'invalid');
+  assert.equal(oneDigest.reason, 'duplicate-set-too-small');
+});
+
+test('duplicate repair requires an explicit retained current digest', () => {
+  const plan = planLiveStatusDigestRepair({
+    comments: [currentDigestComment(101), currentDigestComment(102)],
+    targetState: 'open',
+    retainedCommentId: '999',
+  });
+
+  assert.equal(plan.action, 'invalid');
+  assert.equal(plan.canApply, false);
+  assert.equal(plan.reason, 'retained-comment-is-not-current');
+});
+
+test('duplicate repair plans historical retirement while preserving content', () => {
+  const comments = [
+    currentDigestComment(101, 'retained'),
+    {
+      ...currentDigestComment(102, 'retired'),
+      body: `${renderLiveStatusDigest({ ...fields, phase: 'retired' })}\nextra audit detail`,
+    },
+  ];
+  const plan = planLiveStatusDigestRepair({
+    comments,
+    targetState: 'open',
+    retainedCommentId: '101',
+  });
+
+  assert.equal(plan.action, 'ready');
+  assert.equal(plan.canApply, true);
+  assert.equal(plan.retainedCommentId, '101');
+  assert.deepEqual(
+    plan.retirements.map((retirement) => retirement.id),
+    ['102'],
+  );
+  assert.match(
+    plan.retirements[0].retiredBody,
+    /^<!-- idd-live-status: historical -->/,
+  );
+  assert.equal(
+    plan.retirements[0].retiredBody.slice(
+      LIVE_STATUS_DIGEST_HISTORICAL_MARKER.length,
+    ),
+    plan.retirements[0].originalBody.slice(LIVE_STATUS_DIGEST_MARKER.length),
+  );
+  assert.equal(
+    retireLiveStatusDigestBody(plan.retirements[0].originalBody),
+    plan.retirements[0].retiredBody,
+  );
+});
+
+test('duplicate repair detects body, target-state, and digest-set drift', () => {
+  const comments = [currentDigestComment(101), currentDigestComment(102)];
+  const snapshot = createLiveStatusDigestSnapshot(comments, 'open');
+
+  assert.equal(
+    compareLiveStatusDigestSnapshot(
+      comments,
+      'open',
+      snapshot.entries.map((entry) => entry.id),
+      snapshot.sha256,
+    ).matches,
+    true,
+  );
+  assert.equal(
+    compareLiveStatusDigestSnapshot(
+      [currentDigestComment(101, 'changed'), currentDigestComment(102)],
+      'open',
+      snapshot.entries.map((entry) => entry.id),
+      snapshot.sha256,
+    ).reason,
+    'snapshot-drift',
+  );
+  assert.equal(
+    compareLiveStatusDigestSnapshot(
+      [currentDigestComment(101)],
+      'open',
+      snapshot.entries.map((entry) => entry.id),
+      snapshot.sha256,
+    ).reason,
+    'digest-set-drift',
+  );
+  assert.equal(
+    compareLiveStatusDigestSnapshot(
+      comments,
+      'closed',
+      snapshot.entries.map((entry) => entry.id),
+      snapshot.sha256,
+    ).reason,
+    'snapshot-drift',
+  );
+});
+
+test('duplicate repair evidence records actor, entries, and target snapshots', () => {
+  const comments = [currentDigestComment(101), currentDigestComment(102)];
+  const preflight = createLiveStatusDigestSnapshot(comments, 'open');
+  const postflight = createLiveStatusDigestSnapshot(
+    [currentDigestComment(101)],
+    'open',
+  );
+  const evidence = renderLiveStatusDigestRepairEvidence({
+    target: 'issue #3158',
+    status: 'complete',
+    actor: 'maintainer',
+    retainedCommentId: '101',
+    retiredCommentIds: ['102'],
+    preflight,
+    postflight,
+  });
+
+  assert.match(evidence, /idd-live-status-repair: v1/);
+  assert.match(evidence, /maintainer/);
+  assert.match(evidence, /101/);
+  assert.match(evidence, /102/);
+  assert.match(evidence, new RegExp(preflight.sha256));
+  assert.match(evidence, new RegExp(postflight.sha256));
+  assert.match(evidence, new RegExp(preflight.entries[0].bodySha256));
+});
+
+test('duplicate repair authorization rejects untrusted write actors', () => {
+  const cache: CollaboratorPermissionCache = new Map([
+    ['owner/repo:contributor', { permission: 'write', roleName: 'write' }],
+    ['owner/repo:maintainer', { permission: 'write', roleName: 'maintain' }],
+  ]);
+
+  assert.equal(
+    isAuthorizedForcedHandoffActor(
+      'owner',
+      'repo',
+      'contributor',
+      'owners-and-maintainers-only',
+      cache,
+    ),
+    false,
+  );
+  assert.equal(
+    isAuthorizedForcedHandoffActor(
+      'owner',
+      'repo',
+      'maintainer',
+      'owners-and-maintainers-only',
+      cache,
+    ),
+    true,
+  );
+});
+
+test('duplicate repair CLI keeps dry-run read-only and applies the selected snapshot', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-live-status-repair-cli-'));
+  const statePath = join(tempRoot, 'state.json');
+  const logPath = join(tempRoot, 'gh-args.jsonl');
+  const initialComments = [
+    currentDigestComment(101),
+    currentDigestComment(102),
+  ];
+  writeFileSync(
+    statePath,
+    JSON.stringify({ comments: initialComments, mutations: 0, evidence: 0 }),
+  );
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const statePath = ${JSON.stringify(statePath)};
+const logPath = ${JSON.stringify(logPath)};
+const args = process.argv.slice(2);
+fs.appendFileSync(logPath, JSON.stringify(args) + '\\n');
+const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+const apiArgs = args.slice(1);
+const methodIndex = apiArgs.indexOf('-X');
+const method = methodIndex >= 0 ? apiArgs[methodIndex + 1] : 'GET';
+const bodyArgument = apiArgs.find((value) => value.startsWith('body='));
+const path = apiArgs.find((value) => value.startsWith('repos/')) ?? apiArgs[0];
+if (apiArgs[0] === 'user') {
+  process.stdout.write('maintainer');
+} else if (path.endsWith('/collaborators/maintainer/permission')) {
+  process.stdout.write(JSON.stringify({ permission: 'write', role_name: 'maintain' }));
+} else if (method === 'PATCH' && path.includes('/issues/comments/')) {
+  const id = path.split('/').at(-1);
+  const comment = state.comments.find((item) => String(item.id) === id);
+  if (!comment || !bodyArgument) process.exit(1);
+  comment.body = bodyArgument.slice('body='.length);
+  state.mutations += 1;
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  process.stdout.write(JSON.stringify(comment));
+} else if (method === 'POST' && path.endsWith('/comments')) {
+  state.evidence += 1;
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  process.stdout.write(JSON.stringify({ id: 900 + state.evidence }));
+} else if (apiArgs.includes('--paginate')) {
+  for (const comment of state.comments) process.stdout.write(JSON.stringify(comment) + '\\n');
+} else if (path.endsWith('/issues/123')) {
+  process.stdout.write(JSON.stringify({ state: 'open', state_reason: null }));
+} else {
+  process.exit(1);
+}
+`,
+  );
+  try {
+    const cliPath = join(REPO_ROOT, 'scripts/live-status-digest.mjs');
+    const baseArgs = [
+      cliPath,
+      '--repo',
+      'owner/repo',
+      '--issue',
+      '123',
+      '--repair-duplicate',
+      '--retain-comment-id',
+      '101',
+      '--format',
+      'json',
+    ];
+    const dryRun = JSON.parse(
+      execFileSync(process.execPath, [...baseArgs, '--dry-run'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    ) as {
+      repair: {
+        preflight: { entries: { id: string }[]; sha256: string };
+      };
+    };
+    const afterDryRun = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      comments: { id: number; body: string }[];
+      mutations: number;
+      evidence: number;
+    };
+    assert.equal(afterDryRun.mutations, 0);
+    assert.equal(afterDryRun.evidence, 0);
+    assert.equal(afterDryRun.comments.length, 2);
+
+    const applied = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          ...baseArgs,
+          '--apply',
+          '--expected-current-digest-ids',
+          dryRun.repair.preflight.entries.map((entry) => entry.id).join(','),
+          '--expected-current-digest-sha256',
+          dryRun.repair.preflight.sha256,
+        ],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      ),
+    ) as {
+      action: string;
+      repair: { retiredCommentIds: string[]; evidenceCommentId: number };
+    };
+    assert.equal(applied.action, 'repair-complete');
+    assert.deepEqual(applied.repair.retiredCommentIds, ['102']);
+    assert.equal(applied.repair.evidenceCommentId, 901);
+
+    const afterApply = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      comments: { id: number; body: string }[];
+      mutations: number;
+      evidence: number;
+    };
+    assert.equal(afterApply.mutations, 1);
+    assert.equal(afterApply.evidence, 1);
+    assert.match(afterApply.comments[1].body, /idd-live-status: historical/);
+    const calls = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as string[]);
+    assert.equal(
+      calls.some(
+        (args) =>
+          args.includes('-X') && args[args.indexOf('-X') + 1] === 'PATCH',
+      ),
+      true,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test('plans no-op when the current digest is already up to date', () => {

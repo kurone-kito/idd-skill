@@ -4,6 +4,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import {
   buildAdvisoryConvergenceWaiverPrecondition,
   buildSecondaryQuietWindowStatus,
@@ -47,6 +48,10 @@ import {
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
 export const LIVE_STATUS_DIGEST_MARKER = '<!-- idd-live-status: current -->';
+export const LIVE_STATUS_DIGEST_HISTORICAL_MARKER =
+  '<!-- idd-live-status: historical -->';
+export const LIVE_STATUS_DIGEST_REPAIR_MARKER =
+  '<!-- idd-live-status-repair: v1 -->';
 const REVIEW_BOT_LOGINS = new Set([
   'coderabbitai',
   'coderabbitai[bot]',
@@ -361,6 +366,258 @@ export function findLiveStatusDigestComments(comments) {
   return comments.filter((comment) => {
     return firstLine(comment.body ?? '') === LIVE_STATUS_DIGEST_MARKER;
   });
+}
+function sha256Hex(value) {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+function normalizeSnapshotTargetState(targetState) {
+  const normalized = String(targetState ?? '').trim();
+  return normalized || 'unknown';
+}
+function normalizeSnapshotEntries(entries) {
+  const normalized = entries.map((entry) => {
+    const id = String(entry.id ?? '').trim();
+    const bodySha256 = String(entry.bodySha256 ?? '')
+      .trim()
+      .toLowerCase();
+    if (!/^[1-9]\d*$/.test(id)) {
+      throw new Error(
+        `live-status digest comment id is invalid: ${id || '(empty)'}`,
+      );
+    }
+    if (!/^[a-f0-9]{64}$/.test(bodySha256)) {
+      throw new Error(
+        `live-status digest body sha256 is invalid for comment ${id}`,
+      );
+    }
+    return { id, bodySha256 };
+  });
+  const seen = new Set();
+  for (const entry of normalized) {
+    if (seen.has(entry.id)) {
+      throw new Error(`duplicate live-status digest comment id: ${entry.id}`);
+    }
+    seen.add(entry.id);
+  }
+  normalized.sort((left, right) =>
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+  );
+  return normalized;
+}
+export function normalizeLiveStatusDigestIds(ids) {
+  const normalized = ids.map((id) => String(id ?? '').trim());
+  if (normalized.some((id) => !/^[1-9]\d*$/.test(id))) {
+    throw new Error('live-status digest ids must be positive integer strings');
+  }
+  const unique = new Set(normalized);
+  if (unique.size !== normalized.length) {
+    throw new Error('live-status digest ids must be unique');
+  }
+  return [...unique].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+}
+export function createLiveStatusDigestSnapshotFromEntries(
+  targetState,
+  entries,
+) {
+  const normalizedTargetState = normalizeSnapshotTargetState(targetState);
+  const normalizedEntries = normalizeSnapshotEntries(entries);
+  const canonical = JSON.stringify({
+    version: 1,
+    targetState: normalizedTargetState,
+    entries: normalizedEntries,
+  });
+  return {
+    targetState: normalizedTargetState,
+    entries: normalizedEntries,
+    sha256: sha256Hex(canonical),
+  };
+}
+export function createLiveStatusDigestSnapshot(
+  comments,
+  targetState = 'unknown',
+) {
+  const entries = findLiveStatusDigestComments(comments).map((comment) => {
+    const rawId = String(comment.id ?? '').trim();
+    if (!/^[1-9]\d*$/.test(rawId)) {
+      throw new Error(
+        `current live-status digest comment has no stable numeric id: ${rawId || '(empty)'}`,
+      );
+    }
+    return {
+      id: rawId,
+      bodySha256: sha256Hex(String(comment.body ?? '')),
+    };
+  });
+  return createLiveStatusDigestSnapshotFromEntries(targetState, entries);
+}
+export function compareLiveStatusDigestSnapshot(
+  comments,
+  targetState,
+  expectedIds,
+  expectedSha256,
+) {
+  const snapshot = createLiveStatusDigestSnapshot(comments, targetState);
+  let normalizedExpectedIds;
+  const normalizedExpectedSha256 = String(expectedSha256 ?? '')
+    .trim()
+    .toLowerCase();
+  try {
+    normalizedExpectedIds = normalizeLiveStatusDigestIds(expectedIds);
+  } catch {
+    return {
+      matches: false,
+      reason: 'invalid-expected-snapshot',
+      snapshot,
+    };
+  }
+  if (!/^[a-f0-9]{64}$/.test(normalizedExpectedSha256)) {
+    return {
+      matches: false,
+      reason: 'invalid-expected-snapshot',
+      snapshot,
+    };
+  }
+  const currentIds = snapshot.entries.map((entry) => entry.id);
+  if (
+    currentIds.length !== normalizedExpectedIds.length ||
+    currentIds.some((id, index) => id !== normalizedExpectedIds[index])
+  ) {
+    return { matches: false, reason: 'digest-set-drift', snapshot };
+  }
+  if (snapshot.sha256 !== normalizedExpectedSha256) {
+    return { matches: false, reason: 'snapshot-drift', snapshot };
+  }
+  return { matches: true, reason: 'snapshot-matches', snapshot };
+}
+export function retireLiveStatusDigestBody(body) {
+  const original = String(body ?? '');
+  const bomOffset = original.startsWith('\uFEFF') ? 1 : 0;
+  if (firstLine(original) !== LIVE_STATUS_DIGEST_MARKER) {
+    throw new Error(
+      'cannot retire a comment that does not have the exact current live-status marker',
+    );
+  }
+  return `${original.slice(0, bomOffset)}${LIVE_STATUS_DIGEST_HISTORICAL_MARKER}${original.slice(bomOffset + LIVE_STATUS_DIGEST_MARKER.length)}`;
+}
+export function planLiveStatusDigestRepair(options) {
+  const snapshot = createLiveStatusDigestSnapshot(
+    options.comments,
+    options.targetState,
+  );
+  const retainedCommentId = String(options.retainedCommentId ?? '').trim();
+  const basePlan = {
+    snapshot,
+    retainedCommentId,
+    retirements: [],
+  };
+  const current = findLiveStatusDigestComments(options.comments);
+  if (current.length < 2) {
+    return {
+      action: 'invalid',
+      canApply: false,
+      reason: 'duplicate-set-too-small',
+      ...basePlan,
+    };
+  }
+  const expectedIdsProvided = options.expectedCurrentDigestIds !== undefined;
+  const expectedShaProvided = options.expectedCurrentDigestSha256 !== undefined;
+  if (expectedIdsProvided !== expectedShaProvided) {
+    return {
+      action: 'invalid',
+      canApply: false,
+      reason: 'expected-snapshot-incomplete',
+      ...basePlan,
+    };
+  }
+  if (expectedIdsProvided && expectedShaProvided) {
+    const comparison = compareLiveStatusDigestSnapshot(
+      options.comments,
+      options.targetState,
+      options.expectedCurrentDigestIds ?? [],
+      options.expectedCurrentDigestSha256,
+    );
+    if (!comparison.matches) {
+      return {
+        action: 'drift',
+        canApply: false,
+        reason: comparison.reason,
+        ...basePlan,
+      };
+    }
+  }
+  if (!/^[1-9]\d*$/.test(retainedCommentId)) {
+    return {
+      action: 'invalid',
+      canApply: false,
+      reason: 'retained-comment-id-invalid',
+      ...basePlan,
+    };
+  }
+  const retained = current.find(
+    (comment) => String(comment.id ?? '').trim() === retainedCommentId,
+  );
+  if (!retained) {
+    return {
+      action: 'invalid',
+      canApply: false,
+      reason: 'retained-comment-is-not-current',
+      ...basePlan,
+    };
+  }
+  const retirements = current
+    .filter((comment) => String(comment.id ?? '').trim() !== retainedCommentId)
+    .map((comment) => {
+      const id = String(comment.id ?? '').trim();
+      const originalBody = String(comment.body ?? '');
+      return {
+        id,
+        originalBody,
+        originalBodySha256: sha256Hex(originalBody),
+        retiredBody: retireLiveStatusDigestBody(originalBody),
+      };
+    });
+  return {
+    action: 'ready',
+    canApply: true,
+    reason: 'explicit-retained-digest-selected',
+    snapshot,
+    retainedCommentId,
+    retirements,
+  };
+}
+export function renderLiveStatusDigestRepairEvidence(fields) {
+  const renderEntries = (snapshot) =>
+    snapshot?.entries.length
+      ? snapshot.entries
+          .map((entry) => `${entry.id}:${entry.bodySha256}`)
+          .join(', ')
+      : 'none';
+  const retired = fields.retiredCommentIds.length
+    ? fields.retiredCommentIds.join(', ')
+    : 'none';
+  const reason = fields.reason ?? 'none';
+  const postflight = fields.postflight;
+  return `${LIVE_STATUS_DIGEST_REPAIR_MARKER}
+
+| Field | Value |
+| --- | --- |
+| Status | ${escapeMarkdownTableCell(fields.status)} |
+| Target | ${escapeMarkdownTableCell(fields.target)} |
+| Actor | ${escapeMarkdownTableCell(fields.actor)} |
+| Retained digest comment | ${escapeMarkdownTableCell(fields.retainedCommentId)} |
+| Retired digest comments | ${escapeMarkdownTableCell(retired)} |
+| Pre-repair current digest comments | ${escapeMarkdownTableCell(fields.preflight.entries.map((entry) => entry.id).join(', ') || 'none')} |
+| Post-repair current digest comments | ${escapeMarkdownTableCell(postflight?.entries.map((entry) => entry.id).join(', ') || 'none')} |
+| Pre-repair digest entries | ${escapeMarkdownTableCell(renderEntries(fields.preflight))} |
+| Post-repair digest entries | ${escapeMarkdownTableCell(renderEntries(postflight))} |
+| Pre-repair target state | ${escapeMarkdownTableCell(fields.preflight.targetState)} |
+| Post-repair target state | ${escapeMarkdownTableCell(postflight?.targetState ?? 'none')} |
+| Pre-repair snapshot SHA-256 | ${escapeMarkdownTableCell(fields.preflight.sha256)} |
+| Post-repair snapshot SHA-256 | ${escapeMarkdownTableCell(postflight?.sha256 ?? 'none')} |
+| Recovery detail | ${escapeMarkdownTableCell(reason)} |
+`;
 }
 export function renderLiveStatusDigest(fields) {
   const normalized = normalizeLiveStatusDigestFields(fields);
