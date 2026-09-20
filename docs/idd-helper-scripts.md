@@ -1119,13 +1119,17 @@ The adopted helper boundaries are intentionally narrow:
   `--expected-current-digest-ids` and
   `--expected-current-digest-sha256` values from that fresh dry-run
 - repair re-fetches the target state and complete paginated comments before
-  every retirement, changes only non-retained first-line markers to the
+  every retirement, obtains a fresh ETag, and uses `If-Match` for the
+  conditional PATCH; a missing conditional-write token fails closed before
+  mutation. It changes only non-retained first-line markers to the
   historical marker, preserves the rest of each body, and verifies exactly
   one current digest afterward
-- successful or recovery-hold repair evidence is posted with
-  `<!-- idd-live-status-repair: v1 -->`; inconclusive reads, drift, partial
-  mutation, failed postconditions, or failed evidence writes produce a
-  `repair-recovery-hold` report rather than claiming success
+- successful repairs post structured evidence with
+  `<!-- idd-live-status-repair: v1 -->`; preflight read, planning, and
+  authorization failures emit only a `repair-recovery-hold` JSON report,
+  while drift, partial mutation, failed postconditions, and failed evidence
+  writes after the apply path begins attempt a recovery-hold evidence POST
+  before reporting the hold
 - digest text remains non-authoritative UI state; phase decisions still
   come from trusted markers and GitHub state
 

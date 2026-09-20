@@ -16,6 +16,7 @@ import {
   combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   ghApiJson,
+  ghApiJsonWithHeaders,
   ghText,
 } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
@@ -25,7 +26,7 @@ import {
   createLiveStatusDigestSnapshot,
   createLiveStatusDigestSnapshotFromEntries,
   findLiveStatusDigestComments,
-  LIVE_STATUS_DIGEST_HISTORICAL_MARKER,
+  isHistoricalLiveStatusDigestBody,
   normalizeLiveStatusDigestIds,
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
@@ -455,7 +456,33 @@ function runDuplicateDigestRepair(input) {
       (comment) => String(comment.id ?? '').trim() === retirement.id,
     );
     const currentBody = String(current?.body ?? '');
-    if (!current || currentBody !== retirement.originalBody) {
+    let conditionalComment;
+    try {
+      conditionalComment = fetchRepairCommentWithEtag(
+        owner,
+        repo,
+        retirement.id,
+      );
+    } catch (error) {
+      finishRepairHold(
+        report,
+        args.format,
+        `conditional retirement read failed: ${error.message}`,
+        comparison.snapshot,
+        retiredCommentIds,
+        owner,
+        repo,
+        targetNumber,
+        targetType,
+        true,
+      );
+      return;
+    }
+    if (
+      !current ||
+      currentBody !== retirement.originalBody ||
+      conditionalComment.body !== retirement.originalBody
+    ) {
       finishRepairHold(
         report,
         args.format,
@@ -487,7 +514,13 @@ function runDuplicateDigestRepair(input) {
       return;
     }
     try {
-      patchRepairComment(owner, repo, retirement.id, retiredBody);
+      patchRepairComment(
+        owner,
+        repo,
+        retirement.id,
+        retiredBody,
+        conditionalComment.etag,
+      );
     } catch (error) {
       finishRepairHold(
         report,
@@ -576,7 +609,7 @@ function runDuplicateDigestRepair(input) {
       );
       const body = String(comment?.body ?? '');
       return (
-        body.startsWith(LIVE_STATUS_DIGEST_HISTORICAL_MARKER) &&
+        isHistoricalLiveStatusDigestBody(body) &&
         body === retirement.retiredBody
       );
     });
@@ -713,6 +746,16 @@ function fetchRepairTargetState(owner, repo, targetType, number) {
       ? `repos/${owner}/${repo}/pulls/${number}`
       : `repos/${owner}/${repo}/issues/${number}`;
   const payload = ghApiJson(path);
+  if (
+    typeof payload.state !== 'string' ||
+    payload.state.trim().length === 0 ||
+    (targetType === 'pr' && !Object.hasOwn(payload, 'merged_at')) ||
+    (targetType === 'issue' && !Object.hasOwn(payload, 'state_reason'))
+  ) {
+    throw new Error(
+      `GitHub ${targetType} response is missing required target-state fields`,
+    );
+  }
   return JSON.stringify({
     mergedAt:
       targetType === 'pr' ? String(payload.merged_at ?? 'none') : 'none',
@@ -720,6 +763,20 @@ function fetchRepairTargetState(owner, repo, targetType, number) {
     stateReason:
       targetType === 'issue' ? String(payload.state_reason ?? 'none') : 'none',
   });
+}
+function fetchRepairCommentWithEtag(owner, repo, commentId) {
+  const response = ghApiJsonWithHeaders(
+    `repos/${owner}/${repo}/issues/comments/${commentId}`,
+  );
+  const payload = response.data;
+  if (String(payload.id ?? '').trim() !== commentId) {
+    throw new Error(`GitHub returned an unexpected comment for ${commentId}`);
+  }
+  const etag = String(response.headers.etag ?? '').trim();
+  if (!etag) {
+    throw new Error(`GitHub returned no ETag for comment ${commentId}`);
+  }
+  return { body: String(payload.body ?? ''), etag };
 }
 function resolveDuplicateRepairActor(owner, repo) {
   const actor = currentViewerLogin().trim();
@@ -745,9 +802,12 @@ function resolveDuplicateRepairActor(owner, repo) {
       : 'authenticated viewer is not an owner or maintainer, or permission lookup was unavailable',
   };
 }
-function patchRepairComment(owner, repo, commentId, body) {
+function patchRepairComment(owner, repo, commentId, body, etag) {
+  if (!etag.trim()) {
+    throw new Error(`cannot patch comment ${commentId} without an ETag`);
+  }
   return ghApiJson(`repos/${owner}/${repo}/issues/comments/${commentId}`, {
-    extraArgs: ['-X', 'PATCH', '-f', `body=${body}`],
+    extraArgs: ['-X', 'PATCH', '-H', `If-Match: ${etag}`, '-f', `body=${body}`],
   });
 }
 function createRepairEvidenceComment(owner, repo, number, body) {

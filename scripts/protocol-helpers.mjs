@@ -501,6 +501,9 @@ export function retireLiveStatusDigestBody(body) {
   }
   return `${original.slice(0, bomOffset)}${LIVE_STATUS_DIGEST_HISTORICAL_MARKER}${original.slice(bomOffset + LIVE_STATUS_DIGEST_MARKER.length)}`;
 }
+export function isHistoricalLiveStatusDigestBody(body) {
+  return firstLine(body) === LIVE_STATUS_DIGEST_HISTORICAL_MARKER;
+}
 export function planLiveStatusDigestRepair(options) {
   const snapshot = createLiveStatusDigestSnapshot(
     options.comments,

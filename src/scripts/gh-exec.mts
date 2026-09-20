@@ -350,6 +350,68 @@ export interface GhApiJsonOptions {
   timeout?: number;
 }
 
+/** JSON response plus the HTTP headers returned by `gh api --include`. */
+export interface GhApiJsonWithHeadersResult {
+  data: unknown;
+  headers: Record<string, string>;
+}
+
+function parseIncludedGhApiResponse(raw: string): GhApiJsonWithHeadersResult {
+  const sections = raw.split(/\r?\n\r?\n/);
+  const body = sections.pop()?.trim() ?? '';
+  const headerBlock = sections.pop() ?? '';
+  const headerLines = headerBlock.split(/\r?\n/);
+  if (!/^HTTP\/\d(?:\.\d)?\s+\d{3}\b/.test(headerLines[0] ?? '')) {
+    throw new Error('gh api --include returned no HTTP response headers');
+  }
+  const headers: Record<string, string> = {};
+  for (const line of headerLines.slice(1)) {
+    const separator = line.indexOf(':');
+    if (separator <= 0) continue;
+    headers[line.slice(0, separator).trim().toLowerCase()] = line
+      .slice(separator + 1)
+      .trim();
+  }
+  return {
+    data: JSON.parse(body || '{}'),
+    headers,
+  };
+}
+
+/**
+ * Run a single `gh api` request while retaining response headers.
+ *
+ * This is intentionally separate from {@link ghApiJson}: callers that need a
+ * conditional write must retain the server's ETag and send it back with
+ * `If-Match`. A missing or malformed HTTP envelope fails closed instead of
+ * silently degrading a compare-and-swap operation into an unconditional
+ * mutation.
+ */
+export function ghApiJsonWithHeaders(
+  path: string,
+  options: GhApiJsonOptions = {},
+): GhApiJsonWithHeadersResult {
+  if (options.paginate) {
+    throw new Error(
+      'gh api response headers cannot be combined with pagination',
+    );
+  }
+  const hostname = resolveGhApiHostname();
+  const args = [
+    'api',
+    path,
+    ...(hostname ? ['--hostname', hostname] : []),
+    ...(options.extraArgs ?? []),
+    '--include',
+  ];
+  const raw = execFileSync('gh', args, {
+    encoding: 'utf8',
+    timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return parseIncludedGhApiResponse(raw);
+}
+
 /**
  * Resolve the `--hostname` override {@link ghApiJson} / {@link ghGraphql}
  * pass to `gh api` / `gh api graphql`, so a self-hosted GitHub Enterprise

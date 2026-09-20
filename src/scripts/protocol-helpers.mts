@@ -1265,6 +1265,10 @@ export function retireLiveStatusDigestBody(body: string): string {
   return `${original.slice(0, bomOffset)}${LIVE_STATUS_DIGEST_HISTORICAL_MARKER}${original.slice(bomOffset + LIVE_STATUS_DIGEST_MARKER.length)}`;
 }
 
+export function isHistoricalLiveStatusDigestBody(body: unknown): boolean {
+  return firstLine(body) === LIVE_STATUS_DIGEST_HISTORICAL_MARKER;
+}
+
 export function planLiveStatusDigestRepair(options: {
   comments: CommentLike[];
   targetState?: unknown;

@@ -12,6 +12,7 @@ import {
   GH_TEXT_LOOP_OPTIONS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghApiJson,
+  ghApiJsonWithHeaders,
   ghGraphql,
   ghText,
   ghTextAsync,
@@ -431,6 +432,23 @@ test('ghApiJson (non-paginated) falls back to {} on empty stdout', () => {
   const restore = stubGh(`process.stdout.write('');`);
   try {
     assert.deepEqual(ghApiJson('repos/o/r/issues/1'), {});
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJsonWithHeaders parses the response body and case-insensitive headers', () => {
+  const restore = stubGh(`
+process.stdout.write('HTTP/2.0 200 OK\\nEtag: W/"test-etag"\\nContent-Type: application/json\\n\\n{"id":42}');
+`);
+  try {
+    assert.deepEqual(ghApiJsonWithHeaders('repos/o/r/issues/comments/42'), {
+      data: { id: 42 },
+      headers: {
+        etag: 'W/"test-etag"',
+        'content-type': 'application/json',
+      },
+    });
   } finally {
     restore();
   }
