@@ -1049,6 +1049,352 @@ if (apiArgs[0] === 'user') {
   }
 });
 
+function stubPrRepairGh(statePath: string, logPath: string) {
+  return stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const statePath = ${JSON.stringify(statePath)};
+const logPath = ${JSON.stringify(logPath)};
+const args = process.argv.slice(2);
+fs.appendFileSync(logPath, JSON.stringify(args) + '\\n');
+const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+if (args[0] === 'pr' && args[1] === 'view') {
+  process.stdout.write(JSON.stringify({ closingIssuesReferences: state.linkedIssues }));
+  process.exit(0);
+}
+if (args[0] !== 'api') process.exit(1);
+const apiArgs = args.slice(1);
+const methodIndex = apiArgs.indexOf('-X');
+const method = methodIndex >= 0 ? apiArgs[methodIndex + 1] : 'GET';
+const bodyArgument = apiArgs.find((value) => value.startsWith('body='));
+const requestBody = apiArgs.includes('--input')
+  ? JSON.parse(fs.readFileSync(0, 'utf8')).body
+  : bodyArgument?.slice('body='.length);
+const path = apiArgs.find((value) => value.startsWith('repos/')) ?? apiArgs[0];
+if (apiArgs[0] === 'user') {
+  process.stdout.write(state.viewer);
+} else if (path.endsWith('/collaborators/' + state.viewer + '/permission')) {
+  process.stdout.write(JSON.stringify({ permission: 'write', role_name: 'maintain' }));
+} else if (path.endsWith('/pulls/' + state.prNumber)) {
+  process.stdout.write(JSON.stringify({ state: 'open', merged_at: state.mergedAt ?? null }));
+} else if (method === 'GET' && path.includes('/issues/comments/')) {
+  const id = path.split('/').at(-1);
+  const comment = state.comments.find((item) => String(item.id) === id);
+  if (!comment) process.exit(1);
+  process.stdout.write(JSON.stringify(comment));
+} else if (method === 'PATCH' && path.includes('/issues/comments/')) {
+  const id = path.split('/').at(-1);
+  const comment = state.comments.find((item) => String(item.id) === id);
+  if (!comment || requestBody === undefined) process.exit(1);
+  comment.body = requestBody;
+  state.mutations += 1;
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  process.stdout.write(JSON.stringify(comment));
+} else if (method === 'POST' && path.endsWith('/comments')) {
+  const evidenceId = 900 + state.evidence + 1;
+  state.evidence += 1;
+  state.comments.push({ id: evidenceId, body: requestBody, user: { login: state.viewer } });
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  process.stdout.write(JSON.stringify({ id: evidenceId }));
+} else if (apiArgs.includes('--paginate')) {
+  const issueNumber = path.match(/\\/issues\\/(\\d+)\\/comments$/)?.[1];
+  if (issueNumber === String(state.claimIssueNumber)) {
+    for (const c of state.claimComments) process.stdout.write(JSON.stringify(c) + '\\n');
+  } else if (issueNumber === String(state.prNumber)) {
+    for (const c of state.comments) process.stdout.write(JSON.stringify(c) + '\\n');
+  } else {
+    process.exit(1);
+  }
+} else {
+  process.exit(1);
+}
+`,
+  );
+}
+
+test('duplicate repair CLI supports --pr targets bound to a single linked claim issue (#3158)', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-live-status-repair-pr-cli-'),
+  );
+  const statePath = join(tempRoot, 'state.json');
+  const logPath = join(tempRoot, 'gh-args.jsonl');
+  const initialComments = [
+    currentDigestComment(201),
+    currentDigestComment(202),
+  ];
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      comments: initialComments,
+      mutations: 0,
+      evidence: 0,
+      viewer: 'maintainer',
+      prNumber: '55',
+      mergedAt: null,
+      linkedIssues: [{ number: 123 }],
+      claimIssueNumber: '123',
+      claimComments: [
+        {
+          id: 999,
+          body: '<!-- claimed-by: repair-agent repair-claim supersedes: none 2026-09-20T00:00:00Z branch: issue/123-task -->',
+          user: { login: 'maintainer' },
+        },
+      ],
+    }),
+  );
+  const restore = stubPrRepairGh(statePath, logPath);
+  try {
+    const cliPath = join(REPO_ROOT, 'scripts/live-status-digest.mjs');
+    const baseArgs = [
+      cliPath,
+      '--repo',
+      'owner/repo',
+      '--pr',
+      '55',
+      '--repair-duplicate',
+      '--retain-comment-id',
+      '201',
+      '--format',
+      'json',
+    ];
+    const dryRun = JSON.parse(
+      execFileSync(process.execPath, [...baseArgs, '--dry-run'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    ) as {
+      repair: { preflight: { entries: { id: string }[]; sha256: string } };
+    };
+
+    const applied = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          ...baseArgs,
+          '--apply',
+          '--claim-issue',
+          '123',
+          '--claim-id',
+          'repair-claim',
+          '--agent-id',
+          'repair-agent',
+          '--expected-current-digest-ids',
+          dryRun.repair.preflight.entries.map((entry) => entry.id).join(','),
+          '--expected-current-digest-sha256',
+          dryRun.repair.preflight.sha256,
+        ],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      ),
+    ) as { action: string; repair: { retiredCommentIds: string[] } };
+    assert.equal(applied.action, 'repair-complete');
+    assert.deepEqual(applied.repair.retiredCommentIds, ['202']);
+
+    const afterApply = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      mutations: number;
+      evidence: number;
+    };
+    assert.equal(afterApply.mutations, 1);
+    assert.equal(afterApply.evidence, 1);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('duplicate repair --pr target rejects an unrelated claim before mutation (#3158)', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-live-status-repair-pr-unrelated-'),
+  );
+  const statePath = join(tempRoot, 'state.json');
+  const logPath = join(tempRoot, 'gh-args.jsonl');
+  const initialComments = [
+    currentDigestComment(201),
+    currentDigestComment(202),
+  ];
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      comments: initialComments,
+      mutations: 0,
+      evidence: 0,
+      viewer: 'maintainer',
+      prNumber: '55',
+      mergedAt: null,
+      linkedIssues: [{ number: 123 }],
+      claimIssueNumber: '999',
+      claimComments: [
+        {
+          id: 999,
+          body: '<!-- claimed-by: repair-agent repair-claim supersedes: none 2026-09-20T00:00:00Z branch: issue/999-task -->',
+          user: { login: 'maintainer' },
+        },
+      ],
+    }),
+  );
+  const restore = stubPrRepairGh(statePath, logPath);
+  try {
+    const cliPath = join(REPO_ROOT, 'scripts/live-status-digest.mjs');
+    const baseArgs = [
+      cliPath,
+      '--repo',
+      'owner/repo',
+      '--pr',
+      '55',
+      '--repair-duplicate',
+      '--retain-comment-id',
+      '201',
+      '--format',
+      'json',
+    ];
+    const dryRun = JSON.parse(
+      execFileSync(process.execPath, [...baseArgs, '--dry-run'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    ) as {
+      repair: { preflight: { entries: { id: string }[]; sha256: string } };
+    };
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            ...baseArgs,
+            '--apply',
+            '--claim-issue',
+            '999',
+            '--claim-id',
+            'repair-claim',
+            '--agent-id',
+            'repair-agent',
+            '--expected-current-digest-ids',
+            dryRun.repair.preflight.entries.map((entry) => entry.id).join(','),
+            '--expected-current-digest-sha256',
+            dryRun.repair.preflight.sha256,
+          ],
+          { cwd: REPO_ROOT, encoding: 'utf8' },
+        ),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as { action: string; repair: { recoveryHold: string } };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.match(
+          report.repair.recoveryHold,
+          /does not link claim issue #999/,
+        );
+        return true;
+      },
+    );
+    const afterReject = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      mutations: number;
+      evidence: number;
+    };
+    assert.equal(afterReject.mutations, 0);
+    assert.equal(afterReject.evidence, 0);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('duplicate repair --pr target rejects a claim lease shared across multiple linked issues (#3158)', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-live-status-repair-pr-multi-'),
+  );
+  const statePath = join(tempRoot, 'state.json');
+  const logPath = join(tempRoot, 'gh-args.jsonl');
+  const initialComments = [
+    currentDigestComment(201),
+    currentDigestComment(202),
+  ];
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      comments: initialComments,
+      mutations: 0,
+      evidence: 0,
+      viewer: 'maintainer',
+      prNumber: '55',
+      mergedAt: null,
+      linkedIssues: [{ number: 123 }, { number: 456 }],
+      claimIssueNumber: '123',
+      claimComments: [
+        {
+          id: 999,
+          body: '<!-- claimed-by: repair-agent repair-claim supersedes: none 2026-09-20T00:00:00Z branch: issue/123-task -->',
+          user: { login: 'maintainer' },
+        },
+      ],
+    }),
+  );
+  const restore = stubPrRepairGh(statePath, logPath);
+  try {
+    const cliPath = join(REPO_ROOT, 'scripts/live-status-digest.mjs');
+    const baseArgs = [
+      cliPath,
+      '--repo',
+      'owner/repo',
+      '--pr',
+      '55',
+      '--repair-duplicate',
+      '--retain-comment-id',
+      '201',
+      '--format',
+      'json',
+    ];
+    const dryRun = JSON.parse(
+      execFileSync(process.execPath, [...baseArgs, '--dry-run'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    ) as {
+      repair: { preflight: { entries: { id: string }[]; sha256: string } };
+    };
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            ...baseArgs,
+            '--apply',
+            '--claim-issue',
+            '123',
+            '--claim-id',
+            'repair-claim',
+            '--agent-id',
+            'repair-agent',
+            '--expected-current-digest-ids',
+            dryRun.repair.preflight.entries.map((entry) => entry.id).join(','),
+            '--expected-current-digest-sha256',
+            dryRun.repair.preflight.sha256,
+          ],
+          { cwd: REPO_ROOT, encoding: 'utf8' },
+        ),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as { action: string; repair: { recoveryHold: string } };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.match(
+          report.repair.recoveryHold,
+          /must link exactly one issue for a unique repair claim lease/,
+        );
+        return true;
+      },
+    );
+    const afterReject = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      mutations: number;
+      evidence: number;
+    };
+    assert.equal(afterReject.mutations, 0);
+    assert.equal(afterReject.evidence, 0);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('plans no-op when the current digest is already up to date', () => {
   const body = renderLiveStatusDigest(fields);
   const plan = planLiveStatusDigestUpsert(

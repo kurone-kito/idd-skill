@@ -1185,9 +1185,20 @@ function assertRepairClaimBoundToTarget(
       String((reference as { number?: unknown } | null)?.number ?? '').trim(),
     )
     .filter(Boolean);
-  if (!linkedIssueNumbers.includes(normalizedClaimIssue)) {
+  // A PR-repair coordination lease must be unique to this PR: accepting any
+  // one of several linked issues' claims would let two maintainers each
+  // legitimately claim a different linked issue and both authorize a repair
+  // on the same PR concurrently. Requiring exactly one linked issue ties the
+  // lease to the one claim this repository's protocol can ever mark active
+  // for it at a time (kurone-kito/idd-skill#3158 review).
+  if (linkedIssueNumbers.length !== 1) {
     throw new Error(
-      `PR #${targetNumber} does not link claim issue #${normalizedClaimIssue}; expected one of ${linkedIssueNumbers.join(', ') || 'none'}`,
+      `PR #${targetNumber} must link exactly one issue for a unique repair claim lease; found ${linkedIssueNumbers.join(', ') || 'none'}`,
+    );
+  }
+  if (linkedIssueNumbers[0] !== normalizedClaimIssue) {
+    throw new Error(
+      `PR #${targetNumber} does not link claim issue #${normalizedClaimIssue}; expected ${linkedIssueNumbers[0]}`,
     );
   }
 }
