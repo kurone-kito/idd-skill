@@ -97,8 +97,10 @@ The authenticated `gh` viewer must be an owner or maintainer, verified through
 the repository collaborator-permission endpoint. Missing or inconclusive
 permission data fails closed; configured trusted marker actors and issue
 authors do not authorize this repair. For an issue target, the claim issue
-must equal the target issue; for a PR target, it must be one of the PR's
-`closingIssuesReferences`. Before every mutation the helper
+must equal the target issue; for a PR target, the PR must link exactly one
+issue in its `closingIssuesReferences` and the claim issue must equal that
+issue. A PR that links zero or more than one issue fails closed, because no
+unique repair lease exists. Before every mutation the helper
 re-fetches the complete comment set and target state and compares the exact
 current-digest IDs, target state, and per-comment body hashes with the latest
 expected snapshot. Apply also requires the active IDD claim named by

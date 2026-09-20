@@ -1059,7 +1059,13 @@ const args = process.argv.slice(2);
 fs.appendFileSync(logPath, JSON.stringify(args) + '\\n');
 const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
 if (args[0] === 'pr' && args[1] === 'view') {
-  process.stdout.write(JSON.stringify({ closingIssuesReferences: state.linkedIssues }));
+  state.prViewCallCount = (state.prViewCallCount ?? 0) + 1;
+  const linkedIssues =
+    state.linkedIssuesAfterFirstView && state.prViewCallCount > 1
+      ? state.linkedIssuesAfterFirstView
+      : state.linkedIssues;
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  process.stdout.write(JSON.stringify({ closingIssuesReferences: linkedIssues }));
   process.exit(0);
 }
 if (args[0] !== 'api') process.exit(1);
@@ -1195,6 +1201,115 @@ test('duplicate repair CLI supports --pr targets bound to a single linked claim 
     };
     assert.equal(afterApply.mutations, 1);
     assert.equal(afterApply.evidence, 1);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('duplicate repair --pr target re-checks the claim binding before every mutation (#3158)', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-live-status-repair-pr-link-drift-'),
+  );
+  const statePath = join(tempRoot, 'state.json');
+  const logPath = join(tempRoot, 'gh-args.jsonl');
+  const initialComments = [
+    currentDigestComment(201),
+    currentDigestComment(202),
+  ];
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      comments: initialComments,
+      mutations: 0,
+      evidence: 0,
+      viewer: 'maintainer',
+      prNumber: '55',
+      mergedAt: null,
+      linkedIssues: [{ number: 123 }],
+      claimIssueNumber: '123',
+      claimComments: [
+        {
+          id: 999,
+          body: '<!-- claimed-by: repair-agent repair-claim supersedes: none 2026-09-20T00:00:00Z branch: issue/123-task -->',
+          user: { login: 'maintainer' },
+        },
+      ],
+    }),
+  );
+  const restore = stubPrRepairGh(statePath, logPath);
+  try {
+    const cliPath = join(REPO_ROOT, 'scripts/live-status-digest.mjs');
+    const baseArgs = [
+      cliPath,
+      '--repo',
+      'owner/repo',
+      '--pr',
+      '55',
+      '--repair-duplicate',
+      '--retain-comment-id',
+      '201',
+      '--format',
+      'json',
+    ];
+    const dryRun = JSON.parse(
+      execFileSync(process.execPath, [...baseArgs, '--dry-run'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    ) as {
+      repair: { preflight: { entries: { id: string }[]; sha256: string } };
+    };
+
+    // The PR's linked issue changes partway through the apply run itself
+    // (the closing reference is swapped to a different issue after the
+    // first `gh pr view` call the run makes) -- the initial upfront binding
+    // check passes against the original link, so only a re-check
+    // immediately before mutation can catch this.
+    const driftedState = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      linkedIssuesAfterFirstView?: { number: number }[];
+    };
+    driftedState.linkedIssuesAfterFirstView = [{ number: 456 }];
+    writeFileSync(statePath, JSON.stringify(driftedState));
+
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            ...baseArgs,
+            '--apply',
+            '--claim-issue',
+            '123',
+            '--claim-id',
+            'repair-claim',
+            '--agent-id',
+            'repair-agent',
+            '--expected-current-digest-ids',
+            dryRun.repair.preflight.entries.map((entry) => entry.id).join(','),
+            '--expected-current-digest-sha256',
+            dryRun.repair.preflight.sha256,
+          ],
+          { cwd: REPO_ROOT, encoding: 'utf8' },
+        ),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as { action: string; repair: { recoveryHold: string } };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.match(
+          report.repair.recoveryHold,
+          /does not link claim issue #123/,
+        );
+        return true;
+      },
+    );
+    const afterDrift = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      mutations: number;
+      evidence: number;
+    };
+    assert.equal(afterDrift.mutations, 0);
+    assert.equal(afterDrift.evidence, 0);
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });

@@ -430,6 +430,18 @@ function runDuplicateDigestRepair(input) {
       : {};
   const assertRepairClaim = () => {
     if (!args.apply) return;
+    // Re-run the target-binding check here too, not only once up front: this
+    // callback is what every retirement and the evidence write revalidate
+    // against immediately before mutating, so a PR's closingIssuesReferences
+    // changing after the initial check (the linked issue removed or swapped)
+    // must not leave a now-unbound claim still authorizing the write.
+    assertRepairClaimBoundToTarget(
+      owner,
+      repo,
+      targetType,
+      targetNumber,
+      args.claimIssue,
+    );
     assertActiveClaim(
       owner,
       repo,
