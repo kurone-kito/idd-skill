@@ -6,8 +6,17 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
+import {
+  isCurrentSessionWorktreeOwner,
+  resolveCurrentSessionClaimEvidence,
+} from './discover-roadmap-graph.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
-import { listActivationNonces } from './marker-helpers.mjs';
+import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
+import {
+  listActivationNonces,
+  parseLegacyClaimComment,
+  resolveLegacyClaimState,
+} from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   buildForcedHandoffEnableGate,
@@ -23,10 +32,6 @@ import {
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
 
-const LEGACY_CLAIM_PATTERN =
-  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
-const LEGACY_RELEASE_PATTERN =
-  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -98,7 +103,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const events = normalizeEvents(input.events).filter((event) =>
     trustedAuthor(event.author?.login ?? ''),
   );
-  const state = resolveClaimState(events, nowIso, staleAgeMs, {
+  const state = resolveClaimState(events, staleAgeMs, {
     isForcedHandoffEnabled,
     isAuthorizedForcedHandoff,
   });
@@ -186,6 +191,36 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       routeState = 'disputed';
       action = 'stop';
       reason = 'cold-recovery-activation-nonce-collision';
+    } else if (
+      (options.inspectLocalWorktree || options.isCurrentSessionOwner) &&
+      options.inspectLocalWorktree?.(state.activeClaim.branch)?.status !==
+        'absent' &&
+      !options.isCurrentSessionOwner?.(state.activeClaim)
+    ) {
+      // A matching remote claim-id is not sufficient to resume a live
+      // session when a local worktree probe for this branch did not come
+      // back `absent`: the current canonical worktree, lock, generated
+      // tokens, and branch occupancy must independently identify this
+      // owner, since the occupant could be a second, unrelated same-host
+      // session. The CLI wires this proof from Discover; a missing or
+      // contradictory proof fails closed rather than allowing that second
+      // session to use the branch.
+      //
+      // Blocking on non-`absent` -- not only `occupied` -- matters because
+      // `unreadable` is itself an ambiguous result the fail-closed default
+      // governs: it means occupancy could not be verified either way, which
+      // must not silently behave like "verified empty" (#3154 review).
+      //
+      // Gating on the probe result at all (not merely on whether the
+      // callbacks are wired) matters for a forced-handoff successor's very
+      // first routing check, which can run before B1 ever creates its
+      // worktree (#3154 review): with the probe reporting `absent`, there
+      // is no second session to disambiguate from, and requiring ownership
+      // proof anyway would wrongly reject the successor's own
+      // still-to-be-created worktree.
+      routeState = 'non_inheritable';
+      action = 'stop';
+      reason = 'claim-id-match-without-independent-owner-evidence';
     } else {
       routeState = 'already_owned';
       action = 'keep';
@@ -214,29 +249,58 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     action = 'stop';
     reason = 'active-claim-non-stale';
   }
+  let localWorktree = null;
+  const worktreeSource =
+    routeState === 'stale'
+      ? 'stale'
+      : routeState === 'unclaimed' && state.releasedClaim
+        ? 'released'
+        : null;
+  if (worktreeSource && options.inspectLocalWorktree) {
+    const branch =
+      state.activeClaim?.branch ??
+      state.legacyClaim?.branch ??
+      state.releasedClaim?.branch ??
+      '';
+    if (branch) {
+      localWorktree = options.inspectLocalWorktree(branch);
+      if (localWorktree.status !== 'absent') {
+        routeState = 'local_worktree_occupied';
+        action = 'stop';
+        const reasonPrefix =
+          worktreeSource === 'released' ? 'released-claim' : 'stale-claim';
+        reason =
+          localWorktree.status === 'unreadable'
+            ? `${reasonPrefix}-local-worktree-unreadable`
+            : `${reasonPrefix}-local-worktree-occupied`;
+        warnings.push(
+          localWorktree.status === 'unreadable'
+            ? `cannot verify local worktree occupancy for ${worktreeSource} branch ${branch}: ${localWorktree.reason ?? 'unknown error'}`
+            : `${worktreeSource} branch ${branch} has a live local worktree: ${localWorktree.paths.join(', ')}`,
+        );
+      }
+    }
+  }
   return {
     state: routeState,
     action,
     reason,
     claim_id_checked: claimIdChecked || null,
-    active_claim:
-      routeState === 'unclaimed'
-        ? null
-        : state.activeClaim
-          ? {
-              agent_id: state.activeClaim.agentId,
-              claim_id: state.activeClaim.claimId,
-              created_at: state.activeClaim.createdAt,
-              branch: state.activeClaim.branch,
-            }
-          : state.legacyClaim
-            ? {
-                agent_id: state.legacyClaim.agentId,
-                claim_id: null,
-                created_at: state.legacyClaim.createdAt,
-                branch: state.legacyClaim.branch,
-              }
-            : null,
+    active_claim: state.activeClaim
+      ? {
+          agent_id: state.activeClaim.agentId,
+          claim_id: state.activeClaim.claimId,
+          created_at: state.activeClaim.createdAt,
+          branch: state.activeClaim.branch,
+        }
+      : state.legacyClaim && !state.legacyReleased
+        ? {
+            agent_id: state.legacyClaim.agentId,
+            claim_id: null,
+            created_at: state.legacyClaim.createdAt,
+            branch: state.legacyClaim.branch,
+          }
+        : null,
     stale_age_ms: staleAgeMs,
     now: nowIso,
     warnings,
@@ -249,6 +313,20 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       activation_nonce_winner: activationNonceWinner,
       activation_nonce_count: activationNonces.length,
       forced_handoff: toForcedHandoffEvidence(state.appliedForcedHandoff),
+      ...(state.releasedClaim
+        ? {
+            released_claim: {
+              agent_id: state.releasedClaim.agentId,
+              claim_id:
+                'claimId' in state.releasedClaim
+                  ? state.releasedClaim.claimId
+                  : null,
+              created_at: state.releasedClaim.createdAt,
+              branch: state.releasedClaim.branch,
+            },
+          }
+        : {}),
+      ...(localWorktree ? { local_worktree: localWorktree } : {}),
     },
   };
 }
@@ -281,11 +359,14 @@ function toForcedHandoffEvidence(applied) {
  * A fresh claim owns no prior claim-id, so any `claimId` on `input` is ignored
  * (the resolver's already-owned / same-second-loss branches need a checked id
  * and would otherwise mask pure contention). `winningClaimId` is the active
- * claim's `{claim-id}`, or `null` when there is no active claim or the active
- * claim is a legacy (claim-id-less) marker. GitHub issue comments have no
+ * claim's `{claim-id}`, or the retained released claim's id when its matching
+ * local worktree blocks a fresh claim; it is `null` for legacy releases or
+ * when no active/released claim id exists. GitHub issue comments have no
  * compare-and-swap, so this **narrows** the A5(c) TOCTOU window rather than
  * closing it; the 24 h stale-takeover and same-second tie-break remain the
- * race-recovery backstop.
+ * race-recovery backstop. A verified owner may use a retained released id
+ * with the worktree-local lock takeover protocol; legacy releases remain
+ * claim-id-less and require operator recovery before reuse.
  */
 export function evaluateFreshClaimGate(input, options = {}) {
   const routing = evaluateResumeClaimRouting(
@@ -298,9 +379,28 @@ export function evaluateFreshClaimGate(input, options = {}) {
       : routing.state === 'stale'
         ? 'stale-reclaimable'
         : 'already-claimed';
+  // Only a verified-occupied probe proves a local worktree is what a
+  // caller would actually be taking over -- an `unreadable` result
+  // (occupancy could not be inspected either way) must not expose either
+  // the stale active claim's or the released claim's id as a trustworthy
+  // takeover target, since the claim instructions treat a matching
+  // winningClaimId as sufficient authorization for `claim-lock --takeover`
+  // without separately re-checking local_worktree.status (#3154 review).
+  // This applies to `active_claim` too, not only the released-claim
+  // fallback: a stale (not released) claim whose worktree probe comes back
+  // unreadable still reaches `local_worktree_occupied` with `active_claim`
+  // populated.
+  const localWorktreeUnverified =
+    routing.state === 'local_worktree_occupied' &&
+    routing.evidence.local_worktree?.status !== 'occupied';
   return {
     verdict,
-    winningClaimId: routing.active_claim?.claim_id ?? null,
+    winningClaimId: localWorktreeUnverified
+      ? null
+      : (routing.active_claim?.claim_id ??
+        (routing.state === 'local_worktree_occupied'
+          ? (routing.evidence.released_claim?.claim_id ?? null)
+          : null)),
     reason: routing.reason,
   };
 }
@@ -381,6 +481,24 @@ function runCli() {
         forcedHandoffAuthorityPolicy,
         permissionCache,
       ),
+    inspectLocalWorktree: (branchName) =>
+      inspectLocalWorktreeBranch(branchName),
+    isCurrentSessionOwner: (claim) => {
+      const evidence = resolveCurrentSessionClaimEvidence(claim.claimId);
+      if (
+        evidence === null ||
+        evidence.agentId !== claim.agentId ||
+        evidence.branchName !== claim.branch
+      ) {
+        return false;
+      }
+      return isCurrentSessionWorktreeOwner(
+        evidence.worktreePath,
+        evidence.branchName,
+        claim.branch,
+        inspectLocalWorktreeBranch(claim.branch),
+      );
+    },
   };
   const result = evaluateResumeClaimRouting(
     {
@@ -428,7 +546,7 @@ function runCli() {
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
+function resolveClaimState(events, staleAgeMs, options = {}) {
   const isForcedHandoffEnabled =
     typeof options.isForcedHandoffEnabled === 'function'
       ? options.isForcedHandoffEnabled
@@ -503,6 +621,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     return {
       mode: 'new-format',
       activeClaim: claimTrace?.activeClaim ?? null,
+      releasedClaim: claimTrace?.releasedClaim ?? null,
       appliedForcedHandoff: claimTrace?.appliedForcedHandoff ?? null,
       warnings,
       legacyClaim: null,
@@ -511,42 +630,17 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     };
   }
   const orderedEvents = [...events].sort(compareEvents);
-  const legacy = resolveLegacyClaimState(orderedEvents, nowIso, staleAgeMs);
+  const legacy = resolveLegacyClaimState(orderedEvents);
   return {
     mode: 'legacy-only',
     activeClaim: null,
+    releasedClaim: legacy.releasedClaim,
     appliedForcedHandoff: null,
     warnings,
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,
     hasLegacyClaimMarker,
   };
-}
-function resolveLegacyClaimState(orderedEvents, _nowIso, _staleAgeMs) {
-  let latestClaim = null;
-  let latestMatchingRelease = null;
-  for (const event of orderedEvents) {
-    const claim = parseLegacyClaimComment(event.body, event.createdAt);
-    if (claim) {
-      latestClaim = claim;
-      latestMatchingRelease = null;
-      continue;
-    }
-    const release = parseLegacyReleaseComment(event.body, event.createdAt);
-    if (
-      release &&
-      latestClaim &&
-      release.agentId === latestClaim.agentId &&
-      compareIso(release.createdAt, latestClaim.createdAt) > 0
-    ) {
-      latestMatchingRelease = release;
-    }
-  }
-  if (!latestClaim) {
-    return { claim: null, released: false };
-  }
-  const released = Boolean(latestMatchingRelease);
-  return { claim: latestClaim, released };
 }
 function findSameSecondContenders(events, activeClaim) {
   const activeSecond = toSecond(activeClaim.createdAt);
@@ -646,31 +740,6 @@ function isClaimReleased(events, claim) {
 // F2/F3 merge-time write-gate (`summarizeClaimValidation` in
 // protocol-helpers.mts) can share the identical primitive instead of
 // forking its own copy. Imported above from './protocol-helpers.mts'.
-function parseLegacyClaimComment(body, createdAt) {
-  const match = String(body ?? '')
-    .trimEnd()
-    .match(LEGACY_CLAIM_PATTERN);
-  if (!match) {
-    return null;
-  }
-  return {
-    agentId: match[1],
-    createdAt: normalizeIso(match[2]) ?? normalizeIso(createdAt) ?? createdAt,
-    branch: match[3],
-  };
-}
-function parseLegacyReleaseComment(body, createdAt) {
-  const match = String(body ?? '')
-    .trimEnd()
-    .match(LEGACY_RELEASE_PATTERN);
-  if (!match) {
-    return null;
-  }
-  return {
-    agentId: match[1],
-    createdAt: normalizeIso(match[2]) ?? normalizeIso(createdAt) ?? createdAt,
-  };
-}
 function normalizeEvents(events) {
   if (!Array.isArray(events)) {
     return [];
@@ -820,7 +889,7 @@ function printHelp() {
 Output (selected fields; the JSON also carries repository / issue / policy /
 warnings / evidence):
 {
-  "state": "unclaimed|already_owned|stale|non_inheritable|disputed",
+  "state": "unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|disputed",
   "action": "re_claim|takeover|keep|stop",
   "reason": "...",
   "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,

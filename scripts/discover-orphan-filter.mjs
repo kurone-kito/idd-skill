@@ -1193,9 +1193,9 @@ comments and resolves the active claim using the configured
 trustedMarkerActors, claimTiming.staleAge (default PT24H), and
 claimTiming.heartbeatInterval (default PT12H). Each annotated candidate
 gains (activeClaim is always an object):
-  "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool }
+  "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool, "localWorktree"?: object }
                  (present:false with claimId/agentId null = no trusted claim)
-  "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
+  "claimEligible": bool   (eligible = no present, non-stale, trusted claim and no unverified stale/released-claim worktree)
 Absent the flag, NO comment API calls are made and no claim fields are
 emitted (the output shape is byte-stable).
 heartbeatOverdue is true when the latest valid claimed-by/heartbeat
@@ -1203,12 +1203,15 @@ created_at is at or past claimTiming.heartbeatInterval with no later trusted
 heartbeat; false otherwise, including whenever present is false. It is
 PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate.
 --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
-each activeClaim (true when the active claim's claimId equals <id>).
+each activeClaim (true only when the active claim's claimId equals <id> and
+the current worktree's claim lock plus generated-tokens record confirm the
+same claim and agent identity).
 NOTE: claimEligible is a best-effort SOFT discovery hint (same limitation
-as discover-roadmap-graph's annotation): it resolves only new-format
-claimed-by markers and intentionally does NOT account for legacy
-claim-id-less markers or forced-handoff transfers; the authoritative A5
-claim gate (idd-claim.instructions.md) remains the real protection.
+as discover-roadmap-graph's annotation): it does not reproduce authoritative
+forced-handoff authorization or legacy active-claim takeover rules. Trusted
+legacy claim/release evidence is used only for stale/released local-worktree
+occupancy checks; the authoritative A5 claim gate (idd-claim.instructions.md)
+remains the real protection.
 `);
 }
 function loadPolicy(policyPath) {

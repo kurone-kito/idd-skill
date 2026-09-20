@@ -4,12 +4,15 @@
 // The scripts/discover-roadmap-graph.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mjs';
 import {
   isAutopilotSuitabilityScore,
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
+import { checkClaimLock, readGeneratedClaimTokens } from './claim-lock.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
 import {
   buildRoadmapMarkerResolver,
@@ -17,7 +20,9 @@ import {
 } from './discover-readiness-check.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
+import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+import { resolveLegacyClaimState } from './marker-helpers.mjs';
 import {
   normalizePolicyConfig,
   POLICY_DEFAULTS,
@@ -25,7 +30,8 @@ import {
 } from './policy-helpers.mjs';
 import {
   isStaleAt,
-  resolveActiveClaim,
+  parseClaimComment,
+  resolveActiveClaimWithForcedHandoffTrace,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 import {
@@ -1069,32 +1075,30 @@ async function annotateReadiness(entries, readiness, loadIssue, markerPrefix) {
  * Resolve one execution leaf's active-claim eligibility (#1008).
  *
  * Fetches the leaf issue's comments via the injected `loadComments` loader,
- * resolves the ACTIVE claim with the SHARED `resolveActiveClaim` from
+ * resolves the ACTIVE claim with the SHARED claim resolver from
  * protocol-helpers (trusted-author gated, stale-age aware), then derives
- * present/stale/eligibility. `activeClaim` is ALWAYS returned as an object
+ * present/stale/eligibility. The shared resolver also preserves a
+ * just-released claim branch so a live local worktree remains a discovery
+ * blocker after remote ownership is cleared. `activeClaim` is ALWAYS returned
+ * as an object
  * (Design O): `present: false` (with `claimId: null`, `agentId: null`) when no
  * trusted claim is present, `present: true` otherwise. A leaf is eligible when
- * there is NO present, non-stale, trusted-actor claim. The shared
- * `parseClaimComment` / `resolveActiveClaim` parsing is reused read-only and
- * never re-implemented here.
+ * there is NO present, non-stale, trusted-actor claim and no occupied or
+ * unreadable worktree for a stale/released branch. The shared claim parsing is
+ * reused read-only and never re-implemented here.
  *
- * Intentional limitation: this annotation resolves only NEW-format
- * `claimed-by` markers via the shared `resolveActiveClaim`. It deliberately
- * does NOT factor in legacy claim-id-less markers nor forced-handoff
- * transfers, both of which the authoritative resume/claim path handles
- * (resume-claim-routing's `resolveLegacyClaimState` and forced-handoff
- * authorization). Replicating that here would require duplicating that
- * machinery plus per-candidate permission API calls, which is out of scope
- * for this read-only discovery hint. `claimEligible` is therefore a
- * best-effort SOFT signal only; the authoritative A5 claim gate
- * (`idd-claim.instructions.md`), which DOES account for legacy markers and
- * forced handoffs, remains the real protection.
+ * Intentional limitation: this annotation remains a best-effort SOFT signal.
+ * It traces forced-handoff transfers but does not reproduce authoritative
+ * forced-handoff authorization or legacy active-claim takeover rules. Trusted
+ * legacy claim/release evidence is used only for stale/released local-worktree
+ * collision checks. The authoritative A5 claim gate
+ * (`idd-claim.instructions.md`) remains the real protection.
  */
 export async function annotateLeafClaimState(issueNumber, claimState) {
   const comments = normalizeClaimComments(
     await claimState.loadComments(issueNumber),
   );
-  const active = resolveActiveClaim(comments, {
+  const claimTrace = resolveActiveClaimWithForcedHandoffTrace(comments, {
     isTrustedAuthor: claimState.isTrustedAuthor,
     // The 24h math is not re-derived: when the configured stale age equals the
     // PT24H default, the shared `isStaleAt` is reused as-is;
@@ -1102,12 +1106,85 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     isStale: (activeCreatedAt, nextCreatedAt) =>
       isClaimStaleByAge(activeCreatedAt, nextCreatedAt, claimState.staleAgeMs),
   });
+  const active = claimTrace.activeClaim;
+  const trustedLegacyComments = comments.filter((comment) =>
+    claimState.isTrustedAuthor(comment.author.login),
+  );
+  const hasTrustedNewFormatClaim = hasNewFormatClaim(
+    comments,
+    claimState.isTrustedAuthor,
+  );
+  const legacyState = hasTrustedNewFormatClaim
+    ? null
+    : resolveLegacyClaimState(trustedLegacyComments);
+  const legacyClaim =
+    !active && legacyState && !legacyState.released ? legacyState.claim : null;
+  const releasedClaim =
+    claimTrace.releasedClaim ??
+    (hasTrustedNewFormatClaim ? null : (legacyState?.releasedClaim ?? null));
   if (!active) {
-    // No present trusted claim → eligible. When `--current-claim-id` is
-    // supplied, `ownedByCurrentSession` is still emitted (as `false`) because
-    // there is no claim id to match it; it is omitted only when no
-    // `--current-claim-id` was passed. `heartbeatOverdue` is always `false`
-    // here (#1433): with no present claim there is nothing to be overdue.
+    const legacyStale =
+      legacyClaim !== null &&
+      isClaimStaleByAge(
+        legacyClaim.createdAt,
+        claimState.nowIso,
+        claimState.staleAgeMs,
+      );
+    // A stale legacy claim or release clears no same-clone worktree. Keep
+    // probing that branch before advertising it as a fresh candidate.
+    const localWorktree =
+      (legacyStale ? legacyClaim : releasedClaim) &&
+      claimState.inspectLocalWorktree
+        ? claimState.inspectLocalWorktree(
+            (legacyStale ? legacyClaim : releasedClaim)?.branch ?? '',
+          )
+        : undefined;
+    // A verified owner may release and then re-enter the fresh-claim gate
+    // while retaining the same-clone worktree. The gate accepts that retry
+    // when the released claim id matches and the current canonical worktree
+    // is the occupied worktree for the released branch; stale local evidence
+    // in another worktree must not suppress the collision guard (#3141).
+    const releasedOwnerByCurrentSession = Boolean(
+      claimState.currentSessionOwnsClaimEvidence &&
+        claimState.currentSessionAgentId !== null &&
+        claimState.currentClaimId &&
+        claimTrace.releasedClaim !== null &&
+        claimTrace.releasedClaim.claimId === claimState.currentClaimId &&
+        claimTrace.releasedClaim.agentId === claimState.currentSessionAgentId &&
+        currentSessionOwnsOccupiedWorktree(
+          claimState,
+          claimTrace.releasedClaim.branch,
+          localWorktree,
+        ),
+    );
+    const localWorktreeBlocks =
+      localWorktree !== undefined &&
+      localWorktree.status !== 'absent' &&
+      !releasedOwnerByCurrentSession;
+    if (legacyClaim) {
+      const annotation = {
+        present: true,
+        stale: legacyStale,
+        claimId: null,
+        agentId: legacyClaim.agentId,
+        heartbeatOverdue: isClaimHeartbeatOverdue(
+          legacyClaim.createdAt,
+          claimState.nowIso,
+          claimState.heartbeatIntervalMs,
+        ),
+        ...(localWorktree ? { localWorktree } : {}),
+      };
+      if (claimState.currentClaimId) {
+        annotation.ownedByCurrentSession = false;
+      }
+      return {
+        activeClaim: annotation,
+        claimEligible: legacyStale && !localWorktreeBlocks,
+      };
+    }
+    // When `--current-claim-id` is supplied, `ownedByCurrentSession` is still
+    // emitted (as `false`) because there is no active claim id to match it; it
+    // is omitted only when `--current-claim-id` was not passed.
     return {
       activeClaim: {
         present: false,
@@ -1116,8 +1193,9 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
         agentId: null,
         heartbeatOverdue: false,
         ...(claimState.currentClaimId ? { ownedByCurrentSession: false } : {}),
+        ...(localWorktree ? { localWorktree } : {}),
       },
-      claimEligible: true,
+      claimEligible: !localWorktreeBlocks,
     };
   }
   // Staleness of the present claim is measured against "now": a claim whose
@@ -1139,22 +1217,58 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     claimState.nowIso,
     claimState.heartbeatIntervalMs,
   );
+  const claimIdMatchesCurrentSession = claimState.currentClaimId
+    ? active.claimId === claimState.currentClaimId
+    : false;
+  const claimAgentMatchesCurrentSession =
+    claimState.currentSessionAgentId !== null &&
+    active.agentId === claimState.currentSessionAgentId;
+  const ownedByCurrentSession =
+    claimState.currentSessionOwnsClaimEvidence &&
+    claimIdMatchesCurrentSession &&
+    claimAgentMatchesCurrentSession;
+  const localWorktree =
+    stale && claimState.inspectLocalWorktree
+      ? claimState.inspectLocalWorktree(active.branch)
+      : undefined;
+  const ownerResumeOwnsOccupiedWorktree =
+    ownedByCurrentSession &&
+    currentSessionOwnsOccupiedWorktree(
+      claimState,
+      active.branch,
+      localWorktree,
+    );
+  const localWorktreeBlocks =
+    stale &&
+    !ownerResumeOwnsOccupiedWorktree &&
+    localWorktree !== undefined &&
+    localWorktree.status !== 'absent';
   const annotation = {
     present: true,
     stale,
     claimId: active.claimId,
     agentId: active.agentId,
     heartbeatOverdue,
+    ...(localWorktree ? { localWorktree } : {}),
   };
   if (claimState.currentClaimId) {
-    annotation.ownedByCurrentSession =
-      active.claimId === claimState.currentClaimId;
+    annotation.ownedByCurrentSession = ownedByCurrentSession;
   }
-  // Eligible only when there is no present, NON-stale, trusted claim. A stale
-  // claim is takeover-eligible, so it does not block. `heartbeatOverdue` NEVER
-  // factors into this: it is purely diagnostic (#1433) and must not change
-  // who is claim-eligible.
-  return { activeClaim: annotation, claimEligible: stale };
+  // A stale claim is normally takeover-eligible, but a live same-clone
+  // worktree is an independent occupancy signal. Only a verified owner resume
+  // may reuse it; an unreadable occupancy probe also blocks fail-closed.
+  // `heartbeatOverdue` NEVER factors into this (#1433).
+  return {
+    activeClaim: annotation,
+    claimEligible: stale && !localWorktreeBlocks,
+  };
+}
+function hasNewFormatClaim(comments, isTrustedAuthor) {
+  return comments.some(
+    (comment) =>
+      isTrustedAuthor(comment.author.login) &&
+      parseClaimComment(comment.body, comment.createdAt) !== null,
+  );
 }
 /** Coerce a loaded comment payload into the `resolveActiveClaim` event shape. */
 function normalizeClaimComments(raw) {
@@ -1215,6 +1329,140 @@ export function isClaimHeartbeatOverdue(
 ) {
   return isClaimStaleByAge(activeCreatedAt, nowIso, heartbeatIntervalMs);
 }
+function removeTrailingGitLineFeed(value) {
+  return value.endsWith('\n') ? value.slice(0, -1) : value;
+}
+function sanitizedGitEnvironment() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  return env;
+}
+function resolveCurrentSessionWorktreeIdentity() {
+  try {
+    const cwd = process.cwd();
+    const env = sanitizedGitEnvironment();
+    const discoveredRoot = removeTrailingGitLineFeed(
+      execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
+        encoding: 'utf8',
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    );
+    const worktreePath = realpathSync(discoveredRoot);
+    const branchName = removeTrailingGitLineFeed(
+      execFileSync(
+        'git',
+        ['-C', cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+        {
+          encoding: 'utf8',
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+    );
+    if (!worktreePath || !branchName) {
+      return null;
+    }
+    return { worktreePath, branchName };
+  } catch {
+    return null;
+  }
+}
+export function resolveCurrentSessionClaimEvidence(claimId) {
+  try {
+    const worktree = resolveCurrentSessionWorktreeIdentity();
+    if (worktree === null) {
+      return null;
+    }
+    const lock = checkClaimLock(process.cwd());
+    const holder = lock.holder;
+    if (
+      !lock.present ||
+      lock.malformed ||
+      holder === undefined ||
+      holder.claimId !== claimId ||
+      !holder.agentId
+    ) {
+      return null;
+    }
+    const tokens = readGeneratedClaimTokens(process.cwd(), claimId);
+    return tokens.status === 'present' &&
+      tokens.record.claimId === claimId &&
+      tokens.record.agentId === holder.agentId
+      ? { ...worktree, agentId: holder.agentId }
+      : null;
+  } catch {
+    return null;
+  }
+}
+/**
+ * Prove that the owner-resume exception refers to this session's own
+ * worktree, not merely to matching stale lock/token artifacts in another
+ * worktree. The occupancy probe must be an occupied, readable result and all
+ * paths for the exact claimed branch must be the canonical current worktree
+ * path; unreadable and absent results never qualify for the bypass.
+ */
+export function isCurrentSessionWorktreeOwner(
+  currentPath,
+  currentBranch,
+  branchName,
+  localWorktree,
+) {
+  const normalizedCurrentBranch = normalizeWorktreeBranchName(currentBranch);
+  const normalizedClaimBranch = normalizeWorktreeBranchName(branchName);
+  if (
+    currentPath === null ||
+    normalizedCurrentBranch === null ||
+    normalizedClaimBranch === null ||
+    normalizedCurrentBranch !== normalizedClaimBranch ||
+    localWorktree?.status !== 'occupied'
+  ) {
+    return false;
+  }
+  return (
+    localWorktree.paths.length > 0 &&
+    localWorktree.paths.every((path) => {
+      if (path === currentPath) {
+        return true;
+      }
+      try {
+        return realpathSync(path) === currentPath;
+      } catch {
+        return false;
+      }
+    })
+  );
+}
+function normalizeWorktreeBranchName(branchName) {
+  const value = String(branchName ?? '').trim();
+  if (!value) {
+    return null;
+  }
+  return value.startsWith('refs/heads/')
+    ? value.slice('refs/heads/'.length)
+    : value;
+}
+function currentSessionOwnsOccupiedWorktree(
+  claimState,
+  branchName,
+  localWorktree,
+) {
+  return isCurrentSessionWorktreeOwner(
+    claimState.currentSessionWorktreePath,
+    claimState.currentSessionBranch,
+    branchName,
+    localWorktree,
+  );
+}
 /**
  * Build the CLI-side claim-state resolution: the live comment loader plus the
  * resolved trusted-actor predicate, configured stale age, and "now". Only
@@ -1233,13 +1481,24 @@ export function buildClaimStateResolution(port, policy, currentClaimId) {
   const heartbeatIntervalMs =
     parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
     DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
+  const currentClaimIdValue = String(currentClaimId ?? '').trim();
+  const currentSessionEvidence =
+    currentClaimIdValue.length > 0
+      ? resolveCurrentSessionClaimEvidence(currentClaimIdValue)
+      : null;
   return {
     loadComments: buildCommentLoader(port),
     isTrustedAuthor: buildTrustedAuthorPredicate(policy),
     staleAgeMs,
     heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
-    currentClaimId: String(currentClaimId ?? '').trim(),
+    currentClaimId: currentClaimIdValue,
+    currentSessionAgentId: currentSessionEvidence?.agentId ?? null,
+    currentSessionWorktreePath: currentSessionEvidence?.worktreePath ?? null,
+    currentSessionBranch: currentSessionEvidence?.branchName ?? null,
+    currentSessionOwnsClaimEvidence: currentSessionEvidence !== null,
+    inspectLocalWorktree: (branchName) =>
+      inspectLocalWorktreeBranch(branchName),
   };
 }
 /**
@@ -1842,9 +2101,11 @@ function printHelp() {
   claim using the configured trustedMarkerActors, claimTiming.staleAge
   (default PT24H), and claimTiming.heartbeatInterval (default PT12H). Each
   annotated leaf gains (activeClaim is always an object):
-    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool }
-                   (present:false with claimId/agentId null = no trusted claim)
-    "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
+    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool, "localWorktree"?: object }
+                   (present:false with claimId/agentId null = no trusted claim;
+                    a trusted legacy marker is present:true with claimId:null
+                    and its non-null agentId)
+    "claimEligible": bool   (eligible = no present, non-stale, trusted claim and no unverified stale/released-claim worktree)
   Absent the flag, NO comment API calls are made and no claim fields are
   emitted (the output shape is byte-stable).
   heartbeatOverdue is true when the latest valid claimed-by/heartbeat
@@ -1853,11 +2114,16 @@ function printHelp() {
   It is PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate — a
   heartbeat-overdue claim can still be well inside the 24h stale window.
   --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
-  each activeClaim (true when the active claim's claimId equals <id>).
-  NOTE: claimEligible is a best-effort SOFT discovery hint. It resolves only
-  new-format claimed-by markers and intentionally does NOT account for legacy
-  claim-id-less markers or forced-handoff transfers; the authoritative A5
-  claim gate (idd-claim.instructions.md) remains the real protection.
+  each activeClaim (true only when the active claim's claimId equals <id> and
+  the current worktree's claim lock plus generated-tokens record confirm the
+  same claim and agent identity). A stale-claim occupancy bypass additionally
+  requires the canonical current worktree path and symbolic branch to match
+  the occupied path and active branch.
+  NOTE: claimEligible is a best-effort SOFT discovery hint. It does not
+  reproduce authoritative forced-handoff authorization or legacy active-claim
+  takeover rules. Trusted legacy claim/release evidence is used only for
+  stale/released local-worktree occupancy checks; the authoritative A5 claim
+  gate (idd-claim.instructions.md) remains the real protection.
 
   --with-readiness (opt-in) annotates each OPEN execution leaf with its A3
   startability by composing the discover-readiness-check helper (dependency

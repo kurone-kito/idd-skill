@@ -171,6 +171,18 @@ above: **hold and stop**, exactly as any other non-stale claim. Do not
 treat a missed heartbeat as shortening the wait or as quiet-window
 evidence.
 
+Before continuing to S4, apply the local-worktree safety gate. With helpers,
+run `node scripts/resume-claim-routing.mjs --issue <N>` against a fresh
+snapshot and continue only when it still reports `state: stale` with
+`action: takeover` and `evidence.local_worktree.status: absent` for the
+claimed branch. `local_worktree_occupied` / `stop` (including `occupied`,
+`unreadable`, or unknown worktree evidence), missing evidence, or contradictory
+state requires **hold and stop**. Do not treat quiet-window or stale-age
+evidence as proof that the worktree is absent (#3141, Round 21 report).
+Without helpers, perform the porcelain worktree scan from `idd-claim`'s A5
+pre-check (a missing, malformed, or unreadable result is fail-closed); only a
+proven absent matching worktree permits S4.
+
 ### S4 — Race-safe takeover recheck
 
 Immediately before posting takeover:
@@ -189,7 +201,11 @@ Immediately before posting takeover:
 5. Re-check closed/merged guards. If the issue is now closed or the PR
    is now merged, stop and return to `idd-resume.instructions.md` Step 1
    cleanup behavior.
-6. If takeover is still eligible, use A5 race-safe claim verification
+6. Re-run the S3 local-worktree safety gate immediately before posting. The
+   same claim must still be stale/takeover-eligible and its matching
+   worktree must still be explicitly `absent`; occupied, unreadable, unknown,
+   missing, or contradictory evidence means stop.
+7. If takeover is still eligible, use A5 race-safe claim verification
    (`idd-claim.instructions.md`) for the upcoming takeover post-and-
    verify sequence: wait for the configured settle delay from
    `.github/idd/config.json` `claim.verifySettleDelay`
@@ -203,6 +219,7 @@ Do not post takeover with stale evidence.
 
 ### S5 — Execute takeover and verify
 
+Only execute takeover after S4's final local-worktree safety gate passes.
 Perform takeover via `idd-claim.instructions.md` using:
 
 - a fresh `{claim-id}`

@@ -61,6 +61,7 @@ scripts/idd-roadmap-audit-execute.mjs linguist-generated=true
 scripts/idd-suggest-untrusted-labelers.mjs linguist-generated=true
 scripts/live-status-digest.mjs linguist-generated=true
 scripts/local-validation-evidence.mjs linguist-generated=true
+scripts/local-worktree-occupancy.mjs linguist-generated=true
 scripts/markdown-code.mjs linguist-generated=true
 scripts/markdown-link-audit.mjs linguist-generated=true
 scripts/marker-helpers.mjs linguist-generated=true
