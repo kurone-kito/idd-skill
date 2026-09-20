@@ -711,10 +711,10 @@ test('owner resume stops without independent local ownership evidence', () => {
 
 test('owner resume keeps already_owned before B1 creates the worktree (#3154)', () => {
   // A forced-handoff successor's very first routing check runs before B1
-  // ever creates its worktree, so no local worktree is occupied yet -- the
+  // ever creates its worktree, so the probe reports `absent` -- the
   // independent-owner-evidence gate must not fire merely because
   // isCurrentSessionOwner can't prove ownership of a worktree that does not
-  // exist. Only an *occupied* result disambiguates a real second session.
+  // exist. Only a non-`absent` result disambiguates a real second session.
   const result = evaluateResumeClaimRouting(
     {
       claimId: 'claim-new',
@@ -741,6 +741,41 @@ test('owner resume keeps already_owned before B1 creates the worktree (#3154)', 
   assert.equal(result.state, 'already_owned');
   assert.equal(result.action, 'keep');
   assert.equal(result.reason, 'claim-id-match');
+});
+
+test('owner resume stops on an unreadable worktree probe too (#3154)', () => {
+  // An unreadable probe is ambiguous, not verified-empty: the fail-closed
+  // default means it must block owner-resume the same way an occupied
+  // result does, not silently fall through to already_owned.
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-old',
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'unreadable',
+        paths: ['/tmp/repo.issue-3-task'],
+        reason: 'ambiguous detached-operation metadata',
+      }),
+      isCurrentSessionOwner: () => false,
+    },
+  );
+
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(
+    result.reason,
+    'claim-id-match-without-independent-owner-evidence',
+  );
 });
 
 test('fresh caller cannot bypass occupied worktree with forced-handoff evidence', () => {
@@ -1514,6 +1549,43 @@ test('fresh claim gate blocks a released claim with a live local worktree', () =
   assert.equal(gate.verdict, 'already-claimed');
   assert.equal(gate.winningClaimId, 'claim-released');
   assert.equal(gate.reason, 'released-claim-local-worktree-occupied');
+});
+
+test('fresh claim gate withholds winningClaimId for an unreadable released-claim worktree (#3154)', () => {
+  // An unreadable occupancy probe cannot verify that the released claim's
+  // own worktree is what a taker-over would inherit -- exposing its id as
+  // winningClaimId here would let `claim-lock --takeover` treat a matching
+  // id as sufficient authorization despite the occupancy check being
+  // inconclusive, contradicting the stated fail-closed rule.
+  const gate = evaluateFreshClaimGate(
+    {
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-released supersedes: none 2026-05-12T10:00:00Z branch: issue/24-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: copilot claim-released 2026-05-12T10:05:00Z -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'unreadable',
+        paths: ['/tmp/repo.issue-24-task'],
+        reason: 'ambiguous detached-operation metadata',
+      }),
+    },
+  );
+
+  assert.equal(gate.verdict, 'already-claimed');
+  assert.equal(gate.winningClaimId, null);
+  assert.equal(gate.reason, 'released-claim-local-worktree-unreadable');
 });
 
 test('released legacy claim stays out of active_claim when its worktree is occupied', () => {

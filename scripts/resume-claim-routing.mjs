@@ -192,23 +192,31 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       action = 'stop';
       reason = 'cold-recovery-activation-nonce-collision';
     } else if (
-      options.inspectLocalWorktree?.(state.activeClaim.branch)?.status ===
-        'occupied' &&
+      (options.inspectLocalWorktree || options.isCurrentSessionOwner) &&
+      options.inspectLocalWorktree?.(state.activeClaim.branch)?.status !==
+        'absent' &&
       !options.isCurrentSessionOwner?.(state.activeClaim)
     ) {
       // A matching remote claim-id is not sufficient to resume a live
-      // session **when a local worktree for this branch is already
-      // occupied**: the current canonical worktree, lock, generated tokens,
-      // and branch occupancy must independently identify this owner, since
-      // the occupant could be a second, unrelated same-host session. The CLI
-      // wires this proof from Discover; a missing or contradictory proof
-      // fails closed rather than allowing that second session to use the
-      // branch. Gating on an *occupied* result specifically (not merely on
-      // whether the callbacks are wired) matters for a forced-handoff
-      // successor's very first routing check, which can run before B1 ever
-      // creates its worktree (#3154 review): with nothing occupied yet,
-      // there is no second session to disambiguate from, and requiring
-      // ownership proof anyway would wrongly reject the successor's own
+      // session when a local worktree probe for this branch did not come
+      // back `absent`: the current canonical worktree, lock, generated
+      // tokens, and branch occupancy must independently identify this
+      // owner, since the occupant could be a second, unrelated same-host
+      // session. The CLI wires this proof from Discover; a missing or
+      // contradictory proof fails closed rather than allowing that second
+      // session to use the branch.
+      //
+      // Blocking on non-`absent` -- not only `occupied` -- matters because
+      // `unreadable` is itself an ambiguous result the fail-closed default
+      // governs: it means occupancy could not be verified either way, which
+      // must not silently behave like "verified empty" (#3154 review).
+      //
+      // Gating on the probe result at all (not merely on whether the
+      // callbacks are wired) matters for a forced-handoff successor's very
+      // first routing check, which can run before B1 ever creates its
+      // worktree (#3154 review): with the probe reporting `absent`, there
+      // is no second session to disambiguate from, and requiring ownership
+      // proof anyway would wrongly reject the successor's own
       // still-to-be-created worktree.
       routeState = 'non_inheritable';
       action = 'stop';
@@ -375,7 +383,15 @@ export function evaluateFreshClaimGate(input, options = {}) {
     verdict,
     winningClaimId:
       routing.active_claim?.claim_id ??
-      (routing.state === 'local_worktree_occupied'
+      // Only a verified-occupied probe proves the released claim's own
+      // worktree is what a caller would be taking over: an `unreadable`
+      // result (occupancy could not be inspected either way) must not
+      // expose this id as a trustworthy takeover target, since the claim
+      // instructions treat a matching winningClaimId as sufficient
+      // authorization for `claim-lock --takeover` without separately
+      // re-checking local_worktree.status (#3154 review).
+      (routing.state === 'local_worktree_occupied' &&
+      routing.evidence.local_worktree?.status === 'occupied'
         ? (routing.evidence.released_claim?.claim_id ?? null)
         : null),
     reason: routing.reason,
