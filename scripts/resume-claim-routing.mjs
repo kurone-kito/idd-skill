@@ -379,21 +379,28 @@ export function evaluateFreshClaimGate(input, options = {}) {
       : routing.state === 'stale'
         ? 'stale-reclaimable'
         : 'already-claimed';
+  // Only a verified-occupied probe proves a local worktree is what a
+  // caller would actually be taking over -- an `unreadable` result
+  // (occupancy could not be inspected either way) must not expose either
+  // the stale active claim's or the released claim's id as a trustworthy
+  // takeover target, since the claim instructions treat a matching
+  // winningClaimId as sufficient authorization for `claim-lock --takeover`
+  // without separately re-checking local_worktree.status (#3154 review).
+  // This applies to `active_claim` too, not only the released-claim
+  // fallback: a stale (not released) claim whose worktree probe comes back
+  // unreadable still reaches `local_worktree_occupied` with `active_claim`
+  // populated.
+  const localWorktreeUnverified =
+    routing.state === 'local_worktree_occupied' &&
+    routing.evidence.local_worktree?.status !== 'occupied';
   return {
     verdict,
-    winningClaimId:
-      routing.active_claim?.claim_id ??
-      // Only a verified-occupied probe proves the released claim's own
-      // worktree is what a caller would be taking over: an `unreadable`
-      // result (occupancy could not be inspected either way) must not
-      // expose this id as a trustworthy takeover target, since the claim
-      // instructions treat a matching winningClaimId as sufficient
-      // authorization for `claim-lock --takeover` without separately
-      // re-checking local_worktree.status (#3154 review).
-      (routing.state === 'local_worktree_occupied' &&
-      routing.evidence.local_worktree?.status === 'occupied'
-        ? (routing.evidence.released_claim?.claim_id ?? null)
-        : null),
+    winningClaimId: localWorktreeUnverified
+      ? null
+      : (routing.active_claim?.claim_id ??
+        (routing.state === 'local_worktree_occupied'
+          ? (routing.evidence.released_claim?.claim_id ?? null)
+          : null)),
     reason: routing.reason,
   };
 }

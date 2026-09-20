@@ -336,6 +336,38 @@ test('stale takeover is blocked by a live local worktree', () => {
   assert.equal(gate.reason, 'stale-claim-local-worktree-occupied');
 });
 
+test('fresh claim gate withholds winningClaimId for a stale claim with an unreadable worktree (#3154)', () => {
+  // An unreadable probe cannot verify that the stale active claim's own
+  // worktree is what a taker-over would inherit -- exposing its id here
+  // (via the active_claim branch, not only the released_claim fallback)
+  // would let claim-lock --takeover treat a matching id as sufficient
+  // authorization despite the occupancy check being inconclusive.
+  const gate = evaluateFreshClaimGate(
+    {
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'unreadable',
+        paths: ['/tmp/repo.issue-3-task'],
+        reason: 'ambiguous detached-operation metadata',
+      }),
+    },
+  );
+
+  assert.equal(gate.verdict, 'already-claimed');
+  assert.equal(gate.winningClaimId, null);
+  assert.equal(gate.reason, 'stale-claim-local-worktree-unreadable');
+});
+
 test('unreadable local worktree blocks stale takeover fail closed', () => {
   const result = evaluateResumeClaimRouting(
     {
