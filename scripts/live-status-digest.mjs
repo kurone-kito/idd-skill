@@ -522,10 +522,21 @@ function runDuplicateDigestRepair(input) {
         conditionalComment.etag,
       );
     } catch (error) {
+      const reconciliation = reconcileRepairRetirementMutation(
+        owner,
+        repo,
+        targetType,
+        targetNumber,
+        retirement.id,
+        retiredBody,
+      );
+      if (reconciliation.retired) {
+        retiredCommentIds.push(retirement.id);
+      }
       finishRepairHold(
         report,
         args.format,
-        `retirement mutation failed for comment ${retirement.id}: ${error.message}`,
+        `retirement mutation failed for comment ${retirement.id}: ${error.message}; ${reconciliation.detail}`,
         comparison.snapshot,
         retiredCommentIds,
         owner,
@@ -639,7 +650,7 @@ function runDuplicateDigestRepair(input) {
   });
   let evidenceResult;
   try {
-    evidenceResult = createRepairEvidenceComment(
+    evidenceResult = postRepairEvidenceWithReconciliation(
       owner,
       repo,
       targetNumber,
@@ -656,7 +667,7 @@ function runDuplicateDigestRepair(input) {
       repo,
       targetNumber,
       targetType,
-      true,
+      false,
     );
     return;
   }
@@ -778,6 +789,40 @@ function fetchRepairCommentWithEtag(owner, repo, commentId) {
   }
   return { body: String(payload.body ?? ''), etag };
 }
+function reconcileRepairRetirementMutation(
+  owner,
+  repo,
+  targetType,
+  targetNumber,
+  commentId,
+  retiredBody,
+) {
+  let observedBody = null;
+  let commentDetail = 'comment reread unavailable';
+  try {
+    observedBody = fetchRepairCommentWithEtag(owner, repo, commentId).body;
+    commentDetail = `comment body is ${
+      observedBody === retiredBody &&
+      isHistoricalLiveStatusDigestBody(observedBody)
+        ? 'the planned historical body'
+        : 'not the planned historical body'
+    }`;
+  } catch (error) {
+    commentDetail = `comment reread failed: ${error.message}`;
+  }
+  let targetDetail = 'target-state reread unavailable';
+  try {
+    targetDetail = `target state reread: ${fetchRepairTargetState(owner, repo, targetType, targetNumber)}`;
+  } catch (error) {
+    targetDetail = `target-state reread failed: ${error.message}`;
+  }
+  return {
+    retired:
+      observedBody === retiredBody &&
+      isHistoricalLiveStatusDigestBody(observedBody),
+    detail: `ambiguous mutation reconciliation: ${commentDetail}; ${targetDetail}`,
+  };
+}
 function resolveDuplicateRepairActor(owner, repo) {
   const actor = currentViewerLogin().trim();
   if (!actor) {
@@ -807,13 +852,46 @@ function patchRepairComment(owner, repo, commentId, body, etag) {
     throw new Error(`cannot patch comment ${commentId} without an ETag`);
   }
   return ghApiJson(`repos/${owner}/${repo}/issues/comments/${commentId}`, {
-    extraArgs: ['-X', 'PATCH', '-H', `If-Match: ${etag}`, '-f', `body=${body}`],
+    extraArgs: ['-X', 'PATCH', '-H', `If-Match: ${etag}`, '--input', '-'],
+    input: JSON.stringify({ body }),
   });
 }
 function createRepairEvidenceComment(owner, repo, number, body) {
   return ghApiJson(`repos/${owner}/${repo}/issues/${number}/comments`, {
-    extraArgs: ['-X', 'POST', '-f', `body=${body}`],
+    extraArgs: ['-X', 'POST', '--input', '-'],
+    input: JSON.stringify({ body }),
   });
+}
+function findRepairEvidenceComment(owner, repo, number, body) {
+  const comment = fetchIssueComments(owner, repo, number).find(
+    (candidate) => candidate.body === body && candidate.id != null,
+  );
+  return comment?.id == null ? null : { id: comment.id };
+}
+function postRepairEvidenceWithReconciliation(owner, repo, number, body) {
+  let writeError = null;
+  try {
+    const result = createRepairEvidenceComment(owner, repo, number, body);
+    if (result.id !== undefined && result.id !== null) {
+      return { id: result.id };
+    }
+    writeError = new Error(
+      'evidence write returned no comment id; response outcome is ambiguous',
+    );
+  } catch (error) {
+    writeError = error;
+  }
+  try {
+    const existing = findRepairEvidenceComment(owner, repo, number, body);
+    if (existing) return existing;
+  } catch (error) {
+    throw new Error(
+      `${writeError?.message ?? 'evidence write failed'}; evidence reconciliation failed: ${error.message}; no retry attempted`,
+    );
+  }
+  throw new Error(
+    `${writeError?.message ?? 'evidence write failed'}; exact evidence comment was not observed after reconciliation; no retry attempted`,
+  );
 }
 function finishRepairHold(
   report,

@@ -428,6 +428,27 @@ test('ghApiJson (non-paginated) parses the raw JSON object', () => {
   }
 });
 
+test('ghApiJson forwards JSON input to gh api --input -', () => {
+  const restore = stubGh(`
+const chunks = [];
+process.stdin.on('data', (chunk) => chunks.push(chunk));
+process.stdin.on('end', () => {
+  process.stdout.write(Buffer.concat(chunks).toString('utf8'));
+});
+`);
+  try {
+    assert.deepEqual(
+      ghApiJson('repos/o/r/issues/comments/42', {
+        extraArgs: ['--input', '-'],
+        input: JSON.stringify({ body: '<!-- marker -->\\nbody' }),
+      }),
+      { body: '<!-- marker -->\\nbody' },
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('ghApiJson (non-paginated) falls back to {} on empty stdout', () => {
   const restore = stubGh(`process.stdout.write('');`);
   try {

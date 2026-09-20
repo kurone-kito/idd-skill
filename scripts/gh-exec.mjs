@@ -454,7 +454,8 @@ export function ghApiJson(path, options = {}) {
     raw = execFileSync('gh', args, {
       encoding: 'utf8',
       timeout,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      ...(options.input !== undefined ? { input: options.input } : {}),
     });
   } catch (error) {
     const failure = error;

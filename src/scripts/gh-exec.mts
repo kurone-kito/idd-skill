@@ -335,6 +335,12 @@ export interface GhApiJsonOptions {
   /** Extra arguments appended after the API path (e.g. `-f key=value`). */
   extraArgs?: string[];
   /**
+   * Data written to stdin when the extra arguments include `--input -`.
+   * JSON input is required for HTML-comment-first bodies because `-f body=`
+   * can silently drop their leading comment marker.
+   */
+  input?: string;
+  /**
    * `gh` exit statuses to tolerate: on a matching failure, return the
    * error's captured stdout (only when it looks like JSON) instead of
    * throwing.
@@ -587,7 +593,8 @@ export function ghApiJson(
     raw = execFileSync('gh', args, {
       encoding: 'utf8',
       timeout,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      ...(options.input !== undefined ? { input: options.input } : {}),
     });
   } catch (error) {
     const failure = error as { status?: unknown; stdout?: unknown } | null;

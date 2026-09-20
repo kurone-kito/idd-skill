@@ -103,12 +103,25 @@ Every non-retained current digest is retired by changing only its first-line
 marker to `<!-- idd-live-status: historical -->`. The full table and any
 suffix content remain recoverable; comments are never deleted or minimized.
 A fresh postcondition read must prove that exactly one current digest remains
-and that every selected duplicate has the planned historical body. The helper
-then posts structured evidence with marker
+and that every selected duplicate has the planned historical body. Retirement
+and evidence bodies are sent as JSON through stdin so an HTML-comment-first
+body cannot be truncated by `gh api -f body=...`. If a mutation response is
+ambiguous, the helper re-reads the affected comment and target before
+recording whether the planned retirement landed; if an evidence response is
+ambiguous, it reconciles the exact marker/body and never blindly retries the
+POST. The helper then posts structured evidence with marker
 `<!-- idd-live-status-repair: v1 -->`, naming the actor, retained and retired
 comment IDs, pre/post entry hashes, target state, and snapshot hashes. A
 partial mutation, failed postcondition, or failed evidence write is reported
-as `repair-recovery-hold` and requires manual recovery.
+as `repair-recovery-hold` and requires manual recovery. GitHub exposes
+resource-level conditional writes rather than a transaction across the full
+comment set and target state, so any later concurrent drift is surfaced by the
+postcondition and recovery-hold path rather than claimed as success.
+
+This preventive maintainer path is grounded in the observed duplicate-digest
+incident recorded by issue #3158: dantalion issue #216 closed after its
+handoff recorded eleven current digest comments and the normal helper refused
+to apply with `action=duplicate, canApply=false`.
 
 ## Live Status Digest Helper
 

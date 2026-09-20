@@ -1123,7 +1123,13 @@ The adopted helper boundaries are intentionally narrow:
   conditional PATCH; a missing conditional-write token fails closed before
   mutation. It changes only non-retained first-line markers to the
   historical marker, preserves the rest of each body, and verifies exactly
-  one current digest afterward
+  one current digest afterward. Retirement and evidence bodies use JSON stdin
+  rather than `-f body=...` so HTML-comment-first content is preserved. An
+  ambiguous retirement response is reconciled by re-reading the comment and
+  target; an ambiguous evidence response is reconciled by exact marker/body
+  and never blindly retried. GitHub has no transaction spanning the complete
+  comment set and target state, so later drift is reported through the
+  postcondition recovery hold.
 - successful repairs post structured evidence with
   `<!-- idd-live-status-repair: v1 -->`; preflight read, planning, and
   authorization failures emit only a `repair-recovery-hold` JSON report,

@@ -334,6 +334,9 @@ const apiArgs = args.slice(1);
 const methodIndex = apiArgs.indexOf('-X');
 const method = methodIndex >= 0 ? apiArgs[methodIndex + 1] : 'GET';
 const bodyArgument = apiArgs.find((value) => value.startsWith('body='));
+const requestBody = apiArgs.includes('--input')
+  ? JSON.parse(fs.readFileSync(0, 'utf8')).body
+  : bodyArgument?.slice('body='.length);
 const ifMatch = apiArgs.find((value) => value.startsWith('If-Match:'));
 const path = apiArgs.find((value) => value.startsWith('repos/')) ?? apiArgs[0];
 if (apiArgs[0] === 'user') {
@@ -350,16 +353,20 @@ if (apiArgs[0] === 'user') {
 } else if (method === 'PATCH' && path.includes('/issues/comments/')) {
   const id = path.split('/').at(-1);
   const comment = state.comments.find((item) => String(item.id) === id);
-  if (!comment || !bodyArgument || !ifMatch) process.exit(1);
-  comment.body = bodyArgument.slice('body='.length);
+  if (!comment || requestBody === undefined || !ifMatch) process.exit(1);
+  comment.body = requestBody;
   state.mutations += 1;
   state.conditionalUpdates += 1;
   fs.writeFileSync(statePath, JSON.stringify(state));
+  if (state.patchResponseLost) process.exit(1);
   process.stdout.write(JSON.stringify(comment));
 } else if (method === 'POST' && path.endsWith('/comments')) {
+  const evidenceId = 900 + state.evidence + 1;
   state.evidence += 1;
+  state.comments.push({ id: evidenceId, body: requestBody });
   fs.writeFileSync(statePath, JSON.stringify(state));
-  process.stdout.write(JSON.stringify({ id: 900 + state.evidence }));
+  if (state.evidenceResponseLost) process.exit(1);
+  process.stdout.write(JSON.stringify({ id: evidenceId }));
 } else if (apiArgs.includes('--paginate')) {
   if (state.failAfterMutation && state.mutations > 0) process.exit(1);
   for (const comment of state.comments) process.stdout.write(JSON.stringify(comment) + '\\n');
@@ -573,6 +580,113 @@ if (apiArgs[0] === 'user') {
       ),
       true,
     );
+
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        comments: initialComments,
+        mutations: 0,
+        evidence: 0,
+        conditionalUpdates: 0,
+        failAfterMutation: false,
+        patchResponseLost: true,
+        evidenceResponseLost: false,
+        invalidTargetState: false,
+        viewer: 'maintainer',
+      }),
+    );
+    const ambiguousPatchDryRun = JSON.parse(
+      execFileSync(process.execPath, [...baseArgs, '--dry-run'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    ) as {
+      repair: { preflight: { entries: { id: string }[]; sha256: string } };
+    };
+    const ambiguousPatchArgs = [
+      '--apply',
+      '--expected-current-digest-ids',
+      ambiguousPatchDryRun.repair.preflight.entries
+        .map((entry) => entry.id)
+        .join(','),
+      '--expected-current-digest-sha256',
+      ambiguousPatchDryRun.repair.preflight.sha256,
+    ];
+    assert.throws(
+      () =>
+        execFileSync(process.execPath, [...baseArgs, ...ambiguousPatchArgs], {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+        }),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as {
+          action: string;
+          repair: { retiredCommentIds: string[]; evidenceCommentId: number };
+        };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.deepEqual(report.repair.retiredCommentIds, ['102']);
+        assert.equal(report.repair.evidenceCommentId, 901);
+        return true;
+      },
+    );
+    const afterAmbiguousPatch = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      comments: { id: number; body: string }[];
+      mutations: number;
+      evidence: number;
+    };
+    assert.equal(afterAmbiguousPatch.mutations, 1);
+    assert.equal(afterAmbiguousPatch.evidence, 1);
+    assert.match(
+      afterAmbiguousPatch.comments[1].body,
+      /idd-live-status: historical/,
+    );
+
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        comments: initialComments,
+        mutations: 0,
+        evidence: 0,
+        conditionalUpdates: 0,
+        failAfterMutation: false,
+        patchResponseLost: false,
+        evidenceResponseLost: true,
+        invalidTargetState: false,
+        viewer: 'maintainer',
+      }),
+    );
+    const ambiguousEvidenceDryRun = JSON.parse(
+      execFileSync(process.execPath, [...baseArgs, '--dry-run'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    ) as {
+      repair: { preflight: { entries: { id: string }[]; sha256: string } };
+    };
+    const ambiguousEvidenceArgs = [
+      '--apply',
+      '--expected-current-digest-ids',
+      ambiguousEvidenceDryRun.repair.preflight.entries
+        .map((entry) => entry.id)
+        .join(','),
+      '--expected-current-digest-sha256',
+      ambiguousEvidenceDryRun.repair.preflight.sha256,
+    ];
+    const reconciledEvidence = JSON.parse(
+      execFileSync(process.execPath, [...baseArgs, ...ambiguousEvidenceArgs], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    ) as { action: string; repair: { evidenceCommentId: number } };
+    assert.equal(reconciledEvidence.action, 'repair-complete');
+    assert.equal(reconciledEvidence.repair.evidenceCommentId, 901);
+    const afterAmbiguousEvidence = JSON.parse(
+      readFileSync(statePath, 'utf8'),
+    ) as { evidence: number; comments: { id: number; body: string }[] };
+    assert.equal(afterAmbiguousEvidence.evidence, 1);
+    assert.equal(afterAmbiguousEvidence.comments.length, 3);
 
     const partialComments = [
       currentDigestComment(101),
