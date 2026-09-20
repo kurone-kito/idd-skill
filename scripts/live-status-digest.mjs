@@ -390,6 +390,29 @@ function runDuplicateDigestRepair(input) {
     );
     return;
   }
+  try {
+    assertRepairClaimBoundToTarget(
+      owner,
+      repo,
+      targetType,
+      targetNumber,
+      args.claimIssue,
+    );
+  } catch (error) {
+    finishRepairHold(
+      report,
+      args.format,
+      `repair claim is not bound to the digest target: ${error.message}`,
+      plan.snapshot,
+      [],
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      false,
+    );
+    return;
+  }
   const repairClaimContext =
     targetType === 'pr'
       ? {
@@ -940,6 +963,57 @@ function resolveDuplicateRepairActor(owner, repo) {
       ? 'authenticated viewer is an owner or maintainer'
       : 'authenticated viewer is not an owner or maintainer, or permission lookup was unavailable',
   };
+}
+function assertRepairClaimBoundToTarget(
+  owner,
+  repo,
+  targetType,
+  targetNumber,
+  claimIssue,
+) {
+  const normalizedClaimIssue = String(claimIssue ?? '').trim();
+  if (!normalizedClaimIssue) {
+    throw new Error('claim issue is empty');
+  }
+  if (targetType === 'issue') {
+    if (normalizedClaimIssue !== String(targetNumber)) {
+      throw new Error(
+        `issue target #${targetNumber} requires --claim-issue ${targetNumber}`,
+      );
+    }
+    return;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(
+      ghText([
+        'pr',
+        'view',
+        String(targetNumber),
+        '--repo',
+        `${owner}/${repo}`,
+        '--json',
+        'closingIssuesReferences',
+      ]),
+    );
+  } catch (error) {
+    throw new Error(
+      `could not read closingIssuesReferences for PR #${targetNumber}: ${error.message}`,
+    );
+  }
+  if (!Array.isArray(payload.closingIssuesReferences)) {
+    throw new Error(
+      `PR #${targetNumber} returned no usable closingIssuesReferences`,
+    );
+  }
+  const linkedIssueNumbers = payload.closingIssuesReferences
+    .map((reference) => String(reference?.number ?? '').trim())
+    .filter(Boolean);
+  if (!linkedIssueNumbers.includes(normalizedClaimIssue)) {
+    throw new Error(
+      `PR #${targetNumber} does not link claim issue #${normalizedClaimIssue}; expected one of ${linkedIssueNumbers.join(', ') || 'none'}`,
+    );
+  }
 }
 function patchRepairComment(owner, repo, commentId, body) {
   const payload = ghApiJson(

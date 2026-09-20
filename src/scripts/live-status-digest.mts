@@ -521,6 +521,30 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
     return;
   }
 
+  try {
+    assertRepairClaimBoundToTarget(
+      owner,
+      repo,
+      targetType,
+      targetNumber,
+      args.claimIssue,
+    );
+  } catch (error) {
+    finishRepairHold(
+      report,
+      args.format,
+      `repair claim is not bound to the digest target: ${(error as Error).message}`,
+      plan.snapshot,
+      [],
+      owner,
+      repo,
+      targetNumber,
+      targetType,
+      false,
+    );
+    return;
+  }
+
   const repairClaimContext =
     targetType === 'pr'
       ? {
@@ -1111,6 +1135,61 @@ function resolveDuplicateRepairActor(
       ? 'authenticated viewer is an owner or maintainer'
       : 'authenticated viewer is not an owner or maintainer, or permission lookup was unavailable',
   };
+}
+
+function assertRepairClaimBoundToTarget(
+  owner: string,
+  repo: string,
+  targetType: 'issue' | 'pr',
+  targetNumber: number,
+  claimIssue: string | undefined,
+): void {
+  const normalizedClaimIssue = String(claimIssue ?? '').trim();
+  if (!normalizedClaimIssue) {
+    throw new Error('claim issue is empty');
+  }
+  if (targetType === 'issue') {
+    if (normalizedClaimIssue !== String(targetNumber)) {
+      throw new Error(
+        `issue target #${targetNumber} requires --claim-issue ${targetNumber}`,
+      );
+    }
+    return;
+  }
+
+  let payload: { closingIssuesReferences?: unknown };
+  try {
+    payload = JSON.parse(
+      ghText([
+        'pr',
+        'view',
+        String(targetNumber),
+        '--repo',
+        `${owner}/${repo}`,
+        '--json',
+        'closingIssuesReferences',
+      ]),
+    ) as { closingIssuesReferences?: unknown };
+  } catch (error) {
+    throw new Error(
+      `could not read closingIssuesReferences for PR #${targetNumber}: ${(error as Error).message}`,
+    );
+  }
+  if (!Array.isArray(payload.closingIssuesReferences)) {
+    throw new Error(
+      `PR #${targetNumber} returned no usable closingIssuesReferences`,
+    );
+  }
+  const linkedIssueNumbers = payload.closingIssuesReferences
+    .map((reference) =>
+      String((reference as { number?: unknown } | null)?.number ?? '').trim(),
+    )
+    .filter(Boolean);
+  if (!linkedIssueNumbers.includes(normalizedClaimIssue)) {
+    throw new Error(
+      `PR #${targetNumber} does not link claim issue #${normalizedClaimIssue}; expected one of ${linkedIssueNumbers.join(', ') || 'none'}`,
+    );
+  }
 }
 
 function patchRepairComment(

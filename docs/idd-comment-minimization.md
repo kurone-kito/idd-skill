@@ -96,7 +96,9 @@ node scripts/live-status-digest.mjs --issue <issue-number> \
 The authenticated `gh` viewer must be an owner or maintainer, verified through
 the repository collaborator-permission endpoint. Missing or inconclusive
 permission data fails closed; configured trusted marker actors and issue
-authors do not authorize this repair. Before every mutation the helper
+authors do not authorize this repair. For an issue target, the claim issue
+must equal the target issue; for a PR target, it must be one of the PR's
+`closingIssuesReferences`. Before every mutation the helper
 re-fetches the complete comment set and target state and compares the exact
 current-digest IDs, target state, and per-comment body hashes with the latest
 expected snapshot. Apply also requires the active IDD claim named by

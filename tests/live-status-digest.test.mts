@@ -387,12 +387,12 @@ if (apiArgs[0] === 'user') {
   process.stdout.write(JSON.stringify({ id: evidenceId }));
 } else if (apiArgs.includes('--paginate')) {
   const issueNumber = path.match(/\\/issues\\/(\\d+)\\/comments$/)?.[1];
-  if (
-    state.failAfterMutation &&
-    state.mutations > 0 &&
-    issueNumber !== '321'
-  )
+  const claimIssueNumber = String(state.claimIssueNumber ?? '123');
+  if (state.failAfterMutation && state.mutations > 0 && !state.failedAfterMutation) {
+    state.failedAfterMutation = true;
+    fs.writeFileSync(statePath, JSON.stringify(state));
     process.exit(1);
+  }
   const claimComments = state.claimComments ?? [
     {
       id: 999,
@@ -400,7 +400,10 @@ if (apiArgs[0] === 'user') {
       user: { login: 'maintainer' },
     },
   ];
-  const comments = issueNumber === '321' ? claimComments : state.comments;
+  const comments =
+    issueNumber === claimIssueNumber
+      ? [...state.comments, ...claimComments]
+      : state.comments;
   for (const comment of comments) process.stdout.write(JSON.stringify(comment) + '\\n');
 } else if (path.endsWith('/issues/123')) {
   process.stdout.write(
@@ -449,7 +452,7 @@ if (apiArgs[0] === 'user') {
 
     const repairClaimArgs = [
       '--claim-issue',
-      '321',
+      '123',
       '--claim-id',
       'repair-claim',
       '--agent-id',
@@ -703,6 +706,55 @@ if (apiArgs[0] === 'user') {
       afterRecoveryClaimLoss.comments[1].body,
       /idd-live-status: historical/,
     );
+
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        comments: initialComments,
+        mutations: 0,
+        evidence: 0,
+        patches: 0,
+        failAfterMutation: false,
+        invalidTargetState: false,
+        viewer: 'maintainer',
+      }),
+    );
+    const unrelatedClaimArgs = [
+      '--apply',
+      '--claim-issue',
+      '321',
+      '--claim-id',
+      'repair-claim',
+      '--agent-id',
+      'repair-agent',
+      '--expected-current-digest-ids',
+      dryRun.repair.preflight.entries.map((entry) => entry.id).join(','),
+      '--expected-current-digest-sha256',
+      dryRun.repair.preflight.sha256,
+    ];
+    assert.throws(
+      () =>
+        execFileSync(process.execPath, [...baseArgs, ...unrelatedClaimArgs], {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+        }),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as { action: string; repair: { recoveryHold: string } };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.match(report.repair.recoveryHold, /requires --claim-issue 123/);
+        return true;
+      },
+    );
+    const afterUnrelatedClaim = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      mutations: number;
+      evidence: number;
+      patches: number;
+    };
+    assert.equal(afterUnrelatedClaim.mutations, 0);
+    assert.equal(afterUnrelatedClaim.evidence, 0);
+    assert.equal(afterUnrelatedClaim.patches, 0);
 
     const calls = readFileSync(logPath, 'utf8')
       .trim()

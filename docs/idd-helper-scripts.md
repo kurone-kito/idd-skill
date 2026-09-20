@@ -1115,7 +1115,8 @@ The adopted helper boundaries are intentionally narrow:
   authenticated owner/maintainer permission check and, in apply mode, all
   three `--claim-issue`, `--claim-id`, and `--agent-id` flags for the active
   writer-coordination lease. Repair mode rejects `--skip-claim-check` and
-  never makes an implicit selection
+  binds the lease to the digest target (the same issue, or a PR's
+  `closingIssuesReferences`) and never makes an implicit selection
 - repair dry-run output includes the complete current-digest ID/body-hash
   snapshot; apply additionally requires the exact
   `--expected-current-digest-ids` and
