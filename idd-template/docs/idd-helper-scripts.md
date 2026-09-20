@@ -1112,9 +1112,10 @@ The adopted helper boundaries are intentionally narrow:
   one, deleting, or minimizing audit history
 - `--repair-duplicate --retain-comment-id <id>` is a separate maintainer
   repair mode for an already-duplicate current-digest set; it requires an
-  authenticated owner/maintainer permission check, an active
-  `--claim-issue`/`--claim-id`/`--agent-id` writer-coordination lease in apply
-  mode, and never makes an implicit selection
+  authenticated owner/maintainer permission check and, in apply mode, all
+  three `--claim-issue`, `--claim-id`, and `--agent-id` flags for the active
+  writer-coordination lease. Repair mode rejects `--skip-claim-check` and
+  never makes an implicit selection
 - repair dry-run output includes the complete current-digest ID/body-hash
   snapshot; apply additionally requires the exact
   `--expected-current-digest-ids` and

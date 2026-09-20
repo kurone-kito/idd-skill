@@ -390,9 +390,31 @@ function runDuplicateDigestRepair(input) {
     );
     return;
   }
+  const repairClaimContext =
+    targetType === 'pr'
+      ? {
+          expectedLinkedPrs: buildExpectedLinkedPrReferences(
+            owner,
+            repo,
+            targetNumber,
+          ),
+          prFirstCommitAt: resolvePrFirstCommitAtForPr(
+            owner,
+            repo,
+            targetNumber,
+          ),
+        }
+      : {};
   const assertRepairClaim = () => {
     if (!args.apply) return;
-    assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+    assertActiveClaim(
+      owner,
+      repo,
+      args.claimIssue,
+      args.agentId,
+      args.claimId,
+      repairClaimContext,
+    );
   };
   try {
     assertRepairClaim();
@@ -436,6 +458,7 @@ function runDuplicateDigestRepair(input) {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -459,6 +482,7 @@ function runDuplicateDigestRepair(input) {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -474,6 +498,7 @@ function runDuplicateDigestRepair(input) {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -496,6 +521,7 @@ function runDuplicateDigestRepair(input) {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -515,6 +541,7 @@ function runDuplicateDigestRepair(input) {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -531,6 +558,7 @@ function runDuplicateDigestRepair(input) {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -548,6 +576,7 @@ function runDuplicateDigestRepair(input) {
         targetNumber,
         targetType,
         retiredCommentIds.length > 0,
+        assertRepairClaim,
       );
       return;
     }
@@ -576,6 +605,7 @@ function runDuplicateDigestRepair(input) {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -607,6 +637,7 @@ function runDuplicateDigestRepair(input) {
       targetNumber,
       targetType,
       true,
+      assertRepairClaim,
     );
     return;
   }
@@ -628,6 +659,7 @@ function runDuplicateDigestRepair(input) {
       targetNumber,
       targetType,
       true,
+      assertRepairClaim,
     );
     return;
   }
@@ -668,6 +700,7 @@ function runDuplicateDigestRepair(input) {
       targetNumber,
       targetType,
       true,
+      assertRepairClaim,
     );
     return;
   }
@@ -736,6 +769,7 @@ function runDuplicateDigestRepair(input) {
       targetNumber,
       targetType,
       true,
+      assertRepairClaim,
     );
     return;
   }
@@ -1001,6 +1035,7 @@ function finishRepairHold(
   targetNumber,
   targetType,
   postEvidence,
+  assertClaimBeforeEvidence,
 ) {
   const repair = report.repair;
   if (!repair) {
@@ -1015,7 +1050,16 @@ function finishRepairHold(
   report.action = 'repair-recovery-hold';
   report.canApply = false;
   report.applied = false;
-  if (postEvidence) {
+  let canPostEvidence = postEvidence;
+  if (canPostEvidence && assertClaimBeforeEvidence) {
+    try {
+      assertClaimBeforeEvidence();
+    } catch (error) {
+      canPostEvidence = false;
+      repair.recoveryHold = `${reason}; claim check failed before recovery evidence: ${error.message}`;
+    }
+  }
+  if (canPostEvidence) {
     try {
       const evidenceId = createRepairEvidenceComment(
         owner,

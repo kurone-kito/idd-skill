@@ -521,9 +521,31 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
     return;
   }
 
+  const repairClaimContext =
+    targetType === 'pr'
+      ? {
+          expectedLinkedPrs: buildExpectedLinkedPrReferences(
+            owner,
+            repo,
+            targetNumber,
+          ),
+          prFirstCommitAt: resolvePrFirstCommitAtForPr(
+            owner,
+            repo,
+            targetNumber,
+          ),
+        }
+      : {};
   const assertRepairClaim = (): void => {
     if (!args.apply) return;
-    assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+    assertActiveClaim(
+      owner,
+      repo,
+      args.claimIssue,
+      args.agentId,
+      args.claimId,
+      repairClaimContext,
+    );
   };
 
   try {
@@ -569,6 +591,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -592,6 +615,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -607,6 +631,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -629,6 +654,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -648,6 +674,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -664,6 +691,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -681,6 +709,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
         targetNumber,
         targetType,
         retiredCommentIds.length > 0,
+        assertRepairClaim,
       );
       return;
     }
@@ -709,6 +738,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
         targetNumber,
         targetType,
         true,
+        assertRepairClaim,
       );
       return;
     }
@@ -741,6 +771,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
       targetNumber,
       targetType,
       true,
+      assertRepairClaim,
     );
     return;
   }
@@ -762,6 +793,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
       targetNumber,
       targetType,
       true,
+      assertRepairClaim,
     );
     return;
   }
@@ -802,6 +834,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
       targetNumber,
       targetType,
       true,
+      assertRepairClaim,
     );
     return;
   }
@@ -871,6 +904,7 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
       targetNumber,
       targetType,
       true,
+      assertRepairClaim,
     );
     return;
   }
@@ -1188,6 +1222,7 @@ function finishRepairHold(
   targetNumber: number,
   targetType: 'issue' | 'pr',
   postEvidence: boolean,
+  assertClaimBeforeEvidence?: () => void,
 ): void {
   const repair = report.repair;
   if (!repair) {
@@ -1202,7 +1237,16 @@ function finishRepairHold(
   report.action = 'repair-recovery-hold';
   report.canApply = false;
   report.applied = false;
-  if (postEvidence) {
+  let canPostEvidence = postEvidence;
+  if (canPostEvidence && assertClaimBeforeEvidence) {
+    try {
+      assertClaimBeforeEvidence();
+    } catch (error) {
+      canPostEvidence = false;
+      repair.recoveryHold = `${reason}; claim check failed before recovery evidence: ${(error as Error).message}`;
+    }
+  }
+  if (canPostEvidence) {
     try {
       const evidenceId = createRepairEvidenceComment(
         owner,

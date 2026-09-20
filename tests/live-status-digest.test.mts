@@ -361,6 +361,7 @@ if (apiArgs[0] === 'user') {
   comment.body = requestBody;
   state.mutations += 1;
   state.patches += 1;
+  if (state.dropClaimAfterMutation) state.claimComments = [];
   fs.writeFileSync(statePath, JSON.stringify(state));
   if (state.patchResponseLost) process.exit(1);
   process.stdout.write(
@@ -385,8 +386,13 @@ if (apiArgs[0] === 'user') {
   if (state.evidenceResponseLost) process.exit(1);
   process.stdout.write(JSON.stringify({ id: evidenceId }));
 } else if (apiArgs.includes('--paginate')) {
-  if (state.failAfterMutation && state.mutations > 0) process.exit(1);
   const issueNumber = path.match(/\\/issues\\/(\\d+)\\/comments$/)?.[1];
+  if (
+    state.failAfterMutation &&
+    state.mutations > 0 &&
+    issueNumber !== '321'
+  )
+    process.exit(1);
   const claimComments = state.claimComments ?? [
     {
       id: 999,
@@ -641,6 +647,63 @@ if (apiArgs[0] === 'user') {
     assert.equal(afterApply.evidence, 1);
     assert.equal(afterApply.patches, 1);
     assert.match(afterApply.comments[1].body, /idd-live-status: historical/);
+
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        comments: initialComments,
+        mutations: 0,
+        evidence: 0,
+        patches: 0,
+        dropClaimAfterMutation: true,
+        failAfterMutation: true,
+        invalidTargetState: false,
+        viewer: 'maintainer',
+      }),
+    );
+    assert.throws(
+      () =>
+        execFileSync(process.execPath, [...baseArgs, ...applyArgs], {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+        }),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as {
+          action: string;
+          repair: {
+            retiredCommentIds: string[];
+            evidenceCommentId: number | null;
+            recoveryHold: string;
+          };
+        };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.deepEqual(report.repair.retiredCommentIds, ['102']);
+        assert.equal(report.repair.evidenceCommentId, null);
+        assert.match(
+          report.repair.recoveryHold,
+          /claim check failed before recovery evidence/,
+        );
+        return true;
+      },
+    );
+    const afterRecoveryClaimLoss = JSON.parse(
+      readFileSync(statePath, 'utf8'),
+    ) as {
+      comments: { id: number; body: string }[];
+      mutations: number;
+      evidence: number;
+      patches: number;
+    };
+    assert.equal(afterRecoveryClaimLoss.mutations, 1);
+    assert.equal(afterRecoveryClaimLoss.evidence, 0);
+    assert.equal(afterRecoveryClaimLoss.patches, 1);
+    assert.match(
+      afterRecoveryClaimLoss.comments[1].body,
+      /idd-live-status: historical/,
+    );
+
     const calls = readFileSync(logPath, 'utf8')
       .trim()
       .split('\n')
