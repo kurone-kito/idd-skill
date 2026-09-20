@@ -7,7 +7,7 @@ tags: [comment-minimization, cleanup]
 
 # IDD Comment Minimization
 
-<!-- cspell:words AAAAB Unminimize Wpaqs unminimized -->
+<!-- cspell:words AAAAB Unminimize Wpaqs unminimized upserts -->
 
 This note defines the safe path for hiding completed IDD review feedback
 and stale operational marker comments after a pull request has merged.
@@ -64,6 +64,78 @@ comments exist, do not delete, minimize, or guess which one is
 authoritative during an unattended run; preserve the audit history,
 report the duplicate URLs, and use trusted markers and GitHub state for
 all workflow decisions until a repair path selects one current digest.
+
+### Maintainer-gated duplicate repair
+
+The ordinary digest helper remains fail-closed when it finds multiple current
+digest markers. A maintainer may repair that state only through the separate
+explicit repair mode; routine claim ownership and normal `--apply` upserts
+never select a digest implicitly.
+
+Start with a fresh dry-run and choose the exact current comment to retain:
+
+```sh
+node scripts/live-status-digest.mjs --issue <issue-number> \
+  --repair-duplicate --retain-comment-id <comment-id> --dry-run
+```
+
+The dry-run reports the complete paginated current-digest set and a
+SHA-256 snapshot. Apply only with the exact IDs and snapshot hash from that
+fresh output:
+
+```sh
+node scripts/live-status-digest.mjs --issue <issue-number> \
+  --repair-duplicate --retain-comment-id <comment-id> --apply \
+  --expected-current-digest-ids "<id>,<id>" \
+  --expected-current-digest-sha256 "<snapshot-sha256>" \
+  --claim-issue <repair-claim-issue> \
+  --claim-id <active-claim-id> \
+  --agent-id <claim-agent-id>
+```
+
+The authenticated `gh` viewer must be an owner or maintainer, verified through
+the repository collaborator-permission endpoint. Missing or inconclusive
+permission data fails closed; configured trusted marker actors and issue
+authors do not authorize this repair. For an issue target, the claim issue
+must equal the target issue; for a PR target, the PR must link exactly one
+issue in its `closingIssuesReferences` and the claim issue must equal that
+issue. A PR that links zero or more than one issue fails closed, because no
+unique repair lease exists. Before every mutation the helper
+re-fetches the complete comment set and target state and compares the exact
+current-digest IDs, target state, and per-comment body hashes with the latest
+expected snapshot. Apply also requires the active IDD claim named by
+`--claim-issue`, `--claim-id`, and `--agent-id`; that claim is revalidated
+immediately before each retirement and evidence write so compliant repair
+writers are serialized. Any drift, selected-comment change, lost claim, or
+inconclusive read stops the operation without claiming success.
+
+Every non-retained current digest is retired by changing only its first-line
+marker to `<!-- idd-live-status: historical -->`. The full table and any
+suffix content remain recoverable; comments are never deleted or minimized.
+A fresh postcondition read must prove that exactly one current digest remains
+and that every selected duplicate has the planned historical body. Retirement
+and evidence bodies are sent as JSON through stdin so an HTML-comment-first
+body cannot be truncated by `gh api -f body=...`. If a mutation response is
+ambiguous, the helper re-reads the affected comment and target before
+recording whether the planned retirement landed and uses that fresh
+postflight snapshot in recovery evidence; if an evidence response is
+ambiguous, it reconciles only a newly observed exact marker/body authored by
+the authenticated repair actor and never blindly retries the POST. The helper
+then posts structured evidence with marker
+`<!-- idd-live-status-repair: v1 -->`, naming the actor, retained and retired
+comment IDs, pre/post entry hashes, target state, and snapshot hashes. A
+partial mutation, failed postcondition, or failed evidence write is reported
+as `repair-recovery-hold` and requires manual recovery. GitHub does not
+generally guarantee conditional requests for unsafe methods such as PATCH, so
+the helper does not treat an ETag or `If-Match` header as a compare-and-swap
+authority. The active IDD claim coordinates compliant writers; fresh reads,
+the verified PATCH response, and the postcondition still surface any
+out-of-band drift through the recovery-hold path rather than claiming success.
+
+This preventive maintainer path is grounded in the observed duplicate-digest
+incident recorded by issue #3158: dantalion issue #216 closed after its
+handoff recorded eleven current digest comments and the normal helper refused
+to apply with `action=duplicate, canApply=false`.
 
 ## Live Status Digest Helper
 

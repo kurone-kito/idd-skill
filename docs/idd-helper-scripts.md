@@ -1110,6 +1110,47 @@ The adopted helper boundaries are intentionally narrow:
 - it creates or updates only the single current digest comment and
   refuses duplicate marked digests with repair URLs instead of choosing
   one, deleting, or minimizing audit history
+- `--repair-duplicate --retain-comment-id <id>` is a separate maintainer
+  repair mode for an already-duplicate current-digest set; it requires an
+  authenticated owner/maintainer permission check and, in apply mode, all
+  three `--claim-issue`, `--claim-id`, and `--agent-id` flags for the active
+  writer-coordination lease. Repair mode rejects `--skip-claim-check` and
+  binds the lease to the digest target (the same issue, or, for a PR
+  target, the single issue in its `closingIssuesReferences`) and never
+  makes an implicit selection; a PR that links zero or more than one issue
+  has no unique lease to bind to and fails closed rather than accepting any
+  one of several independently claimable issues (kurone-kito/idd-skill#3158
+  review)
+- repair dry-run output includes the complete current-digest ID/body-hash
+  snapshot; apply additionally requires the exact
+  `--expected-current-digest-ids` and
+  `--expected-current-digest-sha256` values from that fresh dry-run
+- repair re-fetches the target state and complete paginated comments before
+  every retirement, revalidates the active claim immediately before every
+  retirement and evidence write, and verifies the PATCH response body before
+  reporting success. It changes only non-retained first-line markers to the
+  historical marker, preserves the rest of each body, and verifies exactly
+  one current digest afterward. Retirement and evidence bodies use JSON stdin
+  rather than `-f body=...` so HTML-comment-first content is preserved. An
+  ambiguous retirement response is reconciled by re-reading the comment and
+  target; an ambiguous evidence response is reconciled only to a newly
+  observed exact marker/body authored by the authenticated repair actor, and
+  is never blindly retried. The recovery path uses the fresh postflight
+  snapshot when recording an ambiguous retirement. If completion evidence
+  remains unobserved after reconciliation, it reports a recovery hold without
+  a contradictory compensating POST. GitHub does not generally guarantee
+  unsafe-method conditional requests, so an ETag or `If-Match` header is not
+  treated as a compare-and-swap authority; the active claim coordinates
+  compliant writers, while fresh reads and the postcondition surface
+  out-of-band drift through the recovery-hold path.
+- successful repairs post structured evidence with
+  `<!-- idd-live-status-repair: v1 -->`; preflight read, planning, and
+  authorization failures emit only a `repair-recovery-hold` JSON report,
+  while drift, partial mutation, and failed postconditions after the apply
+  path begins attempt a recovery-hold evidence POST before reporting the hold;
+  an ambiguous completion-evidence response is reconciled first and remains a
+  JSON-only hold when the exact evidence is not observed, to avoid a
+  contradictory compensating POST
 - digest text remains non-authoritative UI state; phase decisions still
   come from trusted markers and GitHub state
 
