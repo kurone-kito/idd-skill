@@ -8,6 +8,10 @@
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
+import {
+  isCurrentSessionWorktreeOwner,
+  resolveCurrentSessionClaimEvidence,
+} from './discover-roadmap-graph.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import {
   inspectLocalWorktreeBranch,
@@ -104,6 +108,8 @@ interface ResumeClaimRoutingOptions {
   ) => boolean;
   /** Read same-clone worktree occupancy before a stale takeover. */
   inspectLocalWorktree?: (branchName: string) => LocalWorktreeInspection;
+  /** Independently prove the active claim belongs to this session. */
+  isCurrentSessionOwner?: (claim: ParsedClaimMarker) => boolean;
 }
 
 /**
@@ -310,6 +316,19 @@ export function evaluateResumeClaimRouting(
       routeState = 'disputed';
       action = 'stop';
       reason = 'cold-recovery-activation-nonce-collision';
+    } else if (
+      (options.inspectLocalWorktree || options.isCurrentSessionOwner) &&
+      !options.isCurrentSessionOwner?.(state.activeClaim)
+    ) {
+      // A matching remote claim-id is not sufficient to resume a live
+      // session: the current canonical worktree, lock, generated tokens, and
+      // branch occupancy must independently identify this owner. The CLI
+      // wires this proof from Discover; a missing or contradictory proof
+      // fails closed rather than allowing a second same-host session to use
+      // the branch.
+      routeState = 'non_inheritable';
+      action = 'stop';
+      reason = 'claim-id-match-without-independent-owner-evidence';
     } else {
       routeState = 'already_owned';
       action = 'keep';
@@ -582,6 +601,22 @@ function runCli(): void {
       ),
     inspectLocalWorktree: (branchName: string) =>
       inspectLocalWorktreeBranch(branchName),
+    isCurrentSessionOwner: (claim: ParsedClaimMarker) => {
+      const evidence = resolveCurrentSessionClaimEvidence(claim.claimId);
+      if (
+        evidence === null ||
+        evidence.agentId !== claim.agentId ||
+        evidence.branchName !== claim.branch
+      ) {
+        return false;
+      }
+      return isCurrentSessionWorktreeOwner(
+        evidence.worktreePath,
+        evidence.branchName,
+        claim.branch,
+        inspectLocalWorktreeBranch(claim.branch),
+      );
+    },
   };
   const result = evaluateResumeClaimRouting(
     {

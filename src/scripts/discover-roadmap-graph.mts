@@ -1993,7 +1993,7 @@ export function isClaimHeartbeatOverdue(
  * canonical worktree root and symbolic branch. Failures and malformed
  * evidence fail closed.
  */
-interface CurrentSessionClaimEvidence {
+export interface CurrentSessionClaimEvidence {
   agentId: string;
   worktreePath: string;
   branchName: string;
@@ -2053,7 +2053,7 @@ function resolveCurrentSessionWorktreeIdentity(): {
   }
 }
 
-function resolveCurrentSessionClaimEvidence(
+export function resolveCurrentSessionClaimEvidence(
   claimId: string,
 ): CurrentSessionClaimEvidence | null {
   try {
@@ -2090,15 +2090,19 @@ function resolveCurrentSessionClaimEvidence(
  * paths for the exact claimed branch must be the canonical current worktree
  * path; unreadable and absent results never qualify for the bypass.
  */
-function currentSessionOwnsOccupiedWorktree(
-  claimState: ClaimStateResolution,
+export function isCurrentSessionWorktreeOwner(
+  currentPath: string | null,
+  currentBranch: string | null,
   branchName: string,
   localWorktree: LocalWorktreeInspection | undefined,
 ): boolean {
-  const currentPath = claimState.currentSessionWorktreePath;
+  const normalizedCurrentBranch = normalizeWorktreeBranchName(currentBranch);
+  const normalizedClaimBranch = normalizeWorktreeBranchName(branchName);
   if (
     currentPath === null ||
-    claimState.currentSessionBranch !== branchName ||
+    normalizedCurrentBranch === null ||
+    normalizedClaimBranch === null ||
+    normalizedCurrentBranch !== normalizedClaimBranch ||
     localWorktree?.status !== 'occupied'
   ) {
     return false;
@@ -2115,6 +2119,29 @@ function currentSessionOwnsOccupiedWorktree(
         return false;
       }
     })
+  );
+}
+
+function normalizeWorktreeBranchName(branchName: string | null): string | null {
+  const value = String(branchName ?? '').trim();
+  if (!value) {
+    return null;
+  }
+  return value.startsWith('refs/heads/')
+    ? value.slice('refs/heads/'.length)
+    : value;
+}
+
+function currentSessionOwnsOccupiedWorktree(
+  claimState: ClaimStateResolution,
+  branchName: string,
+  localWorktree: LocalWorktreeInspection | undefined,
+): boolean {
+  return isCurrentSessionWorktreeOwner(
+    claimState.currentSessionWorktreePath,
+    claimState.currentSessionBranch,
+    branchName,
+    localWorktree,
   );
 }
 

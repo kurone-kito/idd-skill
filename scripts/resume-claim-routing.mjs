@@ -6,6 +6,10 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
+import {
+  isCurrentSessionWorktreeOwner,
+  resolveCurrentSessionClaimEvidence,
+} from './discover-roadmap-graph.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
 import {
@@ -187,6 +191,19 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       routeState = 'disputed';
       action = 'stop';
       reason = 'cold-recovery-activation-nonce-collision';
+    } else if (
+      (options.inspectLocalWorktree || options.isCurrentSessionOwner) &&
+      !options.isCurrentSessionOwner?.(state.activeClaim)
+    ) {
+      // A matching remote claim-id is not sufficient to resume a live
+      // session: the current canonical worktree, lock, generated tokens, and
+      // branch occupancy must independently identify this owner. The CLI
+      // wires this proof from Discover; a missing or contradictory proof
+      // fails closed rather than allowing a second same-host session to use
+      // the branch.
+      routeState = 'non_inheritable';
+      action = 'stop';
+      reason = 'claim-id-match-without-independent-owner-evidence';
     } else {
       routeState = 'already_owned';
       action = 'keep';
@@ -434,6 +451,22 @@ function runCli() {
       ),
     inspectLocalWorktree: (branchName) =>
       inspectLocalWorktreeBranch(branchName),
+    isCurrentSessionOwner: (claim) => {
+      const evidence = resolveCurrentSessionClaimEvidence(claim.claimId);
+      if (
+        evidence === null ||
+        evidence.agentId !== claim.agentId ||
+        evidence.branchName !== claim.branch
+      ) {
+        return false;
+      }
+      return isCurrentSessionWorktreeOwner(
+        evidence.worktreePath,
+        evidence.branchName,
+        claim.branch,
+        inspectLocalWorktreeBranch(claim.branch),
+      );
+    },
   };
   const result = evaluateResumeClaimRouting(
     {

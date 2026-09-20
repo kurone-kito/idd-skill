@@ -25,6 +25,7 @@ import {
   extractRoadmapMarkerId,
   extractTaskListReferences,
   isClaimHeartbeatOverdue,
+  isCurrentSessionWorktreeOwner,
   normalizeConcurrency,
   parseClaimHeartbeatIntervalMs,
   parseClaimStaleAgeMs,
@@ -2598,6 +2599,22 @@ test('owner evidence requires a generated-tokens record alongside the lock (#314
     process.chdir(originalCwd);
     rmSync(worktree, { recursive: true, force: true });
   }
+});
+
+test('owner worktree proof normalizes full branch refs (#3141)', () => {
+  assert.equal(
+    isCurrentSessionWorktreeOwner(
+      '/tmp/current-worktree',
+      'issue/42-task',
+      'refs/heads/issue/42-task',
+      {
+        status: 'occupied',
+        paths: ['/tmp/current-worktree'],
+        reason: 'matching local worktree for issue/42-task',
+      },
+    ),
+    true,
+  );
 });
 
 function claimComment(

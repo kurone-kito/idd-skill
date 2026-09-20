@@ -1377,7 +1377,7 @@ function resolveCurrentSessionWorktreeIdentity() {
     return null;
   }
 }
-function resolveCurrentSessionClaimEvidence(claimId) {
+export function resolveCurrentSessionClaimEvidence(claimId) {
   try {
     const worktree = resolveCurrentSessionWorktreeIdentity();
     if (worktree === null) {
@@ -1411,15 +1411,19 @@ function resolveCurrentSessionClaimEvidence(claimId) {
  * paths for the exact claimed branch must be the canonical current worktree
  * path; unreadable and absent results never qualify for the bypass.
  */
-function currentSessionOwnsOccupiedWorktree(
-  claimState,
+export function isCurrentSessionWorktreeOwner(
+  currentPath,
+  currentBranch,
   branchName,
   localWorktree,
 ) {
-  const currentPath = claimState.currentSessionWorktreePath;
+  const normalizedCurrentBranch = normalizeWorktreeBranchName(currentBranch);
+  const normalizedClaimBranch = normalizeWorktreeBranchName(branchName);
   if (
     currentPath === null ||
-    claimState.currentSessionBranch !== branchName ||
+    normalizedCurrentBranch === null ||
+    normalizedClaimBranch === null ||
+    normalizedCurrentBranch !== normalizedClaimBranch ||
     localWorktree?.status !== 'occupied'
   ) {
     return false;
@@ -1436,6 +1440,27 @@ function currentSessionOwnsOccupiedWorktree(
         return false;
       }
     })
+  );
+}
+function normalizeWorktreeBranchName(branchName) {
+  const value = String(branchName ?? '').trim();
+  if (!value) {
+    return null;
+  }
+  return value.startsWith('refs/heads/')
+    ? value.slice('refs/heads/'.length)
+    : value;
+}
+function currentSessionOwnsOccupiedWorktree(
+  claimState,
+  branchName,
+  localWorktree,
+) {
+  return isCurrentSessionWorktreeOwner(
+    claimState.currentSessionWorktreePath,
+    claimState.currentSessionBranch,
+    branchName,
+    localWorktree,
   );
 }
 /**

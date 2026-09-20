@@ -388,6 +388,7 @@ test('verified owner resume may keep an occupied worktree', () => {
         paths: ['/tmp/repo.issue-3-task'],
         reason: 'matching local worktree for issue/3-task',
       }),
+      isCurrentSessionOwner: () => true,
     },
   );
 
@@ -665,6 +666,7 @@ test('verified forced-handoff successor may resume occupied stale worktree', () 
         paths: ['/tmp/repo.issue-11-task'],
         reason: 'matching local worktree for issue/11-task',
       }),
+      isCurrentSessionOwner: () => true,
     },
   );
 
@@ -673,6 +675,38 @@ test('verified forced-handoff successor may resume occupied stale worktree', () 
   assert.equal(result.reason, 'claim-id-match');
   assert.equal(result.evidence.local_worktree, undefined);
   assert.equal(result.evidence.forced_handoff?.new_claim_id, 'claim-new');
+});
+
+test('owner resume stops without independent local ownership evidence', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-old',
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-3-task'],
+        reason: 'matching local worktree for issue/3-task',
+      }),
+      isCurrentSessionOwner: () => false,
+    },
+  );
+
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(
+    result.reason,
+    'claim-id-match-without-independent-owner-evidence',
+  );
 });
 
 test('fresh caller cannot bypass occupied worktree with forced-handoff evidence', () => {
