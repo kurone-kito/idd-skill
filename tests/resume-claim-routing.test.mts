@@ -709,6 +709,40 @@ test('owner resume stops without independent local ownership evidence', () => {
   );
 });
 
+test('owner resume keeps already_owned before B1 creates the worktree (#3154)', () => {
+  // A forced-handoff successor's very first routing check runs before B1
+  // ever creates its worktree, so no local worktree is occupied yet -- the
+  // independent-owner-evidence gate must not fire merely because
+  // isCurrentSessionOwner can't prove ownership of a worktree that does not
+  // exist. Only an *occupied* result disambiguates a real second session.
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-new',
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: codex claim-new supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'absent',
+        paths: [],
+        reason: null,
+      }),
+      isCurrentSessionOwner: () => false,
+    },
+  );
+
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal(result.reason, 'claim-id-match');
+});
+
 test('fresh caller cannot bypass occupied worktree with forced-handoff evidence', () => {
   const result = evaluateResumeClaimRouting(
     {

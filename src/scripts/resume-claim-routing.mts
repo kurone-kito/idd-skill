@@ -317,15 +317,24 @@ export function evaluateResumeClaimRouting(
       action = 'stop';
       reason = 'cold-recovery-activation-nonce-collision';
     } else if (
-      (options.inspectLocalWorktree || options.isCurrentSessionOwner) &&
+      options.inspectLocalWorktree?.(state.activeClaim.branch)?.status ===
+        'occupied' &&
       !options.isCurrentSessionOwner?.(state.activeClaim)
     ) {
       // A matching remote claim-id is not sufficient to resume a live
-      // session: the current canonical worktree, lock, generated tokens, and
-      // branch occupancy must independently identify this owner. The CLI
+      // session **when a local worktree for this branch is already
+      // occupied**: the current canonical worktree, lock, generated tokens,
+      // and branch occupancy must independently identify this owner, since
+      // the occupant could be a second, unrelated same-host session. The CLI
       // wires this proof from Discover; a missing or contradictory proof
-      // fails closed rather than allowing a second same-host session to use
-      // the branch.
+      // fails closed rather than allowing that second session to use the
+      // branch. Gating on an *occupied* result specifically (not merely on
+      // whether the callbacks are wired) matters for a forced-handoff
+      // successor's very first routing check, which can run before B1 ever
+      // creates its worktree (#3154 review): with nothing occupied yet,
+      // there is no second session to disambiguate from, and requiring
+      // ownership proof anyway would wrongly reject the successor's own
+      // still-to-be-created worktree.
       routeState = 'non_inheritable';
       action = 'stop';
       reason = 'claim-id-match-without-independent-owner-evidence';
