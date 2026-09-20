@@ -2989,3 +2989,56 @@ test('discover-roadmap-union schema accepts a legacy activeClaim without an id',
 
   assert.deepEqual(validate(instance, schema), []);
 });
+
+test('discover-roadmap-union schema accepts localWorktree status variants', () => {
+  const schema = loadJson('schemas/discover-roadmap-union.schema.json');
+  const variants = [
+    { status: 'absent', paths: [], reason: null },
+    {
+      status: 'occupied',
+      paths: ['/repo/worktree'],
+      reason: 'matching local worktree for issue/101-task',
+    },
+    {
+      status: 'unreadable',
+      paths: ['/repo/missing-worktree'],
+      reason: 'cannot inspect matching local worktree metadata',
+    },
+  ];
+
+  for (const localWorktree of variants) {
+    const instance = JSON.parse(
+      JSON.stringify(
+        loadJson('fixtures/schemas/discover-roadmap-union.valid.json'),
+      ),
+    );
+    instance.leaves[0].activeClaim.localWorktree = localWorktree;
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `localWorktree ${JSON.stringify(localWorktree)} should be accepted`,
+    );
+  }
+});
+
+test('discover-roadmap-union schema rejects malformed localWorktree objects', () => {
+  const schema = loadJson('schemas/discover-roadmap-union.schema.json');
+  const variants = [
+    { paths: [], reason: null },
+    { status: 'unknown', paths: [], reason: null },
+    { status: 'absent', paths: [], reason: null, extra: true },
+  ];
+
+  for (const localWorktree of variants) {
+    const instance = JSON.parse(
+      JSON.stringify(
+        loadJson('fixtures/schemas/discover-roadmap-union.valid.json'),
+      ),
+    );
+    instance.leaves[0].activeClaim.localWorktree = localWorktree;
+    assert.ok(
+      validate(instance, schema).length > 0,
+      `localWorktree ${JSON.stringify(localWorktree)} should be rejected`,
+    );
+  }
+});

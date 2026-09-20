@@ -2086,9 +2086,9 @@ function resolveCurrentSessionClaimEvidence(
 /**
  * Prove that the owner-resume exception refers to this session's own
  * worktree, not merely to matching stale lock/token artifacts in another
- * worktree. The occupancy probe must be an occupied, readable result and must
- * list the canonical current worktree path for the exact claimed branch;
- * unreadable and absent results never qualify for the bypass.
+ * worktree. The occupancy probe must be an occupied, readable result and all
+ * paths for the exact claimed branch must be the canonical current worktree
+ * path; unreadable and absent results never qualify for the bypass.
  */
 function currentSessionOwnsOccupiedWorktree(
   claimState: ClaimStateResolution,
@@ -2103,16 +2103,19 @@ function currentSessionOwnsOccupiedWorktree(
   ) {
     return false;
   }
-  return localWorktree.paths.some((path) => {
-    if (path === currentPath) {
-      return true;
-    }
-    try {
-      return realpathSync(path) === currentPath;
-    } catch {
-      return false;
-    }
-  });
+  return (
+    localWorktree.paths.length > 0 &&
+    localWorktree.paths.every((path) => {
+      if (path === currentPath) {
+        return true;
+      }
+      try {
+        return realpathSync(path) === currentPath;
+      } catch {
+        return false;
+      }
+    })
+  );
 }
 
 /**

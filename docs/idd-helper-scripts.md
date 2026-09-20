@@ -570,7 +570,7 @@ default below is unchanged.
     A stale-claim occupancy bypass additionally requires the canonical current
     worktree path and symbolic branch to match the occupied path and active
     branch; stale or released claims may also carry
-    `localWorktree: {status, paths, reason}`) and
+    `localWorktree: {status, paths, reason}` and
     `claimEligible: boolean` on
     each
     open leaf. Both `discover-roadmap-graph.mjs` and

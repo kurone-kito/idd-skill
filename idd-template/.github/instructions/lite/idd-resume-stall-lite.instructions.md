@@ -84,6 +84,9 @@ Takeover only if latest valid trusted `claimed-by` `created_at` is
 `heartbeatOverdue` is **diagnostic only**. It does not shorten the 24 h
 gate.
 
+Before S4/posting, rerun helper; require `stale`/`takeover`,
+`evidence.local_worktree.status: absent`; fail → **STOP** (#3141).
+
 ## S4 — Race-safe recheck (immediately before write)
 
 1. Run `idd-claim-lite.instructions.md` pre-checks (d)/(e); either

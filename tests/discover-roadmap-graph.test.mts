@@ -3119,6 +3119,36 @@ test('owner evidence in another occupied worktree cannot bypass stale claim occu
   assert.equal(leaf701?.claimEligible, false);
 });
 
+test('owner evidence cannot bypass occupancy when another matching worktree exists', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', STALE_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    currentClaimId: 'claim-701',
+    currentSessionAgentId: 'agent-a',
+    currentSessionWorktreePath: '/tmp/issue/700-task',
+    currentSessionBranch: 'issue/700-task',
+    currentSessionOwnsClaimEvidence: true,
+    inspectLocalWorktree: () => ({
+      status: 'occupied',
+      paths: ['/tmp/issue/700-task', '/tmp/other-worktree'],
+      reason: 'multiple matching local worktrees for issue/700-task',
+    }),
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.ownedByCurrentSession, true);
+  assert.equal(leaf701?.claimEligible, false);
+});
+
 test('owner evidence on another branch cannot bypass stale claim occupancy', async () => {
   const issues = claimGraphIssues();
   const commentsByIssue = new Map<number, unknown[]>([
