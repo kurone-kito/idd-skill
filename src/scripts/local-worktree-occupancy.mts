@@ -243,6 +243,20 @@ function readGitPath(
   }
 }
 
+function readRegularMetadataFile(
+  path: string,
+  normalize: (value: string) => string,
+): string | null {
+  try {
+    if (!lstatSync(path).isFile()) {
+      return null;
+    }
+    return normalize(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function isCanonicalWorktreeRoot(
   worktreePath: string,
   env: NodeJS.ProcessEnv,
@@ -318,46 +332,44 @@ function resolveDetachedBranch(
     if (sequencerPath !== null) {
       return { branchName: null, unreadable: true };
     }
-    try {
-      const bisectBranch = removeTrailingLineEnding(
-        readFileSync(bisectStartPath, 'utf8'),
-      );
-      if (!bisectBranch) {
-        return { branchName: null, unreadable: true };
-      }
-      const branchName = branchNameFromRef(bisectBranch);
-      if (!branchName) {
-        return { branchName: null, unreadable: true };
-      }
-      if (
-        /^[0-9a-f]{4,64}$/i.test(branchName) &&
-        !hasLocalBranchRef(worktreePath, branchName, env, execute)
-      ) {
-        return { branchName: null, unreadable: true };
-      }
-      return {
-        branchName,
-        unreadable: false,
-      };
-    } catch {
+    const bisectBranch = readRegularMetadataFile(
+      bisectStartPath,
+      removeTrailingLineEnding,
+    );
+    if (!bisectBranch) {
       return { branchName: null, unreadable: true };
     }
+    const branchName = branchNameFromRef(bisectBranch);
+    if (!branchName) {
+      return { branchName: null, unreadable: true };
+    }
+    if (
+      /^[0-9a-f]{4,64}$/i.test(branchName) &&
+      !hasLocalBranchRef(worktreePath, branchName, env, execute)
+    ) {
+      return { branchName: null, unreadable: true };
+    }
+    return {
+      branchName,
+      unreadable: false,
+    };
   }
   if (sequencerPath !== null) {
-    try {
-      const headName = readFileSync(`${sequencerPath}/head-name`, 'utf8');
-      const normalizedHeadName = removeTrailingLineEnding(headName);
-      const branchName = branchNameFromRef(normalizedHeadName);
-      if (!branchName) {
-        return { branchName: null, unreadable: true };
-      }
-      return {
-        branchName,
-        unreadable: false,
-      };
-    } catch {
+    const headName = readRegularMetadataFile(
+      joinPath(sequencerPath, 'head-name'),
+      removeTrailingLineEnding,
+    );
+    if (!headName) {
       return { branchName: null, unreadable: true };
     }
+    const branchName = branchNameFromRef(headName);
+    if (!branchName) {
+      return { branchName: null, unreadable: true };
+    }
+    return {
+      branchName,
+      unreadable: false,
+    };
   }
   // A detached worktree with no recoverable branch metadata is unknown, not
   // proven unrelated. Fail closed so stale-claim takeover cannot proceed.

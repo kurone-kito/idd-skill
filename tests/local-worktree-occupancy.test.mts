@@ -707,6 +707,42 @@ test('fails closed when detached sequencer head-name is empty', () => {
   }
 });
 
+test('fails closed when detached sequencer head-name is a symlink', {
+  skip: process.platform === 'win32',
+}, () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-symlink-head-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  const target = join(gitDirectory, 'head-name-target');
+  try {
+    mkdirSync(join(gitDirectory, 'rebase-merge'));
+    writeFileSync(target, 'refs/heads/issue/42-task\n');
+    symlinkSync(target, join(gitDirectory, 'rebase-merge', 'head-name'));
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        return stubGitCommands(worktree, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.deepEqual(result, {
+      status: 'unreadable',
+      paths: [worktree],
+      reason: 'cannot inspect matching local worktree metadata',
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
 test('fails closed when detached sequencer head-name is malformed', () => {
   const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-bad-head-`);
   const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
