@@ -563,8 +563,8 @@ export function fetchProvenanceCommentsGraphql(owner, repo, issueNumber) {
   while (true) {
     const args = [
       'api',
-      'graphql',
       ...resolveGhHostnameArgs(),
+      'graphql',
       '-f',
       `query=${query}`,
       '-f',
