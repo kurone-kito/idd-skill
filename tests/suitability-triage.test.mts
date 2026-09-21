@@ -3578,10 +3578,12 @@ test('verifiability passes a genuine decision despite an unrelated reporting ver
 });
 
 test('verifiability still fails when an empty inline marker is immediately followed by a heading with no blank line (PR #2662 Copilot round 6)', () => {
-  // Resolution text must start on the same line as the colon: a single
-  // hard-wrap tolerance previously let an empty marker's colon consume the
-  // next line's first character (e.g. a heading's "#") as if it were
-  // resolution content, even with no blank-line paragraph gap at all.
+  // Resolution text must start on the same line as the colon, or after
+  // exactly one hard-wrapped line break guarded against a block-starting
+  // construct (#3165): a single hard-wrap tolerance previously let an
+  // empty marker's colon consume the next line's first character (e.g. a
+  // heading's "#") as if it were resolution content, even with no
+  // blank-line paragraph gap at all.
   const result = checkVerifiability({
     issue: {
       ...BASE_ISSUE,
@@ -3593,6 +3595,60 @@ test('verifiability still fails when an empty inline marker is immediately follo
     },
   } as Context);
   assert.equal(result.pass, false);
+});
+
+test('verifiability passes a genuine resolution hard-wrapped at the colon-to-resolution boundary (#3165)', () => {
+  // Field feedback (gist round 28, 2026-09-21): an adopter's Groom-pass
+  // convention hand-authors the marker, then reflows the issue body to a
+  // project line-length convention. When the parenthetical + colon land
+  // close enough to the wrap column, the wrap falls exactly on the
+  // colon-to-resolution boundary -- a single hard-wrapped line break
+  // immediately after the colon, continuing the same sentence's prose on
+  // the next line, must still count as a resolved decision.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Maintainer decision (name, Groom hearing, 2026-09-20):
+adopt the policy described above.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails when a hard-wrapped inline marker is immediately followed by a blockquote, list marker, or thematic break (#3165)', () => {
+  // The block-start guard added for the hard-wrap tolerance above must
+  // reject every Markdown block construct the issue's acceptance criteria
+  // name, not only an ATX heading (already covered above): a blockquote
+  // marker, an unordered or ordered list marker, and a thematic break.
+  for (const nextLine of [
+    '> quoted text',
+    '- list item',
+    '1. list item',
+    '---',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05):
+${nextLine}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail when the next line is: ${nextLine}`,
+    );
+  }
 });
 
 test('verifiability passes settled decisions that begin with a denylist word (PR #2662 Codex round 4)', () => {
