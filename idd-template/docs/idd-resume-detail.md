@@ -74,6 +74,13 @@ its own — always use the marker's assigned `new-claim-id`. (`{agent-id}` may
 legitimately equal the displaced claim's agent-id; only `{claim-id}` must
 always be the fresh marker-assigned value.)
 
+**Content-scope audit** — Once the successor's post-handoff routing
+(Step 2 in `idd-resume.instructions.md`) lands it on §W7 or §W8 with
+inherited commits on `{branch}`, run the content-scope audit described
+in §CSA before those commits are pushed or bundled into a PR. The
+displaced session is by definition unreachable, so its own planning
+comment can never substitute for this independent check.
+
 ## §W1 — PR exists (1 match), no worktree
 
 Run `git fetch origin` from the primary worktree (this is a
@@ -155,8 +162,10 @@ From the primary worktree (HEAD stays on `main`):
 3. `git worktree add <sibling-worktree-path> {branch}` — create the
    sibling worktree using the B1 naming convention.
 
-Then resume from C1 inside the new worktree. C exits to D1
-immediately if the critique pass finds nothing new.
+Before resuming, run the content-scope audit (§CSA, below) against
+`{branch}` — nothing on it has been through a PR yet. Then resume from
+C1 inside the new worktree. C exits to D1 immediately if the critique
+pass finds nothing new.
 
 Anti-patterns (do not substitute these for steps 2–3): `git switch -c
 {branch} origin/{branch}` or `git checkout -b {branch}
@@ -169,8 +178,54 @@ for the full rule.
 
 Restore the worktree from the local branch. Then route:
 
-- Unpushed commits exist → D1
-- No unpushed commits → B2
+- Unpushed commits exist → run the content-scope audit (§CSA, below)
+  against `{branch}`, then D1.
+- No unpushed commits → B2 (no inherited commit content to audit).
+
+## §CSA — Content-Scope Audit for Inherited Commits
+
+Applies wherever §W7, §W8, or §FH resumes work from commit(s) this
+session itself did not just author on `{branch}` — whether recovering
+its own crashed prior turn or taking over from a different,
+possibly-dead session via forced-handoff. Neither case has a live
+author left to confirm what was actually verified, so before any of
+these commits get pushed or bundled into a PR, the resuming session
+must independently audit their content against the target issue's own
+declared scope (observed 2026-09-21, kurone-kito/idd-skill#3166: an
+inherited unpushed commit correctly implemented an issue's declared
+requirements but also silently bundled in a third, undeclared feature,
+justified only by the dead session's own stale, unverifiable
+"maintainer-authorized" planning comment).
+
+**Diff range**: `{branch}`'s full range against `{development-branch}`,
+not merely commits unpushed relative to `{branch}`'s own remote tip —
+§W7 creates the local branch directly from `origin/{branch}`, so a
+same-branch unpushed-only diff is empty by construction there even
+though nothing on that branch has been through a PR yet.
+`{development-branch}` is the value resolved in
+[B1's Worktree creation](../.github/instructions/idd-work.instructions.md#worktree-creation)
+step — re-resolve it here if this file is entered directly (for
+example, on resume) without a fresh B1 pass, the same caveat
+`idd-pr-submit.instructions.md`'s D1 uses for the same variable. For
+example:
+
+```sh
+git fetch origin {development-branch}
+git diff origin/{development-branch}...{branch}
+```
+
+**Audit**: diff that range against the issue's own `## Proposed
+change`, `## Acceptance criteria`, and `## Candidate files` sections.
+Treat any change that does not trace to a declared requirement the same
+way a fresh implementation would treat unrequested scope: flag it for
+removal, or require an explicit, evidenced justification recorded on
+the issue — never accept a stale planning comment's own self-asserted
+authorization as sufficient by itself. This is a diff review, not a new
+gate or helper.
+
+This audits for scope _creep_; it does not replace C1's own critique
+pass, which verifies declared requirements are _met_ — the two checks
+are complementary, and §W7 still resumes from C1 after this audit.
 
 ## §Digest — Digest Repair Guidance
 
