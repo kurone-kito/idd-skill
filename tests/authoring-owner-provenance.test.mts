@@ -136,6 +136,44 @@ if (path === 'graphql') {
 `;
 }
 
+function ghStubScriptForTwoGraphqlPages(
+  issueBody: string,
+  page1: readonly GraphqlCommentNode[],
+  page2: readonly GraphqlCommentNode[],
+  callLogPath: string,
+): string {
+  return `
+const fs = require('node:fs');
+const path = process.argv[3];
+const cursorArg = process.argv.find((a) => String(a).startsWith('cursor='));
+if (path === 'graphql') {
+  fs.appendFileSync(${JSON.stringify(callLogPath)}, (cursorArg || 'graphql') + '\\n');
+  const comments = cursorArg
+    ? {
+        nodes: ${JSON.stringify(page2)},
+        pageInfo: { hasNextPage: false, endCursor: null },
+      }
+    : {
+        nodes: ${JSON.stringify(page1)},
+        pageInfo: { hasNextPage: true, endCursor: 'CURSOR1' },
+      };
+  process.stdout.write(JSON.stringify({
+    data: { repository: { issue: { comments } } },
+  }));
+} else if (path && path.endsWith('/comments')) {
+  process.stderr.write('REST comments path must not be consulted\\n');
+  process.exit(1);
+} else {
+  process.stdout.write(JSON.stringify({
+    number: 2891,
+    title: 'CLI test issue',
+    body: ${JSON.stringify(issueBody)},
+    html_url: 'https://github.com/kurone-kito/idd-skill/issues/2891',
+  }));
+}
+`;
+}
+
 function ghRestOnlyStubScript(
   issueBody: string,
   comments: readonly RestCommentRow[],
@@ -1265,6 +1303,35 @@ test('mapGraphqlIssueCommentNode: unparseable lastEditedAt fails closed', () => 
   }
 });
 
+test('mapGraphqlIssueCommentNode: omitted body fails closed', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 1,
+    lastEditedAt: null,
+    createdAt: '2026-09-21T10:17:52Z',
+    updatedAt: '2026-09-21T10:17:52Z',
+    author: { login: 'kurone-kito' },
+  });
+  assert.equal(mapped.ok, false);
+  if (!mapped.ok) {
+    assert.match(mapped.reason, /non-string body/);
+  }
+});
+
+test('mapGraphqlIssueCommentNode: null body fails closed', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 1,
+    lastEditedAt: null,
+    createdAt: '2026-09-21T10:17:52Z',
+    updatedAt: '2026-09-21T10:17:52Z',
+    body: null,
+    author: { login: 'kurone-kito' },
+  });
+  assert.equal(mapped.ok, false);
+  if (!mapped.ok) {
+    assert.match(mapped.reason, /non-string body/);
+  }
+});
+
 test('inspectGraphqlCommentsPage: missing nodes fails closed', () => {
   const page = inspectGraphqlCommentsPage(
     { pageInfo: { hasNextPage: false, endCursor: null } },
@@ -1534,5 +1601,57 @@ test('CLI: missing GraphQL pageInfo reports not-found without REST comments', ()
     );
   } finally {
     restore();
+  }
+});
+
+test('CLI: hasNextPage true fetches the second page with the returned cursor', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const callLogDir = mkdtempSync(join(tmpdir(), 'idd-authoring-owner-pages-'));
+  const callLogPath = join(callLogDir, 'calls.log');
+  const page1: GraphqlCommentNode[] = [
+    {
+      databaseId: 1,
+      lastEditedAt: null,
+      createdAt: '2026-09-10T16:00:00Z',
+      updatedAt: '2026-09-10T16:00:00Z',
+      body: 'ordinary comment on page 1',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const page2 = [
+    graphqlAcquireNode(acquireMarkerBody(sha256(liveBody)), {
+      databaseId: 2,
+      createdAt: '2026-09-10T16:48:44Z',
+      updatedAt: '2026-09-10T16:48:44Z',
+      lastEditedAt: null,
+    }),
+  ];
+  const restore = stubGh(
+    ghStubScriptForTwoGraphqlPages(liveBody, page1, page2, callLogPath),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'pass');
+    const calls = readFileSync(callLogPath, 'utf8').trim().split('\n');
+    assert.deepEqual(calls, ['graphql', 'cursor=CURSOR1']);
+  } finally {
+    restore();
+    rmSync(callLogDir, { recursive: true, force: true });
   }
 });

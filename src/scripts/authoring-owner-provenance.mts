@@ -590,8 +590,9 @@ export function inspectGraphqlCommentsPage(
  * Map one GraphQL `IssueComment` node onto
  * {@link AuthoringOwnerProvenanceComment}. Fail closed on a missing
  * `databaseId`, a missing/empty/unparseable `lastEditedAt` (except an
- * explicit JSON `null`), or an unparseable `createdAt`. Never fills
- * `lastEditedAt` from `updatedAt` / `createdAt`.
+ * explicit JSON `null`), an unparseable `createdAt`, or a missing /
+ * non-string `body`. Never fills `lastEditedAt` from `updatedAt` /
+ * `createdAt`.
  */
 export function mapGraphqlIssueCommentNode(
   node: unknown,
@@ -642,6 +643,15 @@ export function mapGraphqlIssueCommentNode(
         `lastEditedAt -- body-edit evidence is incomplete`,
     };
   }
+  const bodyRaw = record.body;
+  if (typeof bodyRaw !== 'string') {
+    return {
+      ok: false,
+      reason:
+        `GraphQL comment #${databaseId} has a missing or non-string body -- ` +
+        `comment-log evidence is incomplete`,
+    };
+  }
   const updatedAtRaw = record.updatedAt;
   const updatedAt =
     typeof updatedAtRaw === 'string' && isParseableTimestamp(updatedAtRaw)
@@ -652,7 +662,7 @@ export function mapGraphqlIssueCommentNode(
     comment: {
       id: databaseId,
       authorLogin: String(record.author?.login ?? ''),
-      body: String(record.body ?? ''),
+      body: bodyRaw,
       createdAt,
       updatedAt,
       lastEditedAt,
