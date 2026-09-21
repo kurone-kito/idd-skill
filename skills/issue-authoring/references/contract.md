@@ -1337,19 +1337,25 @@ only approval boundary.
   kurone-kito/idd-skill#3164).** Creating a standalone issue that is
   its own anchor -- no parent roadmap, no other target in the set --
   walks the exact same general-case sequence above, collapsed onto the
-  one target/anchor identity: generate one opaque `target` id and one
-  publication token before the create (the new issue's own number is
-  not yet known), and set `anchor` to that same `target` value
-  (self-reference, per the self-anchor rule above) instead of a
-  resolved `<owner>/<repo>#<number>`; resolve `journal` to
-  `issueAuthoring.journalIssue` from `.github/idd/config.json`, since a
-  standalone set has no originating Stage 1 hold to reuse; append the
-  publication-intent record with `state=pending; issue=none` before
-  issuing the create; run the capability-checked create-with-label
-  call; attach and verify the returned issue identity on that
-  still-`pending` record; append the `mode=acquire` owner marker with a
-  freshly generated set ID (a new standalone set has no prior set ID to
-  reuse) and a new opaque owner token (`supersedes=none`); wait
+  one target/anchor identity: generate one opaque `target` id, one
+  opaque set ID (a new standalone set has no prior set ID to reuse,
+  so this is a fresh generation, not a reuse), and one publication
+  token before the create (the new issue's own number is not yet
+  known) -- both the `authoring-publication` and
+  `authoring-publication-intent` marker shapes require `set` as a
+  field from their first post, so the set ID must exist before that
+  first post, the same as `target` and the token; set `anchor` to
+  that same `target` value (self-reference, per the self-anchor rule
+  above) instead of a resolved `<owner>/<repo>#<number>`; resolve
+  `journal` to `issueAuthoring.journalIssue` from
+  `.github/idd/config.json`, since a standalone set has no
+  originating Stage 1 hold to reuse; append the publication-intent
+  record, carrying that same set ID, with `state=pending; issue=none`
+  before issuing the create; run the capability-checked
+  create-with-label call; attach and verify the returned issue
+  identity on that still-`pending` record; append the `mode=acquire`
+  owner marker, reusing that same set ID (never a second, different
+  one) and a new opaque owner token (`supersedes=none`); wait
   `claim.verifySettleDelay` and replay the full paginated owner-marker
   log to confirm the winning marker, then re-fetch labels, body, and
   owner comments before treating the issue as a set member, and
@@ -1861,15 +1867,22 @@ only approval boundary.
   this release is proceeding under the narrow auto-release exception
   below instead of an explicit human release request -- an ordinary
   human-gated release skips straight to step (4), since the human
-  request already vouches for the set's scope -- verify, immediately
-  before the label removal in step (4), that this sole target really
-  is the sole member of its authoring set: it carries no
+  request already vouches for the set's scope -- run **both** of that
+  exception's own preconditions here, immediately before the label
+  removal in step (4): first, verify that this sole target really is
+  the sole member of its authoring set -- it carries no
   `<marker-prefix>-roadmap-id` marker, and a repository-wide paginated
   scan for trusted owner markers sharing its exact `set` finds no
   sibling target; this scan is exactly the mechanical proof this fast
   path's own `|set|==1` premise rests on, so skipping it here would be
-  a genuine weakening, not a condensation -- if either condition fails,
-  or the scan cannot be completed, fall back to the ordinary
+  a genuine weakening, not a condensation; second, run the exception's
+  own provenance check -- the target's body must still carry the exact
+  `review-fix-loop-cutoff` marker from Stage 1 publication, and a
+  freshly recomputed body-sha256 must match that same target's
+  `mode=acquire` owner marker's recorded `body-sha256` -- neither
+  check is optional, and this fast path adds no shortcut through
+  either one; if either the sole-member scan or the provenance check
+  fails, or either cannot be completed, fall back to the ordinary
   human-release-request precondition instead; (4) immediately before
   the single label removal, reuse or append the anchor's
   `mode=heartbeat` marker (reuse allowed per the heartbeat-coalescing
