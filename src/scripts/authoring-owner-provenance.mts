@@ -503,6 +503,16 @@ export type GraphqlCommentMapResult =
   | { ok: true; comment: AuthoringOwnerProvenanceComment }
   | { ok: false; reason: string };
 
+interface ProvenanceGraphqlCommentsPageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+interface ProvenanceGraphqlCommentsConnection {
+  nodes: unknown[];
+  pageInfo: ProvenanceGraphqlCommentsPageInfo;
+}
+
 interface ProvenanceGraphqlCommentsPayload {
   data?: {
     repository?: {
@@ -518,6 +528,62 @@ interface ProvenanceGraphqlCommentsPayload {
     } | null;
   };
   errors?: { message?: string }[];
+}
+
+type GraphqlCommentsPageResult =
+  | { ok: true; connection: ProvenanceGraphqlCommentsConnection }
+  | { ok: false; reason: string };
+
+/**
+ * Fail closed on a GraphQL comments page whose `nodes` is not an
+ * array or whose `pageInfo.hasNextPage` is not an actual boolean.
+ * A missing/null `nodes` or optional-chained `pageInfo` must not be
+ * treated as an empty/final page (kurone-kito/idd-skill#3173 review).
+ */
+export function inspectGraphqlCommentsPage(
+  connection: {
+    nodes?: unknown[] | null;
+    pageInfo?: {
+      hasNextPage?: boolean;
+      endCursor?: string | null;
+    };
+  },
+  label: string,
+): GraphqlCommentsPageResult {
+  if (!Array.isArray(connection.nodes)) {
+    return {
+      ok: false,
+      reason: `${label} comments page is missing a nodes array`,
+    };
+  }
+  const pageInfo = connection.pageInfo;
+  if (pageInfo == null || typeof pageInfo !== 'object') {
+    return {
+      ok: false,
+      reason: `${label} comments page is missing pageInfo`,
+    };
+  }
+  if (typeof pageInfo.hasNextPage !== 'boolean') {
+    return {
+      ok: false,
+      reason: `${label} comments page hasNextPage is not a boolean`,
+    };
+  }
+  const endCursor =
+    typeof pageInfo.endCursor === 'string' ? pageInfo.endCursor : null;
+  if (pageInfo.hasNextPage && !endCursor) {
+    return {
+      ok: false,
+      reason: `page reported hasNextPage without endCursor for ${label}`,
+    };
+  }
+  return {
+    ok: true,
+    connection: {
+      nodes: connection.nodes,
+      pageInfo: { hasNextPage: pageInfo.hasNextPage, endCursor },
+    },
+  };
 }
 
 /**
@@ -602,8 +668,9 @@ function graphqlIncompleteEvidence(detail: string): string {
  * Fetch every issue comment via GraphQL, selecting `lastEditedAt` and
  * `databaseId` (this helper's field set, not sweep-authoring-markers's).
  * Paginates to completion. Throws on a failed query, incomplete
- * pagination, or an unmappable node -- callers must not fall back to
- * REST `updated_at`.
+ * pagination (including a missing `nodes` array or a non-boolean
+ * `pageInfo.hasNextPage`), or an unmappable node -- callers must not
+ * fall back to REST `updated_at`.
  */
 export function fetchProvenanceCommentsGraphql(
   owner: string,
@@ -673,25 +740,29 @@ export function fetchProvenanceCommentsGraphql(
         ),
       );
     }
-    for (const node of connection.nodes ?? []) {
+    const page = inspectGraphqlCommentsPage(connection, label);
+    if (!page.ok) {
+      throw new Error(graphqlIncompleteEvidence(page.reason));
+    }
+    for (const node of page.connection.nodes) {
       const mapped = mapGraphqlIssueCommentNode(node);
       if (!mapped.ok) {
         throw new Error(graphqlIncompleteEvidence(mapped.reason));
       }
       out.push(mapped.comment);
     }
-    const pageInfo = connection.pageInfo;
-    if (!pageInfo?.hasNextPage) {
+    if (!page.connection.pageInfo.hasNextPage) {
       break;
     }
-    if (!pageInfo.endCursor) {
+    const nextCursor = page.connection.pageInfo.endCursor;
+    if (!nextCursor) {
       throw new Error(
         graphqlIncompleteEvidence(
           `page reported hasNextPage without endCursor for ${label}`,
         ),
       );
     }
-    cursor = pageInfo.endCursor;
+    cursor = nextCursor;
   }
   return out;
 }

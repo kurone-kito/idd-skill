@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   evaluateAuthoringOwnerProvenance,
+  inspectGraphqlCommentsPage,
   mapGraphqlIssueCommentNode,
 } from '../src/scripts/authoring-owner-provenance.mts';
 import { renderAuthoringOwnerMarker } from '../src/scripts/marker-helpers.mts';
@@ -85,6 +86,38 @@ if (path === 'graphql') {
             nodes,
             pageInfo: { hasNextPage: false, endCursor: null },
           },
+        },
+      },
+    },
+  }));
+} else if (path && path.endsWith('/comments')) {
+  process.stderr.write('REST comments path must not be consulted\\n');
+  process.exit(1);
+} else {
+  process.stdout.write(JSON.stringify({
+    number: 2891,
+    title: 'CLI test issue',
+    body: ${JSON.stringify(issueBody)},
+    html_url: 'https://github.com/kurone-kito/idd-skill/issues/2891',
+  }));
+}
+`;
+}
+
+/** Stub `gh` with a caller-supplied GraphQL comments connection so
+ * incomplete page-shape cases can be asserted through the live CLI. */
+function ghStubScriptForGraphqlConnection(
+  issueBody: string,
+  commentsConnection: unknown,
+): string {
+  return `
+const path = process.argv[3];
+if (path === 'graphql') {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          comments: ${JSON.stringify(commentsConnection)},
         },
       },
     },
@@ -1232,6 +1265,70 @@ test('mapGraphqlIssueCommentNode: unparseable lastEditedAt fails closed', () => 
   }
 });
 
+test('inspectGraphqlCommentsPage: missing nodes fails closed', () => {
+  const page = inspectGraphqlCommentsPage(
+    { pageInfo: { hasNextPage: false, endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /missing a nodes array/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: null nodes fails closed', () => {
+  const page = inspectGraphqlCommentsPage(
+    { nodes: null, pageInfo: { hasNextPage: false, endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /missing a nodes array/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: missing pageInfo fails closed', () => {
+  const page = inspectGraphqlCommentsPage({ nodes: [] }, 'owner/repo#1');
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /missing pageInfo/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: non-boolean hasNextPage fails closed', () => {
+  const page = inspectGraphqlCommentsPage(
+    { nodes: [], pageInfo: { endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /hasNextPage is not a boolean/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: hasNextPage true without endCursor fails closed', () => {
+  const page = inspectGraphqlCommentsPage(
+    { nodes: [], pageInfo: { hasNextPage: true, endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /hasNextPage without endCursor/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: empty final page is accepted', () => {
+  const page = inspectGraphqlCommentsPage(
+    { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, true);
+  if (page.ok) {
+    assert.deepEqual(page.connection.nodes, []);
+    assert.equal(page.connection.pageInfo.hasNextPage, false);
+  }
+});
+
 test('CLI: GraphQL lastEditedAt null with updatedAt drift reports pass', () => {
   const liveBody = '# Draft\n\nSome content.\n';
   const restore = stubGh(
@@ -1363,5 +1460,79 @@ test('CLI: a REST comments stub cannot satisfy the GraphQL mapping', () => {
   } finally {
     restore();
     rmSync(callLogDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: missing GraphQL nodes reports not-found without REST comments', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const restore = stubGh(
+    ghStubScriptForGraphqlConnection(liveBody, {
+      pageInfo: { hasNextPage: false, endCursor: null },
+    }),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+          '--verbose',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'not-found');
+    assert.match(
+      output.checks.find(
+        (check: { id: string }) => check.id === 'acquire_marker_found',
+      )?.evidence ?? '',
+      /missing a nodes array/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: missing GraphQL pageInfo reports not-found without REST comments', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const restore = stubGh(
+    ghStubScriptForGraphqlConnection(liveBody, { nodes: [] }),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+          '--verbose',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'not-found');
+    assert.match(
+      output.checks.find(
+        (check: { id: string }) => check.id === 'acquire_marker_found',
+      )?.evidence ?? '',
+      /missing pageInfo/,
+    );
+  } finally {
+    restore();
   }
 });
