@@ -355,8 +355,14 @@ export function fetchIssueCommentsGraphql(
  * byte-exact canonical match regardless of trust (mirrors `classify
  * AuthoringMarkerFamily`'s `matchIndexes`); `untrusted` and
  * `protectedNewest` explain why a scanned candidate was never submitted
- * for minimization; `alreadyMinimized` is the pre-mutation-snapshot count
- * (a candidate GitHub already reports minimized before this sweep ran);
+ * for minimization. `protectedNewest` sums one entry per continuity-chain
+ * identity group that had something to protect (#3167:
+ * `classifyAuthoringMarkerFamily`'s `newestTrustedIndexes.length`), not a
+ * single 0-or-1 per family -- a shared journal issue hosting several
+ * distinct targets of the same family protects each target's own newest
+ * record independently. `alreadyMinimized` is the pre-mutation-snapshot
+ * count (a candidate GitHub already reports minimized before this sweep
+ * ran);
  * `minimized`/`raceAlreadyMinimized`/`deadlineSkipped`/`failed` are
  * derived from `runMinimize`'s own post-mutation report, keyed back to
  * this family via each candidate's own node id. `minimized` counts both a
@@ -585,8 +591,7 @@ export function runAuthoringMarkerSweep(
       const counts = families[family];
       counts.scanned += classification.matchIndexes.length;
       counts.untrusted += classification.untrustedIndexes.length;
-      counts.protectedNewest +=
-        classification.newestTrustedIndex === null ? 0 : 1;
+      counts.protectedNewest += classification.newestTrustedIndexes.length;
       counts.alreadyMinimized += classification.alreadyMinimizedIndexes.length;
       counts.eligible += classification.eligibleIndexes.length;
       for (const index of classification.eligibleIndexes) {

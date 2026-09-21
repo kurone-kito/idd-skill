@@ -2282,17 +2282,27 @@ export interface AuthoringMarkerFamilyClassification {
    * `trustedActors` (case-insensitive); equal to `matchIndexes` when
    * `trustedActors` is `undefined` (trust filtering disabled). */
   trustedMatchIndexes: number[];
-  /** The single newest (last, in input order) entry of
-   * {@link trustedMatchIndexes} -- the one live marker this sweep must
-   * never minimize -- or `null` when fewer than two trusted matches exist
-   * (nothing can be "superseded" without a later candidate). */
-  newestTrustedIndex: number | null;
-  /** {@link trustedMatchIndexes} minus {@link newestTrustedIndex}, further
-   * excluding any candidate whose `isMinimized` is already `true`: the
-   * actual hide-on-supersede backlog. */
+  /** The newest (last, in input order) entry of {@link
+   * trustedMatchIndexes} within EACH distinct continuity-chain identity
+   * group (#3167) -- every one of these is a live marker this sweep must
+   * never minimize. A "group" shares both `family` and the identity
+   * {@link resolveAuthoringMarkerIdentity} resolves for it (`target=` for
+   * `authoring-owner`; `target=`+`token=` for
+   * `authoring-publication-intent`), so two markers of the same family
+   * that name DIFFERENT targets -- even on the same shared journal issue,
+   * even under the same `set=` -- are never compared against each other
+   * here. In ascending index order. Empty when every identity group has
+   * fewer than two trusted matches (nothing can be "superseded" without a
+   * later candidate in the SAME group). */
+  newestTrustedIndexes: number[];
+  /** Every trusted match minus its own group's entry in {@link
+   * newestTrustedIndexes}, further excluding any candidate whose
+   * `isMinimized` is already `true`: the actual hide-on-supersede
+   * backlog. In ascending index order. */
   eligibleIndexes: number[];
-  /** {@link trustedMatchIndexes} minus {@link newestTrustedIndex} that are
-   * already `isMinimized: true` -- not backlog, already handled. */
+  /** Same population as {@link eligibleIndexes} but already
+   * `isMinimized: true` -- not backlog, already handled. In ascending
+   * index order. */
   alreadyMinimizedIndexes: number[];
   /** {@link matchIndexes} excluded from {@link trustedMatchIndexes} because
    * their author is missing or not a member of `trustedActors`. Always
@@ -2303,15 +2313,44 @@ export interface AuthoringMarkerFamilyClassification {
 }
 
 /**
- * Classify `comments` for exactly one authoring marker `family` (#2935):
- * find every byte-exact canonical match
- * (`matchCanonicalAuthoringMarkerFamily`), determine the newest match
- * among trusted-actor authors only (per the contract's "syntax alone
- * never grants ownership" rule -- an untrusted actor's later byte-exact
- * comment must never be mistaken for the live marker to keep), and split
- * the rest into eligible-for-minimization vs. already-minimized.
- * `family` is matched against the RAW `comment.body` (never
- * `stripMarkdownCodeRegions`-masked), matching exactly what a live
+ * Resolve the continuity-chain identity of one candidate comment body that
+ * has ALREADY matched `family` via `matchCanonicalAuthoringMarkerFamily`
+ * (#3167): `target=` alone for `authoring-owner`; `target=` and `token=`
+ * combined for `authoring-publication-intent`, per
+ * `workflow-boundary.md`'s "the append-only replay selects the latest
+ * valid record for the exact token tuple" replay rule -- `target` alone
+ * is not the fix (a same-`set=` roadmap-plus-children publishes several
+ * distinct targets), and neither is `set=` alone (see the issue's
+ * Background). Returns `null` when the identity fields cannot be parsed,
+ * which should not occur once the byte-exact family match already holds
+ * (both parsers below require exactly the fields this function reads),
+ * but is handled defensively rather than assumed -- see the caller's own
+ * fail-closed handling of a `null` result.
+ */
+function resolveAuthoringMarkerIdentity(
+  body: string,
+  markerPrefix: string,
+  family: AuthoringMarkerFamily,
+): string | null {
+  if (family === 'authoring-owner') {
+    return parseAuthoringOwnerComment(body, markerPrefix)?.target ?? null;
+  }
+  const parsed = parseAuthoringPublicationIntentComment(body, markerPrefix);
+  return parsed ? `${parsed.target} ${parsed.token}` : null;
+}
+
+/**
+ * Classify `comments` for exactly one authoring marker `family` (#2935;
+ * scoped to continuity-chain identity in #3167): find every byte-exact
+ * canonical match (`matchCanonicalAuthoringMarkerFamily`), determine the
+ * newest match among trusted-actor authors only (per the contract's
+ * "syntax alone never grants ownership" rule -- an untrusted actor's
+ * later byte-exact comment must never be mistaken for the live marker to
+ * keep) WITHIN EACH continuity-chain identity group
+ * ({@link resolveAuthoringMarkerIdentity}) rather than across the whole
+ * family, and split the rest into eligible-for-minimization vs.
+ * already-minimized. `family` is matched against the RAW `comment.body`
+ * (never `stripMarkdownCodeRegions`-masked), matching exactly what a live
  * `matchCanonicalAuthoringMarkerFamily` call against the real comment
  * would see. `trustedActors` left `undefined` disables trust filtering
  * entirely (every byte-exact match counts as a candidate regardless of
@@ -2348,34 +2387,62 @@ export function classifyAuthoringMarkerFamily(
     trustedActors === undefined
       ? matchIndexes
       : matchIndexes.filter((index) => !untrustedSet.has(index));
-  if (trustedMatchIndexes.length < 2) {
-    return {
-      matchIndexes,
-      trustedMatchIndexes,
-      newestTrustedIndex: null,
-      eligibleIndexes: [],
-      alreadyMinimizedIndexes: [],
-      untrustedIndexes,
-    };
+
+  // Group trustedMatchIndexes by continuity-chain identity (#3167): a
+  // fail-closed synthetic per-index key stands in for an unresolvable
+  // identity, so such a candidate is never compared against -- and never
+  // treated as superseding or superseded by -- any other candidate.
+  const groups = new Map<string, number[]>();
+  for (const index of trustedMatchIndexes) {
+    const identity = resolveAuthoringMarkerIdentity(
+      comments[index].body,
+      markerPrefix,
+      family,
+    );
+    const key = identity ?? ` unresolved-${index}`;
+    const group = groups.get(key);
+    if (group) {
+      group.push(index);
+    } else {
+      groups.set(key, [index]);
+    }
   }
-  const newestTrustedIndex =
-    trustedMatchIndexes[trustedMatchIndexes.length - 1];
+
+  const newestTrustedIndexes: number[] = [];
   const eligibleIndexes: number[] = [];
   const alreadyMinimizedIndexes: number[] = [];
-  for (const index of trustedMatchIndexes) {
-    if (index === newestTrustedIndex) {
+  for (const group of groups.values()) {
+    // Fewer than two trusted matches in this SAME identity group: nothing
+    // can be "superseded" without a later candidate for the same target.
+    if (group.length < 2) {
       continue;
     }
-    if (comments[index].isMinimized === true) {
-      alreadyMinimizedIndexes.push(index);
-    } else {
-      eligibleIndexes.push(index);
+    const newestInGroup = group[group.length - 1];
+    newestTrustedIndexes.push(newestInGroup);
+    for (const index of group) {
+      if (index === newestInGroup) {
+        continue;
+      }
+      if (comments[index].isMinimized === true) {
+        alreadyMinimizedIndexes.push(index);
+      } else {
+        eligibleIndexes.push(index);
+      }
     }
   }
+  // Grouping by identity does not disturb matchIndexes/trustedMatchIndexes'
+  // own ascending order, but iterating `groups.values()` can interleave
+  // group membership relative to the original comment order -- restore it
+  // here so every returned index list keeps the same ascending-order
+  // guarantee the pre-#3167 single-group implementation provided.
+  newestTrustedIndexes.sort((a, b) => a - b);
+  eligibleIndexes.sort((a, b) => a - b);
+  alreadyMinimizedIndexes.sort((a, b) => a - b);
+
   return {
     matchIndexes,
     trustedMatchIndexes,
-    newestTrustedIndex,
+    newestTrustedIndexes,
     eligibleIndexes,
     alreadyMinimizedIndexes,
     untrustedIndexes,

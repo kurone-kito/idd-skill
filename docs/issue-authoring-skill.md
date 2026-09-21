@@ -1285,8 +1285,13 @@ each `--issue`'s comments via GraphQL (selecting `isMinimized` directly
 -- REST's issue-comments endpoint never carries that field, so this
 command never falls back to REST), classifies every comment with
 `matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`, unchanged),
-determines "newest" only among **trusted-actor** matches per family
-(#2896 review, Codex -- an untrusted actor's later byte-exact comment
+determines "newest" only among **trusted-actor** matches sharing the
+same continuity-chain identity within each family (`target=` for
+`authoring-owner`; `target=`+`token=` together for
+`authoring-publication-intent`) -- #3167: a different target's later
+match, even under the same family and `set=`, is never treated as
+superseding this one; #2896 review, Codex -- an untrusted actor's
+later byte-exact comment
 must never be mistaken for the live marker to keep, since
 `minimize-superseded-markers.mjs` itself refuses to minimize any comment
 outside `--trusted-marker-logins` regardless of this selection, so
@@ -1364,7 +1369,8 @@ command above, now scoped to `--issue <anchor-issue-number> --issue
 <journal-issue-number>` -- covering the anchor's own owner-marker log
 and the journal's publication-intent log -- idempotent with every
 earlier target's own sweep above, since a comment either was already
-minimized or was not yet the newest for its family either way. Then
+minimized or was not yet the newest for its own target within the
+family either way. Then
 reuse or
 append the anchor-only
 `mode=release-complete` marker and record its comment ID. Reconcile that ID
