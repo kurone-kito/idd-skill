@@ -920,6 +920,18 @@ history of their own should keep tuning this value from their own
 observed data rather than adopting either number as a universal
 constant.
 
+#### 2026-09-21 correction: count Copilot reviews, not watermark posts (kurone-kito/idd-skill#3162)
+
+An audit of PRs merged in this repository during a six-day window found
+`Reject (defer)` never fired, because the cutoff compared against the
+claim-scoped `review-watermark` post count instead of the actual
+`copilot-pull-request-reviewer[bot]` review-submission count the
+original calibration above was based on — the two counters diverge
+sharply once a session handoff/resume resets the claim-scoped count.
+The round-count cutoff now compares against the pull request's total
+review-submission count, PR-wide and fully paginated, instead. See
+kurone-kito/idd-skill#3162 for the observed counts.
+
 ### review-ack worked example
 
 A review posts a regular-comment finding plus a suppressed one.

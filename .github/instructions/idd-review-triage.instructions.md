@@ -173,12 +173,13 @@ state of its own, but can still match a prior resolved thread's claim.
   information the prior thread did not address.
 
 **Round-count cutoff (`critiqueLoop.deferAfterRounds`, default `12`).**
-Once the claim's `review-watermark` post count (paginated,
-including minimized ones and this pass's own E1 post) reaches the
-threshold, disposition an undispositioned Low-severity (E4) PATH A
-item **Reject (defer)** instead of the normal judgment — never an
-already-Accepted item mid-fix (`e10NoProgressHoldAfter` unaffected) nor
-a CODEOWNER/required-reviewer item (E6's AMD exception applies). Reply
+Once the PR's total, paginated
+`copilot-pull-request-reviewer[bot]` review count (PR-wide, not
+per-claim; never one page's `length`) hits the threshold, disposition
+an undispositioned Low-severity (E4) PATH A item **Reject (defer)**
+instead of normal judgment — never an Accepted item mid-fix
+(`e10NoProgressHoldAfter` unaffected) nor a CODEOWNER/required-reviewer
+item (E6's AMD exception). Reply
 `**Rejected** — deferred to follow-up issue #<n> (round
 <round>/<threshold>): {reason}`, resolve normally, and bundle every
 item from this cutoff into one follow-up issue per E6's
