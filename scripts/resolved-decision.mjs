@@ -188,7 +188,11 @@ export const RESOLVED_DECISION_PATTERN =
 // case the newline-tolerance removal above was fixing, without
 // reintroducing it. The thematic-break arm tolerates CommonMark's spaced
 // marker forms ("- - -", "* * *", "_ _ _"), not only a contiguous run
-// (C1 critique round 1, CodeRabbit delegate, issue #3165). This guard is
+// (C1 critique round 1, CodeRabbit delegate, issue #3165), and is
+// anchored to end-of-line so a resolution that merely begins with a
+// dash/asterisk/underscore run -- e.g. "--- adopt the policy." -- is not
+// mistaken for a thematic break, which CommonMark requires to occupy the
+// whole line (Copilot review, PR #3172). This guard is
 // deliberately scoped to the hard-wrap branch only -- the same-line branch
 // is untouched, byte-for-byte, from the newline-intolerant revision, so its
 // own well-covered behavior (PR #2662's many review rounds) carries zero
@@ -219,7 +223,7 @@ export const RESOLVED_DECISION_PATTERN =
 // resolution text actually settles the exact approval wording elsewhere in
 // the body.
 export const INLINE_MAINTAINER_DECISION_PATTERN =
-  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:(?:[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S|[ \t]*\n[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))(?!#{1,6}(?:[ \t]|\n|$))(?!>)(?![-*+](?:[ \t]|\n|$))(?!\d{1,9}[.)](?:[ \t]|\n|$))(?!(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}))\S)/i;
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:(?:[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S|[ \t]*\n[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))(?!#{1,6}(?:[ \t]|\n|$))(?!>)(?![-*+](?:[ \t]|\n|$))(?!\d{1,9}[.)](?:[ \t]|\n|$))(?!(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})(?:\n|$))\S)/i;
 // #2661 PR #2662 review round 2 (Codex): unlike a whole-paragraph framing
 // scan, this scans only the paragraph text BEFORE `offset`, not the whole
 // paragraph. Used solely for the inline-decision scan, where the match's own

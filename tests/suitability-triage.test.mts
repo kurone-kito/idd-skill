@@ -3620,6 +3620,31 @@ adopt the policy described above.
   assert.equal(result.pass, true);
 });
 
+test('verifiability passes a hard-wrapped resolution that starts with a non-whole-line dash run (PR #3172 Copilot)', () => {
+  // The thematic-break lookahead must be anchored to end-of-line, matching
+  // CommonMark's whole-line requirement. A genuine resolution such as
+  // "--- adopt the policy." is not a thematic break and must still count.
+  for (const resolution of [
+    '--- adopt the policy.',
+    '*** keep the current default.',
+    '___ follow the recorded decision.',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Maintainer decision (Groom hearing, 2026-09-05):
+${resolution}
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+      },
+    } as Context);
+    assert.equal(result.pass, true, resolution);
+  }
+});
+
 test('verifiability still fails when a hard-wrapped inline marker is immediately followed by a blockquote, list marker, or thematic break (#3165)', () => {
   // The block-start guard added for the hard-wrap tolerance above must
   // reject every Markdown block construct the issue's acceptance criteria
