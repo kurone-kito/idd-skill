@@ -340,6 +340,80 @@ test('a well-formed review-baseline marker is not flagged malformed (no regressi
   assert.equal(detectMalformedOperationalMarker(body), null);
 });
 
+// #3159: zero-accepted-path-a-gate registry coverage. Trusted positive,
+// malformed (appended prose), and out-of-vocabulary condition letter
+// (ordinary look-alike, never a marker-shaped match) cases.
+test('a well-formed zero-accepted-path-a-gate marker is recognized (trusted positive)', () => {
+  const sha = 'c'.repeat(40);
+  const body =
+    `<!-- zero-accepted-path-a-gate: copilot claim-A a ${sha} -->\n\n` +
+    '_copilot: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._';
+  assert.equal(
+    operationalMarkerPrefix(body),
+    '<!-- zero-accepted-path-a-gate:',
+  );
+  assert.equal(
+    operationalMarkerPrefixByStart(body),
+    '<!-- zero-accepted-path-a-gate:',
+  );
+  assert.equal(detectMalformedOperationalMarker(body), null);
+});
+
+test('a zero-accepted-path-a-gate marker with the b condition is also recognized', () => {
+  const sha = 'd'.repeat(40);
+  const body =
+    `<!-- zero-accepted-path-a-gate: copilot claim-A b ${sha} -->\n\n` +
+    '_copilot: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._';
+  assert.equal(
+    operationalMarkerPrefix(body),
+    '<!-- zero-accepted-path-a-gate:',
+  );
+});
+
+test('zero-accepted-path-a-gate with appended prose is flagged malformed', () => {
+  const sha = 'c'.repeat(40);
+  const body =
+    `<!-- zero-accepted-path-a-gate: copilot claim-A a ${sha} -->\n\n` +
+    '_copilot: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._\n\n' +
+    'This condition applies because the last PATH B item was a completed review.';
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(
+    detectMalformedOperationalMarker(body),
+    '<!-- zero-accepted-path-a-gate:',
+  );
+});
+
+test('a zero-accepted-path-a-gate marker with an out-of-vocabulary condition letter fails strict recognition but still matches the token-only start check (existing marker-family precedent)', () => {
+  const sha = 'c'.repeat(40);
+  const body =
+    `<!-- zero-accepted-path-a-gate: copilot claim-A c ${sha} -->\n\n` +
+    '_copilot: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._';
+  // Strict, field-validating recognition rejects the invalid condition
+  // letter, same as every other OPERATIONAL_MARKERS entry's `pattern`.
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(detectMalformedOperationalMarker(body), null);
+  // `startPattern` is deliberately token-only (no field validation) for
+  // every entry in this registry -- the E1 activity-snapshot exclusion
+  // check (`operationalMarkerPrefixByStart`) still recognizes this as
+  // operational-shaped, consistent with how a malformed review-watermark/
+  // review-baseline body is treated the same way.
+  assert.equal(
+    operationalMarkerPrefixByStart(body),
+    '<!-- zero-accepted-path-a-gate:',
+  );
+});
+
+test('a zero-accepted-path-a-gate marker quoted mid-prose is neither a live marker nor flagged malformed (anti-spoofing)', () => {
+  const sha = 'c'.repeat(40);
+  const body =
+    'The gate posts a marker shaped like this:\n' +
+    `<!-- zero-accepted-path-a-gate: copilot claim-A a ${sha} -->\n\n` +
+    '_copilot: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._';
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(operationalMarkerPrefixByStart(body), null);
+  assert.equal(detectMalformedOperationalMarker(body), null);
+});
+
 test('a well-formed claimed-by marker is not flagged malformed (no regression to the happy path)', () => {
   const body =
     '<!-- claimed-by: copilot claim-A supersedes: none 2026-05-23T10:00:00Z branch: issue/100-task -->\n\n' +

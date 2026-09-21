@@ -533,6 +533,7 @@ wait, or review-currency checks. Candidate prefixes are:
 - `<!-- unclaimed-by:`
 - `<!-- review-watermark:`
 - `<!-- review-baseline:`
+- `<!-- zero-accepted-path-a-gate:`
 - `advisory-wait:`
 - `advisory-wait-recovery:`
 - `<!-- advisory-wait:`
