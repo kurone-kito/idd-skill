@@ -30,10 +30,14 @@ const SCRIPT = join(
   'sweep-authoring-markers.mjs',
 );
 
-function ownerMarker(mode: string, owner: string): string {
+function ownerMarker(
+  mode: string,
+  owner: string,
+  target = 'kurone-kito/idd-skill#100',
+): string {
   return renderAuthoringOwnerMarker({
     markerPrefix: MARKER_PREFIX,
-    target: 'kurone-kito/idd-skill#100',
+    target,
     anchor: 'kurone-kito/idd-skill#100',
     mode,
     owner,
@@ -45,14 +49,19 @@ function ownerMarker(mode: string, owner: string): string {
   });
 }
 
-function intentMarker(state: string, issue: string): string {
+function intentMarker(
+  state: string,
+  issue: string,
+  target = 'kurone-kito/idd-skill#100',
+  token = 'pub-1',
+): string {
   return renderAuthoringPublicationIntentMarker({
     markerPrefix: MARKER_PREFIX,
-    target: 'kurone-kito/idd-skill#100',
+    target,
     anchor: 'kurone-kito/idd-skill#100',
     set: 'set-1',
     session: 'session-1',
-    token: 'pub-1',
+    token,
     journal: 'kurone-kito/idd-skill#200',
     issue,
     actor: 'kurone-kito',
@@ -311,6 +320,78 @@ test('runAuthoringMarkerSweep classifies both families independently per issue a
     assert.equal(intent.eligible, 1);
     assert.equal(intent.minimized, 1);
     assert.equal(intent.failed, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('runAuthoringMarkerSweep never marks a still-current record for one target as superseded by a newer record for a DIFFERENT target on a shared journal issue (#3167)', () => {
+  // Reproduces the reported shape directly: two distinct publication-intent
+  // targets under the SAME `set=` value, both hosted on one shared journal
+  // issue (`issueAuthoring.journalIssue`) -- exactly the pattern
+  // `workflow-boundary.md` documents and endorses. Each target's own
+  // record is superseded only by a LATER record for that SAME target, so
+  // this fixture also proves the fix is not a mere "never touch anything"
+  // regression: target A's own stale `pending` record and target B's own
+  // stale `pending` record must both still land in `eligible`, while each
+  // target's own newest record (its `member` state) must stay protected --
+  // never treated as superseded by the OTHER target's newer record.
+  const journalComments: SweepGraphqlComment[] = [
+    comment(
+      'IC_a0',
+      intentMarker('pending', 'none', 'kurone-kito/idd-skill#301', 'pub-a'),
+      'trusted-bot',
+    ), // target A stale -> eligible
+    comment(
+      'IC_b0',
+      intentMarker('pending', 'none', 'kurone-kito/idd-skill#302', 'pub-b'),
+      'trusted-bot',
+    ), // target B stale -> eligible
+    comment(
+      'IC_a1',
+      intentMarker('member', '301', 'kurone-kito/idd-skill#301', 'pub-a'),
+      'trusted-bot',
+    ), // target A's OWN newest -> must stay protected, even though a
+    //    newer record for target B (IC_b1 below) exists in the same
+    //    family, on the same issue, under the same `set=`
+    comment(
+      'IC_b1',
+      intentMarker('member', '302', 'kurone-kito/idd-skill#302', 'pub-b'),
+      'trusted-bot',
+    ), // target B's OWN newest -> protected
+  ];
+
+  const restore = stubExecutable('gh', GH_MINIMIZE_STUB);
+  try {
+    const report = runAuthoringMarkerSweep(
+      {
+        issues: [{ owner: 'kurone-kito', repo: 'idd-skill', issue: 200 }],
+        markerPrefix: MARKER_PREFIX,
+        classifier: 'OUTDATED',
+        trustedSet: new Set(['trusted-bot']),
+        apply: true,
+      },
+      { fetchIssueComments: () => journalComments, minimize: runMinimize },
+    );
+
+    const intent = report.families['authoring-publication-intent'];
+    assert.equal(intent.scanned, 4);
+    assert.equal(intent.untrusted, 0);
+    // One protected newest PER target, not one per family: the bug this
+    // issue fixes collapsed both targets into a single global newest.
+    assert.equal(intent.protectedNewest, 2);
+    assert.equal(intent.eligible, 2);
+    assert.equal(intent.minimized, 2);
+    assert.equal(intent.failed, 0);
+
+    // Confirm the two ELIGIBLE candidates are the two stale records, and
+    // -- the whole point of #3167 -- that neither target's own newest
+    // record (IC_a1, IC_b1) was ever submitted for minimization.
+    const eligibleIds = report.items
+      .filter((item) => item.family === 'authoring-publication-intent')
+      .map((item) => item.subjectId)
+      .sort();
+    assert.deepEqual(eligibleIds, ['IC_a0', 'IC_b0']);
   } finally {
     restore();
   }

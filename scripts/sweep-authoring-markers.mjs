@@ -394,8 +394,7 @@ export function runAuthoringMarkerSweep(options, deps = DEFAULT_DEPS) {
       const counts = families[family];
       counts.scanned += classification.matchIndexes.length;
       counts.untrusted += classification.untrustedIndexes.length;
-      counts.protectedNewest +=
-        classification.newestTrustedIndex === null ? 0 : 1;
+      counts.protectedNewest += classification.newestTrustedIndexes.length;
       counts.alreadyMinimized += classification.alreadyMinimizedIndexes.length;
       counts.eligible += classification.eligibleIndexes.length;
       for (const index of classification.eligibleIndexes) {
