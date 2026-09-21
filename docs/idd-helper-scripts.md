@@ -286,12 +286,22 @@ in this preamble, since the fallback differs per helper.
   (every one still containing the case-insensitive
   `<marker-prefix>-authoring-owner:` token, whether or not it parses),
   taken in deterministic comment order. If ANY of those comments was
-  edited after posting (`updatedAt` differs from `createdAt`), the whole
-  log is rejected up front, before a first candidate is even chosen — an
-  editor cannot make the true Stage 1 acquire vanish from consideration
-  by editing it into something unparseable or retargeting it, letting a
-  later acquire silently win instead (PR #2901 review round 6, Copilot;
-  contract.md: owner comments are append-only). Past that check, the
+  body-edited after posting (GraphQL `IssueComment.lastEditedAt` is a
+  timestamp, not JSON null), the whole log is rejected up front, before
+  a first candidate is even chosen — an editor cannot make the true
+  Stage 1 acquire vanish from consideration by editing it into something
+  unparseable or retargeting it, letting a later acquire silently win
+  instead (PR #2901 review round 6, Copilot; contract.md: owner comments
+  are append-only). Do not use `updatedAt !== createdAt` as that signal:
+  GitHub `minimizeComment` advances `updatedAt` while leaving the body
+  byte-identical and `lastEditedAt` null (issue `#3173`, observed on
+  issue `#3163` comment 5758891385). Omitted, empty, or unparseable
+  `lastEditedAt` is also a reject (incomplete evidence, never treated as
+  "never edited"). The live CLI fetches this pool via GraphQL (selecting
+  `lastEditedAt` and `databaseId`), paginated to completion, then reads
+  and hashes the issue body; it never derives `lastEditedAt` from REST
+  `updated_at`, and a failed GraphQL read reports `not-found`. Past that
+  check, the
   _first_ candidate in comment order is scrutinized whatever its shape —
   not merely the first one that happens to parse and match this target —
   and must itself parse, name this issue as its target, and be a valid
