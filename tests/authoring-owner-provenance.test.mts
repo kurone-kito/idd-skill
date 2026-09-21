@@ -7,7 +7,11 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { evaluateAuthoringOwnerProvenance } from '../src/scripts/authoring-owner-provenance.mts';
+import {
+  evaluateAuthoringOwnerProvenance,
+  inspectGraphqlCommentsPage,
+  mapGraphqlIssueCommentNode,
+} from '../src/scripts/authoring-owner-provenance.mts';
 import { renderAuthoringOwnerMarker } from '../src/scripts/marker-helpers.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -27,30 +31,152 @@ function stubGh(scriptBody: string): () => void {
   return stubExecutable('gh', scriptBody);
 }
 
-/** Build a stub `gh` script answering both calls `runCli` makes: `gh api
- * repos/<owner>/<repo>/issues/<n>/comments --paginate --jq .[]` (NDJSON,
- * one comment object per line) and `gh api repos/<owner>/<repo>/issues/<n>`
- * (a single JSON issue object). `process.argv.slice(2)` inside the stub is
- * `['api', <path>, ...]` (`stubExecutable`'s own documented contract).
+/** GraphQL `IssueComment` node shape the live CLI maps. */
+interface GraphqlCommentNode {
+  databaseId: number;
+  lastEditedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  body: string;
+  author: { login: string };
+}
+
+/** REST issue-comment row. Used only by the negative test that a REST
+ * comments stub cannot satisfy the GraphQL mapping (#3173). */
+interface RestCommentRow {
+  id: number;
+  user: { login: string };
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Build a stub `gh` script answering the live CLI's two calls: `gh api
+ * graphql` (paginated comment pool with `lastEditedAt` + `databaseId`)
+ * then `gh api repos/<owner>/<repo>/issues/<n>` (the issue body).
+ * `process.argv.slice(2)` inside the stub is `['api', <path>, ...]`
+ * (`stubExecutable`'s own documented contract). argv[3] is `graphql` or
+ * the REST issue path.
  *
- * When `callLogPath` is given, each invocation appends its own `<path>`
- * argument as one line -- since the two calls are separate `gh` child
- * processes with no state shared between them (kurone-kito/idd-skill#2901
- * review, Copilot round 7: a stub that only branches on the current
- * call's own path proves nothing about which call the CLI made *first*,
- * so it cannot actually catch a regression that swaps the documented
- * comments-before-body fetch order). Reading this file back is what lets
- * a test assert the real call order the CLI made, not just that both
- * calls eventually happened. */
+ * When `callLogPath` is given, each invocation appends its own argv[3]
+ * as one line -- since the two calls are separate `gh` child processes
+ * with no state shared between them (kurone-kito/idd-skill#2901 review,
+ * Copilot round 7). Reading this file back is what lets a test assert
+ * the real call order the CLI made, not just that both calls eventually
+ * happened. */
 function ghStubScriptForIssue(
   issueBody: string,
-  comments: readonly {
-    id: number;
-    user: { login: string };
-    body: string;
-    created_at: string;
-    updated_at: string;
-  }[],
+  comments: readonly GraphqlCommentNode[],
+  callLogPath?: string,
+): string {
+  return `
+const path = process.argv[3];
+${
+  callLogPath
+    ? `require('node:fs').appendFileSync(${JSON.stringify(callLogPath)}, path + '\\n');`
+    : ''
+}
+if (path === 'graphql') {
+  const nodes = ${JSON.stringify(comments)};
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          comments: {
+            nodes,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  }));
+} else if (path && path.endsWith('/comments')) {
+  process.stderr.write('REST comments path must not be consulted\\n');
+  process.exit(1);
+} else {
+  process.stdout.write(JSON.stringify({
+    number: 2891,
+    title: 'CLI test issue',
+    body: ${JSON.stringify(issueBody)},
+    html_url: 'https://github.com/kurone-kito/idd-skill/issues/2891',
+  }));
+}
+`;
+}
+
+/** Stub `gh` with a caller-supplied GraphQL comments connection so
+ * incomplete page-shape cases can be asserted through the live CLI. */
+function ghStubScriptForGraphqlConnection(
+  issueBody: string,
+  commentsConnection: unknown,
+): string {
+  return `
+const path = process.argv[3];
+if (path === 'graphql') {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          comments: ${JSON.stringify(commentsConnection)},
+        },
+      },
+    },
+  }));
+} else if (path && path.endsWith('/comments')) {
+  process.stderr.write('REST comments path must not be consulted\\n');
+  process.exit(1);
+} else {
+  process.stdout.write(JSON.stringify({
+    number: 2891,
+    title: 'CLI test issue',
+    body: ${JSON.stringify(issueBody)},
+    html_url: 'https://github.com/kurone-kito/idd-skill/issues/2891',
+  }));
+}
+`;
+}
+
+function ghStubScriptForTwoGraphqlPages(
+  issueBody: string,
+  page1: readonly GraphqlCommentNode[],
+  page2: readonly GraphqlCommentNode[],
+  callLogPath: string,
+): string {
+  return `
+const fs = require('node:fs');
+const path = process.argv[3];
+const cursorArg = process.argv.find((a) => String(a).startsWith('cursor='));
+if (path === 'graphql') {
+  fs.appendFileSync(${JSON.stringify(callLogPath)}, (cursorArg || 'graphql') + '\\n');
+  const comments = cursorArg
+    ? {
+        nodes: ${JSON.stringify(page2)},
+        pageInfo: { hasNextPage: false, endCursor: null },
+      }
+    : {
+        nodes: ${JSON.stringify(page1)},
+        pageInfo: { hasNextPage: true, endCursor: 'CURSOR1' },
+      };
+  process.stdout.write(JSON.stringify({
+    data: { repository: { issue: { comments } } },
+  }));
+} else if (path && path.endsWith('/comments')) {
+  process.stderr.write('REST comments path must not be consulted\\n');
+  process.exit(1);
+} else {
+  process.stdout.write(JSON.stringify({
+    number: 2891,
+    title: 'CLI test issue',
+    body: ${JSON.stringify(issueBody)},
+    html_url: 'https://github.com/kurone-kito/idd-skill/issues/2891',
+  }));
+}
+`;
+}
+
+function ghRestOnlyStubScript(
+  issueBody: string,
+  comments: readonly RestCommentRow[],
   callLogPath?: string,
 ): string {
   return `
@@ -63,6 +189,8 @@ ${
 if (path && path.endsWith('/comments')) {
   const comments = ${JSON.stringify(comments)};
   process.stdout.write(comments.map((c) => JSON.stringify(c)).join('\\n') + '\\n');
+} else if (path === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { repository: { issue: null } } }));
 } else {
   process.stdout.write(JSON.stringify({
     number: 2891,
@@ -72,6 +200,26 @@ if (path && path.endsWith('/comments')) {
   }));
 }
 `;
+}
+
+function graphqlAcquireNode(
+  body: string,
+  overrides: {
+    databaseId?: number;
+    lastEditedAt?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  } = {},
+): GraphqlCommentNode {
+  const createdAt = overrides.createdAt ?? '2026-09-10T16:48:44Z';
+  return {
+    databaseId: overrides.databaseId ?? 1,
+    lastEditedAt: overrides.lastEditedAt ?? null,
+    createdAt,
+    updatedAt: overrides.updatedAt ?? createdAt,
+    body,
+    author: { login: 'kurone-kito' },
+  };
 }
 
 function sha256(value: string): string {
@@ -167,6 +315,7 @@ test('unchanged body with a matching acquire-time hash reports pass', () => {
         body: acquireMarkerBody(sha256(liveBody)),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -195,6 +344,7 @@ test('a body edited after acquire fails closed with mismatch', () => {
         body: acquireMarkerBody(sha256(acquireTimeBody)),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -218,6 +368,7 @@ test('no acquire marker for the target reports not-found, never pass', () => {
         body: 'unrelated comment',
         createdAt: '2026-09-10T16:00:00Z',
         updatedAt: '2026-09-10T16:00:00Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -240,6 +391,7 @@ test('an untrusted actor acquire marker is ignored, falling through to not-found
         body: acquireMarkerBody(sha256(liveBody)),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -266,6 +418,7 @@ test('a later heartbeat marker never shadows the Stage 1 acquire marker digest',
         body: acquireMarkerBody(sha256(acquireTimeBody)),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
       {
         id: 2,
@@ -273,6 +426,7 @@ test('a later heartbeat marker never shadows the Stage 1 acquire marker digest',
         body: heartbeatMarkerBody(sha256(laterBody)),
         createdAt: '2026-09-10T17:07:59Z',
         updatedAt: '2026-09-10T17:07:59Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -310,6 +464,7 @@ test('a same-generation acquire race resolves to the first acquire, never the la
         }),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
       {
         id: 2,
@@ -319,6 +474,7 @@ test('a same-generation acquire race resolves to the first acquire, never the la
         }),
         createdAt: '2026-09-10T16:49:00Z',
         updatedAt: '2026-09-10T16:49:00Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -357,6 +513,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
         }),
         createdAt: '2026-09-01T00:00:00Z',
         updatedAt: '2026-09-01T00:00:00Z',
+        lastEditedAt: null,
       },
       {
         id: 2,
@@ -368,6 +525,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
         }),
         createdAt: '2026-09-01T01:00:00Z',
         updatedAt: '2026-09-01T01:00:00Z',
+        lastEditedAt: null,
       },
       {
         id: 3,
@@ -378,6 +536,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
         }),
         createdAt: '2026-09-01T01:00:05Z',
         updatedAt: '2026-09-01T01:00:05Z',
+        lastEditedAt: null,
       },
       {
         id: 4,
@@ -389,6 +548,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
         }),
         createdAt: '2026-09-01T01:00:10Z',
         updatedAt: '2026-09-01T01:00:10Z',
+        lastEditedAt: null,
       },
       {
         id: 5,
@@ -398,6 +558,7 @@ test('a re-acquisition after a full release cycle still compares against the Sta
         }),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -428,6 +589,7 @@ test('a target whose trusted marker log opens with bootstrap, not acquire, repor
         }),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -453,6 +615,7 @@ test('a target whose trusted marker log opens with resume, not acquire, reports 
         }),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -486,6 +649,7 @@ test('an acquire marker whose target differs only by capitalization still wins',
         }),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -503,8 +667,11 @@ test('an acquire marker comment edited after posting fails closed with not-found
   // Stage 1 acquire -- but its body-sha256 field could have been
   // silently rewritten to match a body modified after Stage 1
   // (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector
-  // round 5). Detect the edit via updatedAt !== createdAt and fail
-  // closed instead of trusting an editable field.
+  // round 5). Detect the edit via GraphQL lastEditedAt (a timestamp, not
+  // JSON null) and fail closed instead of trusting an editable field.
+  // Do not use updatedAt !== createdAt: GitHub minimizeComment advances
+  // updatedAt with lastEditedAt still null (#3173 / #3163 comment
+  // 5758891385).
   const liveBody = '# Draft\n\nSome content.\n';
   const result = evaluateAuthoringOwnerProvenance({
     target: TARGET,
@@ -516,6 +683,7 @@ test('an acquire marker comment edited after posting fails closed with not-found
         body: acquireMarkerBody(sha256(liveBody)),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T17:00:00Z',
+        lastEditedAt: '2026-09-10T17:00:00Z',
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -527,6 +695,116 @@ test('an acquire marker comment edited after posting fails closed with not-found
     result.checks.find((check) => check.id === 'acquire_marker_found')
       ?.evidence ?? '',
     /edited after posting/,
+  );
+});
+
+test('minimize-only: updatedAt moved with explicit lastEditedAt null still passes', () => {
+  // GitHub minimizeComment advances updatedAt, leaves the body
+  // byte-identical, and keeps GraphQL lastEditedAt null (#3163 comment
+  // 5758891385 / #3173). That must not trip the append-only pre-pass.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody)),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T17:00:00Z',
+        lastEditedAt: null,
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'pass');
+  assert.equal(result.recordedBodySha256, sha256(liveBody));
+});
+
+test('a body-edited acquire with a rewritten matching digest still fails closed', () => {
+  const liveBody = '# Draft\n\nRewritten after the edit.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody)),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T17:00:00Z',
+        lastEditedAt: '2026-09-10T17:00:00Z',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /edited after posting/,
+  );
+});
+
+test('omitted lastEditedAt fails closed even when updatedAt equals createdAt', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody)),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: undefined,
+      } as unknown as {
+        id: number;
+        authorLogin: string;
+        body: string;
+        createdAt: string;
+        updatedAt: string;
+        lastEditedAt: string | null;
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /incomplete/,
+  );
+});
+
+test('unparseable lastEditedAt fails closed and does not consult updatedAt', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const result = evaluateAuthoringOwnerProvenance({
+    target: TARGET,
+    liveBody,
+    comments: [
+      {
+        id: 1,
+        authorLogin: 'kurone-kito',
+        body: acquireMarkerBody(sha256(liveBody)),
+        createdAt: '2026-09-10T16:48:44Z',
+        updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: 'not-a-timestamp',
+      },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  });
+  assert.equal(result.verdict, 'not-found');
+  assert.match(
+    result.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /incomplete/,
   );
 });
 
@@ -550,6 +828,7 @@ test('an acquire marker whose anchor differs from its own target reports not-fou
         }),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -583,6 +862,7 @@ test('an acquire marker with a non-none supersedes reports not-found', () => {
         }),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -613,6 +893,7 @@ test('an acquire marker with body-sha256=none reports not-found, never pass', ()
         body: acquireMarkerBody('none'),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -650,6 +931,7 @@ test('a Stage 1 acquire edited into unparseable garbage fails closed, not the ne
         body: `<!-- idd-skill-authoring-owner: target=${TARGET}; corrupted`,
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T17:00:00Z',
+        lastEditedAt: '2026-09-10T17:00:00Z',
       },
       {
         id: 2,
@@ -657,6 +939,7 @@ test('a Stage 1 acquire edited into unparseable garbage fails closed, not the ne
         body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
         createdAt: '2026-09-10T16:50:00Z',
         updatedAt: '2026-09-10T16:50:00Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -690,6 +973,7 @@ test('a Stage 1 acquire retargeted by an edit fails closed, not the next acquire
         }),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T17:00:00Z',
+        lastEditedAt: '2026-09-10T17:00:00Z',
       },
       {
         id: 2,
@@ -697,6 +981,7 @@ test('a Stage 1 acquire retargeted by an edit fails closed, not the next acquire
         body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
         createdAt: '2026-09-10T16:50:00Z',
         updatedAt: '2026-09-10T16:50:00Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -718,15 +1003,7 @@ test('CLI: pass -- an unchanged body reports pass end to end, comments fetched b
   const restore = stubGh(
     ghStubScriptForIssue(
       liveBody,
-      [
-        {
-          id: 1,
-          user: { login: 'kurone-kito' },
-          body: acquireMarkerBody(sha256(liveBody)),
-          created_at: '2026-09-10T16:48:44Z',
-          updated_at: '2026-09-10T16:48:44Z',
-        },
-      ],
+      [graphqlAcquireNode(acquireMarkerBody(sha256(liveBody)))],
       callLogPath,
     ),
   );
@@ -758,7 +1035,7 @@ test('CLI: pass -- an unchanged body reports pass end to end, comments fetched b
     // came first and this ordering was never really exercised).
     const calls = readFileSync(callLogPath, 'utf8').trim().split('\n');
     assert.deepEqual(calls, [
-      'repos/kurone-kito/idd-skill/issues/2891/comments',
+      'graphql',
       'repos/kurone-kito/idd-skill/issues/2891',
     ]);
   } finally {
@@ -772,13 +1049,7 @@ test('CLI: mismatch -- a body edited since acquire reports mismatch end to end',
   const editedLiveBody = '# Draft\n\nEdited after acquire.\n';
   const restore = stubGh(
     ghStubScriptForIssue(editedLiveBody, [
-      {
-        id: 1,
-        user: { login: 'kurone-kito' },
-        body: acquireMarkerBody(sha256(acquireTimeBody)),
-        created_at: '2026-09-10T16:48:44Z',
-        updated_at: '2026-09-10T16:48:44Z',
-      },
+      graphqlAcquireNode(acquireMarkerBody(sha256(acquireTimeBody))),
     ]),
   );
   try {
@@ -876,6 +1147,7 @@ test('an edited marker with a differently cased prefix token still fails closed'
         body: 'IDD-SKILL-authoring-owner: broken, no opener',
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T17:00:00Z',
+        lastEditedAt: '2026-09-10T17:00:00Z',
       },
       {
         id: 2,
@@ -883,6 +1155,7 @@ test('an edited marker with a differently cased prefix token still fails closed'
         body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
         createdAt: '2026-09-10T16:50:00Z',
         updatedAt: '2026-09-10T16:50:00Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -914,11 +1187,12 @@ test('an unedited but unparseable first owner-marker-shaped comment fails closed
       {
         id: 1,
         authorLogin: 'kurone-kito',
-        // Never edited (updatedAt === createdAt) -- just malformed from
+        // Never edited (explicit lastEditedAt null) -- just malformed from
         // the start, e.g. a botched initial post.
         body: 'idd-skill-authoring-owner: this was never a well-formed marker',
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
       {
         id: 2,
@@ -926,6 +1200,7 @@ test('an unedited but unparseable first owner-marker-shaped comment fails closed
         body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
         createdAt: '2026-09-10T16:50:00Z',
         updatedAt: '2026-09-10T16:50:00Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -959,6 +1234,7 @@ test('an unedited first marker for a different target fails closed, not the next
         }),
         createdAt: '2026-09-10T16:48:44Z',
         updatedAt: '2026-09-10T16:48:44Z',
+        lastEditedAt: null,
       },
       {
         id: 2,
@@ -966,6 +1242,7 @@ test('an unedited first marker for a different target fails closed, not the next
         body: acquireMarkerBody(sha256(liveBody), { owner: 'owner-token-2' }),
         createdAt: '2026-09-10T16:50:00Z',
         updatedAt: '2026-09-10T16:50:00Z',
+        lastEditedAt: null,
       },
     ],
     markerPrefix: MARKER_PREFIX,
@@ -978,4 +1255,403 @@ test('an unedited first marker for a different target fails closed, not the next
       ?.evidence ?? '',
     /different target/,
   );
+});
+
+test('mapGraphqlIssueCommentNode: explicit lastEditedAt null keeps minimize-only updatedAt drift', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 5758891385,
+    lastEditedAt: null,
+    createdAt: '2026-09-21T10:17:52Z',
+    updatedAt: '2026-09-21T10:58:03Z',
+    body: 'marker',
+    author: { login: 'kurone-kito' },
+  });
+  assert.equal(mapped.ok, true);
+  if (mapped.ok) {
+    assert.equal(mapped.comment.lastEditedAt, null);
+    assert.equal(mapped.comment.updatedAt, '2026-09-21T10:58:03Z');
+    assert.equal(mapped.comment.id, 5758891385);
+  }
+});
+
+test('mapGraphqlIssueCommentNode: omitted lastEditedAt fails closed', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 1,
+    createdAt: '2026-09-21T10:17:52Z',
+    updatedAt: '2026-09-21T10:17:52Z',
+    body: 'marker',
+    author: { login: 'kurone-kito' },
+  });
+  assert.equal(mapped.ok, false);
+  if (!mapped.ok) {
+    assert.match(mapped.reason, /lastEditedAt/);
+  }
+});
+
+test('mapGraphqlIssueCommentNode: unparseable lastEditedAt fails closed', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 1,
+    lastEditedAt: 'bogus',
+    createdAt: '2026-09-21T10:17:52Z',
+    updatedAt: '2026-09-21T10:17:52Z',
+    body: 'marker',
+    author: { login: 'kurone-kito' },
+  });
+  assert.equal(mapped.ok, false);
+  if (!mapped.ok) {
+    assert.match(mapped.reason, /unparseable lastEditedAt/);
+  }
+});
+
+test('mapGraphqlIssueCommentNode: omitted body fails closed', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 1,
+    lastEditedAt: null,
+    createdAt: '2026-09-21T10:17:52Z',
+    updatedAt: '2026-09-21T10:17:52Z',
+    author: { login: 'kurone-kito' },
+  });
+  assert.equal(mapped.ok, false);
+  if (!mapped.ok) {
+    assert.match(mapped.reason, /non-string body/);
+  }
+});
+
+test('mapGraphqlIssueCommentNode: null body fails closed', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 1,
+    lastEditedAt: null,
+    createdAt: '2026-09-21T10:17:52Z',
+    updatedAt: '2026-09-21T10:17:52Z',
+    body: null,
+    author: { login: 'kurone-kito' },
+  });
+  assert.equal(mapped.ok, false);
+  if (!mapped.ok) {
+    assert.match(mapped.reason, /non-string body/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: missing nodes fails closed', () => {
+  const page = inspectGraphqlCommentsPage(
+    { pageInfo: { hasNextPage: false, endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /missing a nodes array/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: null nodes fails closed', () => {
+  const page = inspectGraphqlCommentsPage(
+    { nodes: null, pageInfo: { hasNextPage: false, endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /missing a nodes array/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: missing pageInfo fails closed', () => {
+  const page = inspectGraphqlCommentsPage({ nodes: [] }, 'owner/repo#1');
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /missing pageInfo/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: non-boolean hasNextPage fails closed', () => {
+  const page = inspectGraphqlCommentsPage(
+    { nodes: [], pageInfo: { endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /hasNextPage is not a boolean/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: hasNextPage true without endCursor fails closed', () => {
+  const page = inspectGraphqlCommentsPage(
+    { nodes: [], pageInfo: { hasNextPage: true, endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, false);
+  if (!page.ok) {
+    assert.match(page.reason, /hasNextPage without endCursor/);
+  }
+});
+
+test('inspectGraphqlCommentsPage: empty final page is accepted', () => {
+  const page = inspectGraphqlCommentsPage(
+    { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    'owner/repo#1',
+  );
+  assert.equal(page.ok, true);
+  if (page.ok) {
+    assert.deepEqual(page.connection.nodes, []);
+    assert.equal(page.connection.pageInfo.hasNextPage, false);
+  }
+});
+
+test('CLI: GraphQL lastEditedAt null with updatedAt drift reports pass', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const restore = stubGh(
+    ghStubScriptForIssue(liveBody, [
+      graphqlAcquireNode(acquireMarkerBody(sha256(liveBody)), {
+        updatedAt: '2026-09-10T17:00:00Z',
+        lastEditedAt: null,
+      }),
+    ]),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'pass');
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: missing GraphQL lastEditedAt reports not-found without REST comments', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const node = {
+    databaseId: 1,
+    createdAt: '2026-09-10T16:48:44Z',
+    updatedAt: '2026-09-10T16:48:44Z',
+    body: acquireMarkerBody(sha256(liveBody)),
+    author: { login: 'kurone-kito' },
+  };
+  const restore = stubGh(
+    ghStubScriptForIssue(liveBody, [node as GraphqlCommentNode]),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+          '--verbose',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'not-found');
+    assert.match(
+      output.checks.find(
+        (check: { id: string }) => check.id === 'acquire_marker_found',
+      )?.evidence ?? '',
+      /GraphQL comment log is incomplete/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: a REST comments stub cannot satisfy the GraphQL mapping', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const callLogDir = mkdtempSync(join(tmpdir(), 'idd-authoring-owner-cli-'));
+  const callLogPath = join(callLogDir, 'calls.log');
+  const restore = stubGh(
+    ghRestOnlyStubScript(
+      liveBody,
+      [
+        {
+          id: 1,
+          user: { login: 'kurone-kito' },
+          body: acquireMarkerBody(sha256(liveBody)),
+          created_at: '2026-09-10T16:48:44Z',
+          updated_at: '2026-09-10T16:48:44Z',
+        },
+      ],
+      callLogPath,
+    ),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+          '--verbose',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'not-found');
+    assert.match(
+      output.checks.find(
+        (check: { id: string }) => check.id === 'acquire_marker_found',
+      )?.evidence ?? '',
+      /GraphQL comment log is incomplete/,
+    );
+    const calls = readFileSync(callLogPath, 'utf8').trim().split('\n');
+    assert.equal(calls[0], 'graphql');
+    assert.equal(
+      calls.includes('repos/kurone-kito/idd-skill/issues/2891/comments'),
+      false,
+    );
+  } finally {
+    restore();
+    rmSync(callLogDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: missing GraphQL nodes reports not-found without REST comments', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const restore = stubGh(
+    ghStubScriptForGraphqlConnection(liveBody, {
+      pageInfo: { hasNextPage: false, endCursor: null },
+    }),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+          '--verbose',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'not-found');
+    assert.match(
+      output.checks.find(
+        (check: { id: string }) => check.id === 'acquire_marker_found',
+      )?.evidence ?? '',
+      /missing a nodes array/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: missing GraphQL pageInfo reports not-found without REST comments', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const restore = stubGh(
+    ghStubScriptForGraphqlConnection(liveBody, { nodes: [] }),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+          '--verbose',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'not-found');
+    assert.match(
+      output.checks.find(
+        (check: { id: string }) => check.id === 'acquire_marker_found',
+      )?.evidence ?? '',
+      /missing pageInfo/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: hasNextPage true fetches the second page with the returned cursor', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const callLogDir = mkdtempSync(join(tmpdir(), 'idd-authoring-owner-pages-'));
+  const callLogPath = join(callLogDir, 'calls.log');
+  const page1: GraphqlCommentNode[] = [
+    {
+      databaseId: 1,
+      lastEditedAt: null,
+      createdAt: '2026-09-10T16:00:00Z',
+      updatedAt: '2026-09-10T16:00:00Z',
+      body: 'ordinary comment on page 1',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  const page2 = [
+    graphqlAcquireNode(acquireMarkerBody(sha256(liveBody)), {
+      databaseId: 2,
+      createdAt: '2026-09-10T16:48:44Z',
+      updatedAt: '2026-09-10T16:48:44Z',
+      lastEditedAt: null,
+    }),
+  ];
+  const restore = stubGh(
+    ghStubScriptForTwoGraphqlPages(liveBody, page1, page2, callLogPath),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'pass');
+    const calls = readFileSync(callLogPath, 'utf8').trim().split('\n');
+    assert.deepEqual(calls, ['graphql', 'cursor=CURSOR1']);
+  } finally {
+    restore();
+    rmSync(callLogDir, { recursive: true, force: true });
+  }
 });

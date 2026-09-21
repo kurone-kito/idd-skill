@@ -60,9 +60,11 @@
 
 import { createHash } from 'node:crypto';
 import { parseCliArgs } from './cli-args.mts';
+import { ghTextUnbounded } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import type { ParsedAuthoringOwnerMarker } from './marker-helpers.mts';
 import { parseAuthoringOwnerComment } from './marker-helpers.mts';
+import { resolveGhHostnameArgs } from './minimize-superseded-markers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
@@ -77,6 +79,16 @@ export interface AuthoringOwnerProvenanceComment {
   body: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * GraphQL `IssueComment.lastEditedAt`. An **explicit JSON null** means
+   * the comment body was never edited. Omitted, empty, or unparseable
+   * values are incomplete evidence and must fail closed -- never coerce
+   * them to `null`, and never derive this field from `updatedAt` /
+   * `createdAt` (GitHub `minimizeComment` advances `updatedAt` with
+   * `lastEditedAt` still null; kurone-kito/idd-skill#3173 / #3163
+   * comment 5758891385).
+   */
+  lastEditedAt: string | null;
 }
 
 export interface AuthoringOwnerProvenanceInput {
@@ -146,6 +158,44 @@ function sameIssueRef(a: string, b: string): boolean {
  * recording the published body's digest.
  */
 const REAL_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * True when `value` is a parseable ISO-8601 timestamp GitHub DateTime
+ * fields use (e.g. `2026-09-21T10:17:52Z`). Empty strings are not
+ * timestamps.
+ */
+function isParseableTimestamp(value: string): boolean {
+  return value.trim() !== '' && !Number.isNaN(Date.parse(value));
+}
+
+/**
+ * Inspect one comment's GraphQL `lastEditedAt` for the append-only
+ * pre-pass. Returns `null` when the comment is explicitly never
+ * body-edited (`lastEditedAt === null`). Returns a reject reason when
+ * the comment was body-edited, or when the field is omitted / empty /
+ * unparseable -- never coerce those to "never edited", and never consult
+ * `updatedAt` / `createdAt` (kurone-kito/idd-skill#3173).
+ */
+export function inspectLastEditedAt(
+  comment: AuthoringOwnerProvenanceComment,
+): string | null {
+  const raw: unknown = comment.lastEditedAt;
+  if (raw === null) {
+    return null;
+  }
+  if (typeof raw === 'string' && isParseableTimestamp(raw)) {
+    return (
+      `trusted comment #${comment.id} looks like an authoring-owner ` +
+      `marker and was edited after posting (lastEditedAt=${raw}) -- ` +
+      `owner comments must be append-only`
+    );
+  }
+  return (
+    `trusted comment #${comment.id} looks like an authoring-owner ` +
+    `marker but GraphQL lastEditedAt is missing, empty, or unparseable ` +
+    `-- owner-comment body-edit evidence is incomplete`
+  );
+}
 
 /**
  * True when `event` is a genuine, unedited Stage 1 `mode=acquire` marker
@@ -253,20 +303,27 @@ function looksLikeOwnerMarker(body: string, markerPrefix: string): boolean {
  * with the *first* one in that order scrutinized as the Stage 1
  * candidate, whatever its shape:
  *
- * - If ANY owner-marker-shaped comment in the whole pool was edited
- *   (`updatedAt !== createdAt`), the whole log is rejected up front,
- *   before a first candidate is even chosen -- not only when the edited
- *   comment would otherwise have been selected. An editor who edits the
- *   true Stage 1 acquire into something that still carries the marker
- *   token but no longer parses, or retargets it to a different issue,
- *   cannot make it silently drop out of consideration and let a later
+ * - If ANY owner-marker-shaped comment in the whole pool was
+ *   **body-edited** (GraphQL `lastEditedAt` is a parseable timestamp,
+ *   not JSON null), the whole log is rejected up front, before a first
+ *   candidate is even chosen -- not only when the edited comment would
+ *   otherwise have been selected. An editor who edits the true Stage 1
+ *   acquire into something that still carries the marker token but no
+ *   longer parses, or retargets it to a different issue, cannot make it
+ *   silently drop out of consideration and let a later
  *   (legitimate-looking) acquire win instead (kurone-kito/idd-skill#2901
- *   review, Copilot round 6). This is deliberately over-broad in one
- *   direction: an edited `heartbeat` (or any other owner-marker-shaped
- *   comment, for any target) also trips it, even though only the
- *   eventual Stage 1 acquire matters semantically -- accepted, since
- *   contract.md's append-only rule covers "owner comments" generically
- *   and failing closed on any detected edit is the safe direction.
+ *   review, Copilot round 6). Do **not** use `updatedAt !== createdAt`
+ *   as this signal: GitHub `minimizeComment` advances `updatedAt` while
+ *   leaving the body byte-identical and `lastEditedAt` null
+ *   (kurone-kito/idd-skill#3173, observed on #3163 comment 5758891385).
+ *   Omitted, empty, or unparseable `lastEditedAt` is also a reject --
+ *   incomplete evidence, never treated as "never edited". This is
+ *   deliberately over-broad in one direction: an edited `heartbeat` (or
+ *   any other owner-marker-shaped comment, for any target) also trips
+ *   it, even though only the eventual Stage 1 acquire matters
+ *   semantically -- accepted, since contract.md's append-only rule
+ *   covers "owner comments" generically and failing closed on any
+ *   detected body edit is the safe direction.
  * - The pool's first comment, once past the edit check, must itself
  *   parse as an `authoring-owner` marker and name `target` -- an
  *   unedited-but-malformed first attempt (a genuine posting error, not
@@ -321,13 +378,11 @@ function findStageOneAcquire(
   });
 
   for (const comment of shaped) {
-    if (comment.updatedAt !== comment.createdAt) {
+    const lastEditedReason = inspectLastEditedAt(comment);
+    if (lastEditedReason) {
       return {
         event: null,
-        rejectReason:
-          `trusted comment #${comment.id} looks like an authoring-owner ` +
-          `marker and was edited after posting (createdAt=${comment.createdAt}, ` +
-          `updatedAt=${comment.updatedAt}) -- owner comments must be append-only`,
+        rejectReason: lastEditedReason,
       };
     }
   }
@@ -444,6 +499,317 @@ export function evaluateAuthoringOwnerProvenance(
   };
 }
 
+export type GraphqlCommentMapResult =
+  | { ok: true; comment: AuthoringOwnerProvenanceComment }
+  | { ok: false; reason: string };
+
+interface ProvenanceGraphqlCommentsPageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+interface ProvenanceGraphqlCommentsConnection {
+  nodes: unknown[];
+  pageInfo: ProvenanceGraphqlCommentsPageInfo;
+}
+
+interface ProvenanceGraphqlCommentsPayload {
+  data?: {
+    repository?: {
+      issue?: {
+        comments?: {
+          nodes?: unknown[] | null;
+          pageInfo?: {
+            hasNextPage?: boolean;
+            endCursor?: string | null;
+          };
+        } | null;
+      } | null;
+    } | null;
+  };
+  errors?: { message?: string }[];
+}
+
+type GraphqlCommentsPageResult =
+  | { ok: true; connection: ProvenanceGraphqlCommentsConnection }
+  | { ok: false; reason: string };
+
+/**
+ * Fail closed on a GraphQL comments page whose `nodes` is not an
+ * array or whose `pageInfo.hasNextPage` is not an actual boolean.
+ * A missing/null `nodes` or optional-chained `pageInfo` must not be
+ * treated as an empty/final page (kurone-kito/idd-skill#3173 review).
+ */
+export function inspectGraphqlCommentsPage(
+  connection: {
+    nodes?: unknown[] | null;
+    pageInfo?: {
+      hasNextPage?: boolean;
+      endCursor?: string | null;
+    };
+  },
+  label: string,
+): GraphqlCommentsPageResult {
+  if (!Array.isArray(connection.nodes)) {
+    return {
+      ok: false,
+      reason: `${label} comments page is missing a nodes array`,
+    };
+  }
+  const pageInfo = connection.pageInfo;
+  if (pageInfo == null || typeof pageInfo !== 'object') {
+    return {
+      ok: false,
+      reason: `${label} comments page is missing pageInfo`,
+    };
+  }
+  if (typeof pageInfo.hasNextPage !== 'boolean') {
+    return {
+      ok: false,
+      reason: `${label} comments page hasNextPage is not a boolean`,
+    };
+  }
+  const endCursor =
+    typeof pageInfo.endCursor === 'string' ? pageInfo.endCursor : null;
+  if (pageInfo.hasNextPage && !endCursor) {
+    return {
+      ok: false,
+      reason: `page reported hasNextPage without endCursor for ${label}`,
+    };
+  }
+  return {
+    ok: true,
+    connection: {
+      nodes: connection.nodes,
+      pageInfo: { hasNextPage: pageInfo.hasNextPage, endCursor },
+    },
+  };
+}
+
+/**
+ * Map one GraphQL `IssueComment` node onto
+ * {@link AuthoringOwnerProvenanceComment}. Fail closed on a missing
+ * `databaseId`, a missing/empty/unparseable `lastEditedAt` (except an
+ * explicit JSON `null`), an unparseable `createdAt`, or a missing /
+ * non-string `body`. Never fills `lastEditedAt` from `updatedAt` /
+ * `createdAt`.
+ */
+export function mapGraphqlIssueCommentNode(
+  node: unknown,
+): GraphqlCommentMapResult {
+  if (node === null || typeof node !== 'object') {
+    return { ok: false, reason: 'GraphQL comment node is not an object' };
+  }
+  const record = node as {
+    databaseId?: unknown;
+    lastEditedAt?: unknown;
+    createdAt?: unknown;
+    updatedAt?: unknown;
+    body?: unknown;
+    author?: { login?: unknown } | null;
+  };
+  const databaseId = record.databaseId;
+  if (
+    typeof databaseId !== 'number' ||
+    !Number.isInteger(databaseId) ||
+    databaseId <= 0
+  ) {
+    return {
+      ok: false,
+      reason: 'GraphQL comment node is missing a positive integer databaseId',
+    };
+  }
+  const createdAt = record.createdAt;
+  if (typeof createdAt !== 'string' || !isParseableTimestamp(createdAt)) {
+    return {
+      ok: false,
+      reason: `GraphQL comment #${databaseId} has a missing or unparseable createdAt`,
+    };
+  }
+  const lastEditedAtRaw = record.lastEditedAt;
+  let lastEditedAt: string | null;
+  if (lastEditedAtRaw === null) {
+    lastEditedAt = null;
+  } else if (
+    typeof lastEditedAtRaw === 'string' &&
+    isParseableTimestamp(lastEditedAtRaw)
+  ) {
+    lastEditedAt = lastEditedAtRaw;
+  } else {
+    return {
+      ok: false,
+      reason:
+        `GraphQL comment #${databaseId} has a missing, empty, or unparseable ` +
+        `lastEditedAt -- body-edit evidence is incomplete`,
+    };
+  }
+  const bodyRaw = record.body;
+  if (typeof bodyRaw !== 'string') {
+    return {
+      ok: false,
+      reason:
+        `GraphQL comment #${databaseId} has a missing or non-string body -- ` +
+        `comment-log evidence is incomplete`,
+    };
+  }
+  const updatedAtRaw = record.updatedAt;
+  const updatedAt =
+    typeof updatedAtRaw === 'string' && isParseableTimestamp(updatedAtRaw)
+      ? updatedAtRaw
+      : createdAt;
+  return {
+    ok: true,
+    comment: {
+      id: databaseId,
+      authorLogin: String(record.author?.login ?? ''),
+      body: bodyRaw,
+      createdAt,
+      updatedAt,
+      lastEditedAt,
+    },
+  };
+}
+
+function graphqlIncompleteEvidence(detail: string): string {
+  return `GraphQL comment log is incomplete: ${detail}`;
+}
+
+/**
+ * Fetch every issue comment via GraphQL, selecting `lastEditedAt` and
+ * `databaseId` (this helper's field set, not sweep-authoring-markers's).
+ * Paginates to completion. Throws on a failed query, incomplete
+ * pagination (including a missing `nodes` array or a non-boolean
+ * `pageInfo.hasNextPage`), or an unmappable node -- callers must not
+ * fall back to REST `updated_at`.
+ */
+export function fetchProvenanceCommentsGraphql(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): AuthoringOwnerProvenanceComment[] {
+  const query = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      comments(first:100,after:$cursor){
+        nodes { databaseId lastEditedAt createdAt updatedAt body author { login } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+  const out: AuthoringOwnerProvenanceComment[] = [];
+  let cursor: string | null = null;
+  const label = `${owner}/${repo}#${issueNumber}`;
+  while (true) {
+    const args = [
+      'api',
+      ...resolveGhHostnameArgs(),
+      'graphql',
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-F',
+      `number=${issueNumber}`,
+      ...(cursor ? ['-f', `cursor=${cursor}`] : []),
+    ];
+    const raw = ghTextUnbounded(args);
+    let parsed: ProvenanceGraphqlCommentsPayload;
+    try {
+      parsed = JSON.parse(raw || '{}') as ProvenanceGraphqlCommentsPayload;
+    } catch (error) {
+      throw new Error(
+        graphqlIncompleteEvidence(
+          `gh-graphql-parse: ${(error as Error).message}`,
+        ),
+      );
+    }
+    if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+      throw new Error(
+        graphqlIncompleteEvidence(
+          `gh-graphql-errors: ${parsed.errors
+            .map((e) => String(e.message ?? ''))
+            .filter(Boolean)
+            .join('; ')}`,
+        ),
+      );
+    }
+    const issue = parsed.data?.repository?.issue;
+    if (issue == null) {
+      throw new Error(
+        graphqlIncompleteEvidence(`${label} is not an issue or does not exist`),
+      );
+    }
+    const connection = issue.comments;
+    if (connection == null) {
+      throw new Error(
+        graphqlIncompleteEvidence(
+          `${label} returned a null comments connection`,
+        ),
+      );
+    }
+    const page = inspectGraphqlCommentsPage(connection, label);
+    if (!page.ok) {
+      throw new Error(graphqlIncompleteEvidence(page.reason));
+    }
+    for (const node of page.connection.nodes) {
+      const mapped = mapGraphqlIssueCommentNode(node);
+      if (!mapped.ok) {
+        throw new Error(graphqlIncompleteEvidence(mapped.reason));
+      }
+      out.push(mapped.comment);
+    }
+    if (!page.connection.pageInfo.hasNextPage) {
+      break;
+    }
+    const nextCursor = page.connection.pageInfo.endCursor;
+    if (!nextCursor) {
+      throw new Error(
+        graphqlIncompleteEvidence(
+          `page reported hasNextPage without endCursor for ${label}`,
+        ),
+      );
+    }
+    cursor = nextCursor;
+  }
+  return out;
+}
+
+function notFoundGraphqlResult(
+  target: string,
+  liveBody: string,
+  detail: string,
+): AuthoringOwnerProvenanceResult {
+  const computedBodySha256 = createHash('sha256')
+    .update(liveBody, 'utf8')
+    .digest('hex');
+  return {
+    verdict: 'not-found',
+    target,
+    computedBodySha256,
+    recordedBodySha256: null,
+    marker: null,
+    checks: [
+      {
+        id: 'acquire_marker_found',
+        name: "Target's marker log opens with a valid trusted mode=acquire marker",
+        result: 'fail',
+        evidence: detail.startsWith('GraphQL comment log is incomplete')
+          ? detail
+          : graphqlIncompleteEvidence(detail),
+      },
+      {
+        id: 'body_sha256_match',
+        name: "Live body sha256 matches the Stage 1 acquire marker's recorded digest",
+        result: 'fail',
+        evidence: 'No Stage 1 acquire marker to compare against.',
+      },
+    ],
+  };
+}
+
 const AUTHORING_OWNER_PROVENANCE_FLAG_SPEC = {
   '--issue': { type: 'string' },
   '--owner': { type: 'string' },
@@ -526,15 +892,26 @@ The comparison anchors on this issue's own trusted, owner-marker-shaped
 comments -- every one still containing the case-insensitive
 "<marker-prefix>-authoring-owner:" token, whether or not it actually
 parses -- taken in deterministic comment order (createdAt, ties broken
-by comment id ascending). If ANY of those comments was edited after
-posting (its updatedAt differs from its createdAt), the whole log is
-rejected up front, before a first candidate is even chosen: an editor
-cannot make the true Stage 1 acquire vanish from consideration by
+by comment id ascending). If ANY of those comments was body-edited after
+posting (GraphQL lastEditedAt is a timestamp, not JSON null), the whole
+log is rejected up front, before a first candidate is even chosen: an
+editor cannot make the true Stage 1 acquire vanish from consideration by
 editing it into something unparseable or retargeting it, letting a
 later acquire silently win instead (kurone-kito/idd-skill#2901 review
-round 6, Copilot). This is deliberately over-broad in one direction (an
+round 6, Copilot). Do not use updatedAt !== createdAt as this signal:
+GitHub minimizeComment advances updatedAt while leaving the body
+byte-identical and lastEditedAt null (kurone-kito/idd-skill#3173,
+observed on issue #3163 comment 5758891385). Omitted, empty, or
+unparseable lastEditedAt is also a reject (incomplete evidence, never
+"never edited"). This is deliberately over-broad in one direction (an
 edited heartbeat, for example, also trips it) since contract.md's
 append-only rule covers owner comments generically.
+
+The live CLI fetches that comment pool via GraphQL (selecting
+lastEditedAt and databaseId), paginated to completion, then reads and
+hashes the issue body. It never derives lastEditedAt from REST
+updated_at / created_at, and a failed, incomplete, or unparseable
+GraphQL lastEditedAt reports not-found rather than consulting REST.
 
 Past that check, the *first* candidate in comment order is scrutinized,
 whatever its shape -- not merely the first one that happens to parse and
@@ -613,23 +990,21 @@ function runCli(): void {
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
   const issueNumber = args.issue ?? 0;
-  // Fetch the (potentially slow, paginated) comment log BEFORE the issue
-  // body, and hash the body immediately after fetching it below -- the
-  // whole point of this check is a fresh read taken as close as possible
-  // to the comparison, so the body fetch must be the last network call
-  // before hashing, not the first (kurone-kito/idd-skill#2901 review,
-  // chatgpt-codex-connector round 5: fetching the body first left a
-  // window, spanning the comment fetch, during which a live edit would
-  // go undetected).
-  const comments: AuthoringOwnerProvenanceComment[] = port
-    .listWorkItemComments(issueNumber)
-    .map((comment) => ({
-      id: comment.id,
-      authorLogin: comment.authorLogin,
-      body: comment.body,
-      createdAt: comment.createdAt,
-      updatedAt: comment.updatedAt,
-    }));
+  // Fetch the (potentially slow, paginated) GraphQL comment log BEFORE
+  // the issue body, and hash the body immediately after fetching it
+  // below -- the whole point of this check is a fresh read taken as
+  // close as possible to the comparison, so the body fetch must be the
+  // last network call before hashing, not the first
+  // (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector round 5).
+  // GraphQL lastEditedAt is the append-only detector; never fall back to
+  // REST listWorkItemComments / updated_at (#3173).
+  let comments: AuthoringOwnerProvenanceComment[] | null = null;
+  let graphqlError: string | null = null;
+  try {
+    comments = fetchProvenanceCommentsGraphql(owner, repo, issueNumber);
+  } catch (error) {
+    graphqlError = (error as Error).message;
+  }
   const rawIssue = port.getWorkItem(issueNumber);
   if (!rawIssue) {
     throw new Error(`issue #${issueNumber} not found`);
@@ -647,13 +1022,20 @@ function runCli(): void {
   });
 
   const target = `${owner}/${repo}#${issueNumber}`;
-  const result = evaluateAuthoringOwnerProvenance({
-    target,
-    liveBody: rawIssue.body,
-    comments,
-    markerPrefix,
-    trustedMarkerLogins,
-  });
+  const result =
+    graphqlError !== null || comments === null
+      ? notFoundGraphqlResult(
+          target,
+          rawIssue.body,
+          graphqlError ?? 'comment fetch returned no comment list',
+        )
+      : evaluateAuthoringOwnerProvenance({
+          target,
+          liveBody: rawIssue.body,
+          comments,
+          markerPrefix,
+          trustedMarkerLogins,
+        });
 
   const output = {
     repository: { owner, repo },
