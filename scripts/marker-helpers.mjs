@@ -70,6 +70,23 @@ const OPERATIONAL_MARKER_ENTRIES = [
     malformedPrefixPattern: /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->/i,
   },
   {
+    // #3159: durable Zero-Accepted-PATH-A branch-sync gate state
+    // (idd-review-triage.instructions.md), the same HTML-comment-plus-note
+    // family as review-watermark/review-baseline above -- not folded into
+    // either of those markers' own schemas because the gate's condition
+    // (`a`/`b`) and HEAD SHA are a distinct durable fact from a review
+    // snapshot or critique baseline. The third field is the literal
+    // documented condition letter (`a` or `b`), not a generic token, so an
+    // out-of-vocabulary look-alike value stays unrecognized here the same
+    // way a malformed review-watermark/review-baseline body does.
+    label: '<!-- zero-accepted-path-a-gate:',
+    pattern:
+      /^<!--\s*zero-accepted-path-a-gate:\s+\S+\s+\S+\s+[ab]\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    startPattern: /^<!--\s*zero-accepted-path-a-gate:/i,
+    malformedPrefixPattern:
+      /^<!--\s*zero-accepted-path-a-gate:\s+\S+\s+\S+\s+[ab]\s+\S+\s*-->/i,
+  },
+  {
     label: 'advisory-wait:',
     pattern:
       /^advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
@@ -264,6 +281,19 @@ const MARKER_HIDE_POLICY_ENTRIES = [
     reason: 'Grouped by same claim-id (idd-review-snapshot.instructions.md).',
   },
   {
+    label: '<!-- zero-accepted-path-a-gate:',
+    policy: 'f4-only',
+    reason:
+      "PR-scoped like review-watermark/review-baseline above (F4's generic " +
+      'audit-pr-cleanup.mts sweep structurally reaches it), but ' +
+      'idd-review-triage.instructions.md defines no pre-merge same-claim ' +
+      'hide-at-post-time step for it -- only "post a fresh marker... skip a ' +
+      'duplicate" when the durable (a)/(b) state changes, unlike ' +
+      "review-watermark/review-baseline's documented supersession rule. " +
+      "Adding that wiring is a gate-design decision, out of this fix's own " +
+      'scope (helper-side consistency only).',
+  },
+  {
     label: 'advisory-wait:',
     policy: 'wired',
     reason:
@@ -454,6 +484,7 @@ export const IDD_AGENT_DERIVED_MARKERS = new Set([
   '<!-- activation-nonce:',
   '<!-- review-watermark:',
   '<!-- review-baseline:',
+  '<!-- zero-accepted-path-a-gate:',
   'advisory-wait:',
   'advisory-wait-recovery:',
   '<!-- advisory-wait:',
@@ -2309,9 +2340,9 @@ export function operationalMarkerPrefixByStart(body) {
 }
 /**
  * Detects a `claimed-by` / `unclaimed-by` / `activation-nonce` /
- * `review-watermark` / `review-baseline` comment whose body starts with a
- * structurally valid marker token but whose whole body does not match the
- * canonical, strict
+ * `review-watermark` / `review-baseline` / `zero-accepted-path-a-gate`
+ * comment whose body starts with a structurally valid marker token but
+ * whose whole body does not match the canonical, strict
  * `pattern` -- for **any** reason: content appended directly after the
  * token with no note, a well-intentioned human rationale appended after an
  * otherwise-canonical token + note (the motivating case), a note that does

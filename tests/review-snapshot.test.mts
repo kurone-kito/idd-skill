@@ -445,6 +445,44 @@ test('builds activity snapshot metrics with trusted marker filtering', () => {
   assert.equal(summary.latestPassingCiCompletedAt, '2026-05-10T10:25:00Z');
 });
 
+// #3159: a trusted zero-accepted-path-a-gate marker posted after a review
+// watermark must be excluded from the snapshot's effective count and max
+// activity timestamp, so it cannot alone cause a false newer-activity
+// route -- but an untrusted author's identically-shaped comment (the trust
+// boundary the issue's acceptance criteria requires stay intact) still
+// counts as ordinary activity.
+test('excludes a trusted zero-accepted-path-a-gate marker but counts an untrusted look-alike', () => {
+  const sha = 'c'.repeat(40);
+  const summary = buildActivitySnapshotSummary(
+    {
+      comments: [
+        {
+          author: { login: 'idd-bot' },
+          body:
+            `<!-- zero-accepted-path-a-gate: idd-bot claim-1 a ${sha} -->\n\n` +
+            '_idd-bot: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._',
+          createdAt: '2026-05-10T11:00:00Z',
+          updatedAt: '2026-05-10T11:00:00Z',
+        },
+        {
+          author: { login: 'external-user' },
+          body: `<!-- zero-accepted-path-a-gate: external claim-1 a ${sha} -->`,
+          createdAt: '2026-05-10T11:10:00Z',
+          updatedAt: '2026-05-10T11:10:00Z',
+        },
+      ],
+      reviews: [],
+      threads: [],
+      checks: [],
+    },
+    { trustedMarkerLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.totalItemCount, 1);
+  assert.equal(summary.counts.comments, 1);
+  assert.equal(summary.maxActivityUpdatedAt, '2026-05-10T11:10:00Z');
+});
+
 test('malformed forced-handoff comments remain visible activity', () => {
   const summary = buildActivitySnapshotSummary(
     {

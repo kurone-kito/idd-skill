@@ -4427,6 +4427,26 @@ test('deriveIddAgentLogins keeps prior trusted operational actors but not generi
   );
 });
 
+// #3159: zero-accepted-path-a-gate is posted by the acting IDD session the
+// same way review-watermark/review-baseline are, so its trusted author must
+// be derived as an IDD agent login too.
+test('deriveIddAgentLogins recognizes a trusted zero-accepted-path-a-gate marker author', () => {
+  const sha = 'e'.repeat(40);
+  assert.deepEqual(
+    deriveIddAgentLogins({
+      viewerLogin: 'current-agent',
+      trustedMarkerLogins: ['current-agent', 'prior-agent'],
+      operationalComments: [
+        {
+          author: { login: 'prior-agent' },
+          body: `<!-- zero-accepted-path-a-gate: prior-agent claim-123 a ${sha} -->\n\n_prior-agent: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._`,
+        },
+      ],
+    }),
+    ['current-agent', 'prior-agent'],
+  );
+});
+
 test('deriveIddAgentLogins excludes trusted forced-handoff marker authors', () => {
   const forcedHandoffBody = [
     '<!-- forced-handoff: {"old-agent-id":"github-copilot-cli-old","old-claim-id":"claim-20260512T090000Z-337-old","new-agent-id":"github-copilot-cli-new","new-claim-id":"claim-20260512T110000Z-337-new","branch":"issue/337-feat-protocol-add-auditable-forced","forced-by":"maintainer","reason":"operator-approved-recovery","timestamp":"2026-05-12T11:00:00Z","context-scope":"issue-only"} -->',
