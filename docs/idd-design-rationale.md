@@ -1096,6 +1096,45 @@ recalibration does not attempt to incorporate still-open loops into
 the distribution. Left as a candidate follow-up, alongside the two
 caveats above.
 
+#### 2026-09-21 correction: count Copilot reviews, not watermark posts (kurone-kito/idd-skill#3162)
+
+The "Open caveat" above expected the claim-scoped `review-watermark`
+post count to run _higher_ than the Copilot review-submission count,
+since E1 can refresh the watermark independently of a fresh Copilot
+submission. An audit of every PR merged 2026-09-16 through 2026-09-21
+found the opposite: the `Reject (defer)` disposition fired zero times
+across 64 merged PRs, and three of them —
+kurone-kito/idd-skill#3137, kurone-kito/idd-skill#3154, and
+kurone-kito/idd-skill#3160 — showed why. Their claim-scoped
+`review-watermark` post counts were 2, 3, and 3 respectively, while
+their actual `copilot-pull-request-reviewer[bot]` review-submission
+counts (independently re-verified via paginated
+`gh api repos/kurone-kito/idd-skill/pulls/<n>/reviews`) were 6, 38, and
+8 — a 3.0x, 12.7x, and 2.7x undercount. Two of the three PRs also split
+across two different claim-id lineages mid-review (a session
+handoff/resume), which resets the claim-scoped post count and widens
+the gap further.
+
+The counted quantity therefore ran in the opposite direction from what
+this section's own "Open caveat" anticipated: it structurally
+undercounts the real Copilot-review cost this mechanism exists to
+bound, so the cutoff did not engage for the highest-cost PRs it was
+introduced to catch. This resolves that caveat (not the second or third
+caveats above, which remain open) by redefining the compared quantity
+in `idd-review-triage.instructions.md`'s "Round-count cutoff" section
+from the claim-scoped `review-watermark` post count to the pull
+request's total `copilot-pull-request-reviewer[bot]` review-submission
+count, counted PR-wide regardless of claim-id lineage and fetched with
+full pagination — the same proxy the original 2026-09-10 and
+2026-09-15 calibrations above already used to justify `15` and then
+`12`, now also used for the runtime comparison itself instead of only
+for after-the-fact calibration. `deferAfterRounds`'s configured numeric
+values (this repository's local `5`, and the distributed default `12`)
+are unchanged; only what the number is compared against changed. The
+`review-watermark` marker's own format and posting mechanism are
+unchanged too — it keeps serving freshness and CI-completion gating
+unaffected by this correction.
+
 ### review-ack worked example
 
 A review posts a regular-comment finding plus a suppressed one.
