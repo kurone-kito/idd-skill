@@ -199,11 +199,20 @@ export const RESOLVED_DECISION_PATTERN =
 // ATX heading, a blockquote marker, an unordered/ordered list marker, or a
 // thematic break) is still rejected as an empty marker, closing the exact
 // case the newline-tolerance removal above was fixing, without
-// reintroducing it. This guard is deliberately scoped to the hard-wrap
-// branch only -- the same-line branch is untouched, byte-for-byte, from
-// the newline-intolerant revision, so its own well-covered behavior (PR
-// #2662's many review rounds) carries zero regression risk from this
-// change. The lookahead right after the opening "("
+// reintroducing it. The thematic-break arm tolerates CommonMark's spaced
+// marker forms ("- - -", "* * *", "_ _ _"), not only a contiguous run
+// (C1 critique round 1, CodeRabbit delegate, issue #3165). This guard is
+// deliberately scoped to the hard-wrap branch only -- the same-line branch
+// is untouched, byte-for-byte, from the newline-intolerant revision, so its
+// own well-covered behavior (PR #2662's many review rounds) carries zero
+// regression risk from this change. The still-pending denylist below is
+// duplicated verbatim into both alternation branches rather than hoisted
+// into one shared lookahead: a hoisted form is regex-equivalent (verified
+// by hand-trace) but restructuring this specific regex is exactly the kind
+// of change PR #2662's many review rounds kept finding subtle bugs in, so
+// the duplication is a deliberate, reviewed trade-off, not an oversight
+// (C1 critique round 1, general-purpose subagent, issue #3165). The
+// lookahead right after the opening "("
 // requires the parenthetical to actually contain one of the three
 // provenance signals this shape is documented to carry -- an issue/PR
 // reference, "Groom hearing", or an ISO-style date -- rather than accepting
@@ -223,7 +232,7 @@ export const RESOLVED_DECISION_PATTERN =
 // resolution text actually settles the exact approval wording elsewhere in
 // the body.
 export const INLINE_MAINTAINER_DECISION_PATTERN =
-  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:(?:[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S|[ \t]*\n[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))(?!#{1,6}(?:[ \t]|\n|$))(?!>)(?![-*+](?:[ \t]|\n|$))(?!\d{1,9}[.)](?:[ \t]|\n|$))(?!(?:-{3,}|\*{3,}|_{3,})(?:[ \t]|\n|$))\S)/i;
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:(?:[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S|[ \t]*\n[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))(?!#{1,6}(?:[ \t]|\n|$))(?!>)(?![-*+](?:[ \t]|\n|$))(?!\d{1,9}[.)](?:[ \t]|\n|$))(?!(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}))\S)/i;
 
 // #2661 PR #2662 review round 2 (Codex): unlike a whole-paragraph framing
 // scan, this scans only the paragraph text BEFORE `offset`, not the whole

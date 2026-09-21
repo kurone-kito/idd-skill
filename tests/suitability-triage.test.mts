@@ -3624,12 +3624,18 @@ test('verifiability still fails when a hard-wrapped inline marker is immediately
   // The block-start guard added for the hard-wrap tolerance above must
   // reject every Markdown block construct the issue's acceptance criteria
   // name, not only an ATX heading (already covered above): a blockquote
-  // marker, an unordered or ordered list marker, and a thematic break.
+  // marker, an unordered or ordered list marker, and a thematic break --
+  // both a contiguous run and CommonMark's spaced form (C1 critique round
+  // 1, CodeRabbit delegate: the first revision of this guard only rejected
+  // a contiguous "---"/"***"/"___", missing "- - -"/"* * *"/"_ _ _").
   for (const nextLine of [
     '> quoted text',
     '- list item',
     '1. list item',
     '---',
+    '- - -',
+    '* * *',
+    '_ _ _',
   ]) {
     const result = checkVerifiability({
       issue: {
