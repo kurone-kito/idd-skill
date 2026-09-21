@@ -171,17 +171,51 @@ export const RESOLVED_DECISION_PATTERN =
 // resolution-text denylist at all since #1135, and its own docstring
 // accepts exactly this soft-heuristic trade-off. A denylist can never
 // enumerate every future synonym; widen a *class* here only for a
-// concrete reported case, not for a hypothetical one. Resolution text must
-// start on the SAME LINE as the colon (`[ \t]*`, no newline tolerance): an
-// earlier revision allowed a single hard-wrapped line break here, which
-// fixed the immediate "colon immediately followed by a blank line" case
-// (Codex round 2, PR #2662) but still let an empty marker consume the very
-// next line's first character even with no blank line at all -- e.g. a
-// heading's "#" right after "Maintainer decision (...):\n" (Copilot round
-// 6, PR #2662). Dropping the newline tolerance entirely closes both cases
-// at once; neither of this fix's two real-world citations (#2644, #2641)
-// ever needed it, since GitHub's hard-wrap only splits the provenance
-// parenthetical, never the colon-to-resolution boundary itself. The
+// concrete reported case, not for a hypothetical one. Resolution text may
+// start on the SAME LINE as the colon, or after exactly ONE hard-wrapped
+// line break -- never two (a blank line still ends the marker with no
+// resolution text, unchanged). An earlier revision allowed a single
+// hard-wrapped line break unconditionally, which fixed the immediate
+// "colon immediately followed by a blank line" case (Codex round 2, PR
+// #2662) but still let an empty marker consume the very next line's first
+// character even with no blank line at all -- e.g. a heading's "#" right
+// after "Maintainer decision (...):\n" (Copilot round 6, PR #2662); a
+// later revision dropped newline tolerance entirely to close that gap, on
+// the empirical premise that neither of that fix's two real-world
+// citations (#2644, #2641) ever needed it, since GitHub's hard-wrap only
+// splits the provenance parenthetical, never the colon-to-resolution
+// boundary itself. That premise did not generalize: field feedback (gist
+// round 28, 2026-09-21, issue #3165) reported an adopter whose Groom-pass
+// convention hand-authors the marker, then reflows the issue body to a
+// project line-length convention -- when the parenthetical + colon happen
+// to land close enough to the wrap column, the wrap falls exactly on the
+// colon-to-resolution boundary, and a genuinely resolved decision went
+// silently mis-triaged as still-pending for roughly a day. The colon-to-
+// resolution boundary now mirrors the tolerance the provenance
+// parenthetical above already has (`[^)]` spanning a hard-wrapped line
+// break), restoring the single-hard-wrap tolerance but this time paired
+// with an explicit block-start guard -- a resolution that (after crossing
+// at most one line break) begins a DIFFERENT Markdown block construct (an
+// ATX heading, a blockquote marker, an unordered/ordered list marker, or a
+// thematic break) is still rejected as an empty marker, closing the exact
+// case the newline-tolerance removal above was fixing, without
+// reintroducing it. The thematic-break arm tolerates CommonMark's spaced
+// marker forms ("- - -", "* * *", "_ _ _"), not only a contiguous run
+// (C1 critique round 1, CodeRabbit delegate, issue #3165), and is
+// anchored to end-of-line so a resolution that merely begins with a
+// dash/asterisk/underscore run -- e.g. "--- adopt the policy." -- is not
+// mistaken for a thematic break, which CommonMark requires to occupy the
+// whole line (Copilot review, PR #3172). This guard is
+// deliberately scoped to the hard-wrap branch only -- the same-line branch
+// is untouched, byte-for-byte, from the newline-intolerant revision, so its
+// own well-covered behavior (PR #2662's many review rounds) carries zero
+// regression risk from this change. The still-pending denylist below is
+// duplicated verbatim into both alternation branches rather than hoisted
+// into one shared lookahead: a hoisted form is regex-equivalent (verified
+// by hand-trace) but restructuring this specific regex is exactly the kind
+// of change PR #2662's many review rounds kept finding subtle bugs in, so
+// the duplication is a deliberate, reviewed trade-off, not an oversight
+// (C1 critique round 1, general-purpose subagent, issue #3165). The
 // lookahead right after the opening "("
 // requires the parenthetical to actually contain one of the three
 // provenance signals this shape is documented to carry -- an issue/PR
@@ -202,7 +236,7 @@ export const RESOLVED_DECISION_PATTERN =
 // resolution text actually settles the exact approval wording elsewhere in
 // the body.
 export const INLINE_MAINTAINER_DECISION_PATTERN =
-  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S/i;
+  /(?<![\w-])Maintainer decision(?![\w-])\s*\((?=[^)]{0,200}(?:#\d+|Groom hearing|\d{4}-\d{2}-\d{2}))[^)]{0,200}\)\s*:(?:[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))\S|[ \t]*\n[ \t]*(?![\s*_`>-]*(?:not(?:\s+yet)?(?:\s+been)?\s+(?:resolved|decided)|no\s+(?:decision|consensus|agreement|resolution|verdict|ruling|conclusion)(?:\s+yet)?|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+(?:resolved|decided)|never(?:\s+been)?\s+(?:resolved|decided)|TBD|TBA|TBC|(?:pending|undecided|deferred)(?:\s+(?:yet|still|for\s+now))?[\s*_`]*(?=[.,;:\n]|$)|awaiting\s+(?:a\s+)?(?:decision|consensus|sign-?off|approval)|(?:still|remains?)\s+(?:open|undecided|unresolved|pending|unsettled))(?![a-zA-Z]))(?!#{1,6}(?:[ \t]|\n|$))(?!>)(?![-*+](?:[ \t]|\n|$))(?!\d{1,9}[.)](?:[ \t]|\n|$))(?!(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})(?:\n|$))\S)/i;
 
 // #2661 PR #2662 review round 2 (Codex): unlike a whole-paragraph framing
 // scan, this scans only the paragraph text BEFORE `offset`, not the whole

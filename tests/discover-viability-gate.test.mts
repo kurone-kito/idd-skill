@@ -1115,6 +1115,31 @@ test('a quoted example of the resolved-decision line keeps its current (passing)
   assert.deepEqual(result.failedCriteria, []);
 });
 
+test('passes autonomous completion on a Groom-pass resolved decision hard-wrapped at the colon (#3165)', () => {
+  // #3165: the same findInlineResolvedDecisionSpans this file's own
+  // autonomous_completion criterion relies on (via isWithinResolvedDecisionSpan)
+  // previously required "Maintainer decision (...):" and its resolution text
+  // to share one source line. Before that fix, a hard-wrapped resolution --
+  // reported from an adopter whose Groom-pass convention reflows the issue
+  // body to a line-length convention -- left "Maintainer decision" itself
+  // (an EXTERNAL_COORDINATION_PATTERN trigger phrase) not excluded, so this
+  // gate failed autonomous_completion on an already-resolved issue, the same
+  // false-negative #2763's same-line reproduction above guards against.
+  const result = evaluateA4Viability({
+    number: 66,
+    title: 'apply Groom hearing outcome',
+    body:
+      'Maintainer decision (Groom hearing, 2026-09-09):\nproceed.\n\n' +
+      '## Acceptance criteria\n\n' +
+      '- [ ] Add the change and a regression test.\n\n' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('still fails autonomous completion when a distinct genuine blocker follows a resolved decision (#2763)', () => {
   // Adversarial case: excluding the resolved-decision occurrence must not
   // also swallow a SEPARATE, still-live blocker elsewhere in the body.
