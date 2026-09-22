@@ -11,26 +11,24 @@ owns behavior; `advisoryWait.exemptBotAuthoredPrs` is convergence-only.
 ## Scope — Copilot-only settle/wait window
 
 This protocol's settle/wait window covers **Copilot only**. Other
-`advisoryBotLogins` (e.g. CodeRabbit) get **no** wait window here —
-deliberately (`external-bot` profile in
-[`docs/idd-review-policy-profiles.md`](../../docs/idd-review-policy-profiles.md)
-swaps the single bot instead of gating every configured one).
+`advisoryBotLogins` get **no** wait window in this file. A configured
+`advisoryWait.secondaryQuietWindow` is F2's separate
+`secondary-quiet-window` blocker
+(`idd-pre-merge.instructions.md`): when set, F2 waits until that
+helper reports `elapsed: true` since the last substantive review
+activity. It is the blocker aimed at `secondaryBotLogin`, not a poll
+until that bot's review reaches HEAD. Unset never adds it. Other
+`advisoryBotLogins` stay on the E1 snapshot and watermark.
 
-For non-Copilot bots, the load-bearing safety net for late-arriving
-findings is the **E1 activity-universe snapshot + `review-watermark`
-delta** (`idd-review-snapshot.instructions.md`), re-checked by the
-F2/F3 merge-readiness gate (`idd-pre-merge.instructions.md`), which
-forbids a bare CI-green merge without a fresh covering snapshot.
+For non-Copilot bots, late findings still use the **E1 snapshot +
+`review-watermark` delta**, re-checked by F2/F3, which forbids a
+bare CI-green merge without a fresh covering snapshot.
 
-**Do not build a substitute wait for a non-primary bot.** A polling
-loop, scheduled wakeup, or background monitor that blocks on a
-specific non-primary bot's review reaching current HEAD (any bot
-other than the configured `advisoryWait.primaryBotLogin` — for
-example, Codex, on a repository where it is not that configured bot)
-is not this protocol — it has none of this protocol's caps, timeouts,
-or hold routes, and the bot may never review the PR at all, so the
-wait has no bounded exit. Rely on the E1/review-watermark/F2/F3
-safety net above instead.
+**Do not build a substitute wait for a non-primary bot.** A poll
+that blocks on a bot other than `advisoryWait.primaryBotLogin`
+reaching HEAD is not this protocol: no caps, timeouts, or hold
+routes, and the bot may never review. Use the E1 net above. Do not
+treat the F2 elapsed-window blocker as that substitute.
 
 ## Fast path — common case
 

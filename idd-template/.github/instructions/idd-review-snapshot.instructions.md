@@ -66,10 +66,11 @@ Additionally, fetch the **current CI state** for `{head-SHA}`:
 treated-as-passed) CI run as `{latest-ci-completed-at}`, or `none` if no
 CI pass exists yet for this HEAD.
 
-**Non-Copilot advisory safety net.** This E1 snapshot and Step 2's
-watermark are the only settle/wait coverage non-Copilot advisory bots
-get (`idd-advisory-wait.instructions.md`'s Scope section) — why Step 1
-fetches the full activity universe and Step 2 watermarks all of it.
+**Non-Copilot advisory safety net.** Snapshot and Step 2
+watermark cover non-Copilot bots in this phase. Not exclusive:
+configured F2 `secondaryQuietWindow` waits until `elapsed`
+since last substantive review activity, not until
+`secondaryBotLogin` reviews HEAD.
 
 **Step 2 — Record the watermark.** Using the `{head-SHA}` stored at the
 start of Step 1, compute `{max-activity-updatedAt}` as the highest

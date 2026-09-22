@@ -77,13 +77,13 @@ cover the full activity universe (human reviewers plus advisory bot
 surfaces such as Copilot, CodeRabbit, Codex connectors, and CI bots).
 
 The advisory-wait window is Copilot-only
-(`idd-advisory-wait.instructions.md`) and does not cover any
-repository-configured non-Copilot `advisoryBotLogins` (e.g. CodeRabbit
-or a Codex connector). F2/F3 MUST NOT merge on a bare CI-green signal:
-the **Review currency** check below must confirm a fresh snapshot whose
-`review-watermark` covers the latest activity timestamp, so a
-non-Copilot finding landing shortly after CI still returns the
-workflow to E1 instead of merging over it.
+(`idd-advisory-wait.instructions.md`) and does not cover non-Copilot
+`advisoryBotLogins`. That is this window, not all of F2: configured
+`secondaryQuietWindow` is the quiet-window blocker below (until
+`elapsed: true`, not until `secondaryBotLogin` reviews HEAD).
+F2/F3 MUST NOT merge on bare CI-green: **Review currency** must
+confirm a fresh `review-watermark` covers latest activity, so a late
+non-Copilot finding still returns to E1.
 
 **Nonce passthrough**: when invoking the readiness collector below
 (directly, or via the documented merge-gate helper reference), pass
