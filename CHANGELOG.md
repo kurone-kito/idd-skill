@@ -14,6 +14,21 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-09-22
+
+Advisory-wait docs no longer read the Copilot-only window as the
+whole non-Copilot merge wait.
+
+### Fixed
+
+- Advisory-wait instructions name the configured F2
+  `secondaryQuietWindow` for `secondaryBotLogin` beside the
+  Copilot-only window, so that window is not read as "F2 never
+  waits for any non-Copilot bot." The quiet window still waits
+  until elapsed time since the last substantive review, not until
+  the secondary bot reviews HEAD. Helpers, schema, and distributed
+  defaults are unchanged (#3179).
+
 ## [0.12.1] - 2026-09-22
 
 Claim and worktree takeover fixes, review and marker-family
