@@ -14,6 +14,58 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-22
+
+Claim and worktree takeover fixes, review and marker-family
+fixes, and instruction-precision patch since the 0.12.0 cut.
+
+### Added
+
+- `live-status-digest` gains a maintainer-gated repair path for
+  duplicate live-status digest comments (#3158).
+
+### Changed
+
+- README banner and production metrics (3,000+ issues / 1,400+
+  merged pull requests) (PR `#3123`).
+- The Biome lint gate now fails on new warnings (#3124).
+- Lite instruction files close remaining critique-loop mirroring
+  gaps: resolve `critiqueLoop.delegate` during E10, and invoke the
+  C2/C4 critique telemetry hook (#3129, #3127).
+- Documentation precision across merge (F2/F3 dirty-HEAD
+  `reset --hard` guard, F4 cwd-before-worktree-removal, cleanup
+  evidence re-check before POST), work (WorkTrunk `-x` noop `cd`,
+  preserve test exit status), claim (refuse new claims during
+  context-pressure exit), resume (inherited-commit scope audit
+  before sections W7/W8/FH), review-triage (paginate E4
+  `userContentEdits`), CI (`gh api` jq argument boundaries), and
+  issue-authoring (`|set|==1` self-anchor fast-path).
+
+### Fixed
+
+- Claim, worktree, and discover: skip live local worktrees during
+  stale takeover, close unattended worktree takeover gaps, and
+  require local ownership evidence before resume (#3141).
+- Resume: route empty required-check sets through present-run CI
+  (#3145).
+- Discover: accept canonical issue-number flags across candidate
+  helpers (#3143).
+- Review: classify CodeRabbit already-reviewed acknowledgements,
+  and count Copilot reviews rather than watermark posts for
+  `deferAfterRounds` (#3146, #3162).
+- Marker helpers: register `zero-accepted-path-a-gate` as
+  operational, and scope authoring-marker supersede classification
+  to (family, target identity) rather than family alone (issues
+  `#3159`, `#3167`).
+- `resolved-decision`: tolerate a hard-wrapped line break after
+  the inline Maintainer-decision colon (#3165).
+- `authoring-owner-provenance`: detect body edits via GraphQL
+  `lastEditedAt` rather than REST `updatedAt`, so a
+  hide-on-supersede minimize no longer fails a Stage 1 acquire as
+  edited (issue `#3173`, PR `#3174`).
+- Source-repo `token-cost` harvest reports unclosed phase-event
+  windows (#3155).
+
 ## [0.12.0] - 2026-09-18
 
 Discover A0-O human-input stop, critique-loop configuration and
