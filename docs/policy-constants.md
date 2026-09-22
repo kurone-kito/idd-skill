@@ -259,7 +259,11 @@ computes, so it needs no separately persisted timestamp: a genuinely
 unresolved item keeps the anchor fresh, and a disposition reply, a
 watermark, or a courtesy bot ack never reopens it. Distinct from
 `settledWindow`, which bounds the PRIMARY bot's own pending state, not a
-late secondary-bot arrival. **#2544**: once the secondary bot has already
+late secondary-bot arrival. This F2 duration is separate from the
+Copilot-only advisory-wait window, which does not wait on
+`secondaryBotLogin`. When set, F2 waits until `elapsed: true`; that
+is not a poll until the bot reviews HEAD. Other `advisoryBotLogins`
+stay on the E1 watermark. **#2544**: once the secondary bot has already
 posted a genuine (non-notice) review for the current HEAD, the gate no
 longer requires the full configured duration -- only a short, fixed
 confirmation buffer applies from that review's own timestamp, so the wait
