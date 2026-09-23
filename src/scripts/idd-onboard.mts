@@ -1982,7 +1982,10 @@ export interface HelperLoadResult {
   applicable: boolean;
   /** entryPaths this check actually spawned; empty when `applicable` is
    * false, or when every cataloged entryPath is absent under `--target`
-   * (already `manifestCompleteness.missingTarget`'s own finding). */
+   * (already `manifestCompleteness.missingTarget`'s own finding). An
+   * entryPath that resolves outside `--target` through a symlinked
+   * ancestor is also excluded here -- it is never spawned, and reported
+   * in `failed` instead. */
   probed: string[];
   failed: HelperLoadFailure[];
 }
@@ -1998,6 +2001,28 @@ const HELPER_LOAD_TIMEOUT_MS = 15_000;
  * source repository too, so its expected "loaded successfully" outcome is
  * exit 1 with that message on stderr, never exit 0 with stdout. */
 const FORCE_HANDOFF_HELPER_ID = 'force-handoff';
+
+/**
+ * Whether `targetRoot`/`entryPath`'s REALPATH (symlinks resolved) still
+ * resolves inside `targetRoot`'s own realpath. `fileExists`'s `lstatSync`
+ * only protects the leaf path component -- a symlinked ANCESTOR directory
+ * (for example `targetRoot/scripts` itself) is still followed during
+ * ordinary path resolution, so a real file reached only through such a
+ * symlink would otherwise be spawned from outside the confined `--target`
+ * root (Copilot review, PR #3303). Mirrors `resolveConfinedDirectory`'s
+ * own realpath-boundary check (`isWithinBoundary`), reused here for one
+ * helper entry instead of the whole `--target` root. Fails closed
+ * (`false`) on any `realpathSync` error, e.g. a dangling symlink.
+ */
+function isHelperEntryConfined(targetRoot: string, entryPath: string): boolean {
+  try {
+    const realTarget = realpathSync(targetRoot);
+    const realEntry = realpathSync(resolve(targetRoot, entryPath));
+    return isWithinBoundary(realEntry, realTarget);
+  } catch {
+    return false;
+  }
+}
 
 /** Spawn one cataloged helper's `entryPath` under `targetRoot` with
  * `--help`, working directory `targetRoot`, stdin ignored (so a
@@ -2085,7 +2110,11 @@ function describeHelperLoadFailure(probe: {
  * Skips (never probes, never fails) an entryPath absent under
  * `targetRoot` — that is `checkManifestCompleteness`'s own
  * `missingTarget` finding; probing a file that does not exist would only
- * duplicate it under a different name.
+ * duplicate it under a different name. An entryPath present under
+ * `targetRoot` only through a symlinked ancestor directory is a blocking
+ * failure instead (`isHelperEntryConfined`), never spawned: `fileExists`'s
+ * leaf-only `lstatSync` cannot by itself prove the resolved path stays
+ * inside `--target`.
  */
 export function checkHelperLoad(
   targetRoot: string,
@@ -2098,6 +2127,15 @@ export function checkHelperLoad(
   const failed: HelperLoadFailure[] = [];
   for (const command of buildCommandCatalog()) {
     if (!fileExists(targetRoot, command.entryPath)) {
+      continue;
+    }
+    if (!isHelperEntryConfined(targetRoot, command.entryPath)) {
+      failed.push({
+        id: command.id,
+        entryPath: command.entryPath,
+        reason:
+          'resolves outside --target through a symlinked ancestor directory; refusing to spawn it',
+      });
       continue;
     }
     probed.push(command.entryPath);

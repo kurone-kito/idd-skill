@@ -3466,6 +3466,38 @@ test('checkHelperLoad reports not applicable and spawns nothing for a non-vendor
   }
 });
 
+test('checkHelperLoad refuses to spawn an entryPath reached only through a symlinked ancestor directory (PR #3303 Copilot review)', () => {
+  // fileExists()'s lstatSync only protects the leaf path component -- a
+  // symlinked ancestor directory (here, targetRoot/scripts itself) is
+  // still followed during ordinary path resolution, so a real file
+  // reached only through it must never be spawned as though it were a
+  // normal file under --target.
+  const targetRoot = makeFixtureDir();
+  const outsideDir = makeFixtureDir();
+  const catalog = buildCommandCatalog();
+  const command = catalog.find((c) => c.id === 'select-desynced-index');
+  assert.ok(command, 'expected select-desynced-index in the catalog');
+  const leafName = command.entryPath.split('/').pop();
+  assert.ok(leafName, 'expected a non-empty leaf filename');
+  writeFileSync(
+    join(outsideDir, leafName),
+    "console.log('should never run');\n",
+  );
+  symlinkSync(outsideDir, join(targetRoot, 'scripts'));
+
+  const result = checkHelperLoad(targetRoot, 'vendored-node');
+  assert.equal(result.applicable, true);
+  assert.deepEqual(result.probed, []);
+  const failure = result.failed.find(
+    (entry) => entry.entryPath === command.entryPath,
+  );
+  assert.ok(
+    failure,
+    `expected ${command.entryPath} in helperLoad.failed (symlinked ancestor)`,
+  );
+  assert.match(failure.reason, /symlinked ancestor/);
+});
+
 test('bin/idd-onboard.mjs --verify reports a broken vendored helper in helperLoad without flagging manifestCompleteness (#3238)', () => {
   const targetRoot = makeFixtureDir();
   const { status: importStatus } = runCliBin([
