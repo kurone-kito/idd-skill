@@ -240,13 +240,25 @@ elapses (measured from the current HEAD commit's own timestamp, not an IDD
 marker), the only pass path is a valid maintainer external-check waiver for
 that HEAD under the selector `idd-advisory-convergence`.
 `advisoryWait.secondaryBotLogin` is an **optional, non-gating** supplement:
-when set, the secondary bot is requested once per HEAD only while the
-primary is cap-exhausted or stalled / rate-limited. It never satisfies the
-primary advisory-wait gate and has no default, so omitting it (or setting
-it equal to the primary) keeps behavior identical to the primary-only path.
-Configure it to a **requestable reviewer** whose `--add-reviewer` request
-appears on the PR timeline (like the primary); a bot that reviews via app
-install without a requestable-reviewer event cannot be tracked once per HEAD.
+when set, each configured secondary bot is requested once per HEAD only
+while the primary is cap-exhausted or stalled / rate-limited. It never
+satisfies the primary advisory-wait gate and has no default, so omitting it
+(or a value that normalizes to empty) keeps behavior identical to the
+primary-only path. Accepts either a single login string or an array of
+login strings (#3186) -- a string is exactly a one-element array. Resolution
+trims and lowercases each entry, drops blanks, drops any entry equal to the
+resolved primary login, and dedupes case-insensitively while preserving
+first-occurrence order; a list that becomes empty after this normalization
+resolves as disabled, same as omitting the field. With exactly one resolved
+login, the helper's `secondaryBotLogin` output field still carries that
+single login for backward compatibility; with zero or more than one, that
+field is empty and the `secondaryBotLogins` array is authoritative --
+`secondaryRequestLogins` is the subset of `secondaryBotLogins` still needing
+a request for the current HEAD, and `secondaryRequestNeeded` is true exactly
+when that subset is non-empty. Configure each login to a **requestable
+reviewer** whose `--add-reviewer` request appears on the PR timeline (like
+the primary); a bot that reviews via app install without a
+requestable-reviewer event cannot be tracked once per HEAD.
 `advisoryWait.secondaryQuietWindow` (#2335, off by default when omitted)
 requires this configured duration to elapse since the last substantive
 (non-ack-only) review activity before `pre-merge-readiness` treats the
@@ -260,25 +272,31 @@ unresolved item keeps the anchor fresh, and a disposition reply, a
 watermark, or a courtesy bot ack never reopens it. Distinct from
 `settledWindow`, which bounds the PRIMARY bot's own pending state, not a
 late secondary-bot arrival. This F2 duration is separate from the
-Copilot-only advisory-wait window, which does not wait on
-`secondaryBotLogin`. When set, F2 waits until `elapsed: true`; that
-is not a poll until the bot reviews HEAD. Other `advisoryBotLogins`
-stay on the E1 watermark. **#2544**: once the secondary bot has already
-posted a genuine (non-notice) review for the current HEAD, the gate no
-longer requires the full configured duration -- only a short, fixed
-confirmation buffer applies from that review's own timestamp, so the wait
-stays a fallback for a genuinely unreviewed HEAD rather than a fixed tax on
-every merge. **#2547**: a rate-limit / skip-review notice for the current
-HEAD, with no later genuine comment, is a third, distinct outcome from
-`#2544`'s two-way pending/settled split -- a definitive decline, not
-"might still be reviewing." The gate skips the wait entirely for it
-(no buffer, no remaining window) rather than treating it the same as
-still-pending silence, since nothing further can arrive from the bot for
-that exact commit. Live investigation across several PRs' head commits
-(commit-status history reaching its terminal entry within seconds of
-being queued, never observed to change afterward even 15+ hours later)
+Copilot-only advisory-wait window, which does not wait on any login
+configured under `secondaryBotLogin`. When set, F2 waits until
+`elapsed: true`; that is not a poll until any configured bot reviews HEAD.
+Other `advisoryBotLogins` stay on the E1 watermark. **#2544**: once the
+secondary bot has already posted a genuine (non-notice) review for the
+current HEAD, the gate no longer requires the full configured duration --
+only a short, fixed confirmation buffer applies from that review's own
+timestamp, so the wait stays a fallback for a genuinely unreviewed HEAD
+rather than a fixed tax on every merge. **#2547**: a rate-limit /
+skip-review notice for the current HEAD, with no later genuine comment, is
+a third, distinct outcome from `#2544`'s two-way pending/settled split -- a
+definitive decline, not "might still be reviewing." The gate skips the wait
+entirely for it (no buffer, no remaining window) rather than treating it
+the same as still-pending silence, since nothing further can arrive from
+the bot for that exact commit. Live investigation across several PRs' head
+commits (commit-status history reaching its terminal entry within seconds
+of being queued, never observed to change afterward even 15+ hours later)
 found the notice comment alone sufficient; no separate commit-status
-corroboration is required.
+corroboration is required. **#3186**: with several configured logins, the
+helper classifies each one's own settlement independently and folds the
+results before this status is built -- any login still pending keeps the
+full configured window; once every login has declined, the wait completes
+immediately; otherwise (no login pending, at least one settled) the short
+settled buffer anchors on the _latest_ of those settled logins' own
+timestamps, and a declined sibling never extends that wait.
 `advisoryWait.exemptBotAuthoredPrs` (#1906) is an opt-in, off-by-default
 flag effective only under `advisoryWait.convergenceScope: "all-prs"`. When
 `true`, a PR whose author resolves to a GitHub Bot-typed account AND has no
@@ -295,9 +313,10 @@ that it reviewed current HEAD -- a comment-command-style bot can post
 a rate-limited no-op comment while its check still reports success
 (see [Advisory wait's Secondary advisory bot
 supplement](../.github/instructions/idd-advisory-wait.instructions.md#secondary-advisory-bot-supplement-non-gating)).
-Today `primaryBotLogin` and `secondaryBotLogin` both assume the same
-re-trigger mechanism -- a `--add-reviewer` request that appears on the
-PR timeline (E14/AW3), per the requestable-reviewer constraint above.
+Today `primaryBotLogin` and every login configured under
+`secondaryBotLogin` both assume the same re-trigger mechanism -- a
+`--add-reviewer` request that appears on the PR timeline (E14/AW3), per
+the requestable-reviewer constraint above.
 A bot whose re-trigger is instead a comment command (e.g.
 `@bot review`) or another non-timeline mechanism has no supported
 re-trigger path today. A future `advisoryWait.reReviewTrigger`-style
@@ -316,8 +335,8 @@ only, not an implemented schema key or helper behavior (#2466).
 | Advisory cap exhausted routing in E14            | Skip the advisory wait and proceed to E15                                                                                                                                                                                                                                                                                                                    | [Review fix](../.github/instructions/idd-review-fix.instructions.md)                                                                                                                                                 | Keep unless a stricter profile requires maintainer review after the cap is exhausted.                                                                                                                                                                                                                                                                                           |
 | Advisory cap exhausted routing in F2/F3          | Hold and require maintainer action                                                                                                                                                                                                                                                                                                                           | [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md), [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md), [Merge](../.github/instructions/idd-merge.instructions.md)           | Treat as a merge safety gate; customize only with explicit repository policy.                                                                                                                                                                                                                                                                                                   |
 | Primary advisory bot login                       | `copilot` (via `advisoryWait.primaryBotLogin`)                                                                                                                                                                                                                                                                                                               | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                     | Keep Copilot unless the repository routes the advisory-wait gate to a different primary bot.                                                                                                                                                                                                                                                                                    |
-| Secondary advisory bot supplement                | unset (optional `advisoryWait.secondaryBotLogin`; non-gating, once per HEAD)                                                                                                                                                                                                                                                                                 | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                     | Leave unset unless the repository wants a non-gating fallback reviewer when the primary is throttled.                                                                                                                                                                                                                                                                           |
-| Secondary advisory bot quiet window              | off when unset (`advisoryWait.secondaryQuietWindow`)                                                                                                                                                                                                                                                                                                         | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md), [Helper scripts](idd-helper-scripts.md)                                                                                                          | Leave unset unless the repository runs a secondary advisory bot that lands findings after a snapshot already looked converged (#2335).                                                                                                                                                                                                                                          |
+| Secondary advisory bot supplement                | unset (optional `advisoryWait.secondaryBotLogin`, a string or an array of strings; non-gating, once per HEAD per login)                                                                                                                                                                                                                                      | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                     | Leave unset unless the repository wants one or more non-gating fallback reviewers when the primary is throttled.                                                                                                                                                                                                                                                                |
+| Secondary advisory bot quiet window              | off when unset (`advisoryWait.secondaryQuietWindow`)                                                                                                                                                                                                                                                                                                         | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md), [Helper scripts](idd-helper-scripts.md)                                                                                                          | Leave unset unless the repository runs one or more secondary advisory bots that land findings after a snapshot already looked converged (#2335); with several bots configured, the wait folds every one's own settlement before this window applies.                                                                                                                            |
 | Per-bot-class re-trigger mechanism               | Not configurable -- both bots assume timeline `--add-reviewer` requests; documented direction only (`advisoryWait.reReviewTrigger`, proposed)                                                                                                                                                                                                                | [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                                                                                           | No adopter action; a comment-command-style bot has no supported re-trigger path until a future schema addition introduces this key (#2466).                                                                                                                                                                                                                                     |
 | Human re-review response wait                    | 30 min after addressed `CHANGES_REQUESTED` feedback has a re-review request                                                                                                                                                                                                                                                                                  | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md)                                                                                                                                                   | Keep unless the repository has a different required-reviewer response window.                                                                                                                                                                                                                                                                                                   |
 | Advisory-convergence deadline                    | 24 h (`advisoryWait.convergenceDeadline`)                                                                                                                                                                                                                                                                                                                    | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md), [Helper scripts](idd-helper-scripts.md)                                                                                                          | Keep unless the repository needs a different bound before the maintainer waiver escape hatch applies. Measured from the new HEAD commit's own `committedDate`, not the moment it is pushed; a push to a new HEAD re-anchors it, so waiting it out is only viable once the diff has converged (no further pushes expected — not the same as review itself converging) (`#2338`). |

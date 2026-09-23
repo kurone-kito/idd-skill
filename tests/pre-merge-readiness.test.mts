@@ -9450,6 +9450,7 @@ function secondaryQuietWindowOf(summary: unknown): {
   elapsedMinutes: number | null;
   elapsed: boolean;
   remainingMinutes: number | null;
+  declined: boolean;
 } {
   return (summary as { secondaryQuietWindow: Record<string, unknown> })
     .secondaryQuietWindow as {
@@ -9458,6 +9459,7 @@ function secondaryQuietWindowOf(summary: unknown): {
     elapsedMinutes: number | null;
     elapsed: boolean;
     remainingMinutes: number | null;
+    declined: boolean;
   };
 }
 
@@ -9667,6 +9669,257 @@ test('#2335: a new unresolved finding arriving inside an already-elapsed window 
       (blocker) => blocker.gate === 'secondary-quiet-window',
     ),
   );
+});
+
+// #3186: secondaryQuietWindow with two configured secondary logins.
+
+const TWO_SECONDARY_LOGINS = [
+  'coderabbitai[bot]',
+  'chatgpt-codex-connector[bot]',
+];
+const TWO_SECONDARY_HEAD_COMMITTED_AT = '2026-05-11T23:50:00Z';
+
+function declinedNoticeComment(login: string, createdAt: string) {
+  return {
+    author: { login },
+    body: '## Review limit reached\n\nRate limited for this HEAD.',
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function genuineReviewComment(login: string, createdAt: string) {
+  return {
+    author: { login },
+    body: 'Looks fine to me.',
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+test('#3186: two secondary logins with neither having posted yet keeps the full window, same as the single-login pending case', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    secondaryQuietWindowMinutes: 10,
+    secondaryBotLogins: TWO_SECONDARY_LOGINS,
+    advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+  });
+  const status = secondaryQuietWindowOf(summary);
+  // Same anchor/elapsed/remaining as the single-login pending test above
+  // (the fixture's own effective activity ceiling, 4min before now) --
+  // neither login has posted anything yet, so both are pending.
+  assert.equal(status.anchorAt, '2026-05-11T23:56:00Z');
+  assert.equal(status.elapsedMinutes, 4);
+  assert.equal(status.remainingMinutes, 6);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.declined, false);
+});
+
+test('#3186: one login declined and the other still pending keeps the full window (any pending login wins)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        declinedNoticeComment('coderabbitai[bot]', '2026-05-11T23:51:00Z'),
+        // chatgpt-codex-connector[bot] never posts -- stays pending.
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 10,
+      secondaryBotLogins: TWO_SECONDARY_LOGINS,
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.declined, false);
+  assert.equal(status.remainingMinutes, 6);
+});
+
+test('#3186: every configured login declining completes the wait immediately', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        declinedNoticeComment('coderabbitai[bot]', '2026-05-11T23:51:00Z'),
+        declinedNoticeComment(
+          'chatgpt-codex-connector[bot]',
+          '2026-05-11T23:52:00Z',
+        ),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+      secondaryBotLogins: TWO_SECONDARY_LOGINS,
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  assert.equal(status.elapsed, true);
+  assert.equal(status.declined, true);
+  assert.equal(status.remainingMinutes, 0);
+  assert.ok(
+    !(summary.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+});
+
+test('#3186: one settled login and one declined login anchors on the settled login -- the decline never extends the wait', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        genuineReviewComment('coderabbitai[bot]', '2026-05-11T23:58:00Z'),
+        // Posted LATER than the genuine review above, but a decline must
+        // never push the anchor past the only genuinely settled login.
+        declinedNoticeComment(
+          'chatgpt-codex-connector[bot]',
+          '2026-05-11T23:59:30Z',
+        ),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+      secondaryBotLogins: TWO_SECONDARY_LOGINS,
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  assert.equal(status.anchorAt, '2026-05-11T23:58:00Z');
+  // The settled buffer (5min, clamped from the configured 60min) applies,
+  // not the full window.
+  assert.equal(status.minutes, 5);
+  assert.equal(status.elapsedMinutes, 2);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.remainingMinutes, 3);
+  assert.equal(status.declined, false);
+});
+
+test('#3186: both logins settled anchors on the LATEST genuine review timestamp', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        genuineReviewComment('coderabbitai[bot]', '2026-05-11T23:58:00Z'),
+        genuineReviewComment(
+          'chatgpt-codex-connector[bot]',
+          '2026-05-11T23:59:00Z',
+        ),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+      secondaryBotLogins: TWO_SECONDARY_LOGINS,
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  assert.equal(status.anchorAt, '2026-05-11T23:59:00Z');
+  assert.equal(status.minutes, 5);
+  assert.equal(status.elapsedMinutes, 1);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.remainingMinutes, 4);
+  assert.equal(status.declined, false);
+});
+
+// #3196 (Copilot review): buildPreMergeReadinessSummary must keep accepting
+// the legacy singular `secondaryBotLogin` option for existing direct callers
+// that predate #3186's plural `secondaryBotLogins` option -- it must fold
+// that one login's settlement into the quiet window exactly as before,
+// never silently falling back to the unconfigured (always-full-window)
+// shape.
+test('#3196: buildPreMergeReadinessSummary still accepts the legacy singular secondaryBotLogin option', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const singularOption = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        genuineReviewComment('coderabbitai[bot]', '2026-05-11T23:58:00Z'),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+      secondaryBotLogin: 'coderabbitai[bot]',
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const pluralOption = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        genuineReviewComment('coderabbitai[bot]', '2026-05-11T23:58:00Z'),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+      secondaryBotLogins: ['coderabbitai[bot]'],
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  // Both forms fold the same single login's settlement identically -- the
+  // singular option must not silently degrade to the unconfigured shape.
+  assert.deepEqual(
+    secondaryQuietWindowOf(singularOption),
+    secondaryQuietWindowOf(pluralOption),
+  );
+  const status = secondaryQuietWindowOf(singularOption);
+  assert.equal(status.anchorAt, '2026-05-11T23:58:00Z');
+  assert.equal(status.minutes, 5);
+  assert.equal(status.declined, false);
+});
+
+test('#3196: the plural secondaryBotLogins option wins over the legacy singular secondaryBotLogin when both are supplied', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        genuineReviewComment(
+          'chatgpt-codex-connector[bot]',
+          '2026-05-11T23:59:00Z',
+        ),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+      // The singular option names a login that never posts anything, so if
+      // it wrongly took precedence the status would stay unsettled.
+      secondaryBotLogin: 'my-custom-bot[bot]',
+      secondaryBotLogins: ['chatgpt-codex-connector[bot]'],
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  assert.equal(status.anchorAt, '2026-05-11T23:59:00Z');
+  assert.equal(status.declined, false);
 });
 
 // #2272: the development-branch-target gate is a fail-closed invariant

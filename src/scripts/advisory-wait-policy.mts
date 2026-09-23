@@ -219,50 +219,107 @@ export function resolveAdvisoryBotRestLogin(
 }
 
 /**
- * Normalize a configured secondary advisory bot login. Unlike the primary
- * (which fails closed to Copilot), the secondary is OPTIONAL: an absent,
- * blank, or non-string value resolves to `''` so an unconfigured secondary
- * stays fully disabled — the supplement never fires and behavior is identical
- * to the primary-only path.
+ * Normalize a raw `advisoryWait.secondaryBotLogin` value -- a single string
+ * or an array of strings (#3186) -- into the resolved list of secondary
+ * advisory bot logins: trims and lowercases each entry, drops blanks, drops
+ * any entry equal to the already-normalized `primaryBotLogin` (a
+ * misconfiguration guard), and dedupes case-insensitively while preserving
+ * first-occurrence order. A single string is equivalent to a one-element
+ * array. Exported so `buildAdvisoryWaitSummary` and
+ * `buildPreMergeReadinessSummary` (protocol-helpers.mts, which both also
+ * accept a raw option value directly from unit-test callers that bypass the
+ * policy file) apply this identical rule instead of an independent copy that
+ * could drift out of sync with it.
  */
-function normalizeConfiguredSecondaryBotLogin(value: unknown): string {
-  return typeof value === 'string' && value.trim().length > 0
-    ? value.trim().toLowerCase()
-    : '';
+export function normalizeSecondaryBotLoginList(
+  value: unknown,
+  primaryBotLogin: string,
+): string[] {
+  const primary = String(primaryBotLogin ?? '')
+    .trim()
+    .toLowerCase();
+  const rawEntries = Array.isArray(value) ? value : [value];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of rawEntries) {
+    if (typeof entry !== 'string') continue;
+    const normalized = entry.trim().toLowerCase();
+    if (!normalized || normalized === primary || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
 }
 
 /**
- * Resolve the OPTIONAL secondary advisory bot login from a parsed policy
- * object, returning `''` (disabled) when `advisoryWait.secondaryBotLogin` is
- * absent. The secondary is a non-gating supplement, so it has no Copilot
- * default — absence must read as "no secondary".
+ * Resolve the OPTIONAL secondary advisory bot login(s) from a parsed policy
+ * object (#3186), returning `[]` (disabled) when
+ * `advisoryWait.secondaryBotLogin` is absent, blank, or normalizes to an
+ * empty list (for example a list containing only the primary login). The
+ * secondary is a non-gating supplement, so it has no Copilot default --
+ * absence must read as "no secondary".
  */
-export function resolveAdvisorySecondaryBotLogin(config: unknown = {}): string {
+export function resolveAdvisorySecondaryBotLogins(
+  config: unknown = {},
+): string[] {
   const advisoryWait = ((config as { advisoryWait?: unknown } | null)
     ?.advisoryWait ?? {}) as Record<string, unknown>;
-  return normalizeConfiguredSecondaryBotLogin(advisoryWait.secondaryBotLogin);
+  return normalizeSecondaryBotLoginList(
+    advisoryWait.secondaryBotLogin,
+    resolveAdvisoryPrimaryBotLogin(config),
+  );
 }
 
 /**
- * Read the OPTIONAL secondary advisory bot login from a policy file, failing
- * closed to `''` (disabled) when the file is missing, unreadable, or
- * schema-invalid.
+ * Read the OPTIONAL secondary advisory bot login(s) from a policy file
+ * (#3186), failing closed to `[]` (disabled) when the file is missing,
+ * unreadable, or schema-invalid.
  */
-export function readAdvisorySecondaryBotLogin(
+export function readAdvisorySecondaryBotLogins(
   path: string = '.github/idd/config.json',
-): string {
+): string[] {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
     // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
     if (
       validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
     ) {
-      return '';
+      return [];
     }
-    return resolveAdvisorySecondaryBotLogin(config);
+    return resolveAdvisorySecondaryBotLogins(config);
   } catch {
-    return '';
+    return [];
   }
+}
+
+/**
+ * Backward-compatible singular accessor (#3186): the resolved secondary
+ * login when {@link resolveAdvisorySecondaryBotLogins} normalizes to exactly
+ * one entry, else `''` -- both when unconfigured (empty list) and once more
+ * than one login is configured, matching the `secondaryBotLogin` output
+ * field's own single-vs-plural rule everywhere it is published
+ * (advisory-wait-state.mts, `buildAdvisoryWaitSummary`). The arrays are
+ * authoritative once more than one login is configured; a caller that needs
+ * the full list uses {@link resolveAdvisorySecondaryBotLogins} instead.
+ */
+export function resolveAdvisorySecondaryBotLogin(config: unknown = {}): string {
+  const logins = resolveAdvisorySecondaryBotLogins(config);
+  return logins.length === 1 ? logins[0] : '';
+}
+
+/**
+ * Backward-compatible singular accessor for
+ * {@link readAdvisorySecondaryBotLogins} (#3186): see
+ * {@link resolveAdvisorySecondaryBotLogin}'s doc comment for the exact
+ * single-vs-plural rule.
+ */
+export function readAdvisorySecondaryBotLogin(
+  path: string = '.github/idd/config.json',
+): string {
+  const logins = readAdvisorySecondaryBotLogins(path);
+  return logins.length === 1 ? logins[0] : '';
 }
 
 /**

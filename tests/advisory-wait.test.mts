@@ -13,12 +13,14 @@ import {
   readAdvisoryPrimaryBotLogin,
   readAdvisoryRecoveryCycleCap,
   readAdvisorySecondaryBotLogin,
+  readAdvisorySecondaryBotLogins,
   readAdvisorySecondaryQuietWindowMinutes,
   readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
   resolveAdvisoryPrimaryBotLogin,
   resolveAdvisoryRecoveryCycleCap,
   resolveAdvisorySecondaryBotLogin,
+  resolveAdvisorySecondaryBotLogins,
   resolveAdvisorySecondaryQuietWindowMinutes,
   resolveAdvisoryTerminalWindowMinutes,
   resolveAdvisoryWaitPolicy,
@@ -1225,6 +1227,150 @@ test('readAdvisorySecondaryBotLogin only applies a schema-valid file override, e
   assert.equal(readAdvisorySecondaryBotLogin(join(root, 'missing.json')), '');
 });
 
+// #3186: resolveAdvisorySecondaryBotLogins / readAdvisorySecondaryBotLogins
+// (string-or-array form).
+
+test('resolveAdvisorySecondaryBotLogins normalizes a string, a one-element array, and a case variant to the same one-element list', () => {
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: { secondaryBotLogin: 'CodeRabbitAI[bot]' },
+    }),
+    ['coderabbitai[bot]'],
+  );
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: { secondaryBotLogin: ['CodeRabbitAI[bot]'] },
+    }),
+    ['coderabbitai[bot]'],
+  );
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: { secondaryBotLogin: 'coderabbitai[bot]' },
+    }),
+    ['coderabbitai[bot]'],
+  );
+  assert.deepEqual(resolveAdvisorySecondaryBotLogins({}), []);
+  assert.deepEqual(resolveAdvisorySecondaryBotLogins(), []);
+});
+
+test('resolveAdvisorySecondaryBotLogins dedupes case-insensitively, preserving first-occurrence order', () => {
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: {
+        secondaryBotLogin: ['CodeRabbitAI[bot]', 'coderabbitai[bot]'],
+      },
+    }),
+    ['coderabbitai[bot]'],
+  );
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: {
+        secondaryBotLogin: [
+          'chatgpt-codex-connector[bot]',
+          'coderabbitai[bot]',
+          'CHATGPT-CODEX-CONNECTOR[bot]',
+        ],
+      },
+    }),
+    ['chatgpt-codex-connector[bot]', 'coderabbitai[bot]'],
+  );
+});
+
+test('resolveAdvisorySecondaryBotLogins drops an entry equal to the resolved primary login', () => {
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: {
+        primaryBotLogin: 'chatgpt-codex-connector[bot]',
+        secondaryBotLogin: [
+          'coderabbitai[bot]',
+          'ChatGPT-Codex-Connector[bot]',
+        ],
+      },
+    }),
+    ['coderabbitai[bot]'],
+  );
+});
+
+test('resolveAdvisorySecondaryBotLogins resolves three distinct logins in configured order', () => {
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: {
+        secondaryBotLogin: [
+          'coderabbitai[bot]',
+          'chatgpt-codex-connector[bot]',
+          'my-custom-bot[bot]',
+        ],
+      },
+    }),
+    ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]', 'my-custom-bot[bot]'],
+  );
+});
+
+test('resolveAdvisorySecondaryBotLogins resolves an empty list when every entry is blank, non-string, or equal to the primary', () => {
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: { secondaryBotLogin: ['  ', 42] },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: { secondaryBotLogin: ['copilot'] },
+    }),
+    [],
+  );
+});
+
+test('resolveAdvisorySecondaryBotLogin (singular) is authoritative only for exactly one resolved login', () => {
+  assert.equal(
+    resolveAdvisorySecondaryBotLogin({
+      advisoryWait: {
+        secondaryBotLogin: [
+          'coderabbitai[bot]',
+          'chatgpt-codex-connector[bot]',
+        ],
+      },
+    }),
+    '',
+  );
+  assert.equal(
+    resolveAdvisorySecondaryBotLogin({
+      advisoryWait: { secondaryBotLogin: [] },
+    }),
+    '',
+  );
+});
+
+test('readAdvisorySecondaryBotLogins reads a two-login array from a schema-valid file, and fails closed on a schema-invalid one', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-secondary-bots-'));
+  const validPath = join(root, 'policy.valid.json');
+  const invalidPath = join(root, 'policy.invalid.json');
+  const validConfig = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  validConfig.advisoryWait = {
+    secondaryBotLogin: ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
+  };
+  writeFileSync(validPath, JSON.stringify(validConfig), 'utf8');
+  // A non-string array entry violates the schema, so the reader fails
+  // closed to [] (secondary disabled).
+  writeFileSync(
+    invalidPath,
+    JSON.stringify({ advisoryWait: { secondaryBotLogin: [5, 6] } }),
+    'utf8',
+  );
+
+  assert.deepEqual(readAdvisorySecondaryBotLogins(validPath), [
+    'coderabbitai[bot]',
+    'chatgpt-codex-connector[bot]',
+  ]);
+  assert.deepEqual(readAdvisorySecondaryBotLogins(invalidPath), []);
+  assert.deepEqual(
+    readAdvisorySecondaryBotLogins(join(root, 'missing.json')),
+    [],
+  );
+});
+
 test('readAdvisoryConvergenceDeadlineMinutes applies a schema-valid override and is scoped to advisoryWait', () => {
   const root = mkdtempSync(
     join(tmpdir(), 'idd-advisory-convergence-deadline-'),
@@ -1806,6 +1952,97 @@ test('secondary bot fires on a stalled settled-window wait but not on a HEAD-rev
     satisfiedFixture.input.prHeadSha,
   );
   assert.equal(headReviewed.secondaryRequestNeeded, false);
+});
+
+// #3186: buildAdvisoryWaitSummary with two configured secondary logins.
+
+test('two configured secondary logins: secondaryBotLogin is empty, secondaryBotLogins lists both, and secondaryRequestLogins lists only the unrequested ones', () => {
+  const fixture = readJson('fixtures/advisory-wait/cap-exhausted.json');
+  const base = {
+    prHeadSha: fixture.input.prHeadSha,
+    reviews: fixture.input.reviews,
+    requestedReviewers: fixture.input.requestedReviewers,
+    timelineEvents: fixture.input.timelineEvents,
+    comments: fixture.input.comments,
+  };
+  const opts = {
+    now: fixture.input.now,
+    requestCap: fixture.input.requestCap,
+    trustedMarkerLogins: fixture.input.trustedMarkerLogins,
+  };
+  const bothLogins = ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'];
+
+  const neitherRequested = buildAdvisoryWaitSummary(base, {
+    ...opts,
+    secondaryBotLogins: bothLogins,
+  });
+  assert.equal(neitherRequested.secondaryBotLogin, '');
+  assert.deepEqual(neitherRequested.secondaryBotLogins, bothLogins);
+  assert.deepEqual(neitherRequested.secondaryRequestLogins, bothLogins);
+  assert.equal(neitherRequested.secondaryRequestNeeded, true);
+
+  // Only coderabbitai[bot] was already requested for this HEAD -- the other
+  // configured login still needs its own request.
+  const oneRequested = buildAdvisoryWaitSummary(
+    {
+      ...base,
+      timelineEvents: [
+        { event: 'committed', sha: fixture.input.prHeadSha },
+        {
+          event: 'review_requested',
+          requested_reviewer: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+    { ...opts, secondaryBotLogins: bothLogins },
+  );
+  assert.deepEqual(oneRequested.secondaryRequestLogins, [
+    'chatgpt-codex-connector[bot]',
+  ]);
+  assert.equal(oneRequested.secondaryRequestNeeded, true);
+
+  // Both already requested for this HEAD -- nothing left to request.
+  const bothRequested = buildAdvisoryWaitSummary(
+    {
+      ...base,
+      timelineEvents: [
+        { event: 'committed', sha: fixture.input.prHeadSha },
+        {
+          event: 'review_requested',
+          requested_reviewer: { login: 'coderabbitai[bot]' },
+        },
+        {
+          event: 'review_requested',
+          requested_reviewer: { login: 'chatgpt-codex-connector[bot]' },
+        },
+      ],
+    },
+    { ...opts, secondaryBotLogins: bothLogins },
+  );
+  assert.deepEqual(bothRequested.secondaryRequestLogins, []);
+  assert.equal(bothRequested.secondaryRequestNeeded, false);
+});
+
+test('the plural secondaryBotLogins option wins over the legacy singular secondaryBotLogin when both are supplied', () => {
+  const fixture = readJson('fixtures/advisory-wait/cap-exhausted.json');
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: fixture.input.prHeadSha,
+      reviews: fixture.input.reviews,
+      requestedReviewers: fixture.input.requestedReviewers,
+      timelineEvents: fixture.input.timelineEvents,
+      comments: fixture.input.comments,
+    },
+    {
+      now: fixture.input.now,
+      requestCap: fixture.input.requestCap,
+      trustedMarkerLogins: fixture.input.trustedMarkerLogins,
+      secondaryBotLogin: 'chatgpt-codex-connector[bot]',
+      secondaryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+  assert.deepEqual(summary.secondaryBotLogins, ['coderabbitai[bot]']);
+  assert.equal(summary.secondaryBotLogin, 'coderabbitai[bot]');
 });
 
 test('advisory wait summary normalizes invalid direct options to defaults', () => {

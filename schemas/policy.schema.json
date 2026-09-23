@@ -345,9 +345,14 @@
           "description": "GitHub login of the advisory bot whose review the advisory-wait gate tracks as the primary signal. Optional; defaults to Copilot, preserving the Copilot-advisory behavior."
         },
         "secondaryBotLogin": {
-          "type": "string",
+          "description": "GitHub login(s) of optional, non-gating secondary advisory bot(s) (#3186), each requested once per HEAD only while the primary bot is cap-exhausted or stalled. A single string is equivalent to a one-element array; a non-empty array lists several. Optional; no default -- omitted, blank, or a list that normalizes to empty (for example every entry equal to the primary, or an all-blank list) disables the supplement entirely.",
+          "type": ["string", "array"],
           "minLength": 1,
-          "description": "GitHub login of an optional, non-gating secondary advisory bot, requested once per HEAD only while the primary bot is cap-exhausted or stalled. Optional; no default — omitted or equal to the primary disables it."
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "convergenceDeadline": {
           "type": "string",

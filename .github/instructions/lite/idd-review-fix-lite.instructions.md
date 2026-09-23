@@ -216,8 +216,8 @@ other GitHub side effect, confirm all of the following:
    default, any login equal to `copilot` or starting with
    `copilot-pull-request-reviewer` counts, matching
    `isCopilotReviewerLogin` — or an `advisoryBotLogins` login,
-   regardless of PATH A/B. A login also configured as
-   `secondaryBotLogin` still qualifies as bot-sourced.
+   regardless of PATH A/B. A configured `secondaryBotLogin` login
+   still qualifies as bot-sourced.
 5. Each such comment is a small, confirmable fix whose claim you
    checked against live evidence (a linter run, actual file content,
    actual runtime behavior) before folding it in. Never fold in a
@@ -303,7 +303,8 @@ other GitHub side effect, confirm all of the following:
    fails, returns invalid JSON, or is missing required fields
    (`prHeadSha`, `lastCopilotCommit`, `copilotPending`,
    `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
-   `secondaryBotLogin`, `secondaryRequestNeeded`, `earliestSameHeadAt`,
+   `secondaryBotLogin`, `secondaryBotLogins`, `secondaryRequestLogins`,
+   `secondaryRequestNeeded`, `earliestSameHeadAt`,
    `requestMarkerCount`, `requestCap`, `pendingWindowMinutes`,
    `settledWindowMinutes`, `pollIntervalMinutes`, `capExhaustedRoute`,
    `trustedMarkerSummary` — the full contract in
@@ -315,8 +316,10 @@ other GitHub side effect, confirm all of the following:
    - `SATISFIED`, `copilotPending` `false`, `copilotPendingCoversHead`
      `false` (settled by elapsed time alone, never proven the request
      reached Copilot, `#2327`): lite has no bounded recovery cycle to
-     run here — continue to E15 the same as an ordinary `SATISFIED`.
-   - `SATISFIED` (otherwise) → continue to E15.
+     run here — apply step 10 first, then continue to E15 the same as
+     an ordinary `SATISFIED`.
+   - `SATISFIED` (otherwise) → apply step 10 first, then continue to
+     E15.
    - `RECOVERY_NEEDED`: post the recovery marker
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
@@ -336,17 +339,17 @@ other GitHub side effect, confirm all of the following:
      full protocol's bounded `AW3-S` remove/re-request cycle requires —
      stop and ask rather than remove, re-request, or enter the
      marker-based polling loop below with no marker.
-   - `CAP_EXHAUSTED`: apply step 10 below (the secondary-bot check)
-     first — it is a non-gating supplement that fires on cap exhaustion
-     independent of the cap-exhausted route. Then, if the helper's
-     `capExhaustedRoute` is `hold`, post a hold comment and stop;
-     otherwise (`phase-specific`, the default) continue to E15.
+   - `CAP_EXHAUSTED`: apply step 10 first — it is a non-gating
+     supplement that fires on cap exhaustion independent of the
+     cap-exhausted route. Then, if the helper's `capExhaustedRoute` is
+     `hold`, post a hold comment and stop; otherwise (`phase-specific`,
+     the default) continue to E15.
    - `WAIT`: if `copilotPending` is true and elapsed time since
      `earliestSameHeadAt` is at least the helper's
-     `pendingWindowMinutes`, apply step 10 below (the secondary-bot
-     check) first, then continue to E15; if `copilotPending` is false
-     and elapsed time is at least `settledWindowMinutes`, do the same;
-     otherwise go to the polling loop below.
+     `pendingWindowMinutes`, apply step 10 first, then continue to
+     E15; if `copilotPending` is false and elapsed time is at least
+     `settledWindowMinutes`, do the same; otherwise go to the polling
+     loop below.
 5. The default primary advisory bot is Copilot: use `copilot` for
    `{primary-advisory-bot}` (the add/remove-reviewer login) and
    `copilot-pull-request-reviewer[bot]` for
@@ -380,28 +383,29 @@ other GitHub side effect, confirm all of the following:
    to a manual per-field fetch. If `earliestSameHeadAt` is now empty,
    post a hold comment noting the advisory-wait marker for
    `PR_HEAD_SHA` disappeared during polling and stop. If `outcome` is
-   now `SATISFIED`, exit polling and continue to E15.
+   now `SATISFIED`, apply step 10 first, then exit polling and continue
+   to E15.
 9. Otherwise re-apply the elapsed-window check from step 4's `WAIT`
    branch using the refreshed helper output: if the window is now
-   satisfied, apply step 10 below (the secondary-bot check) first, then
-   exit polling and continue to E15 — the primary bot never reviewed
-   this HEAD, which is exactly the stalled/rate-limited case step 10
-   exists for. Else keep polling. A stalled or silent advisory bot must
-   not cause unbounded polling — this elapsed-window re-check is what
-   times the loop out even when the bot never reviews the current HEAD.
-10. **Optional secondary advisory bot (non-gating).** Use the most
+   satisfied, apply step 10 first, then exit polling and continue to
+   E15 — the primary bot never reviewed this HEAD, which is exactly
+   the stalled/rate-limited case step 10 exists for. Else keep polling.
+   A stalled or silent advisory bot must not cause unbounded polling —
+   this elapsed-window re-check is what times the loop out even when
+   the bot never reviews the current HEAD.
+10. **Optional secondary advisory bot(s) (non-gating).** Use the most
     recent step-3/step-8 helper output's `secondaryRequestNeeded` and
-    `secondaryBotLogin` fields directly — do not re-derive the
-    request/already-requested condition manually. When
-    `secondaryRequestNeeded` is `true`, request `secondaryBotLogin`
-    once for this HEAD using the same gh-then-REST fallback as the
-    primary in step 4. Post no `advisory-wait:` marker for the
-    secondary — it must never satisfy the primary gate or consume the
-    primary's request cap — and never let it change the route already
-    decided above. The secondary's review is ordinary advisory input,
-    picked up by the next E1 snapshot if it lands before merge. Skip
-    this step entirely when `secondaryRequestNeeded` is `false` (which
-    also covers no secondary configured, per the helper contract).
+    `secondaryRequestLogins` fields directly — do not re-derive the
+    request/already-requested condition manually.
+    `secondaryBotLogin` accepts one login or a list. When
+    `secondaryRequestNeeded` is `true`, request **every** login in
+    `secondaryRequestLogins` once each (never only the first), using
+    the same gh-then-REST fallback as the primary in step 4. Post no
+    `advisory-wait:` marker for any — none satisfy the primary gate or
+    consume its cap, and none change the route already decided above.
+    Each review is ordinary advisory input, picked up by the next E1
+    snapshot if it lands before merge. Skip this step entirely when
+    `secondaryRequestNeeded` is `false`.
 11. Advisory feedback is advisory: you are not obligated to accept
     every suggestion, but you must still wait for a review you
     explicitly requested. A human `CHANGES_REQUESTED` reviewer is not
