@@ -663,9 +663,10 @@ export function extractDependencyIssueNumbers(body) {
 /**
  * Whether `body` carries the exact
  * `<!-- {markerPrefix}-authoring-defer-source: review-fix-loop-cutoff -->`
- * marker (#2877). `idd-review-triage.instructions.md`'s round-count cutoff
- * writes this marker, once, at Stage 1 publication time, on a follow-up
- * issue that bundles deferred Low-severity review findings; that issue's
+ * marker (#2877). `idd-review-triage.instructions.md`'s round-count or
+ * adopt-now-urgency defer trigger writes this marker, once, at Stage 1
+ * publication time, on a follow-up issue that bundles deferred review
+ * findings from either trigger; that issue's
  * body also carries a `Refs #<originating-issue>` line back to the PR/issue
  * the deferral came from (the D3 follow-up-issue rule), which this file
  * otherwise never parses as a dependency -- `Refs` is deliberately
