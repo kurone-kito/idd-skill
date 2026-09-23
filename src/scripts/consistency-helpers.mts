@@ -1596,6 +1596,76 @@ export function collectBinExecutableModeViolations(
   return violations;
 }
 
+// The `.mts`/`.mjs` provenance banner line every generated TypeScript
+// helper source and its emitted artifact carry (docs/typescript-sources.md
+// "Layout") -- distinct from the Markdown-instruction generated-from banner
+// (`GENERATED_FROM_BANNER_BODY` above): this one is a `//` line comment, not
+// an HTML comment, and names a `src/scripts/**/*.mts` / `src/bin/**/*.mts`
+// path rather than an instruction sync-pair source. Exported so
+// audit-docs.mts's reverse-direction check (which scans a `.mjs` for this
+// same shape, unbounded rather than within a byte window) can reuse the
+// one pattern instead of keeping a second, independently-drifting copy.
+export const GENERATED_SOURCE_BANNER_PATTERN =
+  /^\/\/ idd-generated-from:\s*(\S+)/m;
+
+/**
+ * Validate that a TypeScript helper source and its generated `.mjs`
+ * artifact both carry a well-formed `// idd-generated-from: <sourcePath>`
+ * banner within the first `scanBytes` bytes of each file. Pure (no I/O) so
+ * it can be unit-tested directly; `checkGeneratedSourcePairs` in
+ * audit-docs.mts is the sole caller and supplies live file contents plus
+ * the same byte window `build-ts.mts` and
+ * `tests/inventory-ordering.test.mts` already scan, so the audit, the
+ * build, and that test agree on one generated set (#3294).
+ *
+ * Reports two distinct violations per file: no matching banner line at all
+ * within the window (missing), or a banner line present but naming a
+ * different path than `sourcePath` (e.g. a copy-pasted banner) -- the
+ * latter mirrors the wording `checkGeneratedSourcePairs`'s existing
+ * reverse-direction check already uses for the same mismatch shape. The
+ * two files get different remediation text for the missing case: rebuilding
+ * only regenerates the `.mjs` from whatever the `.mts` source already
+ * contains -- `pnpm run build` never synthesizes a banner that was never in
+ * the source to begin with, so that remediation is only correct for the
+ * emitted side.
+ */
+export function collectGeneratedSourceBannerViolations(
+  sourcePath: string,
+  sourceText: string,
+  emittedPath: string,
+  emittedText: string,
+  scanBytes: number,
+): string[] {
+  const violations: string[] = [];
+  const roles = [
+    {
+      path: sourcePath,
+      text: sourceText,
+      missingRemediation: 'add the banner per docs/typescript-sources.md',
+    },
+    {
+      path: emittedPath,
+      text: emittedText,
+      missingRemediation: 'run `pnpm run build` and commit the result',
+    },
+  ] as const;
+  for (const { path, text, missingRemediation } of roles) {
+    const match = GENERATED_SOURCE_BANNER_PATTERN.exec(
+      text.slice(0, scanBytes),
+    );
+    if (!match) {
+      violations.push(
+        `${path}: missing a well-formed \`// idd-generated-from: ${sourcePath}\` banner in its first ${scanBytes} bytes; ${missingRemediation}`,
+      );
+    } else if (match[1] !== sourcePath) {
+      violations.push(
+        `${path}: generated-from banner names ${match[1]}, expected ${sourcePath}`,
+      );
+    }
+  }
+  return violations;
+}
+
 // --- generatedBlocks file resolution (#1703) --------------------------------
 //
 // sync-docs.mts and audit-docs.mts each independently decided how a

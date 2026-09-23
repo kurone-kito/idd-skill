@@ -1,3 +1,9 @@
+// idd-generated-from: src/scripts/provider-health.mts
+//
+// The scripts/provider-health.mjs copy is generated from the .mts source
+// named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
+//
 // Read-only, cross-pull-request provider-health classifier (#2319).
 //
 // IDD already observes advisory-review and Actions degradation, but only
