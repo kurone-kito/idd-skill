@@ -1028,6 +1028,12 @@ test('CLI: pass -- an unchanged body reports pass end to end, comments fetched b
     assert.equal(output.verdict, 'pass');
     assert.equal(output.target, TARGET);
     assert.equal(output.recordedBodySha256, sha256(liveBody));
+    // Default (no --verbose) mode strips evidence from passing checks
+    // (kurone-kito/idd-skill#3213).
+    for (const check of output.checks) {
+      assert.equal(check.result, 'pass');
+      assert.equal('evidence' in check, false, check.id);
+    }
     // The actual regression this proves: the comments call happens
     // before the issue-body call (kurone-kito/idd-skill#2901 review,
     // Copilot round 7 -- the prior stub had no memory across the two
@@ -1073,6 +1079,15 @@ test('CLI: mismatch -- a body edited since acquire reports mismatch end to end',
     assert.equal(output.verdict, 'mismatch');
     assert.equal(output.recordedBodySha256, sha256(acquireTimeBody));
     assert.equal(output.computedBodySha256, sha256(editedLiveBody));
+    // Default (no --verbose) mode: the failing check carries evidence,
+    // the passing one does not (kurone-kito/idd-skill#3213).
+    const byId = Object.fromEntries(
+      output.checks.map((check: { id: string }) => [check.id, check]),
+    );
+    assert.equal(byId.acquire_marker_found.result, 'pass');
+    assert.equal('evidence' in byId.acquire_marker_found, false);
+    assert.equal(byId.body_sha256_match.result, 'fail');
+    assert.match(byId.body_sha256_match.evidence, /does not match recorded/);
   } finally {
     restore();
   }
@@ -1102,6 +1117,96 @@ test('CLI: not-found -- no acquire marker reports not-found end to end', () => {
     assert.equal(output.verdict, 'not-found');
     assert.equal(output.marker, null);
     assert.equal(output.recordedBodySha256, null);
+    // Default (no --verbose) mode still names why each check failed
+    // (kurone-kito/idd-skill#3213).
+    assert.equal(output.checks.length, 2);
+    for (const check of output.checks) {
+      assert.equal(check.result, 'fail');
+      assert.equal(typeof check.evidence, 'string', check.id);
+      assert.notEqual(check.evidence, '', check.id);
+    }
+    assert.match(output.checks[0].evidence, /opens with a mode=acquire marker/);
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: --verbose keeps evidence on passing checks too', () => {
+  const liveBody = '# Draft\n\nSome content.\n';
+  const restore = stubGh(
+    ghStubScriptForIssue(liveBody, [
+      graphqlAcquireNode(acquireMarkerBody(sha256(liveBody))),
+    ]),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+          '--verbose',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'pass');
+    for (const check of output.checks) {
+      assert.equal(check.result, 'pass');
+      assert.equal(typeof check.evidence, 'string', check.id);
+      assert.notEqual(check.evidence, '', check.id);
+    }
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: a rejected first acquire names its reject reason without --verbose', () => {
+  // The field-feedback case behind kurone-kito/idd-skill#3213: a marker
+  // is present but fails a Stage 1 acquire condition, and the default
+  // output must say which one instead of a bare not-found.
+  const liveBody = '# Draft\n\nSome content.\n';
+  const restore = stubGh(
+    ghStubScriptForIssue(liveBody, [
+      graphqlAcquireNode(
+        acquireMarkerBody(sha256(liveBody), {
+          supersedes: 'owner-token-stale',
+        }),
+      ),
+    ]),
+  );
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-owner-provenance.mjs'),
+          '--issue',
+          '2891',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.verdict, 'not-found');
+    const acquireCheck = output.checks.find(
+      (check: { id: string }) => check.id === 'acquire_marker_found',
+    );
+    assert.equal(acquireCheck.result, 'fail');
+    assert.match(acquireCheck.evidence, /is not a valid Stage 1 acquire/);
+    assert.match(acquireCheck.evidence, /supersedes/);
   } finally {
     restore();
   }
