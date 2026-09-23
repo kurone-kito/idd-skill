@@ -646,6 +646,27 @@ Repositories that want human-led or gradual IDD adoption should
 leave the check unregistered until they intend the Copilot-advisory
 loop.
 
+**Drop the transitional `pull_request` trigger.** The mirrored
+workflow's own `on:` block keeps `pull_request` active only as a
+**transitional** trigger alongside `pull_request_target` (see that
+block's own comment): a same-repository PR can edit `pull_request`'s
+own copy of the workflow to force its required check green, a gap
+`pull_request_target` does not share. The CODEOWNERS protection above
+narrows, but does not eliminate, that exposure while both triggers
+stay active -- treat it as a mitigation for the transition window, not
+a substitute for this step. Wait until `pull_request_target` has run
+cleanly against production PRs for a period, then drop `pull_request`
+from your repository's copy of the workflow and keep only
+`pull_request_target` (plus `workflow_dispatch`/`workflow_call`) --
+and do this whole wait-then-drop sequence **before** registering the
+required status check below, not after: that check exists to close
+the same-repository-bypass gap, so register it only once the
+bypass-prone trigger is already gone. Issue
+[kurone-kito/idd-skill#3230](https://github.com/kurone-kito/idd-skill/issues/3230)
+tracks this documentation gap (observed 2026-09-23/24: a public
+adopter's onboarding PR independently had two review bots flag the
+same risk).
+
 **Register it as a required status check.** Hosting the workflow alone
 does not block merge — a maintainer must separately register
 `idd-advisory-convergence` (the job id, which is also the
@@ -655,26 +676,6 @@ as a **required** status check in the repository's branch-protection
 Ruleset, the same way other CI jobs are registered there. This is a
 maintainer GitHub-settings action taken outside of IDD automation, not
 something an agent applies on its own.
-
-**Drop the transitional `pull_request` trigger.** Do this before, or as
-part of the same change as, registering the required status check
-above -- not after. The mirrored workflow's own `on:` block keeps
-`pull_request` active only as a **transitional** trigger alongside
-`pull_request_target` (see that block's own comment): a same-repository
-PR can edit `pull_request`'s own copy of the workflow to force its
-required check green, a gap `pull_request_target` does not share. The
-CODEOWNERS protection above narrows, but does not eliminate, that
-exposure while both triggers stay active -- treat it as a mitigation
-for the transition window, not a substitute for this step. Once
-`pull_request_target` has run cleanly against production PRs for a
-period, drop `pull_request` from your repository's copy of the
-workflow and keep only `pull_request_target` (plus
-`workflow_dispatch`/`workflow_call`) as the ongoing design. That same
-`on:` block comment already scopes the drop as a deferred follow-up
-since the design shipped in #2764, and none has been filed (observed
-2026-09-23/24: a public adopter's onboarding PR independently had two
-review bots flag the same gap;
-[kurone-kito/idd-skill#3230](https://github.com/kurone-kito/idd-skill/issues/3230)).
 
 **Avoid the classic-API pinning trap.** This applies specifically to
 GitHub's **classic** branch-protection API (`.../protection/...`) — a
