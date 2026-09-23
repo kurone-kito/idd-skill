@@ -465,12 +465,17 @@ export interface ImportOnlyProbeResult {
  * guard (#3190): a module without the guard runs its CLI as a side effect
  * of the import -- parsing `process.argv`, calling `process.exit`, or (for
  * a write-capable CLI) writing a file -- before this probe's own `.then()`
- * ever runs. `IMPORT_OK`'s presence in `stdout` (with `status: 0`) is the
- * one discriminator every unguarded case shares: whether an unguarded
- * module's own `process.exit` call happens to use a zero or non-zero code
- * (both occur, depending on which branch its CLI body reaches), it always
- * runs before `.then()` does, so `IMPORT_OK` never gets written -- while a
- * guarded module always reaches `.then()` and always prints it.
+ * ever runs. `IMPORT_OK` missing from `stdout` reliably proves an unguarded
+ * CLI's own `process.exit` fired first (whether that call used a zero or
+ * non-zero code), since a guarded module always reaches `.then()` and
+ * always prints it. `IMPORT_OK`'s *presence* alone is not sufficient to
+ * rule out every side effect, though: an unguarded CLI branch that
+ * completes without ever calling `process.exit` (for example a
+ * write-then-fall-off-the-end success path) can still perform its side
+ * effect and then reach `.then()` normally -- a caller that needs to rule
+ * that out, such as the `--apply`-shaped-argv scenario below, must also
+ * assert the concrete side effect directly (e.g. the target file's
+ * content), not rely on `IMPORT_OK` alone.
  *
  * `extraArgv` (default none) becomes the *importing process's own*
  * `process.argv.slice(2)` -- the exact slice every guarded CLI in this
