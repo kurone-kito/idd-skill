@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1771,6 +1771,104 @@ test('--token still sets GH_TOKEN/GITHUB_TOKEN and warns as a deprecated alias',
     assert.equal(dump.ghToken, 'deprecated-test-token');
     assert.equal(dump.githubToken, 'deprecated-test-token');
     assert.match(stderr, /--token is deprecated; use --gh-token instead\./);
+  } finally {
+    fixture.restore();
+  }
+});
+
+// #3188: --format mirrors sibling helpers such as live-status-digest.mjs so a
+// caller that always passes `--format json` does not hit `unknown argument:
+// --format`. JSON is the only supported output, so `json` must be a no-op
+// and every other value must fail loudly rather than silently degrade.
+// The fake `gh` answers exactly the three read calls runCli makes for an
+// issue with no comments under an empty policy (forced handoff disabled,
+// so no timeline lookup) and fails any other call so an unexpected one
+// surfaces as a test failure instead of hitting the network.
+function formatFlagFixture() {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-resume-claim-routing-format-'),
+  );
+  const policyPath = join(tempRoot, 'config.json');
+  writeFileSync(policyPath, '{}\n');
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'user') {
+  process.stdout.write('format-tester\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args.some((arg) => /\\/issues\\/1\\/comments/.test(arg))) {
+  process.exit(0);
+}
+if (args[0] === 'api' && args.some((arg) => /\\/issues\\/1$/.test(arg))) {
+  process.stdout.write(JSON.stringify({
+    number: 1,
+    title: 'format flag fixture',
+    state: 'open',
+    html_url: 'https://github.com/o/r/issues/1',
+  }));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh call: ' + JSON.stringify(args) + '\\n');
+process.exit(1);
+`,
+  );
+  return {
+    policyPath,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+function runFormatFlagCli(policyPath: string, extraArgs: string[]) {
+  return spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '1',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-09-23T00:00:00Z',
+      '--policy',
+      policyPath,
+      ...extraArgs,
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+}
+
+test('--format json is accepted and prints the same JSON as omitting --format (#3188)', () => {
+  const fixture = formatFlagFixture();
+  try {
+    const baseline = runFormatFlagCli(fixture.policyPath, []);
+    assert.equal(baseline.status, 0, baseline.stderr);
+    assert.equal(JSON.parse(baseline.stdout).state, 'unclaimed');
+    for (const formatArgs of [['--format', 'json'], ['--format=json']]) {
+      const result = runFormatFlagCli(fixture.policyPath, formatArgs);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, baseline.stdout);
+    }
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('--format rejects every value other than json (#3188)', () => {
+  const fixture = formatFlagFixture();
+  try {
+    for (const value of ['table', 'JSON', '']) {
+      const result = runFormatFlagCli(fixture.policyPath, ['--format', value]);
+      assert.notEqual(result.status, 0);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /--format must be json/);
+      assert.doesNotMatch(result.stderr, /unknown argument: --format/);
+    }
   } finally {
     fixture.restore();
   }
