@@ -644,10 +644,12 @@ Disposition:
   marker (`idd-overview-core.instructions.md`'s Claim format), bound
   to the PR's actual head branch and posted by a trusted actor, to
   unlock `--claim-issue`/`--claim-id` — release it (`unclaimed-by`)
-  once threads are disposed — or (b) a manual reply (REST
-  `pulls/.../comments/{comment-id}/replies`) plus the GraphQL
+  once threads are disposed — or (b) a manual reply to the thread's
+  top-level comment (REST `pulls/.../comments/{root-id}/replies`, not
+  an arbitrary comment id), with the reply-identity stamp E13
+  documents (`idd-helper-scripts.md`) appended, plus the GraphQL
   `resolveReviewThread` mutation, matching what
-  `resolve-review-thread.mjs --apply` would stamp.
+  `resolve-review-thread.mjs --apply` would otherwise do.
 - **After merge, qualify before escalating.**
   [Upstream-candidate escalation][upstream-candidate] is opt-in
   (`upstreamEscalation.enabled`, default `false`) and only accepts
