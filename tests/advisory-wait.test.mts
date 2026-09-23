@@ -1291,6 +1291,21 @@ test('resolveAdvisorySecondaryBotLogins drops an entry equal to the resolved pri
   );
 });
 
+test('resolveAdvisorySecondaryBotLogins resolves three distinct logins in configured order', () => {
+  assert.deepEqual(
+    resolveAdvisorySecondaryBotLogins({
+      advisoryWait: {
+        secondaryBotLogin: [
+          'coderabbitai[bot]',
+          'chatgpt-codex-connector[bot]',
+          'my-custom-bot[bot]',
+        ],
+      },
+    }),
+    ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]', 'my-custom-bot[bot]'],
+  );
+});
+
 test('resolveAdvisorySecondaryBotLogins resolves an empty list when every entry is blank, non-string, or equal to the primary', () => {
   assert.deepEqual(
     resolveAdvisorySecondaryBotLogins({

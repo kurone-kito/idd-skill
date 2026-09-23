@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   computeSecondaryAdvisoryReviewSettlement,
+  foldSecondaryAdvisoryReviewSettlements,
   isConfiguredAdvisoryBotLogin,
   isGateAdvisoryBotLogin,
   normalizeTrustedMarkerLogins,
@@ -327,4 +328,190 @@ test('computeSecondaryAdvisoryReviewSettlement: matches REST-raw comments (user.
     settledAt: '2026-09-02T12:05:00Z',
     declined: false,
   });
+});
+
+// #3186: foldSecondaryAdvisoryReviewSettlements -- folds each configured
+// secondary login's own computeSecondaryAdvisoryReviewSettlement result
+// into the single { settledAt, declined } shape buildSecondaryQuietWindowStatus
+// consumes.
+
+const DECLINE_NOTICE = '## Review limit reached\n\nRate limited for this HEAD.';
+const GENUINE_REVIEW = 'Looks fine to me.';
+
+test('foldSecondaryAdvisoryReviewSettlements: empty login list -> unconfigured shape', () => {
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements([], {
+      secondaryBotLogins: [],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: null, declined: false },
+  );
+});
+
+test('foldSecondaryAdvisoryReviewSettlements: single pending login -> not declined, no settledAt', () => {
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements([], {
+      secondaryBotLogins: ['coderabbitai[bot]'],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: null, declined: false },
+  );
+});
+
+test('foldSecondaryAdvisoryReviewSettlements: single declined login -> declined', () => {
+  const comments = [
+    comment('coderabbitai[bot]', DECLINE_NOTICE, '2026-09-02T12:01:00Z'),
+  ];
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins: ['coderabbitai[bot]'],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: null, declined: true },
+  );
+});
+
+test('foldSecondaryAdvisoryReviewSettlements: single settled login -> anchors on its own settledAt', () => {
+  const comments = [
+    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+  ];
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins: ['coderabbitai[bot]'],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: '2026-09-02T12:01:00Z', declined: false },
+  );
+});
+
+test('foldSecondaryAdvisoryReviewSettlements: two settled logins -> anchors on the LATEST settledAt', () => {
+  const comments = [
+    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+    comment(
+      'chatgpt-codex-connector[bot]',
+      GENUINE_REVIEW,
+      '2026-09-02T12:03:00Z',
+    ),
+  ];
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins: ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: '2026-09-02T12:03:00Z', declined: false },
+  );
+  // Order of the resolved-login list must not affect the result.
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins: ['chatgpt-codex-connector[bot]', 'coderabbitai[bot]'],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: '2026-09-02T12:03:00Z', declined: false },
+  );
+});
+
+test('foldSecondaryAdvisoryReviewSettlements: every configured login declining -> declined', () => {
+  const comments = [
+    comment('coderabbitai[bot]', DECLINE_NOTICE, '2026-09-02T12:01:00Z'),
+    comment(
+      'chatgpt-codex-connector[bot]',
+      DECLINE_NOTICE,
+      '2026-09-02T12:02:00Z',
+    ),
+  ];
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins: ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: null, declined: true },
+  );
+});
+
+test('foldSecondaryAdvisoryReviewSettlements: one settled and one declined -> anchors on the settled login only (decline never extends the wait)', () => {
+  const comments = [
+    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+    // Posted LATER than the genuine review, but must not become the anchor.
+    comment(
+      'chatgpt-codex-connector[bot]',
+      DECLINE_NOTICE,
+      '2026-09-02T12:05:00Z',
+    ),
+  ];
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins: ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: '2026-09-02T12:01:00Z', declined: false },
+  );
+});
+
+test('foldSecondaryAdvisoryReviewSettlements: three distinct logins, one of each state -> pending wins over both settled and declined', () => {
+  const comments = [
+    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+    comment(
+      'chatgpt-codex-connector[bot]',
+      DECLINE_NOTICE,
+      '2026-09-02T12:02:00Z',
+    ),
+    // 'my-custom-bot[bot]' posts nothing -- stays pending.
+  ];
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins: [
+        'coderabbitai[bot]',
+        'chatgpt-codex-connector[bot]',
+        'my-custom-bot[bot]',
+      ],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: null, declined: false },
+  );
+});
+
+test('foldSecondaryAdvisoryReviewSettlements: three distinct logins all settled -> anchors on the latest of the three', () => {
+  const comments = [
+    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+    comment(
+      'chatgpt-codex-connector[bot]',
+      GENUINE_REVIEW,
+      '2026-09-02T12:04:00Z',
+    ),
+    comment('my-custom-bot[bot]', GENUINE_REVIEW, '2026-09-02T12:02:00Z'),
+  ];
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins: [
+        'coderabbitai[bot]',
+        'chatgpt-codex-connector[bot]',
+        'my-custom-bot[bot]',
+      ],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: '2026-09-02T12:04:00Z', declined: false },
+  );
+});
+
+test('foldSecondaryAdvisoryReviewSettlements: three distinct logins all declined -> declined', () => {
+  const comments = [
+    comment('coderabbitai[bot]', DECLINE_NOTICE, '2026-09-02T12:01:00Z'),
+    comment(
+      'chatgpt-codex-connector[bot]',
+      DECLINE_NOTICE,
+      '2026-09-02T12:02:00Z',
+    ),
+    comment('my-custom-bot[bot]', DECLINE_NOTICE, '2026-09-02T12:03:00Z'),
+  ];
+  assert.deepEqual(
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins: [
+        'coderabbitai[bot]',
+        'chatgpt-codex-connector[bot]',
+        'my-custom-bot[bot]',
+      ],
+      headCommittedAt: HEAD_COMMITTED_AT,
+    }),
+    { settledAt: null, declined: true },
+  );
 });
