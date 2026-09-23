@@ -405,19 +405,26 @@ function isInStrikethroughSpan(codeMaskedBody, paragraphSpans, offset) {
   return false;
 }
 /**
- * Finds every inline "Maintainer decision (<provenance>): <resolution>"
- * occurrence in `body` that survives the framing-verb / blockquote /
- * strikethrough exclusion checks above -- a genuine resolved decision, not a
- * quoted or struck-through example of someone else's. Self-contained: `body`
- * is normalized and code/HTML-comment-masked internally, so a caller passes
- * the raw issue body with no precomputation of its own. Returned spans are
- * offsets into `body` AFTER `\r\n` normalization (`\r\n` -> `\n`); a caller
- * comparing indices from a separately-scanned corpus must normalize that
- * corpus the same way first, or the two coordinate spaces can drift by one
- * byte per CRLF line -- an edge case with no realistic GitHub-fetched issue
- * body, whose API responses are already `\n`-only.
+ * Normalizes `body` and builds the code/HTML-comment-masked copy the
+ * heading and inline resolved-decision checks both scan, plus the paragraph
+ * spans the inline check's framing/blockquote/strikethrough exclusions need.
+ * Shared by `findInlineResolvedDecisionSpans` and `hasResolvedDecision` (#3255)
+ * so `hasResolvedDecision` masks `body` once for both checks instead of
+ * masking twice -- and, more importantly, so the heading form
+ * (`RESOLVED_DECISION_PATTERN`) now sees the SAME masked text the inline form
+ * already did (#2661, #2711). Before #3255, only the inline form was masked:
+ * a "## Decision (... resolved ...)" heading that appeared only inside a
+ * fenced/indented/inline code example or an HTML comment -- none of which
+ * CommonMark renders as a real heading -- still matched
+ * `RESOLVED_DECISION_PATTERN.test(body)` on the raw body and counted as a
+ * genuine resolved decision. Masking is safe for the heading pattern's `^`
+ * (multiline) anchor: `maskMarkdownCodeRegionsPreservingPositions` preserves
+ * every `\n`/`\r` in place, and a fenced range's own `end`
+ * (`findFencedCodeRanges`) already includes the newline terminating the
+ * closing fence line, so a real heading on the very next line (no blank
+ * line separating it from the fence) keeps its own line-start `\n` intact.
  */
-export function findInlineResolvedDecisionSpans(body) {
+function buildMaskedBody(body) {
   const normalizedBody = body.replace(/\r\n/g, '\n');
   const paragraphSpans = getParagraphSpans(normalizedBody);
   const codeRanges = findMarkdownCodeRanges(normalizedBody);
@@ -425,6 +432,21 @@ export function findInlineResolvedDecisionSpans(body) {
     normalizedBody,
     [...codeRanges, ...findHtmlCommentRanges(normalizedBody, codeRanges)],
   );
+  return { normalizedBody, paragraphSpans, codeMaskedBody };
+}
+/**
+ * Finds every inline "Maintainer decision (<provenance>): <resolution>"
+ * occurrence in the already-masked `codeMaskedBody` that survives the
+ * framing-verb / blockquote / strikethrough exclusion checks above -- the
+ * shared implementation behind the exported `findInlineResolvedDecisionSpans`
+ * and `hasResolvedDecision`'s own inline check, so both scan the one masked
+ * body `buildMaskedBody` produces instead of masking `body` twice (#3255).
+ */
+function findInlineResolvedDecisionSpansFromMasked(
+  normalizedBody,
+  paragraphSpans,
+  codeMaskedBody,
+) {
   const spans = [];
   const inlinePattern = new RegExp(
     INLINE_MAINTAINER_DECISION_PATTERN.source,
@@ -452,6 +474,28 @@ export function findInlineResolvedDecisionSpans(body) {
   return spans;
 }
 /**
+ * Finds every inline "Maintainer decision (<provenance>): <resolution>"
+ * occurrence in `body` that survives the framing-verb / blockquote /
+ * strikethrough exclusion checks above -- a genuine resolved decision, not a
+ * quoted or struck-through example of someone else's. Self-contained: `body`
+ * is normalized and code/HTML-comment-masked internally, so a caller passes
+ * the raw issue body with no precomputation of its own. Returned spans are
+ * offsets into `body` AFTER `\r\n` normalization (`\r\n` -> `\n`); a caller
+ * comparing indices from a separately-scanned corpus must normalize that
+ * corpus the same way first, or the two coordinate spaces can drift by one
+ * byte per CRLF line -- an edge case with no realistic GitHub-fetched issue
+ * body, whose API responses are already `\n`-only.
+ */
+export function findInlineResolvedDecisionSpans(body) {
+  const { normalizedBody, paragraphSpans, codeMaskedBody } =
+    buildMaskedBody(body);
+  return findInlineResolvedDecisionSpansFromMasked(
+    normalizedBody,
+    paragraphSpans,
+    codeMaskedBody,
+  );
+}
+/**
  * True when `body` records a resolved maintainer decision, either the
  * heading form (`## Decision (... resolved ...)`) or the inline
  * grooming-pass form. Replaces `suitability-triage.mts`'s own former
@@ -459,10 +503,27 @@ export function findInlineResolvedDecisionSpans(body) {
  * `findInlineResolvedDecisionSpans` directly instead, since its
  * `autonomous_completion` criterion needs per-occurrence match offsets, not
  * just a whole-body boolean.
+ *
+ * Both forms are tested against the SAME code/HTML-comment-masked body
+ * `buildMaskedBody` produces (#3255): a heading or inline marker that
+ * appears only inside a fenced/indented/inline code example or an HTML
+ * comment -- none of which CommonMark renders as real issue content -- is
+ * masked out for both checks, not just the inline one. One accepted
+ * consequence: because the shared mask also covers inline code spans (not
+ * only fenced/indented blocks), an unrealistic heading like
+ * `` ## Decision (`resolved` 2026-06-27) `` now reads as unresolved too --
+ * exactly what "the same masked body" requires, not a separate case to
+ * special-case back in.
  */
 export function hasResolvedDecision(body) {
+  const { normalizedBody, paragraphSpans, codeMaskedBody } =
+    buildMaskedBody(body);
   return (
-    RESOLVED_DECISION_PATTERN.test(body) ||
-    findInlineResolvedDecisionSpans(body).length > 0
+    RESOLVED_DECISION_PATTERN.test(codeMaskedBody) ||
+    findInlineResolvedDecisionSpansFromMasked(
+      normalizedBody,
+      paragraphSpans,
+      codeMaskedBody,
+    ).length > 0
   );
 }
