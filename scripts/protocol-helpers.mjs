@@ -7339,7 +7339,7 @@ export function buildPreMergeReadinessSummary(
   // declined completes immediately; otherwise anchor on the latest genuine
   // review).
   const secondaryBotLogins = normalizeSecondaryBotLoginList(
-    options.secondaryBotLogins,
+    options.secondaryBotLogins ?? options.secondaryBotLogin,
     resolvedPrimaryBotLogin,
   );
   const secondaryReviewSettlement = foldSecondaryAdvisoryReviewSettlements(

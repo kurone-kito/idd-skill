@@ -9211,6 +9211,15 @@ export function buildPreMergeReadinessSummary(
     // string or an array of strings, normalized the same way
     // `buildAdvisoryWaitSummary`'s `secondaryBotLogins` option is.
     secondaryBotLogins?: unknown;
+    // Legacy single-login form (#2544), kept for existing direct callers of
+    // this exported function that predate #3186's plural option -- a call
+    // such as `buildPreMergeReadinessSummary(..., { secondaryBotLogin:
+    // 'coderabbitai[bot]', secondaryQuietWindowMinutes: 10 })` must keep
+    // folding that one login's settlement into the quiet-window status, not
+    // silently fall back to the unconfigured (always-full-window) shape.
+    // `secondaryBotLogins` wins when both are present, mirroring
+    // `buildAdvisoryWaitSummary`'s own precedence (Copilot review, PR #3196).
+    secondaryBotLogin?: string;
   } = {},
 ) {
   const now = String(options.now ?? '');
@@ -9286,7 +9295,7 @@ export function buildPreMergeReadinessSummary(
   // declined completes immediately; otherwise anchor on the latest genuine
   // review).
   const secondaryBotLogins = normalizeSecondaryBotLoginList(
-    options.secondaryBotLogins,
+    options.secondaryBotLogins ?? options.secondaryBotLogin,
     resolvedPrimaryBotLogin,
   );
   const secondaryReviewSettlement = foldSecondaryAdvisoryReviewSettlements(

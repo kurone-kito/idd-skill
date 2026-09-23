@@ -398,8 +398,9 @@ reopens it. Distinct from `advisoryWait.settledWindow`, which bounds the
 PRIMARY bot's own pending state, not a late secondary-bot arrival. **#2544**:
 once a secondary bot has already posted a genuine review for the current
 HEAD, only a short fixed confirmation buffer applies from that review's own
-timestamp instead of the full configured duration -- a HEAD no configured
-secondary bot has reviewed yet still waits the full period unchanged.
+timestamp instead of the full configured duration -- a HEAD that no
+configured secondary bot has reviewed yet still waits the full period
+unchanged.
 **#2547**: a rate-limit / skip-review notice for the current HEAD, with no
 later genuine comment, is a third outcome distinct from `#2544`'s
 pending/settled split -- a definitive decline, not "might still be

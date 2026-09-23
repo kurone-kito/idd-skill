@@ -9841,6 +9841,87 @@ test('#3186: both logins settled anchors on the LATEST genuine review timestamp'
   assert.equal(status.declined, false);
 });
 
+// #3196 (Copilot review): buildPreMergeReadinessSummary must keep accepting
+// the legacy singular `secondaryBotLogin` option for existing direct callers
+// that predate #3186's plural `secondaryBotLogins` option -- it must fold
+// that one login's settlement into the quiet window exactly as before,
+// never silently falling back to the unconfigured (always-full-window)
+// shape.
+test('#3196: buildPreMergeReadinessSummary still accepts the legacy singular secondaryBotLogin option', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const singularOption = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        genuineReviewComment('coderabbitai[bot]', '2026-05-11T23:58:00Z'),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+      secondaryBotLogin: 'coderabbitai[bot]',
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const pluralOption = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        genuineReviewComment('coderabbitai[bot]', '2026-05-11T23:58:00Z'),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+      secondaryBotLogins: ['coderabbitai[bot]'],
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  // Both forms fold the same single login's settlement identically -- the
+  // singular option must not silently degrade to the unconfigured shape.
+  assert.deepEqual(
+    secondaryQuietWindowOf(singularOption),
+    secondaryQuietWindowOf(pluralOption),
+  );
+  const status = secondaryQuietWindowOf(singularOption);
+  assert.equal(status.anchorAt, '2026-05-11T23:58:00Z');
+  assert.equal(status.minutes, 5);
+  assert.equal(status.declined, false);
+});
+
+test('#3196: the plural secondaryBotLogins option wins over the legacy singular secondaryBotLogin when both are supplied', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        genuineReviewComment(
+          'chatgpt-codex-connector[bot]',
+          '2026-05-11T23:59:00Z',
+        ),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+      // The singular option names a login that never posts anything, so if
+      // it wrongly took precedence the status would stay unsettled.
+      secondaryBotLogin: 'my-custom-bot[bot]',
+      secondaryBotLogins: ['chatgpt-codex-connector[bot]'],
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  assert.equal(status.anchorAt, '2026-05-11T23:59:00Z');
+  assert.equal(status.declined, false);
+});
+
 // #2272: the development-branch-target gate is a fail-closed invariant
 // distinct from every other pre-merge gate above -- absent entirely
 // (unmigrated caller / every fixture above) adds no blocker at all,
