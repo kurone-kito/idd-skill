@@ -932,6 +932,54 @@ The round-count cutoff now compares against the pull request's total
 review-submission count, PR-wide and fully paginated, instead. See
 kurone-kito/idd-skill#3162 for the observed counts.
 
+### E4/E5 adopt-now urgency defer
+
+E4 scores each PATH A item on one axis, severity/relevance to PR
+intent. A finding that is minor but genuinely _in scope_ is not Low
+under that definition, so it lands in Medium's "judge by context"
+branch and is typically accepted because it is correct — and every
+Accepted PATH A fix is a push, with E14 requesting a fresh review
+after every push, so each such fix can buy one more review wave whose
+own diff surfaces new findings. The round-count cutoff above doesn't
+cover this case: it only fires after its own round threshold, for Low
+items only, and most review waves in this repository's own dogfooding
+history happened well before that cutoff could act (observed
+2026-09-24; see kurone-kito/idd-skill#3222 for the full baseline).
+
+A code-review bot's severity label, where one is exposed, typically
+has no published definition, no configuration, and no API field, so
+an agent's own E4 tier must stay authoritative; the bot's label can
+only raise the defer-eligibility floor, never substitute for it.
+
+`critiqueLoop.deferByUrgency` adds a second, independent trigger,
+active from round 1, gated on this opt-in key. See
+kurone-kito/idd-skill#3222 for the live baseline behind the decisions
+below.
+
+#### Groom hearing decisions (2026-09-24, kurone-kito/idd-skill#3222)
+
+- Add a second triage axis, "worth another Copilot review wave in this
+  PR" (adopt-now urgency), and defer a finding whose adopt-now urgency
+  is low to a bundled follow-up issue, the same way the round-count
+  cutoff does, but from round 1.
+- The severity ceiling for this new trigger is Low plus Medium (mode
+  `low-and-medium`); High is never deferred. This supersedes a
+  Low-only ceiling **for this new trigger only**; the round-count
+  cutoff above stays unchanged and Low-only.
+- Keep the round-count cutoff as an unchanged backstop; the new rule
+  is an independent trigger applying from the first E4/E5 pass.
+- Apply to every PATH A actor, not only a code-review bot, with the
+  agent's own E4 tier authoritative and any bot severity label
+  recorded as evidence only.
+- The adopt-now allowlist is exactly (a) a regression this PR
+  introduced, (b) an unmet claimed-issue acceptance criterion or
+  requirement, (c) correctness, safety, or CI-stability, and (d)
+  piggybacking on a push that is already certain -- condition (d)
+  keeps new diff surface, and the fresh findings it can attract,
+  bounded.
+- Distribute as an opt-in policy key with default `off`; a repository
+  opts in per its own review-cost profile.
+
 ### review-ack worked example
 
 A review posts a regular-comment finding plus a suppressed one.

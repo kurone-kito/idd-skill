@@ -1459,6 +1459,7 @@ supports these keys:
 - `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `3`)
 - `critiqueLoop.e10NoProgressHoldAfter` (default `3`)
 - `critiqueLoop.deferAfterRounds` (default `12`)
+- `critiqueLoop.deferByUrgency` (default `off`; `low` or `low-and-medium`)
 - `reviewEscalation.changesRequestedFirstEscalation` /
   `reviewEscalation.changesRequestedSecondEscalation`
   (default `PT24H` / `PT48H`)
