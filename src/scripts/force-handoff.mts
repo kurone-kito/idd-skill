@@ -68,7 +68,19 @@ interface RunHandoffOptions {
     body: string,
   ) => Promise<PostedCommentPayload> | PostedCommentPayload;
   mode?: string;
+  /** Sink for the plan-preview / result output; defaults to stdout. Tests
+   * inject this to capture and assert on printed output (e.g. the
+   * same-successor warning) without touching the real stdout stream. */
+  write?: (chunk: string) => void;
 }
+
+/** Options accepted by {@link planHandoff}, minus its default-`{}` `undefined`
+ * branch -- `runHandoff` always passes a concrete options object built up
+ * across its interactive prompts. */
+type ForceHandoffPlanOptions = NonNullable<Parameters<typeof planHandoff>[2]>;
+
+export const SAME_SUCCESSOR_WARNING =
+  'WARNING: successor agent-id is unchanged from the displaced claim; if that session cannot resume, this issue remains effectively unclaimed.';
 
 /** Result returned by {@link runHandoff}. */
 interface RunHandoffResult {
@@ -96,6 +108,9 @@ export async function runHandoff(
     fetchLinkedPrs,
     postComment,
     mode,
+    write = (chunk: string) => {
+      process.stdout.write(chunk);
+    },
   } = options;
 
   if (!isTTY) {
@@ -186,15 +201,26 @@ export async function runHandoff(
         'number,headRefName',
       ]) as LinkedPrPayload[]);
 
-  let plan = planHandoff(issueComments, linkedPrs, resolveOpts);
+  let planOptions: ForceHandoffPlanOptions = resolveOpts;
+  let plan = planHandoff(issueComments, linkedPrs, planOptions);
 
   let resolvedPrNumber: number | undefined;
   if (plan.contextScope === 'issue-plus-pr') {
     const prList = plan.prReferences.join(', ');
     const rawPr = await ask(`Open PR on branch (${prList}). Enter PR number: `);
     const prNumber = parsePositiveInteger(rawPr, '--pr');
-    plan = planHandoff(issueComments, linkedPrs, { ...resolveOpts, prNumber });
+    planOptions = { ...planOptions, prNumber };
+    plan = planHandoff(issueComments, linkedPrs, planOptions);
     resolvedPrNumber = prNumber;
+  }
+
+  const rawSuccessorAgentId = await ask(
+    `Successor agent-id [leave blank to keep \`${plan.activeClaim.agentId}\`]: `,
+  );
+  const enteredAgentId = rawSuccessorAgentId.trim();
+  if (enteredAgentId) {
+    planOptions = { ...planOptions, newAgentId: enteredAgentId };
+    plan = planHandoff(issueComments, linkedPrs, planOptions);
   }
 
   if (!plan.markerBody) {
@@ -204,6 +230,7 @@ export async function runHandoff(
   }
 
   const { newAgentId, newClaimId } = plan.successorIds;
+  const successorUnchanged = newAgentId === plan.activeClaim.agentId;
   const lines = [
     '',
     `Forced-handoff plan for issue #${issueNumber}:`,
@@ -216,13 +243,14 @@ export async function runHandoff(
     'Marker preview:',
     plan.markerBody,
     '',
+    ...(successorUnchanged ? [SAME_SUCCESSOR_WARNING, ''] : []),
   ];
-  process.stdout.write(`${lines.join('\n')}\n`);
+  write(`${lines.join('\n')}\n`);
 
   const confirm = await ask('Confirm forced handoff? [y/N] ');
   ask.close?.();
   if (confirm.trim().toLowerCase() !== 'y') {
-    process.stdout.write('Aborted. No changes made.\n');
+    write('Aborted. No changes made.\n');
     return { posted: false };
   }
 
@@ -238,7 +266,7 @@ export async function runHandoff(
       ]) as PostedCommentPayload);
 
   const commentUrl = String(result.html_url ?? result.url ?? '');
-  process.stdout.write(
+  write(
     [
       '',
       `Forced handoff posted: ${commentUrl}`,

@@ -472,7 +472,9 @@ in this preamble, since the fallback differs per helper.
   PR claim
 - `scripts/force-handoff.mjs` for the interactive TTY-only
   `idd-force-handoff` operator facade that drives issue input, optional
-  PR confirmation from live branch state, and final `y/N` consent
+  PR confirmation from live branch state, an optional successor
+  agent-id prompt (blank keeps the displaced agent's own id), and
+  final `y/N` consent
 - `scripts/forced-handoff-marker.mjs` for low-level forced-handoff
   marker rendering and inspection when maintainers need the canonical
   payload without the interactive facade
@@ -1016,8 +1018,10 @@ The adopted helper boundaries are intentionally narrow:
 - `force-handoff.mjs` is intentionally operator-facing and interactive;
   it asks for the issue number before any mutation, derives whether PR
   input is required from live open PR state on the active claim branch,
-  previews the generated marker and successor IDs, and posts only after
-  an explicit `y` confirmation
+  prompts for an optional successor agent-id (blank keeps the
+  displaced agent's own id; a warning is shown when the resolved
+  successor still matches it), previews the marker, and posts only
+  after an explicit `y` confirmation
 - it must fail closed outside a TTY and is not available to autopilot
   or unattended agent contexts
 - it does not replace the forced-handoff policy contract; it is the
@@ -1311,8 +1315,11 @@ The adopted helper boundaries are intentionally narrow:
   - asks for issue input before any mutation
   - asks for PR input only when a live open PR exists on the active
     claim branch and PR-scoped evidence is required
-  - prints the generated successor IDs and marker preview before the
-    final confirmation
+  - asks for an optional successor agent-id (blank keeps the displaced
+    agent's own id)
+  - prints the resolved successor IDs and marker preview -- with a
+    warning when the resolved successor still matches the displaced
+    agent-id -- before the final confirmation
   - posts nothing unless the final confirmation is exactly `y`
 
 - Command: `node scripts/forced-handoff-marker.mjs --issue <number> --plan ...`

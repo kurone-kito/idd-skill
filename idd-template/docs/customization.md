@@ -1866,9 +1866,14 @@ helper from an interactive TTY. That flow:
 1. prompts for the issue number before any mutation
 2. inspects live open PR state on the active claim branch and asks for a
    PR number only when PR-scoped evidence is required
-3. prints the generated successor claim plan and requires a final
-   `y/N` confirmation before posting the canonical forced-handoff
-   marker
+3. prompts for an optional successor agent-id (leaving it blank keeps
+   the displaced agent's own id -- the default -- while entering a
+   value selects that entered agent-id as the successor, which may
+   still match the displaced agent-id if re-entered verbatim)
+4. prints the resolved successor claim plan -- with a warning when the
+   resolved successor still matches the displaced agent-id -- and
+   requires a final `y/N` confirmation before posting the canonical
+   forced-handoff marker
 
 The interactive helper is intentionally unavailable to autopilot and
 other unattended contexts. It fails closed outside a TTY instead of

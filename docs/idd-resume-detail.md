@@ -23,8 +23,13 @@ evidence URL.
 The recommended operator path for collecting that evidence is the
 interactive `idd-force-handoff` helper. It asks for the issue number
 first, checks live open PRs on the active claim branch to decide whether
-PR input is required, previews the generated successor IDs and marker,
-and then requires a final `y/N` confirmation before posting anything to
+PR input is required, then prompts for an optional successor agent-id
+(leaving it blank keeps the displaced agent's own id -- the default --
+while entering a value selects that entered agent-id as the successor,
+which may still match the displaced agent-id if re-entered verbatim).
+It previews the resolved successor IDs and marker, printing a warning
+when the resolved successor still matches the displaced agent-id, and
+then requires a final `y/N` confirmation before posting anything to
 GitHub. Outside an interactive TTY it must fail closed. The lower-level
 `idd-forced-handoff-marker` helper remains available for rendering or
 inspection, but it is not the primary maintainer workflow.
