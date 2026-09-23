@@ -45,6 +45,7 @@ import {
   isTaskListBlockBoundary,
   isTaskListCheckboxLine,
 } from './discover-roadmap-graph.mts';
+import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
 import {
@@ -690,6 +691,13 @@ export function auditAuthoredIssue(
       normalizeCurrentRepo(options.currentRepo),
     ),
     checkDependencyMarkerRule(text, markerPrefix, shape),
+    checkCandidateFilesNotEmpty(
+      rawText,
+      shape,
+      isBucketAudit,
+      authoringBucket,
+      suitability,
+    ),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
     checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
@@ -1368,6 +1376,72 @@ function checkDependencyMarkerRule(
   }
 
   return pass(id, name, `no roadmap-id marker on this ${shape} issue`);
+}
+
+/**
+ * Child shape only (field-feedback gist round 34 finding 1,
+ * kurone-kito/idd-skill#3191): a `child` issue's `## Candidate files`
+ * section is required content (contract.md's "Child issue under a
+ * roadmap" section), so a body that parses to zero paths -- whether the
+ * heading is missing entirely or present but empty/unparseable -- must
+ * not pass the mechanical pre-publish gate as a `ready` child. The one
+ * exception is a child already routed away from autopilot selection via
+ * an `authoring-bucket: needs-decision`/`blocked-by-human` marker or a
+ * suitability score of `1`: those legitimately declare "this task does
+ * not edit a repository file" and are filtered out of Discover by other
+ * means (the blocking label, or the floor skip), so this check does not
+ * apply to them.
+ *
+ * Reuses `parseCandidateFiles` (discover-shared-file-overlap.mts) against
+ * the RAW, not code-masked, body: that parser's own backtick-code-span
+ * detection needs the original inline-code markup this module's
+ * `stripMarkdownCodeRegions` pass would otherwise erase, the same reason
+ * every other body-text check in this file receives the masked `text`
+ * but this one receives `rawText` instead.
+ */
+function checkCandidateFilesNotEmpty(
+  rawText: string,
+  shape: IssueShape,
+  isBucketAudit: boolean,
+  authoringBucket: AuthoringBucketMarkerDetection,
+  suitability: AutopilotSuitabilityMarkerDetection,
+): AuditFinding {
+  const id = 'candidate-files-not-empty';
+  const name = 'Child ## Candidate files section parses to at least one path';
+  if (isBucketAudit) {
+    return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+  }
+  if (shape !== 'child') {
+    return pass(
+      id,
+      name,
+      `not applicable: only the child shape requires ## Candidate files`,
+    );
+  }
+  const routedToHumanBucket =
+    authoringBucket.value === 'needs-decision' ||
+    authoringBucket.value === 'blocked-by-human' ||
+    suitability.value === 1;
+  if (routedToHumanBucket) {
+    return pass(
+      id,
+      name,
+      'not applicable: issue is routed to a human bucket (authoring-bucket marker or suitability score of 1)',
+    );
+  }
+  const candidateFiles = parseCandidateFiles(rawText);
+  if (candidateFiles.length === 0) {
+    return fail(
+      id,
+      name,
+      'the ## Candidate files section parses to zero paths (heading missing, or present but empty/unparseable); a ready child cannot claim zero touched files',
+    );
+  }
+  return pass(
+    id,
+    name,
+    `## Candidate files parses to ${candidateFiles.length} path(s)`,
+  );
 }
 
 function checkSuitabilityVisibleLineAgreement(

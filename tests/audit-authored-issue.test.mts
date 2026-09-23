@@ -75,12 +75,22 @@ function roadmapBody({
   ].join('\n');
 }
 
+/**
+ * `candidateFiles` defaults to one real backtick-quoted path so every
+ * caller that does not care about the `candidate-files-not-empty` check
+ * (#3191) gets a contract-compliant child body by default. Pass `null`
+ * to omit the `## Candidate files` section entirely (heading absent) or
+ * `[]` to include the heading with no parseable path (heading present
+ * but empty) -- the two distinct zero-path shapes that check exercises.
+ */
 function childBody({
   score = 5,
   extraMarkers = '',
+  candidateFiles = ['`src/scripts/example.mts`'],
 }: {
   score?: number;
   extraMarkers?: string;
+  candidateFiles?: readonly string[] | null;
 } = {}): string {
   return [
     '## Background',
@@ -95,6 +105,14 @@ function childBody({
     '',
     '- [ ] tests pass',
     '',
+    ...(candidateFiles === null
+      ? []
+      : [
+          '## Candidate files',
+          '',
+          ...candidateFiles.map((path) => `- ${path}`),
+          '',
+        ]),
     extraMarkers,
     '',
     suitabilityFooter(score),
@@ -901,6 +919,78 @@ test('dependency-marker-rule fails when the roadmap-id marker is present but mis
   );
   assert.equal(finding?.result, 'fail');
   assert.match(finding?.detail ?? '', /malformed/);
+});
+
+// --- candidate-files-not-empty (#3191) ---
+
+test('candidate-files-not-empty fails for a child issue with no ## Candidate files heading at all', () => {
+  const body = childBody({ candidateFiles: null });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(findingResult(report, 'candidate-files-not-empty'), 'fail');
+});
+
+test('candidate-files-not-empty fails for a child issue whose ## Candidate files heading is present but parses to zero paths', () => {
+  const body = childBody({ candidateFiles: [] });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'candidate-files-not-empty',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /zero paths/);
+});
+
+test('candidate-files-not-empty passes for a child issue with at least one real candidate path', () => {
+  const report = auditAuthoredIssue(childBody(), { shape: 'child' });
+  assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
+});
+
+test('candidate-files-not-empty is not applicable to the orphan shape, even with zero candidate files', () => {
+  const report = auditAuthoredIssue(orphanBody(), { shape: 'orphan' });
+  assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
+});
+
+test('candidate-files-not-empty is not applicable to the roadmap shape, even with zero candidate files', () => {
+  const report = auditAuthoredIssue(roadmapBody(), { shape: 'roadmap' });
+  assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
+});
+
+test('candidate-files-not-empty passes an empty-candidate-files child when an authoring-bucket: needs-decision marker is present', () => {
+  const body = childBody({
+    candidateFiles: [],
+    extraMarkers: '<!-- idd-skill-authoring-bucket: needs-decision -->',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
+});
+
+test('candidate-files-not-empty passes an empty-candidate-files child when an authoring-bucket: blocked-by-human marker is present', () => {
+  const body = childBody({
+    candidateFiles: [],
+    extraMarkers: '<!-- idd-skill-authoring-bucket: blocked-by-human -->',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
+});
+
+test('candidate-files-not-empty passes an empty-candidate-files child when the suitability score is 1', () => {
+  const body = childBody({ candidateFiles: [], score: 1 });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
+});
+
+test('candidate-files-not-empty still fails an empty-candidate-files child at suitability score 2 (no exemption)', () => {
+  const body = childBody({ candidateFiles: [], score: 2 });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(findingResult(report, 'candidate-files-not-empty'), 'fail');
+});
+
+test('candidate-files-not-empty is not applicable under --expect-bucket (bucket-shape audit)', () => {
+  const body = childBody({ candidateFiles: [] });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
 });
 
 // --- suitability-visible-line-agreement ---

@@ -230,34 +230,20 @@ export function normalizeContentionPath(raw) {
   return value;
 }
 /**
- * Parse the `## Candidate files` section of an issue body into a
- * de-duplicated list of {@link CandidateFileEntry} (raw path alongside its
- * normalized contention key). The section is advisory, so parsing is
- * lenient: it extracts every backtick-quoted path in the section —
- * including the continuation lines of a multi-line bullet — plus the
- * leading path-like token of any bullet that has no backticks at all.
- * Returns `[]` when the section is absent. De-duplicates on `raw` (Codex
- * review, PR #2840, round 9; previously deduplicated on `normalized`,
- * which silently discarded a later raw spelling sharing an earlier one's
- * contention key even when the later spelling is the one that actually
- * exists on disk -- see {@link candidateFilesExistOnDisk}'s doc comment).
- * `parseCandidateFiles` applies its own separate normalized-key dedup on
- * top, preserving that function's pre-existing one-entry-per-contention-
- * key contract for its own callers.
- *
- * (Considered and rejected, round 9: masking genuine inline code spans
- * out of `body` first, to guard a multi-line span from smuggling a fake
- * heading/Setext boundary past detection. Verified against GitHub's own
- * renderer -- see `triage-structural-evidence.mts`'s
- * `hasVerificationCommandSignal` doc comment -- that CommonMark's
- * block-before-inline parsing order already makes that input impossible:
- * an ATX heading (or Setext-eligible content line) inside an open span
- * closes it as literal text before the span can extend across the
- * heading, so there is no fake heading for a masking pass to hide.)
+ * Locate the `## Candidate files` section's line bounds within an
+ * already-split `lines` array: `start` is the first line inside the
+ * section (the line after the heading), `end` is the line index the
+ * section stops before (the next heading/Setext boundary, or
+ * `lines.length`). Returns `null` when no such heading is present.
+ * Extracted from {@link parseCandidateFileEntries} so
+ * {@link hasCandidateFilesHeading} can share the exact same
+ * heading-boundary scan -- every GitHub-rendering edge case it already
+ * handles (trailing `##`, a backtick code-span quoting a literal `##`,
+ * exact-title matching so a sibling heading like "Candidate files
+ * considered but rejected" does not count) stays one source of truth
+ * instead of a second regex to keep in sync.
  */
-export function parseCandidateFileEntries(body) {
-  const text = typeof body === 'string' ? body : '';
-  const lines = text.split(/\r?\n/);
+function findCandidateFilesSectionBounds(lines) {
   let start = -1;
   let end = lines.length;
   for (let index = 0; index < lines.length; index += 1) {
@@ -338,8 +324,58 @@ export function parseCandidateFileEntries(body) {
     break;
   }
   if (start === -1) {
+    return null;
+  }
+  return { start, end };
+}
+/**
+ * Whether the `## Candidate files` heading is present in `body` at all,
+ * independent of whether the section then parses to any paths --
+ * distinguishing "heading missing entirely" from "heading present but
+ * empty/unparseable" for a caller that must treat those two cases
+ * differently (kurone-kito/idd-skill#3191, Discover Check 5's Actionability
+ * gate). An orphan or roadmap issue legitimately omits this optional
+ * heading, so this signal is meaningful only where the caller already
+ * knows the heading is expected.
+ */
+export function hasCandidateFilesHeading(body) {
+  const text = typeof body === 'string' ? body : '';
+  return findCandidateFilesSectionBounds(text.split(/\r?\n/)) !== null;
+}
+/**
+ * Parse the `## Candidate files` section of an issue body into a
+ * de-duplicated list of {@link CandidateFileEntry} (raw path alongside its
+ * normalized contention key). The section is advisory, so parsing is
+ * lenient: it extracts every backtick-quoted path in the section —
+ * including the continuation lines of a multi-line bullet — plus the
+ * leading path-like token of any bullet that has no backticks at all.
+ * Returns `[]` when the section is absent. De-duplicates on `raw` (Codex
+ * review, PR #2840, round 9; previously deduplicated on `normalized`,
+ * which silently discarded a later raw spelling sharing an earlier one's
+ * contention key even when the later spelling is the one that actually
+ * exists on disk -- see {@link candidateFilesExistOnDisk}'s doc comment).
+ * `parseCandidateFiles` applies its own separate normalized-key dedup on
+ * top, preserving that function's pre-existing one-entry-per-contention-
+ * key contract for its own callers.
+ *
+ * (Considered and rejected, round 9: masking genuine inline code spans
+ * out of `body` first, to guard a multi-line span from smuggling a fake
+ * heading/Setext boundary past detection. Verified against GitHub's own
+ * renderer -- see `triage-structural-evidence.mts`'s
+ * `hasVerificationCommandSignal` doc comment -- that CommonMark's
+ * block-before-inline parsing order already makes that input impossible:
+ * an ATX heading (or Setext-eligible content line) inside an open span
+ * closes it as literal text before the span can extend across the
+ * heading, so there is no fake heading for a masking pass to hide.)
+ */
+export function parseCandidateFileEntries(body) {
+  const text = typeof body === 'string' ? body : '';
+  const lines = text.split(/\r?\n/);
+  const bounds = findCandidateFilesSectionBounds(lines);
+  if (bounds === null) {
     return [];
   }
+  const { start, end } = bounds;
   const section = lines.slice(start, end);
   const sectionText = section.join('\n');
   const entries = [];
