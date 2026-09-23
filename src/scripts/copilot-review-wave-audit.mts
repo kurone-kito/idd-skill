@@ -33,13 +33,20 @@
 // item scan to include that header line, avoiding a double-count.
 
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
-import { combineOwnerRepoFlags, ghApiJson, ghText } from './gh-exec.mts';
+import {
+  combineOwnerRepoFlags,
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  ghTextUnbounded,
+  resolveGhApiHostname,
+} from './gh-exec.mts';
 import {
   AMD_MARKER_PATTERN,
   DISPOSITION_ACCEPTED_PREFIX_RE,
   DISPOSITION_REJECTED_PREFIX_RE,
   isCopilotReviewerLogin,
   isRejectionConfirmedDisposition,
+  parsePaginatedGhNdjson,
 } from './protocol-helpers.mts';
 
 // ---------------------------------------------------------------------------
@@ -127,6 +134,32 @@ export interface ReviewSequenceEntry {
   open: readonly ParsedOpenFinding[];
 }
 
+/**
+ * One review's own parsed record, preserved per-review (not only folded
+ * into the PR-level aggregates) so a report can answer "which findings
+ * were new versus carried in THIS review" -- the issue's own "per v2
+ * review, the Open findings with severity, discussion_r id, and
+ * new-versus-carried status" requirement (Copilot review, PR #3245).
+ */
+export interface PrReviewRecord {
+  reviewId: number;
+  submittedAt: string | null;
+  kind: ParsedOverview['kind'];
+  /**
+   * For `kind: 'v2'`, the trusted, fully-parsed Open findings -- these are
+   * the ones folded into `PrAuditReport.openAppearances`/`.threads`. For
+   * `kind: 'unparsed'`, this can still carry whatever partially parsed
+   * behind the header/item count mismatch that caused `unparsedReason` --
+   * kept here only for diagnosing the mismatch, deliberately excluded from
+   * every aggregate (openAppearances, threads, the TSV per-finding table)
+   * so an untrusted partial parse never pollutes a trusted total. For
+   * `kind: 'legacy'`, always empty.
+   */
+  open: ParsedOpenFinding[];
+  previouslyMissed: SeverityCounts;
+  unparsedReason?: string;
+}
+
 export interface PrAuditReport {
   pr: number;
   reviewCount: number;
@@ -135,6 +168,7 @@ export interface PrAuditReport {
   unparsedCount: number;
   openAppearances: SeverityCounts;
   previouslyMissed: SeverityCounts;
+  reviews: PrReviewRecord[];
   threads: FindingThread[];
   transitions: TransitionRow[];
 }
@@ -479,6 +513,21 @@ export function computePrAudit(
   const transitions = buildTransitionTable(
     parsedReviews.map((parsed) => ({ kind: parsed.kind, open: parsed.open })),
   );
+  const reviews: PrReviewRecord[] = copilotReviewsInOrder.map(
+    (review, index) => {
+      const parsed = parsedReviews[index];
+      return {
+        reviewId: review.id,
+        submittedAt: review.submittedAt,
+        kind: parsed.kind,
+        open: parsed.open,
+        previouslyMissed: parsed.previouslyMissed,
+        ...(parsed.unparsedReason
+          ? { unparsedReason: parsed.unparsedReason }
+          : {}),
+      };
+    },
+  );
 
   return {
     pr: prNumber,
@@ -488,6 +537,7 @@ export function computePrAudit(
     unparsedCount,
     openAppearances,
     previouslyMissed,
+    reviews,
     threads,
     transitions,
   };
@@ -619,28 +669,58 @@ function sortReviewsBySubmission(reviews: readonly RawReview[]): RawReview[] {
 }
 
 /**
- * Fetch one PR's reviews and review comments via `gh api`'s REST surface
- * (`ghApiJson(..., { paginate: true })`, which already correctly merges
- * paginated NDJSON pages -- `gh api --paginate` alone prints one JSON array
- * PER PAGE, so relying on its raw output to self-merge silently drops every
- * page but the first) and compute the PR's audit report. The only
- * network-touching function in this file besides the PR-number resolvers
- * below.
+ * Fetch one `gh api` REST path, merging paginated pages correctly (`gh api
+ * --paginate` alone prints one JSON array PER PAGE, so relying on its raw
+ * output to self-merge silently drops every page but the first --
+ * `--jq '.[]'` instead emits one NDJSON line per element across every page,
+ * which {@link parsePaginatedGhNdjson} re-merges into a single array).
+ *
+ * Reads the child process's stdout through a temp file
+ * ({@link ghTextUnbounded}) rather than an in-memory pipe with a fixed
+ * `maxBuffer` ceiling: a PR with many review comments can exceed any fixed
+ * buffer guess -- this repository's own PR #3154 (inside the 2026-09-24
+ * baseline window) has 203 review comments totaling ~1.26 MB of paginated
+ * NDJSON, already past Node's default 1 MiB child-process buffer, which
+ * crashed the whole cohort run rather than just that one PR (found and
+ * independently reproduced during this issue's own review-fix critique
+ * pass on PR #3245, alongside Copilot's separate `#discussion_r4086537940`
+ * finding). Mirrors the identical fix `sweep-authoring-markers.mts` applies
+ * to its own
+ * paginated GraphQL walk (#2935) -- removing the buffer-guessing class of
+ * bug entirely, rather than sizing a fixed cap that could still be wrong
+ * for some future PR.
+ */
+function ghApiPaginatedUnbounded(path: string): unknown[] {
+  const hostname = resolveGhApiHostname();
+  const args = [
+    'api',
+    path,
+    ...(hostname ? ['--hostname', hostname] : []),
+    '--paginate',
+    '--jq',
+    '.[]',
+  ];
+  const raw = ghTextUnbounded(args, {
+    timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  });
+  return parsePaginatedGhNdjson(raw);
+}
+
+/**
+ * Fetch one PR's reviews and review comments and compute the PR's audit
+ * report. The only network-touching function in this file besides the
+ * PR-number resolvers below.
  */
 export function auditPr(
   owner: string,
   repo: string,
   prNumber: number,
 ): PrAuditReport {
-  const rawReviews = ghApiJson(
+  const rawReviews = ghApiPaginatedUnbounded(
     `repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
-    {
-      paginate: true,
-    },
   ) as RestReviewPayload[];
-  const rawComments = ghApiJson(
+  const rawComments = ghApiPaginatedUnbounded(
     `repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100`,
-    { paginate: true },
   ) as RestCommentPayload[];
 
   const copilotReviews = sortReviewsBySubmission(
@@ -707,11 +787,81 @@ function parsePrNumberList(value: string): number[] {
   return numbers;
 }
 
+// `gh pr list` (and the GitHub search API it wraps) has no "sort by merge
+// date" qualifier -- only creation/update/comments/reactions -- and sorts
+// merged-state results by creation date descending, NOT merge date
+// (confirmed live: a PR created later but merged earlier sorts ahead of one
+// created earlier but merged later). A plain `--limit N` therefore returns
+// the N most recently CREATED merged PRs, not the N most recently MERGED
+// ones -- a real gap for a tool whose whole purpose is precise, reproducible
+// measurement (found during this issue's own review-fix critique pass on
+// PR #3245, not a GitHub bot finding). Over-fetch a generous multiple of
+// `limit` (capped) and re-sort client-side by `mergedAt` instead. This is a
+// best-effort correction, not a mathematical guarantee: a PR merged long
+// after a long review cycle could still fall outside the over-fetched pool
+// in a pathological case. `--prs <n,n,...>` (an explicit, caller-resolved
+// number set, as this helper's own baseline reproduction command in
+// docs/critique-telemetry.md uses) is the fully precise route when exact
+// reproducibility matters.
+export const RECENT_MERGED_OVER_FETCH_MULTIPLIER = 5;
+export const RECENT_MERGED_OVER_FETCH_MIN = 100;
+export const RECENT_MERGED_OVER_FETCH_MAX = 1000;
+
+export interface MergedPrCandidate {
+  number: number;
+  mergedAt: string | null;
+}
+
+/**
+ * Pure sort/select core of the `--limit` fix above (exported so it is
+ * unit-testable without shelling out to `gh`): descending by `mergedAt`
+ * (a `null` -- a PR `gh pr list` reports merged but with no timestamp,
+ * which should not happen but is defended against -- sorts last), ties
+ * broken by descending PR number for determinism, then the first `limit`
+ * entries.
+ */
+export function selectMostRecentlyMerged(
+  candidates: readonly MergedPrCandidate[],
+  limit: number,
+): number[] {
+  return candidates
+    .slice()
+    .sort((a, b) => {
+      const aTime = a.mergedAt ?? '';
+      const bTime = b.mergedAt ?? '';
+      if (aTime !== bTime) {
+        return aTime < bTime ? 1 : -1;
+      }
+      return b.number - a.number;
+    })
+    .slice(0, limit)
+    .map((entry) => entry.number);
+}
+
 function resolveRecentMergedPrNumbers(
   owner: string,
   repo: string,
   limit: number,
 ): number[] {
+  const fetchCount = Math.min(
+    Math.max(
+      limit * RECENT_MERGED_OVER_FETCH_MULTIPLIER,
+      RECENT_MERGED_OVER_FETCH_MIN,
+    ),
+    RECENT_MERGED_OVER_FETCH_MAX,
+  );
+  if (fetchCount < limit) {
+    // Reachable whenever `limit` exceeds RECENT_MERGED_OVER_FETCH_MAX
+    // (e.g. `--limit 2000`): the ceiling caps fetchCount at MAX regardless
+    // of how large `limit` itself is, so without this guard the CLI would
+    // silently return fewer PRs than requested instead of the documented
+    // "N most recently merged" count -- fail closed instead.
+    // parseCanonicalIntegerOrThrow places no upper bound of its own on
+    // --limit, so this is the only enforcement point.
+    fail(
+      `--limit ${limit} exceeds this helper's over-fetch ceiling (${RECENT_MERGED_OVER_FETCH_MAX}); use --prs <n,n,...> with an explicit, caller-resolved number set instead`,
+    );
+  }
   const raw = ghText([
     'pr',
     'list',
@@ -720,12 +870,27 @@ function resolveRecentMergedPrNumbers(
     '--state',
     'merged',
     '--limit',
-    String(limit),
+    String(fetchCount),
     '--json',
-    'number',
+    'number,mergedAt',
   ]);
-  const parsed = JSON.parse(raw) as { number: number }[];
-  return parsed.map((entry) => entry.number);
+  const parsed = JSON.parse(raw) as MergedPrCandidate[];
+  if (
+    parsed.length === fetchCount &&
+    fetchCount === RECENT_MERGED_OVER_FETCH_MAX
+  ) {
+    // The fetch hit its ceiling and may not have been large enough to
+    // guarantee the true top `limit` by merge date are all present in the
+    // over-fetched pool (see this section's header comment) -- warn rather
+    // than silently return a best-effort-but-unverifiable answer.
+    process.stderr.write(
+      `copilot-review-wave-audit: warning: --limit ${limit} is large enough that the ` +
+        `${RECENT_MERGED_OVER_FETCH_MAX}-PR over-fetch ceiling may not include every ` +
+        'candidate; the result is best-effort, not guaranteed exact. Use --prs for a ' +
+        'fully precise number set.\n',
+    );
+  }
+  return selectMostRecentlyMerged(parsed, limit);
 }
 
 const COPILOT_REVIEW_WAVE_AUDIT_FLAG_SPEC = {
@@ -744,8 +909,12 @@ function printHelp(): void {
 
   --prs <n,n,...>     Audit these merged PR numbers (mutually exclusive
                       with --limit).
-  --limit <N>         Audit the N most recently merged PRs (mutually
-                      exclusive with --prs).
+  --limit <N>         Audit the N most recently merged PRs, sorted by
+                      merge date (best-effort: over-fetches and
+                      re-sorts client-side, since GitHub has no
+                      merge-date sort of its own -- use --prs for a
+                      fully precise, reproducible number set).
+                      Mutually exclusive with --prs.
   --format <json|tsv> Output format (default: json).
   --repo <owner/name> Repository override, combined form.
   --owner <owner>     Repository override, split form (use with
@@ -758,7 +927,11 @@ legacy), "Open" finding appearances by severity, unique finding-thread
 counts by severity (first severity seen), each thread's disposition
 (deferred/rejected/accepted/other/none), "Previously missed"
 per-severity counts (thread-less, excluded from thread metrics), and a
-transition table keyed by each v2 review's highest Open severity.
+transition table keyed by each v2 review's highest Open severity. Each
+per-PR report also preserves the full per-review breakdown (severity,
+discussion_r id, and new-versus-carried status per Open finding) --
+"reviews" in JSON output, a second severity/finding-id/is_new table in
+TSV output.
 `);
 }
 
@@ -817,6 +990,46 @@ function writeTsvReport(
         report.threads.length,
       ].join('\t'),
     );
+  }
+  lines.push('');
+  lines.push(
+    [
+      'pr',
+      'review_id',
+      'submitted_at',
+      'kind',
+      'severity',
+      'finding_id',
+      'is_new',
+    ].join('\t'),
+  );
+  for (const report of reports) {
+    for (const review of report.reviews) {
+      // Only v2 reviews feed openAppearances/threads (computePrAudit
+      // deliberately excludes legacy/unparsed reviews from those
+      // aggregates); an unparsed review's `open` can still carry the
+      // partially-parsed items behind its header/item count mismatch
+      // (diagnostic value, kept in the JSON report's own `reviews[]`), but
+      // listing them here too would let a naive per-severity sum of this
+      // table diverge from the summary's openAppearances -- skip them in
+      // this table, matching the aggregate's own scope exactly.
+      if (review.kind !== 'v2') {
+        continue;
+      }
+      for (const finding of review.open) {
+        lines.push(
+          [
+            report.pr,
+            review.reviewId,
+            review.submittedAt ?? '',
+            review.kind,
+            finding.severity,
+            finding.id,
+            String(finding.isNew),
+          ].join('\t'),
+        );
+      }
+    }
   }
   lines.push('');
   lines.push(

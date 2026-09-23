@@ -9,11 +9,14 @@ import {
   buildTransitionTable,
   classifyDispositionReply,
   computePrAudit,
+  type MergedPrCandidate,
   type ParsedOpenFinding,
   parseOverviewBody,
   type RawComment,
   type RawReview,
+  RECENT_MERGED_OVER_FETCH_MAX,
   resolveThreadDisposition,
+  selectMostRecentlyMerged,
   summarizeCohort,
 } from '../src/scripts/copilot-review-wave-audit.mts';
 
@@ -465,6 +468,18 @@ ${openLine('Low', 5001, true)}
   assert.equal(report.threads.length, 1);
   assert.equal(report.threads[0]?.disposition, 'accepted');
 
+  // Per-review detail is preserved, not only folded into the aggregate
+  // counts above (Copilot review, PR #3245): each review's own Open
+  // findings, including new-versus-carried status, stay inspectable.
+  assert.equal(report.reviews.length, 2);
+  assert.equal(report.reviews[0]?.reviewId, 1);
+  assert.equal(report.reviews[0]?.kind, 'v2');
+  assert.deepEqual(report.reviews[0]?.open, []);
+  assert.equal(report.reviews[1]?.reviewId, 2);
+  assert.deepEqual(report.reviews[1]?.open, [
+    { severity: 'low', id: 5001, isNew: true },
+  ]);
+
   const summary = summarizeCohort([report]);
   assert.equal(summary.prCount, 1);
   assert.equal(summary.reviewCount, 2);
@@ -497,6 +512,15 @@ ${openLine('Low', 1)}
   assert.equal(report.v2Count, 0);
   assert.deepEqual(report.openAppearances, { high: 0, medium: 0, low: 0 });
   assert.equal(report.threads.length, 0);
+  // The per-review record still carries the partially-parsed item (and the
+  // reason) for diagnosis, even though it is excluded from every aggregate
+  // above -- an untrusted partial parse never pollutes a trusted total.
+  assert.equal(report.reviews[0]?.kind, 'unparsed');
+  assert.equal(report.reviews[0]?.open.length, 1);
+  assert.match(
+    report.reviews[0]?.unparsedReason ?? '',
+    /Open header declared 5 but 1 were parsed/,
+  );
 });
 
 test('computePrAudit: a non-Copilot-login review is never handed to this function by auditPr, but a legacy review among Copilot reviews is still counted', () => {
@@ -506,6 +530,47 @@ test('computePrAudit: a non-Copilot-login review is never handed to this functio
   const report = computePrAudit(9, reviews, []);
   assert.equal(report.legacyCount, 1);
   assert.equal(report.v2Count, 0);
+});
+
+// ---------------------------------------------------------------------------
+// selectMostRecentlyMerged
+// ---------------------------------------------------------------------------
+
+test('selectMostRecentlyMerged: sorts by mergedAt descending, not creation/list order', () => {
+  // Mirrors the real, live-confirmed case this fix addresses: PR #3232 was
+  // created later but merged earlier than PR #3225, so gh pr list's own
+  // (creation-order) response lists 3232 first -- the correct output here
+  // must still put 3225 first, since it merged later.
+  const candidates: MergedPrCandidate[] = [
+    { number: 3232, mergedAt: '2026-09-23T17:10:01Z' },
+    { number: 3225, mergedAt: '2026-09-23T19:05:15Z' },
+  ];
+  assert.deepEqual(selectMostRecentlyMerged(candidates, 2), [3225, 3232]);
+});
+
+test('selectMostRecentlyMerged: a null mergedAt sorts last', () => {
+  const candidates: MergedPrCandidate[] = [
+    { number: 1, mergedAt: null },
+    { number: 2, mergedAt: '2026-09-23T00:00:00Z' },
+  ];
+  assert.deepEqual(selectMostRecentlyMerged(candidates, 2), [2, 1]);
+});
+
+test('selectMostRecentlyMerged: ties break by descending PR number', () => {
+  const candidates: MergedPrCandidate[] = [
+    { number: 10, mergedAt: '2026-09-23T00:00:00Z' },
+    { number: 20, mergedAt: '2026-09-23T00:00:00Z' },
+  ];
+  assert.deepEqual(selectMostRecentlyMerged(candidates, 2), [20, 10]);
+});
+
+test('selectMostRecentlyMerged: respects the exact requested limit', () => {
+  const candidates: MergedPrCandidate[] = [
+    { number: 1, mergedAt: '2026-09-23T03:00:00Z' },
+    { number: 2, mergedAt: '2026-09-23T02:00:00Z' },
+    { number: 3, mergedAt: '2026-09-23T01:00:00Z' },
+  ];
+  assert.deepEqual(selectMostRecentlyMerged(candidates, 2), [1, 2]);
 });
 
 // ---------------------------------------------------------------------------
@@ -549,6 +614,37 @@ test('CLI: an invalid --format fails with exit 2', () => {
       const shaped = error as { status?: number; stderr?: string };
       assert.equal(shaped.status, 2);
       assert.match(shaped.stderr ?? '', /--format must be "json" or "tsv"/);
+      return true;
+    },
+  );
+});
+
+test('CLI: --limit beyond the over-fetch ceiling fails closed with exit 2, no gh pr list call', () => {
+  // --repo is passed explicitly so combineOwnerRepoFlags short-circuits
+  // detectRepository() (which would otherwise shell out to `gh repo
+  // view`); the --limit guard itself fires before any `gh pr list` call,
+  // so this exercises the fail-closed path with zero network I/O.
+  assert.throws(
+    () => {
+      execFileSync(
+        'node',
+        [
+          CLI_PATH,
+          '--repo',
+          'kurone-kito/idd-skill',
+          '--limit',
+          String(RECENT_MERGED_OVER_FETCH_MAX + 1),
+        ],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+    },
+    (error: unknown) => {
+      const shaped = error as { status?: number; stderr?: string };
+      assert.equal(shaped.status, 2);
+      assert.match(
+        shaped.stderr ?? '',
+        /exceeds this helper's over-fetch ceiling/,
+      );
       return true;
     },
   );
