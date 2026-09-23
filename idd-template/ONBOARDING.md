@@ -616,7 +616,12 @@ error), so an agent can gate on the exit code without parsing prose.
   rather than dropping it from the output. `<target-path>` must match a
   path the plan already reports (the same `targetPath` a plan entry or
   `--dry-run` output shows); a `--hold` value outside the resolved
-  manifest is a usage error, not a silent no-op.
+  manifest is a usage error (exit 2), not a silent no-op -- except when
+  `--profile vendored-node` resolution has already degraded because
+  `--source` is an incomplete tree (a missing vendored helper file): in
+  that case the unresolved manifest can't confirm or deny an unmatched
+  `--hold` value, so the check is skipped and the existing missing-source
+  blocking finding (exit 1) stays the visible signal instead.
 
   ```sh
   node scripts/idd-onboard.mjs --import --source <idd-skill-clone> \
