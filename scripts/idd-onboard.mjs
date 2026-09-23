@@ -2338,6 +2338,91 @@ const RECORD_POLICY_DOC_ROWS = [
   },
 ];
 /**
+ * Word-wrap a single rendered policy-doc line to at most `width` columns
+ * (#3227's `MD013` fix). A leading `- ` list marker (used by the
+ * `claim-timing` / `ci-wait-policy` bullet rows) is kept only on the
+ * first physical line, and every wrapped continuation line is indented
+ * to align under the item's own text so it stays a lazy continuation of
+ * the same CommonMark list item rather than starting a new block. Wraps
+ * only at word boundaries -- matching this repository's own
+ * inline-code-span-wrap convention -- so a single token longer than
+ * `width` on its own (an unusually long `development-branch` name, for
+ * example) is still emitted whole rather than force-cut. Ported locally
+ * from `token-cost-report.mts`'s module-private `wrapProse` rather than
+ * exported and shared, per this issue's own out-of-scope note against a
+ * general-purpose Markdown-wrapping utility.
+ *
+ * Groups the line into **units** on a bare single space only (never a
+ * bare `' '`.split that would collapse a multi-space run): a run of two
+ * or more spaces glues its neighboring words into one indivisible unit
+ * instead of being treated as a break point. A recorded freeform value
+ * (e.g. `credential-scope`, rendered inside an inline code span) can
+ * contain internal multiple spaces, and silently collapsing them to one
+ * space would change the recorded content rather than only inserting
+ * line breaks -- a real defect Copilot review caught (#3227 review),
+ * not merely a cosmetic one, since the issue's own acceptance criteria
+ * requires existing content to remain unchanged after wrapping. A lone
+ * space is always content-neutral to swap for a line break (CommonMark
+ * renders a line ending inside a code span as one space too), so
+ * ordinary single-spaced content wraps exactly as it did before this
+ * grouping step existed. Wrapping the resulting units is then the same
+ * greedy pass as any plain word-wrap: a multi-space-glued unit is
+ * wider than a normal word, so it can trip the same pre-existing
+ * single-long-token exception below (still never force-cut), but the
+ * greedy pass still breaks *before* it whenever that keeps the
+ * preceding line within `width` -- unlike naively gluing it onto
+ * whatever was already accumulated, which could carry needless
+ * overflow forward (#3227 review round 2).
+ */
+function wrapPolicyDocLine(line, width = 80) {
+  if (line.length <= width) {
+    return line;
+  }
+  const marker = /^-\s+/.exec(line)?.[0] ?? '';
+  const continuationIndent = ' '.repeat(marker.length);
+  const units = [];
+  let unit = '';
+  for (const token of line.slice(marker.length).split(/(\s+)/)) {
+    if (token === '') {
+      continue;
+    }
+    if (token === ' ') {
+      if (unit !== '') {
+        units.push(unit);
+        unit = '';
+      }
+    } else {
+      // Ordinary text, or a 2+ space run: both stay glued into the
+      // current unit, since only a lone space is a break point.
+      unit += token;
+    }
+  }
+  if (unit !== '') {
+    units.push(unit);
+  }
+  const wrapped = [];
+  let current = '';
+  for (const word of units) {
+    const prefixLength =
+      wrapped.length === 0 ? marker.length : continuationIndent.length;
+    const candidate = current.length === 0 ? word : `${current} ${word}`;
+    if (prefixLength + candidate.length > width && current.length > 0) {
+      wrapped.push(
+        `${wrapped.length === 0 ? marker : continuationIndent}${current}`,
+      );
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) {
+    wrapped.push(
+      `${wrapped.length === 0 ? marker : continuationIndent}${current}`,
+    );
+  }
+  return wrapped.join('\n');
+}
+/**
  * Render the filled `## IDD Policy Configuration` Markdown document from
  * a confirmed transcript's answers, following the structure shown in
  * `idd-template/docs/onboarding/policy-decisions.md`'s
@@ -2345,6 +2430,16 @@ const RECORD_POLICY_DOC_ROWS = [
  * answer is omitted rather than printed with a placeholder value. The
  * issue-mediated bootstrap option can override the companion row without
  * changing the transcript or config patch.
+ *
+ * The document opens with a distinct `#` title (#3227) so the standalone
+ * file `--write-policy-doc` writes satisfies `MD041`/first-line-heading
+ * -- added above the original `## IDD Policy Configuration` heading
+ * rather than promoting it, so that heading's own text is unchanged.
+ * Every row's rendered body is then wrapped at 80 columns
+ * (`wrapPolicyDocLine`) to satisfy `MD013`; this is a no-op for the
+ * already-short enum-valued rows and only actually wraps a long
+ * freeform answer (`credential-scope`, `development-branch`) or the
+ * fixed `ci-wait-policy` bullet text.
  */
 function buildFilledPolicyDocument(answers, options = {}) {
   const valueById = new Map(answers.map((answer) => [answer.id, answer.value]));
@@ -2356,12 +2451,18 @@ function buildFilledPolicyDocument(answers, options = {}) {
       options.issueMediated && row.id === 'issue-authoring-companion'
         ? 'not installed'
         : transcriptValue;
-    const body = row.renderBody
+    const rawBody = row.renderBody
       ? row.renderBody(value)
       : `**${row.label}**: \`${value}\``;
+    const body = rawBody
+      .split('\n')
+      .map((line) => wrapPolicyDocLine(line))
+      .join('\n');
     return `### ${row.heading}\n\n${body}`;
   });
   return [
+    '# IDD Policy Configuration Record',
+    '',
     '## IDD Policy Configuration',
     '',
     'This repository uses the following IDD policies:',
