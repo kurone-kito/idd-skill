@@ -1315,8 +1315,11 @@ The adopted helper boundaries are intentionally narrow:
   - asks for issue input before any mutation
   - asks for PR input only when a live open PR exists on the active
     claim branch and PR-scoped evidence is required
-  - prints the generated successor IDs and marker preview before the
-    final confirmation
+  - asks for an optional successor agent-id (blank keeps the displaced
+    agent's own id)
+  - prints the resolved successor IDs and marker preview -- with a
+    warning when the resolved successor still matches the displaced
+    agent-id -- before the final confirmation
   - posts nothing unless the final confirmation is exactly `y`
 
 - Command: `node scripts/forced-handoff-marker.mjs --issue <number> --plan ...`
