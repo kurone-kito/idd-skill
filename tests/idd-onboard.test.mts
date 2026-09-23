@@ -2364,6 +2364,23 @@ test('bin/idd-onboard.mjs --import without --dry-run copies exactly the planned 
   }
 });
 
+test('bin/idd-onboard.mjs --import verdict omits heldTargets entirely when --hold is not passed (Copilot review, PR #3224)', () => {
+  const targetRoot = makeFixtureDir();
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--dry-run',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.ok(
+    !Object.hasOwn(verdict, 'heldTargets'),
+    'the verdict JSON shape must stay unchanged when --hold is never used',
+  );
+});
+
 test('bin/idd-onboard.mjs --import --dry-run --hold <path> shows the held entry as skipped, not omitted from the plan', () => {
   const targetRoot = makeFixtureDir();
   const before = snapshotTree(targetRoot);

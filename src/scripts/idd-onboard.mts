@@ -3637,7 +3637,11 @@ function runImportCli(args: ParsedArgs): void {
     missingSource: plan.missingSource,
     blockedOverwrites: plan.blockedOverwrites,
     nonFileTargetCollisions: plan.nonFileTargetCollisions,
-    heldTargets: plan.heldTargets,
+    // Only present when --hold actually excluded something: keeps a
+    // caller that never passes --hold seeing byte-for-byte the same
+    // verdict shape as before this field existed (Copilot review on
+    // PR #3224), not just the same file writes.
+    ...(plan.heldTargets.length > 0 ? { heldTargets: plan.heldTargets } : {}),
     filesChanged,
     written: canWrite && filesChanged > 0,
   };
