@@ -11,6 +11,7 @@ import {
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
+  normalizeSecondaryBotLoginList,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
 
@@ -2799,6 +2800,53 @@ export function computeSecondaryAdvisoryReviewSettlement(
   }
   return { settled: true, settledAt: latest.at, declined: false };
 }
+// #3186: folds each configured secondary advisory bot login's own
+// independent {@link computeSecondaryAdvisoryReviewSettlement} classification
+// into the single `{ settledAt, declined }` shape
+// `buildSecondaryQuietWindowStatus` consumes, so a repository that configures
+// more than one secondary login still gets exactly one quiet-window status.
+//
+// - Any login still pending (neither settled nor declined for this HEAD)
+//   keeps the caller on the full configured window: reports
+//   `{ settledAt: null, declined: false }`, the same shape
+//   `buildSecondaryQuietWindowStatus` already treats as "fall through to the
+//   ordinary unsettled-anchor path" when no settlement evidence exists.
+// - Otherwise, once every configured login has declined, reports
+//   `{ settledAt: null, declined: true }` -- the zero-wait branch.
+// - Otherwise (no login pending, at least one settled), reports the LATEST
+//   `settledAt` among the settled logins. A declined sibling never extends
+//   this wait -- only a still-PENDING sibling does, via the first bullet.
+//
+// An empty `secondaryBotLogins` list reports the pre-existing unconfigured
+// shape (`{ settledAt: null, declined: false }`), matching
+// `computeSecondaryAdvisoryReviewSettlement`'s own unconfigured default.
+export function foldSecondaryAdvisoryReviewSettlements(
+  comments,
+  { secondaryBotLogins, headCommittedAt },
+) {
+  if (secondaryBotLogins.length === 0) {
+    return { settledAt: null, declined: false };
+  }
+  const settlements = secondaryBotLogins.map((secondaryBotLogin) =>
+    computeSecondaryAdvisoryReviewSettlement(comments, {
+      secondaryBotLogin,
+      headCommittedAt,
+    }),
+  );
+  if (settlements.some((entry) => !entry.settled && !entry.declined)) {
+    return { settledAt: null, declined: false };
+  }
+  const settledAts = settlements
+    .filter((entry) => entry.settled && entry.settledAt !== null)
+    .map((entry) => entry.settledAt);
+  if (settledAts.length === 0) {
+    return { settledAt: null, declined: true };
+  }
+  const latestSettledAt = settledAts.reduce((latest, current) =>
+    compareIsoTimestamps(current, latest) > 0 ? current : latest,
+  );
+  return { settledAt: latestSettledAt, declined: false };
+}
 // #1182 Match trusted machine advisory dispositions to the advisory-bot stickies
 // they address, so a disposition posted by a trusted-marker actor who is NOT a
 // resolved IDD agent (e.g. a second trusted session) is honored without being
@@ -3792,38 +3840,39 @@ export function buildAdvisoryWaitSummary(
   };
   const outcome = evaluateAdvisoryWaitOutcome(outcomeInput);
   const f3Outcome = evaluateAdvisoryWaitF3Outcome(outcomeInput);
-  // Optional NON-GATING secondary advisory bot (issue #1099). Resolved AFTER
-  // `outcome` and never fed into `outcomeInput`, so it can never satisfy or
-  // alter the primary advisory-wait gate (contract a). A secondary equal to the
-  // primary is treated as unconfigured (misconfiguration guard).
-  const secondaryBotLogin = String(options.secondaryBotLogin ?? '')
-    .trim()
-    .toLowerCase();
-  const secondaryConfigured =
-    secondaryBotLogin !== '' && secondaryBotLogin !== primaryBotLogin;
-  // Once per HEAD, read from the GitHub timeline (a `review_requested` for the
-  // secondary after the current HEAD's `committed` event) — no marker is posted
-  // for the secondary, so it never receives a primary `advisory-wait` marker
-  // and never burns the primary cap (contract b).
-  const secondaryAlreadyRequested =
-    secondaryConfigured &&
-    computeSecondaryRequestedForHead(
-      timelineEvents,
-      prHeadSha,
-      secondaryBotLogin,
-    );
-  // Request the secondary once per HEAD only when a follow-up pass is genuinely
-  // needed (the primary has not reviewed HEAD) AND the primary is
+  // Optional NON-GATING secondary advisory bot(s) (issue #1099; #3186 for the
+  // list form). Resolved AFTER `outcome` and never fed into `outcomeInput`,
+  // so it/they can never satisfy or alter the primary advisory-wait gate
+  // (contract a). The plural `secondaryBotLogins` option wins when present;
+  // the legacy singular `secondaryBotLogin` is treated as its one-element
+  // form for existing callers. Any entry equal to the primary is dropped
+  // (misconfiguration guard) by `normalizeSecondaryBotLoginList`.
+  const secondaryBotLogins = normalizeSecondaryBotLoginList(
+    options.secondaryBotLogins ?? options.secondaryBotLogin,
+    primaryBotLogin,
+  );
+  // Request each resolved login once per HEAD only when a follow-up pass is
+  // genuinely needed (the primary has not reviewed HEAD) AND the primary is
   // cap-exhausted, or stalled/rate-limited (the wait was closed by the elapsed
   // settle/pending window rather than by a HEAD review). REQUEST_NEEDED (primary
   // still requestable), WAIT (still in-window), and RECOVERY_NEEDED (active
   // recovery) deliberately do not trigger the supplement.
-  const secondaryRequestNeeded =
-    secondaryConfigured &&
-    !secondaryAlreadyRequested &&
+  const secondaryTriggerMet =
     lastCopilotCommit !== prHeadSha &&
     (outcome === 'CAP_EXHAUSTED' ||
       (outcome === 'SATISFIED' && markerSummary.sameHeadMarkerPresent));
+  // Once per HEAD per login, read from the GitHub timeline (a
+  // `review_requested` for that login after the current HEAD's `committed`
+  // event) — no marker is posted for any secondary, so none of them ever
+  // receive a primary `advisory-wait` marker or burn the primary cap
+  // (contract b).
+  const secondaryRequestLogins = secondaryTriggerMet
+    ? secondaryBotLogins.filter(
+        (login) =>
+          !computeSecondaryRequestedForHead(timelineEvents, prHeadSha, login),
+      )
+    : [];
+  const secondaryRequestNeeded = secondaryRequestLogins.length > 0;
   return {
     protocolVersion: '1',
     prHeadSha,
@@ -3832,7 +3881,12 @@ export function buildAdvisoryWaitSummary(
     copilotPendingCoversHead,
     outcome,
     f3Outcome,
-    secondaryBotLogin: secondaryConfigured ? secondaryBotLogin : '',
+    // #3186: authoritative only when exactly one login is configured; '' on
+    // both 0 (unconfigured) and >1 (use secondaryBotLogins instead).
+    secondaryBotLogin:
+      secondaryBotLogins.length === 1 ? secondaryBotLogins[0] : '',
+    secondaryBotLogins,
+    secondaryRequestLogins,
     secondaryRequestNeeded,
     now,
     requestCap,
@@ -7232,6 +7286,19 @@ export function buildPreMergeReadinessSummary(
   const prAuthorLogin = String(options.prAuthorLogin ?? '')
     .trim()
     .toLowerCase();
+  // Normalize + default `options.primaryBotLogin` the same way
+  // `buildAdvisoryWaitSummary` does (`primaryBotLogin` local const there) --
+  // an omitted/blank option must still resolve to the Copilot default, not
+  // silently drop out of the reviewer-state union below or the secondary
+  // login exclusion just below it. Hoisted above `branchReviewRequirements`
+  // (rather than declared only where `reviewerStateAdvisoryBotLogins` uses
+  // it) so the secondary-bot-login resolution above the review-currency
+  // section can reuse it too, instead of an independent second copy of this
+  // one-liner drifting out of sync with it.
+  const resolvedPrimaryBotLogin =
+    String(options.primaryBotLogin ?? '')
+      .trim()
+      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
     branchProtection,
@@ -7259,21 +7326,29 @@ export function buildPreMergeReadinessSummary(
       dispositionAuthorLogins: iddAgentLogins,
     },
   );
-  // #2544: whether the configured secondary bot has already posted a
-  // genuine (non-notice) comment for the CURRENT HEAD -- reuses
+  // #2544/#3186: whether the configured secondary bot(s) have already
+  // posted a genuine (non-notice) comment for the CURRENT HEAD -- reuses
   // `options.advisoryConvergenceHeadCommittedAt` (the HEAD commit's own
   // `committedDate`, already resolved by the caller for the unrelated
   // advisory-convergence-deadline precondition below) rather than a second
   // fetch, since it is exactly "when did this HEAD land" either way.
-  const secondaryBotLogin = String(options.secondaryBotLogin ?? '')
-    .trim()
-    .toLowerCase();
-  const secondaryReviewSettlement = secondaryBotLogin
-    ? computeSecondaryAdvisoryReviewSettlement(comments, {
-        secondaryBotLogin,
-        headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
-      })
-    : { settled: false, settledAt: null, declined: false };
+  // `foldSecondaryAdvisoryReviewSettlements` combines every configured
+  // login's own independent classification into the single shape
+  // `buildSecondaryQuietWindowStatus` consumes -- see its own doc comment
+  // for the exact fold rule (any pending keeps the full window; all
+  // declined completes immediately; otherwise anchor on the latest genuine
+  // review).
+  const secondaryBotLogins = normalizeSecondaryBotLoginList(
+    options.secondaryBotLogins,
+    resolvedPrimaryBotLogin,
+  );
+  const secondaryReviewSettlement = foldSecondaryAdvisoryReviewSettlements(
+    comments,
+    {
+      secondaryBotLogins,
+      headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
+    },
+  );
   // #2335: stateless secondary-quiet-window gate, anchored on the same
   // non-ack-only activity ceiling `liveSnapshot.effective` already computes
   // for the review-currency ack-only carve-out below -- see
@@ -7344,19 +7419,13 @@ export function buildPreMergeReadinessSummary(
   // `buildActivitySnapshotSummary` and `summarizeRegularCommentsForGate`
   // (unrelated classification needs that must not change as a side effect).
   //
-  // Normalize + default `options.primaryBotLogin` the same way
-  // `buildAdvisoryWaitSummary` does a few lines below (`primaryBotLogin`
-  // local const there) -- an omitted/blank option must still resolve to the
-  // Copilot default, not silently drop out of the union. Without this, a
-  // caller that relies on defaulting (any caller other than this file's own
-  // `collectPreMergeReadiness`, which always resolves a non-empty value)
-  // would leave the bare `copilot` login unclassified here even though
-  // `isCopilotReviewerLogin` elsewhere already treats it as a genuine
-  // Copilot form (Copilot review, PR #1826).
-  const resolvedPrimaryBotLogin =
-    String(options.primaryBotLogin ?? '')
-      .trim()
-      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  // `resolvedPrimaryBotLogin` is hoisted above (near `prAuthorLogin`) so the
+  // secondary-bot-login resolution earlier in this function can reuse it too.
+  // Without this default, a caller that relies on defaulting (any caller
+  // other than this file's own `collectPreMergeReadiness`, which always
+  // resolves a non-empty value) would leave the bare `copilot` login
+  // unclassified here even though `isCopilotReviewerLogin` elsewhere already
+  // treats it as a genuine Copilot form (Copilot review, PR #1826).
   const reviewerStateAdvisoryBotLogins = normalizeTrustedMarkerLogins([
     ...advisoryBotLogins,
     resolvedPrimaryBotLogin,

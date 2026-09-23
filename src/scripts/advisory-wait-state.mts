@@ -12,7 +12,7 @@ import {
   DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
   readAdvisoryPrimaryBotLogin,
   readAdvisoryRecoveryCycleCap,
-  readAdvisorySecondaryBotLogin,
+  readAdvisorySecondaryBotLogins,
   readAdvisoryWaitPolicy,
   resolveEffectiveAdvisoryTerminalWindowMinutes,
   resolveProviderOutageTerminalWindowMinutes,
@@ -760,7 +760,7 @@ function main(): void {
   ]);
   const advisoryWaitPolicy = readAdvisoryWaitPolicy();
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
-  const secondaryBotLogin = readAdvisorySecondaryBotLogin();
+  const secondaryBotLogins = readAdvisorySecondaryBotLogins();
 
   // #2167: only pay for the optional GraphQL reviewRequests call when the
   // cheaper REST + timeline signals are both inconclusive -- mirrors
@@ -803,7 +803,7 @@ function main(): void {
       pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
-      secondaryBotLogin,
+      secondaryBotLogins,
       viewerLogin,
       configuredTrustedActors,
       collaboratorTrustEnabled,

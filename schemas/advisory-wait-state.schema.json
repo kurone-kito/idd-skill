@@ -13,6 +13,8 @@
     "outcome",
     "f3Outcome",
     "secondaryBotLogin",
+    "secondaryBotLogins",
+    "secondaryRequestLogins",
     "secondaryRequestNeeded",
     "now",
     "requestCap",
@@ -76,7 +78,21 @@
     },
     "secondaryBotLogin": {
       "type": "string",
-      "description": "Resolved OPTIONAL secondary advisory bot login (lower-cased), or empty when no secondary is configured. Non-gating supplement; never satisfies the primary advisory-wait gate."
+      "description": "Resolved OPTIONAL secondary advisory bot login (lower-cased), authoritative only when secondaryBotLogins resolves to exactly one entry; empty when no secondary is configured (secondaryBotLogins is empty) or more than one is configured (secondaryBotLogins is authoritative instead, #3186). Non-gating supplement; never satisfies the primary advisory-wait gate."
+    },
+    "secondaryBotLogins": {
+      "type": "array",
+      "description": "Resolved OPTIONAL secondary advisory bot login(s) (lower-cased, deduped case-insensitively, #3186), possibly empty when no secondary is configured. Authoritative source of the configured secondary logins; secondaryBotLogin is a single-login convenience mirror of this list.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "secondaryRequestLogins": {
+      "type": "array",
+      "description": "Subset of secondaryBotLogins that still needs a review request under the once-per-HEAD trigger (primary cap-exhausted or stalled/rate-limited, #3186), possibly empty. secondaryRequestNeeded is true exactly when this list is non-empty.",
+      "items": {
+        "type": "string"
+      }
     },
     "secondaryRequestNeeded": {
       "type": "boolean",
