@@ -23,6 +23,7 @@ scripts/autopilot-suitability.mjs linguist-generated=true
 scripts/branch-conflict-state.mjs linguist-generated=true
 scripts/branch-name.mjs linguist-generated=true
 scripts/build-ts.mjs linguist-generated=true
+scripts/bundle-root.mjs linguist-generated=true
 scripts/check-pnpm-boundary.mjs linguist-generated=true
 scripts/check-untracked-artifacts.mjs linguist-generated=true
 scripts/ci-wait-policy.mjs linguist-generated=true
