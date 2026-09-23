@@ -512,19 +512,19 @@ Before any mutating action in F3, apply the
    state, not an issue-worktree failure: never remove the issue worktree
    because of it.
 
-   Doing this before deletion (next step) lets WorkTrunk's merge-status
-   check, which reads the local `{development-branch}`, see the branch as
-   merged instead of reporting `branch_outcome: retained_unmerged` and
-   declining to delete it (`#2331`). This plain git operation is
-   unrelated to B1 Step 1's trusted-checkout concern — if
-   `{development-branch}` is not the repository's default branch, run
-   `git switch <default-branch>` once F4 completes or holds so the next
-   B1 finds the primary worktree on its trusted checkout.
-5. Run from the **primary worktree**, never from inside the worktree
-   being removed. Any removal (plain or `--force`) silently discards
+   Doing this before deletion lets WorkTrunk's merge-status check,
+   which reads the local `{development-branch}`, see the branch as
+   merged instead of reporting `branch_outcome: retained_unmerged`
+   (`#2331`). This plain git operation is unrelated to B1 Step 1's
+   trusted-checkout concern — if `{development-branch}` is not the
+   repository's default branch, run `git switch <default-branch>`
+   once F4 completes or holds so the next B1 finds it on the trusted
+   checkout.
+5. Run from the **primary worktree**, never inside the one being
+   removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
    commands to `<path>`. Inspect leftover files under a `-`
-   submodule path directly (not a repo).
+   submodule path (not a repo).
 
    Use `--untracked-files=normal` (not `all`). A clean submodule
    worktree can still hide a stash or unpushed commit:
@@ -538,38 +538,39 @@ Before any mutating action in F3, apply the
    Generated output is disposable only when a configured command
    reproduces it; preserve anything else. Copy secrets (e.g. `.env`)
    out — never commit or push them. Copy other work to a different
-   ref or path; delete `<branch-name>` next.
+   ref or path.
    Before each `git worktree remove`, `cd` to the surviving primary
    worktree; keep that cwd for every removal and remaining F4 work
    (branch/remote deletion, digest, revalidation, unclaim, and
    `gh`/helper calls). Before each removal, revalidate the claim and
    worktree lock (`idd-claim.instructions.md`); stop if either is not
-   ours. If it fails with `fatal: working trees containing submodules
-   cannot be moved or removed`, retry
-   `git worktree remove --force <path>` from that cwd only after
-   preserving anything worth keeping. Then remove the worktree, then
-   its branch:
+   ours. A shell in the removed worktree fails a `node` call with
+   `ENOENT` on `uv_cwd`, or — even after `git worktree remove`/`git
+   branch -d` succeeded — `gh`/`git` with "Unable to read current
+   working directory", skipping `unclaimed-by`; rerun from the
+   primary worktree. If it fails with `fatal: working trees
+   containing submodules cannot be moved or removed`, retry
+   `git worktree remove --force <path>` after preserving anything
+   worth keeping. Then:
 
    - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (the baseline permission profile
      denies `-D`; see `docs/permissions.md`). Local `{development-branch}`
-     was already fast-forwarded to the merge commit by the previous
-     step, so this should not fail with `error: the branch
-     '<branch-name>' is not fully merged`; if it still does,
-     investigate before retrying rather than assuming a stale local
-     `{development-branch}` is the cause.
+     was fast-forwarded in step 4, so this should not fail with
+     `error: the branch '<branch-name>' is not fully merged`; if it
+     still does, investigate rather than assume a stale local
+     `{development-branch}`.
 
 6. If GitHub auto-delete is disabled: delete the remote branch too.
-   (WorkTrunk may be used for steps 5–6, the deletion steps —
-   step 4's local `{development-branch}` update is a plain git
-   operation, not a WorkTrunk one.)
+   (WorkTrunk may run steps 5–6; step 4's local `{development-branch}`
+   update stays a plain git operation, not a WorkTrunk one.)
 7. Re-validate the active claim before each mutation below. If it
    still uses your `{claim-id}`, upsert the claimed issue's own digest
    with `Phase: F4 complete`, `Claim: none`, `Branch: none`, `Open
    blockers: none`, `Next action: none`, and `Authoritative by`
-   pointing to the merge commit — mirroring F3's own PR-digest upsert
-   but targeting the issue instead, so a closed/merged issue never
-   stays stuck at a stale digest phase (`#3079`). Proceed only when
+   pointing to the merge commit — mirroring F3's own PR-digest
+   upsert, but for the issue, so a closed/merged issue never sticks
+   at a stale digest phase (`#3079`). Proceed only when
    the upsert reports `create`, `update`, or `noop`; on `duplicate` or
    any other failure, keep the claim, re-validate, then post a hold
    comment with the helper output, and stop for repair. Re-validate
