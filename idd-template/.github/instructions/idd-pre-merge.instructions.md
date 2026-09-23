@@ -75,7 +75,7 @@ The advisory-wait window is Copilot-only
 (`idd-advisory-wait.instructions.md`) and does not cover non-Copilot
 `advisoryBotLogins`. That is this window, not all of F2: configured
 `secondaryQuietWindow` is the quiet-window blocker below (until
-`elapsed: true`, not until `secondaryBotLogin` reviews HEAD).
+`elapsed: true`, not until `secondaryBotLogin`'s logins review HEAD).
 F2/F3 MUST NOT merge on bare CI-green: **Review currency** must
 confirm a fresh `review-watermark` covers latest activity, so a late
 non-Copilot finding still returns to E1.
