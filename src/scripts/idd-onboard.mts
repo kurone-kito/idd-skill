@@ -2932,16 +2932,27 @@ const RECORD_POLICY_DOC_ROWS: readonly RecordPolicyDocRow[] = [
  * exported and shared, per this issue's own out-of-scope note against a
  * general-purpose Markdown-wrapping utility.
  *
- * Splits on whitespace *runs* (`/(\s+)/`, capturing) rather than a bare
- * `' '`, and re-emits each run verbatim wherever it does not become a
- * line break. A recorded freeform value (e.g. `credential-scope`) can
- * contain internal multiple spaces, and it sits inside an inline code
- * span in the rendered line, so collapsing them would silently change
- * the recorded content rather than only inserting line breaks -- a
- * real defect Copilot review caught (#3227 review), not merely a
- * cosmetic one, since the issue's own acceptance criteria requires the
- * document's existing content to remain unchanged after wrapping. Only
- * the one whitespace run actually replaced by a line break is dropped.
+ * Groups the line into **units** on a bare single space only (never a
+ * bare `' '`.split that would collapse a multi-space run): a run of two
+ * or more spaces glues its neighboring words into one indivisible unit
+ * instead of being treated as a break point. A recorded freeform value
+ * (e.g. `credential-scope`, rendered inside an inline code span) can
+ * contain internal multiple spaces, and silently collapsing them to one
+ * space would change the recorded content rather than only inserting
+ * line breaks -- a real defect Copilot review caught (#3227 review),
+ * not merely a cosmetic one, since the issue's own acceptance criteria
+ * requires existing content to remain unchanged after wrapping. A lone
+ * space is always content-neutral to swap for a line break (CommonMark
+ * renders a line ending inside a code span as one space too), so
+ * ordinary single-spaced content wraps exactly as it did before this
+ * grouping step existed. Wrapping the resulting units is then the same
+ * greedy pass as any plain word-wrap: a multi-space-glued unit is
+ * wider than a normal word, so it can trip the same pre-existing
+ * single-long-token exception below (still never force-cut), but the
+ * greedy pass still breaks *before* it whenever that keeps the
+ * preceding line within `width` -- unlike naively gluing it onto
+ * whatever was already accumulated, which could carry needless
+ * overflow forward (#3227 review round 2).
  */
 function wrapPolicyDocLine(line: string, width = 80): string {
   if (line.length <= width) {
@@ -2949,37 +2960,44 @@ function wrapPolicyDocLine(line: string, width = 80): string {
   }
   const marker = /^-\s+/.exec(line)?.[0] ?? '';
   const continuationIndent = ' '.repeat(marker.length);
-  // Odd-indexed entries are the captured whitespace runs; even-indexed
-  // entries are the text between them (either may be '').
-  const tokens = line.slice(marker.length).split(/(\s+)/);
-  const wrapped: string[] = [];
-  let current = '';
-  for (const token of tokens) {
+  const units: string[] = [];
+  let unit = '';
+  for (const token of line.slice(marker.length).split(/(\s+)/)) {
     if (token === '') {
       continue;
     }
-    if (/^\s+$/.test(token)) {
-      // Never a break point on its own; carried verbatim unless the
-      // following text token forces a break, in which case it is
-      // dropped below (consumed by the line break it becomes).
-      current += token;
-      continue;
+    if (token === ' ') {
+      if (unit !== '') {
+        units.push(unit);
+        unit = '';
+      }
+    } else {
+      // Ordinary text, or a 2+ space run: both stay glued into the
+      // current unit, since only a lone space is a break point.
+      unit += token;
     }
+  }
+  if (unit !== '') {
+    units.push(unit);
+  }
+  const wrapped: string[] = [];
+  let current = '';
+  for (const word of units) {
     const prefixLength =
       wrapped.length === 0 ? marker.length : continuationIndent.length;
-    const candidate = current + token;
-    if (prefixLength + candidate.length > width && current.trim().length > 0) {
+    const candidate = current.length === 0 ? word : `${current} ${word}`;
+    if (prefixLength + candidate.length > width && current.length > 0) {
       wrapped.push(
-        `${wrapped.length === 0 ? marker : continuationIndent}${current.replace(/\s+$/, '')}`,
+        `${wrapped.length === 0 ? marker : continuationIndent}${current}`,
       );
-      current = token;
+      current = word;
     } else {
       current = candidate;
     }
   }
   if (current.length > 0) {
     wrapped.push(
-      `${wrapped.length === 0 ? marker : continuationIndent}${current.replace(/\s+$/, '')}`,
+      `${wrapped.length === 0 ? marker : continuationIndent}${current}`,
     );
   }
   return wrapped.join('\n');

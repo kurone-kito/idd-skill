@@ -5261,6 +5261,71 @@ test('bin/idd-onboard.mjs --record-policy --write-policy-doc preserves internal 
   assert.match(doc, /every {2}quarter/);
 });
 
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc keeps a wrap-required word before a multi-space run on its own line within 80 columns (#3227 review round 2)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  // A 60-character run of "w", then a single-spaced "x", then a
+  // double-spaced "yyyyyyyyyy z" -- constructed so the greedy wrap
+  // must decide whether to break *before* the unbreakable "x  yyyyyyyyyy"
+  // unit (keeping every line within width) or glue that unit onto
+  // whatever was already accumulated (overflowing width unnecessarily).
+  // Copilot review's round-2 pass flagged that the first fix attempt did
+  // the latter; this asserts the actual bound, not just that the double
+  // space survives (the "preserves internal multiple spaces" test above
+  // already covers survival).
+  answers['credential-scope'] = `${'w'.repeat(60)} x  yyyyyyyyyy z`;
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const docPath = join(root, 'policy-doc.md');
+
+  const { status } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+  ]);
+  assert.equal(status, 0);
+  const doc = readFileSync(docPath, 'utf8');
+  assert.match(doc, /x {2}yyyyyyyyyy/);
+  for (const line of doc.split('\n')) {
+    assert.ok(
+      line.length <= 80,
+      `expected every line to be <= 80 columns, got ${line.length}: ${line}`,
+    );
+  }
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc still emits a lone over-width unit whole when it cannot be split further (#3227 review round 2)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  // A 68-character run of "a" glued to "verifythis" by a double space
+  // forms a single unbreakable unit wider than 80 columns on its own --
+  // the pre-existing single-long-token exception (a lone word longer
+  // than `width` is emitted whole rather than force-cut) now also
+  // covers a multi-space-glued unit, not only a literal single word.
+  answers['credential-scope'] = `${'a'.repeat(68)}  verifythis`;
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  const doc = verdict.policyDocument as string;
+  assert.match(doc, new RegExp(`${'a'.repeat(68)} {2}verifythis`));
+});
+
 test("bin/idd-onboard.mjs --record-policy --write-policy-doc output passes the template's own markdownlint config (#3227)", (t) => {
   if (!MARKDOWNLINT_BIN) {
     // Expected on the bare-node lane (lint.yml) -- see the block comment
