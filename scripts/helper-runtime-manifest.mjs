@@ -117,6 +117,15 @@ const EXTRA_RUNTIME_FILES = new Map([
 ]);
 const HELPER_COMMANDS = [
   {
+    id: 'advisory-comment-debounce',
+    scriptName: 'idd:advisory-comment-debounce',
+    binName: 'idd-advisory-comment-debounce',
+    entryPath: 'scripts/advisory-comment-debounce.mjs',
+    vendoredCommand: 'node scripts/advisory-comment-debounce.mjs',
+    description:
+      'Decide whether a debounce-guarded workflow rerun step should skip its own --apply call because a newer IDD-originated PR comment or review event has already landed.',
+  },
+  {
     id: 'advisory-convergence',
     scriptName: 'idd:advisory-convergence',
     binName: 'idd-advisory-convergence',
