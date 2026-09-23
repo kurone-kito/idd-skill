@@ -660,7 +660,12 @@ for the A4 Step 2 high-contention shared-file check (see
 Populate it accurately rather than as a loose reading aid for humans.
 Optional for an orphan or roadmap issue; required for a
 [child issue under a roadmap](#child-issue-under-a-roadmap) (see
-[Required draft content](#required-draft-content) below).
+[Required draft content](#required-draft-content) below). For a child,
+the section parsing to zero paths -- heading missing or present but
+empty -- disqualifies it from `ready`, unless it also carries an
+`authoring-bucket: needs-decision`/`blocked-by-human` marker or a
+suitability score of `1` (`audit-authored-issue`'s
+`candidate-files-not-empty` check).
 
 - List each candidate file path inside backticks, one path (or one
   bullet) per line — for example `` - `src/scripts/idd-onboard.mts` ``.

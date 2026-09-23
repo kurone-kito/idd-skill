@@ -16,6 +16,7 @@ import { collaboratorPermission } from './collaborator-permission.mjs';
 import {
   DEFAULT_BUNDLE_IDS,
   DEFAULT_MANIFEST_PATH,
+  hasCandidateFilesHeading,
   parseCandidateFiles,
   resolveHighContentionFiles,
 } from './discover-shared-file-overlap.mjs';
@@ -2213,6 +2214,29 @@ export function checkActionability(context) {
     /\bAcceptance Criteria\b|\bOutput\b|\bDeliverables\b/i.test(body);
   const hasChecklist = /^\s*[-*]\s+\[[ xX]\]/m.test(body);
   const hasSteps = /^\s*\d+\.\s+/m.test(body);
+  // #3191 (field-feedback gist round 34, finding 1): a `## Candidate
+  // files` heading that IS present but parses to zero paths (the
+  // observed bug -- an unquoted prose bullet under an existing heading
+  // stating the task "does not edit a repository file") must fail
+  // Actionability even when the body also carries a well-formed
+  // `## Acceptance Criteria` heading -- checked before the
+  // hasAcceptance/hasChecklist/hasSteps early-pass below so that heading's
+  // presence alone can no longer paper over an empty candidate-files
+  // section. A body with NO `## Candidate files` heading at all is
+  // unaffected (an orphan issue legitimately omits the optional section,
+  // per contract.md) -- `hasCandidateFilesHeading` distinguishes that
+  // case from "present but empty", which `parseCandidateFiles` alone
+  // cannot (both parse to zero paths).
+  if (
+    hasCandidateFilesHeading(body) &&
+    parseCandidateFiles(body).length === 0
+  ) {
+    return {
+      pass: false,
+      evidence:
+        'The ## Candidate files section is present but parses to zero paths.',
+    };
+  }
   if (hasAcceptance || hasChecklist || hasSteps) {
     return {
       pass: true,

@@ -3810,6 +3810,71 @@ test('actionability accepts checklist without Scope/Purpose headings', () => {
   assert.equal(result.pass, true);
 });
 
+// --- #3191: a present-but-empty ## Candidate files section fails
+// Actionability even alongside a well-formed Acceptance Criteria heading
+// (the reported gap: the observed body used an unquoted prose bullet
+// under an existing "## Candidate files" heading, so the parser found
+// zero paths while checkActionability's own hasAcceptance/hasChecklist
+// signals still passed). ------------------------------------------------
+
+test('actionability fails when ## Candidate files is present but parses to zero paths, even with a well-formed Acceptance Criteria heading', () => {
+  const result = checkActionability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] tests pass
+
+## Candidate files
+
+- This task does not edit a repository file; see #100 instead.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /Candidate files/);
+});
+
+test('actionability is unaffected when ## Candidate files is absent entirely (legitimate orphan omission)', () => {
+  const result = checkActionability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria\n- [ ] tests pass\n`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('actionability still passes when ## Candidate files parses to at least one real path', () => {
+  const result = checkActionability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] tests pass
+
+## Candidate files
+
+- \`src/scripts/example.mts\`
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('actionability fails on an empty ## Candidate files section even with no Acceptance Criteria heading', () => {
+  // The new zero-paths check runs before the hasAcceptance/hasChecklist/
+  // hasSteps early-pass, so a body with neither signal still reports the
+  // Candidate-files-specific evidence rather than falling through to the
+  // pre-existing generic "lacks concrete actionable scope" message.
+  const result = checkActionability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Candidate files\n\nNo repository file needs editing here.\n`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /Candidate files/);
+});
+
 // --- #2767: structural-evidence demotion ------------------------------------
 
 const ALL_STRUCTURAL_SIGNALS: StructuralEvidence = {
