@@ -22,6 +22,23 @@ const CODERABBIT_ALREADY_REVIEWED_ACK =
   '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits.\n' +
   'This command is applicable only when automatic reviews are paused.\n\n' +
   '</details>';
+// #3193 (gist round 35): a distinct CodeRabbit reply shape -- a
+// review-command acknowledgement followed by a conclusive "Review rate
+// limited." decline in the same "Action not completed" wrapper #3146
+// uses, instead of "Already reviewed the last commit."
+// The promise sentence deliberately does not contain the word "review" --
+// regression coverage for a C1 delegate finding on this same change: the
+// matcher must not require that specific token (#3193).
+const CODERABBIT_RATE_LIMITED_ACK =
+  '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
+  '<!-- CodeRabbit review command invocation: v2:def456 -->\n' +
+  'Sure, taking a look at this now.\n\n' +
+  '<details>\n' +
+  '<summary>⚠️ Action not completed</summary>\n\n' +
+  'Review rate limited.\n\n' +
+  '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits.\n' +
+  'This command is applicable only when automatic reviews are paused.\n\n' +
+  '</details>';
 const HEAD_COMMITTED_AT = '2026-09-02T12:00:00Z';
 
 function comment(login: string, body: string, createdAt: string) {
@@ -169,6 +186,27 @@ test('computeSecondaryAdvisoryReviewSettlement: no matching comments -> not sett
 test('computeSecondaryAdvisoryReviewSettlement: only a rate-limit notice at HEAD -> declined (#2547, no corroborating commit status checked)', () => {
   const result = computeSecondaryAdvisoryReviewSettlement(
     [comment('coderabbitai[bot]', CODERABBIT_NOTICE, '2026-09-02T12:05:00Z')],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: true,
+  });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: review-command rate-limited acknowledgement at HEAD -> declined (#3193)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'coderabbitai[bot]',
+        CODERABBIT_RATE_LIMITED_ACK,
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
     {
       secondaryBotLogin: 'coderabbitai[bot]',
       headCommittedAt: HEAD_COMMITTED_AT,

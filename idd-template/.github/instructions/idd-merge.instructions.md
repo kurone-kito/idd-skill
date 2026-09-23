@@ -482,14 +482,11 @@ Before any mutating action in F3, apply the
 4. Concurrent workers sharing one clone: serialize this step's fetch
    and step 5's `worktree remove` behind the
    [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock).
-   From the **primary worktree** — the worktree being cleaned up is
-   still checked out to its issue branch at this point, so running
-   this elsewhere would fast-forward the wrong branch — switch to
-   `{development-branch}` (the PR's own validated target branch;
-   resolved in `idd-work.instructions.md`'s B1
-   [Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch)
-   step) explicitly before fast-forwarding it, rather than assuming it
-   is already checked out there:
+   From the **primary worktree** (the issue worktree is still on its
+   branch, so running elsewhere would fast-forward the wrong branch),
+   switch to `{development-branch}` (the PR's validated target; see B1
+   [Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch))
+   and fast-forward it:
 
    ```sh
    git fetch origin {development-branch}
@@ -497,22 +494,27 @@ Before any mutating action in F3, apply the
    git merge --ff-only origin/{development-branch}
    ```
 
-   The switch falls back to creating a local tracking branch when the
-   primary worktree has no local `{development-branch}` yet (expected
-   whenever it differs from the repository default, since B1 branches
-   new worktrees straight from `origin/{development-branch}` without
-   checking it out locally).
+   The switch falls back to a local tracking branch when the primary
+   worktree has none yet (expected for a non-default
+   `{development-branch}`: B1 branches worktrees from its origin ref).
 
-   This ordering makes WorkTrunk's merge-status check (which reads
-   the local, not origin, `{development-branch}`) see the branch as
-   already merged, avoiding `branch_outcome: retained_unmerged`
-   (`#2331`); this checks out the merged branch's own target,
-   unrelated to B1 Step 1's trusted-checkout-source concern. If
-   `{development-branch}` differs from the repository's
-   default branch, switch the primary worktree back to it
-   (`git switch <default-branch>`) once the remaining F4 cleanup steps
-   complete, so the next B1 pass finds the primary worktree on its
-   expected trusted checkout.
+   If the switch or fast-forward refuses because dirty primary-worktree
+   paths would be overwritten, re-validate the claim, hold per
+   [Hold / suspend](idd-overview-appendix.instructions.md#hold--suspend)
+   as `primary-worktree-dirty` (resume: the operator cleans those paths
+   — never stash or discard them yourself — then re-run from this step
+   through step 7), and stop before step 5. This is primary-worktree
+   state, not an issue-worktree failure: never remove the issue worktree
+   because of it.
+
+   Doing this before deletion lets WorkTrunk's merge-status check,
+   which reads the local `{development-branch}`, see the branch as
+   merged instead of reporting `branch_outcome: retained_unmerged`
+   (`#2331`). This plain git operation is unrelated to B1 Step 1's
+   trusted-checkout concern — if `{development-branch}` is not the
+   repository's default branch, run `git switch <default-branch>`
+   once F4 completes or holds so the next B1 finds it on the trusted
+   checkout.
 5. Run from the **primary worktree**, never inside the one being
    removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
@@ -537,36 +539,33 @@ Before any mutating action in F3, apply the
    (branch/remote deletion, digest, revalidation, unclaim, and
    `gh`/helper calls). Before each removal, revalidate the claim and
    worktree lock (`idd-claim.instructions.md`); stop if either is not
-   ours. A leftover shell in the removed worktree fails the next
-   `node` call with `ENOENT` on `uv_cwd`, or `gh`/`git` with "Unable
-   to read current working directory" — possibly after `git worktree
-   remove`/`git branch -d` succeeded, skipping `unclaimed-by`. `cd`
-   to the primary worktree and rerun, posting the release if
-   skipped. If it fails with `fatal: working trees containing submodules
-   cannot be moved or removed`, retry
-   `git worktree remove --force <path>` from that cwd only after
-   preserving anything worth keeping. Then:
+   ours. A shell in the removed worktree fails a `node` call with
+   `ENOENT` on `uv_cwd`, or — even after `git worktree remove`/`git
+   branch -d` succeeded — `gh`/`git` with "Unable to read current
+   working directory", skipping `unclaimed-by`; rerun from the
+   primary worktree. If it fails with `fatal: working trees
+   containing submodules cannot be moved or removed`, retry
+   `git worktree remove --force <path>` after preserving anything
+   worth keeping. Then:
 
    - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (the baseline permission profile
      denies `-D`; see `docs/permissions.md`). Local `{development-branch}`
-     was already fast-forwarded to the merge commit by the previous
-     step, so this should not fail with `error: the branch
-     '<branch-name>' is not fully merged`; if it still does,
-     investigate before retrying rather than assuming a stale local
-     `{development-branch}` is the cause.
+     was fast-forwarded in step 4, so this should not fail with
+     `error: the branch '<branch-name>' is not fully merged`; if it
+     still does, investigate rather than assume a stale local
+     `{development-branch}`.
 
 6. If GitHub auto-delete is disabled: delete the remote branch too.
-   (WorkTrunk may be used for steps 5–6, the deletion steps —
-   step 4's local `{development-branch}` update is a plain git
-   operation, not a WorkTrunk one.)
+   (WorkTrunk may run steps 5–6; step 4's local `{development-branch}`
+   update stays a plain git operation, not a WorkTrunk one.)
 7. Re-validate the active claim before each mutation below. If it
    still uses your `{claim-id}`, upsert the claimed issue's own digest
    with `Phase: F4 complete`, `Claim: none`, `Branch: none`, `Open
    blockers: none`, `Next action: none`, and `Authoritative by`
-   pointing to the merge commit — mirroring F3's own PR-digest upsert
-   but targeting the issue instead, so a closed/merged issue never
-   stays stuck at a stale digest phase (`#3079`). Proceed only when
+   pointing to the merge commit — mirroring F3's own PR-digest
+   upsert, but for the issue, so a closed/merged issue never sticks
+   at a stale digest phase (`#3079`). Proceed only when
    the upsert reports `create`, `update`, or `noop`; on `duplicate` or
    any other failure, keep the claim, re-validate, then post a hold
    comment with the helper output, and stop for repair. Re-validate

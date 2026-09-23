@@ -2706,6 +2706,31 @@ test('idd-merge.instructions.md carries zero bare `main` branch mentions (#2274,
   assert.deepEqual(findUnallowedMainLines(text, NO_MAIN_MENTIONS_ALLOWED), []);
 });
 
+test('idd-merge.instructions.md F4 step 4 holds on a dirty primary worktree without removing the issue worktree (#3192)', () => {
+  const text = readText(
+    'idd-template/.github/instructions/idd-merge.instructions.md',
+  );
+  const start = text.indexOf(
+    '4. Concurrent workers sharing one clone',
+    text.indexOf('## F4'),
+  );
+  const end = text.indexOf('\n5. Run from the **primary worktree**', start);
+  assert.ok(start >= 0 && end > start, 'F4 step 4 boundaries not found');
+  const step4 = text.slice(start, end);
+  // \s+ between words tolerates a Markdown reflow (dprint) that moves a
+  // wrap point mid-phrase without changing the semantic content.
+  assert.match(step4, /`primary-worktree-dirty`/);
+  assert.match(
+    step4,
+    /\(idd-overview-appendix\.instructions\.md#hold--suspend\)/,
+  );
+  assert.match(step4, /stop\s+before\s+step\s+5/);
+  assert.match(
+    step4,
+    /never\s+remove\s+the\s+issue\s+worktree\s+because\s+of\s+it/,
+  );
+});
+
 test('idd-work.instructions.md confines every bare `main` mention to the B1 trusted-checkout contract (#2274)', () => {
   const text = readText(
     'idd-template/.github/instructions/idd-work.instructions.md',
