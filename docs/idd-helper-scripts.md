@@ -513,6 +513,20 @@ future inventory reviews do not need to re-infer their role from code.
 - `scripts/phase-id-resolver.mjs` (`idd-phase-id-resolver`) — phase ID
   normalization utility; resolves canonical phase IDs from aliases and
   validates token format.
+- `scripts/verify-import-mirror.mjs` for proving a vendoring commit is a
+  pure mirror of an upstream commit: diffs one target commit
+  (`--target-ref`, default `HEAD`) against its parent baseline and
+  classifies each added/modified/deleted path against the corresponding
+  path in an upstream checkout (`--upstream-path`) or ref
+  (`--upstream-ref`, optionally `--upstream-remote`), using five rules —
+  exact match with a narrow generated-banner-only tolerance (scoped to a
+  caller-supplied `--generated-dir`; never active by default), structural
+  JSON comparison, Markdown-only prose-reflow tolerance, git file-mode
+  comparison, and deletion-matches-upstream recognition. Exits non-zero on
+  any genuine mismatch (referenced in
+  [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
+  Source-repo internal helper; not distributed via the package-manager /
+  ephemeral-npx profiles.
 
 ### Discover Roadmap Graph Contract
 

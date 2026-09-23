@@ -221,6 +221,7 @@ const COVERED_HELPERS = [
   'suitability-close-execute',
   'suitability-triage',
   'sweep-authoring-markers',
+  'verify-import-mirror',
   'verify-install-deps',
   'verify-workshop-integrity',
 ] as const;
