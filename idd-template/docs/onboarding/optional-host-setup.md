@@ -431,15 +431,15 @@ workflow turns "Copilot's review converged on the current PR HEAD" from
 an instruction the execution model must choose to honor into a
 status check GitHub itself can enforce. It is opt-in — the template
 already mirrors the workflow at
-[`idd-template/.github/workflows/idd-advisory-convergence.yml`](../../.github/workflows/idd-advisory-convergence.yml)
+[`idd-template/.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/v0.12.2/idd-template/.github/workflows/idd-advisory-convergence.yml)
 and its comment-refresh companion
-[`idd-template/.github/workflows/idd-advisory-convergence-comment.yml`](../../.github/workflows/idd-advisory-convergence-comment.yml);
-copy both files into your repository's `.github/workflows/` to
-enable it. Register only the required job id
-`idd-advisory-convergence` as a status check — the companion is
-non-required. They are not wired in automatically by importing the
-rest of `idd-template/`, since adding a new required-status-check-able
-workflow is a deliberate adopter decision, not a default.
+[`idd-template/.github/workflows/idd-advisory-convergence-comment.yml`](https://github.com/kurone-kito/idd-skill/blob/v0.12.2/idd-template/.github/workflows/idd-advisory-convergence-comment.yml);
+copy both files into `.github/workflows/`, then drop the transitional
+`pull_request` trigger (below) before registering only the required
+job id `idd-advisory-convergence` — the companion is non-required.
+Neither is wired in by importing the rest of `idd-template/`, since a
+new required-status-check-able workflow is a deliberate adopter
+decision, not a default.
 
 Adjust the command to your helper-runtime profile, and the
 `actions/checkout` version if needed — the mirrored file intentionally
@@ -594,11 +594,12 @@ drives every live GitHub API call the script makes (reviews, threads,
 comments), independent of what is checked out locally, so pinning the
 checkout to the trusted branch costs nothing functionally.
 
-Two automatic trigger types keep the required verdict current:
-`pull_request` for the normal push case, and `pull_request_target` as
-its tamper-resistant counterpart (see Trusted-code checkout above --
-a same-repository PR cannot edit `pull_request_target`'s own copy of
-this workflow file, unlike `pull_request`). Review-thread comments are
+Two automatic trigger types keep the required verdict current for now
+(see below): `pull_request` for the normal push case, and
+`pull_request_target` as its tamper-resistant counterpart (see
+Trusted-code checkout above -- a same-repository PR cannot edit
+`pull_request_target`'s own copy of this workflow file, unlike
+`pull_request`). Review-thread comments are
 **not** on that required job, and neither is Copilot's review
 submission (`pull_request_review`) — both instead refresh the
 existing HEAD-associated required run from the non-required companion
@@ -643,6 +644,19 @@ Copilot threads still need an IDD disposition;
 Repositories that want human-led or gradual IDD adoption should
 leave the check unregistered until they intend the Copilot-advisory
 loop.
+
+**Drop the transitional `pull_request` trigger.** The mirrored
+workflow's `on:` block keeps `pull_request` active only as a
+**transitional** trigger: a same-repository PR can edit its own copy
+of the workflow to force its required check green, unlike
+`pull_request_target`. CODEOWNERS above is a narrowing, not
+eliminating, mitigation meanwhile. Wait until `pull_request_target`
+has run cleanly (e.g. ten PRs or two weeks, zero bypass incidents --
+pick and record a threshold), drop `pull_request`, keeping only
+`pull_request_target` (plus `workflow_dispatch`/`workflow_call`), then
+register the required status check below -- never before. Issue
+[kurone-kito/idd-skill#3230](https://github.com/kurone-kito/idd-skill/issues/3230)
+tracks this gap (observed 2026-09, two review bots).
 
 **Register it as a required status check.** Hosting the workflow alone
 does not block merge — a maintainer must separately register
