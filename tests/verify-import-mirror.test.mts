@@ -322,6 +322,42 @@ test('rule 2 fail (Copilot review, PR #3225): a real value change to null never 
   assert.equal(result.contentClass, 'content-mismatch');
 });
 
+test('canonicalizeJson returns null for an integer literal outside the safe-integer range (Copilot review, PR #3225)', () => {
+  // Regression: JSON.parse represents every JSON number as an IEEE-754
+  // double, which cannot distinguish 9007199254740993 from
+  // 9007199254740992 once past Number.MAX_SAFE_INTEGER -- both parse to
+  // the same double.
+  assert.equal(canonicalizeJson('{"x":9007199254740993}'), null);
+  assert.equal(canonicalizeJson('{"x":-9007199254740993}'), null);
+  assert.notEqual(canonicalizeJson('{"x":9007199254740991}'), null);
+  // A digit sequence inside a STRING value is never numerically parsed,
+  // so it carries no precision-loss risk and must not trip this check.
+  assert.notEqual(canonicalizeJson('{"x":"9007199254740993"}'), null);
+  // A decimal/exponential number is out of this check's scope (finite
+  // float precision is a universal IEEE-754 property, not specific to
+  // this rule) -- only a BARE integer literal (no "." or "e"/"E") is
+  // checked.
+  assert.notEqual(canonicalizeJson('{"x":9007199254740993.0}'), null);
+});
+
+test('rule 2 fail (Copilot review, PR #3225): a real value change at the unsafe-integer boundary never passes via a precision-loss coincidence', () => {
+  const upstream = Buffer.from('{"x":9007199254740993}');
+  const target = Buffer.from('{"x":9007199254740992}');
+  // Sanity: both sides really do canonicalize to the same string via the
+  // naive JSON.stringify(JSON.parse(x)) approach.
+  assert.equal(
+    JSON.stringify(JSON.parse(upstream.toString('utf8'))),
+    JSON.stringify(JSON.parse(target.toString('utf8'))),
+  );
+  const result = classifyFileContent({
+    path: 'config/settings.json',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
 // ---------------------------------------------------------------------------
 // Rule 3 -- prose reflow tolerance (Markdown only)
 // ---------------------------------------------------------------------------
@@ -907,6 +943,129 @@ test('rule 4 CLI end-to-end: --upstream-path resolves mode from a real git work 
     assert.deepEqual(
       report.results.map((r) => r.status),
       ['mode-only-mismatch'],
+    );
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(upstreamRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI end-to-end: --upstream-path nested inside a larger enclosing git repo reads the SUPPLIED directory, not the enclosing repository (Copilot review, PR #3225)', () => {
+  // Regression: git ls-tree resolves its pathspec relative to cwd, but
+  // `git show <rev>:<path>` is ALWAYS relative to the repository ROOT
+  // regardless of cwd -- verified empirically: from a nested/ cwd inside
+  // a larger repo, `git ls-tree HEAD -- marker.txt` correctly resolves to
+  // nested/marker.txt, but `git show HEAD:marker.txt` reads the ROOT-level
+  // marker.txt instead. An earlier version's `--is-inside-work-tree`
+  // probe couldn't distinguish "upstreamPath is the repo root" from
+  // "upstreamPath is merely SOMEWHERE inside one", so pointing
+  // --upstream-path at a nested (non-root) directory could silently read
+  // an unrelated file from the enclosing repository's root.
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  const outerRoot = mkdtempSync(join(tmpdir(), 'verify-import-mirror-outer-'));
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'baseline.txt'), 'hello\n');
+    commitAll(targetRoot, 'chore: baseline');
+    writeFileSync(join(targetRoot, 'marker.txt'), 'nested content\n');
+    commitAll(targetRoot, 'chore: vendor import of marker.txt');
+
+    // outerRoot is a git repo whose ROOT tracks a DIFFERENT marker.txt
+    // than the one under its nested/ subdirectory -- upstreamRoot below
+    // points at that nested/ subdirectory, never at outerRoot itself.
+    initTargetRepo(outerRoot);
+    mkdirSync(join(outerRoot, 'nested'), { recursive: true });
+    writeFileSync(join(outerRoot, 'nested', 'marker.txt'), 'nested content\n');
+    writeFileSync(
+      join(outerRoot, 'marker.txt'),
+      'root decoy content, DIFFERENT from nested\n',
+    );
+    commitAll(outerRoot, 'chore: outer repo with a nested marker.txt');
+
+    const upstreamRoot = join(outerRoot, 'nested');
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        upstreamRoot,
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0 (the nested file's own real content, not the enclosing repo's root-level decoy), got ${result.status}: ${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout) as {
+      results: { path: string; status: string }[];
+    };
+    assert.deepEqual(report.results, [
+      { path: 'marker.txt', changeType: 'A', status: 'exact' },
+    ]);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(outerRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI end-to-end: a HEAD-tracked but sparse-checkout-omitted upstream file is read from the object database, not misread as absent (Copilot review, PR #3225)', () => {
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  const upstreamRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-upstream-'),
+  );
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'baseline.txt'), 'hello\n');
+    commitAll(targetRoot, 'chore: baseline');
+    // The import commit DELETES a previously-vendored file -- this is
+    // only a legitimate deletion-matches-upstream if upstream genuinely
+    // still lacks it, not merely because it isn't materialized on disk.
+    writeFileSync(join(targetRoot, 'vendored.txt'), 'to be removed\n');
+    commitAll(targetRoot, 'chore: add vendored.txt (pre-import baseline)');
+    rmSync(join(targetRoot, 'vendored.txt'));
+    commitAll(targetRoot, 'chore: vendor import removes vendored.txt');
+
+    // Upstream is a real git work tree whose HEAD still tracks
+    // vendored.txt, but the working-tree copy is missing -- simulating a
+    // sparse checkout (or any other reason a tracked file might be absent
+    // from disk while still present in HEAD's own tree).
+    initTargetRepo(upstreamRoot);
+    writeFileSync(
+      join(upstreamRoot, 'vendored.txt'),
+      'still tracked upstream\n',
+    );
+    commitAll(upstreamRoot, 'chore: upstream still has vendored.txt');
+    rmSync(join(upstreamRoot, 'vendored.txt'));
+
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        upstreamRoot,
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    assert.equal(
+      result.status,
+      1,
+      `expected exit 1 (upstream HEAD still has the file; this must not be a matching deletion), got ${result.status}: ${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout) as {
+      results: { status: string }[];
+    };
+    assert.deepEqual(
+      report.results.map((r) => r.status),
+      ['content-mismatch'],
     );
   } finally {
     rmSync(targetRoot, { recursive: true, force: true });

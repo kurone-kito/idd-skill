@@ -77,7 +77,11 @@
 //    re-serializes as the bare token `null`) is treated the same as a
 //    parse failure -- never eligible for a structural match -- since it
 //    would otherwise canonicalize identically to a real `null` value
-//    (Copilot review, PR #3225). Known, disclosed limitation:
+//    (Copilot review, PR #3225). The same applies to a bare integer
+//    literal outside the IEEE-754 safe-integer range (e.g.
+//    `9007199254740993` vs `9007199254740992`): `JSON.parse` rounds both
+//    to the same double, so a real value change at that magnitude would
+//    otherwise pass too (same review round). Known, disclosed limitation:
 //    JavaScript's own-property enumeration always orders integer-like
 //    string keys ("0", "1", ...) ascending ahead of other keys regardless
 //    of source order, so a reorder limited to such keys is silently
@@ -101,35 +105,45 @@
 //    tolerated reflow (Copilot review, PR #3225).
 // 4. Git file mode compared exactly (e.g. `100644` vs `100755`):
 //    identical bytes with a dropped executable bit still breaks a
-//    `bin/` entry point. For `--upstream-path` (a plain directory), the
-//    exact git-tracked mode is preferred when that directory is itself
-//    a git work tree; otherwise the OS executable bit approximates it
-//    -- except a real symlink, which is always represented the way git
-//    itself would (mode `120000`, content = the link target text)
-//    rather than followed, matching how the target side's own git-tree
-//    reads already treat one (Copilot review, PR #3225). A tracked type
-//    change (git status `T`, e.g. a regular file becoming a symlink) is
-//    treated as an ordinary modification rather than silently discarded
-//    (same review round). For `--upstream-path`, a symlinked ANCESTOR
+//    `bin/` entry point. For `--upstream-path`, mode/content/existence
+//    are ALL read from `HEAD` via the same git-tree reader the target
+//    side and `--upstream-ref` already use whenever `--upstream-path` is
+//    genuinely the TOP LEVEL of a git work tree with a resolvable `HEAD`
+//    -- not merely a directory somewhere inside one (an earlier version's
+//    `--is-inside-work-tree` probe conflated the two, so a directory
+//    nested inside a larger, unrelated ENCLOSING repository could read
+//    paths relative to that enclosing repository's own tree instead of
+//    the directory actually supplied -- Copilot review, PR #3225).
+//    Reading from `HEAD` (the object database) rather than the raw
+//    working tree also means a sparse-checkout-omitted-but-tracked path
+//    is read correctly instead of misread as absent (same review round).
+//    Only when `--upstream-path` is a plain, non-git directory does this
+//    fall back to the filesystem: the OS executable bit approximates
+//    mode, and a real symlink is always represented the way git itself
+//    would (mode `120000`, content = the link target text) rather than
+//    followed. A tracked type change in the TARGET commit (git status
+//    `T`, e.g. a regular file becoming a symlink) is treated as an
+//    ordinary modification rather than silently discarded (Copilot
+//    review, PR #3225). For `--upstream-path`, a symlinked ANCESTOR
 //    directory (e.g. `vendor -> /outside`) is refused outright rather
 //    than transparently followed -- `lstat` on the final path component
 //    alone never catches this, since every intermediate path segment is
-//    still resolved by the OS regardless (verified empirically; Copilot
-//    review, PR #3225).
-// 5. Deletions: see the scope model above. For `--upstream-path`, only
-//    `ENOENT`/`ENOTDIR` from the `lstat` probe count as genuine absence;
-//    any other I/O error (e.g. `EACCES` on a path mid-deletion) is
-//    rethrown rather than silently treated as a matching deletion, which
-//    would let an unverifiable deletion pass unchecked (Copilot review,
-//    PR #3225). `--upstream-path` itself is validated up front (must
-//    exist and be a directory) -- without this, a missing/mistyped
-//    upstream root would make every per-file lookup report absence,
-//    misclassifying an entire deletion-only import as a false pure-mirror
-//    pass (same review round). `--upstream-ref` is validated up front the
-//    same way (must resolve to a commit) -- without it, a typo'd ref
-//    combined with a `--path-prefix` matching no changed paths would
-//    report `scanned: 0` and exit 0 without ever having read upstream at
-//    all (same review round).
+//    still resolved by the OS regardless (verified empirically; same
+//    review round).
+// 5. Deletions: see the scope model above. For the plain-directory
+//    `--upstream-path` fallback, only `ENOENT`/`ENOTDIR` from the `lstat`
+//    probe count as genuine absence; any other I/O error (e.g. `EACCES`
+//    on a path mid-deletion) is rethrown rather than silently treated as
+//    a matching deletion, which would let an unverifiable deletion pass
+//    unchecked (Copilot review, PR #3225). `--upstream-path` itself is
+//    validated up front (must exist and be a directory) -- without this,
+//    a missing/mistyped upstream root would make every per-file lookup
+//    report absence, misclassifying an entire deletion-only import as a
+//    false pure-mirror pass (same review round). `--upstream-ref` is
+//    validated up front the same way (must resolve to a commit) --
+//    without it, a typo'd ref combined with a `--path-prefix` matching no
+//    changed paths would report `scanned: 0` and exit 0 without ever
+//    having read upstream at all (same review round).
 //
 // Tolerated classifications (exit 0 requires every compared path to
 // land in this set): `exact`, `generated-banner-only`,
@@ -141,7 +155,13 @@
 // which is reported with a `detail` string naming the class it would
 // otherwise have matched, rather than inventing an eighth status).
 import { spawnSync } from 'node:child_process';
-import { lstatSync, readFileSync, readlinkSync, statSync } from 'node:fs';
+import {
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 
@@ -266,15 +286,47 @@ function hasNonFiniteNumber(value) {
   return false;
 }
 /**
+ * `true` iff `content` contains a bare JSON integer literal (no `.` or
+ * `e`/`E` -- those are handled by {@link hasNonFiniteNumber} instead, or
+ * are an inherent, universal IEEE-754 float-precision fact this check
+ * does not attempt to police) outside any string literal, whose numeric
+ * value exceeds `Number.isSafeInteger`'s range. `JSON.parse` represents
+ * every JSON number as an IEEE-754 double, which cannot distinguish two
+ * *different* integers once they exceed `Number.MAX_SAFE_INTEGER` --
+ * `JSON.parse('9007199254740993')` and `JSON.parse('9007199254740992')`
+ * both round to the SAME double, so a real value change at that
+ * magnitude would otherwise canonicalize identically (Copilot review, PR
+ * #3225; verified empirically). String literals are masked first (a
+ * digit sequence inside a JSON string value is never numerically parsed,
+ * so it carries no such risk).
+ */
+function hasUnsafeIntegerLiteral(content) {
+  const withoutStrings = content.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  const integerTokenPattern = /-?\d+(?![.\deE])/g;
+  let match = integerTokenPattern.exec(withoutStrings);
+  while (match !== null) {
+    if (!Number.isSafeInteger(Number(match[0]))) {
+      return true;
+    }
+    match = integerTokenPattern.exec(withoutStrings);
+  }
+  return false;
+}
+/**
  * Rule 2 (JSON structural): parses `content` and re-serializes it via
  * `JSON.stringify`, returning the canonical string, or `null` when
- * `content` is not valid JSON OR contains a non-finite number (see
- * {@link hasNonFiniteNumber}) -- treated the same as a parse failure
- * (never eligible for a structural match) rather than risk the false
- * positive above. Deliberately literal, not a deep-equal -- see the
- * module header's disclosed integer-like-key limitation.
+ * `content` is not valid JSON, contains a non-finite number (see
+ * {@link hasNonFiniteNumber}), or contains an integer literal outside the
+ * IEEE-754 safe-integer range (see {@link hasUnsafeIntegerLiteral}) --
+ * every one of those is treated the same as a parse failure (never
+ * eligible for a structural match) rather than risk the false positives
+ * above. Deliberately literal, not a deep-equal -- see the module
+ * header's disclosed integer-like-key limitation.
  */
 export function canonicalizeJson(content) {
+  if (hasUnsafeIntegerLiteral(content)) {
+    return null;
+  }
   try {
     const parsed = JSON.parse(content);
     return hasNonFiniteNumber(parsed) ? null : JSON.stringify(parsed);
@@ -657,28 +709,45 @@ function readTargetEntry(repoRoot, ref, path) {
 function resolveUpstreamRef(remote, ref) {
   return remote === null ? ref : `${remote}/${ref}`;
 }
-/** Approximates a git tree mode for a path under `--upstream-path` (a
- * plain directory, not necessarily a git repo): prefers the exact
- * git-tracked mode when that directory is itself a work tree, falling
- * back to the OS executable bit otherwise (or when the file exists only
- * in that work tree's uncommitted state). */
-function resolveUpstreamPathMode(upstreamRoot, absolutePath, relativePath) {
-  const probe = spawnSync(
-    'git',
-    ['-C', upstreamRoot, 'rev-parse', '--is-inside-work-tree'],
-    {
-      encoding: 'utf8',
-      env: sanitizedGitEnvironment(),
-    },
-  );
-  if (probe.status === 0 && probe.stdout.trim() === 'true') {
-    const mode = readTreeMode(upstreamRoot, 'HEAD', relativePath);
-    if (mode !== null) {
-      return mode;
-    }
+/**
+ * `true` iff `upstreamPath` is itself the TOP LEVEL of a git work tree
+ * with a resolvable `HEAD` commit -- not merely "inside" one somewhere.
+ * `git rev-parse --is-inside-work-tree` (an earlier version's probe)
+ * reports `"true"` even when `upstreamPath` is a plain subdirectory
+ * nested inside a LARGER, unrelated ENCLOSING repository; treating that
+ * as "this is our checkout" would then read paths relative to the
+ * enclosing repository's own tree, not the directory actually supplied
+ * (Copilot review, PR #3225). Comparing against `--show-toplevel`
+ * (`realpath`-normalized on both sides, falling back to lexical
+ * normalization when `realpath` fails) closes that gap. An unborn `HEAD`
+ * (a freshly `git init`'d checkout with no commits yet) has a toplevel
+ * but no resolvable commit -- checked separately so the caller can fall
+ * back to the plain-filesystem path instead of a later git call failing
+ * loudly for a case this rules out up front.
+ */
+function isUpstreamPathGitWorkTreeRoot(upstreamPath) {
+  const toplevelProbe = runGit(upstreamPath, ['rev-parse', '--show-toplevel']);
+  if (toplevelProbe.status !== 0) {
+    return false;
   }
-  const isExecutable = (statSync(absolutePath).mode & 0o111) !== 0;
-  return isExecutable ? '100755' : '100644';
+  const toplevel = toplevelProbe.stdout.toString('utf8').trim();
+  const normalize = (candidate) => {
+    try {
+      return realpathSync(candidate);
+    } catch {
+      return resolve(candidate);
+    }
+  };
+  if (normalize(toplevel) !== normalize(upstreamPath)) {
+    return false;
+  }
+  const headProbe = runGit(upstreamPath, [
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    'HEAD^{commit}',
+  ]);
+  return headProbe.status === 0;
 }
 /**
  * `true` only for the two `lstat` error codes that legitimately mean "this
@@ -732,19 +801,26 @@ function hasSymlinkAncestor(root, relativePath) {
   return false;
 }
 /**
- * Reads one path from a plain `--upstream-path` directory. Uses `lstat`
- * (never `stat`/`readFileSync` directly) to detect a symlink FIRST: a git
- * tree represents a symlink as mode `120000` with the link's target text
- * as its blob content, never the followed file's own content or mode.
- * `readFileSync`/`statSync` silently follow a symlink -- reporting the
- * wrong mode and content for a legitimately mirrored symlink (or throwing
- * outright when the link points at a directory) -- so a symlink is
- * special-cased here to match git's own semantics instead (Copilot
- * review, PR #3225). `lstat` also correctly reports a BROKEN symlink as
+ * Reads one path under `--upstream-path`. When `upstreamPath` is itself
+ * the top level of a git work tree with a resolvable `HEAD` (see
+ * {@link isUpstreamPathGitWorkTreeRoot}), delegates entirely to the same
+ * git-tree reader the target side and `--upstream-ref` already use
+ * (`readTargetEntry`, reading `HEAD`) instead of the raw filesystem --
+ * this reads from the object database, not the (possibly sparse,
+ * possibly stale) working tree, so a sparse-checkout-omitted but
+ * `HEAD`-tracked path is still read correctly rather than misread as
+ * absent (Copilot review, PR #3225), and it can never be confused with
+ * an ENCLOSING repository `upstreamPath` merely happens to sit inside
+ * (same review round). Otherwise (a plain, non-git directory) falls back
+ * to `lstat` (never `stat`/`readFileSync` directly, so a symlink is
+ * detected FIRST: a git tree represents a symlink as mode `120000` with
+ * the link's target text as its blob content, never the followed file's
+ * own content or mode -- `readFileSync`/`statSync` would otherwise
+ * silently follow it). `lstat` also correctly reports a BROKEN symlink as
  * present (unlike `existsSync`, which follows the link and would report
  * a broken one as absent), matching how git itself always tracks the
- * symlink entry regardless of whether its target exists on disk. Also
- * rejects a symlinked ANCESTOR directory outright -- see
+ * symlink entry regardless of whether its target exists on disk. Either
+ * branch first rejects a symlinked ANCESTOR directory outright -- see
  * {@link hasSymlinkAncestor} -- rather than silently following it, since
  * the git tree we're comparing against has no such symlink to justify it.
  */
@@ -754,6 +830,9 @@ function readUpstreamEntryFromPath(upstreamPath, path) {
       `${path}: an ancestor directory under --upstream-path is a symlink -- ` +
         'refusing to follow it (it could resolve outside the intended upstream checkout)',
     );
+  }
+  if (isUpstreamPathGitWorkTreeRoot(upstreamPath)) {
+    return readTargetEntry(upstreamPath, 'HEAD', path);
   }
   const absolute = join(upstreamPath, path);
   let stats;
@@ -771,8 +850,9 @@ function readUpstreamEntryFromPath(upstreamPath, path) {
       content: Buffer.from(readlinkSync(absolute), 'utf8'),
     };
   }
+  const isExecutable = (stats.mode & 0o111) !== 0;
   return {
-    mode: resolveUpstreamPathMode(upstreamPath, absolute, path),
+    mode: isExecutable ? '100755' : '100644',
     content: readFileSync(absolute),
   };
 }
