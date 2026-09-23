@@ -121,3 +121,107 @@ a deliberate, documented follow-up, not an oversight.
 Not yet publishable, n=0.
 
 <!-- idd-critique-docs:end -->
+
+## Copilot review-wave and severity audit
+
+This is a separate, source-repo-only measurement from the harvest ->
+snapshot pipeline above: it reads live GitHub data on demand
+(`gh api`) rather than an accumulated local log, and has no committed
+snapshot of its own. It exists because a change aimed at cutting
+Copilot review cost has repeatedly shipped with no repeatable way to
+check its effect: PR `#3046` (lowering `critiqueLoop.deferAfterRounds`
+to `5`) merged with no acceptance criterion, and a later manual audit
+(2026-09-21, 64 merged PRs) had to rebuild the numbers by hand before
+concluding the cutoff had never fired; the 2026-09-24 baseline for the
+adopt-now urgency-defer rule was again assembled from a throwaway
+script.
+
+### What it measures
+
+```sh
+node scripts/copilot-review-wave-audit.mjs --prs <n,n,...> [--format json|tsv]
+node scripts/copilot-review-wave-audit.mjs --limit <N> [--format json|tsv]
+```
+
+Given a set of merged PRs, the helper fetches each PR's reviews and
+review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
+`.../comments`, both paginated) and computes:
+
+- **Review count**, split into `ccr-overview-v2` (Copilot's current
+  machine-readable overview format) versus legacy (no
+  `<!-- ccr-overview-v2 -->` marker, no severity data available).
+- **Open appearances**: the per-severity count of every "Open" listing
+  across every v2 review — a finding carried forward into a later
+  review's "Open" section is counted again each time it appears.
+- **Unique finding threads**: one entry per distinct
+  `#discussion_r<id>`, keyed by the _first_ severity seen for that id
+  in submission order. This is deliberately a different number from
+  "Open appearances" above: a thread carried across 3 reviews
+  contributes 3 appearances but 1 thread.
+- **Thread dispositions**: `deferred` (a `**Rejected**` reply
+  containing "deferred to follow-up issue"), `rejected` (any other
+  `**Rejected**` reply), `accepted` (`**Accepted**`), `other` (a
+  recognized-but-non-accept/reject disposition — an
+  `**Awaiting maintainer decision**` marker, or a
+  `**Rejection confirmed by maintainer**` reply), or `none` (no reply
+  at all, or replies exist but none are a recognized marker). When a
+  thread has several recognized-disposition replies, the
+  chronologically last one wins. This reuses
+  `DISPOSITION_ACCEPTED_PREFIX_RE`/`DISPOSITION_REJECTED_PREFIX_RE`/
+  `AMD_MARKER_PATTERN` from `protocol-helpers.mts` — the same loose,
+  no-em-dash-required marker shape `isDispositionComment` uses, which
+  is what the merge gate actually credits as "a disposition was
+  posted" — rather than `review-disposition-verify.mts`'s
+  `classifyMarker()`, whose `MARKER_ACCEPTED_RE`/`MARKER_REJECTED_RE`
+  additionally require a trailing em dash. This audit's purpose is
+  fidelity to what the gate credits, so the looser patterns are the
+  deliberate choice.
+- **"Previously missed" findings**: counted per severity, separately
+  from every metric above. These are findings Copilot lists as newly
+  noticed in code that hasn't changed since the last review; they
+  carry a severity but no `#discussion_r<id>` link, so they have no
+  thread to key by.
+- **Transition table**: per v2 review, keyed by the highest "Open"
+  severity in that review (`none` when Open is empty), split into
+  "followed by another Copilot review" versus "last review".
+
+### Known limitation: a legacy listing carries no severity or thread data
+
+A **legacy** (non-`ccr-overview-v2`) review's body carries no severity
+or `#discussion_r<id>` link in this audit's data model at all, so that
+listing contributes nothing to any thread-keyed or severity-keyed
+metric above — only its review is counted (in the legacy review-count
+total). This is scoped to the legacy listing itself, not to the
+underlying finding: if the same finding is later re-flagged in a v2
+review's "Open" section, that v2 listing carries its own real severity
+and `#discussion_r<id>`, so it counts normally, the same as any other
+Open finding. In the 2026-09-24 baseline window (`#3089`-`#3210`), 56
+of 192 Copilot reviews were legacy. This is an inherent gap in
+Copilot's own review-body format, not a bug in this helper, and is not
+something an "explained delta" footnote can close.
+
+### 2026-09-24 baseline
+
+Reproducing command:
+
+```sh
+node scripts/copilot-review-wave-audit.mjs --prs 3089,3091,3092,3093,3094,3095,3096,3097,3098,3099,3105,3106,3107,3108,3109,3114,3115,3116,3118,3122,3123,3131,3132,3133,3134,3135,3136,3137,3147,3148,3149,3150,3151,3152,3153,3154,3156,3160,3161,3168,3169,3170,3171,3172,3174,3180,3181,3185,3196,3197,3198,3199,3200,3201,3202,3203,3204,3206,3209,3210
+```
+
+(The 60 merged PR numbers in the `#3089`-`#3210` window, resolved via
+`gh pr list --state merged --json number,mergedAt`; equivalent to
+`--limit 200` filtered to that range at the time this baseline was
+recorded — `--limit` alone is not reproducible against a fixed
+baseline once more PRs merge.)
+
+This helper's implementation was verified against the baseline before
+merge and reproduces every figure exactly, with zero unparsed reviews:
+
+| Metric                                              | Value                                  |
+| --------------------------------------------------- | -------------------------------------- |
+| Reviews                                             | 192 (136 `ccr-overview-v2`, 56 legacy) |
+| Open appearances                                    | High 70 / Medium 66 / Low 67           |
+| Unique finding threads                              | High 49 / Medium 37 / Low 39           |
+| Low-thread dispositions                             | Accepted 36 / Rejected 0 / None 3      |
+| All-Low-severity reviews followed by another review | 11 / 11                                |
+| "Previously missed" findings                        | 41 (Low 29 / Medium 12 / High 0)       |

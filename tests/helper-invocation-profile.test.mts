@@ -145,6 +145,15 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   // distributed to idd-template/; an adopter repository has no
   // critique-loop telemetry data to report.
   'scripts/idd-critique-report.mjs',
+  // copilot-review-wave-audit.mjs (#3223): this repository's own dogfood
+  // Copilot review-wave/severity-trend audit CLI, named in
+  // docs/critique-telemetry.md's own usage examples. It fetches only
+  // live PR review/comment data via `gh api` -- nothing it reads or
+  // writes is committed to git except the doc's own baseline numbers --
+  // and is never distributed to idd-template/; an adopter repository has
+  // no `kurone-kito/idd-skill`-specific Copilot-review-wave baseline of
+  // its own to measure against this one.
+  'scripts/copilot-review-wave-audit.mjs',
 ]);
 
 // A helper name that appears only as a *proposed*, not-yet-built script
