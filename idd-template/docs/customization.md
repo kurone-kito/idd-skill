@@ -1868,7 +1868,8 @@ helper from an interactive TTY. That flow:
    PR number only when PR-scoped evidence is required
 3. prompts for an optional successor agent-id (leaving it blank keeps
    the displaced agent's own id -- the default -- while entering a
-   value names a different successor)
+   value selects that entered agent-id as the successor, which may
+   still match the displaced agent-id if re-entered verbatim)
 4. prints the resolved successor claim plan -- with a warning when the
    resolved successor still matches the displaced agent-id -- and
    requires a final `y/N` confirmation before posting the canonical
