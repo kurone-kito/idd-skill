@@ -1607,6 +1607,16 @@ function spawnHelperHelp(targetRoot, entryPath) {
       cwd: targetRoot,
       encoding: 'utf8',
       timeout: HELPER_LOAD_TIMEOUT_MS,
+      // node:child_process's `timeout` option only *sends* `killSignal`
+      // once the deadline elapses -- it is not itself a hard deadline.
+      // The default killSignal is SIGTERM, which a cataloged helper (or
+      // one of its imports) can install its own handler for and ignore,
+      // leaving this synchronous call blocked indefinitely despite the
+      // configured timeout (Copilot review, PR #3303). --verify executes
+      // target-owned code, so this check cannot assume every helper
+      // cooperates with SIGTERM the way this repository's own helpers do
+      // -- force termination instead.
+      killSignal: 'SIGKILL',
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
