@@ -4,6 +4,7 @@ import {
   buildActivitySnapshotSummary,
   classifyThreadAckOnlyPostDisposition,
   EDITED_AFTER_DISPOSITION_HINT,
+  LIVE_STATUS_DIGEST_MARKER,
   MALFORMED_DISPOSITION_PREFIX_HINT,
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
@@ -3248,6 +3249,141 @@ test('reviewCurrency still anchors an edited ordinary Accepted marker by created
     activitySummary.ackOnly.items.map((item) => item.id),
     ['AC-3'],
   );
+});
+
+// Round 36 field feedback (#3194): a live-status digest edit was still
+// counting as PR activity in `buildActivitySnapshotSummary`'s raw and
+// `effective` ceilings, contradicting
+// idd-overview-appendix.instructions.md's documented rule that a digest
+// edit must never perturb review-currency -- `isOperationalOrDigestCommentForGate`
+// already excluded it for `summarizeRegularCommentsForGate` /
+// `summarizeDispositionEvidenceForGate`, but `buildActivitySnapshotSummary`'s
+// own `filteredComments` never checked the digest marker at all.
+test('buildActivitySnapshotSummary excludes a live-status digest edit from both activity ceilings', () => {
+  const genuineComment = {
+    id: 'D-1',
+    author: { login: 'reviewer-a' },
+    body: 'Please also cover the edge case where the input is empty.',
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const digestEdit = {
+    id: 'D-2',
+    // The digest is posted by the same trusted IDD agent that holds the
+    // claim, but recognition below must not depend on that -- it mirrors
+    // `isOperationalOrDigestCommentForGate`'s own unconditional digest
+    // branch.
+    author: { login: 'idd-bot' },
+    body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |\n| --- | --- |\n| Phase | still waiting |`,
+    createdAt: '2026-05-12T02:00:00Z',
+    updatedAt: '2026-05-12T03:00:00Z',
+  };
+
+  const activitySummary = buildActivitySnapshotSummary(
+    {
+      comments: [genuineComment, digestEdit],
+      reviews: [],
+      threads: [],
+      checks: [],
+    },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: [],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+
+  // The digest edit's own updatedAt (03:00) postdates the genuine comment
+  // (00:00) -- if it were still counted, it would incorrectly become both
+  // ceilings' anchor. It must be excluded entirely, from both the raw and
+  // effective ceilings and their paired comment counts.
+  assert.equal(activitySummary.maxActivityUpdatedAt, '2026-05-12T00:00:00Z');
+  assert.equal(
+    activitySummary.effective.maxActivityUpdatedAt,
+    '2026-05-12T00:00:00Z',
+  );
+  assert.equal(activitySummary.counts.comments, 1);
+  assert.equal(activitySummary.effective.totalItemCount, 1);
+});
+
+// Negative case for the same fix: the digest marker must be recognized only
+// on the comment's first line (fail-closed, matching
+// `isOperationalOrDigestCommentForGate`'s `firstLine` check) -- a comment
+// that merely mentions the marker text on a later line is not a digest edit
+// and must still count as genuine activity.
+test('buildActivitySnapshotSummary still counts a comment that only mentions the digest marker on a later line', () => {
+  const mentionsMarkerLater = {
+    id: 'D-3',
+    author: { login: 'idd-bot' },
+    body: `Note: see the digest format below, not a typo.\n${LIVE_STATUS_DIGEST_MARKER}`,
+    createdAt: '2026-05-12T04:00:00Z',
+    updatedAt: '2026-05-12T04:00:00Z',
+  };
+
+  const activitySummary = buildActivitySnapshotSummary(
+    { comments: [mentionsMarkerLater], reviews: [], threads: [], checks: [] },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: [],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+
+  assert.equal(activitySummary.maxActivityUpdatedAt, '2026-05-12T04:00:00Z');
+  assert.equal(
+    activitySummary.effective.maxActivityUpdatedAt,
+    '2026-05-12T04:00:00Z',
+  );
+  assert.equal(activitySummary.counts.comments, 1);
+});
+
+// Pins the "unconditional, not gated by trustedMarkerLogins" claim in the
+// source comment above -- an author outside `trustedMarkerLogins` still has
+// their digest-marker-shaped first line excluded, exactly like
+// `isOperationalOrDigestCommentForGate`'s own digest branch (never author-
+// gated, unlike its `forced-handoff` branch). Without this test, an
+// accidental move of the digest check to *after* the trust-gate early
+// return would still pass the two tests above (both use a trusted author)
+// while silently changing this behavior.
+test('buildActivitySnapshotSummary excludes a digest-marker-shaped first line from an untrusted author too', () => {
+  const untrustedDigestShaped = {
+    id: 'D-4',
+    author: { login: 'not-a-trusted-marker-actor' },
+    body: `${LIVE_STATUS_DIGEST_MARKER}\n\nspoofed digest body`,
+    createdAt: '2026-05-12T05:00:00Z',
+    updatedAt: '2026-05-12T05:00:00Z',
+  };
+  const genuineComment = {
+    id: 'D-5',
+    author: { login: 'reviewer-a' },
+    body: 'Genuine review comment.',
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+
+  const activitySummary = buildActivitySnapshotSummary(
+    {
+      comments: [genuineComment, untrustedDigestShaped],
+      reviews: [],
+      threads: [],
+      checks: [],
+    },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: [],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+
+  assert.equal(activitySummary.maxActivityUpdatedAt, '2026-05-12T00:00:00Z');
+  assert.equal(
+    activitySummary.effective.maxActivityUpdatedAt,
+    '2026-05-12T00:00:00Z',
+  );
+  assert.equal(activitySummary.counts.comments, 1);
 });
 
 // #2249: `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
