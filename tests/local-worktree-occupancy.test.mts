@@ -912,3 +912,152 @@ test('fails closed when detached rebase and bisect metadata coexist', () => {
     rmSync(gitDirectory, { recursive: true, force: true });
   }
 });
+
+test('treats a plain non-prunable detached worktree as holding no branch', () => {
+  const parent = realpathSync(
+    mkdtempSync(`${tmpdir()}/idd-local-worktree-plain-detached-`),
+  );
+  const primary = join(parent, 'primary');
+  const detached = join(parent, 'detached-pin');
+  const branchWorktree = join(parent, 'issue-42-task');
+  const branch = 'issue/42-task';
+  mkdirSync(primary);
+  try {
+    git(primary, ['init', '--quiet', '-b', 'main']);
+    git(primary, ['config', 'user.email', 'test@example.com']);
+    git(primary, ['config', 'user.name', 'Test']);
+    writeFileSync(join(primary, 'seed.txt'), 'seed\n');
+    git(primary, ['add', 'seed.txt']);
+    git(primary, ['commit', '--quiet', '-m', 'seed']);
+    git(primary, ['worktree', 'add', '--quiet', '--detach', detached]);
+    git(primary, ['worktree', 'add', '--quiet', '-b', branch, branchWorktree]);
+
+    const unrelated = inspectLocalWorktreeBranch(
+      'issue/9999-unrelated',
+      primary,
+    );
+    assert.deepEqual(unrelated, { status: 'absent', paths: [], reason: null });
+
+    const matching = inspectLocalWorktreeBranch(branch, primary);
+    assert.deepEqual(matching, {
+      status: 'occupied',
+      paths: [branchWorktree.split(sep).join('/')],
+      reason: `matching local worktree for ${branch}`,
+    });
+  } finally {
+    for (const worktree of [detached, branchWorktree]) {
+      try {
+        git(primary, ['worktree', 'remove', '--force', worktree]);
+      } catch {
+        // Best-effort cleanup; the recursive removal below is authoritative.
+      }
+    }
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+function inspectNonPrunableDetached(
+  worktree: string,
+  gitDirectory: string,
+  gitPath: (name: string) => string = (name) => join(gitDirectory, name),
+  worktreeFlags = '',
+): ReturnType<typeof inspectLocalWorktreeBranch> {
+  return inspectLocalWorktreeBranch(
+    'issue/42-task',
+    process.cwd(),
+    process.env,
+    ((file: string, args: string[]) => {
+      if (args[0] === 'worktree') {
+        return `worktree ${worktree}\0HEAD abc\0detached\0${worktreeFlags}\0`;
+      }
+      return stubGitCommands(worktree, {
+        'rebase-merge': gitPath('rebase-merge'),
+        'rebase-apply': gitPath('rebase-apply'),
+        BISECT_START: gitPath('BISECT_START'),
+      })(file, args);
+    }) as typeof execFileSync,
+  );
+}
+
+test('proves a non-prunable detached worktree with no operation metadata absent', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-no-op-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    assert.deepEqual(inspectNonPrunableDetached(worktree, gitDirectory), {
+      status: 'absent',
+      paths: [],
+      reason: null,
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
+test('fails closed when non-prunable detached metadata paths cannot be read', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-no-git-path-`);
+  try {
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        assert.equal(file, 'git');
+        if (args[0] === 'worktree') {
+          return `worktree ${worktree}\0HEAD abc\0detached\0\0`;
+        }
+        if (args[3] === '--show-toplevel') {
+          return `${worktree}\n`;
+        }
+        throw new Error('git rev-parse --git-path failed');
+      }) as typeof execFileSync,
+    );
+    assert.deepEqual(result, {
+      status: 'unreadable',
+      paths: [worktree],
+      reason: 'cannot inspect matching local worktree metadata',
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
+for (const operation of ['rebase-merge', 'BISECT_START']) {
+  test(`fails closed when non-prunable detached ${operation} is a symlink`, {
+    skip: process.platform === 'win32',
+  }, () => {
+    const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-op-symlink-`);
+    const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+    try {
+      symlinkSync(
+        join(gitDirectory, 'missing-target'),
+        join(gitDirectory, operation),
+      );
+      assert.deepEqual(inspectNonPrunableDetached(worktree, gitDirectory), {
+        status: 'unreadable',
+        paths: [worktree],
+        reason: 'cannot inspect matching local worktree metadata',
+      });
+    } finally {
+      rmSync(worktree, { recursive: true, force: true });
+      rmSync(gitDirectory, { recursive: true, force: true });
+    }
+  });
+}
+
+test('fails closed for a locked non-prunable detached worktree with a missing path', () => {
+  const parent = mkdtempSync(`${tmpdir()}/idd-local-worktree-locked-missing-`);
+  const worktree = join(parent, 'missing');
+  try {
+    assert.deepEqual(
+      inspectNonPrunableDetached(worktree, parent, undefined, 'locked\0'),
+      {
+        status: 'unreadable',
+        paths: [worktree],
+        reason: 'cannot inspect matching local worktree metadata',
+      },
+    );
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
