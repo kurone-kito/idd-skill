@@ -344,23 +344,24 @@ login).
      first. `"attempt"` runs its bounded cycle (non-pending entry: skip
      **Remove**, start at **Request**; a proven failure-to-register
      completes the cycle per the entry's inverted step 4/5 disposition),
-     then proceed to E15 either way (accumulates recovery-cycle evidence
-     toward `COPILOT_UNAVAILABLE`; `outcome` itself is unaffected).
-     `"cap-exhausted"` honors `advisoryWait.capExhaustedRoute` exactly
-     like the ordinary `CAP_EXHAUSTED` row below — `hold` posts AW4's
-     **Cap exhausted** hold and stops; `phase-specific` (default)
-     proceeds to E15 unchanged (`#2327` follow-up: cycle exhaustion from
-     this entry must not silently bypass a configured hold policy).
-     `"not-applicable"` → proceed to E15 unchanged.
-   - **SATISFIED** (otherwise) → proceed to E15.
+     then apply step 5, proceed to E15 either way (accumulates
+     recovery-cycle evidence toward `COPILOT_UNAVAILABLE`; `outcome`
+     itself is unaffected). `"cap-exhausted"` honors
+     `advisoryWait.capExhaustedRoute` exactly like the ordinary
+     `CAP_EXHAUSTED` row below, including its step-5 supplement
+     (`#2327` follow-up: cycle exhaustion from this entry must not
+     silently bypass a configured hold policy). `"not-applicable"` →
+     apply step 5, proceed to E15 unchanged.
+   - **SATISFIED** (otherwise) → apply step 5, proceed to E15.
    - **HOLD** → post the hold comment from **AW4** and stop.
    - **RECOVERY_NEEDED** (`COPILOT_PENDING` `"true"`, no same-head
      marker): post the recovery marker from **AW3-R**; do not
      re-request.
    - **CAP_EXHAUSTED** (`REQUEST_MARKER_COUNT` ≥ `REQUEST_CAP`, no
-     same-head marker): if `CAP_EXHAUSTED_ROUTE` is `hold`, post the
-     hold from **AW4** and stop; otherwise (`phase-specific`, default)
-     skip the wait and proceed to E15.
+     same-head marker): apply step 5 regardless of route. Then, if
+     `CAP_EXHAUSTED_ROUTE` is `hold`, post the hold from **AW4** and
+     stop; otherwise (`phase-specific`, default) skip the wait,
+     proceed to E15.
    - **REQUEST_NEEDED**, `COPILOT_PENDING` `"false"` (cap not
      exhausted): request the bot's review and immediately post:
 
@@ -381,16 +382,17 @@ login).
      `"attempt"` runs its bounded remove/re-request/verify/mark cycle
      (independently capped, never the plain marker or `REQUEST_CAP`);
      `"cap-exhausted"` handles like **CAP_EXHAUSTED** above (no
-     remove/re-request); `"not-applicable"` falls through to the
+     remove/re-request, no step 5 — `outcome` here stays
+     `REQUEST_NEEDED`); `"not-applicable"` falls through to the
      polling loop unchanged (a same-head marker already anchors HEAD).
    - **WAIT**, or after a **REQUEST_NEEDED** / **RECOVERY_NEEDED** /
      **AW3-S** marker posts: enter the active polling loop below.
-5. **Secondary advisory bot(s) (optional, non-gating).**
+5. **Secondary advisory bot(s) (optional, non-gating), called from
+   every `apply step 5` reference in this file.**
    `secondaryBotLogin` accepts one login or a list; request **every**
    login the helper's `secondaryRequestLogins` reports (shell
-   fallback: every configured login not yet requested this HEAD on
-   **CAP_EXHAUSTED** or stalled/rate-limited **SATISFIED**) — same
-   gh-then-REST fallback as the primary, per login, no
+   fallback: every configured login not yet requested this HEAD) —
+   same gh-then-REST fallback as the primary, per login, no
    `advisory-wait:` marker, no route change. Each review is ordinary
    advisory input, picked up by E1 if it lands before merge; skipped
    when unconfigured. Never poll/wait for any of them here, E1, or E2;
@@ -434,8 +436,9 @@ Poll every `POLL_INTERVAL_MINUTES` minutes:
 3. Run **AW1**/**AW2** (refresh `COPILOT_PENDING`, `LAST_COPILOT_COMMIT`,
    `EARLIEST_SAME_HEAD_AT`; apply **AW5** if the latter is empty), then
    **AW3**: **SATISFIED** → apply step 4's same non-pending
-   `staleRequestRecovery` consultation before exiting, then proceed to E15;
-   **HOLD** → post **AW4**/**AW5** hold and stop; **WAIT** → keep polling.
+   `staleRequestRecovery` consultation before exiting, then apply step
+   5, proceed to E15; **HOLD** → post **AW4**/**AW5** hold and stop;
+   **WAIT** → keep polling.
 
 Note: "advisory" means the agent need not accept every suggestion — not
 that it may skip a review it explicitly requested. Human
