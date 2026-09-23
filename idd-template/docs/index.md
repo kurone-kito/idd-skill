@@ -1,7 +1,7 @@
 ---
 type: index
 title: IDD Documentation Index
-description: Is the entry point and topic map for the IDD documentation bundle this repository imports into its own docs/.
+description: Provides the entry point and topic map for the IDD documentation bundle this repository imports into its own docs/.
 ---
 
 # IDD Documentation Index
