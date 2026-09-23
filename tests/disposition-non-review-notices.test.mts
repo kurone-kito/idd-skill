@@ -17,8 +17,10 @@ import { hasReviewReplyStamp } from '../src/scripts/marker-helpers.mts';
 import {
   dispositionNamesAdvisoryBot,
   isAdvisoryNonReviewNotice,
+  isCodeRabbitAlreadyReviewedAcknowledgement,
   isDispositionComment,
   isReviewSummaryComment,
+  isTerminalAdvisoryNonReviewNotice,
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -48,6 +50,21 @@ const CODERABBIT_ALREADY_REVIEWED_ACK =
   '<summary>⚠️ Action not completed</summary>\n\n' +
   'Already reviewed the last commit. Use `@coderabbitai full review` to rerun a\n' +
   'review of the entire changeset.\n\n' +
+  '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits.\n' +
+  'This command is applicable only when automatic reviews are paused.\n\n' +
+  '</details>';
+// #3193 (gist round 35): a distinct CodeRabbit reply shape -- the bot
+// acknowledges a review-command invocation, then reports "Review rate
+// limited." inside the same "Action not completed" wrapper #3146 uses,
+// instead of "Already reviewed the last commit." This is a conclusive
+// decline, not a retryable acknowledgement.
+const CODERABBIT_RATE_LIMITED_ACK =
+  '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
+  '<!-- CodeRabbit review command invocation: v2:def456 -->\n' +
+  "I'll review the latest commit now.\n\n" +
+  '<details>\n' +
+  '<summary>⚠️ Action not completed</summary>\n\n' +
+  'Review rate limited.\n\n' +
   '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits.\n' +
   'This command is applicable only when automatic reviews are paused.\n\n' +
   '</details>';
@@ -461,6 +478,45 @@ test('#3146: does not classify similar review prose as the refusal notice', () =
     '</details>';
   assert.equal(isAdvisoryNonReviewNotice(reviewBody), false);
   assert.equal(isReviewSummaryComment(reviewBody), false);
+});
+
+test('#3193: recognizes the review-command rate-limited acknowledgement as a terminal notice', () => {
+  assert.equal(isAdvisoryNonReviewNotice(CODERABBIT_RATE_LIMITED_ACK), true);
+  assert.equal(
+    isTerminalAdvisoryNonReviewNotice(CODERABBIT_RATE_LIMITED_ACK),
+    true,
+  );
+  // Conclusive decline, not the #3146 retryable acknowledgement path.
+  assert.equal(
+    isCodeRabbitAlreadyReviewedAcknowledgement(CODERABBIT_RATE_LIMITED_ACK),
+    false,
+  );
+});
+
+test('#3193: does not classify review prose that merely mentions rate limiting as the notice', () => {
+  const reviewBody =
+    '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
+    '<!-- CodeRabbit review command invocation: v2:def456 -->\n' +
+    "I'll review the latest commit now.\n\n" +
+    '<details>\n' +
+    '<summary>⚠️ Action not completed</summary>\n\n' +
+    'This repository was previously rate limited, but the review completed ' +
+    'and found one issue.\n\n' +
+    '### Walkthrough\n\nThe review identified a real concern.\n\n' +
+    '</details>';
+  assert.equal(isAdvisoryNonReviewNotice(reviewBody), false);
+  assert.equal(isTerminalAdvisoryNonReviewNotice(reviewBody), false);
+});
+
+test('#3193: the #3146 already-reviewed acknowledgement is unaffected (regression guard)', () => {
+  assert.equal(
+    isCodeRabbitAlreadyReviewedAcknowledgement(CODERABBIT_ALREADY_REVIEWED_ACK),
+    true,
+  );
+  assert.equal(
+    isTerminalAdvisoryNonReviewNotice(CODERABBIT_ALREADY_REVIEWED_ACK),
+    false,
+  );
 });
 
 test('buildDispositionPlan plans one disposition per undispositioned notice', () => {

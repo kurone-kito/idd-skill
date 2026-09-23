@@ -843,6 +843,45 @@ export function isCodeRabbitAlreadyReviewedAcknowledgement(body) {
     String(body ?? '').trimStart(),
   );
 }
+// #3193 (gist round 35): a second whole-comment CodeRabbit acknowledgement,
+// sibling to CODERABBIT_ALREADY_REVIEWED_ACK_RE above -- the same reply
+// marker, invocation marker, and "Action not completed" wrapper, but a
+// promise-to-review sentence instead of "Already reviewed the last
+// commit.", and the wrapper's body is the single line "Review rate
+// limited." followed by the same incremental-review-system note. Unlike
+// the sibling above, this is a CONCLUSIVE decline for the current commit
+// (no retryable "run a full review" remedy is offered), so it is folded
+// into `isTerminalAdvisoryNonReviewNotice` below, not
+// `isCodeRabbitAlreadyReviewedAcknowledgement`.
+//
+// The field report (gist round 35) never captured the promise sentence's
+// exact wording verbatim -- unlike every other anchor here, which is
+// matched exactly. Guessing a specific literal phrase risks a regex that
+// silently never matches the real comment (worse than the status quo), so
+// that one sentence is matched structurally instead: a bounded run of
+// plain text (no nested HTML, so it cannot cross into the following
+// `<details>` tag) that mentions "review", the one word every known
+// CodeRabbit review-trigger acknowledgement in this repository's own
+// history actually uses (see the `Review triggered|Sure! I'll review|I'll
+// review` phrases recognized elsewhere in this file). Every other anchor
+// stays exact and fail-closed, mirroring
+// CODERABBIT_ALREADY_REVIEWED_ACK_RE's own anchoring discipline: a genuine
+// review that merely mentions "rate limited" in prose does not match.
+const CODERABBIT_RATE_LIMITED_ACK_RE = new RegExp(
+  `^${escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)}\\s*` +
+    '<!--\\s*CodeRabbit review command invocation:\\s*[^>\\r\\n]+-->\\s*' +
+    '[^<]{0,160}\\breview\\b[^<]{0,160}' +
+    '<details>\\s*<summary>\\s*⚠️\\s*Action not completed\\s*</summary>\\s*' +
+    'Review rate limited\\.\\s*' +
+    '>\\s*Note:\\s*CodeRabbit is an incremental review system and does not ' +
+    're-review already reviewed commits\\.\\s*' +
+    'This command is applicable only when automatic reviews are paused\\.\\s*' +
+    '</details>\\s*$',
+  'i',
+);
+export function isCodeRabbitRateLimitedAcknowledgement(body) {
+  return CODERABBIT_RATE_LIMITED_ACK_RE.test(String(body ?? '').trimStart());
+}
 // Matches the two section headings this older CodeRabbit format nests
 // per-file findings under (kurone-kito/idd-skill#2197, kurone-kito/idd-skill#2559): a review whose finding has no
 // threaded comment of its own. A newer-format review ("Actionable comments
@@ -2515,7 +2554,8 @@ export function isTerminalAdvisoryNonReviewNotice(body) {
   }
   return (
     ADVISORY_NON_REVIEW_NOTICE_PATTERNS.some((pattern) => pattern.test(text)) ||
-    isCodexUsageLimitNotice(text)
+    isCodexUsageLimitNotice(text) ||
+    isCodeRabbitRateLimitedAcknowledgement(body)
   );
 }
 export function isAdvisoryNonReviewNotice(body) {
