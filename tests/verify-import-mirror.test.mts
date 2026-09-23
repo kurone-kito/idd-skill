@@ -387,6 +387,50 @@ test('rule 3 fail: a YAML file with the exact same reflow difference is NOT tole
   assert.equal(result.contentClass, 'content-mismatch');
 });
 
+test('rule 3 fail (Copilot review, PR #3225): a real content edit hidden inside a fenced code block is never tolerated as reflow', () => {
+  const upstream = Buffer.from(
+    'Some prose.\n\n```\na\nb\n```\n\nMore prose.\n',
+  );
+  const target = Buffer.from('Some prose.\n\n```\na b\n```\n\nMore prose.\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
+test('rule 3 pass (Copilot review, PR #3225): prose outside a fenced code block is still reflow-tolerant', () => {
+  const upstream = Buffer.from('one two\nthree four\n\n```\nunchanged\n```\n');
+  const target = Buffer.from('one two three\nfour\n\n```\nunchanged\n```\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'prose-reflow-match');
+});
+
+test('normalizeProseWhitespace compares a fenced code block verbatim, never reflow-tolerant', () => {
+  const upstream = 'Some prose.\n\n```\na\nb\n```\n\nMore prose.\n';
+  const target = 'Some prose.\n\n```\na b\n```\n\nMore prose.\n';
+  assert.notEqual(
+    normalizeProseWhitespace(upstream),
+    normalizeProseWhitespace(target),
+  );
+});
+
+test('normalizeProseWhitespace supports ~~~ fences too, not only backtick fences', () => {
+  const upstream = 'text\n\n~~~\na\nb\n~~~\n';
+  const target = 'text\n\n~~~\na b\n~~~\n';
+  assert.notEqual(
+    normalizeProseWhitespace(upstream),
+    normalizeProseWhitespace(target),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Rule 4 -- git file mode comparison
 // ---------------------------------------------------------------------------
@@ -890,6 +934,144 @@ test('CLI end-to-end: a real symlink in --upstream-path is compared as a git ent
   } finally {
     rmSync(targetRoot, { recursive: true, force: true });
     rmSync(upstreamRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI end-to-end: a symlinked ANCESTOR directory under --upstream-path is refused, not silently followed (Copilot review, PR #3225)', () => {
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  const upstreamRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-upstream-'),
+  );
+  const outsideRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-outside-'),
+  );
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'baseline.txt'), 'hello\n');
+    commitAll(targetRoot, 'chore: baseline');
+
+    // upstreamRoot/vendor is a symlink pointing OUTSIDE upstreamRoot
+    // entirely -- lstat on the final path component (vendor/file.txt)
+    // never reports this, since only the ancestor segment (vendor) is
+    // itself the symlink.
+    writeFileSync(join(outsideRoot, 'file.txt'), 'external content\n');
+    symlinkSync(outsideRoot, join(upstreamRoot, 'vendor'));
+
+    mkdirSync(join(targetRoot, 'vendor'), { recursive: true });
+    writeFileSync(join(targetRoot, 'vendor', 'file.txt'), 'vendored content\n');
+    commitAll(
+      targetRoot,
+      'chore: vendor import under a directory named vendor',
+    );
+
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        upstreamRoot,
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    assert.equal(
+      result.status,
+      2,
+      `expected exit 2 (refused, not silently followed), got ${result.status}: ${result.stderr}`,
+    );
+    assert.match(result.stderr, /symlink/i);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(upstreamRoot, { recursive: true, force: true });
+    rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI end-to-end: a missing --upstream-path is rejected up front, not misread as "upstream lacks every file" (Copilot review, PR #3225)', () => {
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'a.txt'), 'hello\n');
+    commitAll(targetRoot, 'chore: baseline');
+    writeFileSync(join(targetRoot, 'b.txt'), 'deleted later\n');
+    commitAll(targetRoot, 'chore: add b.txt');
+    rmSync(join(targetRoot, 'b.txt'));
+    commitAll(
+      targetRoot,
+      'chore: vendor import deletes b.txt (this is the commit under test)',
+    );
+
+    const missingUpstream = join(
+      tmpdir(),
+      'verify-import-mirror-nonexistent-typo',
+    );
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        missingUpstream,
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    // Without validateUpstreamPathRoot, this would silently misclassify
+    // the b.txt deletion as deletion-matches-upstream and exit 0 -- a
+    // false proof of a pure mirror caused by nothing more than the typo
+    // above.
+    assert.equal(
+      result.status,
+      2,
+      `expected exit 2 (a typo'd --upstream-path must never silently pass), got ${result.status}: ${result.stderr}`,
+    );
+    assert.match(result.stderr, /--upstream-path does not exist/);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI end-to-end: a --upstream-path that is not a directory is rejected up front (Copilot review, PR #3225)', () => {
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  const notADirectory = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-file-'),
+  );
+  const upstreamFile = join(notADirectory, 'upstream-is-a-file.txt');
+  writeFileSync(upstreamFile, 'not a directory\n');
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'a.txt'), 'hello\n');
+    commitAll(targetRoot, 'chore: baseline');
+    writeFileSync(join(targetRoot, 'b.txt'), 'vendored\n');
+    commitAll(targetRoot, 'chore: vendor import');
+
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        upstreamFile,
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    assert.equal(
+      result.status,
+      2,
+      `expected exit 2, got ${result.status}: ${result.stderr}`,
+    );
+    assert.match(result.stderr, /--upstream-path is not a directory/);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(notADirectory, { recursive: true, force: true });
   }
 });
 

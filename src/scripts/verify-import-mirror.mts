@@ -79,9 +79,11 @@
 //    before comparing. A removed blank line that merges two paragraphs
 //    into one still fails (paragraph count changes); the blank-line
 //    COUNT between two paragraphs is tolerated (1 vs 2+ blank lines
-//    both normalize the same way). Known, disclosed limitation: a
-//    fenced code block inside the Markdown file also gets reflow
-//    tolerance -- there is no CommonMark-aware masking here.
+//    both normalize the same way). A fenced code block (``` or ~~~) is
+//    compared VERBATIM, never reflow-tolerant -- an earlier version
+//    applied the same reflow tolerance inside a fence too, letting a
+//    real content edit hidden in a vendored code example pass as a
+//    tolerated reflow (Copilot review, PR #3225).
 // 4. Git file mode compared exactly (e.g. `100644` vs `100755`):
 //    identical bytes with a dropped executable bit still breaks a
 //    `bin/` entry point. For `--upstream-path` (a plain directory), the
@@ -93,13 +95,22 @@
 //    reads already treat one (Copilot review, PR #3225). A tracked type
 //    change (git status `T`, e.g. a regular file becoming a symlink) is
 //    treated as an ordinary modification rather than silently discarded
-//    (same review round).
+//    (same review round). For `--upstream-path`, a symlinked ANCESTOR
+//    directory (e.g. `vendor -> /outside`) is refused outright rather
+//    than transparently followed -- `lstat` on the final path component
+//    alone never catches this, since every intermediate path segment is
+//    still resolved by the OS regardless (verified empirically; Copilot
+//    review, PR #3225).
 // 5. Deletions: see the scope model above. For `--upstream-path`, only
 //    `ENOENT`/`ENOTDIR` from the `lstat` probe count as genuine absence;
 //    any other I/O error (e.g. `EACCES` on a path mid-deletion) is
 //    rethrown rather than silently treated as a matching deletion, which
 //    would let an unverifiable deletion pass unchecked (Copilot review,
-//    PR #3225).
+//    PR #3225). `--upstream-path` itself is validated up front (must
+//    exist and be a directory) -- without this, a missing/mistyped
+//    upstream root would make every per-file lookup report absence,
+//    misclassifying an entire deletion-only import as a false pure-mirror
+//    pass (same review round).
 //
 // Tolerated classifications (exit 0 requires every compared path to
 // land in this set): `exact`, `generated-banner-only`,
@@ -304,10 +315,28 @@ export function isProseExtension(path: string): boolean {
  * whitespace) never matches `\n{2,}` on its own and silently merges into
  * one paragraph, letting a genuinely removed paragraph break slip through
  * as a tolerated reflow (Copilot review, PR #3225).
+ *
+ * A fenced code block (``` or ~~~, CommonMark §4.5) is compared VERBATIM,
+ * never reflow-tolerant -- a Copilot review on PR #3225 pointed out that
+ * this rule's whole point is proving a vendored file is unchanged, and a
+ * real content edit hiding inside a fenced example (the module header's
+ * own previously-disclosed limitation) silently passed as a tolerated
+ * reflow before this fix. {@link splitFencedSegments} isolates each fence
+ * as its own opaque segment; only the prose OUTSIDE fenced blocks gets
+ * paragraph/whitespace normalization.
  */
 export function normalizeProseWhitespace(content: string): string {
+  return splitFencedSegments(content.replace(/\r\n/g, '\n'))
+    .map((segment) =>
+      segment.type === 'code'
+        ? segment.text
+        : normalizeProseSegment(segment.text),
+    )
+    .join('\n');
+}
+
+function normalizeProseSegment(content: string): string {
   const unified = content
-    .replace(/\r\n/g, '\n')
     .split('\n')
     .map((line) => (/^[ \t]*$/.test(line) ? '' : line))
     .join('\n');
@@ -316,6 +345,63 @@ export function normalizeProseWhitespace(content: string): string {
     .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
     .filter((paragraph) => paragraph.length > 0);
   return paragraphs.join('\n\n');
+}
+
+interface FencedSegment {
+  type: 'prose' | 'code';
+  text: string;
+}
+
+/**
+ * Splits `content` (already `\n`-normalized) into alternating prose/code
+ * segments on CommonMark fenced-code-block boundaries (``` or ~~~, 3+
+ * characters, a closing fence needing only the same character at least as
+ * long, with nothing but whitespace after it -- mirrors
+ * `verify-workshop-integrity.mts`'s own `stripFencedCodeBlocks` fence-
+ * matching rules in this same repository). An unterminated fence at EOF
+ * keeps everything from the opening fence onward as `code` (verbatim)
+ * rather than misreading the remainder as reflow-tolerant prose.
+ */
+function splitFencedSegments(content: string): FencedSegment[] {
+  const lines = content.split('\n');
+  const segments: FencedSegment[] = [];
+  let current: string[] = [];
+  let currentType: FencedSegment['type'] = 'prose';
+  let fence: { char: string; length: number } | null = null;
+  const flush = (): void => {
+    segments.push({ type: currentType, text: current.join('\n') });
+    current = [];
+  };
+  for (const line of lines) {
+    const openMatch = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (openMatch) {
+      const fenceMarker = openMatch[1];
+      const fenceChar = fenceMarker[0];
+      const fenceLen = fenceMarker.length;
+      const onlyWhitespaceAfter = /^\s*$/.test(openMatch[2]);
+      if (fence === null) {
+        flush();
+        currentType = 'code';
+        fence = { char: fenceChar, length: fenceLen };
+        current.push(line);
+        continue;
+      }
+      if (
+        fenceChar === fence.char &&
+        fenceLen >= fence.length &&
+        onlyWhitespaceAfter
+      ) {
+        current.push(line);
+        flush();
+        currentType = 'prose';
+        fence = null;
+        continue;
+      }
+    }
+    current.push(line);
+  }
+  flush();
+  return segments;
 }
 
 /** Content-only classification (rules 1-3), ignoring mode entirely. */
@@ -662,6 +748,45 @@ export function isAbsenceErrorCode(code: string | undefined): boolean {
 }
 
 /**
+ * `true` iff any ANCESTOR directory component of `relativePath` (never the
+ * final component itself -- the caller's own `lstat` on the full path
+ * already handles that) is a symlink, walked one component at a time from
+ * `root`. Plain path joining (`join(root, relativePath)`) then a single
+ * `lstat` on the *full* path only ever inspects the final component --
+ * every intermediate segment is still transparently followed by the OS
+ * during normal path resolution, so a symlinked ancestor (e.g.
+ * `vendor -> /outside`) could otherwise read and accept content from
+ * entirely outside the intended upstream checkout (Copilot review, PR
+ * #3225; verified empirically: `lstat` on the final component reports
+ * `isSymbolicLink: false` while the read still resolves through the
+ * symlinked ancestor). A missing ancestor is not itself a symlink --
+ * `false` in that case; the caller's own `lstat` on the full path reports
+ * the genuine absence.
+ */
+function hasSymlinkAncestor(root: string, relativePath: string): boolean {
+  const segments = relativePath
+    .split('/')
+    .filter((segment) => segment.length > 0);
+  let current = root;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    current = join(current, segments[i]);
+    let stats: ReturnType<typeof lstatSync>;
+    try {
+      stats = lstatSync(current);
+    } catch (error) {
+      if (isAbsenceErrorCode((error as NodeJS.ErrnoException).code)) {
+        return false;
+      }
+      throw error;
+    }
+    if (stats.isSymbolicLink()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Reads one path from a plain `--upstream-path` directory. Uses `lstat`
  * (never `stat`/`readFileSync` directly) to detect a symlink FIRST: a git
  * tree represents a symlink as mode `120000` with the link's target text
@@ -673,12 +798,21 @@ export function isAbsenceErrorCode(code: string | undefined): boolean {
  * review, PR #3225). `lstat` also correctly reports a BROKEN symlink as
  * present (unlike `existsSync`, which follows the link and would report
  * a broken one as absent), matching how git itself always tracks the
- * symlink entry regardless of whether its target exists on disk.
+ * symlink entry regardless of whether its target exists on disk. Also
+ * rejects a symlinked ANCESTOR directory outright -- see
+ * {@link hasSymlinkAncestor} -- rather than silently following it, since
+ * the git tree we're comparing against has no such symlink to justify it.
  */
 function readUpstreamEntryFromPath(
   upstreamPath: string,
   path: string,
 ): TreeEntry | null {
+  if (hasSymlinkAncestor(upstreamPath, path)) {
+    throw new Error(
+      `${path}: an ancestor directory under --upstream-path is a symlink -- ` +
+        'refusing to follow it (it could resolve outside the intended upstream checkout)',
+    );
+  }
   const absolute = join(upstreamPath, path);
   let stats: ReturnType<typeof lstatSync>;
   try {
@@ -749,7 +883,33 @@ function buildFileResult(
       };
 }
 
+/**
+ * Fails loudly when `upstreamPath` doesn't exist or isn't a directory,
+ * rather than letting the run proceed and discover it only indirectly:
+ * every per-file `lstat` under a missing/mistyped `--upstream-path` would
+ * otherwise report `ENOENT`/`ENOTDIR`, which {@link isAbsenceErrorCode}
+ * (correctly, for a genuine per-file absence) treats as "upstream lacks
+ * this path" -- for a deletion-only import, that misclassifies every
+ * deleted file as `deletion-matches-upstream` and exits 0, a false proof
+ * of a pure mirror caused by nothing more than an operator typo (Copilot
+ * review, PR #3225).
+ */
+function validateUpstreamPathRoot(upstreamPath: string): void {
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(upstreamPath);
+  } catch {
+    throw new Error(`--upstream-path does not exist: ${upstreamPath}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`--upstream-path is not a directory: ${upstreamPath}`);
+  }
+}
+
 export function runVerification(options: VerifyOptions): Report {
+  if (options.upstreamPath !== null) {
+    validateUpstreamPathRoot(options.upstreamPath);
+  }
   const diffEntries = listChangedPaths(
     options.targetRoot,
     options.targetBaseRef,
