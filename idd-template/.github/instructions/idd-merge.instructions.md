@@ -482,14 +482,11 @@ Before any mutating action in F3, apply the
 4. Concurrent workers sharing one clone: serialize this step's fetch
    and step 5's `worktree remove` behind the
    [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock).
-   From the **primary worktree** — the worktree being cleaned up is
-   still checked out to its issue branch at this point, so running
-   this elsewhere would fast-forward the wrong branch — switch to
-   `{development-branch}` (the PR's own validated target branch;
-   resolved in `idd-work.instructions.md`'s B1
-   [Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch)
-   step) explicitly before fast-forwarding it, rather than assuming it
-   is already checked out there:
+   From the **primary worktree** (the issue worktree is still on its
+   branch, so running elsewhere would fast-forward the wrong branch),
+   switch to `{development-branch}` (the PR's validated target; see B1
+   [Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch))
+   and fast-forward it:
 
    ```sh
    git fetch origin {development-branch}
@@ -497,25 +494,27 @@ Before any mutating action in F3, apply the
    git merge --ff-only origin/{development-branch}
    ```
 
-   The switch falls back to creating a local tracking branch when the
-   primary worktree has no local `{development-branch}` yet (expected
-   whenever it differs from the repository default, since B1 branches
-   new worktrees straight from `origin/{development-branch}` without
-   ever checking it out in the primary worktree).
+   The switch falls back to a local tracking branch when the primary
+   worktree has none yet (expected for a non-default
+   `{development-branch}`: B1 branches worktrees from its origin ref).
 
-   Doing this before worktree/branch deletion (next step) ensures
-   WorkTrunk's own merge-status check, which reads the local
-   `{development-branch}` rather than `origin/{development-branch}`,
-   sees the just-merged branch as already merged on its first attempt
-   instead of reporting `branch_outcome: retained_unmerged` and
-   declining to delete it (`#2331`). This local checkout is a plain git
-   operation over the merged feature branch's own target and is
-   unrelated to the trusted-checkout-source concern in B1 Step 1 — if
-   `{development-branch}` differs from the repository's default branch,
-   switch the primary worktree back to the default branch
-   (`git switch <default-branch>`) once the remaining F4 cleanup steps
-   below complete, so the next B1 pass finds the primary worktree on
-   its expected trusted checkout.
+   If the switch or fast-forward refuses because dirty primary-worktree
+   paths would be overwritten, re-validate the claim, hold per
+   [Hold / suspend](idd-overview-appendix.instructions.md#hold--suspend)
+   as `primary-worktree-dirty` (resume: the operator cleans those paths
+   — never stash or discard them yourself — then re-run from this step
+   through step 7), and stop before step 5. This is primary-worktree
+   state, not an issue-worktree failure: never remove the issue worktree
+   because of it.
+
+   Doing this before deletion (next step) lets WorkTrunk's merge-status
+   check, which reads the local `{development-branch}`, see the branch as
+   merged instead of reporting `branch_outcome: retained_unmerged` and
+   declining to delete it (`#2331`). This plain git operation is
+   unrelated to B1 Step 1's trusted-checkout concern — if
+   `{development-branch}` is not the repository's default branch, run
+   `git switch <default-branch>` once F4 completes or holds so the next
+   B1 finds the primary worktree on its trusted checkout.
 5. Run from the **primary worktree**, never from inside the worktree
    being removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
