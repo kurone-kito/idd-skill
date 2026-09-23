@@ -1695,18 +1695,22 @@ export function isCodeRabbitAlreadyReviewedAcknowledgement(
 // matched exactly. Guessing a specific literal phrase risks a regex that
 // silently never matches the real comment (worse than the status quo), so
 // that one sentence is matched structurally instead: a bounded run of
-// plain text (no nested HTML, so it cannot cross into the following
-// `<details>` tag) that mentions "review", the one word every known
-// CodeRabbit review-trigger acknowledgement in this repository's own
-// history actually uses (see the `Review triggered|Sure! I'll review|I'll
-// review` phrases recognized elsewhere in this file). Every other anchor
-// stays exact and fail-closed, mirroring
-// CODERABBIT_ALREADY_REVIEWED_ACK_RE's own anchoring discipline: a genuine
-// review that merely mentions "rate limited" in prose does not match.
+// plain text with no nested HTML, so it cannot cross into the following
+// `<details>` tag. An earlier draft also required the literal word
+// "review" inside that span; a CodeRabbit CLI delegate review of this
+// same change (C1, #3193) found that requirement itself too strict --
+// a real CodeRabbit acknowledgement sentence need not contain that exact
+// token -- so it was dropped. The surrounding anchors (reply marker,
+// invocation marker, "Action not completed" summary, the exact "Review
+// rate limited." line, and the exact incremental-review note) are
+// already specific enough on their own that a genuine review comment
+// which merely mentions "rate limited" in prose still cannot match,
+// mirroring CODERABBIT_ALREADY_REVIEWED_ACK_RE's own fail-closed
+// anchoring discipline.
 const CODERABBIT_RATE_LIMITED_ACK_RE = new RegExp(
   `^${escapeRegExp(CODERABBIT_AUTO_GENERATED_REPLY_MARKER)}\\s*` +
     '<!--\\s*CodeRabbit review command invocation:\\s*[^>\\r\\n]+-->\\s*' +
-    '[^<]{0,160}\\breview\\b[^<]{0,160}' +
+    '[^<]{1,200}' +
     '<details>\\s*<summary>\\s*⚠️\\s*Action not completed\\s*</summary>\\s*' +
     'Review rate limited\\.\\s*' +
     '>\\s*Note:\\s*CodeRabbit is an incremental review system and does not ' +

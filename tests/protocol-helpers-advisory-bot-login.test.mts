@@ -26,10 +26,13 @@ const CODERABBIT_ALREADY_REVIEWED_ACK =
 // review-command acknowledgement followed by a conclusive "Review rate
 // limited." decline in the same "Action not completed" wrapper #3146
 // uses, instead of "Already reviewed the last commit."
+// The promise sentence deliberately does not contain the word "review" --
+// regression coverage for a C1 delegate finding on this same change: the
+// matcher must not require that specific token (#3193).
 const CODERABBIT_RATE_LIMITED_ACK =
   '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
   '<!-- CodeRabbit review command invocation: v2:def456 -->\n' +
-  "I'll review the latest commit now.\n\n" +
+  'Sure, taking a look at this now.\n\n' +
   '<details>\n' +
   '<summary>⚠️ Action not completed</summary>\n\n' +
   'Review rate limited.\n\n' +
