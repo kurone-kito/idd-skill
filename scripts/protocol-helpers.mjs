@@ -3988,11 +3988,24 @@ export function buildActivitySnapshotSummary(
   const isDispositionMarkerCommentForThread = (comment, threadResolved) =>
     isDispositionComment(comment) ||
     (threadResolved && isRejectionConfirmedDisposition(comment));
+  // #3194 (round 36 field feedback): a live-status digest edit must never
+  // perturb review-currency (idd-overview-appendix.instructions.md's "Live
+  // status digest" section) -- the same fail-closed, first-line-only digest
+  // recognition `isOperationalOrDigestCommentForGate` already uses for
+  // `summarizeRegularCommentsForGate` / `summarizeDispositionEvidenceForGate`.
+  // Checked unconditionally (not gated by `trustedMarkerLogins`, mirroring
+  // that function's own digest branch): a comment merely mentioning the
+  // marker text on a line other than its first still counts as regular
+  // activity below.
   const filteredComments = comments.filter((comment) => {
+    const body = comment.body ?? '';
+    if (firstLine(body) === LIVE_STATUS_DIGEST_MARKER) {
+      return false;
+    }
     if (!trustedMarkerLogins.has((comment.author?.login ?? '').toLowerCase())) {
       return true;
     }
-    return operationalMarkerPrefixByStart(comment.body ?? '') === null;
+    return operationalMarkerPrefixByStart(body) === null;
   });
   // Structural ack-only evidence (#858): the posting moment of the latest
   // disposition by a configured disposition author opens the window;
