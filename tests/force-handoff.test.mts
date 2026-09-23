@@ -6,6 +6,7 @@ import { resolveTrustedCollaboratorMarkerLogins } from '../src/scripts/collabora
 import {
   buildTrustedMarkerLogins,
   runHandoff,
+  SAME_SUCCESSOR_WARNING,
 } from '../src/scripts/force-handoff.mts';
 
 type RunHandoffOptions = NonNullable<Parameters<typeof runHandoff>[0]>;
@@ -198,9 +199,13 @@ test('runHandoff reports posted: true and returns successorIds and commentUrl', 
 // interactive flow never lets the operator choose the successor's
 // agent-id -- it silently reuses the displaced agent's own identity every
 // time, with no warning that the "successor" is the same session that
-// already failed to finish the claim. These two tests cover both branches
-// of the new prompt: leaving it blank (same-agent default, warning shown)
-// and entering a distinct value (that value flows through, no warning).
+// already failed to finish the claim. These tests cover: leaving the
+// prompt blank (same-agent default, warning shown), entering a distinct
+// value (that value flows through, no warning), explicitly re-entering the
+// displaced agent's own id verbatim (still the same-successor warning, per
+// the issue's own "explicit re-entry" clause), and the issue-plus-pr flow
+// combined with a distinct successor (the PR-number selection must survive
+// the later successor-agent-id prompt).
 
 test('runHandoff blank successor-agent-id prompt keeps the displaced agent-id and prints the same-successor warning', async () => {
   const responses = ['497', '', 'y'];
@@ -235,10 +240,42 @@ test('runHandoff blank successor-agent-id prompt keeps the displaced agent-id an
     'marker body should name the displaced agent-id as successor',
   );
   assert.ok(
-    output.includes(
-      'WARNING: successor agent-id is unchanged from the displaced claim',
-    ),
+    output.includes(SAME_SUCCESSOR_WARNING),
     'should print the same-successor warning before confirmation',
+  );
+});
+
+test('runHandoff explicit re-entry of the displaced agent-id also prints the same-successor warning', async () => {
+  const responses = ['497', 'github-copilot-cli-old', 'y'];
+  let callIndex = 0;
+  const postedBodies: string[] = [];
+  let output = '';
+
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      write: (chunk) => {
+        output += chunk;
+      },
+      postComment: async (_issueNum, body) => {
+        postedBodies.push(body);
+        return {
+          html_url:
+            'https://github.com/kurone-kito/idd-skill/issues/497#issuecomment-3b',
+        };
+      },
+    }),
+  );
+
+  assert.equal(result.posted, true, 'should post the comment');
+  assert.equal(
+    result.successorIds?.newAgentId,
+    'github-copilot-cli-old',
+    'explicitly re-entered value should still be the displaced agent-id',
+  );
+  assert.ok(
+    output.includes(SAME_SUCCESSOR_WARNING),
+    'should print the same-successor warning even on an explicit re-entry',
   );
 });
 
@@ -275,8 +312,60 @@ test('runHandoff entered successor-agent-id flows through to the posted marker w
     'marker body should name the entered value as successor',
   );
   assert.ok(
-    !output.includes('WARNING'),
+    output.includes('Marker preview:'),
+    'should still print the plan preview (positive anchor for the negative check below)',
+  );
+  assert.ok(
+    !output.includes(SAME_SUCCESSOR_WARNING),
     'should not print the same-successor warning when successor differs',
+  );
+});
+
+test('runHandoff preserves the chosen PR number when a distinct successor agent-id is also entered', async () => {
+  const responses = ['497', '501', 'distinct-successor-id', 'y'];
+  let callIndex = 0;
+  const postedBodies: string[] = [];
+
+  const linkedPrs = [
+    {
+      number: 501,
+      headRefName: 'issue/497-feat-force-handoff-add-interactive',
+    },
+  ];
+
+  const result = await runHandoff(
+    makeCommonOpts({
+      fetchLinkedPrs: async () => linkedPrs,
+      prompt: async () => responses[callIndex++],
+      postComment: async (_issueNum, body) => {
+        postedBodies.push(body);
+        return {
+          html_url:
+            'https://github.com/kurone-kito/idd-skill/issues/497#issuecomment-5',
+        };
+      },
+    }),
+  );
+
+  assert.equal(result.posted, true, 'should post the comment');
+  assert.equal(result.contextScope, 'issue-plus-pr');
+  assert.equal(
+    result.successorIds?.newAgentId,
+    'distinct-successor-id',
+    'entered successor should still apply in the issue-plus-pr flow',
+  );
+  assert.ok(
+    postedBodies[0].includes('"linked-pr":"501"'),
+    'marker body should still include the previously chosen PR number',
+  );
+  assert.ok(
+    postedBodies[0].includes('"new-agent-id":"distinct-successor-id"'),
+    'marker body should include the entered successor agent-id',
+  );
+  assert.equal(
+    callIndex,
+    4,
+    'should ask for issue number, PR number, successor agent-id, and confirmation',
   );
 });
 

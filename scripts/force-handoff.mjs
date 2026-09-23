@@ -19,8 +19,7 @@ import {
 } from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
-
-const SAME_SUCCESSOR_WARNING =
+export const SAME_SUCCESSOR_WARNING =
   'WARNING: successor agent-id is unchanged from the displaced claim; if that session cannot resume, this issue remains effectively unclaimed.';
 export const NON_TTY_ERROR =
   'operator interaction is required; run idd-force-handoff in an interactive TTY';

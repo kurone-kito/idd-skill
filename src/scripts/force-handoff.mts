@@ -79,7 +79,7 @@ interface RunHandoffOptions {
  * across its interactive prompts. */
 type ForceHandoffPlanOptions = NonNullable<Parameters<typeof planHandoff>[2]>;
 
-const SAME_SUCCESSOR_WARNING =
+export const SAME_SUCCESSOR_WARNING =
   'WARNING: successor agent-id is unchanged from the displaced claim; if that session cannot resume, this issue remains effectively unclaimed.';
 
 /** Result returned by {@link runHandoff}. */
