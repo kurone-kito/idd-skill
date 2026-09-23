@@ -39,16 +39,19 @@
 //
 // 1. Exact byte-for-byte match, then a narrower "generated-banner-only"
 //    tolerance for an emitted `.mjs` file whose `idd-generated-from`
-//    banner line is the ONLY difference. Unlike an early over-broad
-//    design, this strips just the single comment PARAGRAPH containing
-//    the marker (bounded by a blank line, a bare `//` separator line,
-//    or a non-`//` line) -- never the whole leading header comment
-//    block, which would tolerate an edited safety comment too. This
-//    rule additionally fails CLOSED by default: it only ever applies to
-//    a path under a caller-supplied `--generated-dir` (repeatable). With
-//    no `--generated-dir` given, banner tolerance never activates for
-//    any file -- matching the issue's own "only for emitted .mjs under
-//    the build's own output directories" scoping, which is part of the
+//    banner line is the ONLY difference. This strips ONLY the exact
+//    `//`-prefixed line(s) that themselves contain the marker -- never a
+//    whole surrounding comment paragraph, which would tolerate an edited
+//    adjacent safety/prose comment too (a Copilot review on PR #3225
+//    caught an earlier, paragraph-wide version of this stripping doing
+//    exactly that). Both sides must actually carry the marker for this
+//    tolerance to apply at all -- an unmarked side is never coerced into
+//    matching a marked one via the stripped sentinel. This rule
+//    additionally fails CLOSED by default: it only ever applies to a
+//    path under a caller-supplied `--generated-dir` (repeatable). With no
+//    `--generated-dir` given, banner tolerance never activates for any
+//    file -- matching the issue's own "only for emitted .mjs under the
+//    build's own output directories" scoping, which is part of the
 //    rule's definition, not an optional refinement.
 // 2. JSON compared structurally: parsed and literally re-serialized
 //    (`JSON.stringify(JSON.parse(x))`) on each side, then compared as
@@ -62,7 +65,10 @@
 //    preserving JSON parser would close this gap but is disproportionate
 //    for this issue's scope.
 // 3. Prose-reflow tolerance, scoped to `.md` only (never YAML or
-//    source): paragraphs (separated by one or more blank lines) are
+//    source): paragraphs (separated by one or more blank lines, where a
+//    line consisting solely of horizontal whitespace also counts as
+//    blank -- a Copilot review on PR #3225 caught an earlier version
+//    that recognized only a bare, whitespace-free blank line) are
 //    preserved as paragraph boundaries, but intra-paragraph whitespace
 //    (including a mere line-wrap newline) collapses to a single space
 //    before comparing. A removed blank line that merges two paragraphs
@@ -75,7 +81,14 @@
 //    identical bytes with a dropped executable bit still breaks a
 //    `bin/` entry point. For `--upstream-path` (a plain directory), the
 //    exact git-tracked mode is preferred when that directory is itself
-//    a git work tree; otherwise the OS executable bit approximates it.
+//    a git work tree; otherwise the OS executable bit approximates it
+//    -- except a real symlink, which is always represented the way git
+//    itself would (mode `120000`, content = the link target text)
+//    rather than followed, matching how the target side's own git-tree
+//    reads already treat one (Copilot review, PR #3225). A tracked type
+//    change (git status `T`, e.g. a regular file becoming a symlink) is
+//    treated as an ordinary modification rather than silently discarded
+//    (same review round).
 // 5. Deletions: see the scope model above.
 //
 // Tolerated classifications (exit 0 requires every compared path to
@@ -89,7 +102,7 @@
 // otherwise have matched, rather than inventing an eighth status).
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mts';
 
@@ -154,45 +167,48 @@ export interface VerifyOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Rule 1 (banner strip): replaces exactly the `//`-comment paragraph
- * containing `marker` with a fixed sentinel line, leaving every other line
- * untouched. A "paragraph" is the contiguous run of NON-BARE `//`-prefixed
- * lines around the marker line -- a blank line, a bare `//` line (nothing
- * but whitespace after the prefix), or a non-`//` line all end it. Returns
- * `content` unchanged when no line contains the marker.
+ * Rule 1 (banner strip): replaces ONLY the `//`-prefixed line(s) that
+ * themselves contain `marker` with a fixed sentinel, leaving every other
+ * line -- including an immediately adjacent comment line with no blank or
+ * bare `//` separator -- byte-for-byte untouched. An earlier version of
+ * this function stripped the whole contiguous comment PARAGRAPH around the
+ * marker line instead of just the marker line itself, which a Copilot
+ * review on PR #3225 showed collapses two genuinely different adjacent
+ * comments (e.g. a safety-relevant note) into the same sentinel whenever
+ * they sit in the same paragraph as the banner -- reproducing exactly the
+ * "too permissive" failure mode this issue's own background section warns
+ * about. Returns `content` unchanged when no line contains the marker.
  */
-export function stripGeneratedBannerParagraph(
+export function stripGeneratedBannerLine(
   content: string,
   marker: string,
 ): string {
-  const lines = content.split('\n');
-  const markerIndex = lines.findIndex((line) => {
+  return content
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trimStart();
+      return trimmed.startsWith('//') && trimmed.includes(marker)
+        ? '<generated-banner-stripped>'
+        : line;
+    })
+    .join('\n');
+}
+
+/** `true` iff `content` has a `//`-prefixed line containing `marker`. Used
+ * to require BOTH sides of a comparison to actually carry the banner
+ * before rule 1's tolerance applies -- {@link stripGeneratedBannerLine}
+ * returns an unmarked input unchanged, so without this gate an unmarked
+ * side could coincidentally normalize to (or already equal) the literal
+ * `<generated-banner-stripped>` sentinel and falsely match (Copilot
+ * review, PR #3225). */
+export function hasGeneratedBannerMarker(
+  content: string,
+  marker: string,
+): boolean {
+  return content.split('\n').some((line) => {
     const trimmed = line.trimStart();
     return trimmed.startsWith('//') && trimmed.includes(marker);
   });
-  if (markerIndex === -1) {
-    return content;
-  }
-  const isNonBareCommentLine = (line: string): boolean => {
-    const trimmed = line.trimStart();
-    if (!trimmed.startsWith('//')) {
-      return false;
-    }
-    return trimmed.slice(2).trim().length > 0;
-  };
-  let start = markerIndex;
-  while (start > 0 && isNonBareCommentLine(lines[start - 1])) {
-    start -= 1;
-  }
-  let end = markerIndex;
-  while (end + 1 < lines.length && isNonBareCommentLine(lines[end + 1])) {
-    end += 1;
-  }
-  return [
-    ...lines.slice(0, start),
-    '<generated-banner-stripped>',
-    ...lines.slice(end + 1),
-  ].join('\n');
 }
 
 /**
@@ -252,9 +268,21 @@ export function isProseExtension(path: string): boolean {
  * blank-line COUNT between paragraphs normalize identically; one where a
  * blank line was removed entirely (merging two paragraphs into one) does
  * not.
+ *
+ * A line consisting solely of horizontal whitespace (spaces/tabs) is first
+ * normalized to a truly empty line, so it counts as a paragraph-separating
+ * blank line here exactly as CommonMark treats it -- without this pass, a
+ * run like `"first\n  \nsecond"` (a blank line carrying trailing
+ * whitespace) never matches `\n{2,}` on its own and silently merges into
+ * one paragraph, letting a genuinely removed paragraph break slip through
+ * as a tolerated reflow (Copilot review, PR #3225).
  */
 export function normalizeProseWhitespace(content: string): string {
-  const unified = content.replace(/\r\n/g, '\n');
+  const unified = content
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => (/^[ \t]*$/.test(line) ? '' : line))
+    .join('\n');
   const paragraphs = unified
     .split(/\n{2,}/)
     .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
@@ -277,8 +305,10 @@ export function classifyFileContent(params: {
     const upstreamText = upstreamContent.toString('utf8');
     const targetText = targetContent.toString('utf8');
     if (
-      stripGeneratedBannerParagraph(upstreamText, GENERATED_BANNER_MARKER) ===
-      stripGeneratedBannerParagraph(targetText, GENERATED_BANNER_MARKER)
+      hasGeneratedBannerMarker(upstreamText, GENERATED_BANNER_MARKER) &&
+      hasGeneratedBannerMarker(targetText, GENERATED_BANNER_MARKER) &&
+      stripGeneratedBannerLine(upstreamText, GENERATED_BANNER_MARKER) ===
+        stripGeneratedBannerLine(targetText, GENERATED_BANNER_MARKER)
     ) {
       return { contentClass: 'generated-banner-only' };
     }
@@ -433,8 +463,10 @@ function runGit(
 }
 
 /** `git diff --name-status --no-renames <base>..<ref>`, optionally scoped
- * to `pathPrefixes` as pathspecs. Ignores any status letter other than
- * A/M/D defensively (renames are disabled, so none is expected). */
+ * to `pathPrefixes` as pathspecs. Recognizes A/M/D plus T (a tracked type
+ * change, folded into M -- see the module header); throws on any other
+ * status letter rather than silently discarding it (renames are disabled
+ * via `--no-renames`, so none of R/C is ever expected here). */
 function listChangedPaths(
   targetRoot: string,
   baseRef: string,
@@ -470,20 +502,39 @@ function listChangedPaths(
   // With --no-renames, each -z record is exactly two NUL-terminated
   // tokens: the status letter, then the path (verified empirically --
   // unlike the non -z form, the status and path are NOT tab-joined
-  // within one token). The trailing split() token is an empty string
-  // (the output ends in a NUL), which the odd/undefined path guard
-  // below discards along with any other malformed leftover.
+  // within one token). git's -z output always ends in a trailing NUL, so
+  // split('\0') always yields an odd number of tokens for N entries
+  // (2N + 1); the loop bound below (`i + 1 < tokens.length`) is what
+  // excludes that final empty token, never reading it as a status byte.
   const tokens = result.stdout.toString('utf8').split('\0');
   const entries: DiffEntry[] = [];
   for (let i = 0; i + 1 < tokens.length; i += 2) {
-    const changeType = tokens[i].charAt(0);
+    const rawStatus = tokens[i].charAt(0);
     const path = tokens[i + 1];
-    if (
-      (changeType !== 'A' && changeType !== 'M' && changeType !== 'D') ||
-      path === undefined ||
-      path.length === 0
-    ) {
+    if (path === undefined || path.length === 0) {
       continue;
+    }
+    let changeType: DiffEntry['changeType'];
+    if (rawStatus === 'A' || rawStatus === 'M' || rawStatus === 'D') {
+      changeType = rawStatus;
+    } else if (rawStatus === 'T') {
+      // A tracked type change (e.g. a regular file becoming a symlink, or
+      // vice versa) is a real, content-relevant change that this diff
+      // must still compare -- treat it the same as an ordinary
+      // modification rather than silently discarding it, which would let
+      // a commit consisting solely of such a change report "0 files
+      // compared" and exit 0 despite genuinely diverging from upstream
+      // (Copilot review, PR #3225).
+      changeType = 'M';
+    } else {
+      // Any other status (U for unmerged, or an unrecognized future git
+      // status letter) is unsupported -- fail loudly rather than risk
+      // silently skipping a real change and reporting a false pass.
+      throw new Error(
+        `git diff reported an unsupported status "${rawStatus}" for ` +
+          `${path} -- verify-import-mirror only understands A/M/D/T ` +
+          '(renames are disabled via --no-renames)',
+      );
     }
     entries.push({ path, changeType });
   }
@@ -568,13 +619,36 @@ function resolveUpstreamPathMode(
   return isExecutable ? '100755' : '100644';
 }
 
+/**
+ * Reads one path from a plain `--upstream-path` directory. Uses `lstat`
+ * (never `stat`/`readFileSync` directly) to detect a symlink FIRST: a git
+ * tree represents a symlink as mode `120000` with the link's target text
+ * as its blob content, never the followed file's own content or mode.
+ * `readFileSync`/`statSync` silently follow a symlink -- reporting the
+ * wrong mode and content for a legitimately mirrored symlink (or throwing
+ * outright when the link points at a directory) -- so a symlink is
+ * special-cased here to match git's own semantics instead (Copilot
+ * review, PR #3225). `lstat` also correctly reports a BROKEN symlink as
+ * present (unlike `existsSync`, which follows the link and would report
+ * a broken one as absent), matching how git itself always tracks the
+ * symlink entry regardless of whether its target exists on disk.
+ */
 function readUpstreamEntryFromPath(
   upstreamPath: string,
   path: string,
 ): TreeEntry | null {
   const absolute = join(upstreamPath, path);
-  if (!existsSync(absolute)) {
+  let stats: ReturnType<typeof lstatSync>;
+  try {
+    stats = lstatSync(absolute);
+  } catch {
     return null;
+  }
+  if (stats.isSymbolicLink()) {
+    return {
+      mode: '120000',
+      content: Buffer.from(readlinkSync(absolute), 'utf8'),
+    };
   }
   return {
     mode: resolveUpstreamPathMode(upstreamPath, absolute, path),

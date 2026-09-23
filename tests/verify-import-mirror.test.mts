@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,12 +19,13 @@ import {
   classifyDeletedFile,
   classifyFileContent,
   computeExitCode,
+  hasGeneratedBannerMarker,
   isGeneratedBannerEligible,
   isProseExtension,
   isTolerated,
   normalizeProseWhitespace,
   runVerification,
-  stripGeneratedBannerParagraph,
+  stripGeneratedBannerLine,
 } from '../src/scripts/verify-import-mirror.mts';
 import { fixtureEnv } from './test-utils.mts';
 
@@ -34,7 +36,7 @@ const CLI_ENTRY = join(REPO_ROOT, 'scripts', 'verify-import-mirror.mjs');
 // Rule 1 -- generated-banner-only tolerance
 // ---------------------------------------------------------------------------
 
-test("stripGeneratedBannerParagraph strips only the marker line, not the trailing prose (this repo's own real banner shape)", () => {
+test("stripGeneratedBannerLine strips only the marker line, not the trailing prose (this repo's own real banner shape)", () => {
   // Mirrors scripts/verify-install-deps.mjs's own header exactly: the
   // marker line is immediately followed by a bare "//" separator, then a
   // longer prose paragraph that must survive untouched.
@@ -48,7 +50,7 @@ test("stripGeneratedBannerParagraph strips only the marker line, not the trailin
     '',
     "import { execFileSync } from 'node:child_process';",
   ].join('\n');
-  const stripped = stripGeneratedBannerParagraph(content, 'idd-generated-from');
+  const stripped = stripGeneratedBannerLine(content, 'idd-generated-from');
   assert.equal(
     stripped,
     [
@@ -64,10 +66,10 @@ test("stripGeneratedBannerParagraph strips only the marker line, not the trailin
   );
 });
 
-test('stripGeneratedBannerParagraph returns content unchanged when the marker is absent', () => {
+test('stripGeneratedBannerLine returns content unchanged when the marker is absent', () => {
   const content = '// nothing generated here\nconst x = 1;\n';
   assert.equal(
-    stripGeneratedBannerParagraph(content, 'idd-generated-from'),
+    stripGeneratedBannerLine(content, 'idd-generated-from'),
     content,
   );
 });
@@ -135,6 +137,80 @@ test('rule 1 fail: the same banner-only difference is a genuine mismatch when no
   assert.equal(result.contentClass, 'content-mismatch');
 });
 
+test('rule 1 fail (Copilot review, PR #3225): an adjacent comment with no blank/bare-// separator must still be compared, not swallowed into the stripped banner', () => {
+  // Regression: an earlier version stripped the whole contiguous //
+  // paragraph around the marker line, not just the marker line itself --
+  // when a genuinely different adjacent comment (no blank line or bare
+  // "//" separator between it and the marker line) sat in that same
+  // paragraph, both sides collapsed to the same sentinel and a real
+  // difference was falsely tolerated.
+  const upstream = Buffer.from(
+    '// idd-generated-from: a.mts\n// SECURITY: do not disable auth here\nconst x = 1;\n',
+  );
+  const target = Buffer.from(
+    '// idd-generated-from: b.mts\n// SECURITY: disable auth here (malicious)\nconst x = 1;\n',
+  );
+  const result = classifyFileContent({
+    path: 'scripts/foo.mjs',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: ['scripts'],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
+test('stripGeneratedBannerLine strips only the exact marker-bearing line even when immediately adjacent to another comment', () => {
+  const content =
+    '// idd-generated-from: a.mts\n// SECURITY: do not disable auth here\nconst x = 1;\n';
+  assert.equal(
+    stripGeneratedBannerLine(content, 'idd-generated-from'),
+    '<generated-banner-stripped>\n// SECURITY: do not disable auth here\nconst x = 1;\n',
+  );
+});
+
+test('hasGeneratedBannerMarker is true only when a //-prefixed line actually contains the marker', () => {
+  assert.equal(
+    hasGeneratedBannerMarker(
+      '// idd-generated-from: a.mts\n',
+      'idd-generated-from',
+    ),
+    true,
+  );
+  assert.equal(
+    hasGeneratedBannerMarker(
+      'const x = "idd-generated-from";\n',
+      'idd-generated-from',
+    ),
+    false,
+  );
+  assert.equal(
+    hasGeneratedBannerMarker('const x = 1;\n', 'idd-generated-from'),
+    false,
+  );
+});
+
+test('rule 1 fail (Copilot review, PR #3225): an unmarked side never falsely matches a marked one via the stripped sentinel', () => {
+  // Without requiring the marker on BOTH sides, an unmarked upstream
+  // (returned unchanged by stripGeneratedBannerLine) could coincidentally
+  // equal a marked target's post-strip sentinel form. Constructing the
+  // literal coincidence directly proves the both-sides gate, rather than
+  // only proving the gate exists.
+  const upstream = Buffer.from('<generated-banner-stripped>\nconst x = 1;\n');
+  const target = Buffer.from('// idd-generated-from: a.mts\nconst x = 1;\n');
+  assert.equal(
+    stripGeneratedBannerLine(upstream.toString('utf8'), 'idd-generated-from'),
+    stripGeneratedBannerLine(target.toString('utf8'), 'idd-generated-from'),
+    'sanity: the two sides really do collapse to the same stripped form',
+  );
+  const result = classifyFileContent({
+    path: 'scripts/foo.mjs',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: ['scripts'],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
 // ---------------------------------------------------------------------------
 // Rule 2 -- JSON structural comparison
 // ---------------------------------------------------------------------------
@@ -196,6 +272,39 @@ test('normalizeProseWhitespace does NOT tolerate a removed blank line that merge
     normalizeProseWhitespace(twoParagraphs),
     normalizeProseWhitespace(merged),
   );
+});
+
+test('normalizeProseWhitespace recognizes a blank line carrying trailing whitespace as a real paragraph break (Copilot review, PR #3225)', () => {
+  // Regression: a naive /\n{2,}/ split never matches "first\n  \nsecond"
+  // (the two newlines are separated by whitespace, not adjacent), so an
+  // earlier version silently merged this into ONE paragraph -- meaning a
+  // real paragraph break using this (CommonMark-legal) blank-line shape
+  // could be removed entirely without ever being caught as a mismatch.
+  const whitespaceOnlyBlankLine = 'first\n  \nsecond\n';
+  const trueBlankLine = 'first\n\nsecond\n';
+  assert.equal(
+    normalizeProseWhitespace(whitespaceOnlyBlankLine),
+    normalizeProseWhitespace(trueBlankLine),
+    'a whitespace-only blank line should normalize the same as a bare one',
+  );
+  const merged = 'first\nsecond\n';
+  assert.notEqual(
+    normalizeProseWhitespace(whitespaceOnlyBlankLine),
+    normalizeProseWhitespace(merged),
+    'removing that whitespace-only-blank-line paragraph break must still be rejected',
+  );
+});
+
+test('rule 3 fail (Copilot review, PR #3225): a removed whitespace-only-blank-line paragraph break is a genuine mismatch, not a tolerated reflow', () => {
+  const upstream = Buffer.from('first\n  \nsecond\n');
+  const target = Buffer.from('first\nsecond\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
 });
 
 test('isProseExtension matches .md case-insensitively and nothing else', () => {
@@ -661,6 +770,121 @@ test('rule 4 CLI end-to-end: --upstream-path resolves mode from a real git work 
       report.results.map((r) => r.status),
       ['mode-only-mismatch'],
     );
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(upstreamRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI end-to-end: a real symlink in --upstream-path is compared as a git entry, not followed (Copilot review, PR #3225)', () => {
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  const upstreamRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-upstream-'),
+  );
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'baseline.txt'), 'hello\n');
+    commitAll(targetRoot, 'chore: baseline');
+
+    // Upstream is a plain (non-git) checkout directory containing a real
+    // symlink -- readFileSync/statSync would otherwise follow it, reading
+    // the WRONG content/mode instead of the link's own git-tracked blob
+    // (the link target text) and mode (120000).
+    writeFileSync(join(upstreamRoot, 'real.sh'), '#!/bin/sh\necho hi\n');
+    symlinkSync('./real.sh', join(upstreamRoot, 'link.sh'));
+
+    // Target vendors the SAME symlink (same link target text), tracked
+    // by git as a genuine symlink entry.
+    writeFileSync(join(targetRoot, 'real.sh'), '#!/bin/sh\necho hi\n');
+    symlinkSync('./real.sh', join(targetRoot, 'link.sh'));
+    commitAll(targetRoot, 'chore: vendor import of a symlink');
+
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        upstreamRoot,
+        '--path-prefix',
+        'link.sh',
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0, got ${result.status}: ${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout) as {
+      results: { path: string; status: string }[];
+    };
+    assert.deepEqual(report.results, [
+      { path: 'link.sh', changeType: 'A', status: 'exact' },
+    ]);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(upstreamRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI end-to-end: a tracked type change (T status, regular file -> symlink) is compared, not silently discarded (Copilot review, PR #3225)', () => {
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  const upstreamRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-upstream-'),
+  );
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'real.sh'), '#!/bin/sh\necho hi\n');
+    writeFileSync(join(targetRoot, 'vendored.sh'), '#!/bin/sh\necho hi\n');
+    commitAll(targetRoot, 'chore: baseline with vendored.sh as a regular file');
+
+    // Upstream still has vendored.sh as an ordinary regular file --
+    // never converted to a symlink.
+    writeFileSync(join(upstreamRoot, 'real.sh'), '#!/bin/sh\necho hi\n');
+    writeFileSync(join(upstreamRoot, 'vendored.sh'), '#!/bin/sh\necho hi\n');
+
+    // The import commit converts vendored.sh from a regular file into a
+    // symlink (a tracked type change, git status "T") -- diverging from
+    // upstream, which must still be caught, not silently skipped.
+    rmSync(join(targetRoot, 'vendored.sh'));
+    symlinkSync('./real.sh', join(targetRoot, 'vendored.sh'));
+    commitAll(
+      targetRoot,
+      'chore: vendor import turns vendored.sh into a symlink',
+    );
+
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        upstreamRoot,
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    assert.equal(
+      result.status,
+      1,
+      `expected exit 1, got ${result.status}: ${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout) as {
+      results: { path: string; changeType: string; status: string }[];
+    };
+    const vendoredResult = report.results.find((r) => r.path === 'vendored.sh');
+    assert.ok(
+      vendoredResult !== undefined,
+      'the T-status change to vendored.sh must appear in the report, not be silently discarded',
+    );
+    assert.equal(vendoredResult?.changeType, 'M');
+    assert.equal(vendoredResult?.status, 'content-mismatch');
   } finally {
     rmSync(targetRoot, { recursive: true, force: true });
     rmSync(upstreamRoot, { recursive: true, force: true });
