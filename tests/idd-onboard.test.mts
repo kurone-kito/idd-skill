@@ -5231,7 +5231,7 @@ test('bin/idd-onboard.mjs --record-policy --write-policy-doc wraps a long freefo
   }
 });
 
-test('bin/idd-onboard.mjs --record-policy --write-policy-doc preserves internal multiple spaces in a wrapped freeform answer (#3227 review)', () => {
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc preserves internal multiple spaces in a wrapped freeform answer written to disk (#3227 review)', () => {
   const root = makeFixtureDir();
   writeRecordPolicyFixture(root);
   const answers = buildValidHearAnswers();
@@ -5240,7 +5240,9 @@ test('bin/idd-onboard.mjs --record-policy --write-policy-doc preserves internal 
   // caught that the original word-wrap collapsed internal whitespace runs
   // to a single space when it rebuilt a wrapped line, which silently
   // changes the recorded value (rendered inside an inline code span)
-  // rather than only inserting line breaks.
+  // rather than only inserting line breaks. Exercises the actual
+  // --apply --write-policy-doc file-writing path (#3227 review round 3),
+  // not just the dry-run policyDocument field.
   answers['credential-scope'] =
     'A GitHub App  installation token scoped narrowly to this one ' +
     'repository only, rotated automatically every  quarter by the ' +
@@ -5248,15 +5250,20 @@ test('bin/idd-onboard.mjs --record-policy --write-policy-doc preserves internal 
   const transcript = confirmTranscript(root, answers);
   const transcriptPath = join(root, 'transcript.json');
   writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const docPath = join(root, 'policy-doc.md');
 
-  const { verdict } = runCliBin([
+  const { status } = runCliBin([
     '--record-policy',
     '--transcript',
     transcriptPath,
     '--target',
     root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
   ]);
-  const doc = verdict.policyDocument as string;
+  assert.equal(status, 0);
+  const doc = readFileSync(docPath, 'utf8');
   assert.match(doc, /App {2}installation/);
   assert.match(doc, /every {2}quarter/);
 });
