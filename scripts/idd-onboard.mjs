@@ -1392,12 +1392,13 @@ function describeUnresolvedVendoredPath(sourceRoot, error) {
   return 'vendored-node helper bundle (unresolvable: unreadable helper source)';
 }
 /**
- * Build the import plan: classify each manifest file as `held` (excluded by
- * `--hold`; see below), `new` (no target path yet), `unchanged` (target
- * already matches byte-for-byte — a safe no-op), `overwrite` (target exists
- * as a file and differs), or `blocked-non-file` (target path exists but is
- * not a regular file, e.g. a directory — always blocking, see
- * `nonFileTargetCollisions`). An `overwrite` entry is also recorded in
+ * Build the import plan: classify each manifest file as `new` (no target
+ * path yet), `unchanged` (target already matches byte-for-byte — a safe
+ * no-op), `overwrite` (target exists as a file and differs),
+ * `blocked-non-file` (target path exists but is not a regular file, e.g. a
+ * directory — always blocking, see `nonFileTargetCollisions`), or `held`
+ * (excluded by `--hold`; see below) — matching {@link ImportClassification}'s
+ * own declaration order. An `overwrite` entry is also recorded in
  * `blockedOverwrites` unless `force` is set — the fail-closed default
  * refuses to clobber a differing target file. A missing declared source
  * file is recorded in `missingSource` instead of a plan entry.
