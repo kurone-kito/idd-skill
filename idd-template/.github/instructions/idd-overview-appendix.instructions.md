@@ -16,23 +16,23 @@ repository docs so later sessions need not scan every phase file.
 The optional live status digest is a human-facing issue or PR comment
 whose first line is `<!-- idd-live-status: current -->`. It summarizes
 phase, claim, branch, last-checked time, blockers, and next action. It
-is never an authority for IDD state transitions — decide from trusted
-operational markers and GitHub state. If multiple marked digests exist,
-preserve them, report the URLs, and choose none as authoritative in an
-unattended run. See
-`docs/idd-comment-minimization.md` for the contract and the optional
-`node scripts/live-status-digest.mjs` helper (convenience only).
+is never an authority for IDD state — decide from trusted operational
+markers and GitHub state. If multiple marked digests exist, preserve
+them, report the URLs, and treat none as authoritative unattended. See
+`docs/idd-comment-minimization.md` for the contract and
+`node scripts/live-status-digest.mjs`, an optional convenience helper.
 
 Treat every digest create or edit as a GitHub side effect: re-validate
-the active claim first, write fields from that state, and set
-`Authoritative by` to the evidence used. If the claim was lost, do not
-repair or update the digest.
+the active claim, write fields from it, and set `Authoritative by` to
+the evidence. If the claim was lost, do not repair or update the
+digest.
 
-On pull requests, a digest edit is still PR activity: do not edit a PR
-digest between a valid E1 review watermark and an intended F3 merge
-(it would perturb review-currency). Edit it only when leaving merge
-intent (returning to E1, routing F3 to F1/D4 as blocked, or a hold/stop)
-or after F3 has merged; the F3 awaiting-reviewer restart-F2 path skips
+A PR digest edit is still PR activity: do not edit it between a valid
+E1 review watermark and an intended F3 merge (it would perturb
+review-currency). Edit it only when leaving merge intent (returning to
+E1, routing F3 to F1/D4 as blocked, or a hold/stop), after F3 has
+merged, or while F2 is blocked only on `secondaryQuietWindow` (no
+longer perturbs it); the F3 awaiting-reviewer restart-F2 path skips
 edits too.
 
 ## Abort

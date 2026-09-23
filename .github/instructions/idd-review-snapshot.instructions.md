@@ -187,9 +187,9 @@ not be hidden here — see the claim takeover hide path in
 
 Do not create or edit the PR live status digest after posting this
 watermark unless the next route is E1, an F3 blocked reroute that
-leaves the F2 restart path (F1/D4), a hold/stop, or post-merge cleanup
-— a digest edit after the watermark counts as new review-currency
-activity and would require a fresh E1 snapshot before F2 can pass.
+leaves the F2 restart path (F1/D4), a hold/stop, post-merge cleanup,
+or an F2 `secondaryQuietWindow`-only block — any other edit counts as
+new review-currency activity, requiring a fresh E1 snapshot before F2.
 
 **Step 3 — Filter into ReviewItems_snapshot.** Select and combine into
 **ReviewItems_snapshot**, recording the source URL for each item.
