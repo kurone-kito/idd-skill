@@ -623,6 +623,17 @@ When the repository uses a non-default merge, review, or thread policy,
 describe the local effect in prose near the selected value so future
 agents do not need to infer what changed.
 
+**Recording resolved placeholder values.** If you hand-add content to
+this record — for example a table noting which placeholder resolved to
+which value — spell the placeholder name without doubled braces (for
+example `REPO_NAME`, not `{{REPO_NAME}}`). `idd-onboard.mjs --verify`'s
+placeholder-residue scan treats a literal `{{...}}` token as leftover
+template residue; only the conventional imported path
+(`docs/onboarding/policy-decisions.md`) is excluded from that scan, so
+a custom `--write-policy-doc` target is not protected. See
+[Onboarding Reference — Placeholder Values](placeholders.md) for the
+full placeholder list.
+
 ## Machine-readable policy file
 
 `.github/idd/config.json` is the machine-readable record of the same
