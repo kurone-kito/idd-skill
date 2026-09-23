@@ -274,6 +274,10 @@ test('runHandoff explicit re-entry of the displaced agent-id also prints the sam
     'explicitly re-entered value should still be the displaced agent-id',
   );
   assert.ok(
+    postedBodies[0].includes('"new-agent-id":"github-copilot-cli-old"'),
+    'marker body should name the re-entered displaced agent-id as successor',
+  );
+  assert.ok(
     output.includes(SAME_SUCCESSOR_WARNING),
     'should print the same-successor warning even on an explicit re-entry',
   );
