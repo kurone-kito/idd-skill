@@ -240,11 +240,12 @@ gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<N>-" \
 --jq '.[].ref | sub("^refs/heads/"; "")'
 ```
 
-Parse NUL records; detached: before metadata, require
-`git -C <worktree> rev-parse --show-toplevel` to match the canonical
-recorded root; failure/mismatch → STOP as occupied/unreadable; then compare
-`head-name`/`BISECT_START`: invalid/target → STOP; unrelated → absent;
-prunable frees if unrelated (PR #3154 review).
+Parse NUL records; detached: require `git -C <worktree> rev-parse
+--show-toplevel` to match the canonical recorded root before reading
+`head-name`/`BISECT_START`; failure/mismatch → STOP. Absent:
+unrelated, or non-prunable with no `rebase-*` dir and no
+`BISECT_START`. Otherwise (prunable, invalid, target, malformed,
+unreadable) → STOP as occupied/unreadable (#3154 review).
 
 <!-- dprint-ignore-start -->
 | Match found? | Action |
