@@ -26,7 +26,10 @@
 // `audit-docs.mjs` render into `idd-template/ONBOARDING.md`'s Step 2 file
 // list — so the CLI and the manual doc can never carry two independently
 // hardcoded file lists. A drift test in tests/idd-onboard.test.mts fails on
-// mismatch.
+// mismatch. `--hold <target-path>` (repeatable, #3214) opts an adopter out
+// of importing one or more named manifest entries -- for a target file the
+// adopter deliberately forked -- while every other resolved entry still
+// imports; omitting it leaves this stage's behavior unchanged.
 //
 // --verify: mechanical pass/fail for a target tree after --import and
 // --substitute have run, replacing a manual walkthrough of
@@ -1389,27 +1392,67 @@ function describeUnresolvedVendoredPath(sourceRoot, error) {
   return 'vendored-node helper bundle (unresolvable: unreadable helper source)';
 }
 /**
- * Build the import plan: classify each manifest file as `new` (no target
- * path yet), `unchanged` (target already matches byte-for-byte — a safe
- * no-op), `overwrite` (target exists as a file and differs), or
- * `blocked-non-file` (target path exists but is not a regular file, e.g. a
- * directory — always blocking, see `nonFileTargetCollisions`). An
- * `overwrite` entry is also recorded in `blockedOverwrites` unless `force`
- * is set — the fail-closed default refuses to clobber a differing target
- * file. A missing declared source file is recorded in `missingSource`
- * instead of a plan entry.
+ * Build the import plan: classify each manifest file as `held` (excluded by
+ * `--hold`; see below), `new` (no target path yet), `unchanged` (target
+ * already matches byte-for-byte — a safe no-op), `overwrite` (target exists
+ * as a file and differs), or `blocked-non-file` (target path exists but is
+ * not a regular file, e.g. a directory — always blocking, see
+ * `nonFileTargetCollisions`). An `overwrite` entry is also recorded in
+ * `blockedOverwrites` unless `force` is set — the fail-closed default
+ * refuses to clobber a differing target file. A missing declared source
+ * file is recorded in `missingSource` instead of a plan entry.
+ *
+ * `hold` (repeatable) names manifest **target** paths — the same
+ * `targetPath` this function's own entries and `--dry-run`'s plan output
+ * report, matched by exact string equality (no `./`-prefix or
+ * trailing-slash normalization) — to exclude from this import while
+ * still importing every other resolved entry. A held entry is
+ * classified `held` and skips every existence/content check above
+ * (source-missing, overwrite, non-file collision) entirely, since it is
+ * never read from `--source` or written to `--target` — `--force` has
+ * no effect on it either way. A `hold` value that does not match any
+ * path in the resolved manifest (for the given `profile`) is a usage
+ * error, fail-closed: it throws rather than silently matching nothing,
+ * since a stale or misspelled `--hold` value would otherwise import
+ * every file, including the one the caller meant to keep local.
+ *
+ * That unknown-path check is skipped when `resolved.missingSource` is
+ * already non-empty — the `profile: 'vendored-node'` helper-bundle walk
+ * failed against an incomplete `--source` tree, so `resolved.files` is
+ * itself a degraded (core-files-only) view, not the true resolved
+ * manifest. Validating `--hold` against that degraded view would throw
+ * a misleading "unknown --hold" usage error that masks the real
+ * problem; `missingSource`'s own blocking finding is the correct signal
+ * there instead, and a `--hold` value simply matches nothing beyond the
+ * degraded set in that case.
  */
 export function buildImportPlan(
   sourceRoot,
   targetRoot,
-  { profile, force = false } = {},
+  { profile, force = false, hold = [] } = {},
 ) {
   const resolved = resolveImportFiles(sourceRoot, profile);
+  const holdSet = new Set(hold);
+  if (holdSet.size > 0 && resolved.missingSource.length === 0) {
+    const knownTargets = new Set(resolved.files.map((file) => file.targetPath));
+    const unknown = [...holdSet].filter((target) => !knownTargets.has(target));
+    if (unknown.length > 0) {
+      throw new Error(
+        `unknown --hold path(s), not present in the resolved manifest for this --profile: ${unknown.join(', ')}`,
+      );
+    }
+  }
   const entries = [];
   const missingSource = [...resolved.missingSource];
   const blockedOverwrites = [];
   const nonFileTargetCollisions = [];
+  const heldTargets = [];
   for (const file of resolved.files) {
+    if (holdSet.has(file.targetPath)) {
+      entries.push({ ...file, classification: 'held' });
+      heldTargets.push(file.targetPath);
+      continue;
+    }
     if (!fileExists(sourceRoot, file.sourcePath)) {
       missingSource.push(file.sourcePath);
       continue;
@@ -1451,12 +1494,19 @@ export function buildImportPlan(
       blockedOverwrites.push(file.targetPath);
     }
   }
-  return { entries, missingSource, blockedOverwrites, nonFileTargetCollisions };
+  return {
+    entries,
+    missingSource,
+    blockedOverwrites,
+    nonFileTargetCollisions,
+    heldTargets,
+  };
 }
 /**
  * Apply the plan: copy every `new` or `overwrite` entry (skipping
- * `unchanged` entries, which already match, and `blocked-non-file`
- * entries, which can never be copied onto), creating parent directories
+ * `unchanged` entries, which already match; `blocked-non-file` entries,
+ * which can never be copied onto; and `held` entries, which `--hold`
+ * deliberately excluded from this import), creating parent directories
  * as needed. Preserves the source file's permission bits — a plain byte
  * copy would otherwise silently drop the executable bit that
  * `.githooks/pre-commit` / `.githooks/pre-push` require. Returns the count
@@ -1471,7 +1521,8 @@ export function applyImportPlan(sourceRoot, targetRoot, plan) {
   for (const entry of plan.entries) {
     if (
       entry.classification === 'unchanged' ||
-      entry.classification === 'blocked-non-file'
+      entry.classification === 'blocked-non-file' ||
+      entry.classification === 'held'
     ) {
       continue;
     }
@@ -2518,6 +2569,7 @@ function parseArgs(rawArgv) {
     dryRun: false,
     force: false,
     profile: undefined,
+    hold: [],
     overrides: {},
     help: false,
     allowRoots: [],
@@ -2609,6 +2661,11 @@ function parseArgs(rawArgv) {
       index += 1;
       continue;
     }
+    if (token === '--hold') {
+      parsed.hold.push(requireValue());
+      index += 1;
+      continue;
+    }
     if (token === '--allow-root') {
       parsed.allowRoots.push(requireValue());
       index += 1;
@@ -2639,6 +2696,9 @@ function importOnlyFlagsPresent(args) {
   }
   if (args.profile !== undefined) {
     present.push('--profile');
+  }
+  if (args.hold.length > 0) {
+    present.push('--hold');
   }
   return present;
 }
@@ -2671,9 +2731,11 @@ function recordPolicyOnlyFlagsPresent(args) {
 }
 /**
  * Flags --verify does not accept: every substitute-only override flag (verify
- * never substitutes), plus `--force` and `--dry-run` (verify never writes, so
+ * never substitutes), plus `--force`, `--dry-run` (verify never writes, so
  * "allow overwriting" and "print the plan without writing" are both
- * meaningless for it).
+ * meaningless for it), and `--hold` (verify checks manifest completeness
+ * against the full resolved file set; it never builds an import plan that a
+ * hold could exclude an entry from).
  */
 function verifyForeignFlagsPresent(args) {
   const present = substituteOnlyFlagsPresent(args);
@@ -2682,6 +2744,9 @@ function verifyForeignFlagsPresent(args) {
   }
   if (args.dryRun) {
     present.push('--dry-run');
+  }
+  if (args.hold.length > 0) {
+    present.push('--hold');
   }
   return present;
 }
@@ -2919,6 +2984,7 @@ function runImportCli(args) {
   const plan = buildImportPlan(sourceDir, targetDir, {
     profile: args.profile,
     force: args.force,
+    hold: args.hold,
   });
   // Fail closed: never write a partially-imported tree. Apply mode writes
   // only when every declared source file exists, no existing target file
@@ -2945,6 +3011,7 @@ function runImportCli(args) {
     missingSource: plan.missingSource,
     blockedOverwrites: plan.blockedOverwrites,
     nonFileTargetCollisions: plan.nonFileTargetCollisions,
+    heldTargets: plan.heldTargets,
     filesChanged,
     written: canWrite && filesChanged > 0,
   };
@@ -3053,9 +3120,15 @@ collectVendoredFiles); every other profile value vends no extra files.
 Refuses to overwrite an existing target file whose content differs
 unless --force, and reports missing declared source files and non-file
 target collisions (e.g. an existing directory at a target path) as
-blocking findings. Prints a JSON verdict with the per-file plan
-(new / unchanged / overwrite / blocked-non-file classification) and the
-blocking findings.
+blocking findings. With --hold <target-path> (repeatable), skips the
+named manifest entries -- matched against the same targetPath a plan
+entry or --dry-run output reports -- while still importing every other
+entry in the resolved file set; a --hold value that does not match any
+resolved manifest path is a usage error (exit 2), never a silent no-op.
+Prints a JSON verdict with the per-file plan
+(new / unchanged / overwrite / blocked-non-file / held classification),
+the blocking findings, and heldTargets (the target paths --hold
+excluded -- never blocking).
 
 Exit codes: 0 converged; 1 a blocking finding exists (apply writes
 nothing in that case); 2 usage or configuration error.
@@ -3073,6 +3146,9 @@ nothing in that case); 2 usage or configuration error.
                                      substantially widens it instead.
   --profile <name>                  ${PROFILE_NAMES.join(' | ')}
   --force                           allow overwriting a differing target file
+  --hold <target-path>              skip importing this manifest entry
+                                     (repeatable); default behavior (no
+                                     --hold) is unchanged
   --dry-run                         print the plan without writing anything
   --help, -h                        show this help
 

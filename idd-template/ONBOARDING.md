@@ -606,11 +606,22 @@ error), so an agent can gate on the exit code without parsing prose.
   to also copy the profile-conditional helper bundle (every other
   `--profile` value copies no extra files); add `--force` to allow
   overwriting an existing target file whose content differs (refused by
-  default); add `--dry-run` to print the plan without writing.
+  default); add `--dry-run` to print the plan without writing. Add
+  `--hold <target-path>` (repeatable) to skip one or more manifest entries
+  you deliberately maintain a local fork of -- for example a
+  `.github/instructions/*.md` file this target repository has already
+  customized -- while still importing every other entry; omitting
+  `--hold` leaves `--import`'s behavior unchanged, and `--dry-run --import
+  --hold <path>` lists the held entry in the plan as `held` (skipped)
+  rather than dropping it from the output. `<target-path>` must match a
+  path the plan already reports (the same `targetPath` a plan entry or
+  `--dry-run` output shows); a `--hold` value outside the resolved
+  manifest is a usage error, not a silent no-op.
 
   ```sh
   node scripts/idd-onboard.mjs --import --source <idd-skill-clone> \
-    --target <target-repo> [--profile <name>] [--force] [--dry-run]
+    --target <target-repo> [--profile <name>] [--force] [--dry-run] \
+    [--hold <target-path> ...]
   ```
 
 - **Step 4 (replace placeholders) → `--substitute`**: resolves the seven
