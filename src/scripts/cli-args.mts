@@ -49,6 +49,11 @@
 // now would mean tests are their only caller. Left for whichever of
 // #1450/#1451 first needs them.
 
+// #3240: side-effect-only import, kept first so an unsupported Node (where
+// `import.meta.main` is `undefined`, not `false`) fails loudly before any
+// of this module's own code runs. See node-runtime-guard.mts.
+import './node-runtime-guard.mts';
+
 import { parseArgs as nodeParseArgs } from 'node:util';
 
 // #1922: the three message-shape prefixes toRepoShapedError() below

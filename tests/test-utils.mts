@@ -36,6 +36,7 @@ const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
 // its siblings under the temp scripts/ dir.
 const SYNC_DOCS_DEPS = [
   'consistency-helpers.mjs',
+  'node-runtime-guard.mjs',
   'policy-helpers.mjs',
   'provider-contract.mjs',
 ];

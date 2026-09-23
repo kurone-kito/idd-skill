@@ -16,6 +16,39 @@ import { parseArgs } from 'node:util';
 // breaks the template copy with ERR_MODULE_NOT_FOUND. This applies
 // regardless of extension, so keep this local copy in both the .mts
 // source and its generated .mjs/template-mirror artifacts.
+// #3240: same self-containment constraint as the duplicated constants
+// below -- cannot `import './node-runtime-guard.mts'` here, so this
+// inlines a standalone copy of that module's assertEntrySignal() check
+// instead (`standalone-mirror-imports.test.mts`'s "exact-mode
+// idd-template/scripts/ mirror sources import only Node built-ins" test
+// fails loudly if a relative import is added back). `import.meta.main` is
+// `undefined` -- not `false` -- on a Node release that predates it
+// (v20.20.2/v22.17.1/v24.1.0 confirmed live), so on such a runtime this
+// file's own `if (import.meta.main)` entry block below would silently
+// exit 0 without ever running, instead of failing loudly. Keep this in
+// sync with node-runtime-guard.mts's assertEntrySignal() by hand; the two
+// duplicate helpers directly below this one document the same tradeoff.
+//
+// Wrapped in a function (rather than a bare top-level `if`) on purpose:
+// `tests/cli-entry-smoke.test.mts`'s module-eval-order guard recognizes a
+// column-0 `if (...import.meta.main...) {` line as THIS file's own CLI
+// entry block -- a bare top-level `if` here would be mistaken for that
+// entry block and misattribute every later module-level `const` below as
+// a TDZ risk. A function call is not an entry-guard shape, so it stays
+// invisible to that scan.
+function assertNodeRuntimeSupportsEntrySignal() {
+  if (typeof import.meta.main !== 'boolean') {
+    process.stderr.write(
+      `node-runtime-guard: this repository's CLI entry points require Node's ` +
+        `\`import.meta.main\` (added in Node 22.18.0 / 24.2.0), which is not ` +
+        `available on this runtime (Node ${process.version}). Upgrade to a ` +
+        `Node version satisfying this repository's engines.node range ` +
+        `(^22.23.2 || ^24.2.0 || >=26.0.0).\n`,
+    );
+    process.exit(1);
+  }
+}
+assertNodeRuntimeSupportsEntrySignal();
 function loadIddConfig() {
   try {
     return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));

@@ -292,6 +292,176 @@ test('every src/scripts/*.mts helper keeps module-level bindings above its CLI e
 });
 
 // ---------------------------------------------------------------------------
+// node-runtime-guard reachability guard (#3240)
+//
+// `import.meta.main` is `undefined` -- not `false` -- on a Node release
+// that predates it, so a CLI entry block's `if (import.meta.main)` guard
+// is simply falsy there: the helper exits 0 without ever running its
+// body, instead of failing loudly on an unsupported runtime. Every
+// entry-block file must statically reach node-runtime-guard.mts through
+// its relative-import closure, so importing it always runs
+// assertEntrySignal() before the entry block can execute. A dynamic
+// `import()` is deliberately excluded from the scanned specifier shape:
+// it resolves too late, after module evaluation (and so the entry block)
+// may already be underway, to satisfy this contract.
+// ---------------------------------------------------------------------------
+
+const GUARD_FILE_NAME = 'node-runtime-guard.mts';
+
+/**
+ * Static `import` / `export ... from` specifiers only -- the same
+ * specifier shape as the first pattern in helper-runtime-manifest.mts's
+ * (non-exported) findRelativeImports. That function's second pattern,
+ * for a dynamic `import()`, is deliberately NOT reused here (see the
+ * section header above for why).
+ */
+function findStaticRelativeImports(source: string): string[] {
+  const specifiers = new Set<string>();
+  const pattern =
+    /\b(?:import|export)\s+(?:[^"'`]+\s+from\s+)?["'](\.[^"']+)["']/g;
+  for (const match of source.matchAll(pattern)) {
+    specifiers.add(match[1]);
+  }
+  return [...specifiers];
+}
+
+/**
+ * Pure BFS over a fixed `files` map (module basename -> source text).
+ * This repository's src/scripts/*.mts import closure never leaves that
+ * single flat directory (no `../` specifier appears anywhere under it),
+ * so resolving a specifier down to its own basename is enough to look it
+ * up again in the same map -- no filesystem access required, which is
+ * what keeps this scan a pure function testable against a synthetic
+ * in-memory fixture. Returns the subset of `entryNames` whose closure
+ * never reaches `guardName`.
+ */
+function findGuardUnreachableEntries(
+  files: ReadonlyMap<string, string>,
+  entryNames: readonly string[],
+  guardName: string,
+): string[] {
+  return entryNames.filter((entry) => !reachesGuard(entry));
+
+  function reachesGuard(start: string): boolean {
+    const seen = new Set<string>();
+    const queue = [start];
+    while (queue.length > 0) {
+      const current = queue.shift() as string;
+      if (current === guardName) {
+        return true;
+      }
+      if (seen.has(current)) {
+        continue;
+      }
+      seen.add(current);
+      const text = files.get(current);
+      if (text === undefined) {
+        continue;
+      }
+      for (const specifier of findStaticRelativeImports(text)) {
+        const basename = specifier.split('/').pop();
+        if (basename) {
+          queue.push(basename);
+        }
+      }
+    }
+    return false;
+  }
+}
+
+test('the guard-unreachable scan flags a synthetic entry-block file that imports nothing', () => {
+  const files = new Map([
+    ['synthetic-entry.mts', 'if (import.meta.main) {\n  run();\n}\n'],
+    [GUARD_FILE_NAME, '// guard\n'],
+  ]);
+  const violations = findGuardUnreachableEntries(
+    files,
+    ['synthetic-entry.mts'],
+    GUARD_FILE_NAME,
+  );
+  assert.deepEqual(violations, ['synthetic-entry.mts']);
+});
+
+test('the guard-unreachable scan does NOT flag a synthetic entry file that reaches the guard transitively', () => {
+  const files = new Map([
+    [
+      'synthetic-entry.mts',
+      "import './middle.mts';\nif (import.meta.main) {\n  run();\n}\n",
+    ],
+    ['middle.mts', `import './${GUARD_FILE_NAME}';\n`],
+    [GUARD_FILE_NAME, '// guard\n'],
+  ]);
+  const violations = findGuardUnreachableEntries(
+    files,
+    ['synthetic-entry.mts'],
+    GUARD_FILE_NAME,
+  );
+  assert.deepEqual(violations, []);
+});
+
+// #3240: minimize-superseded-markers.mts is curl-mirrored standalone to
+// idd-template/scripts/ (#1208) and cannot import any sibling file --
+// standalone-mirror-imports.test.mts's "exact-mode idd-template/scripts/
+// mirror sources import only Node built-ins" test enforces that. It
+// inlines its own duplicate of the assertEntrySignal() check instead of
+// importing node-runtime-guard.mts, so it is deliberately exempted from
+// the import-closure scan below -- but the exemption is narrow and
+// non-vacuous: the second test asserts the inlined duplicate is actually
+// still present, so deleting it (without also removing this exemption)
+// still fails the suite.
+const STANDALONE_GUARD_DUPLICATE_EXEMPTIONS = new Set([
+  'minimize-superseded-markers.mts',
+]);
+
+test('every src/scripts/*.mts entry-block file reaches node-runtime-guard.mts via its static import closure, except the documented standalone-mirror exemption', () => {
+  const names = readdirSync(SRC_SCRIPTS).filter((name) =>
+    name.endsWith('.mts'),
+  );
+  const files = new Map<string, string>(
+    names.map((name) => [name, readFileSync(join(SRC_SCRIPTS, name), 'utf8')]),
+  );
+  const entryNames = names.filter((name) => {
+    const text = files.get(name) ?? '';
+    return text.split(/\r?\n/).some((line) => ENTRY_GUARD.test(line));
+  });
+  assert.ok(
+    entryNames.length > 0,
+    'expected at least one src/scripts/*.mts CLI entry-block file',
+  );
+  const scannedEntryNames = entryNames.filter(
+    (name) => !STANDALONE_GUARD_DUPLICATE_EXEMPTIONS.has(name),
+  );
+  const violations = findGuardUnreachableEntries(
+    files,
+    scannedEntryNames,
+    GUARD_FILE_NAME,
+  );
+  assert.deepEqual(
+    violations,
+    [],
+    `entry-block file(s) that do not statically reach ${GUARD_FILE_NAME}: ${violations.join(
+      ', ',
+    )}`,
+  );
+});
+
+test('every standalone-mirror exemption still carries its own inlined guard predicate', () => {
+  for (const name of STANDALONE_GUARD_DUPLICATE_EXEMPTIONS) {
+    const text = readFileSync(join(SRC_SCRIPTS, name), 'utf8');
+    assert.match(
+      text,
+      /typeof import\.meta\.main\s*!==\s*'boolean'/,
+      `${name} must keep its inlined "typeof import.meta.main !== 'boolean'" guard predicate in sync with assertEntrySignal()`,
+    );
+    assert.match(
+      text,
+      /\^22\.23\.2 \|\| \^24\.2\.0 \|\| >=26\.0\.0/,
+      `${name}'s inlined guard message must keep the engines.node range literal in sync with node-runtime-guard.mts`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
 // CLI-subprocess smoke test — the entry path actually runs
 //
 // Import-only tests never evaluate the `isMainModule` block, so they cannot
