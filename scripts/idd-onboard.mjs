@@ -2338,6 +2338,50 @@ const RECORD_POLICY_DOC_ROWS = [
   },
 ];
 /**
+ * Word-wrap a single rendered policy-doc line to at most `width` columns
+ * (#3227's `MD013` fix). A leading `- ` list marker (used by the
+ * `claim-timing` / `ci-wait-policy` bullet rows) is kept only on the
+ * first physical line, and every wrapped continuation line is indented
+ * to align under the item's own text so it stays a lazy continuation of
+ * the same CommonMark list item rather than starting a new block. Wraps
+ * only at word boundaries -- matching this repository's own
+ * inline-code-span-wrap convention -- so a single token longer than
+ * `width` on its own (an unusually long `development-branch` name, for
+ * example) is still emitted whole rather than force-cut. Ported locally
+ * from `token-cost-report.mts`'s module-private `wrapProse` rather than
+ * exported and shared, per this issue's own out-of-scope note against a
+ * general-purpose Markdown-wrapping utility.
+ */
+function wrapPolicyDocLine(line, width = 80) {
+  if (line.length <= width) {
+    return line;
+  }
+  const marker = /^-\s+/.exec(line)?.[0] ?? '';
+  const continuationIndent = ' '.repeat(marker.length);
+  const words = line.slice(marker.length).split(' ');
+  const wrapped = [];
+  let current = '';
+  for (const word of words) {
+    const prefixLength =
+      wrapped.length === 0 ? marker.length : continuationIndent.length;
+    const candidate = current.length === 0 ? word : `${current} ${word}`;
+    if (prefixLength + candidate.length > width && current.length > 0) {
+      wrapped.push(
+        `${wrapped.length === 0 ? marker : continuationIndent}${current}`,
+      );
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) {
+    wrapped.push(
+      `${wrapped.length === 0 ? marker : continuationIndent}${current}`,
+    );
+  }
+  return wrapped.join('\n');
+}
+/**
  * Render the filled `## IDD Policy Configuration` Markdown document from
  * a confirmed transcript's answers, following the structure shown in
  * `idd-template/docs/onboarding/policy-decisions.md`'s
@@ -2345,6 +2389,16 @@ const RECORD_POLICY_DOC_ROWS = [
  * answer is omitted rather than printed with a placeholder value. The
  * issue-mediated bootstrap option can override the companion row without
  * changing the transcript or config patch.
+ *
+ * The document opens with a distinct `#` title (#3227) so the standalone
+ * file `--write-policy-doc` writes satisfies `MD041`/first-line-heading
+ * -- added above the original `## IDD Policy Configuration` heading
+ * rather than promoting it, so that heading's own text is unchanged.
+ * Every row's rendered body is then wrapped at 80 columns
+ * (`wrapPolicyDocLine`) to satisfy `MD013`; this is a no-op for the
+ * already-short enum-valued rows and only actually wraps a long
+ * freeform answer (`credential-scope`, `development-branch`) or the
+ * fixed `ci-wait-policy` bullet text.
  */
 function buildFilledPolicyDocument(answers, options = {}) {
   const valueById = new Map(answers.map((answer) => [answer.id, answer.value]));
@@ -2356,12 +2410,18 @@ function buildFilledPolicyDocument(answers, options = {}) {
       options.issueMediated && row.id === 'issue-authoring-companion'
         ? 'not installed'
         : transcriptValue;
-    const body = row.renderBody
+    const rawBody = row.renderBody
       ? row.renderBody(value)
       : `**${row.label}**: \`${value}\``;
+    const body = rawBody
+      .split('\n')
+      .map((line) => wrapPolicyDocLine(line))
+      .join('\n');
     return `### ${row.heading}\n\n${body}`;
   });
   return [
+    '# IDD Policy Configuration Record',
+    '',
     '## IDD Policy Configuration',
     '',
     'This repository uses the following IDD policies:',

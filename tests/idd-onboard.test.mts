@@ -4773,9 +4773,13 @@ test('bin/idd-onboard.mjs --record-policy dry-run prints the config patch and fi
     verdict.policyDocument as string,
     /### Claim Timing\n\n- \*\*claim-stale-age\*\*: 24 h \(distributed default\)\n- \*\*claim-heartbeat-interval\*\*: 12 h \(distributed default\)/,
   );
+  // The two fixed CI Wait Policy bullets are >80 columns even for the
+  // shortest confirmed rerun-policy value (the fixed narrative text
+  // alone already exceeds the width), so #3227's line-wrap always
+  // splits each onto a wrapped, 2-space-indented continuation line.
   assert.match(
     verdict.policyDocument as string,
-    /### CI Wait Policy\n\n- \*\*running timeout\*\*: `PT30M` \/ 30 min \(distributed default, not confirmed by this hearing item\)\n- \*\*generation timeout\*\*: `PT10M` \/ 10 min \(distributed default, not confirmed by this hearing item\)\n- \*\*rerun policy\*\*: `rerun-once`/,
+    /### CI Wait Policy\n\n- \*\*running timeout\*\*: `PT30M` \/ 30 min \(distributed default, not confirmed by\n {2}this hearing item\)\n- \*\*generation timeout\*\*: `PT10M` \/ 10 min \(distributed default, not confirmed\n {2}by this hearing item\)\n- \*\*rerun policy\*\*: `rerun-once`/,
   );
   assertTreeUnchanged(root, before);
 });
@@ -4853,9 +4857,14 @@ test('bin/idd-onboard.mjs --record-policy fills a Claim Timing override with the
     root,
   ]);
   const doc = verdict.policyDocument as string;
+  // This line is >80 columns even with the shortest confirmed override
+  // selection (the fixed narrative text alone exceeds the width), so
+  // #3227's line-wrap always splits it -- unlike the bulleted CI Wait
+  // Policy lines below, this one is a plain paragraph with no list
+  // marker, so the wrapped continuation line carries no indent.
   assert.match(
     doc,
-    /### Claim Timing\n\n\*\*Selection\*\*: `repository-override` \(override values not captured by this hearing item -- record them manually\)/,
+    /### Claim Timing\n\n\*\*Selection\*\*: `repository-override` \(override values not captured by this\nhearing item -- record them manually\)/,
   );
   assert.doesNotMatch(doc, /claim-stale-age/);
   assert.match(
@@ -5184,6 +5193,100 @@ test('bin/idd-onboard.mjs --record-policy --write-policy-doc writes the template
   ]);
   assert.equal(appliedNoDocFlag.status, 0);
   assert.equal(appliedNoDocFlag.verdict.writtenPolicyDocPath, null);
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc wraps a long freeform credential-scope answer to no more than 80 columns (#3227)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  // Long enough (and space-containing) to have previously produced a
+  // >80-column line before #3227's wrap fix -- mirrors the reported
+  // reproduction's 388-column freeform line.
+  answers['credential-scope'] =
+    'A GitHub App installation access token scoped narrowly to only this ' +
+    'one repository, generated fresh for every workflow run and rotated ' +
+    'automatically so no long-lived credential is ever stored at rest';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const docPath = join(root, 'policy-doc.md');
+
+  const { status } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+  ]);
+  assert.equal(status, 0);
+  const lines = readFileSync(docPath, 'utf8').split('\n');
+  for (const line of lines) {
+    assert.ok(
+      line.length <= 80,
+      `expected every line to be <= 80 columns, got ${line.length}: ${line}`,
+    );
+  }
+});
+
+test("bin/idd-onboard.mjs --record-policy --write-policy-doc output passes the template's own markdownlint config (#3227)", (t) => {
+  if (!MARKDOWNLINT_BIN) {
+    // Expected on the bare-node lane (lint.yml) -- see the block comment
+    // above resolveBinScript/tryResolveBinScript.
+    t.skip('markdownlint-cli2 is not installed in this environment');
+    return;
+  }
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  answers['credential-scope'] =
+    'A GitHub App installation access token scoped narrowly to only this ' +
+    'one repository, generated fresh for every workflow run and rotated ' +
+    'automatically so no long-lived credential is ever stored at rest';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const docPath = join(root, 'policy-doc.md');
+
+  const { status } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+  ]);
+  assert.equal(status, 0);
+
+  const markdownlintResult = spawnSync(
+    process.execPath,
+    [
+      MARKDOWNLINT_BIN,
+      '--config',
+      join(REPO_ROOT, 'idd-template', '.markdownlint.yml'),
+      docPath,
+    ],
+    // cwd: root (not this repo's own root) -- markdownlint-cli2 also
+    // auto-discovers a `.markdownlint-cli2.yaml`/`.markdownlint.yml` from
+    // the *process* cwd even when --config and the linted file both sit
+    // elsewhere (confirmed empirically: running from this repo's root
+    // pulls in its own stricter `.markdownlint.yml`, which `extends
+    // '@kurone-kito/markdownlint-config'` rather than the lenient
+    // template config this test means to check against). `root` has no
+    // such config of its own, matching a real adopter repository where
+    // `idd-template/.markdownlint.yml` is copied to the repo root with
+    // nothing stricter layered on top.
+    { cwd: root, encoding: 'utf8' },
+  );
+  assert.equal(
+    markdownlintResult.status,
+    0,
+    `markdownlint-cli2 findings against the written policy doc:\n${markdownlintResult.stdout}${markdownlintResult.stderr}`,
+  );
 });
 
 test('bin/idd-onboard.mjs --record-policy exits 2 when config.json does not already exist (post-import only)', () => {
