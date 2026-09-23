@@ -195,28 +195,37 @@ export function parseOverviewBody(body) {
 // ---------------------------------------------------------------------------
 const DEFERRED_TO_FOLLOW_UP_RE = /\bdeferred to follow-up issue\b/i;
 /**
- * Classify one reply body's disposition marker. `.trim()` (both ends)
- * deliberately merges two established call-site conventions in
- * protocol-helpers.mts: `isDispositionComment`'s `trimEnd()`-only
- * marker-first-bytes contract and `AMD_MARKER_PATTERN`'s own established
- * `trimStart()` call site -- real GitHub reply bodies carry no meaningful
- * leading/trailing whitespace, so merging both into a plain `.trim()` here
- * is a safe, deliberate simplification for this read-only historical audit
- * (never a gating decision on an in-flight thread). Returns `null` for any
- * reply that is not a recognized disposition marker at all (ordinary prose,
- * a reviewer's own follow-up remark, etc.).
+ * Classify one reply body's disposition marker, preserving each pattern's
+ * own established trim contract exactly rather than merging them (Copilot
+ * review, PR #3245, re-review 2026-09-23T20:43:20Z,
+ * `#discussion_r4086537940`'s sibling "Previously missed" finding: an
+ * earlier revision here used a single `.trim()` for every pattern, which
+ * would classify `"  **Accepted** ..."` -- leading whitespace before the
+ * marker -- as a valid disposition, even though `isDispositionComment`
+ * (`protocol-helpers.mts`) deliberately rejects exactly that case via its
+ * own `trimEnd()`-only, marker-first-bytes contract. Since this audit's
+ * whole point is fidelity to what the merge gate actually credits, a
+ * looser trim here would silently disagree with the gate on some real
+ * replies). `DISPOSITION_ACCEPTED_PREFIX_RE`/`DISPOSITION_REJECTED_PREFIX_RE`
+ * therefore use `trimEnd()` only, matching `isDispositionComment` exactly;
+ * `AMD_MARKER_PATTERN` uses `trimStart()`, matching its own established
+ * call site; `isRejectionConfirmedDisposition` trims internally, so the
+ * raw body is passed through unmodified. Returns `null` for any reply that
+ * is not a recognized disposition marker at all (ordinary prose, a
+ * reviewer's own follow-up remark, etc.).
  */
 export function classifyDispositionReply(rawBody) {
-  const trimmed = String(rawBody ?? '').trim();
-  if (DISPOSITION_REJECTED_PREFIX_RE.test(trimmed)) {
-    return DEFERRED_TO_FOLLOW_UP_RE.test(trimmed) ? 'deferred' : 'rejected';
+  const body = String(rawBody ?? '');
+  const trimmedEnd = body.trimEnd();
+  if (DISPOSITION_REJECTED_PREFIX_RE.test(trimmedEnd)) {
+    return DEFERRED_TO_FOLLOW_UP_RE.test(trimmedEnd) ? 'deferred' : 'rejected';
   }
-  if (DISPOSITION_ACCEPTED_PREFIX_RE.test(trimmed)) {
+  if (DISPOSITION_ACCEPTED_PREFIX_RE.test(trimmedEnd)) {
     return 'accepted';
   }
   if (
-    AMD_MARKER_PATTERN.test(trimmed) ||
-    isRejectionConfirmedDisposition({ body: trimmed })
+    AMD_MARKER_PATTERN.test(body.trimStart()) ||
+    isRejectionConfirmedDisposition({ body })
   ) {
     return 'other';
   }

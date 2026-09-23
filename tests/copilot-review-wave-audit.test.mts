@@ -351,10 +351,40 @@ test('classifyDispositionReply: recognizes all five outcomes', () => {
   );
 });
 
-test('classifyDispositionReply: trims surrounding whitespace before matching', () => {
+test('classifyDispositionReply: tolerates trailing whitespace only, matching isDispositionComment', () => {
   assert.equal(
-    classifyDispositionReply('  \n**Accepted** — fixed\n  '),
+    classifyDispositionReply('**Accepted** — fixed\n  '),
     'accepted',
+  );
+});
+
+test('classifyDispositionReply: rejects Accepted/Rejected preceded by leading whitespace', () => {
+  // Copilot review, PR #3245, re-review 2026-09-23T20:43:20Z
+  // (#discussion_r4086537940's sibling "Previously missed" finding):
+  // isDispositionComment (protocol-helpers.mts) deliberately rejects a
+  // marker not at the very first byte -- this audit must agree, or its
+  // disposition counts would disagree with what the merge gate credits.
+  assert.equal(classifyDispositionReply('  **Accepted** — fixed'), null);
+  assert.equal(
+    classifyDispositionReply('  **Rejected** — not applicable'),
+    null,
+  );
+});
+
+test('classifyDispositionReply: AMD and rejection-confirmed markers still tolerate leading whitespace', () => {
+  // AMD_MARKER_PATTERN's own established call site in protocol-helpers.mts
+  // uses trimStart(); isRejectionConfirmedDisposition trims internally.
+  assert.equal(
+    classifyDispositionReply(
+      '  **Awaiting maintainer decision** — needs input',
+    ),
+    'other',
+  );
+  assert.equal(
+    classifyDispositionReply(
+      '  **Rejection confirmed by maintainer** — agreed, dropping this',
+    ),
+    'other',
   );
 });
 
