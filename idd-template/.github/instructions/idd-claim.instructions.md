@@ -203,9 +203,10 @@ issue (different slug variants).
    Match `branch refs/heads/issue/<number>-…`; detached: require
    `git -C <worktree> rev-parse --show-toplevel` to canonicalize to the
    recorded root before reading `head-name`/`BISECT_START`; failure/mismatch
-   → occupied/unreadable, never read an enclosing repository; proven
-   unrelated → absent; missing/unknown state, malformed, unreadable, or
-   target → occupied/unreadable (PR #3154 review).
+   → occupied/unreadable, never read an enclosing repo; proven unrelated,
+   or non-prunable with no `rebase-*` dir or `BISECT_START` → absent;
+   prunable/other unknown, malformed, unreadable, or target →
+   occupied/unreadable (#3154 review).
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query only the issue-number prefix (scoped Refs API):

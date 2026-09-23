@@ -284,9 +284,15 @@ function isCanonicalWorktreeRoot(
   }
 }
 
+/**
+ * The branch a detached worktree still occupies. `noOperation` is true only
+ * when every metadata read succeeded and proved no rebase or bisect is in
+ * progress; it then implies `branchName === null` and `unreadable === false`.
+ */
 interface DetachedBranchResolution {
   branchName: string | null;
   unreadable: boolean;
+  noOperation: boolean;
 }
 
 function resolveDetachedBranch(
@@ -298,13 +304,13 @@ function resolveDetachedBranch(
   // worktree's own metadata is missing or malformed. Refuse to read rebase or
   // bisect state until Git proves that the discovered root is this worktree.
   if (!isCanonicalWorktreeRoot(worktreePath, env, execute)) {
-    return { branchName: null, unreadable: true };
+    return { branchName: null, unreadable: true, noOperation: false };
   }
   let sequencerPath: string | null = null;
   for (const name of ['rebase-merge', 'rebase-apply']) {
     const gitPath = readGitPath(worktreePath, name, env, execute);
     if (!gitPath) {
-      return { branchName: null, unreadable: true };
+      return { branchName: null, unreadable: true, noOperation: false };
     }
     const candidatePath = joinGitPath(worktreePath, gitPath);
     const sequencerStatus = inspectWorktreePath(candidatePath);
@@ -312,46 +318,47 @@ function resolveDetachedBranch(
       continue;
     }
     if (sequencerStatus === 'unreadable') {
-      return { branchName: null, unreadable: true };
+      return { branchName: null, unreadable: true, noOperation: false };
     }
     if (sequencerPath !== null) {
-      return { branchName: null, unreadable: true };
+      return { branchName: null, unreadable: true, noOperation: false };
     }
     sequencerPath = candidatePath;
   }
   const bisectPath = readGitPath(worktreePath, 'BISECT_START', env, execute);
   if (!bisectPath) {
-    return { branchName: null, unreadable: true };
+    return { branchName: null, unreadable: true, noOperation: false };
   }
   const bisectStartPath = joinGitPath(worktreePath, bisectPath);
   const bisectStatus = inspectWorktreePath(bisectStartPath);
   if (bisectStatus === 'unreadable') {
-    return { branchName: null, unreadable: true };
+    return { branchName: null, unreadable: true, noOperation: false };
   }
   if (bisectStatus === 'present') {
     if (sequencerPath !== null) {
-      return { branchName: null, unreadable: true };
+      return { branchName: null, unreadable: true, noOperation: false };
     }
     const bisectBranch = readRegularMetadataFile(
       bisectStartPath,
       removeTrailingLineEnding,
     );
     if (!bisectBranch) {
-      return { branchName: null, unreadable: true };
+      return { branchName: null, unreadable: true, noOperation: false };
     }
     const branchName = branchNameFromRef(bisectBranch);
     if (!branchName) {
-      return { branchName: null, unreadable: true };
+      return { branchName: null, unreadable: true, noOperation: false };
     }
     if (
       /^[0-9a-f]{4,64}$/i.test(branchName) &&
       !hasLocalBranchRef(worktreePath, branchName, env, execute)
     ) {
-      return { branchName: null, unreadable: true };
+      return { branchName: null, unreadable: true, noOperation: false };
     }
     return {
       branchName,
       unreadable: false,
+      noOperation: false,
     };
   }
   if (sequencerPath !== null) {
@@ -360,20 +367,22 @@ function resolveDetachedBranch(
       removeTrailingLineEnding,
     );
     if (!headName) {
-      return { branchName: null, unreadable: true };
+      return { branchName: null, unreadable: true, noOperation: false };
     }
     const branchName = branchNameFromRef(headName);
     if (!branchName) {
-      return { branchName: null, unreadable: true };
+      return { branchName: null, unreadable: true, noOperation: false };
     }
     return {
       branchName,
       unreadable: false,
+      noOperation: false,
     };
   }
-  // A detached worktree with no recoverable branch metadata is unknown, not
-  // proven unrelated. Fail closed so stale-claim takeover cannot proceed.
-  return { branchName: null, unreadable: true };
+  // Every read succeeded and proved no rebase or bisect is in progress, so
+  // this detached HEAD cannot occupy any `refs/heads/<name>` (#3205). Callers
+  // still fail closed for prunable records, whose path may be stale (#3141).
+  return { branchName: null, unreadable: false, noOperation: true };
 }
 
 function inspectWorktreePath(
@@ -392,10 +401,12 @@ function inspectWorktreePath(
  * Inspect one branch in the current clone. A prunable record is stale git
  * metadata only when its path is absent, its branch metadata is valid and
  * proven unrelated, and it is not locked; a target, malformed, unknown,
- * locked, present, or unreadable record fails closed. Every other matching
- * record blocks a stale claim takeover, including a clean worktree. Listing
- * failures are unreadable and therefore fail closed at the claim/discover
- * callers.
+ * locked, present, or unreadable record fails closed. A non-prunable detached
+ * record whose canonical root is verified and whose rebase and bisect
+ * metadata are all proven absent holds no branch, so it matches nothing.
+ * Every other matching record blocks a stale claim takeover, including a
+ * clean worktree. Listing failures are unreadable and therefore fail closed at
+ * the claim/discover callers.
  */
 export function inspectLocalWorktreeBranch(
   branchName: string,
@@ -465,7 +476,9 @@ export function inspectLocalWorktreeBranch(
       }
       if (!prunableBranch && record.detached) {
         const detached = resolveDetachedBranch(record.path, env, execute);
-        if (detached.unreadable) {
+        // A prunable record without branch metadata stays unknown even when
+        // no operation is in progress: keep the #3141 boundary fail-closed.
+        if (detached.unreadable || detached.noOperation) {
           unreadablePaths.push(record.path);
           continue;
         }
