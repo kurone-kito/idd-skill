@@ -20,6 +20,7 @@ import {
   classifyFileContent,
   computeExitCode,
   hasGeneratedBannerMarker,
+  isAbsenceErrorCode,
   isGeneratedBannerEligible,
   isProseExtension,
   isTolerated,
@@ -211,6 +212,54 @@ test('rule 1 fail (Copilot review, PR #3225): an unmarked side never falsely mat
   assert.equal(result.contentClass, 'content-mismatch');
 });
 
+test('rule 1 fail (Copilot review, PR #3225): an unrelated comment merely containing the marker substring is never treated as the banner', () => {
+  // Regression: an earlier predicate matched ANY //-prefixed line
+  // containing the marker substring anywhere, not the canonical
+  // "// idd-generated-from: <path>" syntax specifically -- so an
+  // unrelated comment like "// note: idd-generated-from old" was
+  // wrongly treated as the banner, and a real edit inside that unrelated
+  // comment was silently stripped and tolerated.
+  const upstream = Buffer.from(
+    '// note: idd-generated-from old\nconst x = 1;\n',
+  );
+  const target = Buffer.from('// note: idd-generated-from new\nconst x = 1;\n');
+  assert.equal(
+    hasGeneratedBannerMarker(upstream.toString('utf8'), 'idd-generated-from'),
+    false,
+    'a non-canonical mention must not count as carrying the banner',
+  );
+  const result = classifyFileContent({
+    path: 'scripts/foo.mjs',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: ['scripts'],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
+test('hasGeneratedBannerMarker and stripGeneratedBannerLine require the canonical "marker:" prefix, not a bare substring match', () => {
+  assert.equal(
+    hasGeneratedBannerMarker(
+      '// idd-generated-from: a.mts\n',
+      'idd-generated-from',
+    ),
+    true,
+  );
+  assert.equal(
+    hasGeneratedBannerMarker(
+      '// note: idd-generated-from old\n',
+      'idd-generated-from',
+    ),
+    false,
+  );
+  const nonCanonical = '// note: idd-generated-from old\nconst x = 1;\n';
+  assert.equal(
+    stripGeneratedBannerLine(nonCanonical, 'idd-generated-from'),
+    nonCanonical,
+    'a non-canonical mention must be left completely untouched',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Rule 2 -- JSON structural comparison
 // ---------------------------------------------------------------------------
@@ -394,6 +443,19 @@ test('rule 5 pass: a deletion matches upstream when upstream also lacks the path
 test('rule 5 fail: a deletion is a genuine mismatch when upstream still has the path', () => {
   const result = classifyDeletedFile({ upstreamExists: true });
   assert.equal(result.status, 'content-mismatch');
+});
+
+test('isAbsenceErrorCode (Copilot review, PR #3225): only ENOENT/ENOTDIR count as genuine absence', () => {
+  // Regression: an earlier version treated ANY lstat failure (e.g. EACCES
+  // on a path mid-deletion) as proof the path is absent, which would let
+  // an unverifiable deletion pass as deletion-matches-upstream instead of
+  // failing closed.
+  assert.equal(isAbsenceErrorCode('ENOENT'), true);
+  assert.equal(isAbsenceErrorCode('ENOTDIR'), true);
+  assert.equal(isAbsenceErrorCode('EACCES'), false);
+  assert.equal(isAbsenceErrorCode('EPERM'), false);
+  assert.equal(isAbsenceErrorCode('EIO'), false);
+  assert.equal(isAbsenceErrorCode(undefined), false);
 });
 
 // ---------------------------------------------------------------------------

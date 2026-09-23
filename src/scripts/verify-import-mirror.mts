@@ -40,13 +40,18 @@
 // 1. Exact byte-for-byte match, then a narrower "generated-banner-only"
 //    tolerance for an emitted `.mjs` file whose `idd-generated-from`
 //    banner line is the ONLY difference. This strips ONLY the exact
-//    `//`-prefixed line(s) that themselves contain the marker -- never a
-//    whole surrounding comment paragraph, which would tolerate an edited
-//    adjacent safety/prose comment too (a Copilot review on PR #3225
-//    caught an earlier, paragraph-wide version of this stripping doing
-//    exactly that). Both sides must actually carry the marker for this
-//    tolerance to apply at all -- an unmarked side is never coerced into
-//    matching a marked one via the stripped sentinel. This rule
+//    `//`-prefixed line(s) matching the CANONICAL banner syntax (the
+//    marker immediately after `//` and optional whitespace, followed by
+//    `:`, e.g. `// idd-generated-from: path`) -- never a whole
+//    surrounding comment paragraph (an earlier, paragraph-wide version
+//    tolerated an edited adjacent safety/prose comment too), and never a
+//    looser "line merely contains the marker substring anywhere" match
+//    either (an earlier version of that let an unrelated comment like
+//    `// note: idd-generated-from old` hide a real edit inside itself --
+//    both caught live by Copilot reviews on PR #3225). Both sides must
+//    actually carry the canonical marker for this tolerance to apply at
+//    all -- an unmarked side is never coerced into matching a marked one
+//    via the stripped sentinel. This rule
 //    additionally fails CLOSED by default: it only ever applies to a
 //    path under a caller-supplied `--generated-dir` (repeatable). With no
 //    `--generated-dir` given, banner tolerance never activates for any
@@ -89,7 +94,12 @@
 //    change (git status `T`, e.g. a regular file becoming a symlink) is
 //    treated as an ordinary modification rather than silently discarded
 //    (same review round).
-// 5. Deletions: see the scope model above.
+// 5. Deletions: see the scope model above. For `--upstream-path`, only
+//    `ENOENT`/`ENOTDIR` from the `lstat` probe count as genuine absence;
+//    any other I/O error (e.g. `EACCES` on a path mid-deletion) is
+//    rethrown rather than silently treated as a matching deletion, which
+//    would let an unverifiable deletion pass unchecked (Copilot review,
+//    PR #3225).
 //
 // Tolerated classifications (exit 0 requires every compared path to
 // land in this set): `exact`, `generated-banner-only`,
@@ -167,17 +177,37 @@ export interface VerifyOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Rule 1 (banner strip): replaces ONLY the `//`-prefixed line(s) that
- * themselves contain `marker` with a fixed sentinel, leaving every other
- * line -- including an immediately adjacent comment line with no blank or
- * bare `//` separator -- byte-for-byte untouched. An earlier version of
- * this function stripped the whole contiguous comment PARAGRAPH around the
- * marker line instead of just the marker line itself, which a Copilot
- * review on PR #3225 showed collapses two genuinely different adjacent
- * comments (e.g. a safety-relevant note) into the same sentinel whenever
- * they sit in the same paragraph as the banner -- reproducing exactly the
- * "too permissive" failure mode this issue's own background section warns
- * about. Returns `content` unchanged when no line contains the marker.
+ * `true` only for the CANONICAL banner syntax: a `//`-prefixed line whose
+ * content, immediately after the `//` and any whitespace, starts with
+ * `<marker>:` -- e.g. `// idd-generated-from: src/scripts/foo.mts`. A
+ * looser "line merely contains the marker substring anywhere" predicate
+ * (an earlier version of both {@link stripGeneratedBannerLine} and
+ * {@link hasGeneratedBannerMarker} used exactly that) also matches an
+ * unrelated comment like `// note: idd-generated-from old`, letting a
+ * real edit inside THAT comment be silently stripped and tolerated too --
+ * a Copilot review on PR #3225 caught this live.
+ */
+function isCanonicalBannerLine(line: string, marker: string): boolean {
+  const trimmed = line.trimStart();
+  if (!trimmed.startsWith('//')) {
+    return false;
+  }
+  return trimmed.slice(2).trimStart().startsWith(`${marker}:`);
+}
+
+/**
+ * Rule 1 (banner strip): replaces ONLY the `//`-prefixed line(s) matching
+ * the canonical banner syntax (see {@link isCanonicalBannerLine}) with a
+ * fixed sentinel, leaving every other line -- including an immediately
+ * adjacent comment line with no blank or bare `//` separator -- byte-for-
+ * byte untouched. An earlier version of this function stripped the whole
+ * contiguous comment PARAGRAPH around the marker line instead of just the
+ * marker line itself, which a Copilot review on PR #3225 showed collapses
+ * two genuinely different adjacent comments (e.g. a safety-relevant note)
+ * into the same sentinel whenever they sit in the same paragraph as the
+ * banner -- reproducing exactly the "too permissive" failure mode this
+ * issue's own background section warns about. Returns `content` unchanged
+ * when no line matches the canonical syntax.
  */
 export function stripGeneratedBannerLine(
   content: string,
@@ -185,30 +215,28 @@ export function stripGeneratedBannerLine(
 ): string {
   return content
     .split('\n')
-    .map((line) => {
-      const trimmed = line.trimStart();
-      return trimmed.startsWith('//') && trimmed.includes(marker)
+    .map((line) =>
+      isCanonicalBannerLine(line, marker)
         ? '<generated-banner-stripped>'
-        : line;
-    })
+        : line,
+    )
     .join('\n');
 }
 
-/** `true` iff `content` has a `//`-prefixed line containing `marker`. Used
- * to require BOTH sides of a comparison to actually carry the banner
- * before rule 1's tolerance applies -- {@link stripGeneratedBannerLine}
- * returns an unmarked input unchanged, so without this gate an unmarked
- * side could coincidentally normalize to (or already equal) the literal
- * `<generated-banner-stripped>` sentinel and falsely match (Copilot
- * review, PR #3225). */
+/** `true` iff `content` has a line matching the canonical banner syntax
+ * (see {@link isCanonicalBannerLine}). Used to require BOTH sides of a
+ * comparison to actually carry the banner before rule 1's tolerance
+ * applies -- {@link stripGeneratedBannerLine} returns an unmarked input
+ * unchanged, so without this gate an unmarked side could coincidentally
+ * normalize to (or already equal) the literal `<generated-banner-stripped>`
+ * sentinel and falsely match (Copilot review, PR #3225). */
 export function hasGeneratedBannerMarker(
   content: string,
   marker: string,
 ): boolean {
-  return content.split('\n').some((line) => {
-    const trimmed = line.trimStart();
-    return trimmed.startsWith('//') && trimmed.includes(marker);
-  });
+  return content
+    .split('\n')
+    .some((line) => isCanonicalBannerLine(line, marker));
 }
 
 /**
@@ -620,6 +648,20 @@ function resolveUpstreamPathMode(
 }
 
 /**
+ * `true` only for the two `lstat` error codes that legitimately mean "this
+ * path isn't there": absence itself (`ENOENT`) or an ancestor path
+ * component that isn't a directory (`ENOTDIR`). Any other code (e.g.
+ * `EACCES` on a path mid-deletion, or another I/O error) is NOT proof of
+ * absence -- {@link readUpstreamEntryFromPath} rethrows those instead of
+ * silently treating them as a deletion, which would let an unverifiable
+ * deletion pass as `deletion-matches-upstream` instead of failing closed
+ * (Copilot review, PR #3225).
+ */
+export function isAbsenceErrorCode(code: string | undefined): boolean {
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/**
  * Reads one path from a plain `--upstream-path` directory. Uses `lstat`
  * (never `stat`/`readFileSync` directly) to detect a symlink FIRST: a git
  * tree represents a symlink as mode `120000` with the link's target text
@@ -641,8 +683,11 @@ function readUpstreamEntryFromPath(
   let stats: ReturnType<typeof lstatSync>;
   try {
     stats = lstatSync(absolute);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isAbsenceErrorCode((error as NodeJS.ErrnoException).code)) {
+      return null;
+    }
+    throw error;
   }
   if (stats.isSymbolicLink()) {
     return {
