@@ -541,6 +541,13 @@ explicitly not the full autonomous Discover -> Claim -> Work loop:
   protection, or review bot the target repository already had before
   choosing IDD — those keep gating the bootstrap PR exactly as they did
   before, and this note is never grounds for disregarding them.
+- **A local `idd-doctor` run flags the same condition** (2026-09-23;
+  issue `#3229`): with no sibling worktree, the primary worktree's
+  `issue/*` HEAD trips B1 too — a WARN ("likely a past B1 violation")
+  without `--strict`, or an ERROR ("B1 violation: this branch must
+  live in a sibling worktree...", non-zero exit) under `--strict`;
+  neither is a real problem. Both clear once the primary worktree
+  checks out the default branch after merge.
 
 On an active target repository, also expect
 [concurrent default-branch drift](#concurrent-base-branch-drift-during-the-bootstrap-pr)
@@ -626,6 +633,15 @@ Disposition:
   review profile requires a reviewer or maintainer resolution, not
   merely an approval. Do not patch the vendored copy just to silence
   the comment.
+- **`resolve-review-thread.mjs --claimless` refuses this PR** — it
+  closes its own bootstrap issue, so `--claimless` fails closed
+  (2026-09-23; issue `#3229`). Recover: (a) a fresh, trusted-actor
+  `claimed-by` marker (`supersedes: none`) bound to the PR's head
+  branch, unlocking `--claim-issue`/`--claim-id`, released
+  (`unclaimed-by`) afterward; or (b) reply to the thread's top-level
+  comment (REST `.../comments/{root-id}/replies`) in E13's
+  disposition form (`idd-helper-scripts.md`), then resolve its
+  thread id via GraphQL `resolveReviewThread`.
 - **After merge, qualify before escalating.**
   [Upstream-candidate escalation][upstream-candidate] is opt-in
   (`upstreamEscalation.enabled`, default `false`) and only accepts
