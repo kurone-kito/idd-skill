@@ -710,6 +710,65 @@ test('CLI end-to-end: --upstream-ref resolves against a git ref instead of a che
   }
 });
 
+test('CLI end-to-end: a non-ASCII path is compared correctly under core.quotePath=true (C1 critique regression)', () => {
+  // Without -z, `git diff --name-status` C-quotes any non-ASCII byte under
+  // git's default core.quotePath=true (e.g. "café.mjs" becomes
+  // "caf\303\251.mjs"), and that mangled string would then fail to
+  // resolve against the real path in every downstream lookup -- a false
+  // content-mismatch for an add/modify, or a false
+  // deletion-matches-upstream for a delete (the mangled path never
+  // resolves against the real upstream path either). Pin
+  // core.quotePath=true explicitly (rather than relying on the ambient
+  // default, which this development machine happens to override
+  // globally) so this test fails the same way everywhere if the -z fix
+  // regresses.
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  const upstreamRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-upstream-'),
+  );
+  try {
+    initTargetRepo(targetRoot);
+    execFileSync('git', ['config', 'core.quotePath', 'true'], {
+      cwd: targetRoot,
+      env: fixtureEnv(),
+    });
+    writeFileSync(join(targetRoot, 'baseline.txt'), 'hello\n');
+    commitAll(targetRoot, 'chore: baseline');
+
+    writeFileSync(join(upstreamRoot, 'café.mjs'), 'vendored content\n');
+    writeFileSync(join(targetRoot, 'café.mjs'), 'vendored content\n');
+    commitAll(targetRoot, 'chore: vendor import of a non-ASCII filename');
+
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        upstreamRoot,
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0, got ${result.status}: ${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout) as {
+      results: { path: string; changeType: string; status: string }[];
+    };
+    assert.deepEqual(report.results, [
+      { path: 'café.mjs', changeType: 'A', status: 'exact' },
+    ]);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(upstreamRoot, { recursive: true, force: true });
+  }
+});
+
 // runVerification is exercised directly here too (not only via the CLI
 // subprocess) to prove the exported plumbing function itself -- not just
 // argv parsing -- is what's under test above.

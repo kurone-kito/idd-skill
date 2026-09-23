@@ -445,6 +445,17 @@ function listChangedPaths(
     'diff',
     '--name-status',
     '--no-renames',
+    // -z: NUL-delimited, unquoted output. Without it, git's default
+    // core.quotePath=true C-quotes any non-ASCII byte in a path (e.g.
+    // "caf\303\251.mjs" for "café.mjs"), and that mangled string would
+    // then be used verbatim in every downstream ls-tree/show/fs lookup
+    // -- silently failing to resolve the real path (a false
+    // content-mismatch for an add/modify, or worse, a false
+    // deletion-matches-upstream for a delete, since the mangled path
+    // would never resolve against the real upstream tree either). -z
+    // sidesteps quoting entirely, matching this repo's own
+    // local-worktree-occupancy.mts precedent for the same reason.
+    '-z',
     `${baseRef}..${targetRef}`,
   ];
   if (pathPrefixes.length > 0) {
@@ -456,17 +467,25 @@ function listChangedPaths(
       `git diff failed (${result.status}): ${result.stderr.trim()}`,
     );
   }
+  // With --no-renames, each -z record is exactly two NUL-terminated
+  // tokens: the status letter, then the path (verified empirically --
+  // unlike the non -z form, the status and path are NOT tab-joined
+  // within one token). The trailing split() token is an empty string
+  // (the output ends in a NUL), which the odd/undefined path guard
+  // below discards along with any other malformed leftover.
+  const tokens = result.stdout.toString('utf8').split('\0');
   const entries: DiffEntry[] = [];
-  for (const line of result.stdout.toString('utf8').split('\n')) {
-    if (line.trim().length === 0) {
+  for (let i = 0; i + 1 < tokens.length; i += 2) {
+    const changeType = tokens[i].charAt(0);
+    const path = tokens[i + 1];
+    if (
+      (changeType !== 'A' && changeType !== 'M' && changeType !== 'D') ||
+      path === undefined ||
+      path.length === 0
+    ) {
       continue;
     }
-    const [statusToken, ...pathParts] = line.split('\t');
-    const changeType = statusToken.charAt(0);
-    if (changeType !== 'A' && changeType !== 'M' && changeType !== 'D') {
-      continue;
-    }
-    entries.push({ path: pathParts.join('\t'), changeType });
+    entries.push({ path, changeType });
   }
   return entries;
 }
