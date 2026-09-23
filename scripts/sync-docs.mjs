@@ -90,57 +90,72 @@ function getRepoFiles() {
   }
   return repoFilesCache;
 }
-const args = process.argv.slice(2);
-const apply = args.includes('--apply');
-const force = args.includes('--force');
-const manifest = JSON.parse(readText(manifestPath));
-const generatedBlocks = manifest.generatedBlocks ?? [];
-const shellFileLists = manifest.shellFileLists ?? [];
 const diffs = [];
 const skippedPairs = [];
 let nonZeroExit = false;
-processSyncPairs(manifest.syncPairs ?? []);
-processGeneratedBlocksAndShellFileLists(generatedBlocks, shellFileLists);
-if (nonZeroExit) {
-  process.exit(1);
+// `force` defaults to false and is only ever assigned its real value inside
+// main() -- processSyncPairs below closes over it as a free module-scope
+// variable (the same reason diffs/skippedPairs/nonZeroExit stay at module
+// scope), so it cannot move fully inside main() the way `apply` does.
+let force = false;
+if (import.meta.main) {
+  main();
 }
-if (diffs.length === 0) {
-  console.log('All mirrored artifacts are up to date.');
+// The CLI body. Guarded behind `import.meta.main` so importing this module
+// (e.g. to inspect its exports) does not parse process.argv, read
+// audit/sync-manifest.json, run the sync pipeline, write any file, or call
+// process.exit -- matching the `if (import.meta.main)` idiom already used
+// elsewhere in src/scripts/ and src/bin/ (#3190).
+function main() {
+  const args = process.argv.slice(2);
+  const apply = args.includes('--apply');
+  force = args.includes('--force');
+  const manifest = JSON.parse(readText(manifestPath));
+  const generatedBlocks = manifest.generatedBlocks ?? [];
+  const shellFileLists = manifest.shellFileLists ?? [];
+  processSyncPairs(manifest.syncPairs ?? []);
+  processGeneratedBlocksAndShellFileLists(generatedBlocks, shellFileLists);
+  if (nonZeroExit) {
+    process.exit(1);
+  }
+  if (diffs.length === 0) {
+    console.log('All mirrored artifacts are up to date.');
+    if (skippedPairs.length > 0) {
+      console.log(
+        `Skipped ${skippedPairs.length} pair(s) (structure/contains — no auto-generation):`,
+        skippedPairs.map((p) => p.id).join(', '),
+      );
+    }
+    process.exit(0);
+  }
+  if (!apply) {
+    console.log(`${diffs.length} file(s) out of sync:`);
+    for (const { target } of diffs) {
+      console.log(`  ${target}`);
+    }
+    if (skippedPairs.length > 0) {
+      console.log(
+        `\nSkipped ${skippedPairs.length} pair(s) (structure/contains — no auto-generation):`,
+        skippedPairs.map((p) => p.id).join(', '),
+      );
+    }
+    console.log('\nRun with --apply to write changes.');
+    process.exit(1);
+  }
+  let written = 0;
+  for (const { target, content } of diffs) {
+    mkdirSync(dirname(join(root, target)), { recursive: true });
+    writeFileSync(join(root, target), content, 'utf8');
+    console.log(`  synced: ${target}`);
+    written++;
+  }
+  console.log(`\nSynced ${written} file(s).`);
   if (skippedPairs.length > 0) {
     console.log(
       `Skipped ${skippedPairs.length} pair(s) (structure/contains — no auto-generation):`,
       skippedPairs.map((p) => p.id).join(', '),
     );
   }
-  process.exit(0);
-}
-if (!apply) {
-  console.log(`${diffs.length} file(s) out of sync:`);
-  for (const { target } of diffs) {
-    console.log(`  ${target}`);
-  }
-  if (skippedPairs.length > 0) {
-    console.log(
-      `\nSkipped ${skippedPairs.length} pair(s) (structure/contains — no auto-generation):`,
-      skippedPairs.map((p) => p.id).join(', '),
-    );
-  }
-  console.log('\nRun with --apply to write changes.');
-  process.exit(1);
-}
-let written = 0;
-for (const { target, content } of diffs) {
-  mkdirSync(dirname(join(root, target)), { recursive: true });
-  writeFileSync(join(root, target), content, 'utf8');
-  console.log(`  synced: ${target}`);
-  written++;
-}
-console.log(`\nSynced ${written} file(s).`);
-if (skippedPairs.length > 0) {
-  console.log(
-    `Skipped ${skippedPairs.length} pair(s) (structure/contains — no auto-generation):`,
-    skippedPairs.map((p) => p.id).join(', '),
-  );
 }
 // ---------------------------------------------------------------------------
 // syncPairs processing

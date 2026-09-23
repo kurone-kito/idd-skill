@@ -42,24 +42,30 @@ import { collectMarkdownLinkAuditViolations } from './markdown-link-audit.mjs';
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
-const args = new Set(process.argv.slice(2));
-if (!args.has('--check')) {
-  console.error('usage: node scripts/audit-docs.mjs --check');
-  process.exit(2);
-}
 const errors = [];
 const notices = [];
-const manifest = JSON.parse(readText(manifestPath));
-const repoFiles = listRepoFiles();
-const changedFiles = listChangedFiles();
+// Populated by main() only when this module runs as the CLI entrypoint
+// (import.meta.main below). Declared here as `let` -- not `const`, and not
+// local to main() -- because roughly a dozen check* functions further down
+// this file close over manifest/repoFiles/changedFiles as free module-scope
+// variables; moving them inside main() would break every one of those
+// closures. Deferring the git/fs reads that populate them until main()
+// actually runs is what keeps a bare `import` of this module free of the
+// process.exit and I/O side effects reported in #3190.
+let manifest = {};
+let repoFiles = [];
+let changedFiles = null;
 // Memoized by `${ref}:${file}` (#3028): the bundle-budget files and the
 // instructionSizeBudgets glob(s) overlap heavily in this repository's own
 // manifest, so without this cache adding the per-file near-ceiling ratchet
 // would roughly double the `git show` calls `readTextAtRef` already makes
 // per audit run. Safe to cache unconditionally -- the base ref is
-// immutable for the lifetime of one audit run. Declared at module top
-// level (rather than beside `readTextAtRef` itself further down) so it is
-// already initialized before the top-level check pipeline below runs.
+// immutable for the lifetime of one audit run. Declared here, above the
+// `import.meta.main` trigger below (rather than beside `readTextAtRef`
+// itself further down): the trigger calls `main()` synchronously at module
+// evaluation time, and a `const` declared after that point is still in the
+// temporal dead zone when the trigger fires (see ci-wait-state.mts's
+// identical note).
 const readTextAtRefCache = new Map();
 // The fixed, known mirror set for this repository's engines.node range
 // (#1706) -- not manifest-configurable, since these are this repository's
@@ -101,58 +107,76 @@ const GENERATED_MODE_PLACEHOLDER_EXEMPTIONS = {
   // adopters, not an unresolved leftover from a live marker instance.
   'customization-doc': 'documents the placeholder-mapping table for adopters',
 };
-checkReadmePairs(manifest.readmePairs ?? []);
-checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
-checkGeneratedBlocks(manifest.generatedBlocks ?? []);
-checkShellFileLists(
-  manifest.shellFileLists ?? [],
-  manifest.generatedBlocks ?? [],
-);
-checkSyncPairs(manifest.syncPairs ?? []);
-checkGeneratedModePlaceholders(manifest.syncPairs ?? []);
-checkGeneratedFromBanners(manifest.syncPairs ?? []);
-const instructionSizeBudgetStats = checkInstructionSizeBudgets(
-  manifest.instructionSizeBudgets,
-);
-{
-  const bundleStats = checkBundleBudgets(manifest.bundleBudgets ?? []);
-  checkContextCeiling(manifest.contextCeiling ?? null, bundleStats);
-  checkNearCeilingRatchet(
-    manifest.contextCeiling ?? null,
-    bundleStats,
-    instructionSizeBudgetStats,
+if (import.meta.main) {
+  main();
+}
+// The CLI body. Guarded behind `import.meta.main` so importing this module
+// (e.g. to inspect its exports) does not parse process.argv, read
+// audit/sync-manifest.json, shell out to git, or call process.exit --
+// matching the `if (import.meta.main)` idiom already used elsewhere in
+// src/scripts/ and src/bin/ (#3190).
+function main() {
+  const args = new Set(process.argv.slice(2));
+  if (!args.has('--check')) {
+    console.error('usage: node scripts/audit-docs.mjs --check');
+    process.exit(2);
+  }
+  manifest = JSON.parse(readText(manifestPath));
+  repoFiles = listRepoFiles();
+  changedFiles = listChangedFiles();
+  checkReadmePairs(manifest.readmePairs ?? []);
+  checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
+  checkGeneratedBlocks(manifest.generatedBlocks ?? []);
+  checkShellFileLists(
+    manifest.shellFileLists ?? [],
+    manifest.generatedBlocks ?? [],
   );
-}
-checkDocBudgetNumbers();
-checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
-checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
-checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
-checkOkfBundles(manifest.okfBundles ?? null);
-checkMarkdownLinkAudit(manifest.markdownLinkAudit ?? null);
-checkConfigInstructionDrift();
-checkHelperFlagDrift();
-checkGeneratedSourcePairs();
-checkEnginesRangeMirrors();
-checkBinExecutableMode();
-if (errors.length > 0) {
-  console.error('documentation audit failed:');
-  for (const error of errors) {
-    console.error(`- ${error}`);
+  checkSyncPairs(manifest.syncPairs ?? []);
+  checkGeneratedModePlaceholders(manifest.syncPairs ?? []);
+  checkGeneratedFromBanners(manifest.syncPairs ?? []);
+  const instructionSizeBudgetStats = checkInstructionSizeBudgets(
+    manifest.instructionSizeBudgets,
+  );
+  {
+    const bundleStats = checkBundleBudgets(manifest.bundleBudgets ?? []);
+    checkContextCeiling(manifest.contextCeiling ?? null, bundleStats);
+    checkNearCeilingRatchet(
+      manifest.contextCeiling ?? null,
+      bundleStats,
+      instructionSizeBudgetStats,
+    );
   }
-  const remediation = buildRemediation(errors);
-  if (remediation.length > 0) {
-    console.error('');
-    console.error('remediation:');
-    for (const line of remediation) {
-      console.error(`- ${line}`);
+  checkDocBudgetNumbers();
+  checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
+  checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
+  checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
+  checkOkfBundles(manifest.okfBundles ?? null);
+  checkMarkdownLinkAudit(manifest.markdownLinkAudit ?? null);
+  checkConfigInstructionDrift();
+  checkHelperFlagDrift();
+  checkGeneratedSourcePairs();
+  checkEnginesRangeMirrors();
+  checkBinExecutableMode();
+  if (errors.length > 0) {
+    console.error('documentation audit failed:');
+    for (const error of errors) {
+      console.error(`- ${error}`);
     }
+    const remediation = buildRemediation(errors);
+    if (remediation.length > 0) {
+      console.error('');
+      console.error('remediation:');
+      for (const line of remediation) {
+        console.error(`- ${line}`);
+      }
+    }
+    process.exit(1);
   }
-  process.exit(1);
+  for (const notice of notices) {
+    console.log(`notice: ${notice}`);
+  }
+  console.log('documentation audit passed');
 }
-for (const notice of notices) {
-  console.log(`notice: ${notice}`);
-}
-console.log('documentation audit passed');
 // Structural pairing guard for the TypeScript migration: every
 // `src/**/*.mts` source must have its generated `.mjs` artifact committed,
 // and every banner-marked generated `.mjs` must have its source. This is a

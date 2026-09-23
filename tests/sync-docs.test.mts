@@ -13,7 +13,11 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { fixtureEnv, makeScaffoldedSyncRepo } from './test-utils.mts';
+import {
+  fixtureEnv,
+  makeScaffoldedSyncRepo,
+  runImportOnlyProbe,
+} from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
@@ -82,6 +86,81 @@ function runAuditDocs(dir: string): RunResult {
     };
   }
 }
+
+// #3190: sync-docs.mts used to run its whole sync pipeline -- including
+// process.exit calls -- as a side effect of module evaluation, with no
+// `import.meta.main` guard. Dynamically importing it (e.g. to inventory its
+// named exports) from a process whose own argv carries neither --check nor
+// --apply used to kill the importing process before this probe's own
+// `.then()` ever ran (pre-fix: apply=false, so the pipeline always reaches
+// either `process.exit(0)` -- "up to date" -- or `process.exit(1)` -- "N
+// file(s) out of sync" -- before IMPORT_OK could print). `IMPORT_OK` in
+// stdout is therefore the real discriminator here, not the empty temp
+// directory's contents: sync-docs.mts resolves its write root from the
+// *script's own file location* (`resolveRepoRoot(import.meta.dirname)`),
+// not from `cwd`, so even the pre-fix code could never have written into
+// this particular `dir` regardless of the guard. The sharper "importer's
+// own --apply-shaped argv triggers a real write" risk #3190's issue body
+// describes needs `--apply` actually present in the importing process's
+// argv to reach sync-docs.mts's un-exited write loop -- covered by the
+// dedicated fixture-backed test below instead.
+test('importing scripts/sync-docs.mjs without --check/--apply does not run the pipeline or call process.exit', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'sync-docs-import-only-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const result = runImportOnlyProbe(SYNC_DOCS_SCRIPT, dir);
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /IMPORT_OK/);
+  assert.doesNotMatch(
+    result.stdout,
+    /All mirrored artifacts|file\(s\) out of sync|Synced \d+ file/,
+  );
+});
+
+// #3190's Background/Proposed change describe a sharper danger case than
+// acceptance criterion 2's own no-flags scenario above: an importer whose
+// own process.argv happens to contain `--apply` for a reason unrelated to
+// sync-docs.mts (the pre-fix code read `process.argv` unconditionally, with
+// no way to tell "my own --apply" from "the importer's own, unrelated
+// --apply"). Unlike the no-flags probe above, this scenario's pre-fix write
+// loop never calls `process.exit` on success -- it falls off the end of the
+// script after writing -- so an IMPORT_OK-only assertion could not have
+// caught it; this fixture instead asserts the target file's on-disk content
+// is untouched. Uses a real out-of-sync `exact` pair (via
+// makeScaffoldedSyncRepo, which copies the built sync-docs.mjs -- plus its
+// import closure -- into the fixture so `resolveRepoRoot` anchors writes
+// inside the fixture, observable here) so a pre-fix run would have a real
+// diff to write.
+test('importing scripts/sync-docs.mjs when the importer’s own argv happens to contain --apply does not write the fixture’s out-of-sync target', (t) => {
+  const dir = makeScaffoldedSyncRepo(
+    (cleanup) => t.after(cleanup),
+    {
+      syncPairs: [
+        {
+          id: 'pair-exact',
+          source: 'src/a.md',
+          target: 'out/a.md',
+          mode: 'exact',
+        },
+      ],
+    },
+    {
+      'src/a.md': 'fresh content\n',
+      'out/a.md': 'stale content\n',
+    },
+  );
+
+  const result = runImportOnlyProbe(
+    join(dir, 'scripts', 'sync-docs.mjs'),
+    dir,
+    ['--apply'],
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /IMPORT_OK/);
+  assert.equal(read(dir, 'out/a.md'), 'stale content\n');
+});
 
 test('exact syncPair: --check reports drift without writing, --apply writes and is idempotent', (t) => {
   const dir = makeScaffoldedSyncRepo(
