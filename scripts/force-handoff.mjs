@@ -19,6 +19,9 @@ import {
 } from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
+
+const SAME_SUCCESSOR_WARNING =
+  'WARNING: successor agent-id is unchanged from the displaced claim; if that session cannot resume, this issue remains effectively unclaimed.';
 export const NON_TTY_ERROR =
   'operator interaction is required; run idd-force-handoff in an interactive TTY';
 export async function runHandoff(options = {}) {
@@ -34,6 +37,9 @@ export async function runHandoff(options = {}) {
     fetchLinkedPrs,
     postComment,
     mode,
+    write = (chunk) => {
+      process.stdout.write(chunk);
+    },
   } = options;
   if (!isTTY) {
     throw new Error(NON_TTY_ERROR);
@@ -111,14 +117,24 @@ export async function runHandoff(options = {}) {
         '--json',
         'number,headRefName',
       ]);
-  let plan = planHandoff(issueComments, linkedPrs, resolveOpts);
+  let planOptions = resolveOpts;
+  let plan = planHandoff(issueComments, linkedPrs, planOptions);
   let resolvedPrNumber;
   if (plan.contextScope === 'issue-plus-pr') {
     const prList = plan.prReferences.join(', ');
     const rawPr = await ask(`Open PR on branch (${prList}). Enter PR number: `);
     const prNumber = parsePositiveInteger(rawPr, '--pr');
-    plan = planHandoff(issueComments, linkedPrs, { ...resolveOpts, prNumber });
+    planOptions = { ...planOptions, prNumber };
+    plan = planHandoff(issueComments, linkedPrs, planOptions);
     resolvedPrNumber = prNumber;
+  }
+  const rawSuccessorAgentId = await ask(
+    `Successor agent-id [leave blank to keep \`${plan.activeClaim.agentId}\`]: `,
+  );
+  const enteredAgentId = rawSuccessorAgentId.trim();
+  if (enteredAgentId) {
+    planOptions = { ...planOptions, newAgentId: enteredAgentId };
+    plan = planHandoff(issueComments, linkedPrs, planOptions);
   }
   if (!plan.markerBody) {
     throw new Error(
@@ -126,6 +142,7 @@ export async function runHandoff(options = {}) {
     );
   }
   const { newAgentId, newClaimId } = plan.successorIds;
+  const successorUnchanged = newAgentId === plan.activeClaim.agentId;
   const lines = [
     '',
     `Forced-handoff plan for issue #${issueNumber}:`,
@@ -138,12 +155,13 @@ export async function runHandoff(options = {}) {
     'Marker preview:',
     plan.markerBody,
     '',
+    ...(successorUnchanged ? [SAME_SUCCESSOR_WARNING, ''] : []),
   ];
-  process.stdout.write(`${lines.join('\n')}\n`);
+  write(`${lines.join('\n')}\n`);
   const confirm = await ask('Confirm forced handoff? [y/N] ');
   ask.close?.();
   if (confirm.trim().toLowerCase() !== 'y') {
-    process.stdout.write('Aborted. No changes made.\n');
+    write('Aborted. No changes made.\n');
     return { posted: false };
   }
   const result = postComment
@@ -157,7 +175,7 @@ export async function runHandoff(options = {}) {
         `body=${plan.markerBody}`,
       ]);
   const commentUrl = String(result.html_url ?? result.url ?? '');
-  process.stdout.write(
+  write(
     [
       '',
       `Forced handoff posted: ${commentUrl}`,

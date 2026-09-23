@@ -60,7 +60,7 @@ test('runHandoff throws when not running in a TTY', async () => {
 });
 
 test('runHandoff completes issue-only flow without PR prompt', async () => {
-  const responses = ['497', 'y'];
+  const responses = ['497', '', 'y'];
   let callIndex = 0;
   const postedBodies: string[] = [];
 
@@ -94,13 +94,13 @@ test('runHandoff completes issue-only flow without PR prompt', async () => {
   );
   assert.equal(
     callIndex,
-    2,
-    'should ask for issue number and confirmation only',
+    3,
+    'should ask for issue number, successor agent-id, and confirmation',
   );
 });
 
 test('runHandoff completes issue-plus-pr flow with PR prompt', async () => {
-  const responses = ['497', '501', 'y'];
+  const responses = ['497', '501', '', 'y'];
   let callIndex = 0;
   const postedBodies: string[] = [];
 
@@ -137,13 +137,13 @@ test('runHandoff completes issue-plus-pr flow with PR prompt', async () => {
   );
   assert.equal(
     callIndex,
-    3,
-    'should ask for issue number, PR number, and confirmation',
+    4,
+    'should ask for issue number, PR number, successor agent-id, and confirmation',
   );
 });
 
 test('runHandoff returns posted: false when operator declines confirmation', async () => {
-  const responses = ['497', 'N'];
+  const responses = ['497', '', 'N'];
   let callIndex = 0;
   let postCalled = false;
 
@@ -166,7 +166,7 @@ test('runHandoff returns posted: false when operator declines confirmation', asy
 });
 
 test('runHandoff reports posted: true and returns successorIds and commentUrl', async () => {
-  const responses = ['497', 'y'];
+  const responses = ['497', '', 'y'];
   let callIndex = 0;
 
   const result = await runHandoff(
@@ -189,6 +189,94 @@ test('runHandoff reports posted: true and returns successorIds and commentUrl', 
     result.successorIds.newClaimId,
     /^claim-[0-9a-f]{16}$/,
     'claim ID should match expected format',
+  );
+});
+
+// --- #3195: interactive successor agent-id prompt -------------------------
+//
+// Field feedback (gist round 37) reported that idd-force-handoff's
+// interactive flow never lets the operator choose the successor's
+// agent-id -- it silently reuses the displaced agent's own identity every
+// time, with no warning that the "successor" is the same session that
+// already failed to finish the claim. These two tests cover both branches
+// of the new prompt: leaving it blank (same-agent default, warning shown)
+// and entering a distinct value (that value flows through, no warning).
+
+test('runHandoff blank successor-agent-id prompt keeps the displaced agent-id and prints the same-successor warning', async () => {
+  const responses = ['497', '', 'y'];
+  let callIndex = 0;
+  const postedBodies: string[] = [];
+  let output = '';
+
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      write: (chunk) => {
+        output += chunk;
+      },
+      postComment: async (_issueNum, body) => {
+        postedBodies.push(body);
+        return {
+          html_url:
+            'https://github.com/kurone-kito/idd-skill/issues/497#issuecomment-3',
+        };
+      },
+    }),
+  );
+
+  assert.equal(result.posted, true, 'should post the comment');
+  assert.equal(
+    result.successorIds?.newAgentId,
+    'github-copilot-cli-old',
+    'blank input should keep the displaced agent-id as successor',
+  );
+  assert.ok(
+    postedBodies[0].includes('"new-agent-id":"github-copilot-cli-old"'),
+    'marker body should name the displaced agent-id as successor',
+  );
+  assert.ok(
+    output.includes(
+      'WARNING: successor agent-id is unchanged from the displaced claim',
+    ),
+    'should print the same-successor warning before confirmation',
+  );
+});
+
+test('runHandoff entered successor-agent-id flows through to the posted marker without the warning', async () => {
+  const responses = ['497', 'distinct-successor-id', 'y'];
+  let callIndex = 0;
+  const postedBodies: string[] = [];
+  let output = '';
+
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      write: (chunk) => {
+        output += chunk;
+      },
+      postComment: async (_issueNum, body) => {
+        postedBodies.push(body);
+        return {
+          html_url:
+            'https://github.com/kurone-kito/idd-skill/issues/497#issuecomment-4',
+        };
+      },
+    }),
+  );
+
+  assert.equal(result.posted, true, 'should post the comment');
+  assert.equal(
+    result.successorIds?.newAgentId,
+    'distinct-successor-id',
+    'entered value should become the successor agent-id',
+  );
+  assert.ok(
+    postedBodies[0].includes('"new-agent-id":"distinct-successor-id"'),
+    'marker body should name the entered value as successor',
+  );
+  assert.ok(
+    !output.includes('WARNING'),
+    'should not print the same-successor warning when successor differs',
   );
 });
 
