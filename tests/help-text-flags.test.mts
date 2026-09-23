@@ -184,6 +184,7 @@ const COVERED_HELPERS = [
   'claim-approval-gate',
   'claim-lock',
   'clone-lock',
+  'copilot-review-wave-audit',
   'token-cost-event',
   'token-cost-harvest',
   'token-cost-report',
