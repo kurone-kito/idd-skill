@@ -142,6 +142,7 @@ interface ResumeClaimRoutingArgs {
   staleAgeMs: number;
   trustedMarkerLogins: string;
   freshClaimGate: boolean;
+  format: string;
   help: boolean;
 }
 
@@ -168,6 +169,7 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--stale-age-ms': { type: 'string' },
   '--trusted-marker-logins': { type: 'string' },
   '--fresh-claim-gate': { type: 'boolean', default: false },
+  '--format': { type: 'string', default: 'json' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -1055,6 +1057,15 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
   if (deprecatedTokenValue !== undefined) {
     warnDeprecatedFlag('--token', '--gh-token');
   }
+  // #3188: accepted so callers that always pass `--format json` across IDD
+  // helpers (live-status-digest documents `--format <json|table>`) do not
+  // hit `unknown argument: --format` here. This helper only ever emits
+  // JSON, so `json` is a no-op; every other value fails loudly instead of
+  // silently degrading to JSON.
+  const format = values.format as string;
+  if (format !== 'json') {
+    throw new Error(`--format must be json (got "${format}")`);
+  }
   return {
     // Both --issue and --stale-age-ms are kept as lenient Number.parseInt
     // (not the canonical-integer helper), matching the pre-migration
@@ -1078,14 +1089,19 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
     trustedMarkerLogins:
       (values['trusted-marker-logins'] as string | undefined) ?? '',
     freshClaimGate: values['fresh-claim-gate'] as boolean,
+    format,
     help,
   };
 }
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--format json]
   Deprecated aliases (one release): --token -> --gh-token
+
+  --format json       output format (default: json). JSON is the only
+                      supported value; it is accepted for consistency with
+                      sibling helpers and any other value is rejected.
 
   --fresh-claim-gate  emit the write-side A5(c) claimability verdict for the
                       issue from current marker state, ignoring --claim-id (a

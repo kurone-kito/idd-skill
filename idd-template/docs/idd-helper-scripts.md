@@ -2855,6 +2855,10 @@ close.
   a mismatch routes `state`/`reason` to `disputed` /
   `activation-nonce-mismatch` instead of `already_owned`. Omit it (or leave
   the claim-id's nonce not posted) to skip the comparison unchanged.
+- Optional `--format json` (kurone-kito/idd-skill#3188): accepted as a
+  no-op for consistency with sibling helpers such as `live-status-digest`,
+  since this helper only ever emits JSON. Any other value fails with
+  `--format must be json` instead of `unknown argument: --format`.
 - `evidence.forced_handoff` (kurone-kito/idd-skill#2178): populated on
   **any** call, including a bare `--issue` call with no `--claim-id`,
   whenever a trusted, rule-7-valid `forced-handoff` marker's successor
