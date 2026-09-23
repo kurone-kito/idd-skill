@@ -21,8 +21,8 @@ This protocol's settle/wait window covers **Copilot only**. Other
 `secondary-quiet-window` blocker
 (`idd-pre-merge.instructions.md`): when set, F2 waits until that
 helper reports `elapsed: true` since the last substantive review
-activity. It is the blocker aimed at `secondaryBotLogin`, not a poll
-until that bot's review reaches HEAD. Unset never adds it. Other
+activity. It is the blocker aimed at `secondaryBotLogin`'s login(s),
+not a poll until any reaches HEAD. Unset never adds it. Other
 `advisoryBotLogins` stay on the E1 snapshot and watermark.
 
 For non-Copilot bots, late findings still use the **E1 snapshot +
@@ -85,8 +85,9 @@ Required helper fields: `prHeadSha`, `lastCopilotCommit`,
 
 Optional non-gating secondary-bot fields (not in the `outcome`/
 `f3Outcome` enums; see **Secondary advisory bot supplement** below):
-`secondaryBotLogin` (empty when unconfigured or equal to the primary)
-and `secondaryRequestNeeded`.
+`secondaryBotLogin` (single login only), `secondaryBotLogins` (full
+list), `secondaryRequestLogins` (still-unrequested subset), and
+`secondaryRequestNeeded` (true iff non-empty).
 
 Allowed `outcome`/`f3Outcome` values: `SATISFIED`, `REQUEST_NEEDED`,
 `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`. `HOLD` is a protocol-level
@@ -125,11 +126,12 @@ outage (e.g. via status page or an org admin surface) before retrying.
 Orthogonal to the table above: changes no `outcome`/`f3Outcome` or
 route, never satisfies the primary gate, posts no `advisory-wait`
 marker. A bot check alone never confirms review of current HEAD.
-Full trigger condition (`secondaryRequestNeeded`/`CAP_EXHAUSTED`/
-stalled `SATISFIED`) and request procedure:
-`idd-review-fix.instructions.md`'s E14 step 5 — never poll/wait for it
-there, E1, or E2; only F2's `secondary-quiet-window` blocker
-(`idd-pre-merge.instructions.md`) waits.
+`secondaryBotLogin` accepts one login or a list; request every
+`secondaryRequestLogins` entry, not only the first, never polling any.
+Trigger condition and per-login procedure:
+`idd-review-fix.instructions.md`'s E14 step 5 — never poll/wait there,
+E1, or E2; only F2's `secondary-quiet-window` blocker
+(`idd-pre-merge.instructions.md`) waits, folded across every login.
 
 ### F3-specific interpretation
 

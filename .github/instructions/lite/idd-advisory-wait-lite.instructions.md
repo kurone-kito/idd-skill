@@ -81,12 +81,11 @@ Required fields (stop and ask if any are missing — matching
 `idd-review-fix-lite.instructions.md`'s E14 field list exactly):
 `prHeadSha`, `lastCopilotCommit`, `copilotPending`,
 `copilotPendingCoversHead`, `outcome`, `f3Outcome`, `secondaryBotLogin`,
-`secondaryRequestNeeded`, `earliestSameHeadAt`, `requestMarkerCount`,
-`requestCap`, `pendingWindowMinutes`, `settledWindowMinutes`,
-`pollIntervalMinutes`, `capExhaustedRoute`, `trustedMarkerSummary`. The
-helper always emits every one of these — an empty/false value (e.g.
-`secondaryBotLogin: ""` unconfigured, or `f3Outcome` unused by E14) is
-still present, not missing. Validate presence, not truthiness.
+`secondaryBotLogins`, `secondaryRequestLogins`, `secondaryRequestNeeded`,
+`earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
+`pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
+`capExhaustedRoute`, `trustedMarkerSummary`. Every field is always
+present, even empty/false/`[]` — validate presence, not truthiness.
 
 The helper computes `outcome` directly from live evidence — never by
 hand from raw timestamps. Allowed values: `SATISFIED`,
@@ -157,12 +156,13 @@ duplicated here).
 5. Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
    keep polling.
 
-## Secondary advisory bot (non-gating, optional)
+## Secondary advisory bot(s) (non-gating, optional)
 
-When the helper's `secondaryRequestNeeded` is `true`, request
-`secondaryBotLogin` once for this HEAD using the same request
-mechanics above. Post no `advisory-wait:` marker for it — it never
-satisfies the primary gate or consumes its request cap. Skip when
+`secondaryBotLogin` accepts one login or a list. When
+`secondaryRequestNeeded` is `true`, request **every** login in
+`secondaryRequestLogins` once each (never only the first), using the
+same mechanics above. Post no `advisory-wait:` marker for any — none
+satisfy the primary gate or consume its cap. Skip when
 `secondaryRequestNeeded` is `false`.
 
 ## Marker hygiene (optional)

@@ -208,8 +208,8 @@ fresh round per arrival, but only when **all** hold:
   `copilot-pull-request-reviewer*`, matched via `isCopilotReviewerLogin`
   in `scripts/protocol-helpers.mjs`) or an `advisoryBotLogins` login,
   **regardless of PATH A/B** (Copilot's inline thread comments fall
-  through to PATH A under E4's ambiguous-default rule; a
-  `secondaryBotLogin` overlap still qualifies).
+  through to PATH A under E4's ambiguous-default rule; an overlap with
+  any configured `secondaryBotLogin` login still qualifies).
 - Each comment is a small, confirmable fix whose claim was checked
   against live evidence (linter run, actual file/runtime behavior)
   before folding it in — the same **verify-before-accept discipline** E5
@@ -390,17 +390,17 @@ login).
      polling loop unchanged (a same-head marker already anchors HEAD).
    - **WAIT**, or after a **REQUEST_NEEDED** / **RECOVERY_NEEDED** /
      **AW3-S** marker posts: enter the active polling loop below.
-5. **Secondary advisory bot (optional, non-gating).** Request it once
-   per HEAD when the helper reports `secondaryRequestNeeded: true` (or,
-   in the shell fallback, AW3 yields **CAP_EXHAUSTED** or a
-   stalled/rate-limited **SATISFIED**) and `advisoryWait.secondaryBotLogin`
-   is configured and not yet requested for this HEAD — same
-   gh-then-REST fallback as the primary, no `advisory-wait:` marker, and
-   no change to the AW3 route. Its review is ordinary advisory input,
-   returned by the E1 snapshot if it lands before merge; skipped when
-   unconfigured. Never poll/wait for it here, E1, or E2; only F2's
-   `secondary-quiet-window` blocker (`idd-pre-merge.instructions.md`)
-   waits.
+5. **Secondary advisory bot(s) (optional, non-gating).**
+   `secondaryBotLogin` accepts one login or a list; request **every**
+   login the helper's `secondaryRequestLogins` reports (shell
+   fallback: every configured login not yet requested this HEAD on
+   **CAP_EXHAUSTED** or stalled/rate-limited **SATISFIED**) — same
+   gh-then-REST fallback as the primary, per login, no
+   `advisory-wait:` marker, no route change. Each review is ordinary
+   advisory input, picked up by E1 if it lands before merge; skipped
+   when unconfigured. Never poll/wait for any of them here, E1, or E2;
+   only F2's `secondary-quiet-window` blocker
+   (`idd-pre-merge.instructions.md`) waits, folded across every login.
 
 Copilot and CI advisory bot comments are advisory; unanswered ones do
 not block merge.

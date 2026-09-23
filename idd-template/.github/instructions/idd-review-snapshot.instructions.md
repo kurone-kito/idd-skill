@@ -69,8 +69,8 @@ CI pass exists yet for this HEAD.
 **Non-Copilot advisory safety net.** Snapshot and Step 2
 watermark cover non-Copilot bots in this phase. Not exclusive:
 configured F2 `secondaryQuietWindow` waits until `elapsed`
-since last substantive review activity, not until
-`secondaryBotLogin` reviews HEAD.
+since last substantive review activity, not until every login
+configured under `secondaryBotLogin` reviews HEAD.
 
 **Step 2 — Record the watermark.** Using the `{head-SHA}` stored at the
 start of Step 1, compute `{max-activity-updatedAt}` as the highest

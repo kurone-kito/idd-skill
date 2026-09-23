@@ -115,22 +115,29 @@ If the external bot can produce blocking `CHANGES_REQUESTED` reviews or
 decision-relevant comments, classify those items as PATH A unless the
 operator explicitly narrows them.
 
-### Configuring a primary and an optional secondary advisory bot
+### Configuring a primary and one or more optional secondary advisory bots
 
 The `advisoryWait.primaryBotLogin` and `advisoryWait.secondaryBotLogin`
 config fields let a profile choose which bot the advisory-wait gate tracks and
-add an **optional, non-gating** fallback. Set
+add one or more **optional, non-gating** fallbacks. Set
 `advisoryWait.primaryBotLogin` to route the gate to a non-Copilot bot (it
 defaults to Copilot). Set `advisoryWait.secondaryBotLogin` to a second
-requestable review bot when the repository wants a fallback while the primary
-is throttled: IDD then requests the secondary **once per HEAD** only when the
-primary is cap-exhausted or stalled / rate-limited. The secondary is a
-**supplement only** — it never satisfies the primary advisory-wait gate, never
-receives a primary `advisory-wait` marker, and its output is ordinary advisory
-input (classified PATH A / PATH B by the snapshot and triage rules). Leaving
-`advisoryWait.secondaryBotLogin` unset (or equal to the primary) keeps
-single-bot behavior. Pick a secondary whose `--add-reviewer` request appears
-on the PR timeline so the once-per-HEAD guard can observe it.
+requestable review bot — or an array of several — when the repository wants
+one or more fallbacks while the primary is throttled: IDD then requests each
+configured secondary **once per HEAD** only when the primary is
+cap-exhausted or stalled / rate-limited. Every secondary is a
+**supplement only** — none of them ever satisfies the primary advisory-wait
+gate, receives a primary `advisory-wait` marker, or consumes the primary's
+request cap, and each one's output is ordinary advisory input (classified
+PATH A / PATH B by the snapshot and triage rules). Leaving
+`advisoryWait.secondaryBotLogin` unset (or a value that normalizes to an
+empty list, for example every entry equal to the primary) keeps single-bot
+behavior. Pick each secondary from a requestable reviewer whose
+`--add-reviewer` request appears on the PR timeline so the once-per-HEAD
+guard can observe it. A configured `advisoryWait.secondaryQuietWindow`
+(F2's quiet-window wait) folds every configured secondary's own settlement
+before it applies — see [IDD policy constants](policy-constants.md) for the
+exact fold rule.
 
 ## PR Review Profile Edit Surfaces
 
