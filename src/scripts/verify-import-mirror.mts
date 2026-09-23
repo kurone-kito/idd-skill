@@ -32,6 +32,15 @@
 // this commit deleted mirrors upstream only when upstream also lacks it
 // at the given ref.
 //
+// Every git subprocess this file spawns runs with a sanitized environment
+// (sanitizedGitEnvironment): GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/
+// GIT_COMMON_DIR/GIT_OBJECT_DIRECTORY and any GIT_CONFIG* variable are
+// stripped before spawning, so an ambient override inherited from a
+// calling hook or wrapper can never silently redirect a check onto the
+// wrong repository (Copilot review, PR #3225; the same class of bug this
+// repository already fixed once in idd-roadmap-audit-execute.mts, issue
+// #2225).
+//
 // The five classification rules (issue #3216's own specification,
 // itself distilled from a reporter's field experience -- three of the
 // five exist only because their first version of this check was too
@@ -604,11 +613,41 @@ interface TreeEntry {
   content: Buffer;
 }
 
+/**
+ * Keeps repository discovery tied to the requested `cwd` rather than to
+ * ambient Git overrides inherited from a hook, wrapper, or parent process
+ * -- without this, an inherited `GIT_DIR`/`GIT_WORK_TREE`/
+ * `GIT_INDEX_FILE`/`GIT_COMMON_DIR`/`GIT_OBJECT_DIRECTORY` could silently
+ * redirect every git call in this file onto the WRONG repository,
+ * producing a proof about a repository this run never intended to inspect
+ * (Copilot review, PR #3225; matches the same class of bug this repo
+ * already fixed once in `idd-roadmap-audit-execute.mts`, issue #2225). A
+ * local, file-scoped port of that same `sanitizedGitEnvironment` --
+ * neither file exports it for the other to import.
+ */
+function sanitizedGitEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  return env;
+}
+
 function runGit(
   cwd: string,
   args: string[],
 ): { status: number; stdout: Buffer; stderr: string } {
-  const result = spawnSync('git', args, { cwd });
+  const result = spawnSync('git', args, {
+    cwd,
+    env: sanitizedGitEnvironment(),
+  });
   return {
     status: result.status ?? 1,
     stdout: result.stdout ?? Buffer.alloc(0),
@@ -732,6 +771,7 @@ function readTargetEntry(
   }
   const result = spawnSync('git', ['show', `${ref}:${path}`], {
     cwd: repoRoot,
+    env: sanitizedGitEnvironment(),
   });
   if (result.status !== 0) {
     const stderrText = (result.stderr ?? Buffer.alloc(0)).toString('utf8');
@@ -761,6 +801,7 @@ function resolveUpstreamPathMode(
     ['-C', upstreamRoot, 'rev-parse', '--is-inside-work-tree'],
     {
       encoding: 'utf8',
+      env: sanitizedGitEnvironment(),
     },
   );
   if (probe.status === 0 && probe.stdout.trim() === 'true') {

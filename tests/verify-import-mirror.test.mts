@@ -600,10 +600,12 @@ function commitAll(root: string, message: string): void {
 function runCli(
   args: string[],
   cwd: string,
+  env?: NodeJS.ProcessEnv,
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync('node', [CLI_ENTRY, ...args], {
     cwd,
     encoding: 'utf8',
+    ...(env === undefined ? {} : { env }),
   });
   return {
     status: result.status ?? 1,
@@ -1343,5 +1345,71 @@ test('runVerification wires the git plumbing and pure classification together', 
   } finally {
     rmSync(targetRoot, { recursive: true, force: true });
     rmSync(upstreamRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI end-to-end: an inherited GIT_DIR/GIT_WORK_TREE from a calling hook never redirects the check onto the wrong repository (Copilot review, PR #3225)', () => {
+  // Regression: without a sanitized subprocess environment, git's own
+  // ambient overrides (GIT_DIR/GIT_WORK_TREE take precedence over normal
+  // cwd-based discovery) would silently redirect every git call in this
+  // file onto whatever repository a calling hook or wrapper happened to
+  // have configured -- producing a proof about the WRONG repository, or
+  // (as constructed here) an outright failure against a decoy repo that
+  // doesn't even share the same commit history.
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  const upstreamRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-upstream-'),
+  );
+  const decoyRoot = mkdtempSync(join(tmpdir(), 'verify-import-mirror-decoy-'));
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'baseline.txt'), 'hello\n');
+    commitAll(targetRoot, 'chore: baseline');
+    writeFileSync(join(targetRoot, 'new.txt'), 'vendored content\n');
+    commitAll(targetRoot, 'chore: vendor import');
+
+    writeFileSync(join(upstreamRoot, 'new.txt'), 'vendored content\n');
+
+    // The decoy has only ONE commit -- no HEAD^ -- so if GIT_DIR/
+    // GIT_WORK_TREE leak through, the diff command fails outright rather
+    // than silently returning plausible-looking wrong results, making the
+    // leak unambiguous either way.
+    initTargetRepo(decoyRoot);
+    writeFileSync(join(decoyRoot, 'decoy.txt'), 'unrelated repository\n');
+    commitAll(decoyRoot, 'chore: decoy single commit');
+
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        upstreamRoot,
+        '--format',
+        'json',
+      ],
+      targetRoot,
+      {
+        ...process.env,
+        GIT_DIR: join(decoyRoot, '.git'),
+        GIT_WORK_TREE: decoyRoot,
+      },
+    );
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0 (targetRoot's own history, unaffected by the inherited decoy GIT_DIR/GIT_WORK_TREE), got ${result.status}: ${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout) as {
+      results: { path: string; changeType: string; status: string }[];
+    };
+    assert.deepEqual(report.results, [
+      { path: 'new.txt', changeType: 'A', status: 'exact' },
+    ]);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(upstreamRoot, { recursive: true, force: true });
+    rmSync(decoyRoot, { recursive: true, force: true });
   }
 });
