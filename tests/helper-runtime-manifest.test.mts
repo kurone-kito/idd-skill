@@ -667,6 +667,101 @@ test("every manifest helper binName is exposed in package.json's bin map", () =>
   }
 });
 
+// idd-skill#3239: the guard above is one-way -- it only checks that
+// every cataloged binName has a package.json bin entry, never the
+// reverse. At fa49fb6c three bin keys had no HELPER_COMMANDS entry:
+// idd-advisory-comment-debounce (the bug this issue fixes),
+// idd-onboard, and idd-merged-pr-feedback-sweep. The latter two are
+// genuinely maintainer/CI-only tools that must stay unregistered (see
+// SOURCE_REPO_INTERNAL_ENTRY_PATHS in
+// tests/helper-invocation-profile.test.mts and "the registration guard
+// scopes out instruction-referenced libraries and dev tooling" above),
+// so this guard allowlists exactly those two, each with its own
+// one-line justification, rather than excluding the whole check.
+//
+// Both helpers below take `bin` and `allowlist` as plain data (never
+// reading package.json internally), so the acceptance criteria's
+// synthetic-map cases can be direct unit tests instead of fixture
+// files.
+
+/** Sorted `bin` keys that are neither a registered binName nor allowlisted. */
+function findUnregisteredBinNames(
+  bin: Record<string, string>,
+  registeredBinNames: Set<string>,
+  allowlist: Record<string, string>,
+): string[] {
+  return Object.keys(bin)
+    .filter((name) => !registeredBinNames.has(name) && !(name in allowlist))
+    .sort();
+}
+
+/** Sorted allowlist keys that are no longer present in `bin` (a stale entry). */
+function findMissingAllowlistedBinNames(
+  bin: Record<string, string>,
+  allowlist: Record<string, string>,
+): string[] {
+  return Object.keys(allowlist)
+    .filter((name) => !(name in bin))
+    .sort();
+}
+
+const BIN_ALLOWLIST: Record<string, string> = {
+  'idd-onboard':
+    'Runs from a clone of this repository against a target via --source; already listed in SOURCE_REPO_INTERNAL_ENTRY_PATHS in tests/helper-invocation-profile.test.mts for that reason.',
+  'idd-merged-pr-feedback-sweep':
+    'Already pinned as the unregistered maintainer-only post-merge sweep by "the registration guard scopes out instruction-referenced libraries and dev tooling" in this same test file.',
+};
+
+test('findUnregisteredBinNames flags a synthetic bin key with no catalog entry and no allowlist entry', () => {
+  const bin = {
+    'idd-audit-pr-cleanup': './bin/idd-audit-pr-cleanup.mjs',
+    'idd-not-a-real-helper': './bin/idd-not-a-real-helper.mjs',
+  };
+  const registeredBinNames = new Set(['idd-audit-pr-cleanup']);
+  assert.deepEqual(findUnregisteredBinNames(bin, registeredBinNames, {}), [
+    'idd-not-a-real-helper',
+  ]);
+});
+
+test('findMissingAllowlistedBinNames flags an allowlisted name no longer present in bin', () => {
+  const bin = {
+    'idd-merged-pr-feedback-sweep': './bin/idd-merged-pr-feedback-sweep.mjs',
+  };
+  assert.deepEqual(findMissingAllowlistedBinNames(bin, BIN_ALLOWLIST), [
+    'idd-onboard',
+  ]);
+});
+
+test('every package.json bin key is a cataloged binName or an explicitly justified allowlist entry', () => {
+  // The reverse of "every manifest helper binName is exposed in
+  // package.json's bin map" above: every bin key must trace back to
+  // either a HELPER_COMMANDS entry or a justified allowlist entry, so a
+  // helper like advisory-comment-debounce (bin key present, catalog
+  // entry missing) cannot silently ship unregistered again. The
+  // allowlist itself is checked for staleness in the same assertion:
+  // an allowlisted name that stops being a bin key must also fail, so
+  // the allowlist cannot drift from reality unnoticed.
+  const { commandCatalog } = buildHelperRuntimeManifest({
+    targetRoot: REPO_ROOT,
+  });
+  const registeredBinNames = new Set(
+    commandCatalog.map((command) => command.binName),
+  );
+  const bin = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'))
+    .bin as Record<string, string>;
+
+  assert.deepEqual(
+    findUnregisteredBinNames(bin, registeredBinNames, BIN_ALLOWLIST),
+    [],
+    'package.json bin keys with no HELPER_COMMANDS entry and no allowlist justification',
+  );
+  assert.deepEqual(
+    findMissingAllowlistedBinNames(bin, BIN_ALLOWLIST),
+    [],
+    'BIN_ALLOWLIST names that are no longer package.json bin keys -- remove the stale entry',
+  );
+});
+
 const INSTRUCTIONS_DIR = join(REPO_ROOT, '.github/instructions');
 
 function readInstructionFiles(): { name: string; source: string }[] {
@@ -876,6 +971,202 @@ test('the registration guard scopes out instruction-referenced libraries and dev
       `${nonAdopterTool} is not an adopter CLI helper and must not be registered in HELPER_COMMANDS`,
     );
   }
+});
+
+// idd-skill#3239: the guard above scans `.github/instructions/**` only,
+// which never caught advisory-comment-debounce -- the template's own
+// comment-refresh workflow invokes it directly, with no matching
+// instruction-file mention. This guard scans the distributed
+// `idd-template/.github/workflows/*.yml` files instead, for every
+// invocation form a real workflow step uses: `node scripts/<name>.mjs`,
+// and the four package-runner forms `pnpm exec idd-<name>`, `yarn
+// [--silent] idd-<name>` (the optional `--silent` flag is a real form at
+// idd-advisory-convergence.yml's Yarn-1-detection branch),
+// `npm exec idd-<name>`, and `npx --yes --package <spec> idd-<name>`.
+// Deliberately keyed on these invocation forms only, not a bare `idd-`
+// token scan, which would also match job ids, config file names, and
+// marker names (e.g. the `idd-advisory-convergence` check-run context
+// literal, or the `ALLOWLIST=( "scripts/rerun-advisory-convergence.mjs"
+// ... )` bash array in idd-advisory-convergence.yml, a bare path with no
+// `node` prefix).
+
+const TEMPLATE_WORKFLOWS_DIR = join(
+  REPO_ROOT,
+  'idd-template/.github/workflows',
+);
+
+function readTemplateWorkflowFiles(): { name: string; source: string }[] {
+  return readdirSync(TEMPLATE_WORKFLOWS_DIR)
+    .filter((name) => name.endsWith('.yml'))
+    .map((name) => ({
+      name,
+      source: readFileSync(join(TEMPLATE_WORKFLOWS_DIR, name), 'utf8'),
+    }));
+}
+
+interface TemplateWorkflowViolation {
+  file: string;
+  form: 'node' | 'package-runner';
+  name: string;
+  message: string;
+}
+
+interface TemplateWorkflowScan {
+  violations: TemplateWorkflowViolation[];
+  nodeEntryPaths: string[];
+  packageRunnerBinNames: string[];
+}
+
+const TEMPLATE_WORKFLOW_NODE_PATTERN = /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g;
+const TEMPLATE_WORKFLOW_PACKAGE_RUNNER_PATTERNS = [
+  /\bpnpm\s+exec\s+(idd-[a-z0-9-]+)\b/g,
+  /\byarn\s+(?:--silent\s+)?(idd-[a-z0-9-]+)\b/g,
+  /\bnpm\s+exec\s+(idd-[a-z0-9-]+)\b/g,
+  /\bnpx\s+--yes\s+--package\s+\S+\s+(idd-[a-z0-9-]+)\b/g,
+];
+
+/**
+ * Strip any line whose trimmed text starts with `#` -- drops YAML
+ * comments and shell `# ...` lines inside `run:` blocks, including
+ * module-header prose that mentions a helper name or flag without a
+ * real invocation (e.g. this file's own header paragraphs quoting
+ * `rerun-advisory-convergence.mjs --apply` in prose).
+ */
+function stripCommentLines(source: string): string {
+  return source
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n');
+}
+
+/**
+ * Pure function over (workflow texts, command catalog): scans every
+ * workflow's non-comment text for the node and package-runner
+ * invocation forms above, and flags any invocation whose target is not
+ * a cataloged `entryPath`/`binName`. Also returns the full found-sets
+ * (not just violations), so a caller can assert sanity anchors -- a
+ * restructured `run:` block that accidentally stops matching anything
+ * would otherwise let this guard pass vacuously with an empty
+ * violation list.
+ */
+function scanTemplateWorkflowRegistrations(
+  workflowFiles: { name: string; source: string }[],
+  commandCatalog: { entryPath: string; binName: string }[],
+): TemplateWorkflowScan {
+  const registeredEntryPaths = new Set(
+    commandCatalog.map((command) => command.entryPath),
+  );
+  const registeredBinNames = new Set(
+    commandCatalog.map((command) => command.binName),
+  );
+  const violations: TemplateWorkflowViolation[] = [];
+  const nodeEntryPaths = new Set<string>();
+  const packageRunnerBinNames = new Set<string>();
+
+  for (const { name, source } of workflowFiles) {
+    const scannable = stripCommentLines(source);
+
+    for (const match of scannable.matchAll(TEMPLATE_WORKFLOW_NODE_PATTERN)) {
+      const entryPath = match[1];
+      nodeEntryPaths.add(entryPath);
+      if (!registeredEntryPaths.has(entryPath)) {
+        violations.push({
+          file: name,
+          form: 'node',
+          name: entryPath,
+          message: `${name} invokes \`node ${entryPath}\`, which is not a cataloged HELPER_COMMANDS entryPath`,
+        });
+      }
+    }
+
+    for (const pattern of TEMPLATE_WORKFLOW_PACKAGE_RUNNER_PATTERNS) {
+      for (const match of scannable.matchAll(pattern)) {
+        const binName = match[1];
+        packageRunnerBinNames.add(binName);
+        if (!registeredBinNames.has(binName)) {
+          violations.push({
+            file: name,
+            form: 'package-runner',
+            name: binName,
+            message: `${name} invokes ${binName} via a package-runner form, which is not a cataloged HELPER_COMMANDS binName`,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    violations,
+    nodeEntryPaths: [...nodeEntryPaths].sort(),
+    packageRunnerBinNames: [...packageRunnerBinNames].sort(),
+  };
+}
+
+test('every helper invocation in idd-template workflow files is registered', () => {
+  const workflowFiles = readTemplateWorkflowFiles();
+  // Vacuity guard: a moved/renamed workflow directory must not make this
+  // test silently pass with nothing scanned.
+  assert.ok(
+    workflowFiles.length >= 3,
+    'expected at least 3 idd-template/.github/workflows/*.yml files',
+  );
+
+  const { commandCatalog } = buildHelperRuntimeManifest({
+    targetRoot: REPO_ROOT,
+  });
+  const scan = scanTemplateWorkflowRegistrations(workflowFiles, commandCatalog);
+
+  // Sanity anchors (idd-skill#3239): the scan must find both of these
+  // known-registered helpers in BOTH the node form and a package-runner
+  // form, so a restructured `run:` block that stops matching anything
+  // cannot make the guard above pass vacuously.
+  assert.ok(
+    scan.nodeEntryPaths.includes('scripts/rerun-advisory-convergence.mjs'),
+  );
+  assert.ok(scan.nodeEntryPaths.includes('scripts/audit-pr-cleanup.mjs'));
+  assert.ok(
+    scan.packageRunnerBinNames.includes('idd-rerun-advisory-convergence'),
+  );
+  assert.ok(scan.packageRunnerBinNames.includes('idd-audit-pr-cleanup'));
+
+  assert.deepEqual(scan.violations, []);
+});
+
+test('the template-workflow guard flags advisory-comment-debounce when the catalog lacks its entry', () => {
+  // Regression reproduction for idd-skill#3239: with
+  // advisory-comment-debounce removed from the catalog, the real
+  // idd-advisory-convergence-comment.yml invocations (its `node` form
+  // under vendored-node, and its `pnpm exec`/`yarn`/`npm exec`/`npx`
+  // forms under package-manager/ephemeral-npx) must be flagged, naming
+  // both identifiers.
+  const workflowFiles = readTemplateWorkflowFiles();
+  const { commandCatalog } = buildHelperRuntimeManifest({
+    targetRoot: REPO_ROOT,
+  });
+  const catalogWithoutDebounce = commandCatalog.filter(
+    (command) => command.id !== 'advisory-comment-debounce',
+  );
+  const scan = scanTemplateWorkflowRegistrations(
+    workflowFiles,
+    catalogWithoutDebounce,
+  );
+
+  assert.ok(
+    scan.violations.some(
+      (violation) =>
+        violation.form === 'node' &&
+        violation.name === 'scripts/advisory-comment-debounce.mjs',
+    ),
+    'expected a node-form violation naming scripts/advisory-comment-debounce.mjs',
+  );
+  assert.ok(
+    scan.violations.some(
+      (violation) =>
+        violation.form === 'package-runner' &&
+        violation.name === 'idd-advisory-comment-debounce',
+    ),
+    'expected a package-runner-form violation naming idd-advisory-comment-debounce',
+  );
 });
 
 test('resolveHelperCommandForProfile resolves the audit-pr-cleanup invocation for every profile (idd-skill#1718)', () => {
