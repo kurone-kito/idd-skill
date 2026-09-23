@@ -98,11 +98,21 @@
 //    before comparing. A removed blank line that merges two paragraphs
 //    into one still fails (paragraph count changes); the blank-line
 //    COUNT between two paragraphs is tolerated (1 vs 2+ blank lines
-//    both normalize the same way). A fenced code block (``` or ~~~) is
-//    compared VERBATIM, never reflow-tolerant -- an earlier version
-//    applied the same reflow tolerance inside a fence too, letting a
-//    real content edit hidden in a vendored code example pass as a
-//    tolerated reflow (Copilot review, PR #3225).
+//    both normalize the same way). A fenced code block, an indented code
+//    block, and an inline code span (backtick-delimited) are all compared
+//    VERBATIM, never reflow-tolerant -- an earlier version applied the
+//    same reflow tolerance inside a fence too (letting a real content
+//    edit hidden in a vendored code example pass), and a hand-rolled
+//    fence-detection regex also had no CommonMark indentation limit (a
+//    4-space-indented ` ``` ` line -- itself ordinary code content, per
+//    CommonMark's 3-space limit on real fence markers -- could falsely
+//    close a fence and reclassify everything after it as prose) and
+//    never masked inline code spans at all (Copilot reviews, PR #3225).
+//    Rather than harden that hand-rolled parser further, this now reuses
+//    `findMarkdownCodeRanges` from `markdown-code.mts` -- this
+//    repository's own CommonMark-compliant, container/list-aware code-
+//    region detector, already proven across many review rounds on its
+//    own PR.
 // 4. Git file mode compared exactly (e.g. `100644` vs `100755`):
 //    identical bytes with a dropped executable bit still breaks a
 //    `bin/` entry point. For `--upstream-path`, mode/content/existence
@@ -165,6 +175,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mts';
+import { findMarkdownCodeRanges } from './markdown-code.mts';
 
 /** Hardcoded scoping constants (module-level, not CLI flags -- mirrors
  * verify-workshop-integrity.mts's own WORKSHOP_ROOTS/WORKSHOP_ASSET_DIRS
@@ -418,23 +429,38 @@ export function isProseExtension(path: string): boolean {
  * one paragraph, letting a genuinely removed paragraph break slip through
  * as a tolerated reflow (Copilot review, PR #3225).
  *
- * A fenced code block (``` or ~~~, CommonMark §4.5) is compared VERBATIM,
- * never reflow-tolerant -- a Copilot review on PR #3225 pointed out that
- * this rule's whole point is proving a vendored file is unchanged, and a
- * real content edit hiding inside a fenced example (the module header's
- * own previously-disclosed limitation) silently passed as a tolerated
- * reflow before this fix. {@link splitFencedSegments} isolates each fence
- * as its own opaque segment; only the prose OUTSIDE fenced blocks gets
- * paragraph/whitespace normalization.
+ * A fenced code block, an indented code block, and an inline code span
+ * (backtick-delimited) are all compared VERBATIM, never reflow-tolerant --
+ * a Copilot review on PR #3225 pointed out this rule's whole point is
+ * proving a vendored file is unchanged, and a real content edit hiding
+ * inside a fenced example silently passed as a tolerated reflow before an
+ * earlier fix that masked only fenced blocks; a second review round then
+ * caught the same gap for inline code spans AND an earlier fence-detection
+ * regex that didn't reject a 4-space-indented fence marker as CommonMark
+ * requires. Rather than hand-roll a second, narrower Markdown-structure
+ * parser, this reuses `findMarkdownCodeRanges` from `markdown-code.mts` --
+ * this repository's own CommonMark-compliant code-region detector (fenced
+ * blocks, indented code, and inline spans, container/list-aware),
+ * already proven across many review rounds on its own PR. Only the text
+ * OUTSIDE every detected code range gets paragraph/whitespace
+ * normalization; every code range's own bytes pass through unchanged.
  */
 export function normalizeProseWhitespace(content: string): string {
-  return splitFencedSegments(content.replace(/\r\n/g, '\n'))
-    .map((segment) =>
-      segment.type === 'code'
-        ? segment.text
-        : normalizeProseSegment(segment.text),
-    )
-    .join('\n');
+  const unified = content.replace(/\r\n/g, '\n');
+  const ranges = findMarkdownCodeRanges(unified);
+  const segments: string[] = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    if (range.start > cursor) {
+      segments.push(normalizeProseSegment(unified.slice(cursor, range.start)));
+    }
+    segments.push(unified.slice(range.start, range.end));
+    cursor = range.end;
+  }
+  if (cursor < unified.length) {
+    segments.push(normalizeProseSegment(unified.slice(cursor)));
+  }
+  return segments.join('');
 }
 
 function normalizeProseSegment(content: string): string {
@@ -447,63 +473,6 @@ function normalizeProseSegment(content: string): string {
     .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
     .filter((paragraph) => paragraph.length > 0);
   return paragraphs.join('\n\n');
-}
-
-interface FencedSegment {
-  type: 'prose' | 'code';
-  text: string;
-}
-
-/**
- * Splits `content` (already `\n`-normalized) into alternating prose/code
- * segments on CommonMark fenced-code-block boundaries (``` or ~~~, 3+
- * characters, a closing fence needing only the same character at least as
- * long, with nothing but whitespace after it -- mirrors
- * `verify-workshop-integrity.mts`'s own `stripFencedCodeBlocks` fence-
- * matching rules in this same repository). An unterminated fence at EOF
- * keeps everything from the opening fence onward as `code` (verbatim)
- * rather than misreading the remainder as reflow-tolerant prose.
- */
-function splitFencedSegments(content: string): FencedSegment[] {
-  const lines = content.split('\n');
-  const segments: FencedSegment[] = [];
-  let current: string[] = [];
-  let currentType: FencedSegment['type'] = 'prose';
-  let fence: { char: string; length: number } | null = null;
-  const flush = (): void => {
-    segments.push({ type: currentType, text: current.join('\n') });
-    current = [];
-  };
-  for (const line of lines) {
-    const openMatch = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
-    if (openMatch) {
-      const fenceMarker = openMatch[1];
-      const fenceChar = fenceMarker[0];
-      const fenceLen = fenceMarker.length;
-      const onlyWhitespaceAfter = /^\s*$/.test(openMatch[2]);
-      if (fence === null) {
-        flush();
-        currentType = 'code';
-        fence = { char: fenceChar, length: fenceLen };
-        current.push(line);
-        continue;
-      }
-      if (
-        fenceChar === fence.char &&
-        fenceLen >= fence.length &&
-        onlyWhitespaceAfter
-      ) {
-        current.push(line);
-        flush();
-        currentType = 'prose';
-        fence = null;
-        continue;
-      }
-    }
-    current.push(line);
-  }
-  flush();
-  return segments;
 }
 
 /** Content-only classification (rules 1-3), ignoring mode entirely. */

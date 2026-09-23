@@ -497,6 +497,59 @@ test('normalizeProseWhitespace supports ~~~ fences too, not only backtick fences
   );
 });
 
+test('normalizeProseWhitespace compares an inline code span verbatim, never reflow-tolerant (Copilot review, PR #3225)', () => {
+  // Regression: an earlier version only masked FENCED code blocks, so a
+  // real edit hidden inside a backtick-delimited inline code span (whose
+  // own content can legally wrap across one line, per CommonMark) still
+  // passed as a tolerated reflow.
+  const upstream = 'Run `foo\nbar`\n';
+  const target = 'Run `foo bar`\n';
+  assert.notEqual(
+    normalizeProseWhitespace(upstream),
+    normalizeProseWhitespace(target),
+  );
+});
+
+test('rule 3 fail (Copilot review, PR #3225): a real edit inside an inline code span is a genuine mismatch, not a tolerated reflow', () => {
+  const upstream = Buffer.from('Run `foo\nbar`\n');
+  const target = Buffer.from('Run `foo bar`\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
+test('normalizeProseWhitespace does not let a 4-space-indented line falsely close a fence (CommonMark rejects it as a fence marker) (Copilot review, PR #3225)', () => {
+  // Regression: an earlier version's fence-detection regex allowed any
+  // leading whitespace (\s*) before the fence marker, with no CommonMark
+  // indentation limit -- so a 4-space-indented "```" line (itself
+  // ordinary CODE CONTENT inside the fence, per CommonMark's 3-space
+  // limit on fence markers) was misread as a real closer, reclassifying
+  // everything after it as reflow-tolerant prose instead of the fenced
+  // code it actually is.
+  const upstream = '```\n    ```\nreal code A\nmore\n```\n';
+  const target = '```\n    ```\nreal code B changed\nmore\n```\n';
+  assert.notEqual(
+    normalizeProseWhitespace(upstream),
+    normalizeProseWhitespace(target),
+  );
+});
+
+test('rule 3 fail (Copilot review, PR #3225): code hidden after a false 4-space-indented fence-close is a genuine mismatch, not a tolerated reflow', () => {
+  const upstream = Buffer.from('```\n    ```\nreal code A\nmore\n```\n');
+  const target = Buffer.from('```\n    ```\nreal code B changed\nmore\n```\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
 // ---------------------------------------------------------------------------
 // Rule 4 -- git file mode comparison
 // ---------------------------------------------------------------------------
@@ -897,7 +950,9 @@ test('CLI end-to-end: an empty scoped diff prints "0 files compared" and exits 0
   }
 });
 
-test('rule 4 CLI end-to-end: --upstream-path resolves mode from a real git work tree, not just fs bits', () => {
+test('rule 4 CLI end-to-end: --upstream-path resolves mode from a real git work tree, not just fs bits', {
+  skip: process.platform === 'win32',
+}, () => {
   const targetRoot = mkdtempSync(
     join(tmpdir(), 'verify-import-mirror-target-'),
   );
@@ -1073,7 +1128,13 @@ test('CLI end-to-end: a HEAD-tracked but sparse-checkout-omitted upstream file i
   }
 });
 
-test('CLI end-to-end: a real symlink in --upstream-path is compared as a git entry, not followed (Copilot review, PR #3225)', () => {
+test('CLI end-to-end: a real symlink in --upstream-path is compared as a git entry, not followed (Copilot review, PR #3225)', {
+  skip: process.platform === 'win32',
+}, () => {
+  // Creating a symlink needs elevated privilege or Developer Mode on
+  // Windows, which CI cannot assume -- matches this repo's established
+  // guard idiom for symlink-creating fixtures (e.g.
+  // verify-install-deps.test.mts).
   const targetRoot = mkdtempSync(
     join(tmpdir(), 'verify-import-mirror-target-'),
   );
@@ -1128,7 +1189,12 @@ test('CLI end-to-end: a real symlink in --upstream-path is compared as a git ent
   }
 });
 
-test('CLI end-to-end: a symlinked ANCESTOR directory under --upstream-path is refused, not silently followed (Copilot review, PR #3225)', () => {
+test('CLI end-to-end: a symlinked ANCESTOR directory under --upstream-path is refused, not silently followed (Copilot review, PR #3225)', {
+  skip: process.platform === 'win32',
+}, () => {
+  // Creating a symlink needs elevated privilege or Developer Mode on
+  // Windows, which CI cannot assume -- matches this repo's established
+  // guard idiom for symlink-creating fixtures.
   const targetRoot = mkdtempSync(
     join(tmpdir(), 'verify-import-mirror-target-'),
   );
@@ -1266,7 +1332,12 @@ test('CLI end-to-end: a --upstream-path that is not a directory is rejected up f
   }
 });
 
-test('CLI end-to-end: a tracked type change (T status, regular file -> symlink) is compared, not silently discarded (Copilot review, PR #3225)', () => {
+test('CLI end-to-end: a tracked type change (T status, regular file -> symlink) is compared, not silently discarded (Copilot review, PR #3225)', {
+  skip: process.platform === 'win32',
+}, () => {
+  // Creating a symlink needs elevated privilege or Developer Mode on
+  // Windows, which CI cannot assume -- matches this repo's established
+  // guard idiom for symlink-creating fixtures.
   const targetRoot = mkdtempSync(
     join(tmpdir(), 'verify-import-mirror-target-'),
   );
