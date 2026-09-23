@@ -282,7 +282,7 @@ under concurrent execution, so re-check once the B1 worktree exists and
 **before writing any code or drafting the plan below**, using a
 mechanical file/close-based signal stronger than A4.5's title/
 declaration heuristic (a weak **title-only** match is **not** a hit
-here). Keep it cheap: one fetch plus a bounded merged-PR scan.
+here).
 
 1. `git fetch origin {development-branch}` (concurrent workers sharing
    one clone: behind the
@@ -307,13 +307,15 @@ here). Keep it cheap: one fetch plus a bounded merged-PR scan.
    gh pr view <n> --json files --jq '.files[].path'
    ```
 
-**On a hit → verify-then-close** (never silent re-implementation, and never an
-auto-close on a weak signal): confirm the issue's acceptance criteria already
-hold on current `{development-branch}`, then close the issue with a
+**On a hit → verify-then-close**: confirm the issue's acceptance criteria
+already hold on current `{development-branch}`, then close the issue with a
 comment referencing the superseding PR. If the criteria only
 **partly** hold, keep the issue open,
 record the overlap, and plan only the genuinely-remaining work. On no hit,
 continue with the plan below.
+
+`gh issue close` is not completion: with no diff and no PR, only
+**verify-then-close** or F4 step 1 post-merge close may close it.
 
 ### B2.1 — Premise verification (decision-transcription issues)
 
