@@ -118,13 +118,12 @@ every phase. GitHub is IDD's only implemented provider today; see
 for the staged, provider-neutral adapter boundary this onboarding path
 does not depend on.
 
-Important: the distributed default workflow is cross-agent for
-execution, but its later PR phases still include a GitHub Copilot
-advisory review step by default. If the operator does not want that PR
-policy, choose another profile in `docs/idd-review-policy-profiles.md`
-and apply the matching artifact from `profiles/`. The artifact records
-the complete edit surface, adopter-owned values, and verification
-evidence for the selected non-default profile.
+Important: the distributed default workflow is cross-agent, but its
+later PR phases still include a GitHub Copilot advisory review step by
+default. If the operator does not want that PR policy, choose another
+profile in `docs/idd-review-policy-profiles.md` and apply the matching
+artifact from `profiles/`, which records the complete edit surface,
+adopter-owned values, and verification evidence for that profile.
 
 Also choose a review-thread resolution policy before treating the import
 as complete. The distributed default is `fast-agent-resolve`, where an
@@ -163,14 +162,13 @@ alongside the merge policy and point operators to
 such as `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
 `ciWait.rerunPolicy` are easy to find later.
 
-Also consider the AI model used for the IDD execution session. Large and
-premium reasoning models are more likely to trigger frequent context
-compaction when the full instruction file set is loaded, which can
-interrupt unattended IDD loops. For day-to-day execution, standard models
-(for example, models in the Sonnet class) handle the instruction overhead
-more efficiently and are the recommended choice. Reserve large or premium
-reasoning models for tasks that genuinely benefit from their extended
-reasoning depth, not for routine IDD loop execution.
+Also consider the AI model used for the IDD execution session. A
+premium reasoning model is more likely to trigger frequent context
+compaction when the full instruction set is loaded, interrupting
+unattended IDD loops; a standard model (for example, the Sonnet class)
+handles that overhead more efficiently and is the recommended default,
+reserving premium reasoning models for tasks that genuinely benefit from
+their extended reasoning depth.
 
 ## Your task
 
@@ -671,15 +669,17 @@ error), so an agent can gate on the exit code without parsing prose.
 
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check for a target tree after `--import` and `--substitute` have run,
-  replacing a manual walkthrough of the checklist below with four check
+  replacing a manual walkthrough of the checklist below with five check
   groups: manifest completeness (reusing `--import`'s own file-set
-  resolution), placeholder residue (reusing `--substitute`'s scanner), an
-  informational stale-import signal, and a non-blocking package-pin
-  advisory (flags an `ephemeral-npx`/`package-manager` helper runtime
-  profile with no configured `helperRuntime.packageSpec` — see
+  resolution), placeholder residue (reusing `--substitute`'s scanner), a
+  helper-load check (`vendored-node` only: spawns each cataloged helper
+  under `--target` with `--help`), an informational stale-import signal,
+  and a non-blocking package-pin advisory (flags an
+  `ephemeral-npx`/`package-manager` helper runtime profile with no
+  configured `helperRuntime.packageSpec` — see
   [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)).
-  A missing manifest file or a leftover onboarding placeholder is
-  blocking; the stale-import signal and the package-pin advisory are
+  A missing manifest file, leftover placeholder, or helper-load failure
+  is blocking; the stale-import signal and package-pin advisory are
   never blocking.
 
   ```sh
