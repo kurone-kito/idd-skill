@@ -1646,6 +1646,109 @@ test('resolveImportFiles reports a missing vendored helper file via missingSourc
   );
 });
 
+test('buildImportPlan --hold excludes the named entry, classifying it "held", while every other entry still imports', () => {
+  const sourceRoot = makeImportSourceFixture({
+    'a.md': 'alpha\n',
+    'b.md': 'bravo\n',
+    'c.md': 'charlie\n',
+  });
+  const targetRoot = makeFixtureDir();
+
+  const plan = buildImportPlan(sourceRoot, targetRoot, { hold: ['b.md'] });
+  const byTarget = new Map(plan.entries.map((e) => [e.targetPath, e]));
+  assert.equal(byTarget.get('a.md')?.classification, 'new');
+  assert.equal(byTarget.get('b.md')?.classification, 'held');
+  assert.equal(byTarget.get('c.md')?.classification, 'new');
+  assert.deepEqual(plan.heldTargets, ['b.md']);
+  // Never blocking.
+  assert.deepEqual(plan.missingSource, []);
+  assert.deepEqual(plan.blockedOverwrites, []);
+  assert.deepEqual(plan.nonFileTargetCollisions, []);
+
+  const filesChanged = applyImportPlan(sourceRoot, targetRoot, plan);
+  assert.equal(filesChanged, 2);
+  assert.ok(existsSync(join(targetRoot, 'a.md')));
+  assert.ok(existsSync(join(targetRoot, 'c.md')));
+  assert.ok(!existsSync(join(targetRoot, 'b.md')));
+});
+
+test('buildImportPlan throws a clear error when --hold names a path outside the resolved manifest', () => {
+  const sourceRoot = makeImportSourceFixture({ 'a.md': 'alpha\n' });
+  assert.throws(
+    () =>
+      buildImportPlan(sourceRoot, makeFixtureDir(), {
+        hold: ['does-not-exist.md'],
+      }),
+    /unknown --hold/u,
+  );
+});
+
+test('buildImportPlan never classifies an entry "held" when --hold is omitted (default-behavior regression)', () => {
+  const targetRoot = makeFixtureDir();
+  const plan = buildImportPlan(REPO_ROOT, targetRoot);
+  assert.deepEqual(plan.heldTargets, []);
+  assert.ok(plan.entries.every((entry) => entry.classification !== 'held'));
+});
+
+test('buildImportPlan skips the unknown --hold check when vendored-node resolution degrades (missingSource non-empty)', () => {
+  // A --hold value naming the same missing vendored helper file must not
+  // surface as a misleading "unknown --hold" usage error (exit 2) -- the
+  // degraded resolveImportFiles view can't tell whether that path would
+  // have been in the true manifest, so the real problem (missingSource)
+  // must stay the visible signal instead.
+  const sourceRoot = makeIncompleteVendoredSourceFixture(
+    'scripts/branch-name.mjs',
+  );
+  const targetRoot = makeFixtureDir();
+  const plan = buildImportPlan(sourceRoot, targetRoot, {
+    profile: 'vendored-node',
+    hold: ['scripts/branch-name.mjs'],
+  });
+  assert.deepEqual(plan.missingSource, ['scripts/branch-name.mjs']);
+  assert.deepEqual(plan.heldTargets, []);
+  assert.ok(plan.entries.every((entry) => entry.classification !== 'held'));
+});
+
+test('buildImportPlan holds a genuine vendored-node helper file (non-degraded resolution)', () => {
+  const targetRoot = makeFixtureDir();
+  const plan = buildImportPlan(REPO_ROOT, targetRoot, {
+    profile: 'vendored-node',
+    hold: ['scripts/branch-name.mjs'],
+  });
+  assert.deepEqual(plan.missingSource, []);
+  assert.deepEqual(plan.heldTargets, ['scripts/branch-name.mjs']);
+  const held = plan.entries.find(
+    (entry) => entry.targetPath === 'scripts/branch-name.mjs',
+  );
+  assert.equal(held?.classification, 'held');
+  // Every other vendored-node helper file, and the core file set, still
+  // import normally.
+  assert.ok(
+    plan.entries.some(
+      (entry) =>
+        entry.targetPath !== 'scripts/branch-name.mjs' &&
+        entry.classification === 'new',
+    ),
+  );
+  const filesChanged = applyImportPlan(REPO_ROOT, targetRoot, plan);
+  assert.equal(filesChanged, plan.entries.length - 1);
+  assert.ok(!existsSync(join(targetRoot, 'scripts', 'branch-name.mjs')));
+});
+
+test('buildImportPlan reports heldTargets in manifest-resolution order, not argv order', () => {
+  const sourceRoot = makeImportSourceFixture({
+    'a.md': 'alpha\n',
+    'b.md': 'bravo\n',
+    'c.md': 'charlie\n',
+  });
+  const targetRoot = makeFixtureDir();
+  // argv/--hold order is deliberately reversed from manifest order.
+  const plan = buildImportPlan(sourceRoot, targetRoot, {
+    hold: ['c.md', 'a.md'],
+  });
+  assert.deepEqual(plan.heldTargets, ['a.md', 'c.md']);
+});
+
 test('buildImportPlan blocks a non-directory ancestor collision, not just a leaf collision', () => {
   const sourceRoot = makeImportSourceFixture({ 'nested/a.md': 'alpha\n' });
   const targetRoot = makeFixtureDir();
@@ -2261,6 +2364,105 @@ test('bin/idd-onboard.mjs --import without --dry-run copies exactly the planned 
   }
 });
 
+test('bin/idd-onboard.mjs --import verdict omits heldTargets entirely when --hold is not passed (Copilot review, PR #3224)', () => {
+  const targetRoot = makeFixtureDir();
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--dry-run',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.ok(
+    !Object.hasOwn(verdict, 'heldTargets'),
+    'the verdict JSON shape must stay unchanged when --hold is never used',
+  );
+});
+
+test('bin/idd-onboard.mjs --import --dry-run --hold <path> shows the held entry as skipped, not omitted from the plan', () => {
+  const targetRoot = makeFixtureDir();
+  const before = snapshotTree(targetRoot);
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--dry-run',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--hold',
+    '.cspell.config.yml',
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.mode, 'dry-run');
+  assert.equal(verdict.written, false);
+  assert.deepEqual(verdict.heldTargets, ['.cspell.config.yml']);
+  const plan = verdict.plan as { targetPath: string; classification: string }[];
+  const held = plan.find((e) => e.targetPath === '.cspell.config.yml');
+  assert.equal(held?.classification, 'held');
+  assertTreeUnchanged(targetRoot, before);
+});
+
+test('bin/idd-onboard.mjs --import --hold <path> writes every other planned file but not the held one', () => {
+  const targetRoot = makeFixtureDir();
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--hold',
+    '.cspell.config.yml',
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.written, true);
+  const plan = verdict.plan as { targetPath: string; classification: string }[];
+  const heldCount = plan.filter(
+    (entry) => entry.classification === 'held',
+  ).length;
+  assert.equal(heldCount, 1);
+  assert.equal(verdict.filesChanged, plan.length - heldCount);
+  assert.ok(!existsSync(join(targetRoot, '.cspell.config.yml')));
+  for (const entry of plan) {
+    if (entry.classification === 'held') {
+      continue;
+    }
+    assert.ok(
+      existsSync(join(targetRoot, entry.targetPath)),
+      `not copied: ${entry.targetPath}`,
+    );
+  }
+});
+
+test('bin/idd-onboard.mjs --import --hold <bogus-path> exits 2 naming the bad path', () => {
+  const targetRoot = makeFixtureDir();
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--import',
+        '--source',
+        REPO_ROOT,
+        '--target',
+        targetRoot,
+        '--hold',
+        'no/such/path.md',
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /unknown --hold/);
+    assert.match(String(failed.stderr), /no\/such\/path\.md/);
+  }
+});
+
 test('bin/idd-onboard.mjs --import blocks on a differing existing target file without --force', () => {
   const targetRoot = makeFixtureDir();
   mkdirSync(join(targetRoot, '.github', 'idd'), { recursive: true });
@@ -2451,6 +2653,77 @@ test('bin/idd-onboard.mjs --import --force preserves a customized commands table
   );
 });
 
+test('bin/idd-onboard.mjs --import --hold .github/idd/config.json leaves an existing customized config completely untouched across a re-import', () => {
+  // Unlike a plain --force re-import (#2222 above, which overwrites the
+  // file then restores only the three RESTORABLE_COMMAND_KEYS rows),
+  // holding the file outright means it is never read from --source or
+  // written to --target at all -- every row, including install-deps
+  // (out of #2222's restore scope), survives byte-for-byte.
+  const targetRoot = makeFixtureDir();
+  execFileSync(process.execPath, [
+    BIN_PATH,
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--allow-root',
+    tmpdir(),
+  ]);
+  execFileSync(process.execPath, [
+    BIN_PATH,
+    '--substitute',
+    '--target',
+    targetRoot,
+    '--repo-name',
+    'my-app',
+    '--marker-prefix',
+    'my-app',
+    '--trusted-marker-actor',
+    'trusted-user-a',
+    '--fix-validate-commands',
+    'npx biome check --write (customized)',
+    '--pre-push-validate-commands',
+    'npx biome check (customized)',
+    '--post-fix-validate-commands',
+    'npx biome check --write (customized)',
+    '--install-deps-command',
+    'npm install (customized)',
+    '--allow-root',
+    tmpdir(),
+  ]);
+  const configPath = join(targetRoot, '.github', 'idd', 'config.json');
+  const before = readFileSync(configPath, 'utf8');
+
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--force',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--hold',
+    '.github/idd/config.json',
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.written, true);
+  assert.deepEqual(verdict.heldTargets, ['.github/idd/config.json']);
+  const plan = verdict.plan as { targetPath: string; classification: string }[];
+  const configEntry = plan.find(
+    (entry) => entry.targetPath === '.github/idd/config.json',
+  );
+  assert.equal(configEntry?.classification, 'held');
+
+  const after = readFileSync(configPath, 'utf8');
+  assert.equal(after, before);
+  const config = JSON.parse(after) as { commands: Record<string, string> };
+  assert.equal(config.commands['install-deps'], 'npm install (customized)');
+  assert.equal(
+    config.commands['fix-validate'],
+    'npx biome check --write (customized)',
+  );
+});
+
 test('bin/idd-onboard.mjs --import blocks a non-file target collision even with --force', () => {
   const targetRoot = makeFixtureDir();
   // A directory occupies a declared core-file target path.
@@ -2521,6 +2794,14 @@ test('bin/idd-onboard.mjs --help lists --profile values sourced from PROFILE_NAM
   }
 });
 
+test('bin/idd-onboard.mjs --help documents --hold', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(help, /--hold/);
+  assert.match(help, /held/);
+});
+
 test('bin/idd-onboard.mjs exits 2 when --import is combined with a substitute-only placeholder override', () => {
   const targetRoot = makeFixtureDir();
   try {
@@ -2569,6 +2850,32 @@ test('bin/idd-onboard.mjs exits 2 when --substitute is combined with an import-o
     assert.equal(failed.status, 2);
     assert.match(String(failed.stderr), /import-only flag/);
     assert.match(String(failed.stderr), /--force/);
+  }
+});
+
+test('bin/idd-onboard.mjs exits 2 when --substitute is combined with --hold', () => {
+  const targetRoot = makeFixtureDir();
+  writeTemplateFixture(targetRoot);
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--substitute',
+        '--target',
+        targetRoot,
+        '--hold',
+        '.cspell.config.yml',
+        ...CLI_OVERRIDE_FLAGS,
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /import-only flag/);
+    assert.match(String(failed.stderr), /--hold/);
   }
 });
 
@@ -3196,6 +3503,32 @@ test('bin/idd-onboard.mjs --verify exits 2 when combined with --force or --dry-r
   }
 });
 
+test('bin/idd-onboard.mjs --verify exits 2 when combined with --hold', () => {
+  const targetRoot = makeFixtureDir();
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--verify',
+        '--source',
+        REPO_ROOT,
+        '--target',
+        targetRoot,
+        '--hold',
+        '.cspell.config.yml',
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /does not accept flag\(s\)/);
+    assert.match(String(failed.stderr), /--hold/);
+  }
+});
+
 test('bin/idd-onboard.mjs --help documents --verify and lists --profile values sourced from PROFILE_NAMES', () => {
   const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
     encoding: 'utf8',
@@ -3455,6 +3788,30 @@ test('bin/idd-onboard.mjs exits 2 when --hear is combined with --import, --subst
       assert.equal(failed.status, 2);
       assert.match(String(failed.stderr), /mutually exclusive/);
     }
+  }
+});
+
+test('bin/idd-onboard.mjs exits 2 when --hear is combined with --hold', () => {
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--hear',
+        '--propose',
+        '--target',
+        makeFixtureDir(),
+        '--hold',
+        '.cspell.config.yml',
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /does not accept flag\(s\)/);
+    assert.match(String(failed.stderr), /--hold/);
   }
 });
 
@@ -3789,6 +4146,7 @@ test('runRecordPolicyCli uses the injected readRemoteBranchExists reader instead
         dryRun: false,
         force: false,
         profile: undefined,
+        hold: [],
         overrides: {},
         help: false,
         allowRoots: [tmpdir()],
@@ -4930,6 +5288,25 @@ test('bin/idd-onboard.mjs exits 2 when --record-policy is combined with --import
     });
     assert.equal(result.status, 2, `expected exit 2 for: ${args.join(' ')}`);
   }
+});
+
+test('bin/idd-onboard.mjs exits 2 when --record-policy is combined with --hold', () => {
+  const root = makeFixtureDir();
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--target',
+      root,
+      '--hold',
+      '.cspell.config.yml',
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(String(result.stderr), /does not accept flag\(s\)/);
+  assert.match(String(result.stderr), /--hold/);
 });
 
 test('bin/idd-onboard.mjs --hear rejects --record-policy-only flags (--transcript, --write-policy-doc)', () => {
