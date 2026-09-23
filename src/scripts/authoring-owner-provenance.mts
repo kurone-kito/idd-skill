@@ -936,8 +936,9 @@ one -- comparing against any of those instead would make this check
 pass trivially for a body edited before that later marker
 (kurone-kito/idd-skill#2901 review, chatgpt-codex-connector round 4).
 target comparisons fold case, since GitHub owner/repo names are
-case-insensitive. --verbose surfaces which condition failed in the
-acquire_marker_found check's evidence.
+case-insensitive. A failing acquire_marker_found check's evidence names
+which condition failed (always printed for a failing check; see
+--verbose below).
 
 Two accepted limitations, both fail-closed (never a false pass): a
 marker whose own anchor differs from its own target (a multi-target
@@ -956,7 +957,7 @@ Output schema:
   "computedBodySha256": "<64-hex>",
   "recordedBodySha256": "<64-hex>|null",
   "marker": {"author": "...", "createdAt": "...", "mode": "acquire", "owner": "...", "set": "...", "session": "...", "bodySha256": "<64-hex>"} | null,
-  "checks": [{"id":"acquire_marker_found","name":"...","result":"pass|fail"}, {"id":"body_sha256_match","name":"...","result":"pass|fail"}]
+  "checks": [{"id":"acquire_marker_found","name":"...","result":"pass|fail","evidence":"..."}, {"id":"body_sha256_match","name":"...","result":"pass|fail","evidence":"..."}]
 }
 
 "not-found" means this issue's own trusted authoring-owner marker log does
@@ -964,12 +965,22 @@ not open with a valid mode=acquire marker for this target -- never
 treated as a pass. "mismatch" means a valid Stage 1 acquire marker exists
 but the live body has changed since its own snapshot.
 
---verbose adds an "evidence" string to each checks[] entry (the computed
-and recorded digests, or the acquire marker's author/timestamp); omitted
-by default to keep default output terse.
+A failing checks[] entry always carries its "evidence" string (the
+computed and recorded digests, or which Stage 1 acquire condition
+failed), so a not-found or mismatch verdict is never indistinguishable
+from "nothing here" (kurone-kito/idd-skill#3213). --verbose additionally
+adds "evidence" to passing entries (the acquire marker's
+author/timestamp, or the matching digests); passing entries omit it by
+default to keep default output terse.
 `);
 }
 
+/**
+ * CLI entry point. Default output keeps `evidence` on every failing
+ * `checks[]` entry and strips it only from passing ones; `--verbose`
+ * keeps it on every entry (kurone-kito/idd-skill#3213 -- a default run
+ * previously withheld the one field naming why a check failed).
+ */
 function runCli(): void {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -1049,13 +1060,11 @@ function runCli(): void {
     computedBodySha256: result.computedBodySha256,
     recordedBodySha256: result.recordedBodySha256,
     marker: result.marker,
-    checks: args.verbose
-      ? result.checks
-      : result.checks.map((check) => ({
-          id: check.id,
-          name: check.name,
-          result: check.result,
-        })),
+    checks: result.checks.map((check) =>
+      args.verbose || check.result === 'fail'
+        ? check
+        : { id: check.id, name: check.name, result: check.result },
+    ),
   };
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
