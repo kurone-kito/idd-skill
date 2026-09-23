@@ -435,11 +435,12 @@ already mirrors the workflow at
 and its comment-refresh companion
 [`idd-template/.github/workflows/idd-advisory-convergence-comment.yml`](https://github.com/kurone-kito/idd-skill/blob/v0.12.2/idd-template/.github/workflows/idd-advisory-convergence-comment.yml);
 copy both files into your repository's `.github/workflows/` to
-enable it. Register only the required job id
-`idd-advisory-convergence` as a status check — the companion is
-non-required. They are not wired in automatically by importing the
-rest of `idd-template/`, since adding a new required-status-check-able
-workflow is a deliberate adopter decision, not a default.
+enable it, then drop the transitional `pull_request` trigger (below)
+before registering only the required job id `idd-advisory-convergence`
+as a status check — the companion is non-required. They are not wired in
+automatically by importing the rest of `idd-template/`, since adding a
+new required-status-check-able workflow is a deliberate adopter
+decision, not a default.
 
 Adjust the command to your helper-runtime profile, and the
 `actions/checkout` version if needed — the mirrored file intentionally
@@ -655,17 +656,16 @@ own copy of the workflow to force its required check green, a gap
 narrows, but does not eliminate, that exposure while both triggers
 stay active -- treat it as a mitigation for the transition window, not
 a substitute for this step. Wait until `pull_request_target` has run
-cleanly against production PRs for a period, then drop `pull_request`
-from your repository's copy of the workflow and keep only
+cleanly (e.g. ten PRs or two weeks, zero bypass incidents -- pick and
+record a threshold), then drop `pull_request` from your repository's
+copy of the workflow and keep only
 `pull_request_target` (plus `workflow_dispatch`/`workflow_call`) --
-and do this whole wait-then-drop sequence **before** registering the
-required status check below, not after: that check exists to close
-the same-repository-bypass gap, so register it only once the
-bypass-prone trigger is already gone. Issue
+do this **before** registering the required status check below, not
+after -- that check exists to close the same gap, so register it only
+once the bypass-prone trigger is gone. Issue
 [kurone-kito/idd-skill#3230](https://github.com/kurone-kito/idd-skill/issues/3230)
-tracks this documentation gap (observed 2026-09-23/24: a public
-adopter's onboarding PR independently had two review bots flag the
-same risk).
+tracks this gap (observed 2026-09-23/24: an adopter's onboarding PR
+independently had two review bots flag it).
 
 **Register it as a required status check.** Hosting the workflow alone
 does not block merge — a maintainer must separately register
