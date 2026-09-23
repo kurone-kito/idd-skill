@@ -62,13 +62,19 @@
 //    (`JSON.stringify(JSON.parse(x))`) on each side, then compared as
 //    strings -- deliberately stricter than a deep-equal, so a real value
 //    change still fails; only incidental formatting (indentation,
-//    trailing newline, spacing) is tolerated. Known, disclosed
-//    limitation: JavaScript's own-property enumeration always orders
-//    integer-like string keys ("0", "1", ...) ascending ahead of other
-//    keys regardless of source order, so a reorder limited to such keys
-//    is silently normalized away by this approach. A custom order-
-//    preserving JSON parser would close this gap but is disproportionate
-//    for this issue's scope.
+//    trailing newline, spacing) is tolerated. A parsed value containing a
+//    non-finite number (`JSON.parse` silently converts an overflowing
+//    number like `1e400` to `Infinity`, which `JSON.stringify`
+//    re-serializes as the bare token `null`) is treated the same as a
+//    parse failure -- never eligible for a structural match -- since it
+//    would otherwise canonicalize identically to a real `null` value
+//    (Copilot review, PR #3225). Known, disclosed limitation:
+//    JavaScript's own-property enumeration always orders integer-like
+//    string keys ("0", "1", ...) ascending ahead of other keys regardless
+//    of source order, so a reorder limited to such keys is silently
+//    normalized away by this approach. A custom order-preserving JSON
+//    parser would close this gap but is disproportionate for this
+//    issue's scope.
 // 3. Prose-reflow tolerance, scoped to `.md` only (never YAML or
 //    source): paragraphs (separated by one or more blank lines, where a
 //    line consisting solely of horizontal whitespace also counts as
@@ -110,7 +116,11 @@
 //    exist and be a directory) -- without this, a missing/mistyped
 //    upstream root would make every per-file lookup report absence,
 //    misclassifying an entire deletion-only import as a false pure-mirror
-//    pass (same review round).
+//    pass (same review round). `--upstream-ref` is validated up front the
+//    same way (must resolve to a commit) -- without it, a typo'd ref
+//    combined with a `--path-prefix` matching no changed paths would
+//    report `scanned: 0` and exit 0 without ever having read upstream at
+//    all (same review round).
 //
 // Tolerated classifications (exit 0 requires every compared path to
 // land in this set): `exact`, `generated-banner-only`,
@@ -279,14 +289,44 @@ export function isGeneratedBannerEligible(
 }
 
 /**
+ * `true` iff `value` (a `JSON.parse` result) contains a non-finite number
+ * (`Infinity`/`-Infinity` -- `JSON.parse` never actually produces `NaN`,
+ * since JSON itself has no NaN literal, but the check is written generally
+ * regardless) anywhere in its structure. `JSON.parse` silently converts an
+ * overflowing JSON number (e.g. `1e400`) to `Infinity`, and
+ * `JSON.stringify` then re-serializes ANY non-finite number as the bare
+ * token `null` -- so a real value change from an overflowing number to a
+ * literal `null` would otherwise canonicalize identically and pass as a
+ * structural match (Copilot review, PR #3225; verified empirically:
+ * `JSON.stringify(JSON.parse('{"x":1e400}'))` and
+ * `JSON.stringify(JSON.parse('{"x":null}'))` both yield `{"x":null}`).
+ */
+function hasNonFiniteNumber(value: unknown): boolean {
+  if (typeof value === 'number') {
+    return !Number.isFinite(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasNonFiniteNumber);
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value).some(hasNonFiniteNumber);
+  }
+  return false;
+}
+
+/**
  * Rule 2 (JSON structural): parses `content` and re-serializes it via
  * `JSON.stringify`, returning the canonical string, or `null` when
- * `content` is not valid JSON. Deliberately literal, not a deep-equal --
- * see the module header's disclosed integer-like-key limitation.
+ * `content` is not valid JSON OR contains a non-finite number (see
+ * {@link hasNonFiniteNumber}) -- treated the same as a parse failure
+ * (never eligible for a structural match) rather than risk the false
+ * positive above. Deliberately literal, not a deep-equal -- see the
+ * module header's disclosed integer-like-key limitation.
  */
 export function canonicalizeJson(content: string): string | null {
   try {
-    return JSON.stringify(JSON.parse(content));
+    const parsed = JSON.parse(content);
+    return hasNonFiniteNumber(parsed) ? null : JSON.stringify(parsed);
   } catch {
     return null;
   }
@@ -906,9 +946,46 @@ function validateUpstreamPathRoot(upstreamPath: string): void {
   }
 }
 
+/**
+ * Fails loudly when the resolved `--upstream-ref` doesn't resolve to a
+ * commit, rather than letting the run proceed and discover it only
+ * indirectly. `readUpstreamEntry` is only ever called from inside the
+ * per-changed-path loop below, so a typo'd ref (or a missing remote)
+ * combined with a `--path-prefix` that matches no changed paths would
+ * otherwise report `scanned: 0` and exit 0 without ever having read a
+ * single byte from upstream -- the `--upstream-ref` sibling of
+ * {@link validateUpstreamPathRoot}'s gap (Copilot review, PR #3225).
+ */
+function validateUpstreamRef(
+  targetRoot: string,
+  remote: string | null,
+  ref: string,
+): void {
+  const resolvedRef = resolveUpstreamRef(remote, ref);
+  const result = runGit(targetRoot, [
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    `${resolvedRef}^{commit}`,
+  ]);
+  if (result.status !== 0) {
+    throw new Error(
+      `--upstream-ref does not resolve to a commit: ${resolvedRef}`,
+    );
+  }
+}
+
 export function runVerification(options: VerifyOptions): Report {
   if (options.upstreamPath !== null) {
     validateUpstreamPathRoot(options.upstreamPath);
+  } else {
+    // parseArgs() guarantees exactly one of upstreamPath/upstreamRef is
+    // non-null before the CLI ever reaches here.
+    validateUpstreamRef(
+      options.targetRoot,
+      options.upstreamRemote,
+      options.upstreamRef as string,
+    );
   }
   const diffEntries = listChangedPaths(
     options.targetRoot,

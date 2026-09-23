@@ -292,6 +292,36 @@ test('rule 2 fail: a real value change is never whitespace-tolerant', () => {
   assert.equal(result.contentClass, 'content-mismatch');
 });
 
+test('canonicalizeJson returns null for a non-finite number, never silently canonicalizing it as null (Copilot review, PR #3225)', () => {
+  // Regression: JSON.parse silently converts an overflowing number like
+  // 1e400 to Infinity, and JSON.stringify re-serializes any non-finite
+  // number as the bare token "null" -- so a real value change to a
+  // literal null would otherwise canonicalize identically.
+  assert.equal(canonicalizeJson('{"x":1e400}'), null);
+  assert.equal(canonicalizeJson('{"x":-1e400}'), null);
+  assert.equal(canonicalizeJson('[1, 2e400, 3]'), null);
+  assert.notEqual(canonicalizeJson('{"x":1}'), null);
+});
+
+test('rule 2 fail (Copilot review, PR #3225): a real value change to null never passes via a non-finite-number coincidence', () => {
+  const upstream = Buffer.from('{"x":1e400}');
+  const target = Buffer.from('{"x":null}');
+  // Sanity: both sides really do canonicalize to the same string via the
+  // naive JSON.stringify(JSON.parse(x)) approach, proving the fix is
+  // load-bearing rather than vacuous.
+  assert.equal(
+    JSON.stringify(JSON.parse(upstream.toString('utf8'))),
+    JSON.stringify(JSON.parse(target.toString('utf8'))),
+  );
+  const result = classifyFileContent({
+    path: 'config/settings.json',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
 // ---------------------------------------------------------------------------
 // Rule 3 -- prose reflow tolerance (Markdown only)
 // ---------------------------------------------------------------------------
@@ -1173,6 +1203,46 @@ test('CLI end-to-end: --upstream-ref resolves against a git ref instead of a che
     assert.deepEqual(report.results, [
       { path: 'a.txt', changeType: 'M', status: 'content-mismatch' },
     ]);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI end-to-end: a typo'd --upstream-ref is rejected up front, not misread via an empty scoped diff (Copilot review, PR #3225)", () => {
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'a.txt'), 'hello\n');
+    commitAll(targetRoot, 'chore: baseline');
+    // The import commit only touches a path OUTSIDE the --path-prefix
+    // scope used below, so the scoped diff is empty -- without
+    // validateUpstreamRef, readUpstreamEntry is never even called (it
+    // only runs inside the per-changed-path loop), so a typo'd ref would
+    // silently report "0 files compared" and exit 0.
+    writeFileSync(join(targetRoot, 'unrelated.txt'), 'not under vendor/\n');
+    commitAll(targetRoot, 'chore: vendor import (outside the scoped prefix)');
+
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-ref',
+        'this-ref-does-not-exist',
+        '--path-prefix',
+        'vendor',
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    assert.equal(
+      result.status,
+      2,
+      `expected exit 2 (a typo'd --upstream-ref must never silently pass), got ${result.status}: ${result.stderr}`,
+    );
+    assert.match(result.stderr, /--upstream-ref does not resolve to a commit/);
   } finally {
     rmSync(targetRoot, { recursive: true, force: true });
   }
