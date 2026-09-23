@@ -290,6 +290,30 @@ body
   );
 });
 
+test('parseOverviewBody: a positive Findings header with no recognized Open section is unparsed', () => {
+  // Copilot review, PR #3245 (#discussion_r4086537940's sibling
+  // "Previously missed" finding): a marker-present body whose Open section
+  // markup drifted (or was otherwise never recognized) must not silently
+  // fall through to a "zero findings" v2 review when the summary line
+  // itself declares a positive count.
+  const body = `<!-- ccr-overview-v2 -->
+
+**Findings:** 2 ${pictureBadge('Medium')}
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'unparsed');
+  assert.match(
+    parsed.unparsedReason ?? '',
+    /Findings header declared 2 but no Open section was found/,
+  );
+});
+
+test('parseOverviewBody: a "Findings: None" header with no Open section stays a genuine v2 zero-findings review', () => {
+  const parsed = parseOverviewBody(NO_FINDINGS_FIXTURE);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+});
+
 // ---------------------------------------------------------------------------
 // classifyDispositionReply
 // ---------------------------------------------------------------------------

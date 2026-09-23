@@ -220,6 +220,10 @@ const SEVERITY_ALT_RE = /alt="(High|Medium|Low) severity"/g;
 // `· New` is U+00B7 MIDDLE DOT, not an ASCII period.
 const OPEN_ITEM_RE =
   /alt="(High|Medium|Low) severity"[\s\S]*?\]\(#discussion_r(\d+)\)(\s*·\s*New)?/g;
+// The review's own `**Findings:** None` / `**Findings:** N <picture ...>`
+// summary line -- corroborating evidence cross-checked against whether an
+// "Open" section was actually found (see parseOverviewBody below).
+const FINDINGS_HEADER_RE = /\*\*Findings:\*\*\s*(None|\d+)/i;
 
 interface RawSection {
   header: string;
@@ -267,10 +271,12 @@ export function parseOverviewBody(body: unknown): ParsedOverview {
   const open: ParsedOpenFinding[] = [];
   const previouslyMissed = emptySeverityCounts();
   const unparsedReasons: string[] = [];
+  let sawOpenHeader = false;
 
   for (const { header, content } of findSections(text)) {
     const openMatch = OPEN_HEADER_RE.exec(header);
     if (openMatch) {
+      sawOpenHeader = true;
       const expected = Number.parseInt(openMatch[1], 10);
       const items = [...content.matchAll(OPEN_ITEM_RE)];
       for (const item of items) {
@@ -300,6 +306,30 @@ export function parseOverviewBody(body: unknown): ParsedOverview {
           `Previously missed header declared ${expected} but ${alts.length} were parsed`,
         );
       }
+    }
+  }
+
+  // Copilot review, PR #3245 (#discussion_r4086537940's sibling "Previously
+  // missed" finding, review 2026-09-23T20:15:44Z): a marker-present body
+  // with none of the section headers above recognized (a genuinely
+  // no-findings review, OR a future markup change this parser doesn't
+  // know about) would otherwise silently fall through to `kind: 'v2'` with
+  // an empty `open` -- indistinguishable from a real zero-findings review.
+  // The `**Findings:** <None|N>` summary line is independent corroborating
+  // evidence: cross-check it against whether an "Open" section was ever
+  // found at all. A declared positive count with no matching Open section
+  // means the section markup itself went unrecognized -- degrade to
+  // `unparsed` rather than silently undercounting, per this helper's own
+  // "count the review as legacy or unparsed, never crash" contract.
+  const findingsHeaderMatch = FINDINGS_HEADER_RE.exec(text);
+  if (findingsHeaderMatch && !sawOpenHeader) {
+    const declared = findingsHeaderMatch[1].toLowerCase();
+    const declaredCount =
+      declared === 'none' ? 0 : Number.parseInt(declared, 10);
+    if (declaredCount > 0) {
+      unparsedReasons.push(
+        `Findings header declared ${declaredCount} but no Open section was found`,
+      );
     }
   }
 
