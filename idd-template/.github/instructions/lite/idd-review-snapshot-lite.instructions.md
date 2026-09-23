@@ -169,8 +169,8 @@ here.
 
 Do not touch the PR live status digest after posting this watermark
 unless the next route is E1, an F3-blocked reroute to F1/D4, a
-hold/stop, post-merge cleanup, or an F2 `secondaryQuietWindow`-only
-block — any other edit still forces a fresh E1 snapshot before F2.
+hold/stop, or post-merge cleanup — a digest edit after the watermark
+counts as new activity, forcing a fresh E1 snapshot before F2.
 
 ### Step 3 — Filter into ReviewItems_snapshot
 
