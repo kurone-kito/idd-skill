@@ -247,9 +247,10 @@ gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<N>-" \
 
 Parse NUL records; detached: require `git -C <worktree> rev-parse
 --show-toplevel` to canonicalize to the root before reading
-`head-name`/`BISECT_START`, never an enclosing repo. Absent: unrelated,
-or non-prunable with neither. Otherwise (prunable, invalid, target,
-malformed, unreadable) → STOP as occupied/unreadable (#3154 review).
+`head-name`/`BISECT_START`; failure/mismatch → STOP. Absent:
+unrelated, or non-prunable with no `rebase-*` dir and no
+`BISECT_START`. Otherwise (prunable, invalid, target, malformed,
+unreadable) → STOP as occupied/unreadable (#3154 review).
 
 <!-- dprint-ignore-start -->
 | Match found? | Action |
