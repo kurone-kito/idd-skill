@@ -18,7 +18,7 @@ whose first line is `<!-- idd-live-status: current -->`. It summarizes
 phase, claim, branch, last-checked time, blockers, and next action. It
 is never an authority for IDD state — decide from trusted operational
 markers and GitHub state. If multiple marked digests exist, preserve
-and report them, treating none as authoritative unattended. See
+them, report the URLs, and treat none as authoritative unattended. See
 `docs/idd-comment-minimization.md` for the contract and
 `node scripts/live-status-digest.mjs`, an optional convenience helper.
 
