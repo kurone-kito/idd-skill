@@ -2931,6 +2931,17 @@ const RECORD_POLICY_DOC_ROWS: readonly RecordPolicyDocRow[] = [
  * from `token-cost-report.mts`'s module-private `wrapProse` rather than
  * exported and shared, per this issue's own out-of-scope note against a
  * general-purpose Markdown-wrapping utility.
+ *
+ * Splits on whitespace *runs* (`/(\s+)/`, capturing) rather than a bare
+ * `' '`, and re-emits each run verbatim wherever it does not become a
+ * line break. A recorded freeform value (e.g. `credential-scope`) can
+ * contain internal multiple spaces, and it sits inside an inline code
+ * span in the rendered line, so collapsing them would silently change
+ * the recorded content rather than only inserting line breaks -- a
+ * real defect Copilot review caught (#3227 review), not merely a
+ * cosmetic one, since the issue's own acceptance criteria requires the
+ * document's existing content to remain unchanged after wrapping. Only
+ * the one whitespace run actually replaced by a line break is dropped.
  */
 function wrapPolicyDocLine(line: string, width = 80): string {
   if (line.length <= width) {
@@ -2938,25 +2949,37 @@ function wrapPolicyDocLine(line: string, width = 80): string {
   }
   const marker = /^-\s+/.exec(line)?.[0] ?? '';
   const continuationIndent = ' '.repeat(marker.length);
-  const words = line.slice(marker.length).split(' ');
+  // Odd-indexed entries are the captured whitespace runs; even-indexed
+  // entries are the text between them (either may be '').
+  const tokens = line.slice(marker.length).split(/(\s+)/);
   const wrapped: string[] = [];
   let current = '';
-  for (const word of words) {
+  for (const token of tokens) {
+    if (token === '') {
+      continue;
+    }
+    if (/^\s+$/.test(token)) {
+      // Never a break point on its own; carried verbatim unless the
+      // following text token forces a break, in which case it is
+      // dropped below (consumed by the line break it becomes).
+      current += token;
+      continue;
+    }
     const prefixLength =
       wrapped.length === 0 ? marker.length : continuationIndent.length;
-    const candidate = current.length === 0 ? word : `${current} ${word}`;
-    if (prefixLength + candidate.length > width && current.length > 0) {
+    const candidate = current + token;
+    if (prefixLength + candidate.length > width && current.trim().length > 0) {
       wrapped.push(
-        `${wrapped.length === 0 ? marker : continuationIndent}${current}`,
+        `${wrapped.length === 0 ? marker : continuationIndent}${current.replace(/\s+$/, '')}`,
       );
-      current = word;
+      current = token;
     } else {
       current = candidate;
     }
   }
   if (current.length > 0) {
     wrapped.push(
-      `${wrapped.length === 0 ? marker : continuationIndent}${current}`,
+      `${wrapped.length === 0 ? marker : continuationIndent}${current.replace(/\s+$/, '')}`,
     );
   }
   return wrapped.join('\n');

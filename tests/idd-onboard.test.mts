@@ -5231,6 +5231,36 @@ test('bin/idd-onboard.mjs --record-policy --write-policy-doc wraps a long freefo
   }
 });
 
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc preserves internal multiple spaces in a wrapped freeform answer (#3227 review)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  // Long enough to force a wrap, with a deliberate double space inside a
+  // run of text on each side of the expected wrap point -- Copilot review
+  // caught that the original word-wrap collapsed internal whitespace runs
+  // to a single space when it rebuilt a wrapped line, which silently
+  // changes the recorded value (rendered inside an inline code span)
+  // rather than only inserting line breaks.
+  answers['credential-scope'] =
+    'A GitHub App  installation token scoped narrowly to this one ' +
+    'repository only, rotated automatically every  quarter by the ' +
+    'security team without manual intervention';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  const doc = verdict.policyDocument as string;
+  assert.match(doc, /App {2}installation/);
+  assert.match(doc, /every {2}quarter/);
+});
+
 test("bin/idd-onboard.mjs --record-policy --write-policy-doc output passes the template's own markdownlint config (#3227)", (t) => {
   if (!MARKDOWNLINT_BIN) {
     // Expected on the bare-node lane (lint.yml) -- see the block comment
