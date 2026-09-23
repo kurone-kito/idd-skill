@@ -631,7 +631,12 @@
         "deferAfterRounds": {
           "type": "integer",
           "minimum": 1,
-          "description": "Review-fix loop round-count threshold (counted from same-claim `review-watermark` comments) after which E4/E5 dispositions a still-undispositioned Low-severity PATH A item `Reject (defer)` into a bundled follow-up issue instead of the normal Accept/Reject judgment. Never affects Medium/High-severity items or an item already Accepted and mid-fix from an earlier round (see `e10NoProgressHoldAfter` above). Optional; defaults to `12` — recalibrated from `15` using a month of real review-fix-loop data; see `docs/idd-design-rationale.md`."
+          "description": "Review-fix loop round-count threshold (counted from the pull request's total, paginated `copilot-pull-request-reviewer[bot]` review-submission count, PR-wide, not scoped to one claim-id lineage) after which E4/E5 dispositions a still-undispositioned Low-severity PATH A item `Reject (defer)` into a bundled follow-up issue instead of the normal Accept/Reject judgment. Never affects Medium/High-severity items or an item already Accepted and mid-fix from an earlier round (see `e10NoProgressHoldAfter` above). Optional; defaults to `12` — recalibrated from `15` using a month of real review-fix-loop data; see `docs/idd-design-rationale.md`."
+        },
+        "deferByUrgency": {
+          "type": "string",
+          "enum": ["off", "low", "low-and-medium"],
+          "description": "Independent E4/E5 defer trigger, active from round 1, based on \"adopt-now urgency\" rather than round count: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) disposes `Reject (defer)` when its defer-eligibility severity is within this mode's ceiling. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low`: Low-severity items only. `low-and-medium`: Low or Medium; High is never eligible under any mode. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
         },
         "delegate": {
           "type": ["object", "null"],

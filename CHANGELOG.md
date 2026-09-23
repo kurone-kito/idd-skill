@@ -14,6 +14,13 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+### Added
+
+- `critiqueLoop.deferByUrgency` opt-in policy key (`off` default,
+  `low`, `low-and-medium`) adds an independent E4/E5 "adopt-now
+  urgency" defer trigger, active from round 1, alongside the existing
+  round-count `deferAfterRounds` cutoff (#3222).
+
 ## [0.12.2] - 2026-09-22
 
 Advisory-wait docs no longer read the Copilot-only window as the

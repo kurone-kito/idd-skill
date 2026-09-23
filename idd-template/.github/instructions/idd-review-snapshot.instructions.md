@@ -158,9 +158,7 @@ ignore them and rerun E1 under the successor claim.
 
 **Hide superseded same-claim watermarks.** After the new watermark is
 verified on GitHub, minimize every strictly older trusted **same-claim**
-`review-watermark`/`review-baseline` comment as `OUTDATED`. Find
-candidate subject IDs (older trusted same-claim watermarks), then
-call:
+`review-watermark`/`review-baseline` comment as `OUTDATED`, then call:
 
 `--subject-ids` needs a GraphQL node id, not a REST numeric id;
 convert with `gh api repos/{owner}/{repo}/issues/comments/{comment_id}

@@ -27,6 +27,7 @@ interface CritiqueLoopPolicy {
   cPhaseLowSeveritySkipAfter: number;
   e10NoProgressHoldAfter: number;
   deferAfterRounds: number;
+  deferByUrgency: 'off' | 'low' | 'low-and-medium';
   delegate?: CritiqueLoopDelegate;
 }
 
@@ -406,6 +407,7 @@ interface RawConfig {
     cPhaseLowSeveritySkipAfter?: unknown;
     e10NoProgressHoldAfter?: unknown;
     deferAfterRounds?: unknown;
+    deferByUrgency?: unknown;
     delegate?: { command?: unknown; mode?: unknown };
     telemetryHook?: { command?: unknown };
   };
@@ -458,6 +460,7 @@ const FORCED_HANDOFF_MODES = new Set(['disabled', 'human-gated']);
 const ADVISORY_CAP_ROUTES = new Set(['phase-specific', 'hold']);
 const ADVISORY_CONVERGENCE_SCOPES = new Set(['all-prs', 'idd-claimed']);
 const SELECTION_DESYNC_MODES = new Set(['off', 'session-offset']);
+const DEFER_BY_URGENCY_MODES = new Set(['off', 'low', 'low-and-medium']);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
   'maintainer-authorized',
@@ -593,6 +596,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
     deferAfterRounds: 12,
+    deferByUrgency: 'off',
   }) as Readonly<CritiqueLoopPolicy>,
   reviewEscalation: Object.freeze({
     changesRequestedFirstEscalation: 'PT24H',
@@ -787,6 +791,11 @@ export function normalizePolicyConfig(config: unknown) {
       c?.critiqueLoop?.deferAfterRounds,
       POLICY_DEFAULTS.critiqueLoop.deferAfterRounds,
     ),
+    deferByUrgency: parseEnum(
+      c?.critiqueLoop?.deferByUrgency,
+      DEFER_BY_URGENCY_MODES,
+      POLICY_DEFAULTS.critiqueLoop.deferByUrgency,
+    ) as CritiqueLoopPolicy['deferByUrgency'],
   };
   // Own-property omitted (not set to `undefined`) when no delegate is
   // configured, matching POLICY_DEFAULTS -- see the clone() doc comment on

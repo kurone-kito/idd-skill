@@ -239,6 +239,7 @@ interface PolicyConfigFile {
     cPhaseLowSeveritySkipAfter?: number;
     e10NoProgressHoldAfter?: number;
     deferAfterRounds?: number;
+    deferByUrgency?: 'off' | 'low' | 'low-and-medium';
     delegate?: {
       command: string;
       mode?: 'fallback' | 'combined' | 'on-success' | 'never';
@@ -1227,6 +1228,7 @@ const policyConfigFixture = {
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
     deferAfterRounds: 12,
+    deferByUrgency: 'off',
   },
   reviewEscalation: {
     changesRequestedFirstEscalation: 'PT24H',

@@ -2066,9 +2066,10 @@ only approval boundary.
   `docs/idd-helper-scripts.md`) performs and verifies this comparison
   mechanically (`#2891`). This
   exists because
-  `idd-review-triage.instructions.md`'s round-count cutoff files this
-  exact marker on a follow-up issue during unattended autonomous
-  execution, where no human is present to issue a release request —
+  `idd-review-triage.instructions.md`'s round-count or
+  adopt-now-urgency defer trigger files this exact marker on a
+  follow-up issue during unattended autonomous execution, where no
+  human is present to issue a release request —
   left under the ordinary human-gated boundary above, that deferred
   work would sit under the authoring label indefinitely on a fully
   autonomous repository, silently defeating the point of deferring it
@@ -2081,7 +2082,7 @@ only approval boundary.
   single-target design intentionally does not extend to anchor
   release. See `docs/idd-autonomy-contract.md`'s Stage 2 label-removal
   row for the same note in table form. **Sequencing with the
-  originating issue (`#2877`):** the round-count cutoff's follow-up
+  originating issue (`#2877`):** either defer trigger's follow-up
   issue also carries a `Refs #<originating-issue>` line back to the
   deferred work (the D3 follow-up-issue rule in
   `idd-pr-submit.instructions.md`); `discover-readiness-check.mts`
