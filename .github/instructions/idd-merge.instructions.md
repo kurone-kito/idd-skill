@@ -506,26 +506,23 @@ Before any mutating action in F3, apply the
    primary worktree has no local `{development-branch}` yet (expected
    whenever it differs from the repository default, since B1 branches
    new worktrees straight from `origin/{development-branch}` without
-   ever checking it out in the primary worktree).
+   checking it out locally).
 
-   Doing this before worktree/branch deletion (next step) ensures
-   WorkTrunk's own merge-status check, which reads the local
-   `{development-branch}` rather than `origin/{development-branch}`,
-   sees the just-merged branch as already merged on its first attempt
-   instead of reporting `branch_outcome: retained_unmerged` and
-   declining to delete it (`#2331`). This local checkout is a plain git
-   operation over the merged feature branch's own target and is
-   unrelated to the trusted-checkout-source concern in B1 Step 1 — if
-   `{development-branch}` differs from the repository's default branch,
-   switch the primary worktree back to the default branch
+   This ordering makes WorkTrunk's merge-status check (which reads
+   the local, not origin, `{development-branch}`) see the branch as
+   already merged, avoiding `branch_outcome: retained_unmerged`
+   (`#2331`); this checks out the merged branch's own target,
+   unrelated to B1 Step 1's trusted-checkout-source concern. If
+   `{development-branch}` differs from the repository's
+   default branch, switch the primary worktree back to it
    (`git switch <default-branch>`) once the remaining F4 cleanup steps
-   below complete, so the next B1 pass finds the primary worktree on
-   its expected trusted checkout.
-5. Run from the **primary worktree**, never from inside the worktree
-   being removed. Any removal (plain or `--force`) silently discards
+   complete, so the next B1 pass finds the primary worktree on its
+   expected trusted checkout.
+5. Run from the **primary worktree**, never inside the one being
+   removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
    commands to `<path>`. Inspect leftover files under a `-`
-   submodule path directly (not a repo).
+   submodule path (not a repo).
 
    Use `--untracked-files=normal` (not `all`). A clean submodule
    worktree can still hide a stash or unpushed commit:
@@ -539,17 +536,21 @@ Before any mutating action in F3, apply the
    Generated output is disposable only when a configured command
    reproduces it; preserve anything else. Copy secrets (e.g. `.env`)
    out — never commit or push them. Copy other work to a different
-   ref or path; delete `<branch-name>` next.
+   ref or path.
    Before each `git worktree remove`, `cd` to the surviving primary
    worktree; keep that cwd for every removal and remaining F4 work
    (branch/remote deletion, digest, revalidation, unclaim, and
    `gh`/helper calls). Before each removal, revalidate the claim and
    worktree lock (`idd-claim.instructions.md`); stop if either is not
-   ours. If it fails with `fatal: working trees containing submodules
+   ours. A leftover shell in the removed worktree fails the next
+   `node` call with `ENOENT` on `uv_cwd`, or `gh`/`git` with "Unable
+   to read current working directory" — possibly after `git worktree
+   remove`/`git branch -d` succeeded, skipping `unclaimed-by`. `cd`
+   to the primary worktree and rerun, posting the release if
+   skipped. If it fails with `fatal: working trees containing submodules
    cannot be moved or removed`, retry
    `git worktree remove --force <path>` from that cwd only after
-   preserving anything worth keeping. Then remove the worktree, then
-   its branch:
+   preserving anything worth keeping. Then:
 
    - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (the baseline permission profile
