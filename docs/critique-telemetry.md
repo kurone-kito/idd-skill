@@ -185,16 +185,20 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
   severity in that review (`none` when Open is empty), split into
   "followed by another Copilot review" versus "last review".
 
-### Known limitation: legacy reviews are invisible to thread metrics
+### Known limitation: a legacy listing carries no severity or thread data
 
-A finding first raised in a **legacy** (non-`ccr-overview-v2`) review
-carries no severity or `#discussion_r<id>` link in this audit's data
-model at all, so it is invisible to every thread-keyed and
-severity-keyed metric above — only its review is counted (in the
-legacy review-count total). In the 2026-09-24 baseline window
-(`#3089`-`#3210`), 56 of 192 Copilot reviews were legacy. This is an
-inherent gap in Copilot's own review-body format, not a bug in this
-helper, and is not something an "explained delta" footnote can close.
+A **legacy** (non-`ccr-overview-v2`) review's body carries no severity
+or `#discussion_r<id>` link in this audit's data model at all, so that
+listing contributes nothing to any thread-keyed or severity-keyed
+metric above — only its review is counted (in the legacy review-count
+total). This is scoped to the legacy listing itself, not to the
+underlying finding: if the same finding is later re-flagged in a v2
+review's "Open" section, that v2 listing carries its own real severity
+and `#discussion_r<id>`, so it counts normally, the same as any other
+Open finding. In the 2026-09-24 baseline window (`#3089`-`#3210`), 56
+of 192 Copilot reviews were legacy. This is an inherent gap in
+Copilot's own review-body format, not a bug in this helper, and is not
+something an "explained delta" footnote can close.
 
 ### 2026-09-24 baseline
 
