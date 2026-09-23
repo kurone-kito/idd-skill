@@ -541,16 +541,12 @@ explicitly not the full autonomous Discover -> Claim -> Work loop:
   protection, or review bot the target repository already had before
   choosing IDD — those keep gating the bootstrap PR exactly as they did
   before, and this note is never grounds for disregarding them.
-- **A local `idd-doctor` run flags the same condition separately.**
-  With no sibling worktree for this exempted flow, the primary
-  worktree's `issue/*`-shaped HEAD trips the B1 check too (gist round
-  39, `kurone-kito/vpm`, 2026-09-23; issue `#3229`): a non-blocking
-  `report.warnings` entry ("likely a past B1 violation") without
-  `--strict` — safe to ignore — or a blocking `report.errors` entry
-  ("B1 violation: this branch must live in a sibling worktree...",
-  non-zero exit) under `--strict` — not evidence of a real problem.
-  Both clear once this PR merges and the primary worktree returns to
-  the default branch.
+- **A local `idd-doctor` run flags the same condition** (2026-09-23;
+  issue `#3229`): with no sibling worktree, the primary worktree's
+  `issue/*` HEAD trips B1 too — a WARN ("likely a past B1 violation")
+  without `--strict`, or an ERROR ("B1 violation: this branch must
+  live in a sibling worktree...", non-zero exit) under `--strict`;
+  neither is a real problem. Both clear on merge.
 
 On an active target repository, also expect
 [concurrent default-branch drift](#concurrent-base-branch-drift-during-the-bootstrap-pr)
@@ -636,20 +632,16 @@ Disposition:
   review profile requires a reviewer or maintainer resolution, not
   merely an approval. Do not patch the vendored copy just to silence
   the comment.
-- **`resolve-review-thread.mjs --claimless` refuses this PR** — it
-  closes its own bootstrap issue, so `closingIssuesReferences` is
-  non-empty and `--claimless` fails closed, and `--claim-issue` has
-  nothing to bind to either (gist round 39, `kurone-kito/vpm`,
-  2026-09-23; issue `#3229`). Recover with either (a) a `claimed-by`
-  marker (`idd-overview-core.instructions.md`'s Claim format), bound
-  to the PR's actual head branch and posted by a trusted actor, to
-  unlock `--claim-issue`/`--claim-id` — release it (`unclaimed-by`)
-  once threads are disposed — or (b) a manual reply to the thread's
-  top-level comment (REST `pulls/.../comments/{root-id}/replies`, not
-  an arbitrary comment id), with the reply-identity stamp E13
-  documents (`idd-helper-scripts.md`) appended, plus the GraphQL
-  `resolveReviewThread` mutation, matching what
-  `resolve-review-thread.mjs --apply` would otherwise do.
+- **`resolve-review-thread.mjs --claimless` refuses this PR** —
+  closing its own bootstrap issue leaves `closingIssuesReferences`
+  non-empty, so `--claimless` fails closed (2026-09-23; issue
+  `#3229`). Recover: (a) a trusted-actor `claimed-by` marker bound to
+  the PR's head branch, unlocking `--claim-issue`/`--claim-id`,
+  released (`unclaimed-by`) after disposing threads; or (b) reply to
+  the thread's top-level comment (REST
+  `pulls/.../comments/{root-id}/replies`) with the E13 reply-identity
+  stamp (`idd-helper-scripts.md`), then resolve via GraphQL
+  `resolveReviewThread`.
 - **After merge, qualify before escalating.**
   [Upstream-candidate escalation][upstream-candidate] is opt-in
   (`upstreamEscalation.enabled`, default `false`) and only accepts
