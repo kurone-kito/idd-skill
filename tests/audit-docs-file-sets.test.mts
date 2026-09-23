@@ -6,12 +6,13 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { fixtureEnv } from './test-utils.mts';
+import { fixtureEnv, runImportOnlyProbe } from './test-utils.mts';
 
-// checkFileSets in src/scripts/audit-docs.mts is not exported (the module
-// runs as a top-level side-effecting CLI script, including a `process.exit`
-// on failure), so it cannot be imported and unit-tested directly. These
-// tests drive the built `scripts/audit-docs.mjs` CLI as a subprocess
+// checkFileSets in src/scripts/audit-docs.mts is not exported -- the CLI
+// body only runs when this module is the entrypoint (guarded by
+// `import.meta.main`, #3190), but its internal check* functions stay
+// private either way -- so it cannot be imported and unit-tested directly.
+// These tests drive the built `scripts/audit-docs.mjs` CLI as a subprocess
 // against a minimal fixture git repo instead — the same pattern used by
 // tests/sync-docs.test.mts and the CLI-subprocess smoke tests in
 // tests/cli-entry-smoke.test.mts.
@@ -144,4 +145,27 @@ test('checkFileSets fails closed when two target files share a basename', (t) =>
     result.stderr,
     /fixture-set: ambiguous basename a\.md matches multiple target files/,
   );
+});
+
+// #3190: audit-docs.mts used to run its whole CLI body -- including a
+// `process.exit` -- as a side effect of module evaluation, with no
+// `import.meta.main` guard. Dynamically importing it (e.g. to inventory its
+// named exports) from a process whose own argv lacks `--check` used to kill
+// the importing process before this probe's own `.then()` ever ran. This
+// runs from an empty temp directory (no git repo, no
+// audit/sync-manifest.json) specifically to prove the import no longer
+// depends on either -- a guarded import never reaches the code that would
+// need them.
+test('importing scripts/audit-docs.mjs without --check does not run the CLI or call process.exit', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'audit-docs-import-only-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const result = runImportOnlyProbe(
+    join(REPO_ROOT, 'scripts', 'audit-docs.mjs'),
+    dir,
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /IMPORT_OK/);
+  assert.doesNotMatch(result.stderr, /usage: node scripts\/audit-docs\.mjs/);
 });

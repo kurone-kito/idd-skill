@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { ReviewThreadNode } from '../src/scripts/resolve-review-thread.mts';
 
@@ -449,6 +449,81 @@ export function makeScaffoldedSyncRepo(
     writeScaffoldedFile(dir, rel, content);
   }
   return dir;
+}
+
+/** Result of {@link runImportOnlyProbe}. */
+export interface ImportOnlyProbeResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Dynamically `import()`s `scriptPath` (an absolute path to a built `.mjs`
+ * CLI entrypoint) from a standalone child process, run with `cwd` as its
+ * working directory. Used to regression-test the `if (import.meta.main)`
+ * guard (#3190): a module without the guard runs its CLI as a side effect
+ * of the import -- parsing `process.argv`, calling `process.exit`, or (for
+ * a write-capable CLI) writing a file -- before this probe's own `.then()`
+ * ever runs. `IMPORT_OK`'s presence in `stdout` (with `status: 0`) is the
+ * one discriminator every unguarded case shares: whether an unguarded
+ * module's own `process.exit` call happens to use a zero or non-zero code
+ * (both occur, depending on which branch its CLI body reaches), it always
+ * runs before `.then()` does, so `IMPORT_OK` never gets written -- while a
+ * guarded module always reaches `.then()` and always prints it.
+ *
+ * `extraArgv` (default none) becomes the *importing process's own*
+ * `process.argv.slice(2)` -- the exact slice every guarded CLI in this
+ * repository (including audit-docs.mts/sync-docs.mts) parses its own flags
+ * from -- so a caller can reproduce the sharper risk #3190's issue body
+ * describes: an importer whose own argv happens to look `--apply`-shaped
+ * for a reason unrelated to the imported module, which an unguarded module
+ * would have honored as if it were its own CLI invocation.
+ */
+export function runImportOnlyProbe(
+  scriptPath: string,
+  cwd: string,
+  extraArgv: string[] = [],
+): ImportOnlyProbeResult {
+  const moduleUrl = pathToFileURL(scriptPath).href;
+  const probe = [
+    `import(${JSON.stringify(moduleUrl)})`,
+    "  .then(() => { process.stdout.write('IMPORT_OK\\n'); })",
+    '  .catch((error) => {',
+    '    process.stderr.write(',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal source text for the spawned child process's own template literal, not a forgotten placeholder here.
+    '      `IMPORT_ERR: ${error && error.stack ? error.stack : error}\\n`,',
+    '    );',
+    '    process.exitCode = 1;',
+    '  });',
+  ].join('\n');
+  // `-e` has no real script-path argv[1] slot of its own; Node fills it in
+  // from the first token after `--` regardless, so a placeholder is needed
+  // to push any caller-supplied `extraArgv` out to `process.argv.slice(2)`
+  // (empirically verified: `node -e '...' -- placeholder --apply` yields
+  // `process.argv` = `[execPath, 'placeholder', '--apply']`).
+  const execArgs = [
+    '--input-type=module',
+    '-e',
+    probe,
+    ...(extraArgv.length > 0 ? ['--', 'argv-placeholder', ...extraArgv] : []),
+  ];
+  try {
+    const stdout = execFileSync(process.execPath, execArgs, {
+      cwd,
+      env: fixtureEnv(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { status: 0, stdout, stderr: '' };
+  } catch (error) {
+    const e = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
+    return {
+      status: typeof e.status === 'number' ? e.status : 1,
+      stdout: typeof e.stdout === 'string' ? e.stdout : '',
+      stderr: typeof e.stderr === 'string' ? e.stderr : '',
+    };
+  }
 }
 
 /** Builds a merged-pr-feedback-sweep review-thread fixture. */
