@@ -10,4 +10,8 @@
 # code-span-wrap trio, but not build:check or idd-doctor). build:check's
 # `git diff` deadlocked here against the in-progress commit's
 # index.lock (see #1007).
+#
+# The IDD worktree guard runs first so a primary-worktree `issue/*` or
+# `roadmap-audit/*` commit fails fast before lint (see #3207).
+"$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@" || exit $?
 pnpm run lint:precommit
