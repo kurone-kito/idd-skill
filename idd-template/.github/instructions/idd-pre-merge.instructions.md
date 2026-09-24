@@ -286,7 +286,8 @@ turns an operator-visible failure into a silent stall.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
-  `ciWait.rerunPolicy` values; on-success → re-evaluate F2).
+  `ciWait.rerunPolicy` values; on-success → re-evaluate F2; code-caused
+  → `Phase: F2 ci-failure`, E15's code-caused route).
 
   `pre-merge-readiness` reads `.github/idd/config.json` from the PR's
   trusted **base** ref, not the PR head. When this PR introduces a
