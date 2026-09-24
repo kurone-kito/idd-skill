@@ -288,6 +288,9 @@ function autoWaiverComment() {
     createdAt: '2026-07-31T09:00:00Z',
     updatedAt: '2026-07-31T09:00:00Z',
     authorLogin: 'github-actions[bot]',
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 

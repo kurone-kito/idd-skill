@@ -45,6 +45,7 @@ test('normalizeComment maps REST issue-comment fields, falling back to createdAt
       body: 'looks good',
       createdAt: '2026-07-31T11:00:00Z',
       updatedAt: '2026-07-31T11:00:00Z',
+      lastEditedAt: undefined,
     },
   );
   assert.equal(
@@ -53,6 +54,29 @@ test('normalizeComment maps REST issue-comment fields, falling back to createdAt
       updated_at: '2026-07-31T12:00:00Z',
     }).updatedAt,
     '2026-07-31T12:00:00Z',
+  );
+});
+
+test('normalizeComment carries last_edited_at through to lastEditedAt (#3246)', () => {
+  assert.equal(
+    normalizeComment({
+      id: 123,
+      body: 'looks good',
+      created_at: '2026-07-31T11:00:00Z',
+      user: { login: 'Commenter-User' },
+      last_edited_at: null,
+    }).lastEditedAt,
+    null,
+  );
+  assert.equal(
+    normalizeComment({
+      id: 123,
+      body: 'looks good',
+      created_at: '2026-07-31T11:00:00Z',
+      user: { login: 'Commenter-User' },
+      last_edited_at: '2026-07-31T11:30:00Z',
+    }).lastEditedAt,
+    '2026-07-31T11:30:00Z',
   );
 });
 
@@ -259,6 +283,7 @@ function buildStubGhScript(
   const prComments = [
     {
       id: 1,
+      node_id: 'IC_kwDOexample001',
       body: 'looks good',
       created_at: '2026-07-31T11:00:00Z',
       user: { login: 'commenter-user' },
@@ -367,6 +392,19 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comme
 }
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDate')) out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
+// #3246: listWorkItemComments' includeEditState opt-in batch-resolves
+// each PR comment's lastEditedAt via nodes(ids:) -- every fixture
+// comment is unedited by construction.
+if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('nodes(ids:')) out(${JSON.stringify(
+    JSON.stringify({
+      data: {
+        nodes: prComments.map((comment) => ({
+          id: comment.node_id,
+          lastEditedAt: null,
+        })),
+      },
+    }),
+  )});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/files`}') out(${JSON.stringify(ndjson(changedFiles))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/commits`}') out(${JSON.stringify(ndjson(options.commits ?? []))});
 ${
@@ -1394,6 +1432,9 @@ function selfWaiverMarkerCollectionComment(payload: {
     createdAt: payload.createdAt,
     updatedAt: payload.createdAt,
     authorLogin: 'github-actions[bot]',
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 

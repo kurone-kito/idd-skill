@@ -39,6 +39,7 @@ import {
   renderExternalCheckWaiverComment,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
 
@@ -1607,6 +1608,17 @@ export async function runExternalCheckWaiver(
  * #2328: the pull request's own issue comments, where waiver markers live.
  * Paginated so a long conversation cannot hide an existing waiver and cause
  * a duplicate to be appended.
+ *
+ * #3246: also resolves each comment's GraphQL edit state via a follow-up
+ * `fetchLastEditedAtByNodeId` batch read, keyed by the REST row's own
+ * `node_id`. Without this, `summarizeExternalCheckWaivers` would see every
+ * comment's edit state as `unknown` (never `unedited`), so an existing,
+ * genuinely-unedited waiver would never be classified `valid` -- reuse
+ * would never fire, and `--apply` would keep appending a duplicate marker.
+ * Deliberately NOT routed through `ProviderPort.listWorkItemComments`: this
+ * function's callers need `html_url`/`url` for `ReusableWaiver.commentUrl`,
+ * fields `ProviderComment` does not carry, so the existing REST read stays
+ * as-is and only gains the extra GraphQL round trip.
  */
 function fetchPrComments({
   owner,
@@ -1629,7 +1641,29 @@ function fetchPrComments({
       `external-check waiver apply blocked: could not read PR #${prNumber} comments to check for an existing waiver`,
     );
   }
-  return payload as WaiverCommentPayload[];
+  const rows = payload as WaiverCommentPayload[];
+  if (rows.length === 0) {
+    return rows;
+  }
+  const nodeIds = rows.map((row) => String(row.node_id ?? ''));
+  if (nodeIds.some((id) => id === '')) {
+    throw new Error(
+      `external-check waiver apply blocked: PR #${prNumber} comment is missing node_id, cannot resolve edit state`,
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return rows.map((row) => {
+    const nodeId = String(row.node_id ?? '');
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `external-check waiver apply blocked: missing edit-state resolution for comment #${row.id} on PR #${prNumber}`,
+      );
+    }
+    return {
+      ...row,
+      lastEditedAt: lastEditedAtByNodeId.get(nodeId) ?? null,
+    };
+  });
 }
 
 /** One issue comment, in the shape the GitHub REST list endpoint returns. */
@@ -1641,6 +1675,14 @@ interface WaiverCommentPayload {
   created_at?: string | null;
   user?: GhAuthorPayload | null;
   author?: GhAuthorPayload | null;
+  /** REST-returned GraphQL node id, needed to batch-resolve edit state via
+   * {@link fetchLastEditedAtByNodeId} (#3246). */
+  node_id?: string | null;
+  /** #3246: see `ProviderComment.lastEditedAt`'s doc comment
+   * (provider-port.mts) for the three-state contract. Populated by
+   * `fetchPrComments` for every comment it fetches; a test that injects
+   * `options.prComments` directly must set this itself. */
+  lastEditedAt?: string | null;
 }
 
 /** An existing waiver this invocation should reuse instead of appending. */

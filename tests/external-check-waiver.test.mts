@@ -1169,6 +1169,9 @@ function waiverComment({
       reason: 'rate limit',
       expiresAt,
     }),
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 
@@ -1395,6 +1398,91 @@ test('runExternalCheckWaiver posts nothing when it reuses an existing waiver (#2
   assert.equal(report?.applied, false);
   assert.equal(report?.reusedWaiver?.commentId, '100');
   assert.match(String(report?.commentUrl), /issuecomment-100$/);
+});
+
+test('runExternalCheckWaiver never reuses an existing waiver whose comment was body-edited (kurone-kito/idd-skill#3246)', async () => {
+  let postCalls = 0;
+  const comments = [
+    {
+      ...waiverComment({
+        id: 100,
+        createdAt: '2026-08-30T22:05:01Z',
+        checkSelector: 'idd-advisory-convergence',
+        claimId: 'claim-20260830T222316Z-2328',
+        headSha: REUSE_HEAD_SHA,
+      }),
+      // GitHub reports this comment was body-edited after posting -- an
+      // otherwise perfectly reusable waiver must never be reused, and
+      // --apply must post a fresh marker instead.
+      lastEditedAt: '2026-08-30T22:10:00Z',
+    },
+  ];
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        'rate limit',
+        '--expires-in',
+        'PT8H',
+        '--apply',
+        '--yes',
+        '--allow-closed-precondition',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+      issueNumber: 2328,
+    },
+    actor: 'kurone-kito',
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: comments,
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T22:30:00Z'),
+    isTTY: false,
+    postComment: () => {
+      postCalls += 1;
+      return { html_url: 'https://example.invalid/posted-fresh' };
+    },
+  });
+
+  assert.equal(
+    postCalls,
+    1,
+    'an edited existing waiver must not block a fresh post',
+  );
+  assert.equal(report?.applied, true);
+  assert.equal(report?.reusedWaiver, undefined);
 });
 
 test('the deadline reader rejects a schema-invalid advisoryWait section (#2328 review)', () => {
@@ -2023,6 +2111,9 @@ function autoBootstrapWaiverComment({
       expiresAt: '2026-08-31T10:00:00Z',
       runId,
     }),
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 

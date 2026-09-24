@@ -316,7 +316,12 @@ test('idd-claimed scope: an indeterminate branch mismatch still falls through th
       reviews: [copilotReview()],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
@@ -960,7 +965,12 @@ test('deadline-passed-with-waiver: a valid maintainer waiver flips a stale-pendi
       reviews: [], // still pending -- the primary bot never reviewed
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
@@ -977,6 +987,43 @@ test('deadline-passed-with-waiver: a valid maintainer waiver flips a stale-pendi
   assert.equal(verdict.waived, true);
   assert.equal(verdict.converged, false);
   assert.equal(verdict.ready, true);
+});
+
+test('deadline-passed-with-waiver: an edited idd-advisory-convergence waiver does not count toward validCount (kurone-kito/idd-skill#3246)', () => {
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: AGENT_ID,
+    claimId: CLAIM_ID,
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'Copilot review API outage, maintainer verified the diff manually',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // still pending -- the primary bot never reviewed
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          // GitHub reports this comment was body-edited after posting --
+          // it must never be trusted as waiver evidence, even though it
+          // is otherwise identical to the valid waiver above.
+          lastEditedAt: '2026-07-11T10:15:00Z',
+        },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
 });
 
 test('deadline-passed-with-waiver: an otherwise-valid marker does not waive unless this gate is in the configured waivable list', () => {
@@ -998,7 +1045,12 @@ test('deadline-passed-with-waiver: an otherwise-valid marker does not waive unle
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
@@ -1040,7 +1092,12 @@ test("#1512: this repository's own .github/idd/config.json wires the maintainer-
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
@@ -1078,7 +1135,12 @@ test('claimless waiver: a maintainer-posted none-claim-id waiver flips a stale-p
       reviews: [], // still pending -- the primary bot never reviewed
       claimEvents: [], // no IDD claim at all
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
@@ -1112,7 +1174,12 @@ test('claimless waiver: a non-none claim id posted on a claimless PR does not wa
       reviews: [],
       claimEvents: [],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
@@ -1156,7 +1223,12 @@ test('deadline-passed-no-waiver: waiver mode disabled never waives, even with an
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
@@ -1294,6 +1366,9 @@ function waiverComment({
       actor,
     }),
     createdAt: RECENT,
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 
@@ -3489,6 +3564,9 @@ function terminalWaiverComment(
       ...rest,
     }),
     createdAt: RECENT,
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 
@@ -3861,6 +3939,7 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3904,6 +3983,7 @@ test('self-referential-bootstrap-auto: an indeterminate idd-claimed scope (stale
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ claimId: 'none' }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3961,6 +4041,7 @@ test('self-referential-bootstrap-auto: ambiguous closing-issue claim candidates 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ claimId: 'none' }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3995,6 +4076,7 @@ test('self-referential-bootstrap-auto: a PR that does not touch the trigger-file
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4021,6 +4103,7 @@ test('self-referential-bootstrap-auto: a pull_request-triggered run is rejected 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4048,6 +4131,7 @@ test('self-referential-bootstrap-auto: a run whose own workflow path does not ma
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4078,6 +4162,7 @@ test('self-referential-bootstrap-auto: a run bound to a different head SHA is re
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4105,6 +4190,7 @@ test('self-referential-bootstrap-auto: a run hosted by a different repository is
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4139,6 +4225,7 @@ test('self-referential-bootstrap-auto: a run reported with different repository-
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4178,6 +4265,7 @@ test('self-referential-bootstrap-auto: an unresolved repositoryFullName never tr
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4209,6 +4297,7 @@ test('self-referential-bootstrap-auto: a marker missing run-id: never resolves t
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ runId: null }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4234,6 +4323,7 @@ test('self-referential-bootstrap-auto: a run-id lookup error (unresolvable run) 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: { error: 'HTTP 404' } },
@@ -4259,6 +4349,7 @@ test('self-referential-bootstrap-auto: a different reason token never counts as 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ reason: 'some-other-automated-reason' }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4284,6 +4375,7 @@ test('self-referential-bootstrap-auto: a human-authored marker with the same rea
           author: { login: TRUSTED },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4309,6 +4401,7 @@ test('self-referential-bootstrap-auto: waiverMode disabled means no automated wa
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4339,7 +4432,12 @@ test('self-referential-bootstrap-auto: an ordinary person-authored waiver keeps 
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
@@ -4359,7 +4457,12 @@ test('self-referential-bootstrap-auto: an ordinary person-authored waiver keeps 
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
@@ -4381,6 +4484,7 @@ test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a r
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4414,6 +4518,7 @@ test('self-referential-bootstrap-auto: an indeterminate PR with no bindable clai
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ claimId: CLAIM_ID }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4451,6 +4556,7 @@ test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4636,6 +4742,7 @@ test('self-referential-bootstrap-auto: a vendored-node adopter touching its own 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4671,6 +4778,7 @@ test('self-referential-bootstrap-auto: a package-manager adopter touching packag
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4706,6 +4814,7 @@ test("self-referential-bootstrap-auto: a non-origin repository touching this sou
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4747,6 +4856,7 @@ test('self-referential-bootstrap-auto: this source repository ignores its own co
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4798,6 +4908,7 @@ test('self-referential-bootstrap-auto: a genuine marker deleted after posting le
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4906,6 +5017,7 @@ test('self-referential-bootstrap-auto: two distinct candidates sharing the same 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4960,6 +5072,7 @@ test('self-referential-bootstrap-auto: a legitimate CI rerun (second genuine mar
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -5021,6 +5134,7 @@ test('self-referential-bootstrap-auto: a marker citing a run whose self-waiver p
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -5059,6 +5173,7 @@ test("self-referential-bootstrap-auto: a marker created outside the cited run's 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -5094,6 +5209,7 @@ test('self-referential-bootstrap-auto: a run-jobs lookup error fails closed the 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -5128,6 +5244,7 @@ test('self-referential-bootstrap-auto: an absent/empty artifact-trusted-id set f
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
