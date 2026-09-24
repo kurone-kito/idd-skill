@@ -1367,28 +1367,70 @@ function isHtmlBlockContainerEnded(
 // `resolved-decision.mts` re-exports this name so its own callers
 // (`suitability-triage.mts`, `triage-structural-evidence.mts`) compile
 // unchanged.
-// #3282 Copilot review: an unterminated opener (no matching "-->"
-// anywhere later in the text) only extends through end-of-text when it
-// sits at a CommonMark HTML-block type-2 opening position -- the first
-// non-whitespace content of its line, with at most 3 leading spaces
-// (mirrors specialHtmlBlockCloseToken's own `/^ {0,3}<!--/u` check
-// above). A "<!--" appearing mid-line -- e.g. inside a Markdown link
+// #3282 Copilot review (PR #3413): an unterminated opener (no matching
+// "-->" anywhere later in the text) only extends through end-of-text
+// when it sits at a CommonMark HTML-block type-2 opening position --
+// after stripping 0+ blockquote container markers (each an optional
+// leading `>` with up to 3 spaces before it, mirroring
+// parseContainerLine's own recognition rule) and, on the same line,
+// optionally ONE list-item marker with its required spacing, nothing
+// else precedes the "<!--" but at most 3 more leading spaces. This
+// covers a bare line-start opener, one nested inside a blockquote
+// (`> <!--`, `>> <!--`), a list item's own opening line (`- <!--`,
+// `1) <!--`), and a combination (`> - <!--`) -- round 1 of this fix
+// (Copilot review, same PR) only checked the raw physical line's own
+// leading spaces, missing every container-nested case; `gh api
+// markdown` confirms each of the shapes above still swallows the rest
+// of the document exactly like a bare line-start opener. A "<!--"
+// appearing anywhere else mid-line -- e.g. inside a Markdown link
 // title's quoted text, `[x](url "<!-- still drafting")` -- is ordinary
 // prose there: CommonMark's inline raw-HTML grammar for a comment
 // requires BOTH delimiters, and this position never qualifies as an
 // HTML block opener either, so GitHub renders it as literal text with
-// no masking effect (confirmed via `gh api markdown`, #3282, issue
-// #3413 review; reproduces tests/fixtures/issue-body-corpus/
-// gap-2767-09.json's own body). Before this fix, every mid-line
-// unterminated opener was treated the same as a genuine line-start one,
-// masking real content after it -- including, in that exact fixture, a
-// later "Maintainer decision (...)" line that should have stayed
-// visible either as this criterion's own live trigger text or as
-// findInlineResolvedDecisionSpans's exemption for it, depending on
-// which corpus a given caller scans it in.
+// no masking effect (reproduces tests/fixtures/issue-body-corpus/
+// gap-2767-09.json's own body). Before the first #3282 fix, every
+// mid-line unterminated opener -- container-nested or not -- was
+// treated the same as a genuine line-start one, masking real content
+// after it.
+//
+// Not covered: a list-item CONTINUATION line that carries no marker of
+// its own and relies on an earlier line's inherited list-content
+// indentation (e.g. a second paragraph two lines below a `- ` bullet,
+// indented to match). Recognizing that shape needs the same forward,
+// multi-line list-content-indent tracking {@link findHtmlBlockRanges}
+// already carries via {@link createListContentIndentTrackerState};
+// this function deliberately stays a flat, position-only scan rather
+// than gaining that state machine, since every caller that also needs
+// full generic/raw-text HTML block awareness already has it available
+// through the separate `htmlBlocks: 'mask'` option, which does track
+// it.
+//
+// CodeRabbit review, same PR, same round: a list marker's own required
+// padding is bounded to 1-4 columns of indentation (CommonMark's list
+// item rule 1; a bare tab counts as up to 4 columns via the usual
+// tab-stop rule) -- five or more columns of padding is NOT "immediately
+// after the marker" for block-opener purposes, it starts an indented
+// code block nested inside the list item instead (confirmed via `gh
+// api markdown`: "-     <!-- x" renders as a `<pre><code>` block
+// _inside_ the `<li>`, with later content rendering as its own
+// paragraph OUTSIDE the list, i.e. NOT swallowed). Reuses
+// parseListItemContainer's own markerEndColumns/spacingColumns
+// derivation so both call sites agree on the same boundary.
 function isAtHtmlBlockOpenerPosition(text: string, openIndex: number): boolean {
   const lineStart = text.lastIndexOf('\n', openIndex - 1) + 1;
-  return /^ {0,3}$/.test(text.slice(lineStart, openIndex));
+  const { content } = parseContainerLine(text.slice(lineStart, openIndex));
+  if (/^ {0,3}$/.test(content)) {
+    return true;
+  }
+  const listItem = parseListItemMatch(content);
+  if (listItem === null || listItem.content !== '') {
+    return false;
+  }
+  const markerEndColumns =
+    indentationColumns(listItem.markerIndent) + listItem.marker.length;
+  const spacingColumns =
+    indentationColumns(listItem.spacing, markerEndColumns) - markerEndColumns;
+  return spacingColumns <= 4;
 }
 export function findHtmlCommentRanges(
   text: string,

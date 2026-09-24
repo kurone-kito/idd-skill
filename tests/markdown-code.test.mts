@@ -1541,3 +1541,78 @@ test('findHtmlCommentRanges still masks a mid-line "<!--" when it is properly te
   const body = 'before <!-- real comment --> after';
   assert.deepEqual(findHtmlCommentRanges(body), [{ start: 7, end: 28 }]);
 });
+
+test('findHtmlCommentRanges still masks a line-start unterminated "<!--" nested inside a blockquote container (#3282 Copilot review round 2, PR #3413)', () => {
+  // `gh api markdown` confirms "> <!-- x\n\nAfter" renders as an empty
+  // blockquote -- the comment swallows the rest of the document exactly
+  // like a bare line-start opener. Round 1 of this fix only checked the
+  // raw physical line's own leading spaces, so a blockquote's own ">"
+  // prefix wrongly defeated the block-opener check and left this case
+  // unmasked.
+  const body = '> <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 2, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges still masks a line-start unterminated "<!--" opening a list item', () => {
+  // "- <!-- x\n\nAfter" renders as an empty list item (confirmed via
+  // `gh api markdown`) -- the list marker's own required spacing does
+  // not defeat the block-opener check.
+  const body = '- <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 2, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges still masks a line-start unterminated "<!--" opening a list item inside a blockquote', () => {
+  const body = '> - <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 4, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges does not mask a mid-line unterminated "<!--" inside a link title even when the link sits inside a list item', () => {
+  // Confirms the container-aware opener check does not overcorrect: a
+  // "<!--" that is not the first thing after the list marker's own
+  // spacing (here, `See [x](url "<!--` follows real prose) stays
+  // ordinary prose, matching `gh api markdown`'s rendering of this exact
+  // body (the link title renders literally, and the following sentence
+  // renders as its own paragraph).
+  const body = '- See [x](url "<!-- t")\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks a list-marker opener padded with up to 4 columns of spacing', () => {
+  // CommonMark's list-item rule bounds a marker's own required padding to
+  // 1-4 columns; `gh api markdown` confirms "-    <!-- x" (4 spaces)
+  // still swallows the rest of the document, same as 1 space.
+  const body = '-    <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 5, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges does not mask a "<!--" padded 5+ columns after a list marker (CodeRabbit review, PR #3413)', () => {
+  // Five or more columns of padding after a list marker is not "the
+  // marker's own required spacing" per CommonMark -- it starts an
+  // indented code block nested inside the list item instead. `gh api
+  // markdown` confirms "-     <!-- x" (5 spaces) renders as a literal
+  // `<pre><code>` block inside the `<li>`, with later content rendering
+  // as its own paragraph OUTSIDE the list -- not swallowed. Before this
+  // fix, reusing the list-item regex's unbounded "[ \\t]+" padding group
+  // wrongly treated any run length as valid marker spacing.
+  const body = '-     <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks a list-marker opener padded with a single tab', () => {
+  // A tab right after a 1-column marker expands to fill columns 2-4 (the
+  // usual 4-column tab-stop rule), landing within the valid 1-4 column
+  // range -- `gh api markdown` confirms "-\t<!-- x" still swallows the
+  // rest of the document.
+  const body = '-\t<!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 2, end: body.length },
+  ]);
+});
