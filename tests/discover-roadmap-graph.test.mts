@@ -1219,10 +1219,18 @@ test('collapses exact same-triple mentions from the same issue body', async () =
   assert.deepEqual(graph.diagnostics.duplicateReferences, []);
 });
 
-test('collapses same-body Blocked-by prose and standalone line to one dependency', async () => {
-  // #2799: issue-authoring routinely narrates why a dependency exists and
-  // restates it as a standalone `Blocked by #N` line. Both are `dependency`
-  // with different evidence; that must not emit duplicateReferences.
+test('#2799, #3284: a same-body Blocked-by prose mention is ignored; only the standalone line is a dependency', async () => {
+  // #2799 originally let issue-authoring's narrated-prose habit ("...the
+  // condition (Blocked by #332)...") plus a standalone restatement both
+  // register as `dependency` edges to the same target, needing a
+  // deduplication step so the pair would not also emit a
+  // `duplicateReferences` diagnostic. #3284's Maintainer decision made the
+  // line-anchored grammar authoritative for every helper, including this
+  // one, so the mid-sentence prose mention is no longer recognized as a
+  // dependency at all -- only the standalone line is, and there is
+  // nothing left to deduplicate for this body. See the test below for
+  // deduplication still holding across two genuinely line-anchored
+  // mentions of the same target.
   const issues = new Map([
     [330, roadmapIssue(330, '- [ ] #331', 'blocked-by-double-mention-roadmap')],
     [
@@ -1250,7 +1258,38 @@ test('collapses same-body Blocked-by prose and standalone line to one dependency
       source: 331,
       target: 332,
       relationship: 'dependency',
-      evidence: 'sessions follow when they hit the condition (Blocked by #332)',
+      evidence: 'Blocked by #332',
+    },
+  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('#3284: two genuinely line-anchored Blocked-by mentions of the same target still collapse to one dependency', async () => {
+  const issues = new Map([
+    [
+      333,
+      roadmapIssue(333, '- [ ] #334', 'blocked-by-double-anchored-roadmap'),
+    ],
+    [334, executionIssue(334, 'Blocked by #335\n\nBlocked by #335')],
+    [335, executionIssue(335, 'closed dependency', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(333, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  const dependencyEdges = graph.edges.filter(
+    (edge) =>
+      edge.source === 334 &&
+      edge.target === 335 &&
+      edge.relationship === 'dependency',
+  );
+  assert.deepEqual(dependencyEdges, [
+    {
+      source: 334,
+      target: 335,
+      relationship: 'dependency',
+      evidence: 'Blocked by #335',
     },
   ]);
   assert.deepEqual(graph.diagnostics.duplicateReferences, []);

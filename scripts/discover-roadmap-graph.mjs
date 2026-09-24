@@ -1942,20 +1942,32 @@ export function extractKeywordReferences(body, options = {}) {
         // `extractKeywordReferenceTargets` below, gaining
         // `https://github.com/owner/repo/issues/N` token recognition,
         // fail-safe cross-repository reporting, and GitHub's line-wrap
-        // continuation (#2441) -- while this function's own "anywhere on
-        // the line" match position is kept unchanged (unlike
-        // `discover-readiness-check.mts`'s stricter line-anchored
-        // grammar), so a narrated mid-sentence mention such as
-        // "(Blocked by #332)" still produces a real edge, matching the
-        // existing #2799 regression test. A mention hidden inside an HTML
-        // comment must still be suppressed, though (the two
-        // Background-table rows the issue documents) -- `maskedLine`
-        // above only masks code regions (HTML comments stay visible,
-        // matching every other keyword's own unchanged behavior), so
-        // re-derive the segment from `dependencyMaskedLines` (the same
-        // line, HTML comments additionally masked) at the same offsets
-        // instead of widening the shared per-body masking every other
-        // keyword here still relies on.
+        // continuation (#2441). Unlike every other keyword this function
+        // matches anywhere on the line, a dependency match only counts
+        // when it is genuinely line-anchored (only optional indentation,
+        // blockquote markers, and at most one list marker may precede
+        // it) -- the issue's own Maintainer decision names the
+        // line-anchored grammar "the single `Blocked by` grammar shared
+        // by every helper". A non-anchored match (a narrated mid-sentence
+        // mention) produces no reference at all here, the same "no
+        // dependency" outcome a negated match produces; see the updated
+        // #2799 regression test for the resulting behavior on a body
+        // that narrates a dependency in prose and also restates it as a
+        // standalone line.
+        const dependencyLineAnchorRe =
+          /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?$/u;
+        if (!dependencyLineAnchorRe.test(maskedLine.slice(0, matchIndex))) {
+          continue;
+        }
+        // A mention hidden inside an HTML comment must still be
+        // suppressed (the two Background-table rows the issue documents)
+        // -- `maskedLine` above only masks code regions (HTML comments
+        // stay visible, matching every other keyword's own unchanged
+        // behavior), so re-derive the segment from
+        // `dependencyMaskedLines` (the same line, HTML comments
+        // additionally masked) at the same offsets instead of widening
+        // the shared per-body masking every other keyword here still
+        // relies on.
         const dependencyMaskedLine = dependencyMaskedLines[lineIndex] ?? '';
         if (
           dependencyMaskedLine.slice(matchIndex, segmentStart).trim() === ''

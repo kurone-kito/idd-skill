@@ -215,22 +215,17 @@ test('consumeDependencyContinuationRefLines stops at a blank line', () => {
 // the orphan filter's `extractBlockedByReferences`, and
 // `extractKeywordReferences` (discover-roadmap-graph.mts, filtered to
 // `relationship === 'dependency'`) must agree on the resolved local
-// numbers for every pinned "Blocked by" body above -- all three now share
-// `dependency-grammar.mts`'s ref-list grammar.
-//
-// One Background-table body is deliberately excluded here: a
+// numbers for every pinned "Blocked by" body above, including a
 // non-parenthetical mid-sentence mention ("This work is Blocked by #12
-// until it lands.") is never a dependency for the readiness/orphan pair
-// (both are line-anchored), but `discover-roadmap-graph.mts` intentionally
-// keeps matching a dependency keyword anywhere on the line -- preserving
-// the pre-existing, still-pinned "collapses same-body Blocked-by prose and
-// standalone line to one dependency" test (#2799), which requires a
-// parenthetical mid-sentence mention (`(Blocked by #332)`) to still
-// produce a real edge. That is a deliberate, documented divergence for an
-// edge case #2799 already covers on its own terms, not a parity gap this
-// test needs to close.
+// until it lands.") -- all three now share `dependency-grammar.mts`'s
+// ref-list grammar AND its line-anchoring, per the issue's Maintainer
+// decision naming the line-anchored grammar authoritative for every
+// helper (see the updated `discover-roadmap-graph.test.mts` #2799 test
+// for the roadmap graph's own no-longer-divergent behavior on this exact
+// mid-sentence shape).
 const PARITY_BODIES = [
   '1. Blocked by #12',
+  'This work is Blocked by #12 until it lands.',
   'Blocked by kurone-kito/idd-skill#12',
   'Blocked by other/repo#5, #13',
   'Blocked by #12, other/repo#5, #13',
