@@ -38,6 +38,7 @@ import { parseCliArgs } from './cli-args.mts';
 import { evaluateA4Viability } from './discover-viability-gate.mts';
 import { ghGraphql } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
+import { parseClaimComment } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
@@ -296,7 +297,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       stateReason
       labels(first: 30) { nodes { name } }
       closedByPullRequestsReferences(first: 10) { nodes { state } }
-      comments(first: 100) { nodes { author { login } body } }
+      comments(first: 100) { nodes { author { login } body createdAt } }
     }
   }
 }`;
@@ -319,7 +320,11 @@ function fetchIssue(
           labels: { nodes: { name: string }[] };
           closedByPullRequestsReferences: { nodes: { state: string }[] };
           comments: {
-            nodes: { author: { login: string } | null; body: string }[];
+            nodes: {
+              author: { login: string } | null;
+              body: string;
+              createdAt: string;
+            }[];
           };
         } | null;
       } | null;
@@ -332,9 +337,21 @@ function fetchIssue(
   const hasMergedClosingPr = issue.closedByPullRequestsReferences.nodes.some(
     (pr) => pr.state === 'MERGED',
   );
+  // #3368 Copilot review: a bare `startsWith('<!-- claimed-by:')` check is
+  // not equivalent to a valid, well-formed claim marker -- it passes on a
+  // trusted actor's malformed body (e.g. a truncated or hand-typed
+  // `<!-- claimed-by: garbage`) while this boolean guards the merged-
+  // corpus selection rule's authoritative "carries a trusted claimed-by
+  // marker" requirement. Use the shared strict parser instead: it requires
+  // the full agent-id/claim-id/supersedes/timestamp/branch grammar (and is
+  // more permissive than a literal prefix on whitespace/case, matching
+  // every genuine marker `emit-marker.mts`/`post-idd-marker.mts` produce).
+  // The parser's own `createdAt` echo isn't consumed here -- only whether
+  // parsing succeeds at all -- but the comment's real GraphQL `createdAt`
+  // is passed through for hygiene rather than an empty placeholder.
   const hasTrustedClaim = issue.comments.nodes.some(
     (comment) =>
-      comment.body.startsWith('<!-- claimed-by:') &&
+      parseClaimComment(comment.body, comment.createdAt) !== null &&
       isTrustedLogin(comment.author?.login ?? ''),
   );
   return {
@@ -359,6 +376,17 @@ function buildTrustedLoginChecker(): (login: string) => boolean {
   return (login: string) => trustedSet.has(login.toLowerCase());
 }
 
+/** This repository's configured `blockedByHumanLabelName` /
+ * `needsDecisionLabelName` (POLICY_DEFAULTS fallback when unconfigured) --
+ * read once per CLI invocation and passed to `negativeRefusalReason`. */
+function resolveLabelsPolicy(): {
+  blockedByHumanLabelName: string;
+  needsDecisionLabelName: string;
+} {
+  const { config } = loadPolicyConfig();
+  return normalizePolicyConfig(config).labels;
+}
+
 /**
  * Refusal reason for a `category: merged` candidate, or `null` when it
  * passes the Selection rule in the issue's own "Proposed change" section:
@@ -378,6 +406,52 @@ function mergedRefusalReason(issue: FetchedIssue): string | null {
   return null;
 }
 
+/**
+ * Refusal reason for a `category: negative` candidate, or `null` when it
+ * passes the Selection rule in the issue's own "Proposed change" section:
+ * carries `status:needs-decision`/`status:blocked-by-human`, or was closed
+ * as not planned after an A4.5 rejection, AND the current A4/A4.5 helpers
+ * still rate it non-ready. #3368 Copilot review: before this function
+ * existed, `--add --category negative` accepted any fetched issue
+ * unconditionally, so a maintainer could vendor an entry that violates
+ * this category's own selection rule (nothing checked the label/reason or
+ * the freshly computed verdict).
+ */
+function negativeRefusalReason(
+  issue: FetchedIssue,
+  expected: ExpectedVerdict,
+  labelsPolicy: {
+    blockedByHumanLabelName: string;
+    needsDecisionLabelName: string;
+  },
+): string | null {
+  const hasNegativeLabel =
+    issue.labels.includes(labelsPolicy.blockedByHumanLabelName) ||
+    issue.labels.includes(labelsPolicy.needsDecisionLabelName);
+  const closedNotPlanned =
+    issue.state === 'CLOSED' && issue.stateReason === 'NOT_PLANNED';
+  if (!hasNegativeLabel && !closedNotPlanned) {
+    return (
+      `carries neither "${labelsPolicy.blockedByHumanLabelName}" nor ` +
+      `"${labelsPolicy.needsDecisionLabelName}", and was not closed as not planned`
+    );
+  }
+  const rendersReady =
+    expected.viability.passed &&
+    Object.values(expected.triage).every((result) => result !== 'fail');
+  if (rendersReady) {
+    return 'the current A4/A4.5 helpers rate this issue ready (violates the negative-category selection rule)';
+  }
+  return null;
+}
+
+// #3368 Copilot review: node:util's parseInt-based coercion accepts a
+// numeric PREFIX ("123oops" -> 123), silently vendoring the wrong issue
+// body for a typo'd --add token instead of rejecting it. Mirrors
+// cli-args.mts's own CANONICAL_INTEGER_PATTERN (positive-only variant):
+// the whole trimmed token must match before it is parsed.
+const CANONICAL_POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
+
 function runAdd(
   owner: string,
   repo: string,
@@ -390,26 +464,42 @@ function runAdd(
       `--category must be "merged" or "negative", got: ${category}`,
     );
   }
-  const isTrustedLogin = buildTrustedLoginChecker();
-  let index = readIndex();
-  const written: string[] = [];
+  const numbers: number[] = [];
   for (const rawId of ids) {
-    const number = Number.parseInt(rawId.trim(), 10);
-    if (!Number.isInteger(number) || number <= 0) {
+    const trimmed = rawId.trim();
+    if (!CANONICAL_POSITIVE_INTEGER_PATTERN.test(trimmed)) {
       throw new Error(`--add: not a positive integer issue number: ${rawId}`);
     }
+    numbers.push(Number.parseInt(trimmed, 10));
+  }
+
+  const isTrustedLogin = buildTrustedLoginChecker();
+  const labelsPolicy = resolveLabelsPolicy();
+  // #3368 Copilot review: fetch, validate, and refusal-check every id
+  // FIRST, writing nothing until the whole batch clears -- a mid-batch
+  // fetch/selection failure previously left earlier entry files on disk
+  // with index.json unchanged, the exact file/index-drift state
+  // tests/issue-body-corpus.test.mts's own consistency check rejects.
+  const entries: CorpusEntry[] = [];
+  for (const number of numbers) {
     const issue = fetchIssue(owner, repo, number, isTrustedLogin);
-    if (category === 'merged') {
-      const refusal = mergedRefusalReason(issue);
-      if (refusal) {
-        throw new Error(
-          `refusing to add issue #${number} as category "merged": ${refusal}`,
-        );
-      }
+    const expected = computeExpectedVerdict({
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      labels: issue.labels,
+    });
+    const refusal =
+      category === 'merged'
+        ? mergedRefusalReason(issue)
+        : negativeRefusalReason(issue, expected, labelsPolicy);
+    if (refusal) {
+      throw new Error(
+        `refusing to add issue #${number} as category "${category}": ${refusal}`,
+      );
     }
-    const id = String(issue.number);
-    const entry: CorpusEntry = {
-      id,
+    entries.push({
+      id: String(issue.number),
       category,
       note,
       title: issue.title,
@@ -417,18 +507,21 @@ function runAdd(
       body: issue.body,
       bodySha256: bodySha256(issue.body),
       fetchedAt: new Date().toISOString(),
-      expected: computeExpectedVerdict({
-        number: issue.number,
-        title: issue.title,
-        body: issue.body,
-        labels: issue.labels,
-      }),
-    };
+      expected,
+    });
+  }
+
+  let index = readIndex();
+  for (const entry of entries) {
     writeEntry(entry);
-    index = upsertIndexEntry(index, { id, category: entry.category, note });
-    written.push(id);
+    index = upsertIndexEntry(index, {
+      id: entry.id,
+      category: entry.category,
+      note: entry.note,
+    });
   }
   writeIndex(index);
+  const written = entries.map((entry) => entry.id);
   process.stdout.write(
     `snapshot-issue-body-corpus --add — wrote ${written.length} ${
       written.length === 1 ? 'entry' : 'entries'
