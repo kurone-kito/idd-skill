@@ -4619,6 +4619,61 @@ same as `AW4`/`AW5`.
   again after enabling new automation or after a long gap (a bot with
   no history yet can still start labeling later).
 
+### F4 branch-failure routes
+
+Reference detail for `idd-merge.instructions.md` F4 step 4 and step 5
+(issue #3327), which quote only the message fragment each acceptance
+check greps for and point here for the rest. Step 4 fast-forwards
+`{development-branch}` before step 5 removes the issue worktree so
+WorkTrunk's merge-status check sees the branch as merged instead of
+reporting `branch_outcome: retained_unmerged` (issue #2331).
+
+- **`development-branch-in-use`** (step 4): the switch fails because
+  `{development-branch}` is checked out in a sibling worktree —
+  `fatal: '{development-branch}' is already used by worktree at
+  '<path>'`. Its `||` fallback then fails too (`a branch named
+  '{development-branch}' already exists`), so the compound command
+  exits non-zero; chaining the fast-forward behind `&&` instead of
+  running it as a separate command stops it from silently advancing
+  whatever branch the primary worktree happens to be on.
+  Message-independent check: `git worktree list --porcelain` shows the
+  branch's `worktree`/`branch` pair.
+- **`development-branch-diverged`** (step 4): the fast-forward refuses
+  because local `{development-branch}` holds a commit
+  `origin/{development-branch}` lacks — `fatal: Not possible to
+  fast-forward, aborting.`. Never reset or rebase it: `git reset
+  --hard` is on the baseline deny list (`docs/permissions.md`).
+  Message-independent check:
+  `git log origin/{development-branch}..{development-branch}` is
+  non-empty.
+- **`local-branch-unmerged-commits`** (step 5): `git branch -d
+  <branch-name>` still refuses `error: the branch '<branch-name>' is
+  not fully merged` after step 4's fast-forward — expected once the PR
+  merged as a squash or rebase (for example a human merge under
+  `human_merge`), since the squash commit is not an ancestor-of match
+  for the branch's own commits even though nothing is lost. Compare
+  `git rev-parse <branch-name>` against the merged PR's own head via
+  `gh pr view {pr-number} --json state,headRefOid` — the only check
+  that actually proves this; `git branch -vv` showing
+  `[origin/<branch-name>: gone]` is a corroborating symptom (the
+  upstream ref was deleted), never a substitute, since an unmerged or
+  closed PR can show the same marker. Equal tips with a `MERGED` PR
+  mean the branch holds nothing beyond what already merged, so F4
+  keeps it (never `-D`) and tells the operator they may delete it by
+  hand; unequal tips mean genuinely unmerged
+  local work, so F4 holds instead of discarding it.
+
+The two step 4 holds reuse the `primary-worktree-dirty` resume rule
+(#3192): once the hold clears, re-run F4 from step 4 through step 7.
+`local-branch-unmerged-commits` holds after step 5's worktree-removal
+bullet already succeeded, so its resume is narrower: once resolved,
+redo only the `git branch -d` bullet and continue through step 7 —
+re-running step 4 or the worktree-removal bullet is unnecessary and
+the latter would fail against the already-removed path. If step 6
+(remote branch delete) already ran before this hold fired, redoing it
+on resume is a harmless no-op (or a "ref does not exist" error), never
+a destructive re-run.
+
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 
 `idd-review-triage.instructions.md`'s E-phase sync path and

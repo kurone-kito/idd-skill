@@ -136,10 +136,10 @@ can satisfy F4's own claim-revalidation gate at each mutation. On this row,
 `{branch}` is the active claim's own `branch:` field — the same binding
 Step 2 uses, available here without waiting for Step 2 because the claim
 is already verified. This is also
-what makes F4's own `primary-worktree-dirty` hold's "resume: ... then
-re-run from this step through step 7" instruction reachable from Resume for
-the first time — previously nothing routed a resuming session back into F4
-at all. The unowned row applies only when **no claim is currently active**
+what makes F4's own `primary-worktree-dirty` hold's resume instruction
+(re-run step 4 through step 7 once the hold clears) reachable from Resume
+for the first time — previously nothing routed a resuming session back
+into F4 at all. The unowned row applies only when **no claim is currently active**
 and the issue's most recent claim was released (never a claim that was
 never made — see below); a live competing claim (even mid-F4 itself) still
 falls to the catch-all row, not this one. It binds `{branch}` to that
@@ -153,7 +153,15 @@ local-only steps: F4 step 4 (fast-forward `{development-branch}`) and step
 7 (its revalidation gate stops on any claim that is not this session's,
 including none). On this row, step 4's own `primary-worktree-dirty` guard
 still applies, but degrades to a plain hold comment rather than F4's usual
-Hold / suspend: there is no held claim on this row to suspend. A merged PR
+Hold / suspend: there is no held claim on this row to suspend. All three
+of F4's newer holds (kurone-kito/idd-skill#3327) —
+`development-branch-in-use`, `development-branch-diverged` (both step 4),
+and `local-branch-unmerged-commits` (step 5) — degrade the same way: each
+assumes the owned row's held claim and later steps (naming that claim,
+"keep claim", "stop before step 7"), none of which this row has. Post a
+plain hold comment describing the branch/worktree state instead and stop;
+do not treat any of their wording as an instruction to claim the issue.
+A merged PR
 whose issue was **never claimed at all** has no released-claim branch to
 bind and nothing local to clean up — it falls to the catch-all row below,
 not this one.
