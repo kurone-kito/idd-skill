@@ -12,6 +12,7 @@ import {
   type NoticeComment,
   noticeReason,
   parseArgs,
+  resolveClaimStillActive,
 } from '../src/scripts/disposition-non-review-notices.mts';
 import { hasReviewReplyStamp } from '../src/scripts/marker-helpers.mts';
 import {
@@ -28,6 +29,72 @@ import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 const planSchema = loadJson(
   'schemas/disposition-non-review-notices.schema.json',
 );
+
+// #3270: WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the takeover
+// below lands 20h later (2026-05-13T05:00:00Z) -- squarely in the 18-24h
+// gap the issue describes: stale under an 18h configured age, not stale
+// under the old hardcoded 24h `resolveActiveClaimForWriteGate` silently
+// fell back to when `claimStillActive` (the caller `resolveClaimStillActive`
+// was extracted from) omitted `staleAgeMs`.
+function claimStillActiveEvents(): {
+  body: string;
+  createdAt: string;
+  author: { login: string };
+}[] {
+  return [
+    {
+      body: [
+        '<!-- claimed-by: cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->',
+        '',
+        '_cli-old: issue claim — IDD automation marker._',
+      ].join('\n'),
+      createdAt: '2026-05-12T09:00:00Z',
+      author: { login: 'cli-old' },
+    },
+    {
+      body: [
+        '<!-- claimed-by: cli-new claim-20260513T050000Z-337-new supersedes: claim-20260512T090000Z-337-old 2026-05-13T05:00:00Z branch: issue/337-feat -->',
+        '',
+        '_cli-new: issue claim — IDD automation marker._',
+      ].join('\n'),
+      createdAt: '2026-05-13T05:00:00Z',
+      author: { login: 'cli-new' },
+    },
+  ];
+}
+
+const claimStillActiveTrusted = (login: string): boolean =>
+  ['cli-old', 'cli-new'].includes(login);
+const claimStillActiveForcedHandoffOptions = {
+  forcedHandoffEnabled: false,
+  isAuthorizedForcedHandoff: () => false,
+};
+
+test('resolveClaimStillActive (#3270) recognizes a takeover claim inside a configured 18h staleAge', () => {
+  assert.equal(
+    resolveClaimStillActive(
+      claimStillActiveEvents(),
+      'claim-20260513T050000Z-337-new',
+      claimStillActiveTrusted,
+      claimStillActiveForcedHandoffOptions,
+      18 * 60 * 60 * 1000,
+    ),
+    true,
+  );
+});
+
+test('resolveClaimStillActive (#3270) does not recognize the same takeover when staleAgeMs is explicitly the 24h default', () => {
+  assert.equal(
+    resolveClaimStillActive(
+      claimStillActiveEvents(),
+      'claim-20260513T050000Z-337-new',
+      claimStillActiveTrusted,
+      claimStillActiveForcedHandoffOptions,
+      24 * 60 * 60 * 1000,
+    ),
+    false,
+  );
+});
 
 const CODEX = 'chatgpt-codex-connector[bot]';
 const CODERABBIT = 'coderabbitai[bot]';

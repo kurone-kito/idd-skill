@@ -143,9 +143,9 @@ import {
 import type { PrCommitPayload } from './protocol-helpers.mts';
 import {
   compareIsoTimestamps,
-  DEFAULT_STALE_AGE_MS,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  readClaimStaleAgeMs,
   resolveAdvisoryBotLogins,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
@@ -3210,6 +3210,12 @@ export function collectFromGitHub(
     .resolveViewerLoginSafeQuiet()
     .viewerLogin.toLowerCase();
   const rawConfig = loadIddConfig();
+  // #3270: resolved once, early -- both `resolveClaimEvidence` below (the
+  // claim-candidate disambiguation) and the returned `options.staleAgeMs`
+  // (the main claim check further down) must honor the SAME configured
+  // window, not silently fall back to the hardcoded 24h default the way
+  // `filterResolvingClaimCandidates` alone used to.
+  const staleAgeMs = readClaimStaleAgeMs(rawConfig);
   const { actors: configuredTrustedActors } = resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
@@ -3316,6 +3322,7 @@ export function collectFromGitHub(
       claimCandidates,
       trustedMarkerLogins,
       Boolean(args.claimIssueNumber),
+      staleAgeMs,
     );
 
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
@@ -3450,9 +3457,6 @@ export function collectFromGitHub(
       prFirstCommitAt = null;
     }
   }
-  const staleAgeMs =
-    parseIsoDurationToMs(policy.claimTiming.staleAge) ?? DEFAULT_STALE_AGE_MS;
-
   const convergenceScope =
     policy?.advisoryWait?.convergenceScope === 'idd-claimed'
       ? 'idd-claimed'
@@ -3939,14 +3943,25 @@ function fetchClaimEventCandidates(
  * resolves (`summarizeClaimValidation`). Shared by
  * {@link pickResolvingClaimEvents} and {@link classifyClaimCandidateAmbiguity}
  * (#1686) so both read the identical disambiguation result instead of two
- * independently-maintained filters that could drift. */
+ * independently-maintained filters that could drift.
+ *
+ * `staleAgeMs` (#3270) is the configured `claimTiming.staleAge` window,
+ * threaded into `summarizeClaimValidation` so a takeover claim inside that
+ * window resolves as active instead of being silently evaluated against the
+ * hardcoded 24h default. Optional (unlike the write-gate-required primitives
+ * in `protocol-helpers.mts`): this helper is not itself exported, and its
+ * two callers below are exported, pinned by many existing
+ * `tests/advisory-convergence.test.mts` calls that predate #3270 and do not
+ * care about staleness -- omitted keeps `summarizeClaimValidation`'s own 24h
+ * fallback, unchanged for those calls. */
 function filterResolvingClaimCandidates(
   candidates: IssueCommentPayload[][],
   trustedMarkerLogins: string[],
+  staleAgeMs?: number,
 ): IssueCommentPayload[][] {
   return candidates.filter((comments) =>
     Boolean(
-      summarizeClaimValidation(comments, { trustedMarkerLogins })
+      summarizeClaimValidation(comments, { trustedMarkerLogins, staleAgeMs })
         .activeClaimPresent,
     ),
   );
@@ -3980,6 +3995,7 @@ export function pickResolvingClaimEvents(
   candidates: IssueCommentPayload[][],
   trustedMarkerLogins: string[],
   isExplicit: boolean,
+  staleAgeMs?: number,
 ): IssueCommentPayload[] {
   if (isExplicit) {
     return candidates[0] ?? [];
@@ -3987,6 +4003,7 @@ export function pickResolvingClaimEvents(
   const resolving = filterResolvingClaimCandidates(
     candidates,
     trustedMarkerLogins,
+    staleAgeMs,
   );
   return resolving.length === 1 ? resolving[0] : [];
 }
@@ -4009,12 +4026,14 @@ export function classifyClaimCandidateAmbiguity(
   candidates: IssueCommentPayload[][],
   trustedMarkerLogins: string[],
   isExplicit: boolean,
+  staleAgeMs?: number,
 ): boolean {
   if (isExplicit) {
     return false;
   }
   return (
-    filterResolvingClaimCandidates(candidates, trustedMarkerLogins).length > 1
+    filterResolvingClaimCandidates(candidates, trustedMarkerLogins, staleAgeMs)
+      .length > 1
   );
 }
 
@@ -4084,6 +4103,7 @@ export function resolveClaimEvidence(
   candidates: IssueCommentPayload[][],
   trustedMarkerLogins: string[],
   isExplicit: boolean,
+  staleAgeMs?: number,
 ): {
   claimEvents: IssueCommentPayload[];
   claimCandidateAmbiguous: boolean;
@@ -4093,6 +4113,7 @@ export function resolveClaimEvidence(
     candidates,
     trustedMarkerLogins,
     isExplicit,
+    staleAgeMs,
   );
   // #1686: ambiguity is a distinct signal from `claimEvents` above --
   // `pickResolvingClaimEvents` deliberately collapses BOTH "zero candidates
@@ -4104,6 +4125,7 @@ export function resolveClaimEvidence(
     candidates,
     trustedMarkerLogins,
     isExplicit,
+    staleAgeMs,
   );
   // #1686: true when ANY candidate claim issue ever carried a trusted,
   // syntactically valid `claimed-by` marker -- computed over the union of

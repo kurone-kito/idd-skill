@@ -22,8 +22,9 @@ import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   parsePaginatedGhNdjson,
+  readClaimStaleAgeMs,
   renderForcedHandoffComment,
-  summarizeClaimValidation,
+  summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
 } from './protocol-helpers.mjs';
 export function generateSuccessorIds(baseAgentId) {
@@ -32,7 +33,7 @@ export function generateSuccessorIds(baseAgentId) {
     newClaimId: `claim-${randomUUID().replace(/-/g, '').slice(0, 16)}`,
   };
 }
-export function planHandoff(issueComments, linkedPrs, options = {}) {
+export function planHandoff(issueComments, linkedPrs, options) {
   const {
     newAgentId,
     newClaimId,
@@ -42,12 +43,14 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
     timestamp,
     trustedMarkerLogins,
     isAuthorizedForcedHandoff,
+    staleAgeMs,
   } = options;
   const resolveOpts = {
     isAuthorizedForcedHandoff:
       typeof isAuthorizedForcedHandoff === 'function'
         ? isAuthorizedForcedHandoff
         : () => false,
+    staleAgeMs,
   };
   // First pass: resolve without PR filter to obtain the claim branch.
   const firstPassClaim = resolveHelperActiveClaim(
@@ -183,6 +186,7 @@ export function main(argv = process.argv.slice(2)) {
         permissionCache,
       );
     const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+    const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
     const tempClaim = resolveHelperActiveClaim(
       issueComments,
       trustedMarkerLogins,
@@ -195,6 +199,7 @@ export function main(argv = process.argv.slice(2)) {
             forcedHandoffAuthorityPolicy,
             permissionCache,
           ),
+        staleAgeMs,
       },
     );
     let linkedPrs = [];
@@ -229,6 +234,7 @@ export function main(argv = process.argv.slice(2)) {
           forcedHandoffAuthorityPolicy,
           permissionCache,
         ),
+      staleAgeMs,
     });
     console.log(
       JSON.stringify(
@@ -311,6 +317,7 @@ export function main(argv = process.argv.slice(2)) {
           forcedHandoffAuthorityPolicy,
           permissionCache,
         ),
+      staleAgeMs: readClaimStaleAgeMs(loadIddConfig()),
     },
   );
   if (!activeClaim) {
@@ -386,7 +393,7 @@ export function main(argv = process.argv.slice(2)) {
 export function resolveHelperActiveClaim(
   issueComments,
   trustedMarkerLogins,
-  options = {},
+  options,
 ) {
   const trustedSources = Array.isArray(trustedMarkerLogins)
     ? trustedMarkerLogins
@@ -402,7 +409,7 @@ export function resolveHelperActiveClaim(
       )
       .filter(Boolean),
   );
-  const summary = summarizeClaimValidation(
+  const summary = summarizeClaimValidationForWriteGate(
     issueComments.map(normalizeIssueComment),
     {
       trustedMarkerLogins: [...trustedLogins],
@@ -412,6 +419,7 @@ export function resolveHelperActiveClaim(
         typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff
           : () => false,
+      staleAgeMs: options.staleAgeMs,
     },
   );
   return summary.activeClaimPresent ? summary.activeClaim : null;

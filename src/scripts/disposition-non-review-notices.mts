@@ -53,6 +53,7 @@ import {
   isReviewSummaryComment,
   isReviewSummaryDisposition,
   normalizeTrustedMarkerLogins,
+  readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate,
   resolveAdvisoryBotLogins,
 } from './protocol-helpers.mts';
@@ -652,6 +653,11 @@ interface ForcedHandoffGateOptions {
  * issue-scoped revalidation (`expectedLinkedPrs: null`), so a legitimate
  * issue-only handoff is accepted. Aborting on a contested claim is always
  * safe (the manual E6 path remains).
+ *
+ * `staleAgeMs` (#3270) is the configured `claimTiming.staleAge` window (e.g.
+ * via {@link readClaimStaleAgeMs}), threaded into the write-gate resolver so
+ * a takeover claim inside that window is recognized instead of being
+ * silently evaluated against the hardcoded 24h default.
  */
 function claimStillActive(
   owner: string,
@@ -660,6 +666,7 @@ function claimStillActive(
   claimId: string,
   isTrustedAuthor: (login: string) => boolean,
   forcedHandoffOptions: ForcedHandoffGateOptions,
+  staleAgeMs: number,
 ): boolean {
   const comments = ghJsonPaginated([
     'api',
@@ -670,6 +677,28 @@ function claimStillActive(
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
   }));
+  return resolveClaimStillActive(
+    events,
+    claimId,
+    isTrustedAuthor,
+    forcedHandoffOptions,
+    staleAgeMs,
+  );
+}
+
+/**
+ * Pure claim-ownership check {@link claimStillActive} delegates to, taking
+ * already-fetched comment events instead of shelling out itself -- so
+ * `tests/disposition-non-review-notices.test.mts` can exercise the #3270
+ * `staleAgeMs` threading directly, without stubbing `gh`.
+ */
+export function resolveClaimStillActive(
+  events: { body: string; createdAt: string; author: { login: string } }[],
+  claimId: string,
+  isTrustedAuthor: (login: string) => boolean,
+  forcedHandoffOptions: ForcedHandoffGateOptions,
+  staleAgeMs: number,
+): boolean {
   const active = resolveActiveClaimForWriteGate(events, {
     isTrustedAuthor,
     forcedHandoffEnabled: forcedHandoffOptions.forcedHandoffEnabled,
@@ -678,6 +707,7 @@ function claimStillActive(
     isAuthorizedForcedHandoff: (forcedBy) =>
       forcedHandoffOptions.isAuthorizedForcedHandoff(forcedBy),
     requireAuthorMatchesForcedBy: true,
+    staleAgeMs,
   });
   return active?.claimId === claimId;
 }
@@ -1051,6 +1081,7 @@ if (import.meta.main) {
   const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
   const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
+  const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
   const forcedHandoffOptions: ForcedHandoffGateOptions = {
     forcedHandoffEnabled,
     isAuthorizedForcedHandoff: (forcedBy) =>
@@ -1070,6 +1101,7 @@ if (import.meta.main) {
       args.claimId,
       isTrustedAuthor,
       forcedHandoffOptions,
+      staleAgeMs,
     );
 
   if (!revalidateClaim()) {

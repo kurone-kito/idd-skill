@@ -2047,6 +2047,61 @@ test('issue-target mode (no expectedLinkedPrs) honors the handoff unconditionall
   assert.equal(summary.activeClaim?.claimId, PR_TARGET_NEW_CLAIM_ID);
 });
 
+// #3270: mirrors the exact options shape `readActiveClaim` builds (trusted
+// marker logins, forcedHandoffEnabled, expectedLinkedPrs, prFirstCommitAt,
+// staleAgeMs) against a plain (non-forced-handoff) takeover claim, proving
+// the staleAgeMs threading this file's own `readActiveClaim` now does.
+// WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the takeover lands 20h
+// later (2026-05-13T05:00:00Z) -- squarely in the 18-24h gap the issue
+// describes: stale under an 18h configured age, not stale under the old
+// hardcoded 24h default.
+const WG_OLD_CLAIM_ID = 'claim-20260512T090000Z-337-old';
+const WG_TAKEOVER_CLAIM_ID = 'claim-20260513T050000Z-337-new';
+
+function wgOldClaimComment() {
+  return {
+    author: { login: 'cli-old' },
+    body: `<!-- claimed-by: cli-old ${WG_OLD_CLAIM_ID} supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->\n\n_cli-old: issue claim — IDD automation marker._`,
+    createdAt: '2026-05-12T09:00:00Z',
+  };
+}
+
+function wgTakeoverClaimComment() {
+  return {
+    author: { login: 'cli-new' },
+    body: `<!-- claimed-by: cli-new ${WG_TAKEOVER_CLAIM_ID} supersedes: ${WG_OLD_CLAIM_ID} 2026-05-13T05:00:00Z branch: issue/337-feat -->\n\n_cli-new: issue claim — IDD automation marker._`,
+    createdAt: '2026-05-13T05:00:00Z',
+  };
+}
+
+test('readActiveClaim (#3270): recognizes a takeover claim inside a configured 18h staleAge', () => {
+  const summary = summarizeClaimValidation(
+    [wgOldClaimComment(), wgTakeoverClaimComment()],
+    {
+      trustedMarkerLogins: ['cli-old', 'cli-new'],
+      forcedHandoffEnabled: false,
+      expectedLinkedPrs: [],
+      prFirstCommitAt: null,
+      staleAgeMs: 18 * 60 * 60 * 1000,
+    },
+  );
+  assert.equal(summary.activeClaim?.claimId, WG_TAKEOVER_CLAIM_ID);
+});
+
+test('readActiveClaim (#3270): keeps the old claim active for the same 20h gap when staleAgeMs is explicitly the 24h default', () => {
+  const summary = summarizeClaimValidation(
+    [wgOldClaimComment(), wgTakeoverClaimComment()],
+    {
+      trustedMarkerLogins: ['cli-old', 'cli-new'],
+      forcedHandoffEnabled: false,
+      expectedLinkedPrs: [],
+      prFirstCommitAt: null,
+      staleAgeMs: 24 * 60 * 60 * 1000,
+    },
+  );
+  assert.equal(summary.activeClaim?.claimId, WG_OLD_CLAIM_ID);
+});
+
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 test('--help marks every unconditionally-required digest field as required (#2492)', () => {

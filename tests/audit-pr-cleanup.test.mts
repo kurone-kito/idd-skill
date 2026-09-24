@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import type {
@@ -11,6 +14,7 @@ import {
   evaluateReviewComment,
   fetchReviewThreads,
   parsePrNumbers,
+  readActiveClaim,
 } from '../src/scripts/audit-pr-cleanup.mts';
 import { indexLatestGatingReviewsByAuthor } from '../src/scripts/protocol-helpers.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -798,4 +802,98 @@ test('evaluateReviewComment excludes the PR author from ack-only blocking feedba
   assert.equal(report.skipped.length, 0);
   assert.equal(report.candidates.length, 1);
   assert.equal(report.candidates[0]?.subjectId, 'PA-3');
+});
+
+// #3270: readActiveClaim (private summarizeClaimValidation-based claim
+// resolver) exercised directly against a stubbed `gh` -- same technique as
+// `withFakeGh` above -- rather than stubbing every other `gh` call a full
+// CLI run would need. WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the
+// takeover below lands 20h later (2026-05-13T05:00:00Z) -- squarely in the
+// 18-24h gap the issue describes: stale under an 18h configured age, not
+// stale under the old hardcoded 24h `summarizeClaimValidation` silently fell
+// back to when `readActiveClaim` omitted `staleAgeMs`. `readActiveClaim`
+// reads `.github/idd/config.json` from `process.cwd()` directly (both for
+// `staleAgeMs` and for its own trusted-marker-actor resolution), so this
+// test changes into a sandbox directory with its own config -- mirroring
+// `tests/forced-handoff-marker.test.mts`'s established pattern for the same
+// need -- rather than depending on (or mutating) this real repository's own
+// `.github/idd/config.json`.
+function readActiveClaimIssueViewResponse(): string {
+  return JSON.stringify({
+    comments: [
+      {
+        body: [
+          '<!-- claimed-by: kurone-kito claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->',
+          '',
+          '_kurone-kito: issue claim — IDD automation marker._',
+        ].join('\n'),
+        createdAt: '2026-05-12T09:00:00Z',
+        author: { login: 'kurone-kito' },
+      },
+      {
+        body: [
+          '<!-- claimed-by: kurone-kito claim-20260513T050000Z-337-new supersedes: claim-20260512T090000Z-337-old 2026-05-13T05:00:00Z branch: issue/337-feat -->',
+          '',
+          '_kurone-kito: issue claim — IDD automation marker._',
+        ].join('\n'),
+        createdAt: '2026-05-13T05:00:00Z',
+        author: { login: 'kurone-kito' },
+      },
+    ],
+  });
+}
+
+function withFakeGhIssueView<T>(run: () => T): T {
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'issue' && args[1] === 'view') {
+  process.stdout.write(${JSON.stringify(readActiveClaimIssueViewResponse())});
+  process.exit(0);
+}
+process.exit(1);
+`,
+  );
+  try {
+    return run();
+  } finally {
+    restore();
+  }
+}
+
+function withSandboxConfig<T>(staleAge: string | undefined, run: () => T): T {
+  const originalCwd = process.cwd();
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-audit-pr-cleanup-'));
+  mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(sandbox, '.github', 'idd', 'config.json'),
+    JSON.stringify({
+      trustedMarkerActors: ['kurone-kito'],
+      ...(staleAge ? { claimTiming: { staleAge } } : {}),
+    }),
+  );
+  process.chdir(sandbox);
+  try {
+    return run();
+  } finally {
+    process.chdir(originalCwd);
+  }
+}
+
+test('readActiveClaim (#3270) recognizes a takeover claim inside a configured 18h staleAge', () => {
+  withSandboxConfig('PT18H', () => {
+    withFakeGhIssueView(() => {
+      const active = readActiveClaim('kurone-kito', 'idd-skill', '337');
+      assert.equal(active?.claimId, 'claim-20260513T050000Z-337-new');
+    });
+  });
+});
+
+test('readActiveClaim (#3270) keeps the old claim active for the same 20h gap when staleAgeMs is explicitly the 24h default', () => {
+  withSandboxConfig('PT24H', () => {
+    withFakeGhIssueView(() => {
+      const active = readActiveClaim('kurone-kito', 'idd-skill', '337');
+      assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+    });
+  });
 });

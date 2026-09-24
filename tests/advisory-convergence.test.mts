@@ -4938,6 +4938,59 @@ test('pickResolvingClaimEvents: zero or multiple resolving candidates still fail
   );
 });
 
+// #3270: WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the takeover
+// lands 19h later (2026-05-13T04:00:00Z) -- inside an 18h configured
+// staleAge, not stale under the old hardcoded 24h. The candidate's own
+// `unclaimed-by` (for the TAKEOVER claim-id) immediately follows. Whether
+// that release actually clears `activeClaimPresent` depends on the takeover
+// having activated first (idd-claim's unclaimed-by rule 5: it releases only
+// the CURRENT active claim's exact agent-id/claim-id) -- so this is the
+// #1310-window regression for `filterResolvingClaimCandidates` (exercised
+// here via the exported `pickResolvingClaimEvents`, which delegates to it):
+// with the fix (an 18h `staleAgeMs`), the takeover activates, its own
+// unclaimed-by then correctly releases it, and NO candidate resolves.
+// Without the fix (staleAgeMs omitted, the old hardcoded 24h default), the
+// takeover never activates, the stale old claim stays "active" instead, and
+// its unmatched `unclaimed-by` is ignored -- so the (wrong) old claim still
+// resolves as present.
+test('pickResolvingClaimEvents (#3270): a takeover inside a configured 18h staleAge, followed by its own unclaimed-by, yields no resolving candidate', () => {
+  const takeoverClaimId = 'claim-20260513T040000Z-337-new';
+  const candidate = [
+    {
+      author: { login: TRUSTED },
+      body: `<!-- claimed-by: ${AGENT_ID} claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
+      createdAt: '2026-05-12T09:00:00Z',
+    },
+    {
+      author: { login: TRUSTED },
+      body: `<!-- claimed-by: ${AGENT_ID} ${takeoverClaimId} supersedes: claim-20260512T090000Z-337-old 2026-05-13T04:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
+      createdAt: '2026-05-13T04:00:00Z',
+    },
+    {
+      author: { login: TRUSTED },
+      body: `<!-- unclaimed-by: ${AGENT_ID} ${takeoverClaimId} 2026-05-13T04:05:00Z -->\n\n_${AGENT_ID}: issue claim released — IDD automation marker._`,
+      createdAt: '2026-05-13T04:05:00Z',
+    },
+  ];
+
+  assert.deepEqual(
+    pickResolvingClaimEvents(
+      [candidate],
+      [TRUSTED],
+      false,
+      18 * 60 * 60 * 1000,
+    ),
+    [],
+  );
+  // Without the fix (staleAgeMs omitted -> the primitive's own hardcoded
+  // 24h default), the takeover never activates, so the stale old claim
+  // stays wrongly "active" and the whole candidate still resolves.
+  assert.deepEqual(
+    pickResolvingClaimEvents([candidate], [TRUSTED], false),
+    candidate,
+  );
+});
+
 // --- classifyCopilotAuthoredThreadIds (pure helper) -------------------------
 
 test('classifyCopilotAuthoredThreadIds: a thread counts only when its ORIGINATING comment is bot-authored', () => {

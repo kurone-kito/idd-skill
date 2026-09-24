@@ -994,6 +994,61 @@ test('a stale (takeover-eligible) claim is not owned at the default age', () => 
   assert.equal(verdict.stale, true);
 });
 
+// #3270: WG_OLD_CLAIM is created at 2026-06-26T00:00:00Z; the takeover
+// below lands 20h later (2026-06-26T20:00:00Z) -- squarely in the 18-24h
+// gap the issue describes: stale under an 18h configured age, not stale
+// under the old hardcoded 24h `summarizeClaimValidation` silently fell back
+// to when `evaluateRoadmapClaim` didn't thread `staleAgeMs` into its own
+// claim-identity match. Before #3270, this scenario resolved to
+// `claim-id-mismatch` (the takeover never activated) even though the
+// caller passed the very `staleAgeMs` the second (branch/staleness) check
+// below honored -- only the FIRST (claim-identity) check ignored it.
+const WG_TAKEOVER_CLAIM_ID = 'claim-20260626T200000Z-995';
+
+function claimTakeoverComment() {
+  return {
+    body: renderClaimedByMarker({
+      agentId: 'github-copilot-cli-new',
+      claimId: WG_TAKEOVER_CLAIM_ID,
+      supersedes: CLAIM_ID,
+      timestamp: '2026-06-26T20:00:00Z',
+      branch: CLAIM_BRANCH,
+    }),
+    createdAt: '2026-06-26T20:00:00Z',
+    author: { login: 'kurone-kito' },
+  };
+}
+
+test('evaluateRoadmapClaim (#3270) recognizes a takeover claim inside a configured 18h staleAge', () => {
+  const verdict = evaluateRoadmapClaim(
+    [claimComment(), claimTakeoverComment()],
+    {
+      roadmapNumber: ROADMAP,
+      expectedClaimId: WG_TAKEOVER_CLAIM_ID,
+      isTrustedAuthor: () => true,
+      nowIso: '2026-06-26T20:00:01Z',
+      staleAgeMs: 18 * 60 * 60 * 1000,
+    },
+  );
+  assert.equal(verdict.owned, true);
+  assert.equal(verdict.reason, 'match');
+});
+
+test('evaluateRoadmapClaim (#3270) does not recognize the same takeover when staleAgeMs is explicitly the 24h default', () => {
+  const verdict = evaluateRoadmapClaim(
+    [claimComment(), claimTakeoverComment()],
+    {
+      roadmapNumber: ROADMAP,
+      expectedClaimId: WG_TAKEOVER_CLAIM_ID,
+      isTrustedAuthor: () => true,
+      nowIso: '2026-06-26T20:00:01Z',
+      staleAgeMs: 24 * 60 * 60 * 1000,
+    },
+  );
+  assert.equal(verdict.owned, false);
+  assert.equal(verdict.reason, 'claim-id-mismatch');
+});
+
 test('an untrusted claim author yields no active claim', () => {
   const verdict = evaluateRoadmapClaim([claimComment()], {
     roadmapNumber: ROADMAP,

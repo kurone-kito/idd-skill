@@ -30,6 +30,7 @@ import {
   isDispositionComment,
   isRejectionConfirmedDisposition,
   type ParsedClaimMarker,
+  readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate,
 } from './protocol-helpers.mts';
 import {
@@ -371,14 +372,22 @@ interface ForcedHandoffGateOptions {
  * Aborting on a contested claim is always safe (the manual E13 path remains).
  * The returned `branch` lets the caller bind the mutation to the PR whose head
  * is that branch.
+ *
+ * `staleAgeMs` (#3270) is the configured `claimTiming.staleAge` window (e.g.
+ * via {@link readClaimStaleAgeMs}), threaded into the write-gate resolver so
+ * a takeover claim inside that window is recognized instead of being
+ * silently evaluated against the hardcoded 24h default. Exported so
+ * `tests/resolve-review-thread.test.mts` can exercise it directly against a
+ * fake `ProviderPort`.
  */
-function activeOwnedClaim(
+export function activeOwnedClaim(
   port: ProviderPort,
   issue: number,
   agentId: string,
   claimId: string,
   isTrustedAuthor: (login: string) => boolean,
   forcedHandoffOptions: ForcedHandoffGateOptions,
+  staleAgeMs: number,
 ): ParsedClaimMarker | null {
   const comments = port.listWorkItemComments(issue);
   const events = comments.map((comment) => ({
@@ -394,6 +403,7 @@ function activeOwnedClaim(
     isAuthorizedForcedHandoff: (forcedBy) =>
       forcedHandoffOptions.isAuthorizedForcedHandoff(forcedBy),
     requireAuthorMatchesForcedBy: true,
+    staleAgeMs,
   });
   if (active?.claimId !== claimId) {
     return null;
@@ -465,7 +475,11 @@ if (import.meta.main) {
   }
   const pr = args.pr as number;
   const commentId = args.commentId as number;
-  const markerPrefixRaw = loadIddConfig()?.markerPrefix;
+  // Loaded once (#3270): both `markerPrefixRaw` below and `staleAgeMs`
+  // (near the forced-handoff options, once claim-scoped work below is known
+  // to be needed) come from this single read.
+  const iddConfig = loadIddConfig();
+  const markerPrefixRaw = iddConfig?.markerPrefix;
   // `--body` is optional in dry-run. `parseCliArgs` defaults it to '', but
   // coerce anyway so a missing value cannot throw on `.trim()` before the
   // report is written.
@@ -543,6 +557,10 @@ if (import.meta.main) {
     forcedHandoffEnabled: false,
     isAuthorizedForcedHandoff: () => false,
   };
+  // #3270: only meaningful (and only read) inside the `assertClaim` closure
+  // below when `!args.claimless` -- the `--claimless` path never calls
+  // `activeOwnedClaim`, so this default is never exercised.
+  let staleAgeMs = 0;
   if (!args.claimless) {
     // Bind the mutation to the claimed PR: the active claim's branch must be
     // the PR's head branch, so a valid claim on the issue cannot be used to
@@ -573,6 +591,7 @@ if (import.meta.main) {
     const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
     const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
     const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
+    staleAgeMs = readClaimStaleAgeMs(iddConfig);
     forcedHandoffOptions = {
       forcedHandoffEnabled,
       isAuthorizedForcedHandoff: (forcedBy) =>
@@ -613,6 +632,7 @@ if (import.meta.main) {
           args.claimId,
           isTrustedAuthor,
           forcedHandoffOptions,
+          staleAgeMs,
         );
         if (!active) {
           throw new Error(

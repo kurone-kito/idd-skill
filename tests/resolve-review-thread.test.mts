@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import {
+  activeOwnedClaim,
   applyResolveReviewThread,
   assertNoGraphqlErrors,
   findThreadForComment,
@@ -87,6 +88,78 @@ test('isClaimlessEligible reflects live closingIssuesReferences on every call, n
   // see it, not reuse the first call's answer.
   refs = [{ number: 5 }];
   assert.equal(isClaimlessEligible(port, 42), false);
+});
+
+// #3270: WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the takeover
+// below lands 20h later (2026-05-13T05:00:00Z) -- squarely in the 18-24h
+// gap the issue describes: stale under an 18h configured age, not stale
+// under the old hardcoded 24h `resolveActiveClaimForWriteGate` silently
+// fell back to when a write-gate caller (like this file's `activeOwnedClaim`)
+// omitted `staleAgeMs`.
+function activeOwnedClaimEvents(): { body: string; createdAt: string }[] {
+  return [
+    {
+      body: [
+        '<!-- claimed-by: cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->',
+        '',
+        '_cli-old: issue claim — IDD automation marker._',
+      ].join('\n'),
+      createdAt: '2026-05-12T09:00:00Z',
+    },
+    {
+      body: [
+        '<!-- claimed-by: cli-new claim-20260513T050000Z-337-new supersedes: claim-20260512T090000Z-337-old 2026-05-13T05:00:00Z branch: issue/337-feat -->',
+        '',
+        '_cli-new: issue claim — IDD automation marker._',
+      ].join('\n'),
+      createdAt: '2026-05-13T05:00:00Z',
+    },
+  ];
+}
+
+function fakePortWithComments(
+  events: { body: string; createdAt: string }[],
+): ProviderPort {
+  return {
+    listWorkItemComments: () =>
+      events.map((event) => ({
+        body: event.body,
+        createdAt: event.createdAt,
+        authorLogin: event.body.includes('cli-new') ? 'cli-new' : 'cli-old',
+      })),
+  } as unknown as ProviderPort;
+}
+
+test('activeOwnedClaim (#3270) recognizes a takeover claim inside a configured 18h staleAge', () => {
+  const port = fakePortWithComments(activeOwnedClaimEvents());
+  const active = activeOwnedClaim(
+    port,
+    337,
+    'cli-new',
+    'claim-20260513T050000Z-337-new',
+    (login) => ['cli-old', 'cli-new'].includes(login),
+    { forcedHandoffEnabled: false, isAuthorizedForcedHandoff: () => false },
+    18 * 60 * 60 * 1000,
+  );
+  assert.equal(active?.claimId, 'claim-20260513T050000Z-337-new');
+  assert.equal(active?.agentId, 'cli-new');
+});
+
+test('activeOwnedClaim (#3270) keeps the old claim active for the same 20h gap when staleAgeMs is explicitly the 24h default', () => {
+  const port = fakePortWithComments(activeOwnedClaimEvents());
+  const active = activeOwnedClaim(
+    port,
+    337,
+    'cli-new',
+    'claim-20260513T050000Z-337-new',
+    (login) => ['cli-old', 'cli-new'].includes(login),
+    { forcedHandoffEnabled: false, isAuthorizedForcedHandoff: () => false },
+    24 * 60 * 60 * 1000,
+  );
+  // The takeover does not activate under the 24h default (20h < 24h), so the
+  // caller's expected claim-id ("claim-20260513T050000Z-337-new") no longer
+  // matches the still-active old claim -- activeOwnedClaim returns null.
+  assert.equal(active, null);
 });
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
