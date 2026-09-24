@@ -346,6 +346,49 @@ test('getChangeRequestReviewsWithHeadCommitDate: GitHub and fake adapters agree 
   );
 });
 
+test('getChangeRequestHeadObservedAt: GitHub and fake adapters agree on the earliest check-suite createdAt (kurone-kito/idd-skill#3253)', () => {
+  const githubPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: 'abc123',
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        oid: 'abc123',
+                        checkSuites: {
+                          nodes: [
+                            { createdAt: '2026-09-22T01:35:21Z' },
+                            { createdAt: '2026-09-22T01:36:00Z' },
+                          ],
+                          pageInfo: { hasNextPage: false, endCursor: null },
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const fakePort = createFakeProviderAdapter({
+    headObservedAtByChangeRequest: { 42: '2026-09-22T01:35:21Z' },
+  });
+
+  assert.equal(
+    fakePort.getChangeRequestHeadObservedAt(42),
+    githubPort.getChangeRequestHeadObservedAt(42),
+  );
+});
+
 // --- merge readiness -----------------------------------------------------
 
 test('getChangeRequestReadinessSnapshot: GitHub and fake adapters agree on the normalized shape', () => {

@@ -2997,6 +2997,199 @@ test('getChangeRequestReviewsWithHeadCommitDate throws on a GraphQL errors paylo
   );
 });
 
+// getChangeRequestHeadObservedAt (kurone-kito/idd-skill#3253): the earliest
+// GitHub-recorded check-suite createdAt for the PR's current HEAD commit --
+// a GitHub-observed anchor, unlike getChangeRequestReviewsWithHeadCommitDate's
+// headCommittedAt. Deliberately fail-closed (never throws) on every failure
+// mode, unlike the structurally similar listCheckRunWorkflowPaths above.
+function headObservedAtPage({
+  headRefOid = 'deadbeef',
+  commitOid = 'deadbeef',
+  createdAts = [],
+  hasNextPage = false,
+  endCursor = null as string | null,
+}: {
+  headRefOid?: string;
+  commitOid?: string | null;
+  createdAts?: string[];
+  hasNextPage?: boolean;
+  endCursor?: string | null;
+} = {}): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          headRefOid,
+          commits: {
+            nodes:
+              commitOid === null
+                ? [{ commit: null }]
+                : [
+                    {
+                      commit: {
+                        oid: commitOid,
+                        checkSuites: {
+                          nodes: createdAts.map((createdAt) => ({
+                            createdAt,
+                          })),
+                          pageInfo: { hasNextPage, endCursor },
+                        },
+                      },
+                    },
+                  ],
+          },
+        },
+      },
+    },
+  });
+}
+
+test('getChangeRequestHeadObservedAt returns the earliest check-suite createdAt across pages', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        headObservedAtPage({
+          createdAts: ['2026-09-22T01:35:21Z', '2026-09-22T01:36:00Z'],
+        }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '2026-09-22T01:35:21Z');
+});
+
+test('getChangeRequestHeadObservedAt paginates checkSuites to completion, threading endCursor forward', () => {
+  let call = 0;
+  const capturedArgsByCall: string[][] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgsByCall.push(args);
+        call += 1;
+        return call === 1
+          ? headObservedAtPage({
+              createdAts: ['2026-09-22T02:00:00Z'],
+              hasNextPage: true,
+              endCursor: 'CURSOR_1',
+            })
+          : headObservedAtPage({
+              createdAts: ['2026-09-22T01:00:00Z'],
+              hasNextPage: false,
+              endCursor: null,
+            });
+      },
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '2026-09-22T01:00:00Z');
+  assert.equal(call, 2);
+  assert.ok(
+    capturedArgsByCall[1]?.some((arg) => arg === 'after=CURSOR_1'),
+    `expected page 1's endCursor threaded into page 2's variables, got: ${capturedArgsByCall[1]?.join(' ')}`,
+  );
+});
+
+test('getChangeRequestHeadObservedAt returns empty when the queried commit oid no longer matches headRefOid', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        headObservedAtPage({
+          headRefOid: 'newsha',
+          commitOid: 'oldsha',
+          createdAts: ['2026-09-22T01:00:00Z'],
+        }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
+test('getChangeRequestHeadObservedAt aborts with empty on a HEAD move detected mid-walk (not only on the first page)', () => {
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        call += 1;
+        return call === 1
+          ? headObservedAtPage({
+              headRefOid: 'sha1',
+              commitOid: 'sha1',
+              createdAts: ['2026-09-22T02:00:00Z'],
+              hasNextPage: true,
+              endCursor: 'CURSOR_1',
+            })
+          : headObservedAtPage({
+              // A push landed between page 1 and page 2's fetch.
+              headRefOid: 'sha2',
+              commitOid: 'sha1',
+              createdAts: ['2026-09-22T01:00:00Z'],
+            });
+      },
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+  assert.equal(call, 2);
+});
+
+test('getChangeRequestHeadObservedAt returns empty when the commit has no check suites', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => headObservedAtPage({ createdAts: [] }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
+test('getChangeRequestHeadObservedAt returns empty when a page reports hasNextPage without an endCursor', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        headObservedAtPage({
+          createdAts: ['2026-09-22T01:00:00Z'],
+          hasNextPage: true,
+          endCursor: null,
+        }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
+test('getChangeRequestHeadObservedAt returns empty rather than throwing when the check-suite page walk exceeds its page budget', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        headObservedAtPage({
+          createdAts: ['2026-09-22T01:00:00Z'],
+          hasNextPage: true,
+          endCursor: 'CURSOR_NEXT',
+        }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
+test('getChangeRequestHeadObservedAt returns empty rather than throwing on a GraphQL errors payload', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({ errors: [{ message: 'boom' }], data: null }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
 // listChangeRequestGraphqlComments / listChangeRequestGraphqlReviews
 // (Codex review, PR #2429): a missing pullRequest node or connection must
 // fail fast rather than silently read as zero comments/reviews, matching

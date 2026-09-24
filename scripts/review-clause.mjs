@@ -199,3 +199,21 @@ export function fetchReviewsAndHeadCommit(
   }));
   return { reviews, headCommittedAt };
 }
+/**
+ * Fetch `headObservedAt` -- the earliest GitHub-recorded check-suite
+ * `createdAt` for the PR's current HEAD commit -- via
+ * {@link ProviderPort.getChangeRequestHeadObservedAt} (kurone-kito/idd-skill#3253).
+ * A sibling of {@link fetchReviewsAndHeadCommit}, not an extension of it:
+ * the two are independent GraphQL reads, fetched and consumed separately by
+ * every caller. Same injectable-port shape as its sibling, so a caller
+ * already holding its own fake-backed `ProviderPort` can pass it through
+ * instead of this function constructing its own live adapter.
+ */
+export function fetchHeadObservedAt(
+  owner,
+  repo,
+  prNumber,
+  port = createGithubProviderAdapter(owner, repo),
+) {
+  return port.getChangeRequestHeadObservedAt(prNumber);
+}

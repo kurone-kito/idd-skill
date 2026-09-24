@@ -296,6 +296,12 @@ export interface FakeProviderFixture {
   unresolvableReviewThreadIds?: Set<string>;
   /** Backs {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}. */
   reviewsWithHeadCommitDate?: Record<number, ProviderReviewsWithHeadCommitDate>;
+  /** Backs {@link ProviderPort.getChangeRequestHeadObservedAt}, keyed by PR
+   * number; absent key means `''` -- matches the port method's own
+   * fail-closed default for an unavailable anchor (kurone-kito/idd-skill#3253),
+   * unlike `reviewsWithHeadCommitDate`'s throw-on-missing-fixture style
+   * above. */
+  headObservedAtByChangeRequest?: Record<number, string>;
   /** Backs {@link ProviderPort.getChangeRequestAuthor}; absent key means `null`. */
   changeRequestAuthors?: Record<number, ProviderChangeRequestAuthor>;
   /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType}. */
@@ -1059,6 +1065,10 @@ export function createFakeProviderAdapter(
         );
       }
       return value;
+    },
+
+    getChangeRequestHeadObservedAt(number: number): string {
+      return fixture.headObservedAtByChangeRequest?.[number] ?? '';
     },
 
     resolveChangeRequestReviewThread(threadId: string): void {
