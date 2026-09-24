@@ -26,6 +26,12 @@ function fixtureError(
   });
 }
 
+function ghErrorFixtureStderr(id: string): string {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture?.stderr, `missing gh-errors.json fixture stderr: ${id}`);
+  return fixture.stderr;
+}
+
 // Shape of a real execFileSync('gh', ...) failure: process exit code 1
 // regardless of the HTTP status, with the true status in stderr/stdout.
 const ghError = (parts: {
@@ -157,6 +163,42 @@ test('deriveGhHttpStatus does not match an unrelated number in prose', () => {
   );
 });
 
+// Copilot review, #3335: a bare `\b` word boundary (with no line-start
+// anchor) still let prose text carrying a `:` or ` (` right after the
+// number match, even though the number is not gh's own line-leading
+// status report -- for example "retry HTTP 404: please try again" would
+// have matched the same lookahead the real `HTTP 404: Not Found (<url>)`
+// shape uses. Anchoring to the start of a line (with an optional `gh: `
+// prefix) fixes it without narrowing the two real shapes it targets.
+test('deriveGhHttpStatus requires the bare/URL-suffixed forms to start a line, not just follow a word boundary', () => {
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), {
+        stderr: 'retry HTTP 404: please try again',
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), {
+        stderr: 'some HTTP 200 (ok) message',
+      }),
+    ),
+    null,
+  );
+  // The real shapes still match when they genuinely start a line, even a
+  // non-first line inside the stderr+stdout+message join.
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), {
+        stderr: 'some prose\ngh: HTTP 502',
+      }),
+    ),
+    502,
+  );
+});
+
 test('classifyInaccessibleIssueLookup: 404 fixtures -> not-found', () => {
   assert.equal(
     classifyInaccessibleIssueLookup(fixtureError('bare404')),
@@ -200,6 +242,33 @@ test('classifyInaccessibleIssueLookup: 403 downgrades only on visibility/integra
   assert.equal(
     classifyInaccessibleIssueLookup(fixtureError('secondaryRateLimit403')),
     null,
+  );
+});
+
+// Copilot + CodeRabbit review, #3335: a real `execFile`/`ghTextAsync`
+// rejection's `.message` is synthesized by Node as `Command failed: <full
+// command line>\n<stderr>` -- it always embeds the invoked command
+// (including any owner/repo path segment) regardless of what any caller
+// constructs, so the wording check must prefer real stderr/stdout over
+// `.message` whenever either stream is non-empty, or an owner/repo name
+// containing "visibility" would false-positive an unrelated 403.
+test('classifyInaccessibleIssueLookup ignores message-embedded wording when a real stream exists', () => {
+  const stderr = ghErrorFixtureStderr('secondaryRateLimit403');
+  const nodeExecFileShapedError = Object.assign(
+    new Error(
+      `Command failed: gh api repos/visibility-org/visibility-repo/issues/900 --jq .\n${stderr}`,
+    ),
+    { stderr, stdout: '' },
+  );
+  assert.equal(classifyInaccessibleIssueLookup(nodeExecFileShapedError), null);
+});
+
+test('classifyInaccessibleIssueLookup falls back to message wording only when both streams are empty', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(
+      new Error(ghErrorFixtureStderr('samlEnforcement403')),
+    ),
+    'inaccessible',
   );
 });
 

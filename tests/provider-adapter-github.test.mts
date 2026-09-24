@@ -26,6 +26,34 @@ function ghErrorFixture(id: string): Error & { stderr?: string } {
   });
 }
 
+/**
+ * A fixture error's `.message` never modeled a real `ghTextAsync`
+ * rejection: Node's `execFile`/`util.promisify` synthesizes `.message` as
+ * `Command failed: <full command line>\n<stderr>`, which always embeds
+ * the invoked `repos/{owner}/{repo}/issues/{n}` endpoint regardless of
+ * what `wrapTraversalGhFailure` itself constructs. A test built only from
+ * `ghErrorFixture` cannot catch a wording-classification leak through
+ * `.message` (Copilot review, #3335) -- this constructs the real shape
+ * instead.
+ */
+function nodeExecFileShapedGhError(
+  owner: string,
+  repo: string,
+  number: number,
+  fixtureId: string,
+): Error & { stderr: string; stdout: string } {
+  const fixture = GH_ERROR_FIXTURES.cases[fixtureId];
+  assert.ok(
+    fixture?.stderr,
+    `missing gh-errors.json fixture stderr: ${fixtureId}`,
+  );
+  const cmd = `gh api repos/${owner}/${repo}/issues/${number} --jq .`;
+  return Object.assign(new Error(`Command failed: ${cmd}\n${fixture.stderr}`), {
+    stderr: fixture.stderr,
+    stdout: '',
+  });
+}
+
 function fakeDeps(
   overrides: Partial<GithubProviderAdapterDeps>,
 ): GithubProviderAdapterDeps {
@@ -1016,11 +1044,16 @@ test('getWorkItemForTraversalAsync rethrows a secondary-rate-limit 403 after exh
   assert.equal(calls, 3);
 });
 
-// CodeRabbit review, #3335: a repo/owner name containing "visibility" must
-// never leak into wrapTraversalGhFailure's wrapped error text and
-// false-positive INACCESSIBLE_403_WORDING's `visibility` alternative --
-// this still rethrows after bounded retries, exactly like the
-// non-"visibility"-named case above, never downgrading to 'inaccessible'.
+// Copilot + CodeRabbit review, #3335: a repo/owner name containing
+// "visibility" must never leak into the 403 wording classification via
+// either wrapTraversalGhFailure's own wrapped error text or Node's own
+// `execFile`/`ghTextAsync` `.message` synthesis (`Command failed: <full
+// command line>\n<stderr>`, which embeds the endpoint regardless of what
+// this file constructs) -- this still rethrows after bounded retries,
+// exactly like the non-"visibility"-named case above, never downgrading
+// to 'inaccessible'. Uses the realistic Node execFile error shape (not
+// the plain `ghErrorFixture`, whose synthetic `.message` never modeled
+// the endpoint at all and so could not have caught this).
 test('getWorkItemForTraversalAsync does not let an owner/repo name containing "visibility" leak into 403 wording classification', async () => {
   let calls = 0;
   const port = createGithubProviderAdapter(
@@ -1029,7 +1062,12 @@ test('getWorkItemForTraversalAsync does not let an owner/repo name containing "v
     fakeDeps({
       ghTextAsync: async () => {
         calls += 1;
-        throw ghErrorFixture('secondaryRateLimit403');
+        throw nodeExecFileShapedGhError(
+          'visibility-org',
+          'visibility-repo',
+          900,
+          'secondaryRateLimit403',
+        );
       },
     }),
   );

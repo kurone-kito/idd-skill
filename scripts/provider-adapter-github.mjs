@@ -885,34 +885,45 @@ function fetchReviewThreadsGeneric(
 // stderr/stdout text via the shared classifier instead, matching
 // discover-readiness-check.mts's isInaccessibleIssueLookupError.
 /**
- * Wraps a failed `gh` error into a normalized `{ stderr }` shape the
- * shared classifier re-derives its status from. Returns `''` on a
- * genuine 404 (`getWorkItemForTraversalAsync` treats "not found" as an
- * empty successful lookup, not a thrown error); otherwise re-throws with
- * the joined diagnostic text (stderr + stdout + message) from the
- * *original* error preserved verbatim as `.stderr`, so a status embedded
- * in any of those streams still classifies correctly once re-derived
+ * Wraps a failed `gh` error into a normalized `{ stderr, stdout }` shape
+ * the shared classifier re-derives its status and wording classification
+ * from. Returns `''` on a genuine 404 (`getWorkItemForTraversalAsync`
+ * treats "not found" as an empty successful lookup, not a thrown error);
+ * otherwise re-throws with the *original* error's real `stderr`/`stdout`
+ * streams preserved **separately and verbatim** (never flattened together
+ * with `.message` into a single field), so a status or wording match
+ * embedded in either stream still classifies correctly once re-derived
  * from the wrapped error.
  *
- * Deliberately never folds `args` (the `repos/{owner}/{repo}/issues/{n}`
- * endpoint) into `.stderr`/`.message` when real diagnostic text exists:
- * `classifyInaccessibleIssueLookup`'s `visibility` wording alternative
- * would otherwise false-positive on any owner/repo name that happens to
- * contain that substring, silently downgrading an unrelated 403 (e.g. a
- * secondary rate limit) instead of retrying it (CodeRabbit review,
- * #3335). `args` is used only in the no-diagnostic-text fallback branch,
- * where no status is derivable either way, so it can never feed a
- * wording match.
+ * Deliberately keeps `args` (the `repos/{owner}/{repo}/issues/{n}`
+ * endpoint) out of `.stderr`/`.stdout` entirely, using it only inside
+ * `.message` -- a human-readable summary the shared classifier's wording
+ * check never reads once either real stream is non-empty
+ * (`classifyInaccessibleIssueLookup`'s stream-preferring text getter,
+ * gh-http-status.mts). Without this separation, an owner/repo name that
+ * happens to contain "visibility" could false-positive the 403 wording
+ * check and silently downgrade an unrelated 403 (e.g. a secondary rate
+ * limit) instead of retrying it -- first found folded into `.message` via
+ * a hand-built prefix (CodeRabbit review), then found again once Node's
+ * own `execFile`/`ghTextAsync` rejection shape was accounted for: its
+ * `.message` is synthesized as `Command failed: <full command line>\n
+ * <stderr>`, so it always embeds the endpoint regardless of what this
+ * function constructs, unless the wording check is kept off `.message`
+ * whenever real stream text exists (Copilot review, #3335).
  */
 function wrapTraversalGhFailure(error, args) {
   if (classifyInaccessibleIssueLookup(error) === 'not-found') {
     return '';
   }
-  const diagnosticText = ghErrorText(error).trim();
-  const wrapped = new Error(
-    diagnosticText || `gh ${args.join(' ')} failed with no diagnostic output`,
-  );
-  wrapped.stderr = diagnosticText;
+  const candidate = error;
+  const stderr = candidate?.stderr == null ? '' : String(candidate.stderr);
+  const stdout = candidate?.stdout == null ? '' : String(candidate.stdout);
+  const summary =
+    ghErrorText(error).trim() ||
+    `gh ${args.join(' ')} failed with no diagnostic output`;
+  const wrapped = new Error(summary);
+  wrapped.stderr = stderr;
+  wrapped.stdout = stdout;
   throw wrapped;
 }
 // #1449: explicit above the promisified execFile's 1 MiB default, applied

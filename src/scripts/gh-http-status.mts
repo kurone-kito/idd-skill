@@ -46,10 +46,14 @@ export function deriveGhHttpStatus(error: unknown): number | null {
     return Number.parseInt(jsonMatch[1], 10);
   }
   // Fallback: gh's other HTTP-status shapes -- a bare `gh: HTTP NNN` line,
-  // or `HTTP NNN: <message> (<url>)` / `HTTP NNN (<url>)`. Anchored on what
-  // follows the digits (a colon, an open paren, or end of line) so an
-  // unrelated number in prose text cannot match.
-  const bareMatch = text.match(/\bHTTP (\d{3})(?=:| \(|\s*$)/m);
+  // or `HTTP NNN: <message> (<url>)` / `HTTP NNN (<url>)`. Anchored to the
+  // *start* of a line (Copilot review, #3335: a bare `\b` word boundary
+  // alone still lets prose text like "retry HTTP 404: please try again"
+  // match, since a `:` or ` (` can follow the number anywhere, not only in
+  // gh's own output) with an optional `gh: ` prefix, and on what follows
+  // the digits (a colon, an open paren, or end of line) so an unrelated
+  // number in prose text cannot match.
+  const bareMatch = text.match(/^(?:gh: )?HTTP (\d{3})(?=:| \(|\s*$)/m);
   if (bareMatch) {
     return Number.parseInt(bareMatch[1], 10);
   }
@@ -58,6 +62,34 @@ export function deriveGhHttpStatus(error: unknown): number | null {
 
 const INACCESSIBLE_403_WORDING =
   /resource not accessible|not accessible by integration|visibility|SAML enforcement/i;
+
+/**
+ * Text to run {@link INACCESSIBLE_403_WORDING} against: the real gh-authored
+ * `stderr`/`stdout` streams when either is non-empty, falling back to
+ * `.message` only when both are empty. A Node `execFile`/`ghTextAsync`
+ * rejection's `.message` is synthesized as `Command failed: <full command
+ * line>\n<stderr>` -- it always embeds the invoked command (including any
+ * `owner`/`repo`/path segment), so scanning it unconditionally lets an
+ * owner or repo name that happens to contain "visibility" false-positive
+ * an unrelated 403 (e.g. a secondary rate limit) into `'inaccessible'`
+ * (Copilot + CodeRabbit review, #3335). `.message` is scanned only as a
+ * last resort, when there is no stream text to prefer at all.
+ */
+function wordingScanText(error: unknown): string {
+  const candidate = error as {
+    stderr?: unknown;
+    stdout?: unknown;
+    message?: unknown;
+  } | null;
+  const streamText = [candidate?.stderr, candidate?.stdout]
+    .map((value) => (value == null ? '' : String(value)))
+    .filter((value) => value.length > 0)
+    .join('\n');
+  if (streamText) {
+    return streamText;
+  }
+  return candidate?.message == null ? '' : String(candidate.message);
+}
 
 /**
  * Outcome of {@link classifyInaccessibleIssueLookup}: `'not-found'` for a
@@ -92,7 +124,7 @@ export function classifyInaccessibleIssueLookup(
     return 'inaccessible';
   }
   if (status === 403) {
-    return INACCESSIBLE_403_WORDING.test(ghErrorText(error))
+    return INACCESSIBLE_403_WORDING.test(wordingScanText(error))
       ? 'inaccessible'
       : null;
   }
