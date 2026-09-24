@@ -14,7 +14,6 @@
 // head + claim re-validate immediately before the merge.
 import { execFileSync } from 'node:child_process';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
-import { loadIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mjs';
@@ -138,9 +137,20 @@ function resolveOwnerRepoFromRef(repoRef) {
  * `pre-merge-readiness.mts`) -- default resolves the real base64 `.content`
  * field via `gh api .../contents/.github/idd/config.json`.
  *
+ * `ref` (#3252) must be a value the PR under evaluation cannot itself
+ * steer -- the PR's base branch (falling back to the repository's live
+ * default branch), never its head SHA and never a local worktree read.
+ * This mirrors `loadTrustedIddConfig`'s own trust-boundary contract
+ * (`idd-config.mts`) exactly, including its 404-is-absent /
+ * non-404-rethrows split below; this function keeps its own
+ * injectable-fetch body -- rather than delegating to
+ * `loadTrustedIddConfig` outright -- so the four direct unit tests below
+ * (404 default, non-404 rethrow, empty-content, valid-decode) keep
+ * pinning this exact decode-and-classify logic, not a different reader's.
+ *
  * A confirmed `404` means the target ref has no policy file: falls back to
- * the same distributed defaults `loadIddConfig()` uses for the local-repo
- * path. Any other fetch failure is ambiguous or malformed and rethrows
+ * the same distributed defaults as the repository's default local config.
+ * Any other fetch failure is ambiguous or malformed and rethrows
  * (fail-closed) rather than silently mapping onto the permissive
  * `auto-admin-retry` default -- the #1521-adjacent fail-open corner #1708
  * pins with direct tests (previously exercised only via a full
@@ -155,15 +165,15 @@ function resolveOwnerRepoFromRef(repoRef) {
 export function resolveRemoteSoloCodeownerAdminFallbackMode(
   prNumber,
   repoRef,
-  headSha,
-  fetchEncodedConfig = (scopedRepoRef, ref) => {
+  ref,
+  fetchEncodedConfig = (scopedRepoRef, scopedRef) => {
     const outcome = createGithubProviderAdapter(
       '',
       '',
     ).getRepositoryFileContentAtRef(
       scopedRepoRef,
       '.github/idd/config.json',
-      ref,
+      scopedRef,
     );
     if (outcome.outcome === 'not-found') {
       const notFound = new Error('Not Found (HTTP 404)');
@@ -175,10 +185,10 @@ export function resolveRemoteSoloCodeownerAdminFallbackMode(
 ) {
   let config;
   try {
-    const encodedConfig = fetchEncodedConfig(repoRef, headSha);
+    const encodedConfig = fetchEncodedConfig(repoRef, ref);
     if (!encodedConfig) {
       throw new Error(
-        `target repository policy is empty for PR #${prNumber} at ${headSha}`,
+        `target repository policy is empty for PR #${prNumber} at ${ref}`,
       );
     }
     config = JSON.parse(
@@ -231,11 +241,31 @@ const defaultDeps = {
       repo,
     ).mergeChangeRequestAdminAtRepo(owner, repo, prNumber, headSha);
   },
-  resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) =>
-    repoRef
-      ? resolveRemoteSoloCodeownerAdminFallbackMode(prNumber, repoRef, headSha)
-      : normalizePolicyConfig(loadIddConfig()).mergeGate
-          .soloCodeownerAdminFallback,
+  // #3252: always a trusted-ref remote read, scoped to `repoRef` when set
+  // or the current-directory repo otherwise (`resolveOwnerRepoFromRef`
+  // already implements that split for every other dep above) -- never a
+  // local worktree read, which during F3 is checked out on the PR's own
+  // branch and so would let the PR under merge steer this policy.
+  resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, baseRef) => {
+    const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
+    const scopedRepoRef = `${owner}/${repo}`;
+    const resolvedRef =
+      baseRef ||
+      createGithubProviderAdapter(owner, repo).getRepositoryDefaultBranch(
+        owner,
+        repo,
+      );
+    if (!resolvedRef) {
+      throw new Error(
+        `cannot resolve a trusted ref for the admin-fallback policy read: PR #${prNumber} has no base ref and ${scopedRepoRef}'s live default branch could not be determined`,
+      );
+    }
+    return resolveRemoteSoloCodeownerAdminFallbackMode(
+      prNumber,
+      scopedRepoRef,
+      resolvedRef,
+    );
+  },
   getLocalHeadState: () => {
     try {
       const branch = execFileSync(
@@ -274,6 +304,27 @@ export function runMergeExecute(argv, deps = defaultDeps) {
   const args = parseArgs(argv);
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
+  }
+  // #3252: required BEFORE any collection or merge call -- an --apply run
+  // with no claim binding at all (no --claim-id/--expected-claim-id and
+  // no explicit --claimless opt-out) must never reach `deps.collect` or
+  // `deps.mergePr`, since the collector's own claim gate only checks
+  // whether a SUPPLIED --claim-id matches the active claim, never whether
+  // one was supplied at all.
+  if (!args.claimless && !args.claimIdProvided) {
+    throw new Error(
+      'missing required --claim-id <claim-id> argument (or the deprecated --expected-claim-id alias); pass --claimless only for a PR with no closingIssuesReferences',
+    );
+  }
+  // #3252: --now overrides every merge-gate clock (claim staleness,
+  // waiver expiry, advisory-convergence deadline, terminal-unavailability
+  // window, secondary-bot quiet window) -- safe for read-only dry-run
+  // evaluation, unsafe under --apply, where the caller could pick a clock
+  // the actual merge gate would never see live.
+  if (args.nowProvided && args.apply) {
+    throw new Error(
+      '--now and --apply are mutually exclusive: --now overrides every merge-gate clock, which is unsafe under --apply; pass --now only for a dry-run',
+    );
   }
   const report = deps.collect(args.passthrough);
   const prHeadSha = String(report.prHeadSha ?? '');
@@ -387,10 +438,19 @@ export function runMergeExecute(argv, deps = defaultDeps) {
     }
     let fallbackMode;
     try {
+      // #3252: the base ref, never the head SHA -- read from the SAME
+      // freshly re-collected `revalidated` report the eligibility check
+      // above uses, not the earlier (possibly stale) `report`.
+      const revalidatedDevelopmentBranchTarget = asRecord(
+        revalidated.developmentBranchTarget,
+      );
+      const baseRef = String(
+        revalidatedDevelopmentBranchTarget.baseRefName ?? '',
+      );
       fallbackMode = deps.resolveSoloCodeownerAdminFallbackMode(
         args.prNumber,
         args.repoRef,
-        prHeadSha,
+        baseRef,
       );
     } catch (policyError) {
       verdict.mergeResult = `admin-fallback aborted: target repository policy unreadable: ${ghErrorText(policyError) || 'unknown error'}; no merge`;
@@ -564,6 +624,9 @@ function parseArgs(argv) {
     passthrough: [],
     apply: false,
     repoRef: null,
+    claimIdProvided: false,
+    claimless: false,
+    nowProvided: false,
   };
   // Captured locally so `repoRef` is set only when BOTH are present; these
   // are ALSO forwarded to the collector via passthrough (we do not stop
@@ -597,6 +660,70 @@ function parseArgs(argv) {
       // Keep forwarding to the collector so it still validates this repo.
       parsed.passthrough.push(token, value ?? '');
       index += 1;
+      continue;
+    }
+    // #3252: detect (without changing) the collector's own `--claim-id` /
+    // `--expected-claim-id` presence, in either the `--flag value` or
+    // `--flag=value` spelling, so `runMergeExecute` can require ONE of
+    // them (or `--claimless`) before ever calling `deps.collect`. Every
+    // spelling still forwards to `passthrough` exactly as the generic
+    // branch below would.
+    if (
+      token === '--claim-id' ||
+      token === '--expected-claim-id' ||
+      token.startsWith('--claim-id=') ||
+      token.startsWith('--expected-claim-id=')
+    ) {
+      let value;
+      if (token.includes('=')) {
+        value = token.slice(token.indexOf('=') + 1);
+        parsed.passthrough.push(token);
+      } else {
+        value = argv[index + 1];
+        if (value !== undefined && !value.startsWith('--')) {
+          parsed.passthrough.push(token, value);
+          index += 1;
+        } else {
+          parsed.passthrough.push(token);
+          value = undefined;
+        }
+      }
+      // Unconditional assignment (not "only set true"): the collector's
+      // own `resolveLastGivenAlias` resolves the effective claim id by
+      // last-occurrence-wins across both spellings, and an empty
+      // resolved value is falsy in `summarizeClaimValidation`'s
+      // `expectedClaimId && ...` guard -- functionally identical to no
+      // claim-id at all. A later empty occurrence (e.g. `--claim-id
+      // real --claim-id ''`) must clear this flag the same way, or this
+      // gate would pass while the collector still validates no claim
+      // binding, re-opening the exact gap #3252 exists to close
+      // (CodeRabbit finding on this PR).
+      parsed.claimIdProvided = value !== undefined && value.trim() !== '';
+      continue;
+    }
+    if (token === '--claimless') {
+      parsed.claimless = true;
+      parsed.passthrough.push(token);
+      continue;
+    }
+    // #3252: same detect-without-changing purpose as `--claim-id` above,
+    // for the `--now`/`--apply` mutual-exclusion gate.
+    if (token === '--now' || token.startsWith('--now=')) {
+      let value;
+      if (token.includes('=')) {
+        value = token.slice(token.indexOf('=') + 1);
+        parsed.passthrough.push(token);
+      } else {
+        value = argv[index + 1];
+        if (value !== undefined && !value.startsWith('--')) {
+          parsed.passthrough.push(token, value);
+          index += 1;
+        } else {
+          parsed.passthrough.push(token);
+          value = undefined;
+        }
+      }
+      parsed.nowProvided = value !== undefined && value.trim() !== '';
       continue;
     }
     // Every other flag (and its value, if it takes one) is forwarded
@@ -635,13 +762,25 @@ function parseArgs(argv) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> [--claim-id <claim-id>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
+  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> --claim-id <claim-id> [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
 
   Every flag except --apply is forwarded verbatim to the read-only
   pre-merge-readiness collector, so the full collector flag surface is
-  accepted here — including --idd-agent-logins, --now, and the deprecated
+  accepted here — including --idd-agent-logins and the deprecated
   --expected-claim-id / --expected-agent-id aliases. --owner and --repo
   must be passed together or not at all.
+
+  #3252 required claim binding: --claim-id (or the deprecated
+  --expected-claim-id alias) is required unless --claimless is also
+  given (only valid for a PR with no closingIssuesReferences) -- checked
+  here, before this helper ever collects readiness evidence or merges,
+  since the collector's own claim gate only checks whether a SUPPLIED
+  claim-id matches the active claim, never whether one was supplied.
+
+  #3252 --now is dry-run only: passing --now together with --apply is
+  rejected before any collection or merge call, since --now overrides
+  every merge-gate clock and picking one under --apply would let the
+  caller steer which clock the merge is actually gated on.
 
   Default (no --apply): dry-run. Evaluates every F3 merge gate via the
   read-only pre-merge-readiness collector and prints { ready, blockers,
@@ -655,15 +794,18 @@ function printHelp() {
   #1521 solo-CODEOWNER --admin fallback: if the plain merge command fails
   with GitHub's "base branch policy prohibits the merge" error, and the
   repository has not set mergeGate.soloCodeownerAdminFallback to
-  "hold-and-report" in .github/idd/config.json, this retries ONCE with
-  --admin -- but ONLY when reviewerStates.codeownerSelfApproval proves the
-  PR author is the sole eligible codeowner (status "clear", a bypass-actor
-  reason, and prAuthorIsSoleEligibleCodeowner true). A genuinely
-  outstanding review from any other codeowner never triggers this retry.
-  The retry also requires a second immediate head/claim/readiness
-  re-validation and a live MERGEABLE state; a BEHIND state is accepted only
-  when the fresh branch-currency evidence says an up-to-date head is not
-  required. Unreadable or unsafe live state aborts the retry.
+  "hold-and-report" in .github/idd/config.json (#3252: read from the PR's
+  base ref, falling back to the repository's live default branch --
+  never the PR's head SHA and never a local worktree read), this retries
+  ONCE with --admin -- but ONLY when reviewerStates.codeownerSelfApproval
+  proves the PR author is the sole eligible codeowner (status "clear", a
+  bypass-actor reason, and prAuthorIsSoleEligibleCodeowner true). A
+  genuinely outstanding review from any other codeowner never triggers
+  this retry. The retry also requires a second immediate
+  head/claim/readiness re-validation and a live MERGEABLE state; a
+  BEHIND state is accepted only when the fresh branch-currency evidence
+  says an up-to-date head is not required. Unreadable or unsafe live
+  state aborts the retry.
   The verdict's adminFallbackUsed field records whether this path fired.
 
   Local-head-drift warning (#2453): when the invoking worktree's local
