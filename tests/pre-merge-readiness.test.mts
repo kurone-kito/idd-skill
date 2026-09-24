@@ -10375,6 +10375,43 @@ test('closingSet: a same-repository entry (repository field present, matching ow
   assert.equal(evidence.status, 'match');
 });
 
+// Copilot review, PR #3353: closingIssuesReferences is an unvalidated
+// provider passthrough, so a malformed entry (no resolvable number, or a
+// non-object repository field) previously fell through a silent `continue`,
+// dropping it from the comparison entirely -- expected [7] plus
+// [{ number: 7 }, {}] reported "match" even though the second entry was
+// never actually verified as "nothing." Both cases now fail the whole
+// result closed instead of silently ignoring the one bad entry.
+test('closingSet: a malformed entry with no resolvable number fails the whole result closed, not just that entry', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [{ number: 7 }, {}],
+  });
+  assert.equal(evidence.status, 'unavailable');
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
+});
+
+test('closingSet: a present but non-object repository field fails closed, never silently assumed same-repo', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [{ number: 7, repository: 'not-an-object' }],
+  });
+  assert.equal(evidence.status, 'unavailable');
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
+});
+
+test('closingSet: an explicit null repository field is still treated as "no repository info" (same-repo), not malformed', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [{ number: 7, repository: null }],
+  });
+  assert.equal(evidence.status, 'match');
+});
+
 test('computePreMergeReadinessBlockers: an absent closingSet adds no closing-set blocker (unmigrated caller / unit fixture)', () => {
   assert.deepEqual(closingSetBlockers(undefined), []);
 });

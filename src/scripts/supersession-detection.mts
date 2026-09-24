@@ -419,6 +419,15 @@ export interface ClosingSetEvidence {
  *   `extra` -- computed here (not re-derived from plain `expected`/`actual`
  *   number sets downstream) so a coincidental cross-repo number collision
  *   still surfaces as `extra`, not a false "match".
+ * - Each entry must itself resolve to a valid positive-integer `number`,
+ *   and its `repository` field (when present and non-null) must be a real
+ *   object, or the whole result fails closed to `"unavailable"` rather than
+ *   silently dropping just that entry (Copilot review, PR #3353: since
+ *   `closingIssuesReferences` is an unvalidated provider passthrough, an
+ *   entry this file cannot interpret -- a missing `number`, or a
+ *   non-object `repository` -- could just as easily be an undetected extra
+ *   close as genuinely nothing; expected `[7]` plus
+ *   `[{ number: 7 }, {}]` previously reported `"match"`).
  */
 export function computeClosingSetEvidence(options: {
   expected: readonly number[];
@@ -497,11 +506,44 @@ export function computeClosingSetEvidence(options: {
     const rawNumber = record && 'number' in record ? record.number : entry;
     const number = Number(rawNumber);
     if (!Number.isInteger(number) || number <= 0) {
-      continue;
+      // Copilot review, PR #3353: a malformed entry (no resolvable positive
+      // `number`) previously fell through `continue`, silently dropping it
+      // from `actual` -- e.g. expected `[7]` plus
+      // `[{ number: 7 }, {}]` reported `"match"`, even though the second,
+      // unverifiable entry could just as easily have been an undetected
+      // extra close whose `number` field was lost or mistransformed.
+      // `closingIssuesReferences` is a raw provider passthrough (no schema
+      // guarantee), so an entry this file cannot interpret makes the whole
+      // comparison untrustworthy, not just that one entry.
+      return {
+        status: 'unavailable',
+        expected,
+        actual: [],
+        extra: [],
+        missing: [],
+        strayCommitCloses: [],
+      };
     }
     actual.push(number);
     const repository = record?.repository;
-    if (repository !== null && typeof repository === 'object') {
+    if (repository !== null && repository !== undefined) {
+      if (typeof repository !== 'object') {
+        // Copilot review, PR #3353: a present-but-unusable `repository`
+        // value (a string/number/boolean, never a real GraphQL repository
+        // object) previously fell through this whole check unexamined
+        // (only `typeof repository === 'object'` was tested), silently
+        // defaulting to the same-repo assumption below -- the same
+        // false-match risk the malformed-number case above fails closed
+        // on, just one field over.
+        return {
+          status: 'unavailable',
+          expected,
+          actual: [],
+          extra: [],
+          missing: [],
+          strayCommitCloses: [],
+        };
+      }
       const repoRecord = repository as {
         name?: unknown;
         owner?: { login?: unknown } | null;
