@@ -70,8 +70,11 @@ the same as a commit or push:
 ## F2.5 — Draft and post the handoff comment
 
 1. Read the recorded merge policy before composing the comment below.
-   First run `git fetch origin main`. If the fetch itself fails, do
-   not fall back to a possibly-stale local `origin/main` — an
+   First run `git fetch origin main` (concurrent workers sharing one
+   clone: serialize this behind the clone-scoped lock,
+   `docs/idd-helper-scripts.md#clone-scoped-lock`, the same as B1's own
+   fetch). If the fetch itself fails, do not fall back to a
+   possibly-stale local `origin/main` — an
    already-existing ref must never substitute for a fresh fetch, or a
    later failure could silently authorize a release against outdated
    policy. Only after a successful fetch, read the config file from
