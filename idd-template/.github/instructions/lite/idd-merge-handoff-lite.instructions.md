@@ -73,8 +73,10 @@ step 4 repeats checks 1-2 before releasing the claim):
      (schema-invalid, since the key is required whenever the file
      exists), or a present value other than `fully_autonomous_merge`,
      `human_merge`, or `separate_merge_agent` — treat it as
-     unrecognized, and record the underlying failure (or the
-     unrecognized value) for step 2's comment.
+     unrecognized. Record, for step 2's comment: the underlying
+     fetch/show/parse failure; the unrecognized value itself; or, when
+     the config file parsed but had no `mergePolicy` key, a note that
+     the key was absent.
 2. Compose a comment containing:
    - The PR number and branch.
    - The recorded F2 verdict: `prHeadSha` (the HEAD this verdict
@@ -84,9 +86,11 @@ step 4 repeats checks 1-2 before releasing the claim):
      entry verbatim (`gate` plus `detail`).
    - The active `{claim-id}`.
    - Step 1's `mergePolicy` outcome, verbatim: the resolved value (an
-     unrecognized value included), the recorded failure when step 1
-     hit a fetch, read, or parse failure, or a note that the config
-     file was absent (the successful-fetch missing-path case only).
+     unrecognized value included); the recorded failure when step 1
+     hit a fetch, read, or parse failure; a note that the `mergePolicy`
+     key itself was absent from an otherwise-readable config file; or
+     a note that the config file was absent (the successful-fetch
+     missing-path case only).
    - If `ready` is `true`: the merge command candidate, for the
      operator or a stronger-tier session to review and run —
      `gh pr merge {pr-number} --merge --match-head-commit "{prHeadSha}"`
@@ -103,10 +107,13 @@ step 4 repeats checks 1-2 before releasing the claim):
      `ready`.
    - `mergePolicy` is `separate_merge_agent` **and** `ready: true` —
      the only case that releases:
-     1. Repeat the pre-mutation guard's checks 1-2 (the active claim
-        still uses this session's `{claim-id}`; the activation nonce,
-        if posted, still wins). If the claim was already lost, post no
-        release.
+     1. Repeat the pre-mutation guard in full (checks 1-3: the active
+        claim still uses this session's `{claim-id}`; the activation
+        nonce, if posted, still wins; and reacquire the worktree-local
+        `claim-lock` plus `--read-tokens`) immediately before this
+        mutation — the elapsed time since posting the comment means
+        those local invariants cannot be assumed to still hold. If any
+        check fails, post no release.
      2. Otherwise, post `unclaimed-by` for this session's `{agent-id}`
         / `{claim-id}` with the profile-selected `post-idd-marker`
         helper (fields: agent id, claim id, timestamp; resolve the
