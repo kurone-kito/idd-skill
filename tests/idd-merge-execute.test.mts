@@ -896,6 +896,218 @@ test('missing --pr is rejected', () => {
   );
 });
 
+// #3252: --claim-id (or --expected-claim-id) is required unless
+// --claimless, and the gate must run BEFORE any collection or merge call.
+test('missing --claim-id is rejected before collect/merge, unless --claimless', () => {
+  const { deps, calls } = depsFor(readyReport());
+  let collectCalls = 0;
+  const countingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      collectCalls += 1;
+      return deps.collect(passthrough);
+    },
+  };
+
+  assert.throws(
+    () =>
+      runMergeExecute(
+        ['--pr', '994', '--claim-issue', '309', '--apply'],
+        countingDeps,
+      ),
+    /missing required --claim-id/,
+  );
+  assert.equal(collectCalls, 0);
+  assert.deepEqual(calls.merged, []);
+
+  // The existing missing-`--pr` test still reports that message first,
+  // even with no --claim-id either.
+  assert.throws(
+    () => runMergeExecute(['--claim-issue', '309'], countingDeps),
+    /missing required --pr/,
+  );
+  assert.equal(collectCalls, 0);
+
+  // --claimless in place of --claim-issue/--claim-id passes the gate and
+  // reaches collect (dry-run: --apply would re-collect a second time for
+  // its own immediately-before-merge revalidation, which is a separate,
+  // already-covered behavior, not what this assertion is checking).
+  const { verdict } = runMergeExecute(
+    ['--pr', '994', '--claimless'],
+    countingDeps,
+  );
+  assert.equal(collectCalls, 1);
+  assert.equal(verdict.ready, true);
+});
+
+test('--claim-id accepts the --claim-id=value spelling', () => {
+  const { deps } = depsFor(readyReport());
+  const { verdict } = runMergeExecute(
+    ['--pr', '994', '--claim-issue', '309', '--claim-id=c-1', '--apply'],
+    deps,
+  );
+  assert.equal(verdict.merged, true);
+});
+
+// The deprecated --expected-claim-id alias, named explicitly in the gate's
+// own error message, must satisfy the gate on its own -- not only when
+// combined with the canonical --claim-id (subagent critique finding).
+test('--expected-claim-id alone satisfies the required-claim-binding gate', () => {
+  const { deps } = depsFor(readyReport());
+  const { verdict } = runMergeExecute(
+    [
+      '--pr',
+      '994',
+      '--claim-issue',
+      '309',
+      '--expected-claim-id',
+      'c-1',
+      '--apply',
+    ],
+    deps,
+  );
+  assert.equal(verdict.merged, true);
+});
+
+test('an empty --claim-id value does not satisfy the gate', () => {
+  const { deps } = depsFor(readyReport());
+  assert.throws(
+    () =>
+      runMergeExecute(
+        ['--pr', '994', '--claim-issue', '309', '--claim-id', '', '--apply'],
+        deps,
+      ),
+    /missing required --claim-id/,
+  );
+});
+
+// CodeRabbit finding on this PR: a later empty occurrence of either
+// spelling must clear an earlier nonempty one's `claimIdProvided`, not
+// leave it stuck true. The collector's own `resolveLastGivenAlias`
+// resolves the effective claim id by last-occurrence-wins across both
+// spellings, and an empty resolved value is falsy in
+// `summarizeClaimValidation`'s `expectedClaimId && ...` guard --
+// functionally identical to no claim-id at all. A sticky-true gate
+// would pass this argv while the collector still validates no claim
+// binding, re-opening the exact gap #3252 exists to close.
+test('a later empty --claim-id occurrence overrides an earlier nonempty one', () => {
+  const { deps } = depsFor(readyReport());
+  assert.throws(
+    () =>
+      runMergeExecute(
+        [
+          '--pr',
+          '994',
+          '--claim-issue',
+          '309',
+          '--claim-id',
+          'c-1',
+          '--claim-id',
+          '',
+          '--apply',
+        ],
+        deps,
+      ),
+    /missing required --claim-id/,
+  );
+  // Same override across the two spellings, not only within one.
+  assert.throws(
+    () =>
+      runMergeExecute(
+        [
+          '--pr',
+          '994',
+          '--claim-issue',
+          '309',
+          '--claim-id',
+          'c-1',
+          '--expected-claim-id',
+          '',
+          '--apply',
+        ],
+        deps,
+      ),
+    /missing required --claim-id/,
+  );
+});
+
+// The reverse order must still satisfy the gate: a later nonempty
+// occurrence overrides an earlier empty one.
+test('a later nonempty --claim-id occurrence overrides an earlier empty one', () => {
+  const { deps } = depsFor(readyReport());
+  const { verdict } = runMergeExecute(
+    [
+      '--pr',
+      '994',
+      '--claim-issue',
+      '309',
+      '--claim-id',
+      '',
+      '--claim-id',
+      'c-1',
+      '--apply',
+    ],
+    deps,
+  );
+  assert.equal(verdict.merged, true);
+});
+
+// #3252: --now overrides every merge-gate clock; safe for a dry-run
+// evaluation, but unsafe under --apply, so the two must never combine.
+test('--now together with --apply is rejected before any merge call', () => {
+  const { deps, calls } = depsFor(readyReport());
+  let collectCalls = 0;
+  const countingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      collectCalls += 1;
+      return deps.collect(passthrough);
+    },
+  };
+
+  assert.throws(
+    () =>
+      runMergeExecute(
+        [...BASE_ARGS, '--now', '2026-01-01T00:00:00Z', '--apply'],
+        countingDeps,
+      ),
+    /--now and --apply are mutually exclusive/,
+  );
+  assert.equal(collectCalls, 0);
+  assert.deepEqual(calls.merged, []);
+});
+
+test('--now without --apply is still forwarded to the collector', () => {
+  const { deps } = depsFor(readyReport());
+  let receivedPassthrough: string[] = [];
+  const capturingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      receivedPassthrough = passthrough;
+      return deps.collect(passthrough);
+    },
+  };
+  const { verdict } = runMergeExecute(
+    [...BASE_ARGS, '--now', '2026-01-01T00:00:00Z'],
+    capturingDeps,
+  );
+  assert.equal(verdict.ready, true);
+  assert.ok(receivedPassthrough.includes('--now'));
+  assert.ok(receivedPassthrough.includes('2026-01-01T00:00:00Z'));
+});
+
+test('--now=value is also rejected together with --apply', () => {
+  const { deps } = depsFor(readyReport());
+  assert.throws(
+    () =>
+      runMergeExecute(
+        [...BASE_ARGS, '--now=2026-01-01T00:00:00Z', '--apply'],
+        deps,
+      ),
+    /--now and --apply are mutually exclusive/,
+  );
+});
+
 test('evaluateMergeGates delegates to the shared computePreMergeReadinessBlockers rollup', () => {
   // A fully ready report → no blockers, and both entry points agree.
   assert.deepEqual(evaluateMergeGates(readyReport()), []);
@@ -1467,14 +1679,14 @@ function httpError(status: number): Error {
   return new Error(`gh: Not Found (HTTP ${status})`);
 }
 
-test('resolveRemoteSoloCodeownerAdminFallbackMode decodes a valid remote config, threading repoRef/headSha to the fetch', () => {
+test('resolveRemoteSoloCodeownerAdminFallbackMode decodes a valid remote config, threading repoRef/ref to the fetch', () => {
   const calls: [string, string][] = [];
   const mode = resolveRemoteSoloCodeownerAdminFallbackMode(
     42,
     'o/r',
     'deadbeef',
-    (repoRef, headSha) => {
-      calls.push([repoRef, headSha]);
+    (repoRef, ref) => {
+      calls.push([repoRef, ref]);
       return base64Config({
         mergeGate: { soloCodeownerAdminFallback: 'hold-and-report' },
       });

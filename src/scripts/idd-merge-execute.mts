@@ -106,6 +106,16 @@ interface IddMergeExecuteArgs {
    * behavior.
    */
   repoRef: string | null;
+  /**
+   * #3252: true when `--claim-id` or the deprecated `--expected-claim-id`
+   * alias was given a non-empty (post-`.trim()`) value. Used only by the
+   * required-claim-binding gate in `runMergeExecute` below -- the actual
+   * value is forwarded to the collector via `passthrough` unchanged, so
+   * this file never needs to resolve which spelling wins.
+   */
+  claimIdProvided: boolean;
+  /** #3252: true when `--claimless` was given (exempts the claim-id gate). */
+  claimless: boolean;
 }
 
 /**
@@ -475,6 +485,17 @@ export function runMergeExecute(
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
+  // #3252: required BEFORE any collection or merge call -- an --apply run
+  // with no claim binding at all (no --claim-id/--expected-claim-id and
+  // no explicit --claimless opt-out) must never reach `deps.collect` or
+  // `deps.mergePr`, since the collector's own claim gate only checks
+  // whether a SUPPLIED --claim-id matches the active claim, never whether
+  // one was supplied at all.
+  if (!args.claimless && !args.claimIdProvided) {
+    throw new Error(
+      'missing required --claim-id <claim-id> argument (or the deprecated --expected-claim-id alias); pass --claimless only for a PR with no closingIssuesReferences',
+    );
+  }
 
   const report = deps.collect(args.passthrough);
   const prHeadSha = String(report.prHeadSha ?? '');
@@ -810,6 +831,8 @@ function parseArgs(argv: string[]): IddMergeExecuteArgs {
     passthrough: [],
     apply: false,
     repoRef: null,
+    claimIdProvided: false,
+    claimless: false,
   };
   // Captured locally so `repoRef` is set only when BOTH are present; these
   // are ALSO forwarded to the collector via passthrough (we do not stop
@@ -844,6 +867,50 @@ function parseArgs(argv: string[]): IddMergeExecuteArgs {
       // Keep forwarding to the collector so it still validates this repo.
       parsed.passthrough.push(token, value ?? '');
       index += 1;
+      continue;
+    }
+    // #3252: detect (without changing) the collector's own `--claim-id` /
+    // `--expected-claim-id` presence, in either the `--flag value` or
+    // `--flag=value` spelling, so `runMergeExecute` can require ONE of
+    // them (or `--claimless`) before ever calling `deps.collect`. Every
+    // spelling still forwards to `passthrough` exactly as the generic
+    // branch below would.
+    if (
+      token === '--claim-id' ||
+      token === '--expected-claim-id' ||
+      token.startsWith('--claim-id=') ||
+      token.startsWith('--expected-claim-id=')
+    ) {
+      let value: string | undefined;
+      if (token.includes('=')) {
+        value = token.slice(token.indexOf('=') + 1);
+        parsed.passthrough.push(token);
+      } else {
+        value = argv[index + 1];
+        if (value !== undefined && !value.startsWith('--')) {
+          parsed.passthrough.push(token, value);
+          index += 1;
+        } else {
+          parsed.passthrough.push(token);
+          value = undefined;
+        }
+      }
+      // Unconditional assignment (not "only set true"): the collector's
+      // own `resolveLastGivenAlias` resolves the effective claim id by
+      // last-occurrence-wins across both spellings, and an empty
+      // resolved value is falsy in `summarizeClaimValidation`'s
+      // `expectedClaimId && ...` guard -- functionally identical to no
+      // claim-id at all. A later empty occurrence (e.g. `--claim-id
+      // real --claim-id ''`) must clear this flag the same way, or this
+      // gate would pass while the collector still validates no claim
+      // binding, re-opening the exact gap #3252 exists to close
+      // (CodeRabbit finding on this PR).
+      parsed.claimIdProvided = value !== undefined && value.trim() !== '';
+      continue;
+    }
+    if (token === '--claimless') {
+      parsed.claimless = true;
+      parsed.passthrough.push(token);
       continue;
     }
     // Every other flag (and its value, if it takes one) is forwarded

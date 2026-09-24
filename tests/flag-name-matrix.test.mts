@@ -44,10 +44,21 @@ const FLAG_CONCEPTS = [
       'advisory-wait-state.mjs',
       'audit-pr-cleanup.mjs',
       'external-check-waiver.mjs',
+      'idd-merge-execute.mjs',
       'live-status-digest.mjs',
       'pre-merge-readiness.mjs',
       'resume-claim-routing.mjs',
     ],
+    // idd-merge-execute.mjs's own parser only detects `--claim-id` /
+    // `--expected-claim-id` presence (#3252's required-claim-binding
+    // gate) -- both spellings still forward verbatim to the collector via
+    // `passthrough`, and `collectPreMergeReadiness` (imported directly,
+    // same process) is what actually resolves the alias and calls its
+    // own `warnDeprecatedFlag`. A second local call here would double
+    // the stderr warning for one `--expected-claim-id` run, so this
+    // helper is excluded from the alias-routing scan the same way
+    // select-desynced-index.mjs is excluded below for an unrelated flag.
+    deprecatedScanExclude: ['idd-merge-execute.mjs'],
   },
   {
     concept: 'agent id',
