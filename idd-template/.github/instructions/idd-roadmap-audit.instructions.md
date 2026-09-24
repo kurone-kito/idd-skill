@@ -258,15 +258,16 @@ Apply one outcome:
   2. Then update the roadmap task list with that link before creating
      another follow-up, as today.
   3. If **both** the sub-issue link and the task-list edit fail,
-     create no more issues and report the created issue link. While
-     the roadmap-audit claim is still this session's, also route the
-     gap through the existing "Non-autonomous gaps found" outcome —
-     comment with the decision, naming the unlinked follow-up issue,
-     apply the configured needs-decision label, and stop before A2
-     for this roadmap exactly as that outcome already does; if the
-     claim was lost, skip that outcome
-     and only report. If just one of the two links fails, report it
-     and continue.
+     create no more issues and report the follow-up issue link — the
+     newly created issue, or the reused existing one when the
+     duplicate/reuse check selected it. While the roadmap-audit claim
+     is still this session's, also route the gap through the existing
+     "Non-autonomous gaps found" outcome — comment with the decision,
+     naming the unlinked follow-up issue, apply the configured
+     needs-decision label, and stop before A2 for this roadmap exactly
+     as that outcome already does; if the claim was lost, skip that
+     outcome and only report. If just one of the two links fails,
+     report it and continue.
   4. New follow-up issue bodies must still reference the roadmap (for
      example `Refs #NNN`) as reader provenance (#1278); a later audit
      now rediscovers the follow-up through the sub-issue link or the
