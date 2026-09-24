@@ -102,6 +102,15 @@ export interface FakeProviderFixture {
       endCursor: string | null;
     }[]
   >;
+  /** Backs a thrown error from {@link ProviderPort.getConnectedPullRequestEventsPage}
+   * (#3276) -- checked before `connectedPrEventPages`, mirroring the
+   * `changeRequestHeadShas`-style absent-key/explicit-error fixture shape
+   * elsewhere in this file, so a test can simulate the real GitHub
+   * adapter's no-catch failure propagation (a `gh` error, or an absent
+   * connection) without a live `gh` process. Keyed by issue number; a call
+   * for an unconfigured issue number falls through to the
+   * `connectedPrEventPages` default unchanged. */
+  connectedPrEventPageErrors?: Record<number, string>;
   /** Backs {@link ProviderPort.listIssueNumbersClosedByOpenChangeRequests}. */
   issueNumbersClosedByOpenChangeRequests?: number[];
   issueBranchRefs?: string[];
@@ -450,6 +459,10 @@ export function createFakeProviderAdapter(
       hasNextPage: boolean;
       endCursor: string | null;
     } {
+      const errorMessage = fixture.connectedPrEventPageErrors?.[number];
+      if (errorMessage !== undefined) {
+        throw new Error(errorMessage);
+      }
       const pages = fixture.connectedPrEventPages?.[number] ?? [];
       const index = connectedPageCallIndex[number] ?? 0;
       connectedPageCallIndex[number] = index + 1;

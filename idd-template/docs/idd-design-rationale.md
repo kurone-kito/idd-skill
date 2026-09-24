@@ -268,6 +268,37 @@ legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
 
+**Failed linked-PR lookup on the resume side (kurone-kito/idd-skill#3276).**
+Resume routing's own PR-backed-claim detection
+(`fetchOpenLinkedPrReferences`) used the unpaginated, fail-open
+`getConnectedPullRequestEventsSingle`, whose GitHub adapter swallows every
+lookup error and returns an empty event list — indistinguishable from "no
+connected PR." Combined with `buildForcedHandoffEnableGate`'s
+`expectedLinkedPrReferences.size === 0` shortcut, a transient lookup
+failure could silently honor an `issue-only` forced handoff against a claim
+a PR actually backs, the exact case the strictness split above exists to
+reject. The fix moved the lookup to the already-throwing paginated
+`getConnectedPullRequestEventsPage` and threads an explicit
+`linkedPrLookupFailed` flag through resume routing's own gate: a failed
+lookup now rejects an `issue-only` handoff as "PR state unknown" (fail
+closed) instead of the prior fail-open behavior, and neither side of a
+handoff blocked this way (the displaced original owner's `oldClaimId` nor
+the would-be successor's `newClaimId`) may read a `--claim-id` check as an
+ordinary claim-state outcome — both route to an explicit `stop` with a
+dedicated `forced-handoff-linked-pr-lookup-failed` reason, unconditionally
+and permanently for that exact `newClaimId` (it was never activated, so no
+legitimate session should ever check ownership under it again; a genuine
+later takeover still reaches `already-claimed` → `stale-reclaimable` via
+`--fresh-claim-gate` and a freshly minted claim-id, which the override
+never touches). Scoped to
+`issue-only` handoffs only, matching the Groom hearing decision that
+introduced it: `buildForcedHandoffEnabledGate`'s wrapper delegates an
+`issue-plus-pr` handoff straight to the pre-existing shared gate
+regardless of `linkedPrLookupFailed`, so its behavior is unchanged. The
+merge-side `summarizeClaimValidation` path (and its `prFirstCommitAt`
+Part-B allowance above) never shared this lookup either, and is untouched
+by this fix.
+
 ### Activation-nonce: why a separate marker, and what stays deferred
 
 kurone-kito/idd-skill#1480 found a verified near-miss: two independent

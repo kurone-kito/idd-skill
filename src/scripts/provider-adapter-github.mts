@@ -1504,6 +1504,10 @@ export function createGithubProviderAdapter(
       };
     },
 
+    // See provider-port.mts's doc comment on this method: no caller uses it
+    // today (#3276 moved resume-claim-routing.mts's sole call site to
+    // getConnectedPullRequestEventsPage below, which throws on failure
+    // instead of this method's fail-open empty-array swallow).
     getConnectedPullRequestEventsSingle(
       number: number,
     ): ProviderConnectedPrEvent[] {

@@ -837,6 +837,31 @@ test('getConnectedPullRequestEventsPage throws when the connection itself is nul
   );
 });
 
+// #3276: a genuine `gh` process failure (not merely a malformed/null JSON
+// body) during the connected-PR lookup must also propagate, not read as an
+// empty event list. resume-claim-routing.mts's `fetchOpenLinkedPrReferences`
+// is this method's sole caller and relies on that propagation to
+// distinguish "lookup failed" (PR state unknown) from "no connected PR"
+// (a genuinely empty, successful result) -- see `getConnectedPullRequestEventsSingle`'s
+// doc comment on this file's own `getConnectedPullRequestEventsSingle`
+// implementation for the fail-open shape this method deliberately does not
+// share.
+test('getConnectedPullRequestEventsPage propagates a gh process failure instead of swallowing it as an empty result', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('gh: simulated process failure');
+      },
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /simulated process failure/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // getWorkItemForTraversalAsync (#2266): the bounded-retry (#1394) and
 // no-retry-on-404/inaccessible classification discover-roadmap-graph.mts's
