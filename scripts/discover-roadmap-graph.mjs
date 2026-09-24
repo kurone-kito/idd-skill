@@ -2004,8 +2004,37 @@ export function extractKeywordReferences(body, options = {}) {
           // the same as a negated match.
           continue;
         }
+        // #3284 (Copilot review, PR #3415, round 2): the shared grammar's
+        // line pattern requires horizontal whitespace after the keyword
+        // (optionally after a colon) before it will even try to parse a
+        // ref-list -- `Blocked by#12`/`Blocked by:#12` (no gap) is not a
+        // dependency declaration there. Enforce the same gap here instead
+        // of trusting whatever `trimStart()`/`replace()` below would
+        // otherwise happily consume, so a near-miss spelling doesn't
+        // become a real edge here while the other two consumers reject it.
+        if (!/^:?[ \t]+/u.test(dependencyMaskedLine.slice(segmentStart))) {
+          continue;
+        }
+        // The ordinary `segmentEnd` computed above is bounded by the next
+        // `KEYWORD_REFERENCE_REGEX` match on the UNMASKED `maskedLine`, so
+        // a keyword hidden inside an HTML comment later on this same line
+        // (invisible prose) would wrongly truncate this dependency's own
+        // segment and suppress its continuation sweep below, even though
+        // the shared grammar (which masks that comment) reads straight
+        // through it. Recompute the boundary -- and the continuation
+        // eligibility below -- against a fresh keyword search over
+        // `dependencyMaskedLine`, so only a genuinely visible later
+        // keyword ends this segment early.
+        const laterKeywordInMasked = [
+          ...dependencyMaskedLine
+            .slice(segmentStart)
+            .matchAll(KEYWORD_REFERENCE_REGEX),
+        ][0];
+        const dependencySegmentEnd = laterKeywordInMasked
+          ? segmentStart + (laterKeywordInMasked.index ?? 0)
+          : dependencyMaskedLine.length;
         const dependencySegment = dependencyMaskedLine
-          .slice(segmentStart, segmentEnd)
+          .slice(segmentStart, dependencySegmentEnd)
           .trimStart()
           .replace(/^:\s*/u, '');
         const dependencyResult = consumeDependencyReferenceList(
@@ -2018,10 +2047,7 @@ export function extractKeywordReferences(body, options = {}) {
           relationship,
           rawLine,
         );
-        if (
-          keywordMatches[index + 1] === undefined &&
-          dependencyResult.remaining.trim() === ''
-        ) {
+        if (!laterKeywordInMasked && dependencyResult.remaining.trim() === '') {
           pushDependencyReferences(
             references,
             consumeDependencyContinuationRefLines(

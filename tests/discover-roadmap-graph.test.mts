@@ -362,6 +362,43 @@ test('#3284 review fix: a visible dependency preceded by an inline HTML comment 
   ]);
 });
 
+test('#3284 review fix (round 2): a dependency keyword needs the same whitespace gap the shared grammar requires', () => {
+  // `dependency-grammar.mts`'s line pattern requires `[ \t]+` after the
+  // keyword (or after an immediately adjacent colon) before it will even
+  // attempt to parse a ref-list, so `Blocked by#12`/`Blocked by:#12` (no
+  // gap) are not dependency declarations there -- the graph must reject
+  // the same near-miss spellings instead of accepting them via a bare
+  // trimStart()/replace().
+  assert.deepEqual(extractKeywordReferences('Blocked by#12'), []);
+  assert.deepEqual(extractKeywordReferences('Blocked by:#12'), []);
+  assert.deepEqual(extractKeywordReferences('Blocked by: #12'), [
+    { target: 12, relationship: 'dependency', evidence: 'Blocked by: #12' },
+  ]);
+});
+
+test('#3284 review fix (round 2): a comment-only keyword later on the line must not suppress the continuation sweep', () => {
+  // The segment boundary and continuation-eligibility check must be based
+  // on the HTML-comment-masked view, not the raw `KEYWORD_REFERENCE_REGEX`
+  // matches (which still see a keyword hidden inside an HTML comment) --
+  // otherwise a comment-only "Depends on" on the same line as a real
+  // "Blocked by" would wrongly end the segment early and suppress the
+  // #2441 line-wrap sweep for the following line, even though the shared
+  // grammar (which masks the comment) reads straight through it.
+  const body = 'Blocked by #12 <!-- Depends on #13 -->\n#14';
+  assert.deepEqual(extractKeywordReferences(body), [
+    {
+      target: 12,
+      relationship: 'dependency',
+      evidence: 'Blocked by #12 <!-- Depends on #13 -->',
+    },
+    {
+      target: 14,
+      relationship: 'dependency',
+      evidence: 'Blocked by #12 <!-- Depends on #13 -->',
+    },
+  ]);
+});
+
 test('extractKeywordReferences stops before incidental narrative mentions', () => {
   const body = `
 Refs #401; similar to #402
