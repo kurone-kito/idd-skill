@@ -13,7 +13,7 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { classifyInaccessibleIssueLookup } from './gh-http-status.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
@@ -63,7 +63,6 @@ const TRAILING_LOCAL_ISSUE_REF_PATTERN = /(?<![\w/-])#\d+\b/;
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
-const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -1152,19 +1151,13 @@ function resolveSuitabilityEnabled(config) {
 function isInaccessibleIssue(value) {
   return value?.__iddLookupStatus === 'inaccessible';
 }
+// #3335: delegates to the shared classifier
+// (classifyInaccessibleIssueLookup, gh-http-status.mts) instead of
+// duplicating the status-set + wording check by hand -- the same
+// classifier backs provider-adapter-github.mts's traversal path. 410/451
+// downgrade unconditionally; a 403 secondary-rate-limit (or an auth
+// failure that somehow surfaces as 403) keeps aborting instead of being
+// downgraded.
 export function isInaccessibleIssueLookupError(error) {
-  const status = deriveGhHttpStatus(error);
-  // Only a true 403/410/451 can be an inaccessible-issue downgrade.
-  if (status === null || !INACCESSIBLE_HTTP_STATUSES.has(status)) {
-    return false;
-  }
-  // Among those, downgrade only on visibility / integration-permission
-  // wording. A 403 secondary-rate-limit (or an auth failure that somehow
-  // surfaces as 403) must abort instead of being downgraded, so the regex
-  // deliberately excludes generic "forbidden" / "requires authentication".
-  const candidate = error;
-  const stderr = String(candidate.stderr ?? candidate.message ?? '');
-  return /resource not accessible|not accessible by integration|visibility/i.test(
-    stderr,
-  );
+  return classifyInaccessibleIssueLookup(error) === 'inaccessible';
 }

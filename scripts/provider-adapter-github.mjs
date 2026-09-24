@@ -20,7 +20,11 @@ import {
   resolveGhApiHostname,
   withBoundedRetry,
 } from './gh-exec.mjs';
-import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import {
+  classifyInaccessibleIssueLookup,
+  deriveGhHttpStatus,
+  ghErrorText,
+} from './gh-http-status.mjs';
 import { PROVIDER_CAPABILITY_GROUPS } from './provider-contract.mjs';
 
 /**
@@ -867,62 +871,60 @@ function fetchReviewThreadsGeneric(
   }
   return threads;
 }
-// The traversal-only helpers below (through wrapTraversalGhFailure) back
-// getWorkItemForTraversalAsync only -- a verbatim port of
-// discover-roadmap-graph.mts's pre-migration resolveGhExitStatus/
-// wrapGhFailure/isNotFoundIssueLookupError/isInaccessibleIssueLookupError,
-// which existed to preserve retry-skip classification (#1394) the
+// The helper below backs getWorkItemForTraversalAsync only, wrapping a
+// failed `gh` invocation into a normalized shape for the shared
+// classifyInaccessibleIssueLookup() classifier (gh-http-status.mts) --
+// preserving the retry-skip classification (#1394) the
 // statusToCategory/ProviderError classification above cannot express: it
-// maps 410/451 to 'validation', not the same bucket as 403, where this
-// file's own INACCESSIBLE_HTTP_STATUSES treats all three as one signal.
-const TRAVERSAL_INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
-/** Mirrors resolveGhExitStatus: sync `.status` first, async `.code` second. */
-function resolveTraversalGhExitStatus(error) {
-  const candidate = error;
-  const rawStatus = candidate?.status ?? candidate?.code;
-  return typeof rawStatus === 'number' ? rawStatus : null;
-}
+// maps 410/451 to 'validation', not the same bucket as 403. This used to
+// be a verbatim port of discover-roadmap-graph.mts's pre-migration
+// resolveGhExitStatus/wrapGhFailure/isNotFoundIssueLookupError/
+// isInaccessibleIssueLookupError, which classified on the child-process
+// exit status -- always `1` for every gh HTTP failure, so that branch
+// could never fire (#3335). It now derives the real status from gh's own
+// stderr/stdout text via the shared classifier instead, matching
+// discover-readiness-check.mts's isInaccessibleIssueLookupError.
 /**
- * Wraps a failed `gh` error into the canonical `{ status, stderr }` shape
- * the two classifiers below read. Returns `''` when the exit status is in
- * `allowStatuses` (the 404-tolerance `getWorkItemForTraversalAsync` relies
- * on); otherwise throws.
+ * Wraps a failed `gh` error into a normalized `{ stderr, stdout }` shape
+ * the shared classifier re-derives its status and wording classification
+ * from. Returns `''` on a genuine 404 (`getWorkItemForTraversalAsync`
+ * treats "not found" as an empty successful lookup, not a thrown error);
+ * otherwise re-throws with the *original* error's real `stderr`/`stdout`
+ * streams preserved **separately and verbatim** (never flattened together
+ * with `.message` into a single field), so a status or wording match
+ * embedded in either stream still classifies correctly once re-derived
+ * from the wrapped error.
+ *
+ * Deliberately keeps `args` (the `repos/{owner}/{repo}/issues/{n}`
+ * endpoint) out of `.stderr`/`.stdout` entirely, using it only inside
+ * `.message` -- a human-readable summary the shared classifier's wording
+ * check never reads once either real stream is non-empty
+ * (`classifyInaccessibleIssueLookup`'s stream-preferring text getter,
+ * gh-http-status.mts). Without this separation, an owner/repo name that
+ * happens to contain "visibility" could false-positive the 403 wording
+ * check and silently downgrade an unrelated 403 (e.g. a secondary rate
+ * limit) instead of retrying it -- first found folded into `.message` via
+ * a hand-built prefix (CodeRabbit review), then found again once Node's
+ * own `execFile`/`ghTextAsync` rejection shape was accounted for: its
+ * `.message` is synthesized as `Command failed: <full command line>\n
+ * <stderr>`, so it always embeds the endpoint regardless of what this
+ * function constructs, unless the wording check is kept off `.message`
+ * whenever real stream text exists (Copilot review, #3335).
  */
-function wrapTraversalGhFailure(error, args, allowStatuses) {
-  const status = resolveTraversalGhExitStatus(error);
-  if (status !== null && allowStatuses.includes(status)) {
+function wrapTraversalGhFailure(error, args) {
+  if (classifyInaccessibleIssueLookup(error) === 'not-found') {
     return '';
   }
-  const stderr = String(error?.stderr ?? '').trim();
-  const prefix = `gh ${args.join(' ')}`;
-  const wrapped = new Error(
-    stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`,
-  );
-  wrapped.status = status;
-  wrapped.stderr = stderr;
-  throw wrapped;
-}
-function isTraversalInaccessibleError(error) {
-  if (!error) {
-    return false;
-  }
-  const rawStatus = error.status;
-  const status = typeof rawStatus === 'number' ? rawStatus : null;
-  if (status !== null && TRAVERSAL_INACCESSIBLE_HTTP_STATUSES.has(status)) {
-    return true;
-  }
-  const stderr = String(error.stderr ?? '');
-  return /Resource not accessible|access denied|Forbidden|Unavailable for legal reasons/i.test(
-    stderr,
-  );
-}
-function isTraversalNotFoundError(error) {
-  if (!error) {
-    return false;
-  }
   const candidate = error;
-  const stderr = String(candidate.stderr ?? candidate.message ?? '');
-  return stderr.includes('HTTP 404');
+  const stderr = candidate?.stderr == null ? '' : String(candidate.stderr);
+  const stdout = candidate?.stdout == null ? '' : String(candidate.stdout);
+  const summary =
+    ghErrorText(error).trim() ||
+    `gh ${args.join(' ')} failed with no diagnostic output`;
+  const wrapped = new Error(summary);
+  wrapped.stderr = stderr;
+  wrapped.stdout = stdout;
+  throw wrapped;
 }
 // #1449: explicit above the promisified execFile's 1 MiB default, applied
 // PER STREAM. The two traversal hot-path callers (a single GitHub issue's
@@ -1520,7 +1522,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
                 maxBuffer: GH_ASYNC_MAX_BUFFER,
               });
             } catch (error) {
-              raw = wrapTraversalGhFailure(error, args, [404]);
+              raw = wrapTraversalGhFailure(error, args);
             }
             const trimmed = raw.trim();
             if (!trimmed || trimmed === 'null') {
@@ -1530,8 +1532,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           },
           {
             isRetryable: (error) =>
-              !isTraversalNotFoundError(error) &&
-              !isTraversalInaccessibleError(error),
+              classifyInaccessibleIssueLookup(error) === null,
           },
         );
         if (parsed === null) {
@@ -1539,10 +1540,11 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         }
         return { outcome: 'found', item: parsed };
       } catch (error) {
-        if (isTraversalNotFoundError(error)) {
+        const classification = classifyInaccessibleIssueLookup(error);
+        if (classification === 'not-found') {
           return { outcome: 'not-found' };
         }
-        if (isTraversalInaccessibleError(error)) {
+        if (classification === 'inaccessible') {
           return { outcome: 'inaccessible' };
         }
         throw error;

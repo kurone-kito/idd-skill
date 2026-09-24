@@ -25,6 +25,20 @@ import {
 } from '../src/scripts/gh-exec.mts';
 import { stubExecutable } from './test-utils.mts';
 
+// #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
+// gh-http-status.test.mts and the other migrated-domain test files.
+const GH_ERROR_FIXTURES = JSON.parse(
+  readFileSync(new URL('./fixtures/gh-errors.json', import.meta.url), 'utf8'),
+) as {
+  cases: Record<string, { status: number; stderr?: string; stdout?: string }>;
+};
+
+function ghErrorFixtureStderr(id: string): string {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture?.stderr, `missing gh-errors.json fixture stderr: ${id}`);
+  return fixture.stderr;
+}
+
 /**
  * Save/restore `GH_HOST` and `GITHUB_SERVER_URL` around a test body (the
  * `stubGh`/`process.env.PATH` pattern already used below) so a test that
@@ -1471,6 +1485,34 @@ test('viewerLoginFailureIsGraphqlEligible treats unclassified errors as fail-clo
     viewerLoginFailureIsGraphqlEligible(new Error('something went wrong')),
     false,
   );
+});
+
+// #3335: before deriveGhHttpStatus recognized gh's bare `HTTP NNN` form
+// (no JSON body, no `(HTTP NNN)` suffix -- e.g. an HTML 5xx page), this
+// shape derived a null status and fell through to the fail-closed
+// unclassified-error branch instead of the 5xx GraphQL fallback below.
+// No production-code change was needed here: viewerLoginFailureIsGraphqlEligible
+// already delegates its status check to deriveGhHttpStatus.
+test('resolveViewerLogin falls back to GraphQL on a bare "gh: HTTP 502" REST failure', () => {
+  const restError = Object.assign(new Error('HTTP 502'), {
+    stderr: ghErrorFixtureStderr('bare502'),
+  });
+  assert.equal(viewerLoginFailureIsGraphqlEligible(restError), true);
+  let graphqlCalls = 0;
+  const login = resolveViewerLogin(
+    {},
+    {
+      rest: () => {
+        throw restError;
+      },
+      graphql: () => {
+        graphqlCalls += 1;
+        return 'graphql-user';
+      },
+    },
+  );
+  assert.equal(login, 'graphql-user');
+  assert.equal(graphqlCalls, 1);
 });
 
 test('resolveViewerLogin does not fall back on an unclassified REST error', () => {

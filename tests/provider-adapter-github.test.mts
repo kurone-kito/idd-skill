@@ -1,10 +1,58 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
   createGithubProviderAdapter,
   type GithubProviderAdapterDeps,
 } from '../src/scripts/provider-adapter-github.mts';
+
+// #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
+// gh-http-status.test.mts and discover-readiness-check.test.mts.
+const GH_ERROR_FIXTURES = JSON.parse(
+  readFileSync(new URL('./fixtures/gh-errors.json', import.meta.url), 'utf8'),
+) as {
+  cases: Record<string, { status: number; stderr?: string; stdout?: string }>;
+};
+
+function ghErrorFixture(id: string): Error & { stderr?: string } {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture, `missing gh-errors.json fixture: ${id}`);
+  // No `.status`/`.code` field: a real gh child-process error always exits
+  // `1` regardless of HTTP status, so a test-only `.status` would pin a
+  // classification path gh never actually exercises (#3335).
+  return Object.assign(new Error(`gh failed (fixture: ${id})`), {
+    stderr: fixture.stderr,
+  });
+}
+
+/**
+ * A fixture error's `.message` never modeled a real `ghTextAsync`
+ * rejection: Node's `execFile`/`util.promisify` synthesizes `.message` as
+ * `Command failed: <full command line>\n<stderr>`, which always embeds
+ * the invoked `repos/{owner}/{repo}/issues/{n}` endpoint regardless of
+ * what `wrapTraversalGhFailure` itself constructs. A test built only from
+ * `ghErrorFixture` cannot catch a wording-classification leak through
+ * `.message` (Copilot review, #3335) -- this constructs the real shape
+ * instead.
+ */
+function nodeExecFileShapedGhError(
+  owner: string,
+  repo: string,
+  number: number,
+  fixtureId: string,
+): Error & { stderr: string; stdout: string } {
+  const fixture = GH_ERROR_FIXTURES.cases[fixtureId];
+  assert.ok(
+    fixture?.stderr,
+    `missing gh-errors.json fixture stderr: ${fixtureId}`,
+  );
+  const cmd = `gh api repos/${owner}/${repo}/issues/${number} --jq .`;
+  return Object.assign(new Error(`Command failed: ${cmd}\n${fixture.stderr}`), {
+    stderr: fixture.stderr,
+    stdout: '',
+  });
+}
 
 function fakeDeps(
   overrides: Partial<GithubProviderAdapterDeps>,
@@ -926,10 +974,7 @@ test('getWorkItemForTraversalAsync resolves not-found on a 404 immediately, with
     fakeDeps({
       ghTextAsync: async () => {
         calls += 1;
-        const error = new Error('HTTP 404') as Error & { stderr?: string };
-        error.stderr =
-          'HTTP 404: Not Found (https://api.github.com/repos/o/r/issues/900)';
-        throw error;
+        throw ghErrorFixture('notFoundWithUrl404');
       },
     }),
   );
@@ -938,7 +983,12 @@ test('getWorkItemForTraversalAsync resolves not-found on a 404 immediately, with
   assert.equal(calls, 1);
 });
 
-test('getWorkItemForTraversalAsync resolves inaccessible on a 403 immediately, without retry', async () => {
+// #3335: previously set `error.status = 403` directly, a shape a real gh
+// child-process error never produces (its exit status is always `1`
+// regardless of HTTP status) -- the dead exit-code-based branch this
+// test exercised passed only because of that fabricated shape. Rewritten
+// onto a realistic stderr-text fixture instead.
+test('getWorkItemForTraversalAsync resolves inaccessible on a SAML-enforcement 403 immediately, without retry', async () => {
   let calls = 0;
   const port = createGithubProviderAdapter(
     'o',
@@ -946,15 +996,86 @@ test('getWorkItemForTraversalAsync resolves inaccessible on a 403 immediately, w
     fakeDeps({
       ghTextAsync: async () => {
         calls += 1;
-        const error = new Error('HTTP 403') as Error & { status?: number };
-        error.status = 403;
-        throw error;
+        throw ghErrorFixture('samlEnforcement403');
       },
     }),
   );
   const result = await port.getWorkItemForTraversalAsync(900);
   assert.deepEqual(result, { outcome: 'inaccessible' });
   assert.equal(calls, 1);
+});
+
+test('getWorkItemForTraversalAsync resolves inaccessible on a deleted-issue 410 immediately, without retry', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw ghErrorFixture('deletedIssue410');
+      },
+    }),
+  );
+  const result = await port.getWorkItemForTraversalAsync(900);
+  assert.deepEqual(result, { outcome: 'inaccessible' });
+  assert.equal(calls, 1);
+});
+
+// A 403 secondary-rate-limit must keep retrying then rethrowing, never
+// downgrade to 'inaccessible' -- the shared classifier's wording check
+// deliberately excludes it (#3335).
+test('getWorkItemForTraversalAsync rethrows a secondary-rate-limit 403 after exhausting retries', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw ghErrorFixture('secondaryRateLimit403');
+      },
+    }),
+  );
+  await assert.rejects(
+    () => port.getWorkItemForTraversalAsync(900),
+    /secondary rate limit/,
+  );
+  assert.equal(calls, 3);
+});
+
+// Copilot + CodeRabbit review, #3335: a repo/owner name containing
+// "visibility" must never leak into the 403 wording classification via
+// either wrapTraversalGhFailure's own wrapped error text or Node's own
+// `execFile`/`ghTextAsync` `.message` synthesis (`Command failed: <full
+// command line>\n<stderr>`, which embeds the endpoint regardless of what
+// this file constructs) -- this still rethrows after bounded retries,
+// exactly like the non-"visibility"-named case above, never downgrading
+// to 'inaccessible'. Uses the realistic Node execFile error shape (not
+// the plain `ghErrorFixture`, whose synthetic `.message` never modeled
+// the endpoint at all and so could not have caught this).
+test('getWorkItemForTraversalAsync does not let an owner/repo name containing "visibility" leak into 403 wording classification', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'visibility-org',
+    'visibility-repo',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw nodeExecFileShapedGhError(
+          'visibility-org',
+          'visibility-repo',
+          900,
+          'secondaryRateLimit403',
+        );
+      },
+    }),
+  );
+  await assert.rejects(
+    () => port.getWorkItemForTraversalAsync(900),
+    /secondary rate limit/,
+  );
+  assert.equal(calls, 3);
 });
 
 // ---------------------------------------------------------------------------

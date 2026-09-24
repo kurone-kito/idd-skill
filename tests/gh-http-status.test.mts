@@ -1,10 +1,36 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
+  classifyInaccessibleIssueLookup,
   deriveGhHttpStatus,
   ghErrorText,
 } from '../src/scripts/gh-http-status.mts';
+
+const GH_ERROR_FIXTURES = JSON.parse(
+  readFileSync(new URL('./fixtures/gh-errors.json', import.meta.url), 'utf8'),
+) as {
+  cases: Record<string, { status: number; stderr?: string; stdout?: string }>;
+};
+
+function fixtureError(
+  id: string,
+): Error & { stderr?: string; stdout?: string } {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture, `missing gh-errors.json fixture: ${id}`);
+  return Object.assign(new Error(`gh failed (fixture: ${id})`), {
+    status: 1,
+    stderr: fixture.stderr,
+    stdout: fixture.stdout,
+  });
+}
+
+function ghErrorFixtureStderr(id: string): string {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture?.stderr, `missing gh-errors.json fixture stderr: ${id}`);
+  return fixture.stderr;
+}
 
 // Shape of a real execFileSync('gh', ...) failure: process exit code 1
 // regardless of the HTTP status, with the true status in stderr/stdout.
@@ -110,4 +136,187 @@ test('ghErrorText returns empty string for null/undefined/non-object input', () 
   assert.equal(ghErrorText(undefined), '');
   assert.equal(ghErrorText('a bare string'), '');
   assert.equal(ghErrorText({}), '');
+});
+
+// #3335: gh's other HTTP-status shapes -- a bare `gh: HTTP NNN` line (a
+// non-JSON error body), and `HTTP NNN: <message> (<url>)` / `HTTP NNN
+// (<url>)` from non-`api` subcommands. Fixture-driven against realistic
+// gh 2.101.0 shapes (tests/fixtures/gh-errors.json), not hand-invented
+// wording.
+test('deriveGhHttpStatus recognizes the bare and URL-suffixed HTTP forms', () => {
+  assert.equal(deriveGhHttpStatus(fixtureError('bare502')), 502);
+  assert.equal(deriveGhHttpStatus(fixtureError('bare404')), 404);
+  assert.equal(deriveGhHttpStatus(fixtureError('notFoundWithUrl404')), 404);
+  assert.equal(deriveGhHttpStatus(fixtureError('deletedIssue410')), 410);
+  assert.equal(deriveGhHttpStatus(fixtureError('samlEnforcement403')), 403);
+  assert.equal(deriveGhHttpStatus(fixtureError('jsonBody404')), 404);
+});
+
+test('deriveGhHttpStatus does not match an unrelated number in prose', () => {
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('retry HTTP 200 later'), {
+        stderr: 'retry HTTP 200 later',
+      }),
+    ),
+    null,
+  );
+});
+
+// Copilot review, #3335: a bare `\b` word boundary (with no line-start
+// anchor) still let prose text carrying a `:` or ` (` right after the
+// number match, even though the number is not gh's own line-leading
+// status report -- for example "retry HTTP 404: please try again" would
+// have matched the same lookahead the real `HTTP 404: Not Found (<url>)`
+// shape uses. Anchoring to the start of a line (with an optional `gh: `
+// prefix) fixes it without narrowing the two real shapes it targets.
+test('deriveGhHttpStatus requires the bare/URL-suffixed forms to start a line, not just follow a word boundary', () => {
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), {
+        stderr: 'retry HTTP 404: please try again',
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), {
+        stderr: 'some HTTP 200 (ok) message',
+      }),
+    ),
+    null,
+  );
+  // The real shapes still match when they genuinely start a line, even a
+  // non-first line inside the stderr+stdout+message join.
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), {
+        stderr: 'some prose\ngh: HTTP 502',
+      }),
+    ),
+    502,
+  );
+});
+
+// Copilot review round 2, #3335: the line-start anchor alone still let a
+// *line-leading* prose line like "HTTP 404: please try again" or
+// "HTTP 404 (ok)" match, since neither the real `HTTP NNN: <message>
+// (<url>)` nor `HTTP NNN (<url>)` shape was distinguished from arbitrary
+// text by content -- only the real gh 2.101.0 forms always carry a
+// parenthesized `http(s)://` URL, which the fixed regex now requires.
+test('deriveGhHttpStatus requires the URL-suffixed forms to carry a real http(s) URL in parens', () => {
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), {
+        stderr: 'HTTP 404: please try again',
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), { stderr: 'HTTP 200 (ok)' }),
+    ),
+    null,
+  );
+  // The bare end-of-line form is unaffected -- it never carries a URL at
+  // all, and still requires the `gh: ` prefix.
+  assert.equal(
+    deriveGhHttpStatus(Object.assign(new Error('x'), { stderr: 'HTTP 502' })),
+    null,
+  );
+});
+
+test('classifyInaccessibleIssueLookup: 404 fixtures -> not-found', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('bare404')),
+    'not-found',
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('notFoundWithUrl404')),
+    'not-found',
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('jsonBody404')),
+    'not-found',
+  );
+});
+
+test('classifyInaccessibleIssueLookup: 410/451 -> inaccessible regardless of wording', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('deletedIssue410')),
+    'inaccessible',
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(
+      Object.assign(new Error('legal'), {
+        stderr: 'gh: Repository access blocked (HTTP 451)',
+      }),
+    ),
+    'inaccessible',
+  );
+});
+
+test('classifyInaccessibleIssueLookup: 403 downgrades only on visibility/integration/SAML wording', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('samlEnforcement403')),
+    'inaccessible',
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('integration403')),
+    'inaccessible',
+  );
+  // A secondary-rate-limit 403 must keep aborting/retrying, never downgrade.
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('secondaryRateLimit403')),
+    null,
+  );
+});
+
+// Copilot + CodeRabbit review, #3335: a real `execFile`/`ghTextAsync`
+// rejection's `.message` is synthesized by Node as `Command failed: <full
+// command line>\n<stderr>` -- it always embeds the invoked command
+// (including any owner/repo path segment) regardless of what any caller
+// constructs, so the wording check must prefer real stderr/stdout over
+// `.message` whenever either stream is non-empty, or an owner/repo name
+// containing "visibility" would false-positive an unrelated 403.
+test('classifyInaccessibleIssueLookup ignores message-embedded wording when a real stream exists', () => {
+  const stderr = ghErrorFixtureStderr('secondaryRateLimit403');
+  const nodeExecFileShapedError = Object.assign(
+    new Error(
+      `Command failed: gh api repos/visibility-org/visibility-repo/issues/900 --jq .\n${stderr}`,
+    ),
+    { stderr, stdout: '' },
+  );
+  assert.equal(classifyInaccessibleIssueLookup(nodeExecFileShapedError), null);
+});
+
+test('classifyInaccessibleIssueLookup falls back to message wording only when both streams are empty', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(
+      new Error(ghErrorFixtureStderr('samlEnforcement403')),
+    ),
+    'inaccessible',
+  );
+});
+
+test('classifyInaccessibleIssueLookup: fails closed on auth failures and undetermined status', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(
+      Object.assign(new Error('auth'), {
+        stderr: 'gh: Bad credentials (HTTP 401)',
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(
+      Object.assign(new Error('timeout'), {
+        stderr: 'connect ETIMEDOUT 140.82.0.0:443',
+      }),
+    ),
+    null,
+  );
+  assert.equal(classifyInaccessibleIssueLookup(null), null);
 });
