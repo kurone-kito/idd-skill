@@ -23,6 +23,7 @@ import {
   DEFAULT_STALE_AGE_MS,
   isStaleByAge,
   normalizeLinkedPrReference,
+  orderClaimEvents,
   parseClaimComment,
   parseReleaseComment,
   readClaimStaleAgeMs,
@@ -739,7 +740,15 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
       linkedPrLookupFailureRejections,
     };
   }
-  const orderedEvents = [...events].sort(compareEvents);
+  // kurone-kito/idd-skill#3266: shared with the new-format path above via
+  // the single `orderClaimEvents` primitive instead of this file's own
+  // near-duplicate comparator (removed). `events` here is already
+  // trust-filtered by `evaluateResumeClaimRouting`'s own top-level
+  // filter, so no claim-id tie-break can ever fire in practice (no
+  // legacy marker carries a claim-id) -- this is effectively the same
+  // `(second, time, index)` ordering `compareEvents` produced, just
+  // sharing the one implementation.
+  const orderedEvents = orderClaimEvents(events);
   const legacy = resolveLegacyClaimState(orderedEvents);
   return {
     mode: 'legacy-only',
@@ -864,29 +873,6 @@ function normalizeEvents(events) {
       },
     }))
     .filter((event) => event.createdAt !== null);
-}
-function compareEvents(left, right) {
-  const leftSecond = toSecond(left.createdAt);
-  const rightSecond = toSecond(right.createdAt);
-  if (
-    leftSecond !== null &&
-    rightSecond !== null &&
-    leftSecond !== rightSecond
-  ) {
-    return leftSecond - rightSecond;
-  }
-  if (leftSecond !== null && rightSecond === null) {
-    return -1;
-  }
-  if (leftSecond === null && rightSecond !== null) {
-    return 1;
-  }
-  const leftClaim = parseClaimComment(left.body, left.createdAt);
-  const rightClaim = parseClaimComment(right.body, right.createdAt);
-  if (leftClaim && rightClaim && leftClaim.claimId !== rightClaim.claimId) {
-    return leftClaim.claimId < rightClaim.claimId ? -1 : 1;
-  }
-  return compareIso(left.createdAt, right.createdAt);
 }
 function warnDeprecatedFlag(deprecated, canonical) {
   process.stderr.write(

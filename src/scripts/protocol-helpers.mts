@@ -10646,7 +10646,15 @@ export function readClaimStaleAgeMs(config: unknown): number {
   );
 }
 
-function compareClaimIds(left: string, right: string): number {
+/**
+ * Ascending, case-sensitive ASCII compare of two claim-ids -- the
+ * lexicographic tie-break `idd-claim.instructions.md` documents for
+ * same-second competing claims. A plain string comparator over a single
+ * key, so it is trivially transitive for every triple. Exported so
+ * `orderClaimEvents` below and its tests share and can directly assert
+ * against the identical primitive.
+ */
+export function compareClaimIds(left: string, right: string): number {
   if (left === right) {
     return 0;
   }
@@ -10687,60 +10695,128 @@ function isStrictlyBeforeIso(
   return leftTime < rightTime;
 }
 
+/** {@link orderClaimEvents}'s per-event decoration; also the shape
+ * {@link compareClaimEventOrder} compares directly. */
+interface DecoratedClaimEvent {
+  event: CommentLike;
+  index: number;
+  time: number | null;
+  second: number | null;
+  claimId: string | null;
+}
+
 /**
- * Chronological ordering `resolveActiveClaim` and
- * `resolveActiveClaimWithForcedHandoffTrace` both reduce over: by GitHub
- * `created_at` second, tie-broken by claim-id (same-second contenders),
- * then by sub-second time, then by original array index.
+ * Base chronological comparator: by GitHub `created_at` second (`null`
+ * sorts last), then by sub-second time (`null` sorts last), then by
+ * original array index. Deliberately excludes any claim-id comparison --
+ * a single comparator that conditionally switched to comparing claim-id
+ * only when both sides happened to parse as a claim (the pre-#3266
+ * `sortClaimEvents`) is not transitive: a claim/non-claim/claim triple in
+ * the same second can cycle (`kurone-kito/idd-skill#3266`). This
+ * comparator alone is a plain lexicographic order over a 3-tuple and is
+ * transitive for every triple; {@link orderClaimEvents} applies the
+ * claim-id tie-break as a separate, second pass instead of folding it in
+ * here. Exported so a test can assert this comparator's own transitivity
+ * directly.
  */
-function sortClaimEvents(events: CommentLike[]): CommentLike[] {
-  return events
-    .map((event, index) => {
-      const claim = parseClaimComment(event.body ?? '', event.createdAt ?? '');
-      return {
-        event,
-        index,
-        claimId: claim?.claimId ?? null,
-        time: createdAtToTime(event.createdAt),
-        second: createdAtToSecond(event.createdAt),
-      };
-    })
-    .sort((left, right) => {
-      if (
-        left.second !== null &&
-        right.second !== null &&
-        left.second !== right.second
-      ) {
-        return left.second - right.second;
-      }
-      if (left.second !== null && right.second === null) {
-        return -1;
-      }
-      if (left.second === null && right.second !== null) {
-        return 1;
-      }
+export function compareClaimEventOrder(
+  left: Pick<DecoratedClaimEvent, 'second' | 'time' | 'index'>,
+  right: Pick<DecoratedClaimEvent, 'second' | 'time' | 'index'>,
+): number {
+  if (
+    left.second !== null &&
+    right.second !== null &&
+    left.second !== right.second
+  ) {
+    return left.second - right.second;
+  }
+  if (left.second !== null && right.second === null) {
+    return -1;
+  }
+  if (left.second === null && right.second !== null) {
+    return 1;
+  }
 
-      if (
-        left.second !== null &&
-        right.second !== null &&
-        left.claimId &&
-        right.claimId &&
-        left.claimId !== right.claimId
-      ) {
-        return compareClaimIds(left.claimId, right.claimId);
-      }
+  if (left.time !== null && right.time !== null && left.time !== right.time) {
+    return left.time - right.time;
+  }
 
-      if (
-        left.time !== null &&
-        right.time !== null &&
-        left.time !== right.time
-      ) {
-        return left.time - right.time;
-      }
+  return left.index - right.index;
+}
 
-      return left.index - right.index;
-    })
-    .map(({ event }) => event);
+/**
+ * Total, deterministic ordering over an ALREADY trust-filtered set of
+ * claim-lifecycle comment events -- the single ordering primitive
+ * `resolveActiveClaimWithForcedHandoffTrace` (which performs the trust
+ * filtering, once, before calling this) and `resume-claim-routing.mts`'s
+ * legacy-only path both use, replacing the former `sortClaimEvents`
+ * (renamed/exported here) and the near-duplicate `compareEvents` that
+ * used to live in `resume-claim-routing.mts` (kurone-kito/idd-skill#3266).
+ *
+ * Two-step algorithm, chosen specifically to keep every comparator it
+ * uses transitive (see {@link compareClaimEventOrder}'s own doc comment
+ * for why a single mixed comparator is not):
+ *
+ * 1. A stable base sort by {@link compareClaimEventOrder} --
+ *    `(second, sub-second time, original index)`.
+ * 2. Within each maximal run of equal, non-null `second`, the *positions*
+ *    (not the events) that parsed as a `claimed-by` marker are collected
+ *    and their occupants re-sorted, ascending, by
+ *    {@link compareClaimIds} -- the lexicographic tie-break
+ *    `idd-claim.instructions.md` documents for same-second competing
+ *    claims. Every other position in that run (an activation-nonce, an
+ *    `unclaimed-by`, a forced-handoff marker, or a plain comment) keeps
+ *    exactly the slot the base sort gave it -- its "fetch order" within
+ *    the second is never disturbed by which claim-ids happen to be
+ *    interleaved with it.
+ *
+ * A run with a null `second` (an unparseable `createdAt`) never groups
+ * with any other event for step 2 -- each such event is its own
+ * single-element run, so no claim-id reordering applies to it; it simply
+ * keeps its step-1 position, same as `sortClaimEvents` before it.
+ */
+export function orderClaimEvents(events: CommentLike[]): CommentLike[] {
+  const decorated: DecoratedClaimEvent[] = events.map((event, index) => {
+    const claim = parseClaimComment(event.body ?? '', event.createdAt ?? '');
+    return {
+      event,
+      index,
+      claimId: claim?.claimId ?? null,
+      time: createdAtToTime(event.createdAt),
+      second: createdAtToSecond(event.createdAt),
+    };
+  });
+
+  const base = [...decorated].sort(compareClaimEventOrder);
+
+  let i = 0;
+  while (i < base.length) {
+    const second = base[i].second;
+    let j = i + 1;
+    if (second !== null) {
+      while (j < base.length && base[j].second === second) {
+        j += 1;
+      }
+    }
+    const slots: number[] = [];
+    for (let k = i; k < j; k += 1) {
+      if (base[k].claimId !== null) {
+        slots.push(k);
+      }
+    }
+    if (slots.length > 1) {
+      const claimants = slots.map((slot) => base[slot]);
+      claimants.sort((left, right) =>
+        compareClaimIds(left.claimId as string, right.claimId as string),
+      );
+      for (let m = 0; m < slots.length; m += 1) {
+        base[slots[m]] = claimants[m];
+      }
+    }
+    i = j;
+  }
+
+  return base.map(({ event }) => event);
 }
 
 /** Result of {@link resolveActiveClaimWithForcedHandoffTrace}. */
@@ -10803,7 +10879,27 @@ export function resolveActiveClaimWithForcedHandoffTrace(
     true,
 ): ActiveClaimResolution {
   const options = normalizeClaimResolutionOptions(isTrustedAuthor);
-  const orderedEvents = sortClaimEvents(events);
+  // kurone-kito/idd-skill#3266: filter to trusted authors ONCE, here,
+  // before ordering -- not only inside applyClaimEvent's later per-event
+  // check. Before this fix, an untrusted comment (claim-shaped or not)
+  // still occupied a slot `sortClaimEvents` itself reasoned about (its
+  // claim-id, if any, still participated in the same-second tie-break),
+  // which could shift the relative order of two genuinely trusted
+  // same-second claims around it -- part of the reported non-transitive
+  // same-second cycle, and the reason `resolveActiveClaimForWriteGate` /
+  // `summarizeClaimValidation` (both feed this function the full,
+  // unfiltered stream) could disagree with `evaluateResumeClaimRouting`
+  // (which already filtered before calling this). Filtering first means
+  // every caller -- resume routing, the write-gate, and any direct
+  // caller such as `discover-roadmap-graph.mts` /
+  // `discover-shared-file-overlap.mts` -- orders and reduces over the
+  // identical trusted event set. `applyClaimEvent`'s own per-event
+  // trust check below stays as defense in depth (always true in
+  // practice now, since every event it sees already passed this filter).
+  const trustedEvents = events.filter((event) =>
+    options.isTrustedAuthor(event.author?.login ?? ''),
+  );
+  const orderedEvents = orderClaimEvents(trustedEvents);
 
   let active: ParsedClaimMarker | null = null;
   let releasedClaim: ParsedClaimMarker | null = null;
