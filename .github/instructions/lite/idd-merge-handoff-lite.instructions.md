@@ -34,7 +34,8 @@ churn on that issue until someone merges it. If the repository is
 ## Pre-mutation guard
 
 Before posting the handoff comment, confirm all of the following (F2.5
-step 4 repeats checks 1-2 before releasing the claim):
+step 3 repeats checks 1-3 immediately before posting, and step 4
+repeats checks 1-3 again immediately before releasing):
 
 1. The active claim still uses this session's `{claim-id}`. If it is
    missing, released, or held by a different `{claim-id}` (even under
@@ -101,7 +102,11 @@ step 4 repeats checks 1-2 before releasing the claim):
      `gh pr merge {pr-number} --merge --match-head-commit "{prHeadSha}"`
      (using the recorded `prHeadSha` value from F2, not a locally
      re-derived SHA).
-3. Post the comment.
+3. Immediately before posting, repeat the pre-mutation guard in full
+   (checks 1-3) — step 1's fetch and read may have taken time since
+   the initial guard, during which another session could have
+   released or replaced the claim. If any check fails, stop per the
+   condition above without posting. Otherwise, post the comment.
 4. Decide whether to release the worker claim, gated on both the
    `mergePolicy` resolved in step 1 and the recorded F2 verdict:
    - `ready: false`: keep the claim under every `mergePolicy` value —
