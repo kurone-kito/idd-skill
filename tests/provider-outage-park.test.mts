@@ -231,28 +231,37 @@ test('buildParkedChangeList: count matches the entry count', () => {
 // parkedIssues; a stale one is excluded and counted in retiredCount.
 // ---------------------------------------------------------------------------
 
-test('classifyParkMarker: a head mismatch retires the marker', () => {
+test('classifyParkMarker: a head mismatch retires the marker without resolving the issue claim (#3379 review)', () => {
   const marker = rawMarker({ headSha: 'a'.repeat(40) });
-  assert.equal(
-    classifyParkMarker(marker, 'b'.repeat(40), null),
-    'retired:head-moved',
-  );
+  let resolverCalls = 0;
+  const classification = classifyParkMarker(marker, 'b'.repeat(40), () => {
+    resolverCalls += 1;
+    return null;
+  });
+  assert.equal(classification, 'retired:head-moved');
+  assert.equal(resolverCalls, 0);
 });
 
 test('classifyParkMarker: a matching head with no later claim is live', () => {
   const marker = rawMarker({ headSha: 'a'.repeat(40) });
-  assert.equal(classifyParkMarker(marker, 'a'.repeat(40), null), 'live');
+  assert.equal(
+    classifyParkMarker(marker, 'a'.repeat(40), () => null),
+    'live',
+  );
 });
 
-test('classifyParkMarker: an absent/unreadable PR head SHA fails open to live (never compared)', () => {
+test('classifyParkMarker: an absent/unreadable PR head SHA fails CLOSED to retired (#3379 review, Copilot)', () => {
   const marker = rawMarker({ headSha: 'a'.repeat(40) });
-  assert.equal(classifyParkMarker(marker, '', null), 'live');
+  assert.equal(
+    classifyParkMarker(marker, '', () => null),
+    'retired:head-moved',
+  );
 });
 
 test('classifyParkMarker: a trusted claimed-by after the park comment createdAt is not live', () => {
   const marker = rawMarker({ createdAt: '2026-09-02T00:00:00Z' });
   assert.equal(
-    classifyParkMarker(marker, marker.headSha, '2026-09-02T00:00:05Z'),
+    classifyParkMarker(marker, marker.headSha, () => '2026-09-02T00:00:05Z'),
     'retired:later-claim',
   );
 });
@@ -260,34 +269,43 @@ test('classifyParkMarker: a trusted claimed-by after the park comment createdAt 
 test('classifyParkMarker: a trusted claimed-by at or before the park comment createdAt is still live', () => {
   const marker = rawMarker({ createdAt: '2026-09-02T00:00:05Z' });
   assert.equal(
-    classifyParkMarker(marker, marker.headSha, '2026-09-02T00:00:05Z'),
+    classifyParkMarker(marker, marker.headSha, () => '2026-09-02T00:00:05Z'),
     'live',
   );
   assert.equal(
-    classifyParkMarker(marker, marker.headSha, '2026-09-02T00:00:00Z'),
+    classifyParkMarker(marker, marker.headSha, () => '2026-09-02T00:00:00Z'),
     'live',
   );
 });
 
 test('classifyParkMarker: a null issueLatestClaimCreatedAt (failed issue-comment read) fails open to live', () => {
   const marker = rawMarker({ createdAt: '2026-09-02T00:00:00Z' });
-  assert.equal(classifyParkMarker(marker, marker.headSha, null), 'live');
-});
-
-test('classifyParkMarker: an unreadable park-comment createdAt ("none") fails open to live', () => {
-  const marker = rawMarker({ createdAt: 'none' });
   assert.equal(
-    classifyParkMarker(marker, marker.headSha, '2099-01-01T00:00:00Z'),
+    classifyParkMarker(marker, marker.headSha, () => null),
     'live',
   );
 });
 
-test('classifyParkMarker: an unsupported service value retires the marker', () => {
+test('classifyParkMarker: an unreadable park-comment createdAt ("none") fails open to live without resolving the issue claim (#3379 review)', () => {
+  const marker = rawMarker({ createdAt: 'none' });
+  let resolverCalls = 0;
+  const classification = classifyParkMarker(marker, marker.headSha, () => {
+    resolverCalls += 1;
+    return '2099-01-01T00:00:00Z';
+  });
+  assert.equal(classification, 'live');
+  assert.equal(resolverCalls, 0);
+});
+
+test('classifyParkMarker: an unsupported service value retires the marker without resolving the issue claim (#3379 review)', () => {
   const marker = rawMarker({ service: 'not-a-real-service' });
-  assert.equal(
-    classifyParkMarker(marker, marker.headSha, null),
-    'retired:unsupported-service',
-  );
+  let resolverCalls = 0;
+  const classification = classifyParkMarker(marker, marker.headSha, () => {
+    resolverCalls += 1;
+    return null;
+  });
+  assert.equal(classification, 'retired:unsupported-service');
+  assert.equal(resolverCalls, 0);
 });
 
 test('classifyParkMarker: liveness compares the comment createdAt, never the embedded parked: field (#3277 AC)', () => {
@@ -300,7 +318,7 @@ test('classifyParkMarker: liveness compares the comment createdAt, never the emb
     createdAt: '2026-09-02T00:00:00Z',
   });
   assert.equal(
-    classifyParkMarker(marker, marker.headSha, '2026-09-02T06:00:00Z'),
+    classifyParkMarker(marker, marker.headSha, () => '2026-09-02T06:00:00Z'),
     'retired:later-claim',
   );
 });
@@ -435,7 +453,7 @@ test('buildParkedIssuesSummary: a non-healthy service falls through to the full 
   });
 });
 
-test('buildParkedChangeReport: a head-mismatched marker found via the real fetch wiring is excluded and counted as retired', () => {
+test('buildParkedChangeReport: a head-mismatched marker found via the real fetch wiring is excluded, counted as retired, and never triggers an issue-comment read (#3379 review)', () => {
   const markerBody = renderProviderOutageParkComment({
     actor: 'claude-1',
     issueNumber: 555,
@@ -445,28 +463,76 @@ test('buildParkedChangeReport: a head-mismatched marker found via the real fetch
     parkedAt: '2026-09-02T00:00:00Z',
     blockers: ['advisory-wait'],
   });
+  let issueReadCalls = 0;
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'b'.repeat(40) } }, // head moved since parking
       ],
-      fetchComments: (_owner, _repo, number: number) =>
-        number === 7
-          ? [
-              {
-                body: markerBody,
-                created_at: '2026-09-02T00:00:05Z',
-                user: { login: 'kurone-kito' },
-              },
-            ]
-          : [],
+      fetchComments: (_owner, _repo, number: number) => {
+        if (number === 7) {
+          return [
+            {
+              body: markerBody,
+              created_at: '2026-09-02T00:00:05Z',
+              user: { login: 'kurone-kito' },
+            },
+          ];
+        }
+        // Issue 555's own comments: must never be read -- the head
+        // mismatch above already retires the marker.
+        issueReadCalls += 1;
+        return [];
+      },
     }),
   );
+  assert.equal(issueReadCalls, 0);
   assert.equal(report.count, 0);
   assert.deepEqual(report.entries, []);
   assert.equal(report.retiredCount, 1);
   assert.deepEqual(report.parkedIssues, []);
+});
+
+test('buildParkedChangeReport: two markers sharing one originating issue read that issue only once (#3379 review, Copilot)', () => {
+  const markerBodyFor = (prNumber: number) =>
+    renderProviderOutageParkComment({
+      actor: 'claude-1',
+      issueNumber: 555,
+      service: 'advisory-review',
+      headSha: 'a'.repeat(40),
+      claimId: `claim-${prNumber}`,
+      parkedAt: '2026-09-02T00:00:00Z',
+      blockers: ['advisory-wait'],
+    });
+  let issueReadCalls = 0;
+  const report = withoutTrustedMarkerActorsEnv(() =>
+    buildParkedChangeReport('acme', 'widget', {
+      config: { trustedMarkerActors: ['kurone-kito'] },
+      fetchOpenPullRequests: () => [
+        { number: 7, head: { sha: 'a'.repeat(40) } },
+        { number: 8, head: { sha: 'a'.repeat(40) } },
+      ],
+      fetchComments: (_owner, _repo, number: number) => {
+        if (number === 7 || number === 8) {
+          return [
+            {
+              body: markerBodyFor(number),
+              created_at: '2026-09-02T00:00:05Z',
+              user: { login: 'kurone-kito' },
+            },
+          ];
+        }
+        // Issue 555's own comments, shared by both PR #7 and PR #8's
+        // markers -- must be read only once for the whole collection.
+        issueReadCalls += 1;
+        return [];
+      },
+    }),
+  );
+  assert.equal(issueReadCalls, 1);
+  assert.equal(report.count, 2);
+  assert.deepEqual(report.parkedIssues, [555]);
 });
 
 test('buildParkedChangeReport: a REAL later claimed-by comment on the originating issue (via renderClaimedByMarker, latestTrustedClaimCreatedAt end to end) retires the marker', () => {

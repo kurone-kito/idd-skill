@@ -185,42 +185,54 @@ function latestTrustedClaimCreatedAt(comments, trustedMarkerLogins) {
  *   already rejects any other value, so a marker outside this set is
  *   stale/malformed evidence, not a service this report can even classify;
  * - the marker's `headSha` still equals the pull request's current head
- *   SHA (the pull request has not moved since it was parked) -- an
- *   unreadable/absent `prHeadSha` (empty string) fails OPEN toward live,
- *   skipping this check entirely, rather than comparing against an empty
- *   string and retiring every such marker;
+ *   SHA (the pull request has not moved since it was parked). An empty
+ *   `prHeadSha` (the open-pull-request list payload's own `head.sha` was
+ *   missing or unreadable) fails CLOSED to `retired:head-moved` --
+ *   `marker.headSha` is always a validated 40-hex value
+ *   (`renderProviderOutageParkComment` rejects anything else), so it can
+ *   never equal an empty string; the required current-head comparison
+ *   was never actually established, so this must never be silently
+ *   treated as proven-live (#3379 review, Copilot);
  * - no trusted `claimed-by` on the originating issue has a GitHub
  *   `created_at` STRICTLY LATER than the park marker's own COMMENT
  *   `created_at` (never the embedded `parked:` field, which is the
  *   parking agent's local clock -- the Groom-hearing decision this issue
  *   records).
  *
- * The `marker.createdAt !== 'none'` guard below is LOAD-BEARING, not
- * defensive: `compareIsoTimestamps` sorts a non-ISO string (including the
- * literal `'none'` `parseProviderOutageParkComment` degrades an unreadable
- * comment `created_at` to) as AFTER any valid ISO timestamp via its
- * numeric/string fallback, so removing this guard would silently flip the
- * fail-open contract -- an unreadable park comment would retire the
- * marker instead of keeping it live. `issueLatestClaimCreatedAt === null`
- * (no trusted claimed-by found at all, or the issue's own comment read
- * failed) fails open the same way.
+ * `resolveIssueLatestClaimCreatedAt` is a LAZY callback, not a plain
+ * value: it is invoked only once the cheaper service/head checks above
+ * already pass and `marker.createdAt` is readable, so a marker already
+ * retired by service or head never pays for the originating-issue
+ * comment read at all (#3379 review, Copilot) -- the caller
+ * ({@link collectRawParkMarkers}) also caches its result per issue
+ * number, since several markers can share one originating issue.
+ *
+ * The `marker.createdAt === 'none'` short-circuit below is LOAD-BEARING,
+ * not defensive: `compareIsoTimestamps` sorts a non-ISO string (including
+ * the literal `'none'` `parseProviderOutageParkComment` degrades an
+ * unreadable comment `created_at` to) as AFTER any valid ISO timestamp
+ * via its numeric/string fallback, so removing this guard would silently
+ * flip the fail-open contract -- an unreadable park comment would retire
+ * the marker instead of keeping it live. A resolved
+ * `issueLatestClaimCreatedAt === null` (no trusted claimed-by found at
+ * all, or the issue's own comment read failed) fails open the same way.
  */
 export function classifyParkMarker(
   marker,
   prHeadSha,
-  issueLatestClaimCreatedAt,
+  resolveIssueLatestClaimCreatedAt,
 ) {
   if (!PROVIDER_HEALTH_SERVICES.includes(marker.service)) {
     return 'retired:unsupported-service';
   }
-  if (
-    prHeadSha !== '' &&
-    marker.headSha.toLowerCase() !== prHeadSha.toLowerCase()
-  ) {
+  if (marker.headSha.toLowerCase() !== prHeadSha.toLowerCase()) {
     return 'retired:head-moved';
   }
+  if (marker.createdAt === 'none') {
+    return 'live';
+  }
+  const issueLatestClaimCreatedAt = resolveIssueLatestClaimCreatedAt();
   if (
-    marker.createdAt !== 'none' &&
     issueLatestClaimCreatedAt !== null &&
     compareIsoTimestamps(issueLatestClaimCreatedAt, marker.createdAt) > 0
   ) {
@@ -265,14 +277,16 @@ const defaultFetchComments = (owner, repo, number) => {
  * (already present on the open-PR list payload -- no extra fetch) and the
  * originating issue's latest trusted `claimed-by` `created_at`
  * ({@link latestTrustedClaimCreatedAt}, read via the SAME injectable
- * `fetchComments`). Only a `'live'` classification is kept in `rawMarkers`;
- * anything else increments `retiredCount`. A failed ORIGINATING-ISSUE
- * comment read is caught locally and treated as `null` (fails open toward
- * live, per {@link classifyParkMarker}) -- it does not drop a marker from
- * the list, so it is never counted toward `prCommentReadFailureCount`,
- * which tracks only a failed PULL-REQUEST comment read (the read that
- * finds the marker itself, whose failure DOES silently drop a genuinely
- * parked pull request).
+ * `fetchComments`, lazily and cached per issue number -- see
+ * `resolveIssueLatestClaimCreatedAt` below; #3379 review, Copilot). Only a
+ * `'live'` classification is kept in `rawMarkers`; anything else
+ * increments `retiredCount`. A failed ORIGINATING-ISSUE comment read is
+ * caught locally and treated as `null` (fails open toward live, per
+ * {@link classifyParkMarker}) -- it does not drop a marker from the list,
+ * so it is never counted toward `prCommentReadFailureCount`, which tracks
+ * only a failed PULL-REQUEST comment read (the read that finds the marker
+ * itself, whose failure DOES silently drop a genuinely parked pull
+ * request).
  */
 function collectRawParkMarkers(owner, repo, options) {
   const sampleSize = options.sampleSize ?? 50;
@@ -287,6 +301,32 @@ function collectRawParkMarkers(owner, repo, options) {
       `could not read open pull requests to list parked changes: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // #3379 review (Copilot): several markers can share one originating
+  // issue (`deriveParkedIssues` explicitly supports this), so cache the
+  // per-issue claim-lookup result -- including a failed read, which
+  // still fails open to `null` -- for the lifetime of this collection
+  // pass, keyed by issue number. Combined with `classifyParkMarker`'s
+  // lazy resolver callback, a marker already retired by the cheaper
+  // service/head checks never triggers this read at all.
+  const issueLatestClaimCreatedAtCache = new Map();
+  const resolveIssueLatestClaimCreatedAt = (issueNumber) => {
+    const cached = issueLatestClaimCreatedAtCache.get(issueNumber);
+    if (cached !== undefined) return cached;
+    let result;
+    try {
+      const issueComments = fetchComments(owner, repo, issueNumber);
+      result = latestTrustedClaimCreatedAt(
+        issueComments,
+        options.trustedMarkerLogins,
+      );
+    } catch {
+      // Fails open toward live (#3277 AC) -- never counted toward
+      // `prCommentReadFailureCount`; see the docstring above.
+      result = null;
+    }
+    issueLatestClaimCreatedAtCache.set(issueNumber, result);
+    return result;
+  };
   const rawMarkers = [];
   let retiredCount = 0;
   let prCommentReadFailureCount = 0;
@@ -310,22 +350,10 @@ function collectRawParkMarkers(owner, repo, options) {
       options.trustedMarkerLogins,
     );
     if (marker === null) continue;
-    let issueLatestClaimCreatedAt = null;
-    try {
-      const issueComments = fetchComments(owner, repo, marker.issueNumber);
-      issueLatestClaimCreatedAt = latestTrustedClaimCreatedAt(
-        issueComments,
-        options.trustedMarkerLogins,
-      );
-    } catch {
-      // Fails open toward live (#3277 AC) -- never counted toward
-      // `prCommentReadFailureCount`; see the docstring above.
-      issueLatestClaimCreatedAt = null;
-    }
     const classification = classifyParkMarker(
       marker,
       String(pr.head?.sha ?? ''),
-      issueLatestClaimCreatedAt,
+      () => resolveIssueLatestClaimCreatedAt(marker.issueNumber),
     );
     if (classification !== 'live') {
       retiredCount += 1;
