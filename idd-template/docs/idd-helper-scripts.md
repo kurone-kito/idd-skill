@@ -1272,6 +1272,17 @@ The adopted helper boundaries are intentionally narrow:
   their own threads, gated independently. The body names the bot by its login
   (never the standalone word "CodeRabbit") so per-HEAD re-disposition is
   preserved.
+- **CodeRabbit in-progress / paused revisions (#3260)**: CodeRabbit edits its
+  summary comment in place, so a revision can carry a `review in progress by
+  coderabbit.ai` or `review paused by coderabbit.ai` marker instead of a
+  completed walkthrough — even while an older "No actionable comments were
+  generated" sentence from the review it superseded is still present in the
+  body. An in-progress revision is skipped with reason
+  `coderabbit-review-in-progress` (the CodeRabbit analog of Codex's own
+  in-progress "Running" state, never `**Accepted**`); a paused revision is a
+  terminal non-review notice —
+  routed through the same `**Rejected**` path as a rate-limit notice, with
+  its own `noticeReason` label, never `**Accepted**`.
 - **Fail-closed**: only classifier-recognized notices are dispositioned;
   real reviews and review threads are never touched. `--apply`
   re-validates the active claim and retries once on a transient post
