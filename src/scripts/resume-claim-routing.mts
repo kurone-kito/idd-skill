@@ -509,9 +509,13 @@ export interface FreshClaimGateResult {
  * when no active/released claim id exists. GitHub issue comments have no
  * compare-and-swap, so this **narrows** the A5(c) TOCTOU window rather than
  * closing it; the 24 h stale-takeover and same-second tie-break remain the
- * race-recovery backstop. A verified owner may use a retained released id
- * with the worktree-local lock takeover protocol; legacy releases remain
- * claim-id-less and require operator recovery before reuse.
+ * race-recovery backstop. A retained released claim's id is exposed here
+ * only for the A5(c) owner release-then-fresh retry -- by itself it never
+ * authorizes a worktree-local lock `--takeover`: the caller must also see
+ * a top-level `reason` that is not a `released-claim-*` reason
+ * (`idd-claim.instructions.md`'s Worktree-local lock file section).
+ * Legacy releases remain claim-id-less and require operator recovery
+ * before reuse.
  */
 export function evaluateFreshClaimGate(
   input: ResumeClaimRoutingInput,
