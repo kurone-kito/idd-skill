@@ -659,8 +659,9 @@ error), so an agent can gate on the exit code without parsing prose.
   confirmed `instructions-only` profile, and writing
   `skipIssueAuthorApprovalGate` only when the operator opted out); add
   `--write-policy-doc <path>` (`--apply` only) to also write the
-  filled template to that path. Refuses `ONBOARDING.md`, `CLAUDE.md`,
-  `AGENTS.md`, or `GEMINI.md` without `--force`.
+  filled template to that path. Refuses an existing, non-generated
+  `ONBOARDING.md`, `CLAUDE.md`, `AGENTS.md`, or `GEMINI.md` unless
+  `--force`d.
 
   ```sh
   node scripts/idd-onboard.mjs --record-policy --transcript <transcript-file> \

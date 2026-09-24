@@ -6136,6 +6136,99 @@ test('bin/idd-onboard.mjs --record-policy refuses when .github/idd/config.json i
   assert.equal(readFileSync(outsideConfigPath, 'utf8'), outsideConfigContent);
 });
 
+// Permission-denied is a distinct failure from ENOENT and must fail closed
+// (never silently treated as "absent"). Skipped when running as root or on
+// a platform where chmod does not restrict the owning user's own access
+// (root ignores POSIX permission bits; Windows chmod semantics differ) --
+// mirrors tests/idd-config.test.mts's own `canTestPermissionDenied` guard.
+const canTestPermissionDenied =
+  process.platform !== 'win32' &&
+  typeof process.getuid === 'function' &&
+  process.getuid() !== 0;
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc fails closed (never silently overwrites) on a permission-denied existing destination (#3292 review, Copilot)', {
+  skip: !canTestPermissionDenied,
+}, () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const docPath = join(root, 'policy-doc.md');
+  const originalContent = '# pre-existing, unreadable\n';
+  writeFileSync(docPath, originalContent);
+  chmodSync(docPath, 0o000);
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--record-policy',
+        '--transcript',
+        transcriptPath,
+        '--target',
+        root,
+        '--apply',
+        '--write-policy-doc',
+        docPath,
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 2);
+    assert.match(
+      String(result.stderr),
+      /could not read the existing destination/,
+    );
+  } finally {
+    chmodSync(docPath, 0o644);
+  }
+  assert.equal(readFileSync(docPath, 'utf8'), originalContent);
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc fails closed on a permission-denied ancestor directory, not treating it as absent (#3292 review, Copilot)', {
+  skip: !canTestPermissionDenied,
+}, () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const blockedDir = join(root, 'blocked');
+  mkdirSync(blockedDir);
+  const docPath = join(blockedDir, 'policy-doc.md');
+  chmodSync(blockedDir, 0o000);
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--record-policy',
+        '--transcript',
+        transcriptPath,
+        '--target',
+        root,
+        '--apply',
+        '--write-policy-doc',
+        docPath,
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 2);
+    assert.match(String(result.stderr), /could not stat the destination/);
+  } finally {
+    chmodSync(blockedDir, 0o755);
+  }
+  assert.equal(existsSync(docPath), false);
+});
+
 test('bin/idd-onboard.mjs --record-policy --write-policy-doc creates a missing parent directory under --target instead of failing after config.json is already written (#3292 review, CodeRabbit)', () => {
   const root = makeFixtureDir();
   writeRecordPolicyFixture(root);
@@ -6279,7 +6372,7 @@ test("idd-template/ONBOARDING.md's Step 5 no longer describes --write-policy-doc
   const doc = readFileSync(ONBOARDING_DOC, 'utf8');
   assert.doesNotMatch(doc, /writes into the clone/);
   assert.match(doc, /refuses \(exit `2`\) a path resolving outside/);
-  assert.match(doc, /`GEMINI\.md` without `--force`/);
+  assert.match(doc, /`GEMINI\.md` unless\n {2}`--force`d\./);
 
   const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
     encoding: 'utf8',

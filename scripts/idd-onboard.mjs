@@ -1103,6 +1103,17 @@ function assertSafeGuardWorkflowDestination(targetDir, path) {
   assertSafePlainFileDestination(targetDir, path);
 }
 /**
+ * Whether `error` (from a caught `fs` call) is exactly Node's "no such
+ * file or directory" errno -- the only failure that legitimately means
+ * "this path doesn't exist yet," as opposed to `EACCES`/`EPERM` (exists,
+ * but this process can't read it) or another I/O error. A caller
+ * conflating any of those with "absent" can silently treat a real,
+ * unreadable file as safe to overwrite (#3292 review, Copilot).
+ */
+function isEnoent(error) {
+  return error?.code === 'ENOENT';
+}
+/**
  * Fail closed (throw) unless `relativePath` (already confirmed safe and
  * `targetDir`-relative by the caller — this does not itself run
  * {@link isSafeRelativePath}) has no symlinked or otherwise
@@ -1111,7 +1122,11 @@ function assertSafeGuardWorkflowDestination(targetDir, path) {
  * {@link assertSafeGuardWorkflowDestination} (#3292) so the
  * `--write-policy-doc` destination guard and the `.github/idd/config.json`
  * write guard share the same ancestor/leaf check instead of each writing
- * their own.
+ * their own. A non-`ENOENT` `lstatSync` failure (for example `EACCES` on
+ * the leaf itself) is never treated as "absent" -- it fails closed with
+ * its own error instead, rather than silently letting an unreadable
+ * existing entry through as if nothing were there (#3292 review,
+ * Copilot).
  */
 function assertSafePlainFileDestination(targetDir, relativePath) {
   if (hasNonDirectoryAncestor(targetDir, relativePath)) {
@@ -1123,7 +1138,12 @@ function assertSafePlainFileDestination(targetDir, relativePath) {
   let leafStat;
   try {
     leafStat = lstatSync(absolute);
-  } catch {
+  } catch (error) {
+    if (!isEnoent(error)) {
+      throw new Error(
+        `refusing to write ${relativePath}: could not stat the destination under ${targetDir} (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
     leafStat = null;
   }
   if (leafStat !== null && !leafStat.isFile()) {
@@ -2829,7 +2849,11 @@ function resolvePolicyDocDestination(targetDir, rawPath) {
  * `resolvePolicyDocDestination`'s own `assertSafePlainFileDestination`
  * call already refused it earlier, and unlike this content check,
  * `force` cannot override that one (matching `--import`'s own
- * non-file-collision convention).
+ * non-file-collision convention). A non-`ENOENT` read failure (for
+ * example `EACCES` on an existing-but-unreadable file) is never treated
+ * as "absent" either -- silently doing so would let this process
+ * overwrite content it never actually verified was safe to overwrite
+ * (#3292 review, Copilot).
  */
 function assertPolicyDocNotClobbered(absolutePath, force) {
   if (force) {
@@ -2838,7 +2862,12 @@ function assertPolicyDocNotClobbered(absolutePath, force) {
   let existing;
   try {
     existing = readFileSync(absolutePath, 'utf8');
-  } catch {
+  } catch (error) {
+    if (!isEnoent(error)) {
+      throw new Error(
+        `refusing to write ${absolutePath}: could not read the existing destination to verify it is safe to overwrite (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
     existing = null;
   }
   if (existing === null || isUneditedGeneratedPolicyDoc(existing)) {
