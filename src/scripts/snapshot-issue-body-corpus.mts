@@ -136,10 +136,14 @@ tests/issue-body-corpus.test.mts.
                         every issue in this --add call. A "merged" issue
                         is refused (no file written, non-zero exit)
                         unless it is closed as completed, carries at
-                        least one comment whose body starts with
-                        "<!-- claimed-by:" authored by a configured
-                        trusted marker actor, and was closed by at least
-                        one merged pull request.
+                        least one well-formed claimed-by marker comment
+                        authored by a configured trusted marker actor,
+                        and was closed by at least one merged pull
+                        request. A "negative" issue is refused unless it
+                        carries the configured needs-decision or
+                        blocked-by-human label (or was closed as not
+                        planned) AND the current A4/A4.5 helpers still
+                        rate it non-ready.
   --note <text>         optional free-text "note" stored on every entry
                         added by this call (default: "").
   --refresh              re-fetch every existing merged/negative entry
