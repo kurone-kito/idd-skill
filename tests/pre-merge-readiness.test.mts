@@ -10026,7 +10026,12 @@ test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread fi
   // marker text -- `computeSecondaryAdvisoryReviewSettlement` filters
   // `comments` by whichever login `secondaryBotLogin` names, not
   // necessarily CodeRabbit, before these body-shape checks ever run.
-  test('#3260: computeSecondaryAdvisoryReviewSettlement settles a non-CodeRabbit secondary bot even if its body coincidentally contains the in-progress marker text', () => {
+  // #3261 update: this scenario is now subsumed by a much broader rule --
+  // an identity with no completion recognizer at all (like
+  // "some-other-bot[bot]") can never settle regardless of body content, so
+  // the coincidental marker text is moot; the result is pending either way,
+  // no longer settled as it was before #3261.
+  test('#3261: a non-CodeRabbit, non-Codex secondary bot never settles, even on a body that coincidentally contains the CodeRabbit in-progress marker text', () => {
     const result = computeSecondaryAdvisoryReviewSettlement(
       [
         {
@@ -10041,8 +10046,8 @@ test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread fi
         headCommittedAt: '2026-09-23T07:12:24Z',
       },
     );
-    assert.equal(result.settled, true);
-    assert.equal(result.settledAt, '2026-09-23T07:13:25Z');
+    assert.equal(result.settled, false);
+    assert.equal(result.settledAt, null);
     assert.equal(result.declined, false);
   });
 
@@ -10385,10 +10390,28 @@ function declinedNoticeComment(login: string, createdAt: string) {
   };
 }
 
+// #3261: a genuinely settled review must now be a RECOGNIZED COMPLETED
+// shape for its identity, not plain prose -- a CodeRabbit summary with none
+// of the in-progress/paused/skip-review markers, or a Codex status table
+// whose row for the current HEAD reads Completed. Every call site below
+// uses `fixtures/pre-merge-readiness/clean.json`'s own `prHeadSha`
+// (`1111111111111111111111111111111111111111`) unchanged, so the Codex
+// table's commit cell is a prefix of that same SHA.
+const GENUINE_REVIEW_HEAD_SHA_PREFIX = '1111111';
+
 function genuineReviewComment(login: string, createdAt: string) {
+  const isCodex = login.toLowerCase().includes('codex');
+  const body = isCodex
+    ? '<!-- codex-pull-request-review-summary -->\n\n' +
+      '## Codex Review Summary\n\n' +
+      '| Review | Status | Commit | Review trigger |\n' +
+      '| --- | --- | --- | --- |\n' +
+      `| 📝 **Code Review** | ✅ **Completed** | \`${GENUINE_REVIEW_HEAD_SHA_PREFIX}\` | PR opened |\n`
+    : '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+      '## Walkthrough\nLooks fine to me.';
   return {
     author: { login },
-    body: 'Looks fine to me.',
+    body,
     createdAt,
     updatedAt: createdAt,
   };
@@ -10657,6 +10680,48 @@ test('#3196: the plural secondaryBotLogins option wins over the legacy singular 
   );
   const status = secondaryQuietWindowOf(summary);
   assert.equal(status.anchorAt, '2026-05-11T23:59:00Z');
+  assert.equal(status.declined, false);
+});
+
+// #3261: an identity with no completion recognizer at all must never get
+// the short settled buffer, even when it posts a genuine-looking comment --
+// the full configured window still applies, same as a login that never
+// posts anything.
+test('#3261: an unrecognized secondary-bot identity never gets the settled buffer -- the full configured window still applies', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        // No recognizer exists for this identity at all, so this can never
+        // settle no matter what it posts.
+        {
+          author: { login: 'my-custom-bot[bot]' },
+          body: 'Looks fine to me.',
+          createdAt: '2026-05-11T23:51:00Z',
+          updatedAt: '2026-05-11T23:51:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 10,
+      secondaryBotLogins: ['my-custom-bot[bot]'],
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  // Same anchor/elapsed/remaining as the never-posted pending case -- the
+  // comment exists but its identity has no completion recognizer, so it
+  // never anchors the settled buffer.
+  assert.equal(status.anchorAt, '2026-05-11T23:56:00Z');
+  assert.equal(status.minutes, 10);
+  assert.equal(status.elapsedMinutes, 4);
+  assert.equal(status.remainingMinutes, 6);
+  assert.equal(status.elapsed, false);
   assert.equal(status.declined, false);
 });
 
