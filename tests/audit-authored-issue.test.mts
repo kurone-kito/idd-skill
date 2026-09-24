@@ -1,11 +1,45 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { auditAuthoredIssue } from '../src/scripts/audit-authored-issue.mts';
 import {
   renderAuthoringOwnerMarker,
   renderAuthoringPublicationIntentMarker,
 } from '../src/scripts/marker-helpers.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const CLI_PATH = join(REPO_ROOT, 'scripts/audit-authored-issue.mjs');
+
+/**
+ * Run the built CLI and return its parsed JSON stdout. The CLI exits 1
+ * (not 0) whenever any check fails (see printUsage's documented exit-code
+ * contract) -- `execFileSync` throws on that non-zero exit the same way
+ * it would on a genuine crash, but still attaches the process's own
+ * stdout/stderr to the thrown error, so a failing-report invocation is
+ * recovered from there instead of being mistaken for a usage/crash error.
+ */
+function runCli(args: string[]): {
+  findings: { id: string; result: string }[];
+} {
+  try {
+    const stdout = execFileSync(process.execPath, [CLI_PATH, ...args], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    return JSON.parse(stdout);
+  } catch (error) {
+    const stdout = (error as { stdout?: unknown }).stdout;
+    if (typeof stdout === 'string' && stdout.trim().length > 0) {
+      return JSON.parse(stdout);
+    }
+    throw error;
+  }
+}
 
 function suitabilityFooter(score: number): string {
   return `---\n\n_Autopilot suitability: ${score} / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: ${score} -->`;
@@ -3696,4 +3730,82 @@ test('authoring-owner-marker-trail never exempts a child-shaped audit, even when
     (entry) => entry.id === 'authoring-owner-marker-trail',
   );
   assert.equal(finding?.result, 'fail');
+});
+
+// --- CLI end-to-end: --title forwarding through the compiled binary (#3289) ---
+//
+// Copilot review (PR #3383): the pre-existing unit tests all call
+// auditAuthoredIssue() directly, so the --title CLI flag's own parse/
+// forwarding path (parseArgs -> CliArgs.title -> main()'s
+// auditAuthoredIssue() call) had no coverage exercising the actual
+// generated scripts/audit-authored-issue.mjs artifact. These two tests
+// close that gap end to end, mirroring tests/branch-name.test.mts's own
+// execFileSync-against-the-built-CLI pattern.
+
+test("the compiled CLI's --title flag makes a title-less body pass triage-title-missing", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-audit-authored-issue-cli-'));
+  try {
+    const bodyPath = join(tempRoot, 'draft.md');
+    // childBody() minus its own leading "# <title>" line -- a well-formed,
+    // otherwise title-less child body.
+    writeFileSync(
+      bodyPath,
+      childBody().replace('# Add a sample child feature\n\n', ''),
+    );
+
+    const withTitle = runCli([
+      '--shape',
+      'child',
+      '--title',
+      'Add a sample child feature',
+      '--body-file',
+      bodyPath,
+      '--marker-prefix',
+      'idd-skill',
+    ]);
+    const withTitleFinding = withTitle.findings.find(
+      (entry) => entry.id === 'triage-title-missing',
+    );
+    assert.equal(withTitleFinding?.result, 'pass');
+
+    // Negative control, same title-less body, no --title: proves the flag
+    // is actually doing the work above, not merely accepted and ignored.
+    const withoutTitle = runCli([
+      '--shape',
+      'child',
+      '--body-file',
+      bodyPath,
+      '--marker-prefix',
+      'idd-skill',
+    ]);
+    const withoutTitleFinding = withoutTitle.findings.find(
+      (entry) => entry.id === 'triage-title-missing',
+    );
+    assert.equal(withoutTitleFinding?.result, 'fail');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('the compiled CLI falls back to a leading "# <title>" body line when --title is omitted', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-audit-authored-issue-cli-'));
+  try {
+    const bodyPath = join(tempRoot, 'draft.md');
+    writeFileSync(bodyPath, childBody());
+
+    const result = runCli([
+      '--shape',
+      'child',
+      '--body-file',
+      bodyPath,
+      '--marker-prefix',
+      'idd-skill',
+    ]);
+    const finding = result.findings.find(
+      (entry) => entry.id === 'triage-title-missing',
+    );
+    assert.equal(finding?.result, 'pass');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
