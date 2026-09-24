@@ -10,8 +10,9 @@ prior session context, or when a fresh session resumes an issue whose prior
 session left an active claim after its own deliberate, announced pause (see
 [Operator-present release](#operator-present-release)
 below). Read `idd-overview-core.instructions.md` for shared definitions
-(claim format, stale threshold, abort, hold). For full narrative detail on
-each routing branch, see
+(claim format, stale threshold) and
+`idd-overview-appendix.instructions.md` for abort and hold. For full
+narrative detail on each routing branch, see
 [`docs/idd-resume-detail.md`](../../docs/idd-resume-detail.md).
 
 Resume stale checks use the `claim-stale-age` policy default from

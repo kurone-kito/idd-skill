@@ -62,9 +62,10 @@ This check is read-only — F1 does not rebase, merge, or push.
   attempts, a few seconds apart), then route by the first settled
   result. Only if still `computing`/`unknown` after the budget, fall
   through to the terminal hold below.
-- **`dirty`** (`mergeStateStatus` is `DIRTY`) or **`unknown`**: hold;
-  post a PR comment documenting the branch state and stop. A
-  maintainer must clear the hold.
+- **`dirty`** (`mergeStateStatus` is `DIRTY`), **`unknown`**, or any
+  other state the bullets above do not name (for example
+  `force-push-exception`): hold; post a PR comment documenting the
+  branch state and stop. A maintainer must clear the hold.
 
 ## F2 — Pre-merge condition check
 
