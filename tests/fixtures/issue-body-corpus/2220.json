@@ -1,0 +1,28 @@
+{
+  "id": "2220",
+  "category": "merged",
+  "note": "",
+  "title": "docs(idd-merge): require unclaimed-by marker post in F4 cleanup",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "## Background\n\n`.github/instructions/idd-merge.instructions.md`'s F4 (Cleanup) section\n(around line 276 onward) never mentions posting an `unclaimed-by`\nmarker as part of cleanup. An adopter who added their own explicit,\nstandalone instruction line requiring this marker post observed the\ngap close immediately and stay closed across several subsequent runs,\nsuggesting the omission itself (not an unrelated cleanup-ordering\nissue) was the cause of the marker being silently skipped.\n\n## Proposed change\n\nAdd an explicit, standalone instruction line to the F4 (Cleanup)\nsection of `idd-merge.instructions.md` requiring the `unclaimed-by`\nmarker to be posted as part of cleanup, mirroring how other required\nF4 marker posts are already stated as their own explicit steps rather\nthan being implied by surrounding prose.\n\n## Acceptance criteria\n\n- [ ] `idd-merge.instructions.md`'s F4 section contains an explicit,\n      standalone instruction line requiring the `unclaimed-by` marker\n      post\n- [ ] the added line follows the same phrasing/formatting convention\n      as neighboring explicit F4 marker-post instructions\n- [ ] `node scripts/audit-docs.mjs --check` passes\n\n---\n\n_Autopilot suitability: 5 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 5 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "6501b1a263b6d3f2a278b51c0e08971f580f2e00e75a48ddef4d786e83844c96",
+  "fetchedAt": "2026-09-24T04:43:04.729Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

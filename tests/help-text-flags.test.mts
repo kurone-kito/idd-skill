@@ -218,6 +218,7 @@ const COVERED_HELPERS = [
   'review-comment-origin',
   'review-disposition-verify',
   'select-desynced-index',
+  'snapshot-issue-body-corpus',
   'stalled-session-quiet-check',
   'suitability-close-execute',
   'suitability-triage',

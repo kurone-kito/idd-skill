@@ -1,0 +1,28 @@
+{
+  "id": "3129",
+  "category": "merged",
+  "note": "",
+  "title": "docs(lite): E10 omits critiqueLoop.delegate verdict resolution that the full-profile review-fix file has",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "**Origin**: local-ahead correction in `kurone-kito/dotfiles` (dotfiles#421 / PR #430; registered as `dotfiles-divergence: lite-critique-delegate-parity` by dotfiles#425). Reconfirmed still absent from upstream lite template at `v0.12.0` (`11105d705820e50be0a14fcc174587abbaf62b30`) by dotfiles#452.\n\n**File**: `idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md` (E10)\n\n**Problem**: full-profile `idd-review-fix.instructions.md` resolves `critiqueLoop.delegate` (mode/command/fallback, union of delegate + per-agent findings). Upstream lite E10 still lacks that resolution. This repository mirrored it locally so lite sessions keep delegate-critique coverage (same pattern as `lite-telemetry-parity`, different phase).\n\n`kurone-kito/idd-skill#2968` landed several lite/standard mirroring fixes at `v0.12.0`; this E10 delegate-verdict block was not among them.\n\n**Suggested fix**: mirror the stock E10 delegate-verdict resolution steps into the lite review-fix file.\n\n**Confirmed present** at `v0.12.0` by a direct diff of the local lite review-fix file against the pinned template.\n\n## Acceptance Criteria\n\n- Lite E10 resolves `critiqueLoop.delegate` mode/command/fallback and unions delegate findings with the per-agent pass, matching the full-profile file.\n- `node scripts/audit-docs.mjs --check` and markdownlint pass on the updated file.\n",
+  "bodySha256": "1c247c44ad72481db4cd2185506a9a42d51153c564b335151dc2128a44953d06",
+  "fetchedAt": "2026-09-24T04:42:33.690Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

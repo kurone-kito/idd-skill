@@ -1,0 +1,25 @@
+{
+  "id": "gap-2767-07",
+  "category": "synthetic",
+  "note": "#2767 item 7 (literal \"&gt;\" inside a quoted HTML tag attribute value defeats the open-tag scan): isInsideOpenHtmlTag never existed under that name in this repo's git history. The closest current mechanism, matchInlineHtmlTagEnd / INLINE_HTML_OPEN_TAG_PATTERN (built for #2865), already has quoted-attribute-value state tracking that correctly consumes an embedded \">\" inside quotes without ending the tag early. No defeat of the open-tag scan was reproduced (MISMATCH).",
+  "title": "Adopt option A for the API",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\nExample markup: `<span title=\"a &gt; b\" data-note=\"see notes &gt; below\">demo</span>` renders fine.\n\nMaintainer decision (#100, 2026-09-01): adopt option A.\n\n## Acceptance Criteria\n- [ ] `src/foo.mts` implements the change described above.\n",
+  "bodySha256": "45fe46094b1f5d28c94988bd935f2139f2ca532d45c9aaf5119bb47a53770681",
+  "fetchedAt": "2026-09-24T07:22:41.388Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

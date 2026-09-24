@@ -1,0 +1,28 @@
+{
+  "id": "1625",
+  "category": "merged",
+  "note": "",
+  "title": "docs(idd): point idd-resume.instructions.md's §W1-§W8 pointer at §FH too",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\n`.github/instructions/idd-resume.instructions.md`'s Step 1 table\n(around line 103) cites \"Forced-handoff recovery confirmed (§FH)\", and\na real `## §FH — Forced-Handoff Recovery` detail entry exists in\n`docs/idd-resume-detail.md` (line 8). But unlike its siblings §W1-§W8,\nthe file's own pointer sentence (around line 148 — \"Section numbers\n§W1-§W8 are detail entries in `docs/idd-resume-detail.md`\") never\nmentions §FH, so nothing in-scope tells a cold reader where §FH is\nactually defined, even though the abbreviation itself is glossed\ninline as \"Forced-handoff recovery\" in the table.\n\nSurfaced by the completion audit of roadmap #1598 (`idd-spec-audit` dry\nrun, #1597 / PR #1610).\n\n## Proposed change\n\nUpdate the pointer sentence around line 148 to include §FH alongside\n§W1-§W8, for example: \"Section numbers §W1-§W8 and §FH are detail\nentries in `docs/idd-resume-detail.md`.\"\n\n## Acceptance criteria\n\n- [ ] The pointer sentence in `idd-resume.instructions.md` names §FH\n      alongside §W1-§W8 as a `docs/idd-resume-detail.md` detail entry.\n- [ ] `node scripts/audit-docs.mjs --check` passes.\n\n---\n\n_Autopilot suitability: 5 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 5 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection tie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "c3554b9a7b9ac723a0a6d04e6c4fbe7eedac0e3d727c3153d60e4e93580f8077",
+  "fetchedAt": "2026-09-24T04:43:35.635Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

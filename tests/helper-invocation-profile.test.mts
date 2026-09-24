@@ -154,6 +154,15 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   // no `kurone-kito/idd-skill`-specific Copilot-review-wave baseline of
   // its own to measure against this one.
   'scripts/copilot-review-wave-audit.mjs',
+  // snapshot-issue-body-corpus.mjs (#3288): this repository's own dogfood
+  // A4/A4.5 verdict-corpus snapshot/refresh CLI, named in
+  // docs/typescript-sources.md's own usage examples. It vendors real
+  // `kurone-kito/idd-skill` issue bodies plus their current lexical-gate
+  // verdicts into the committed `tests/fixtures/issue-body-corpus/`
+  // regression corpus, and is never distributed to idd-template/; an
+  // adopter repository has no `kurone-kito/idd-skill`-specific issue
+  // history of its own to snapshot.
+  'scripts/snapshot-issue-body-corpus.mjs',
 ]);
 
 // A helper name that appears only as a *proposed*, not-yet-built script

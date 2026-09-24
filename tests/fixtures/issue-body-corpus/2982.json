@@ -1,0 +1,28 @@
+{
+  "id": "2982",
+  "category": "merged",
+  "note": "",
+  "title": "docs(onboarding): stale cross-reference and dangling ONBOARDING.md links across 4 files",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "## Background\n\n**Origin**: flagged during the issue-mediated bootstrap of this template into `kurone-kito/kurone-kito` (kurone-kito/kurone-kito#29, merged), tracked upstream via #2973 items 8, 9, and 11. Verified 2026-09-14 against this repository's current source, with the scope widened by one file versus the original report (see note below).\n\n**Files**:\n- `idd-template/docs/onboarding/issue-mediated-bootstrap.md` (~line 228, stale reference; ~line 10-13, dangling link)\n- `idd-template/docs/onboarding/agent-entry-and-verification.md` (~line 10-12, dangling link)\n- `idd-template/docs/onboarding/optional-host-setup.md` (~line 578-579, dangling link)\n- `idd-template/docs/onboarding/project-tuning.md` (~lines 11, 28, 124, dangling link)\n\n**Problem** (two related reference-hygiene gaps):\n\n1. `issue-mediated-bootstrap.md` (~L228) references a `\"Do not draft this\"` heading/anchor/quoted rule that doesn't exist anywhere in the file (no matching heading or exact phrase); the related prose actually lives at ~lines 300-314 with no matching heading to point at.\n2. Four files carry the same class of dangling local-path reference (`../../ONBOARDING.md` or `idd-template/ONBOARDING.md`-style), which 404s once only `docs/` -- not the full `idd-template/` tree -- is imported downstream: `issue-mediated-bootstrap.md` (~L10-13), `agent-entry-and-verification.md` (~L10-12), `optional-host-setup.md` (~L578-579, `../../ONBOARDING.md#dry-run--readiness-assessment`), and `project-tuning.md` (~lines 11, 28, 124). The original report described `project-tuning.md` as \"already fixed\" via a downstream adopter's local divergence, but verification found the identical unfixed pattern still present in this canonical repository -- that fix was only ever applied locally downstream, never upstreamed here, so the real remaining scope is these 4 files, not 2.\n\n## Proposed change\n\n1. Correct `issue-mediated-bootstrap.md`'s stale cross-reference to point at the actual prose location (~lines 300-314) or add the missing heading it expects.\n2. Replace each dangling local-path reference in all 4 files with a released tag or pinned-commit URL, consistent with this repository's own \"keep imports pinned\" convention used elsewhere in these same documents.\n\n## Acceptance criteria\n- `issue-mediated-bootstrap.md`'s `\"Do not draft this\"` cross-reference points at real, existing content.\n- All 4 named files' `ONBOARDING.md`-family references resolve to a released tag or pinned-commit URL instead of a dangling local relative path.\n- `node scripts/audit-docs.mjs --check` and `npx markdownlint-cli2 \"**/*.md\"` pass on all 4 updated files.\n\n## Groom disposition\n\nMaintainer decision (Groom hearing, 2026-09-15): confirm this issue as full-autopilot-ready. The scope is repository-local, the acceptance criteria are deterministic, and no human coordination remains after the hearing.\n\n## Candidate files\n\n- `idd-template/ONBOARDING.md`\n- `idd-template/docs/onboarding/agent-entry-and-verification.md`\n- `idd-template/docs/onboarding/issue-mediated-bootstrap.md`\n- `idd-template/docs/onboarding/optional-host-setup.md`\n- `idd-template/docs/onboarding/project-tuning.md`\n\nRefs #3027 (non-blocking)\n\nIssue `#3027` puts this same onboarding surface under a\n`bundleBudgets` size budget measured at its own implementation time, so\nthese two can land in either order; neither needs to wait for the other.\n\n---\n\n_Autopilot suitability: 5 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented. The scope is repository-local, the acceptance criteria are deterministic, and no human coordination is required._\n<!-- idd-skill-autopilot-suitability: 5 -->\n\n_Effort: M -- author-estimated size; a soft autopilot selection tie-breaker only._\n<!-- idd-skill-effort: M -->\n\n",
+  "bodySha256": "74dcaaf2a15093e74443f14a38305831f05f207554c2bb5e9a8dc785d4372e3f",
+  "fetchedAt": "2026-09-24T04:42:38.272Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

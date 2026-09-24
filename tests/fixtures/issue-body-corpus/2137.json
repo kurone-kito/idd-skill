@@ -1,0 +1,28 @@
+{
+  "id": "2137",
+  "category": "merged",
+  "note": "Merged/ready real issue about honoring reviewPolicy in advisory-convergence; today's A4.5 verifiability check false-positives on its own policy-conditional prose (known lexical-gate boundary gap).",
+  "title": "feat(advisory-convergence): honor reviewPolicy when deciding applicability",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "## Background\n\nParent roadmap: #2141\n\n`reviewPolicy` already exists on `.github/idd/config.json`\n(`copilot-advisory` / `human-required` / `no-advisory` /\n`external-bot`). Profile artifacts under `idd-template/profiles/`\ntell an adopter to strip Copilot wait language from the phase files.\n\n`advisory-convergence.mts` never reads `reviewPolicy`. Once the\noptional workflow is registered as a required check, every applicable\nPR is judged as a Copilot-advisory PR — including a repository that\nchose `human-required` or `no-advisory`.\n`advisoryWait.exemptBotAuthoredPrs` does not help: a human-authored\nPR is never exempted.\n\n`idd-claimed` is the wrong substitute. A hybrid PR that closes an IDD\nissue becomes applicable and then demands Copilot. That is the\ngradual-adoption shape.\n\nThe profile READMEs also never tell the adopter to set\n`reviewPolicy` in config or to leave the workflow unregistered. The\nfield and the required check can disagree in silence.\n\n## Proposed change\n\nMake the convergence applicability (or an equivalent early\nshort-circuit that yields `ready` through `not_applicable`, not\nthrough a fake `converged`) honor `reviewPolicy`:\n\n- `copilot-advisory`, absent, or an invalid value: current behavior\n  (fail-closed).\n- `human-required` and `no-advisory`: Copilot clauses do not apply.\n  Human approval and conversation resolution stay on branch\n  protection / the phase files, not on this check.\n- `external-bot`: keep using the configured primary advisory bot\n  (already the non-Copilot path).\n\nAdd `reviewPolicy` (and \"do not register `idd-advisory-convergence`\nas required unless this policy actually wants an advisory-bot\ncheck\") to the `human-required` and `no-advisory` profile patch\nsurfaces so a later session does not re-host the check against a\nhuman-only policy.\n\nDo not invent a new `convergenceScope` value in this issue. Do not\ntreat a trusted human approve as a silent Copilot substitute under\n`copilot-advisory`.\n\n## Acceptance criteria\n\n- With `reviewPolicy: human-required` or `no-advisory`,\n  `advisory-convergence --assert` exits 0 on a fixture PR that has no\n  Copilot review and no waiver.\n- With `reviewPolicy` absent or `copilot-advisory`, the same fixture\n  still fails until Copilot converges or a valid waiver applies\n  (today's behavior).\n- An invalid `reviewPolicy` value does not widen applicability past\n  today's `copilot-advisory` behavior.\n- `idd-template/profiles/human-required/README.md` and\n  `no-advisory/README.md` list the config field and the \"do not\n  register this check unless you want an advisory-bot gate\" note on\n  the same patch surface as the phase-file edits.\n- Schema / helper-script / customization docs name the new reading\n  of `reviewPolicy`.\n- Tests cover the three policy branches above.\n- `pnpm test` and `pnpm run lint:minimum` pass.\n\n## Candidate files\n\n- `src/scripts/advisory-convergence.mts`\n- `schemas/policy.schema.json` (description only if the enum is\n  unchanged)\n- `idd-template/profiles/human-required/README.md`\n- `idd-template/profiles/no-advisory/README.md`\n- `docs/customization.md`, `docs/idd-helper-scripts.md`,\n  `docs/idd-review-policy-profiles.md` (and `idd-template/` mirrors)\n- `tests/advisory-convergence.test.mts`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n---\n\n_Effort: M -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "9fefffdde7f01fc39a9d3d2352b1e3123209676ffbcdecc05f54f082fcf23f2b",
+  "fetchedAt": "2026-09-24T04:43:08.169Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}

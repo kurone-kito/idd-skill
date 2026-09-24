@@ -1,0 +1,27 @@
+{
+  "id": "1454",
+  "category": "merged",
+  "note": "",
+  "title": "fix(idd): tryFetchBase hardcodes github.com, breaking GHES checkouts",
+  "labels": [
+    "bug"
+  ],
+  "body": "## Background\n\n`tryFetchBase` in `src/scripts/branch-conflict-state.mts` (introduced in\ncommit 56dce2eb, predating #1398) hardcodes the fetch remote as:\n\n```ts\nconst remote = `https://github.com/${owner}/${repo}.git`;\n```\n\nFound via Copilot/Codex review on PR #1452 (implementing #1398): for a\nGitHub Enterprise Server (GHES) repository, this always fetches from\ngithub.com instead of the actual configured host, so the fetch fails\n(or worse, could silently address an unrelated public github.com repo\nof the same owner/repo name). This affects every caller of the shared\nmerge-base fallback-fetch path: the pre-existing conflict-probing used\nfor `CONFLICTING` / `BEHIND` states, and the new\n`baseAdvancedSinceMergeBase` computation added in #1398 -- in both\ncases, a GHES checkout with insufficient local history silently falls\nback to an indeterminate/safe-default result instead of a working\nfetch.\n\n## Proposed change\n\nDerive the remote from the configured `gh` host (e.g. `gh api` already\nresolves against `GH_HOST` / `gh config get -h`) or from the local\ncheckout's `origin` remote URL, instead of hardcoding `github.com`.\n\n## Acceptance criteria\n\n- [ ] `tryFetchBase` derives the remote host from configured `gh`\n      host / local origin remote, not a hardcoded `github.com`.\n- [ ] Existing github.com-hosted behavior unchanged (regression test).\n- [ ] New test covering a non-github.com host resolves correctly (or\n      documents why it cannot be tested without a live GHES instance).\n\nRefs #1398",
+  "bodySha256": "d392825571ec649a95fc6602b69541a85e1a8586737295d6b0891d5ad7e71681",
+  "fetchedAt": "2026-09-24T04:43:48.305Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

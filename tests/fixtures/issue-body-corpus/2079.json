@@ -1,0 +1,28 @@
+{
+  "id": "2079",
+  "category": "merged",
+  "note": "",
+  "title": "fix(doctor): scope the placeholder scanner to IDD-managed files, not the whole repo",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "## Goal\n\nFix `idd-doctor.mjs`'s `{{...}}` placeholder scanner so it stays scoped to\nIDD-managed files, matching its own pass-message claim (\"no unresolved\n`{{...}}` placeholders in IDD-managed files\"), instead of scanning every\ngit-tracked text-like file in the adopter repository.\n\n## Background\n\nDiscovered 2026-08-15 while running the v0.6.0 re-import verification in\n[`kurone-kito/kit.black`](https://github.com/kurone-kito/kit.black) (issue\nkurone-kito/kit.black#128). `node scripts/idd-doctor.mjs` reports:\n\n```text\nERROR unresolved placeholders found: packages/web/src/i18n/en.ts: {{ year }} | packages/web/src/i18n/ja.ts: {{ year }}\n```\n\n`packages/web/src/i18n/{en,ja}.ts` are the adopter's own application i18n\ndictionaries. `{{ year }}` there is a legitimate runtime template token the\napp's own translator substitutes at render time — it has nothing to do with\nIDD onboarding placeholders and was never meant to be \"resolved\" by import.\n\n## Root cause\n\n`checkPlaceholders` (`scripts/idd-doctor.mjs`) receives `files` from\n`listFiles(root)` → `git ls-files --cached --others --exclude-standard`,\nfiltered only by `isTextLikeFile` (`/\\.(md|txt|yml|yaml|json|mjs|js|ts|sh)$/`)\nin the caller (`runDoctor`, around line 42: `const textFiles =\nfiles.filter(isTextLikeFile);`). `checkPlaceholders`'s own\n`excludedPrefixes` list only removes `idd-template/`, `fixtures/`,\n`tests/fixtures/`, `tests/`, `.git/` (plus `.github/instructions/` and\n`audit/` under `distributionSource`) — there is no scoping to IDD-managed\npaths (`.github/instructions/`, `docs/`, `profiles/`, `.claude/skills/`,\nthe vendored `scripts/`/`schemas/` bundle, etc.). Every other `.ts`/`.js`/\n`.md`/`.json`/`.yml` file in the adopter's own application source is\nscanned too, so any adopter that legitimately uses `{{...}}` as a runtime\ntemplate syntax (i18n, mustache-style templates, etc.) trips this check.\n\nThe function's own doc comment and pass message both say \"IDD-managed\nfiles\" / \"unresolved placeholders in IDD-managed files\" — the code does\nnot actually implement that scope.\n\n## Proposed change\n\nScope `checkPlaceholders` to only the paths `idd-doctor` itself treats as\nIDD-managed (the same file classes `checkRequiredFiles` cares about, plus\n`.github/instructions/`, `profiles/`, `.claude/skills/`, the vendored\n`scripts/`/`schemas/`/`fixtures/schemas/` bundle, and `docs/*.md`), rather\nthan every text-like file in the repository. Add a regression fixture\nunder an adopter-style path outside that scope (e.g. a `.ts` file with a\n`{{ token }}` template placeholder) to `tests/fixtures/` to lock the fix.\n\n## Acceptance criteria\n\n- [ ] `checkPlaceholders` only scans IDD-managed paths, not the full\n      adopter-repository file tree.\n- [ ] A regression test fixture (a non-IDD-managed file containing a\n      `{{...}}`-shaped token) passes cleanly.\n- [ ] Existing IDD-managed-file placeholder detection (including inside\n      `.github/instructions/*.md` marker examples) still fires as before.\n- [ ] `docs/idd-policy.md`-style downstream adopters relying on `node\n      scripts/idd-doctor.mjs` exiting clean no longer need a manual\n      disposition note for this false positive.\n\n## Downstream reference\n\nkurone-kito/kit.black#128 disposition (record-and-route, no local patch —\n`scripts/idd-doctor.mjs` is vendored byte-identical from this repository\nand a local patch would silently revert on the next re-sync).\n",
+  "bodySha256": "739bd1fa76ce938dbf24b9bb53d27fb416853243d0946203666a8f6218229c91",
+  "fetchedAt": "2026-09-24T04:43:09.507Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

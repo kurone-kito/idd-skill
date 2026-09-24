@@ -1,0 +1,25 @@
+{
+  "id": "gap-2767-04",
+  "category": "synthetic",
+  "note": "#2767 item 4 (indented-code scanner has no list-item-nesting awareness): today's findIndentedCodeRanges (markdown-code.mts) carries substantial container/list-content-indent tracking that appears purpose-built for exactly this case. A dedicated research pass could not reproduce a nested, blank-line-preceded sub-bullet being wrongly masked as indented code across 5 varied constructions (single/double nesting, numbered lists, list-type switches, multi-blank-line resets); the gap does not reproduce today (MISMATCH).",
+  "title": "Adopt src/foo.mts change (nested sub-bullet)",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\nMaintainer decision (#100, 2026-09-01): adopt the change described below.\n\n## Acceptance Criteria\n- First top-level bullet is fine `src/a.mts`\n\n  - Nested sub-bullet under the first bullet, blank-line preceded\n- Second top-level bullet `src/b.mts`\n\n  - Nested sub-bullet under the second bullet, blank-line preceded, more detail here\n- Third top-level bullet `src/c.mts`\n",
+  "bodySha256": "e5fdc6ad98304d172641ce0d90ad11e7b5eb77fbd321fc1118578bb5de3e80a5",
+  "fetchedAt": "2026-09-24T07:22:41.384Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

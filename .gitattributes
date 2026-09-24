@@ -95,6 +95,7 @@ scripts/review-clause.mjs linguist-generated=true
 scripts/review-comment-origin.mjs linguist-generated=true
 scripts/review-disposition-verify.mjs linguist-generated=true
 scripts/select-desynced-index.mjs linguist-generated=true
+scripts/snapshot-issue-body-corpus.mjs linguist-generated=true
 scripts/stalled-session-quiet-check.mjs linguist-generated=true
 scripts/suitability-close-execute.mjs linguist-generated=true
 scripts/suitability-triage.mjs linguist-generated=true

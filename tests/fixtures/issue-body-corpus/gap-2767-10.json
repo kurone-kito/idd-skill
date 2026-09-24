@@ -1,0 +1,27 @@
+{
+  "id": "gap-2767-10",
+  "category": "synthetic",
+  "note": "#2767 item 10 (a non-\"1\"-starting ordered-list marker wrongly interrupts a paragraph): the inline maintainer-decision pattern's block-start guard rejects ANY digit-led ordered marker on the hard-wrapped resolution line, regardless of the starting digit -- but CommonMark only lets a marker starting at \"1\" interrupt an open paragraph; a \"5.\" continuation is ordinary lazy-continuation prose. findIndentedCodeRanges's own isNonInterruptingListItem already encodes the correct CommonMark rule elsewhere in this same codebase, but resolved-decision.mts's guard has no equivalent exception, so a genuinely resolved decision whose resolution text happens to start with a non-\"1\" numbered continuation is wrongly rejected as an empty marker. The gap is present today (MATCH).",
+  "title": "Keep numbering as before",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\nMaintainer decision (#100, 2026-09-01):\n5. Keep numbering the remaining steps as before, no change needed.\n\n## Acceptance Criteria\n- [ ] `src/foo.mts` implements the change described above.\n",
+  "bodySha256": "c32b4c8d715e420d5d0670a12b262b77ec8d64ee2a2c0d550c7d1135ad3888d7",
+  "fetchedAt": "2026-09-24T07:22:41.391Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}
