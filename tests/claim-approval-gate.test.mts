@@ -349,6 +349,10 @@ test('ready label actor permission-read failure is a fail-closed ambiguity (pres
   assert.equal(result.approved, false);
   assert.equal(result.reason, 'approval-ambiguous');
   assert.equal(findCheck(result, 'ambiguity_guard')?.result, 'fail');
+  assert.match(
+    findCheck(result, 'ambiguity_guard')?.evidence ?? '',
+    /ready-label-actor-permission-unavailable/,
+  );
 });
 
 test('ready label present but no matching labeled event in the timeline is not approved (presence-only, #3254)', () => {
@@ -370,6 +374,41 @@ test('ready label present but no matching labeled event in the timeline is not a
   assert.equal(result.approved, false);
   assert.equal(result.reason, 'approval-ambiguous');
   assert.equal(findCheck(result, 'ready_label_present')?.result, 'fail');
+  assert.match(
+    findCheck(result, 'ambiguity_guard')?.evidence ?? '',
+    /ready-label-actor-unverified/,
+  );
+});
+
+test('a labeled event with no recorded actor is not approved (presence-only, #3254)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'idd:ready' }] },
+      policy: {},
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          // No `actor` field at all -- a malformed/unexpected timeline
+          // event shape, distinct from "no matching event found".
+          event: 'labeled',
+          created_at: '2026-05-10T12:00:00Z',
+          label: { name: 'idd:ready' },
+        },
+      ],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, 'approval-ambiguous');
+  assert.match(
+    findCheck(result, 'ambiguity_guard')?.evidence ?? '',
+    /ready-label-actor-unverified/,
+  );
 });
 
 test('an earlier authorized labeled event does not approve when the latest labeled event is unauthorized (presence-only, #3254)', () => {
