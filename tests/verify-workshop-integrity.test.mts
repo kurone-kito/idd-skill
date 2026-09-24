@@ -217,6 +217,41 @@ test('extractReferences skips links inside fenced code blocks', () => {
   assert.equal(refs[0].target, './a.md');
 });
 
+// #3283's four-row CommonMark fence/span table: extractReferences must
+// find the real link in the first two rows and not find the code one in
+// the last two.
+test('extractReferences finds a real link after a backtick fence whose content has a tilde-fence-shaped line', () => {
+  const md = [
+    '```',
+    'inside content',
+    '~~~',
+    'nested-looking line',
+    '~~~',
+    '```',
+    '[real](./a.md)',
+  ].join('\n');
+  const refs = extractReferences(md);
+  assert.equal(refs.length, 1);
+  assert.equal(refs[0].target, './a.md');
+});
+
+test('extractReferences finds a real link on the line after a 4-space-indented backtick-shaped line (indented code, not a fence)', () => {
+  const md = ['paragraph', '', '    ```', '[real](./a.md)'].join('\n');
+  const refs = extractReferences(md);
+  assert.equal(refs.length, 1);
+  assert.equal(refs[0].target, './a.md');
+});
+
+test('extractReferences ignores a link inside a tilde fence', () => {
+  const md = ['~~~', '[fake](./missing.md)', '~~~'].join('\n');
+  assert.equal(extractReferences(md).length, 0);
+});
+
+test('extractReferences ignores a link inside a double-backtick code span', () => {
+  const md = '``[fake](./missing.md)``';
+  assert.equal(extractReferences(md).length, 0);
+});
+
 test('extractReferenceDefinitions reads [label]: target pairs', () => {
   const md = `text\n\n[alpha]: ./a.md\n[beta]: https://example.com "Title"\n`;
   const defs = extractReferenceDefinitions(md);
