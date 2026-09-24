@@ -156,6 +156,102 @@ function assertNoGraphqlErrors(payload: unknown, context: string): void {
 }
 
 /**
+ * #3246: map a raw GraphQL `lastEditedAt` field value onto
+ * {@link ProviderComment.lastEditedAt}'s three-state contract. Used by
+ * every ALREADY-GraphQL comment query (review threads,
+ * `listChangeRequestGraphqlComments`) that selects this field
+ * unconditionally -- `undefined` here means the field came back missing,
+ * empty, or unparseable on an otherwise-successful response, never a
+ * transport failure (a failed call throws before this runs).
+ */
+function mapLastEditedAt(raw: unknown): string | null | undefined {
+  if (raw === null) {
+    return null;
+  }
+  if (
+    typeof raw === 'string' &&
+    raw.trim() !== '' &&
+    !Number.isNaN(Date.parse(raw))
+  ) {
+    return raw;
+  }
+  return undefined;
+}
+
+/**
+ * #3246: batch-resolve GraphQL `IssueComment.lastEditedAt` for the given
+ * comment node ids via `nodes(ids:)`, chunked to 100 ids per request
+ * (matching this file's own `first:100` page-size convention). Backs
+ * {@link ProviderPort.listWorkItemComments}'s and
+ * {@link ProviderPort.listWorkItemCommentsWithRetryAsync}'s opt-in
+ * `includeEditState` -- both read REST `issues/{n}/comments`, which has
+ * no edit-timestamp field, so resolving it needs this separate GraphQL
+ * round trip. Exported so `external-check-waiver.mts` -- which predates
+ * the #2266 provider-port migration and still calls `gh` directly for its
+ * own REST comment read (needing `html_url`/`url`, fields
+ * {@link ProviderComment} does not carry) -- can share this one
+ * resolution instead of forking a second copy.
+ *
+ * Every requested id must resolve to a well-formed `IssueComment` node
+ * with a three-state-contract-valid `lastEditedAt`
+ * (`null`/parseable-timestamp): a missing, mismatched, or malformed node
+ * throws rather than silently reporting 'unknown' for a caller that
+ * explicitly opted in and needs a definitive answer -- mirrors this
+ * file's other GraphQL methods' fail-fast-on-malformed-page contract.
+ */
+export function fetchLastEditedAtByNodeId(
+  ghTextFn: typeof ghText,
+  nodeIds: string[],
+): Map<string, string | null> {
+  const result = new Map<string, string | null>();
+  if (nodeIds.length === 0) {
+    return result;
+  }
+  const query = `query($ids:[ID!]!){
+  nodes(ids:$ids) { id ... on IssueComment { lastEditedAt } }
+}`;
+  const chunkSize = 100;
+  for (let start = 0; start < nodeIds.length; start += chunkSize) {
+    const chunk = nodeIds.slice(start, start + chunkSize);
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...graphqlHostnameArgs(),
+      '-f',
+      `query=${query}`,
+      ...chunk.flatMap((id) => ['-f', `ids[]=${id}`]),
+    ];
+    const parsed = JSON.parse(ghTextFn(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(parsed, 'fetchLastEditedAtByNodeId');
+    const nodes = (parsed as { data?: { nodes?: unknown[] } })?.data?.nodes;
+    if (!Array.isArray(nodes) || nodes.length !== chunk.length) {
+      throw new Error(
+        `fetchLastEditedAtByNodeId: expected ${chunk.length} node(s), got ${
+          Array.isArray(nodes) ? nodes.length : 'none'
+        }`,
+      );
+    }
+    nodes.forEach((node, index) => {
+      const expectedId = chunk[index];
+      const typed = node as { id?: unknown; lastEditedAt?: unknown } | null;
+      if (typed == null || String(typed.id ?? '') !== expectedId) {
+        throw new Error(
+          `fetchLastEditedAtByNodeId: node ${expectedId} missing or mismatched in response`,
+        );
+      }
+      const mapped = mapLastEditedAt(typed.lastEditedAt);
+      if (mapped === undefined) {
+        throw new Error(
+          `fetchLastEditedAtByNodeId: node ${expectedId} has a missing/unparseable lastEditedAt`,
+        );
+      }
+      result.set(expectedId, mapped);
+    });
+  }
+  return result;
+}
+
+/**
  * Backs {@link ProviderPort.getWorkItemUserContentEdits} (via
  * {@link fetchWorkItemUserContentEdits}'s full backward-pagination loop
  * over this single-page fetch) and, directly (one call, no pagination --
@@ -935,6 +1031,8 @@ interface RawThreadCommentNode {
   author?: { login?: unknown; __typename?: unknown } | null;
   pullRequestReview?: { id?: unknown } | null;
   databaseId?: unknown;
+  /** #3246: present only when the caller's own fragment selects it. */
+  lastEditedAt?: unknown;
 }
 
 /** Raw GraphQL review-thread node, as {@link fetchReviewThreadsGeneric}
@@ -1673,7 +1771,7 @@ export function createGithubProviderAdapter(
 
     listWorkItemComments(
       number: number,
-      options?: { timeoutMs?: number },
+      options?: { timeoutMs?: number; includeEditState?: boolean },
     ): ProviderComment[] {
       const rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
         paginate: true,
@@ -1688,7 +1786,7 @@ export function createGithubProviderAdapter(
         updated_at?: unknown;
         user?: { login?: unknown };
       }[];
-      return rows.map((row) => ({
+      const mapped = rows.map((row) => ({
         id: Number(row.id),
         nodeId: String(row.node_id ?? ''),
         body: String(row.body ?? ''),
@@ -1696,6 +1794,34 @@ export function createGithubProviderAdapter(
         updatedAt: String(row.updated_at ?? row.created_at ?? ''),
         authorLogin: String(row.user?.login ?? ''),
       }));
+      if (!options?.includeEditState) {
+        return mapped;
+      }
+      // #3246: REST has no edit-timestamp field -- resolve it via one
+      // follow-up GraphQL batch read, keyed by each comment's own
+      // `node_id`. A comment missing `node_id` cannot be resolved at all;
+      // fail closed rather than silently reporting it 'unknown'.
+      const nodeIds = mapped.map((comment) => comment.nodeId);
+      if (nodeIds.some((id) => id === '')) {
+        throw new Error(
+          `listWorkItemComments: includeEditState requires every comment on #${number} to carry a node_id`,
+        );
+      }
+      const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(
+        deps.ghText,
+        nodeIds,
+      );
+      return mapped.map((comment) => {
+        if (!lastEditedAtByNodeId.has(comment.nodeId)) {
+          throw new Error(
+            `listWorkItemComments: missing edit-state resolution for comment #${comment.id}`,
+          );
+        }
+        return {
+          ...comment,
+          lastEditedAt: lastEditedAtByNodeId.get(comment.nodeId) ?? null,
+        };
+      });
     },
 
     postWorkItemComment(number: number, body: string): ProviderPostedComment {
@@ -2088,6 +2214,7 @@ export function createGithubProviderAdapter(
 
     async listWorkItemCommentsWithRetryAsync(
       number: number,
+      options?: { includeEditState?: boolean },
     ): Promise<unknown[]> {
       const comments: unknown[] = [];
       const pageSize = 100;
@@ -2114,7 +2241,37 @@ export function createGithubProviderAdapter(
           break;
         }
       }
-      return comments;
+      if (!options?.includeEditState) {
+        return comments;
+      }
+      // #3246: same edit-state resolution as `listWorkItemComments`, but
+      // merged onto each raw REST row as snake_case `last_edited_at` --
+      // this method's return type is a raw passthrough, not
+      // `ProviderComment`.
+      const nodeIds = comments.map((row) =>
+        String((row as { node_id?: unknown })?.node_id ?? ''),
+      );
+      if (nodeIds.some((id) => id === '')) {
+        throw new Error(
+          `listWorkItemCommentsWithRetryAsync: includeEditState requires every comment on #${number} to carry a node_id`,
+        );
+      }
+      const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(
+        deps.ghText,
+        nodeIds,
+      );
+      return comments.map((row, index) => {
+        const nodeId = nodeIds[index];
+        if (!lastEditedAtByNodeId.has(nodeId)) {
+          throw new Error(
+            `listWorkItemCommentsWithRetryAsync: missing edit-state resolution for node ${nodeId}`,
+          );
+        }
+        return {
+          ...(row as Record<string, unknown>),
+          last_edited_at: lastEditedAtByNodeId.get(nodeId) ?? null,
+        };
+      });
     },
 
     searchOpenWorkItems(query: {
@@ -2595,7 +2752,7 @@ export function createGithubProviderAdapter(
         owner,
         repo,
         number,
-        'body createdAt updatedAt author { login } pullRequestReview { id }',
+        'body createdAt updatedAt lastEditedAt author { login } pullRequestReview { id }',
       );
       return nodes.map((node) => ({
         id: node.id,
@@ -2609,6 +2766,7 @@ export function createGithubProviderAdapter(
             comment.pullRequestReview?.id == null
               ? null
               : String(comment.pullRequestReview.id),
+          lastEditedAt: mapLastEditedAt(comment.lastEditedAt),
         })),
       }));
     },
@@ -2621,7 +2779,7 @@ export function createGithubProviderAdapter(
         owner,
         repo,
         number,
-        'body url createdAt updatedAt author { login }',
+        'body url createdAt updatedAt lastEditedAt author { login }',
       );
       return nodes.map((node) => ({
         isResolved: node.isResolved,
@@ -2632,6 +2790,7 @@ export function createGithubProviderAdapter(
           createdAt: String(comment.createdAt ?? ''),
           updatedAt: String(comment.updatedAt ?? ''),
           authorLogin: String(comment.author?.login ?? ''),
+          lastEditedAt: mapLastEditedAt(comment.lastEditedAt),
         })),
       }));
     },
@@ -2660,7 +2819,7 @@ export function createGithubProviderAdapter(
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
       comments(first:100,after:$cursor){
-        nodes { body url createdAt updatedAt author { login } }
+        nodes { body url createdAt updatedAt lastEditedAt author { login } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -2699,6 +2858,7 @@ export function createGithubProviderAdapter(
                     url?: unknown;
                     createdAt?: unknown;
                     updatedAt?: unknown;
+                    lastEditedAt?: unknown;
                     author?: { login?: unknown } | null;
                   }[];
                   pageInfo?: {
@@ -2734,6 +2894,7 @@ export function createGithubProviderAdapter(
             createdAt: String(node.createdAt ?? ''),
             updatedAt: String(node.updatedAt ?? ''),
             authorLogin: String(node.author?.login ?? ''),
+            lastEditedAt: mapLastEditedAt(node.lastEditedAt),
           });
         }
         const pageInfo = connection.pageInfo;
@@ -3148,7 +3309,7 @@ export function createGithubProviderAdapter(
         owner,
         repo,
         number,
-        'body createdAt updatedAt author { login __typename } pullRequestReview { id }',
+        'body createdAt updatedAt lastEditedAt author { login __typename } pullRequestReview { id }',
       );
       return nodes.map((node) => ({
         id: node.id,
@@ -3166,6 +3327,7 @@ export function createGithubProviderAdapter(
             comment.pullRequestReview?.id == null
               ? null
               : String(comment.pullRequestReview.id),
+          lastEditedAt: mapLastEditedAt(comment.lastEditedAt),
         })),
       }));
     },
