@@ -3547,6 +3547,87 @@ test('listChangeRequestGraphqlComments throws on a null comments connection', ()
   );
 });
 
+// kurone-kito/idd-skill#3259: the query must select the reviewed commit's
+// oid so `merged-pr-feedback-sweep.mts` can bind a `review-ack:` marker to
+// the SPECIFIC review it acknowledges, not just the PR's current HEAD.
+test('listChangeRequestGraphqlReviews selects the commit oid and maps it to commitOid', () => {
+  let capturedQuery: string | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedQuery = args.find((arg) => arg.startsWith('query=query('));
+        return JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  nodes: [
+                    {
+                      body: 'hi',
+                      url: 'https://example.invalid',
+                      state: 'COMMENTED',
+                      submittedAt: '2026-01-01T00:00:00Z',
+                      author: { login: 'octocat' },
+                      commit: {
+                        oid: 'a5a56e57267540dc046659c600bcb7c62bdc3949',
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  assert.deepEqual(port.listChangeRequestGraphqlReviews(7), [
+    {
+      body: 'hi',
+      url: 'https://example.invalid',
+      state: 'COMMENTED',
+      submittedAt: '2026-01-01T00:00:00Z',
+      authorLogin: 'octocat',
+      commitOid: 'a5a56e57267540dc046659c600bcb7c62bdc3949',
+    },
+  ]);
+  assert.match(capturedQuery ?? '', /commit \{ oid \}/);
+});
+
+test('listChangeRequestGraphqlReviews maps a missing commit oid to null', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  nodes: [
+                    {
+                      body: 'hi',
+                      url: 'https://example.invalid',
+                      state: 'COMMENTED',
+                      submittedAt: '2026-01-01T00:00:00Z',
+                      author: { login: 'octocat' },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.equal(port.listChangeRequestGraphqlReviews(7)[0].commitOid, null);
+});
+
 test('listChangeRequestGraphqlReviews throws on a missing pullRequest node', () => {
   const port = createGithubProviderAdapter(
     'o',

@@ -14,13 +14,20 @@
 //
 // This is the recurring counterpart of the one-time audit in #910 and the
 // chosen recovery path from #909 (advisory-wait stays Copilot-only).
+import {
+  DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  readAdvisoryPrimaryBotLogin,
+} from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
+import { classifyCopilotReviewBody } from './copilot-review-body.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
   DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
+  hasTrustedReviewAckAfter,
   isAdvisoryNonReviewNotice,
+  isCopilotReviewerLogin,
   isDispositionComment,
   isKnownReviewBot,
   isReviewSummaryComment,
@@ -61,6 +68,14 @@ export interface SweepReviewInput {
   state?: string | null;
   submittedAt?: string | null;
   url?: string | null;
+  /** kurone-kito/idd-skill#3259: the reviewed commit's oid
+   * (`ProviderGraphqlReview.commitOid`) -- lets a trusted `review-ack:`
+   * marker be bound to THIS specific review rather than the PR's current
+   * HEAD, so an operator can acknowledge a thread-less primary-bot finding
+   * (see {@link MergedPrSweepOptions.primaryBotLogin}) the same way
+   * `idd-advisory-convergence`'s own Clause 1 already recognizes a
+   * trusted ack. */
+  commitOid?: string | null;
 }
 
 export interface SweepThreadCommentInput {
@@ -91,6 +106,13 @@ export interface MergedPrSweepOptions {
   trustedMarkerActors: string[];
   advisoryBotLogins: string[];
   iddAgentLogins: string[];
+  /** kurone-kito/idd-skill#3259: the primary advisory bot whose thread-less
+   * review-body findings (`classifyCopilotReviewBody`) this sweep also
+   * surfaces -- the same login `idd-advisory-convergence`'s Clause 1 names
+   * via `advisoryWait.primaryBotLogin` / `readAdvisoryPrimaryBotLogin`.
+   * Optional and defaults to {@link DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN}
+   * (Copilot) when absent or blank, matching that same default. */
+  primaryBotLogin?: string;
 }
 
 export interface SweepThreadFinding {
@@ -265,6 +287,19 @@ export function buildMergedPrFeedbackSweep(
     isKnownReviewBot(login) || advisory.has(login);
   const isConfiguredAdvisoryBotIdentity = (login: string): boolean =>
     advisoryIdentities.has(advisoryBotIdentityToken(login));
+  // #3259: a normalized (trimmed, lower-cased) trusted-logins ARRAY, distinct
+  // from the `isTrusted` predicate above -- `hasTrustedReviewAckAfter`
+  // (protocol-helpers.mts) needs the list itself, not a membership test.
+  const trustedMarkerLoginsForAck = normalizeTrustedMarkerLogins(
+    options.trustedMarkerActors,
+  );
+  // #3259: defaults to Copilot exactly like `isCopilotReviewerLogin`'s own
+  // `primaryBotLogin` parameter normalizes an absent/blank configured value,
+  // so the two stay in agreement.
+  const primaryBotLogin =
+    String(options.primaryBotLogin ?? '')
+      .trim()
+      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
 
   const findings: SweepPrFinding[] = [];
   for (const pr of prs) {
@@ -281,6 +316,8 @@ export function buildMergedPrFeedbackSweep(
       isTrusted,
       isAdvisoryBot,
       isConfiguredAdvisoryBotIdentity,
+      primaryBotLogin,
+      trustedMarkerLoginsForAck,
     );
     if (unresolvedThreads.length === 0 && unaddressedComments.length === 0) {
       continue;
@@ -389,6 +426,8 @@ function collectUnaddressedComments(
   isTrusted: (login: string) => boolean,
   isAdvisoryBot: (login: string) => boolean,
   isConfiguredAdvisoryBotIdentity: (login: string) => boolean,
+  primaryBotLogin: string,
+  trustedMarkerLoginsForAck: string[],
 ): SweepCommentFinding[] {
   // A non-IDD item counts as addressed only when a later IDD-agent
   // *disposition* (Accepted / Rejected / Awaiting maintainer decision)
@@ -477,26 +516,68 @@ function collectUnaddressedComments(
 
   for (const review of reviews) {
     const author = authorLogin(review);
-    // #2194: a non-`CHANGES_REQUESTED` review is still surfaced when it is
-    // from a *configured* advisory bot (matching the same narrower gate the
-    // comment loop above uses, not the broader `isAdvisoryBot`) and its body
-    // carries an outside-diff-range finding GitHub could not host as a
-    // normal inline comment.
-    if (
-      review.state !== 'CHANGES_REQUESTED' &&
-      !(
-        isConfiguredAdvisoryBotIdentity(author) &&
-        hasOutsideDiffRangeFindings(String(review.body ?? ''))
-      )
-    ) {
-      continue;
-    }
     // Same author rule as comments: exclude only explicit IDD agents; a
     // missing/unknown author is surfaced with `author: null`.
     if (isIdd(author)) {
       continue;
     }
-    if (isLaterThan(latestDispositionAt, review.submittedAt ?? null)) {
+    const isChangesRequested = review.state === 'CHANGES_REQUESTED';
+    // #2194: a non-`CHANGES_REQUESTED` review is still surfaced when it is
+    // from a *configured* advisory bot (matching the same narrower gate the
+    // comment loop above uses, not the broader `isAdvisoryBot`) and its body
+    // carries an outside-diff-range finding GitHub could not host as a
+    // normal inline comment.
+    const hasOutsideDiffRange =
+      isConfiguredAdvisoryBotIdentity(author) &&
+      hasOutsideDiffRangeFindings(String(review.body ?? ''));
+    // #3259: GitHub Copilot's reviews are always `COMMENTED`, never
+    // `CHANGES_REQUESTED`, so a thread-less finding embedded in the review
+    // BODY (rather than posted as a separate review comment) never reaches
+    // either rule above. Classify the body only for a review whose author
+    // matches the configured primary bot (`isCopilotReviewerLogin`) --
+    // classifying every review's body would be wasted work and could
+    // misclassify an unrelated bot's own prose.
+    const bodyClassification = isCopilotReviewerLogin(author, primaryBotLogin)
+      ? classifyCopilotReviewBody(review.body)
+      : null;
+    const isPrimaryBotFinding =
+      bodyClassification !== null &&
+      (bodyClassification.suppressedCount > 0 ||
+        (primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
+          bodyClassification.shape === 'unrecognized'));
+    if (!isChangesRequested && !hasOutsideDiffRange && !isPrimaryBotFinding) {
+      continue;
+    }
+    // The pre-existing whole-PR disposition gate covers the two
+    // pre-existing surfacing reasons above unchanged. It deliberately does
+    // NOT gate the new primary-bot-finding reason (#3259): a thread-less
+    // body-embedded finding has no discrete comment/thread an ordinary IDD
+    // reply could disposition, which is why `review-ack:` exists as its own
+    // dedicated mechanism (see the check below) rather than reusing this
+    // one.
+    if (
+      (isChangesRequested || hasOutsideDiffRange) &&
+      isLaterThan(latestDispositionAt, review.submittedAt ?? null)
+    ) {
+      continue;
+    }
+    // #3259: the new path's own escape hatch -- a trusted `review-ack:`
+    // marker naming THIS review's own reviewed commit, posted after it.
+    // Only applies when the primary-bot-finding reason is the SOLE reason
+    // this review is a candidate; a review already surfaced via
+    // CHANGES_REQUESTED / outside-diff-range keeps its pre-existing
+    // (unrelated) behavior unchanged.
+    if (
+      isPrimaryBotFinding &&
+      !isChangesRequested &&
+      !hasOutsideDiffRange &&
+      hasTrustedReviewAckAfter(
+        comments,
+        trustedMarkerLoginsForAck,
+        review.submittedAt ?? '',
+        review.commitOid ?? '',
+      )
+    ) {
       continue;
     }
     out.push({
@@ -713,6 +794,7 @@ function fetchMergedPr(
       state: review.state,
       submittedAt: review.submittedAt,
       author: { login: review.authorLogin },
+      commitOid: review.commitOid,
     })),
     threads: port
       .listChangeRequestReviewThreadsExtended(number)
@@ -769,6 +851,11 @@ function main(): void {
     resolveLoginList(args.iddAgentLogins) ??
     resolveLoginList(process.env.IDD_AGENT_LOGINS ?? '') ??
     trustedMarkerActors;
+  // #3259: the primary advisory bot whose thread-less review-body findings
+  // this sweep also surfaces -- no dedicated CLI flag; resolved the same
+  // way `idd-advisory-convergence`'s own Clause 1 does, defaulting to
+  // Copilot.
+  const primaryBotLogin = readAdvisoryPrimaryBotLogin();
 
   // --since/--days only drive the merged-PR enumeration; when explicit PR
   // numbers are given they are unused, so resolve and report the window as
@@ -791,6 +878,7 @@ function main(): void {
     trustedMarkerActors,
     advisoryBotLogins,
     iddAgentLogins,
+    primaryBotLogin,
   });
 
   process.stdout.write(
@@ -805,6 +893,7 @@ function main(): void {
         trustedMarkerActors,
         advisoryBotLogins,
         iddAgentLogins,
+        primaryBotLogin,
         prs: result.prs,
         summary: result.summary,
       },

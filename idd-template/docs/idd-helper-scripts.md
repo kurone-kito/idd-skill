@@ -4461,7 +4461,23 @@ same as `AW4`/`AW5`.
     text, rather than as a normal inline review comment, when it targets a
     line the diff-hunk view cannot host; `N == 0` or an absent block is an
     ordinary walkthrough/summary review with nothing outside the diff and
-    stays unsurfaced. Trusted IDD operational markers, IDD
+    stays unsurfaced. A review from the _configured_ primary advisory bot
+    (`isCopilotReviewerLogin`, `advisoryWait.primaryBotLogin` /
+    `readAdvisoryPrimaryBotLogin`, Copilot by default) is also surfaced when
+    `classifyCopilotReviewBody` reports either a nonzero `suppressedCount`,
+    or — only under the Copilot default — shape `unrecognized`
+    (kurone-kito/idd-skill#3259): Copilot's reviews are always `COMMENTED`,
+    so a thread-less "Previously missed" / `Suppressed comments (N)` finding
+    embedded in the review body never reaches the `CHANGES_REQUESTED` rule
+    above. Unlike every other surfacing rule here, this one has its own
+    narrower escape hatch instead of the whole-PR disposition check: a
+    trusted `review-ack:` marker (`hasTrustedReviewAckAfter`,
+    protocol-helpers.mts — the same check `idd-advisory-convergence`'s own
+    Clause 1 uses) naming that SPECIFIC review's own reviewed commit,
+    posted after it, clears the finding; an unrelated later disposition
+    comment does not, since a thread-less body-embedded finding has no
+    discrete comment or thread an ordinary disposition reply could address.
+    Trusted IDD operational markers, IDD
     disposition comments, any HTML comment beginning with `<!-- idd-` (for
     example cleanup-evidence, excluded regardless of author — including CI
     automation such as `github-actions[bot]`), and a genuine CodeRabbit
@@ -4490,8 +4506,9 @@ same as `AW4`/`AW5`.
     configured `advisoryBotLogins` author) so the operator can prioritize human
     feedback over capricious advisory-bot noise.
 - JSON output keys: `sweepWindow`, `trustedMarkerActors`,
-  `advisoryBotLogins`, `iddAgentLogins`, `prs` (each entry has `number`,
-  `mergedAt`, `mergeCommit`, `unresolvedThreads`, and `unaddressedComments`),
+  `advisoryBotLogins`, `iddAgentLogins`, `primaryBotLogin`, `prs` (each
+  entry has `number`, `mergedAt`, `mergeCommit`, `unresolvedThreads`, and
+  `unaddressedComments`),
   and `summary` (`prCount`, `flaggedPrCount`, `unresolvedThreadCount`,
   `unaddressedCommentCount`).
 - Read-only boundary: the helper performs no minimization, no posting, and no
