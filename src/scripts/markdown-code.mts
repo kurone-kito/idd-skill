@@ -1016,13 +1016,17 @@ type ContainerLine = {
   listContentIndent: number | null;
 };
 
-/** One line's genuine, paragraph-interrupting list-item marker shape (see
- * {@link parseListItemMatch}): the raw leading indent, the marker token
- * itself, the required separating whitespace after it, and the item's own
- * first-line content. Exported for `verify-import-mirror.mts`'s rule 3
- * (issue #3233), which reuses `markerIndent`/`marker` to keep a list
- * item's own boundary and nesting indent significant -- never
- * reflow-collapsed the way ordinary wrapped prose is. */
+/** One line's MARKER-SHAPED list-item syntax (see {@link parseListItemMatch}):
+ * the raw leading indent, the marker token itself, the required
+ * separating whitespace after it, and the item's own first-line content.
+ * A non-`null` match here does NOT by itself mean the marker can
+ * interrupt an open paragraph -- {@link isInterruptingListMarker} is the
+ * separate, narrower check for that (Copilot review, PR #3417); this
+ * type's own shape includes every non-`1` ordered marker (e.g. `5.`)
+ * too. Exported for `verify-import-mirror.mts`'s rule 3 (issue #3233),
+ * which reuses `markerIndent`/`marker` to keep a list item's own
+ * boundary and nesting indent significant -- never reflow-collapsed the
+ * way ordinary wrapped prose is. */
 export type ListItemMatch = {
   marker: string;
   markerIndent: string;
