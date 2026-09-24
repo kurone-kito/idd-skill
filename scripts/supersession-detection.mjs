@@ -236,10 +236,13 @@ export function findStrayCommitCloses(commits, expectedIssueNumbers) {
  * - `expected`: the deliberate closing set, already resolved by the caller
  *   (`--closing-issues`, else `[claimIssueNumber]`, else `[]` under
  *   `--claimless`).
- * - `liveDefaultBranch === null` means the repository's live default
- *   branch could not be read -- fails closed to `"unavailable"` before even
- *   comparing `baseRefName` (D3.5's own non-default-branch exemption cannot
- *   be evaluated without it).
+ * - `liveDefaultBranch === null`, or `baseRefName` is empty/missing, means
+ *   the PR's real base branch cannot be verified against the live default
+ *   -- fails closed to `"unavailable"` before even comparing the two
+ *   (Copilot review, PR #3353: an empty `baseRefName` previously compared
+ *   unequal to a non-empty `liveDefaultBranch` and fell through to
+ *   `"skipped-non-default-branch"`, reporting a successful exemption for
+ *   an unverified PR target instead of failing closed).
  * - `baseRefName !== liveDefaultBranch` reproduces D3.5's own exemption:
  *   `closingIssuesReferences` never populates against a non-default base
  *   branch, so `"skipped-non-default-branch"` short-circuits before any
@@ -262,7 +265,7 @@ export function findStrayCommitCloses(commits, expectedIssueNumbers) {
  */
 export function computeClosingSetEvidence(options) {
   const expected = [...new Set(options.expected)].sort((a, b) => a - b);
-  if (!options.liveDefaultBranch) {
+  if (!options.liveDefaultBranch || !options.baseRefName) {
     return {
       status: 'unavailable',
       expected,

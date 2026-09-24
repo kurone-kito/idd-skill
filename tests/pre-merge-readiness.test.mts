@@ -10279,6 +10279,24 @@ test('closingSet: an unreadable live default branch -> unavailable, blocker', ()
   assert.match(blockers[0].detail, /unavailable/);
 });
 
+// Copilot review, PR #3353: an empty/missing `baseRefName` previously
+// compared unequal to a non-empty `liveDefaultBranch` and fell through to
+// `"skipped-non-default-branch"` -- reporting a successful exemption for a
+// PR whose real base branch was never actually verified, instead of
+// failing closed. `liveDefaultBranch` is deliberately a real, non-empty
+// value here so the only unknown is `baseRefName` itself.
+test('closingSet: an empty/missing baseRefName fails closed to unavailable, never a false skipped-non-default-branch exemption', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    baseRefName: '',
+    liveDefaultBranch: 'main',
+  });
+  assert.equal(evidence.status, 'unavailable');
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
+});
+
 test('closingSet: a failed commit-list read (null) -> unavailable, blocker', () => {
   const evidence = computeClosingSetEvidence({
     ...baseClosingSetOptions(),
