@@ -8,22 +8,26 @@
 //
 // `gh` exits with process code 1 for 401, 403, and 404 alike, so the
 // child-process exit status is useless for HTTP classification. The real
-// status appears in gh's stderr as `(HTTP NNN)`, or in a JSON error body's
-// `"status"` field. Discovery helpers use this to fail closed on auth /
-// rate-limit / network failures instead of misreading them as a genuine
-// 404. Consumed by:
+// status appears in gh's stderr as `(HTTP NNN)`, a bare `HTTP NNN` line, or
+// `HTTP NNN: <message> (<url>)` / `HTTP NNN (<url>)`, or in a JSON error
+// body's `"status"` field (#3335). Discovery helpers use this to fail
+// closed on auth / rate-limit / network failures instead of misreading
+// them as a genuine 404. Consumed by:
 //
 // - scripts/discover-viability-gate.mjs (A4 viability gate)
 // - scripts/discover-readiness-check.mjs (A3 readiness check)
+// - scripts/provider-adapter-github.mjs (roadmap-traversal issue lookup)
 
 /**
  * Derive the real HTTP status code from a failed `gh` invocation error.
  *
- * Inspects the error's `stderr`, `stdout`, and `message` text for either
- * gh's `(HTTP NNN)` suffix or a JSON error body carrying a `"status"`
- * field. Returns the numeric status, or null when no status can be
- * determined — callers must fail closed on null (treat it as a tool
- * failure, not a genuine 404).
+ * Inspects the error's `stderr`, `stdout`, and `message` text for gh's
+ * `(HTTP NNN)` suffix, a JSON error body carrying a `"status"` field, or
+ * one of gh's other HTTP-status shapes: a bare `gh: HTTP NNN` line (a
+ * non-JSON error body, e.g. an HTML 5xx page), or `HTTP NNN: <message>
+ * (<url>)` / `HTTP NNN (<url>)` from non-`api` subcommands. Returns the
+ * numeric status, or null when no status can be determined — callers must
+ * fail closed on null (treat it as a tool failure, not a genuine 404).
  */
 export function deriveGhHttpStatus(error: unknown): number | null {
   const text = ghErrorText(error);
@@ -40,6 +44,57 @@ export function deriveGhHttpStatus(error: unknown): number | null {
   const jsonMatch = text.match(/"status"\s*:\s*"?(\d{3})"?/);
   if (jsonMatch) {
     return Number.parseInt(jsonMatch[1], 10);
+  }
+  // Fallback: gh's other HTTP-status shapes -- a bare `gh: HTTP NNN` line,
+  // or `HTTP NNN: <message> (<url>)` / `HTTP NNN (<url>)`. Anchored on what
+  // follows the digits (a colon, an open paren, or end of line) so an
+  // unrelated number in prose text cannot match.
+  const bareMatch = text.match(/\bHTTP (\d{3})(?=:| \(|\s*$)/m);
+  if (bareMatch) {
+    return Number.parseInt(bareMatch[1], 10);
+  }
+  return null;
+}
+
+const INACCESSIBLE_403_WORDING =
+  /resource not accessible|not accessible by integration|visibility|SAML enforcement/i;
+
+/**
+ * Outcome of {@link classifyInaccessibleIssueLookup}: `'not-found'` for a
+ * genuine 404, `'inaccessible'` for a downgradeable permission/visibility
+ * failure, or `null` when the error is neither (a real, retryable/fatal
+ * failure -- fail closed).
+ */
+export type IssueLookupClassification = 'not-found' | 'inaccessible' | null;
+
+/**
+ * Classify a failed issue-lookup `gh` error for the read-side
+ * inaccessible/not-found downgrade shared by the roadmap-traversal path
+ * (`provider-adapter-github.mts`'s `getWorkItemForTraversalAsync`) and the
+ * A3 readiness check (`discover-readiness-check.mts`'s
+ * `isInaccessibleIssueLookupError`). A genuine 404 always downgrades to
+ * `'not-found'`. 410 (deleted) and 451 (legal) always downgrade to
+ * `'inaccessible'` regardless of wording. 403 downgrades to
+ * `'inaccessible'` only for visibility, integration-permission, or
+ * organization-SAML-enforcement wording -- a 403 secondary rate limit (or
+ * a generic auth failure that happens to surface as 403) must keep
+ * aborting/retrying instead. Every other status, or no derivable status at
+ * all, returns `null` (#3335).
+ */
+export function classifyInaccessibleIssueLookup(
+  error: unknown,
+): IssueLookupClassification {
+  const status = deriveGhHttpStatus(error);
+  if (status === 404) {
+    return 'not-found';
+  }
+  if (status === 410 || status === 451) {
+    return 'inaccessible';
+  }
+  if (status === 403) {
+    return INACCESSIBLE_403_WORDING.test(ghErrorText(error))
+      ? 'inaccessible'
+      : null;
   }
   return null;
 }

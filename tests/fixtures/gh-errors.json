@@ -1,0 +1,38 @@
+{
+  "description": "Realistic gh 2.101.0 HTTP-failure shapes for deriveGhHttpStatus / classifyInaccessibleIssueLookup coverage (kurone-kito/idd-skill#3335). Built from gh's own format strings (`%s (HTTP %d)`, a bare `HTTP %d` printed through `gh: %s`, `HTTP %d: %s (%s)`, and `HTTP %d (%s)`) plus a REST JSON error body -- not live-captured API responses.",
+  "cases": {
+    "jsonBody404": {
+      "status": 404,
+      "stderr": "gh: Not Found (HTTP 404)",
+      "stdout": "{\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest\",\"status\":\"404\"}"
+    },
+    "bare404": {
+      "status": 404,
+      "stderr": "gh: HTTP 404"
+    },
+    "bare502": {
+      "status": 502,
+      "stderr": "gh: HTTP 502"
+    },
+    "deletedIssue410": {
+      "status": 410,
+      "stderr": "gh: This issue was deleted (HTTP 410)"
+    },
+    "samlEnforcement403": {
+      "status": 403,
+      "stderr": "gh: Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization. (HTTP 403)"
+    },
+    "integration403": {
+      "status": 403,
+      "stderr": "gh: Resource not accessible by integration (HTTP 403)"
+    },
+    "secondaryRateLimit403": {
+      "status": 403,
+      "stderr": "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again (HTTP 403)"
+    },
+    "notFoundWithUrl404": {
+      "status": 404,
+      "stderr": "HTTP 404: Not Found (https://api.github.com/repos/o/r/issues/900)"
+    }
+  }
+}

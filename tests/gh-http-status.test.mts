@@ -1,10 +1,30 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
+  classifyInaccessibleIssueLookup,
   deriveGhHttpStatus,
   ghErrorText,
 } from '../src/scripts/gh-http-status.mts';
+
+const GH_ERROR_FIXTURES = JSON.parse(
+  readFileSync(new URL('./fixtures/gh-errors.json', import.meta.url), 'utf8'),
+) as {
+  cases: Record<string, { status: number; stderr?: string; stdout?: string }>;
+};
+
+function fixtureError(
+  id: string,
+): Error & { stderr?: string; stdout?: string } {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture, `missing gh-errors.json fixture: ${id}`);
+  return Object.assign(new Error(`gh failed (fixture: ${id})`), {
+    status: 1,
+    stderr: fixture.stderr,
+    stdout: fixture.stdout,
+  });
+}
 
 // Shape of a real execFileSync('gh', ...) failure: process exit code 1
 // regardless of the HTTP status, with the true status in stderr/stdout.
@@ -110,4 +130,95 @@ test('ghErrorText returns empty string for null/undefined/non-object input', () 
   assert.equal(ghErrorText(undefined), '');
   assert.equal(ghErrorText('a bare string'), '');
   assert.equal(ghErrorText({}), '');
+});
+
+// #3335: gh's other HTTP-status shapes -- a bare `gh: HTTP NNN` line (a
+// non-JSON error body), and `HTTP NNN: <message> (<url>)` / `HTTP NNN
+// (<url>)` from non-`api` subcommands. Fixture-driven against realistic
+// gh 2.101.0 shapes (tests/fixtures/gh-errors.json), not hand-invented
+// wording.
+test('deriveGhHttpStatus recognizes the bare and URL-suffixed HTTP forms', () => {
+  assert.equal(deriveGhHttpStatus(fixtureError('bare502')), 502);
+  assert.equal(deriveGhHttpStatus(fixtureError('bare404')), 404);
+  assert.equal(deriveGhHttpStatus(fixtureError('notFoundWithUrl404')), 404);
+  assert.equal(deriveGhHttpStatus(fixtureError('deletedIssue410')), 410);
+  assert.equal(deriveGhHttpStatus(fixtureError('samlEnforcement403')), 403);
+  assert.equal(deriveGhHttpStatus(fixtureError('jsonBody404')), 404);
+});
+
+test('deriveGhHttpStatus does not match an unrelated number in prose', () => {
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('retry HTTP 200 later'), {
+        stderr: 'retry HTTP 200 later',
+      }),
+    ),
+    null,
+  );
+});
+
+test('classifyInaccessibleIssueLookup: 404 fixtures -> not-found', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('bare404')),
+    'not-found',
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('notFoundWithUrl404')),
+    'not-found',
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('jsonBody404')),
+    'not-found',
+  );
+});
+
+test('classifyInaccessibleIssueLookup: 410/451 -> inaccessible regardless of wording', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('deletedIssue410')),
+    'inaccessible',
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(
+      Object.assign(new Error('legal'), {
+        stderr: 'gh: Repository access blocked (HTTP 451)',
+      }),
+    ),
+    'inaccessible',
+  );
+});
+
+test('classifyInaccessibleIssueLookup: 403 downgrades only on visibility/integration/SAML wording', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('samlEnforcement403')),
+    'inaccessible',
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('integration403')),
+    'inaccessible',
+  );
+  // A secondary-rate-limit 403 must keep aborting/retrying, never downgrade.
+  assert.equal(
+    classifyInaccessibleIssueLookup(fixtureError('secondaryRateLimit403')),
+    null,
+  );
+});
+
+test('classifyInaccessibleIssueLookup: fails closed on auth failures and undetermined status', () => {
+  assert.equal(
+    classifyInaccessibleIssueLookup(
+      Object.assign(new Error('auth'), {
+        stderr: 'gh: Bad credentials (HTTP 401)',
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    classifyInaccessibleIssueLookup(
+      Object.assign(new Error('timeout'), {
+        stderr: 'connect ETIMEDOUT 140.82.0.0:443',
+      }),
+    ),
+    null,
+  );
+  assert.equal(classifyInaccessibleIssueLookup(null), null);
 });
